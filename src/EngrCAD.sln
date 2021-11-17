@@ -7,20 +7,52 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Core", "EngrCAD.Cor
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Client", "EngrCAD.Client\EngrCAD.Client.csproj", "{49454450-C427-40B3-A13E-90CFFA3D4161}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EngrCAD.OCWrapper", "EngrCAD.OCWrapper\EngrCAD.OCWrapper.vcxproj", "{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
 		Release|Any CPU = Release|Any CPU
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Debug|x64.Build.0 = Debug|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Debug|x86.Build.0 = Debug|Any CPU
 		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Release|x64.ActiveCfg = Release|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Release|x64.Build.0 = Release|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Release|x86.ActiveCfg = Release|Any CPU
+		{E662AAA9-A2CE-4899-AC22-0EBFF93E80E5}.Release|x86.Build.0 = Release|Any CPU
 		{49454450-C427-40B3-A13E-90CFFA3D4161}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{49454450-C427-40B3-A13E-90CFFA3D4161}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Debug|x64.Build.0 = Debug|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Debug|x86.Build.0 = Debug|Any CPU
 		{49454450-C427-40B3-A13E-90CFFA3D4161}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{49454450-C427-40B3-A13E-90CFFA3D4161}.Release|Any CPU.Build.0 = Release|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Release|x64.ActiveCfg = Release|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Release|x64.Build.0 = Release|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Release|x86.ActiveCfg = Release|Any CPU
+		{49454450-C427-40B3-A13E-90CFFA3D4161}.Release|x86.Build.0 = Release|Any CPU
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Debug|Any CPU.ActiveCfg = Debug|Win32
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Debug|x64.ActiveCfg = Debug|x64
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Debug|x64.Build.0 = Debug|x64
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Debug|x86.ActiveCfg = Debug|Win32
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Debug|x86.Build.0 = Debug|Win32
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Release|Any CPU.ActiveCfg = Release|Win32
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Release|x64.ActiveCfg = Release|x64
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Release|x64.Build.0 = Release|x64
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Release|x86.ActiveCfg = Release|Win32
+		{A1DD5E2F-9DC1-442F-A334-450D4DC0E17A}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
