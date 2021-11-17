@@ -3,9 +3,9 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net5.0</TargetFramework>
+    <Platforms>x64</Platforms>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../EngrCAD.Core.Generator/EngrCAD.Core.Generator.csproj" OutputItemType="Analyzer" ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
   </ItemGroup>
 
