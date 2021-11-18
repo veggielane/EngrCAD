@@ -12,6 +12,7 @@ namespace EngrCAD.Core
 
         public int Run()
         {
+            var t = new ShapeWrapper();
             return Wrapper.Test(@"C:\Users\chris\OneDrive\Desktop\n20.stp");
         }
     }

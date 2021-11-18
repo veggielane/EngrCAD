@@ -1,16 +1,23 @@
 #include "pch.h"
 #include "STEPControl_Reader.hxx"
+#include "TopoDS_Solid.hxx"
 
 #include "EngrCAD.OCWrapper.h"
 #include <vcclr.h>
+#include <BRepPrimAPI_MakeSphere.hxx>
+#include <STEPControl_Writer.hxx>
+
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
 #pragma comment(lib, "TKBRep.lib")
 #pragma comment(lib, "TKXSBase.lib")
 #pragma comment(lib, "TKService.lib")
+#pragma comment(lib, "TKTopAlgo.lib")
+
+
+#pragma comment(lib, "TKPrim.lib")
 #pragma comment(lib, "TKV3d.lib")
-#pragma comment(lib, "TKOpenGl.lib")
 #pragma comment(lib, "TKIGES.lib")
 #pragma comment(lib, "TKSTEP.lib")
 #pragma comment(lib, "TKStl.lib")
@@ -23,7 +30,7 @@ static TCollection_AsciiString toAsciiString(String^ theString)
     {
         return TCollection_AsciiString();
     }
-
+    
     pin_ptr<const wchar_t> aPinChars = PtrToStringChars(theString);
     const wchar_t* aWCharPtr = aPinChars;
     if (aWCharPtr == NULL
@@ -33,6 +40,7 @@ static TCollection_AsciiString toAsciiString(String^ theString)
     }
     return TCollection_AsciiString(aWCharPtr);
 }
+
 
 int EngrCADOCWrapper::Wrapper::Test(String^ filename)
 {
@@ -54,7 +62,7 @@ int EngrCADOCWrapper::Wrapper::Test(String^ filename)
                 for (int i = 1; i <= aNbShap; i++)
                 {
                     TopoDS_Shape aShape = aReader.Shape(i);
-
+                    //TopoDS_Solid
                     Console::WriteLine(i);
                     //myAISContext()->Display(new AIS_Shape(aShape), Standard_False);
                 }
@@ -69,3 +77,18 @@ int EngrCADOCWrapper::Wrapper::Test(String^ filename)
 
     return 1;
 }
+
+EngrCADOCWrapper::ShapeWrapper::ShapeWrapper()
+{
+    gp_Ax2 anAxis;
+    anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
+    TopoDS_Shape fshape = BRepPrimAPI_MakeSphere(anAxis, 50).Shape();
+    shape = &fshape;
+
+    STEPControl_Writer writer;
+    writer.Transfer(fshape, STEPControl_AsIs);
+    TCollection_AsciiString temp = toAsciiString("output.stp");
+    writer.Write(temp.ToCString());
+}
+
+

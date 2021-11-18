@@ -8,7 +8,7 @@ namespace EngrCAD.Client
         static void Main(string[] args)
         {
             var test = new Test().Run();
-
+            
         }
     }
 }
