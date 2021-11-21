@@ -32,7 +32,7 @@ namespace EngrCAD.Core.Nodes
         }
 
 
-        public abstract NativeWrapper Wrap();
+        public abstract NativeWrapper Generate();
     }
 
     public class Sphere:BaseNode
@@ -40,9 +40,20 @@ namespace EngrCAD.Core.Nodes
         public float Radius { get; init; } = 1f;
 
 
-        public override NativeWrapper Wrap()
+        public override NativeWrapper Generate()
         {
             return NativeWrapper.Sphere(Radius);
         }
+    }
+
+    public class Subtract : INodeWithChildren
+    {
+        public INode Child { get; init; }
+        public NativeWrapper Generate()
+        {
+            return Children.First().Generate().Subtract(Children.Skip(1).First().Generate());
+        }
+
+        public List<INode> Children { get; init; }
     }
 }

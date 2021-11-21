@@ -24,6 +24,10 @@ namespace EngrCADOCWrapper {
 
 		NativeWrapper^ Translate(float x, float y, float z);
 
+		NativeWrapper^ Subtract(NativeWrapper^ other);
+
+
+
 		void SaveSTP(String^ path);
 
 	private:

@@ -23,7 +23,7 @@ namespace EngrCAD.Core.Nodes.Transformations
 
         }
 
-        public override NativeWrapper Wrap()
+        public override NativeWrapper Generate()
         {
             throw new System.NotImplementedException();
         }

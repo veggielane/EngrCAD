@@ -6,6 +6,7 @@
 #include <vcclr.h>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <STEPControl_Writer.hxx>
+#include <BRepAlgoAPI_Cut.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -14,7 +15,7 @@
 #pragma comment(lib, "TKXSBase.lib")
 #pragma comment(lib, "TKService.lib")
 #pragma comment(lib, "TKTopAlgo.lib")
-
+#pragma comment(lib, "TKBO.lib")
 
 #pragma comment(lib, "TKPrim.lib")
 #pragma comment(lib, "TKV3d.lib")
@@ -41,64 +42,6 @@ static TCollection_AsciiString toAsciiString(String^ theString)
     return TCollection_AsciiString(aWCharPtr);
 }
 
-
-//int EngrCADOCWrapper::Wrapper::Test(String^ filename)
-//{
-//    STEPControl_Reader aReader;
-//    IFSelect_ReturnStatus aStatus = aReader.ReadFile(toAsciiString(filename).ToCString());
-//    if (aStatus == IFSelect_RetDone)
-//    {
-//        bool isFailsonly = false;
-//        aReader.PrintCheckLoad(isFailsonly, IFSelect_ItemsByEntity);
-//
-//        int aNbRoot = aReader.NbRootsForTransfer();
-//        //aReader.PrintCheckTransfer(isFailsonly, IFSelect_ItemsByEntity);
-//        for (Standard_Integer n = 1; n <= aNbRoot; n++)
-//        {
-//            Standard_Boolean ok = aReader.TransferRoot(n);
-//            int aNbShap = aReader.NbShapes();
-//            if (aNbShap > 0)
-//            {
-//                for (int i = 1; i <= aNbShap; i++)
-//                {
-//                    TopoDS_Shape aShape = aReader.Shape(i);
-//                    //TopoDS_Solid
-//                    Console::WriteLine(i);
-//                    //myAISContext()->Display(new AIS_Shape(aShape), Standard_False);
-//                }
-//                //myAISContext()->UpdateCurrentViewer();
-//            }
-//        }
-//    }
-//    else
-//    {
-//        return 0;
-//    }
-//
-//    return 1;
-//}
-//
-//EngrCADOCWrapper::ShapeWrapper::ShapeWrapper()
-//{
-//    gp_Ax2 anAxis;
-//    anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
-//    TopoDS_Shape fshape = BRepPrimAPI_MakeSphere(anAxis, 50).Shape();
-//    shape = &fshape;
-//
-//    STEPControl_Writer writer;
-//    writer.Transfer(fshape, STEPControl_AsIs);
-//    TCollection_AsciiString temp = toAsciiString("output.stp");
-//    writer.Write(temp.ToCString());
-//}
-
-//EngrCADOCWrapper::ShapeWrapper^ EngrCADOCWrapper::ShapeWrapper::Sphere()
-//{
-//    gp_Ax2 anAxis;
-//    anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
-//    TopoDS_Shape fshape = BRepPrimAPI_MakeSphere(anAxis, 50).Shape();
-//
-//    return gcnew ShapeWrapper(&fshape);
-//}
 namespace EngrCADOCWrapper {
     NativeWrapper^ EngrCADOCWrapper::NativeWrapper::Sphere(float radius)
     {
@@ -120,6 +63,25 @@ namespace EngrCADOCWrapper {
         TopLoc_Location translation = TopLoc_Location(transformation);
 
         TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+
+    }
+
+    NativeWrapper^ NativeWrapper::Subtract(NativeWrapper^ other)
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape difference = *shape_pointer;
+
+        TopoDS_Shape* other_pointer = static_cast<TopoDS_Shape*>(other->m_Impl);
+        TopoDS_Shape other_shape = *other_pointer;
+
+        BRepAlgoAPI_Cut differenceCut = BRepAlgoAPI_Cut(difference, other_shape);
+        differenceCut.SetFuzzyValue(0.1);
+        differenceCut.Build();
+        difference = differenceCut.Shape();
+
+        TopoDS_Shape* retVal = new TopoDS_Shape(difference);
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
 

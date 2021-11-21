@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Numerics;
 using EngrCAD.Core;
 using EngrCAD.Core.Nodes;
 
@@ -9,12 +10,17 @@ namespace EngrCAD.Client
         static void Main(string[] args)
         {
 
-            var sphere = new Sphere()
+            var sphereA = new Sphere()
             {
                 Radius = 10f
             };
 
-            sphere.SaveSTP("sphere.stp");
+            var sphereB = new Sphere()
+            {
+                Radius = 10f
+            }.Translate(new Vector3(5,5,5));
+
+            sphereA.Subtract(sphereB).SaveSTP("sphere_sub.stp");
         }
     }
 }
