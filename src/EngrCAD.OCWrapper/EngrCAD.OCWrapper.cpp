@@ -100,31 +100,39 @@ static TCollection_AsciiString toAsciiString(String^ theString)
 //    return gcnew ShapeWrapper(&fshape);
 //}
 namespace EngrCADOCWrapper {
-    NativeWrapper^ EngrCADOCWrapper::NativeWrapper::Sphere()
+    NativeWrapper^ EngrCADOCWrapper::NativeWrapper::Sphere(float radius)
     {
         gp_Ax2 anAxis;
         anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
-
-        TopoDS_Shape fshape = BRepPrimAPI_MakeSphere(anAxis, 50).Shape();
-
-        STEPControl_Writer writer;
-        writer.Transfer(fshape, STEPControl_AsIs);
-        TCollection_AsciiString temp = toAsciiString("A.stp");
-        writer.Write(temp.ToCString());
-
+        TopoDS_Shape fshape = BRepPrimAPI_MakeSphere(anAxis, radius).Shape();
         TopoDS_Shape* retVal = new TopoDS_Shape(fshape);
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Translate(float x, float y, float z)
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+
+        gp_Trsf transformation = gp_Trsf();
+        transformation.SetTranslation(gp_Vec(x, y, z));
+        TopLoc_Location translation = TopLoc_Location(transformation);
+
+        TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+
     }
 
     void NativeWrapper::SaveSTP(String^ path)
     {
         STEPControl_Writer writer;
 
-        TopoDS_Shape* p_A = static_cast<TopoDS_Shape*>(m_Impl);
-        TopoDS_Shape a = *p_A;
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
 
-        writer.Transfer(a, STEPControl_AsIs);
+        writer.Transfer(shape, STEPControl_AsIs);
         TCollection_AsciiString temp = toAsciiString(path);
         writer.Write(temp.ToCString());
     }

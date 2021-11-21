@@ -1,5 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.Numerics;
+using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations
 {
@@ -20,6 +21,11 @@ namespace EngrCAD.Core.Nodes.Transformations
         public Transform(Matrix4x4 matrix, params INode[] nodes) : this(matrix, (IEnumerable<INode>)nodes)
         {
 
+        }
+
+        public override NativeWrapper Wrap()
+        {
+            throw new System.NotImplementedException();
         }
     }
 }

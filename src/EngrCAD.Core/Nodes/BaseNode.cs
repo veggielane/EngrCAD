@@ -3,10 +3,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes
 {
-    public abstract class BaseNode : INode
+    public abstract class BaseNode : INodeWithChildren
     {
         /// <summary>
         /// List of child nodes
@@ -28,6 +29,20 @@ namespace EngrCAD.Core.Nodes
         protected BaseNode(IEnumerable<INode> children)
         {
             Children.AddRange(children);
+        }
+
+
+        public abstract NativeWrapper Wrap();
+    }
+
+    public class Sphere:BaseNode
+    {
+        public float Radius { get; init; } = 1f;
+
+
+        public override NativeWrapper Wrap()
+        {
+            return NativeWrapper.Sphere(Radius);
         }
     }
 }

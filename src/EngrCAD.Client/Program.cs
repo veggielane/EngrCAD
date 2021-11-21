@@ -1,5 +1,6 @@
 ﻿using System;
 using EngrCAD.Core;
+using EngrCAD.Core.Nodes;
 
 namespace EngrCAD.Client
 {
@@ -7,8 +8,13 @@ namespace EngrCAD.Client
     {
         static void Main(string[] args)
         {
-            var test = new Test().Run();
-            
+
+            var sphere = new Sphere()
+            {
+                Radius = 10f
+            };
+
+            sphere.SaveSTP("sphere.stp");
         }
     }
 }

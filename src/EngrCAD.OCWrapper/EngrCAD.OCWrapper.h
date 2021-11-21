@@ -20,7 +20,9 @@ namespace EngrCADOCWrapper {
 	public:
 		void* GetPointer() { return m_Impl; }
 
-		static NativeWrapper^ Sphere();
+		static NativeWrapper^ Sphere(float radius);
+
+		NativeWrapper^ Translate(float x, float y, float z);
 
 		void SaveSTP(String^ path);
 
