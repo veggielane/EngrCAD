@@ -3,26 +3,29 @@
 using namespace System;
 
 namespace EngrCADOCWrapper {
-	public ref class Wrapper
+	public ref class NativeWrapper
 	{
 	public:
-		
-		static int Test(System::String^ filename);
-
-		// TODO: Add your methods for this class here.
-	};
-
-
-	public ref class ShapeWrapper
-	{
-	private:
-		TopoDS_Shape* shape;
-
-	public:
-		ShapeWrapper();
-		~ShapeWrapper()
-		{
-			delete shape;
+		NativeWrapper(void* shape) : m_Impl(shape) {
 		}
+
+		~NativeWrapper() {
+			this->!NativeWrapper();
+		}
+	protected:
+		!NativeWrapper() {
+			delete m_Impl;
+		}
+
+	public:
+		void* GetPointer() { return m_Impl; }
+
+		static NativeWrapper^ Sphere();
+
+		void SaveSTP(String^ path);
+
+	private:
+		void* m_Impl;
 	};
+
 }
