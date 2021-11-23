@@ -1,6 +1,5 @@
 #pragma once
 
-using namespace System;
 
 namespace EngrCADOCWrapper {
 	public ref class NativeWrapper
@@ -28,7 +27,8 @@ namespace EngrCADOCWrapper {
 
 
 
-		void SaveSTP(String^ path);
+		void SaveSTP(System::String^ path);
+		void SaveSTL(System::String^ path);
 
 		float CalculateVolume();
 

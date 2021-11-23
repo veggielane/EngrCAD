@@ -8,17 +8,13 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations
 {
-    public class Translate: INodeWithChild
+    public class Translate: BaseNode
     {
-        public INode Child { get; init; }
-
         public Vector3 Position { get; init; } = Vector3.Zero;
 
-        public NativeWrapper Generate()
+        public override NativeWrapper Generate()
         {
-            return Child.Generate().Translate(Position.X, Position.Y, Position.Z);
+            return Children.First().Generate().Translate(Position.X, Position.Y, Position.Z);
         }
-
-
     }
 }

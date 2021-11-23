@@ -6,12 +6,12 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes
 {
-    public abstract class BaseNode : INodeWithChildren
+    public abstract class BaseNode : INode
     {
         /// <summary>
         /// List of child nodes
         /// </summary>
-        public List<INode> Children { get; protected set; } = new List<INode>();
+        public List<INode> Children { get; protected set; } = new();
 
         /// <summary>
         /// Default BaseNode Constructor

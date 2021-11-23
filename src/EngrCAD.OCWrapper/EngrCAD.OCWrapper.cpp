@@ -1,14 +1,20 @@
-#include "pch.h"
-#include "STEPControl_Reader.hxx"
-#include "TopoDS_Solid.hxx"
 
-#include "EngrCAD.OCWrapper.h"
-#include <vcclr.h>
-#include <BRepPrimAPI_MakeSphere.hxx>
+#include "pch.h"
+
+#include <STEPControl_Reader.hxx>
 #include <STEPControl_Writer.hxx>
+#include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
+#include <StlAPI_Writer.hxx>
+#include "TopoDS_Solid.hxx"
+
+#include "EngrCAD.OCWrapper.h"
+
+#include <vcclr.h>
+#include <BRepMesh_IncrementalMesh.hxx>
+
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -16,6 +22,7 @@
 #pragma comment(lib, "TKXSBase.lib")
 #pragma comment(lib, "TKService.lib")
 #pragma comment(lib, "TKTopAlgo.lib")
+#pragma comment(lib, "TKMesh.lib")
 #pragma comment(lib, "TKBO.lib")
 #pragma comment(lib, "TKG3d.lib")
 
@@ -23,11 +30,12 @@
 #pragma comment(lib, "TKV3d.lib")
 #pragma comment(lib, "TKIGES.lib")
 #pragma comment(lib, "TKSTEP.lib")
+#pragma comment(lib, "TKSTEP.lib")
 #pragma comment(lib, "TKStl.lib")
 #pragma comment(lib, "TKVrml.lib")
 #pragma comment(lib, "TKLCAF.lib")
 
-static TCollection_AsciiString toAsciiString(String^ theString)
+static TCollection_AsciiString toAsciiString(System::String^ theString)
 {
     if (theString == nullptr)
     {
@@ -45,6 +53,7 @@ static TCollection_AsciiString toAsciiString(String^ theString)
 }
 
 namespace EngrCADOCWrapper {
+
     NativeWrapper^ EngrCADOCWrapper::NativeWrapper::Sphere(float radius)
     {
         gp_Ax2 anAxis;
@@ -89,7 +98,7 @@ namespace EngrCADOCWrapper {
 
     }
 
-    void NativeWrapper::SaveSTP(String^ path)
+    void NativeWrapper::SaveSTP(System::String^ path)
     {
         STEPControl_Writer writer;
 
@@ -99,6 +108,21 @@ namespace EngrCADOCWrapper {
         writer.Transfer(shape, STEPControl_AsIs);
         TCollection_AsciiString temp = toAsciiString(path);
         writer.Write(temp.ToCString());
+    }
+
+    void NativeWrapper::SaveSTL(System::String^ path)
+    {
+        StlAPI_Writer writer;
+        writer.ASCIIMode() = true;
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+
+        BRepMesh_IncrementalMesh mesh(shape, 0.001f, true);
+        mesh.Perform();
+
+        TCollection_AsciiString temp = toAsciiString(path);
+
+        writer.Write(shape, temp.ToCString());
     }
 
     float NativeWrapper::CalculateVolume()
