@@ -8,12 +8,7 @@ namespace EngrCAD.Core.Nodes
         NativeWrapper Wrapper { get; }
         NativeWrapper Generate();
 
-        public List<INode> Children { get; }
-    }
-
-    public interface INodeWithVolume:INode
-    {
-
+        //public List<INode> Children { get; }
         float CalculateVolume();
     }
 }

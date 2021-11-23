@@ -2,7 +2,7 @@
 
 namespace EngrCAD.Core.Nodes.Shapes
 {
-    public class Box : BaseNode, INodeWithVolume
+    public class Box : BaseNode
     {
         public float X { get; init; } = 1f;
         public float Y { get; init; } = 1f;
@@ -11,6 +11,6 @@ namespace EngrCAD.Core.Nodes.Shapes
         public bool Centered { get; init; } = true;
 
         public override NativeWrapper Generate() => NativeWrapper.Box(X, Y, Z, Centered);
-        public float CalculateVolume() => Wrapper.CalculateVolume();
+
     }
 }

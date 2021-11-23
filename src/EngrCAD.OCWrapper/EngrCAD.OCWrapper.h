@@ -25,6 +25,8 @@ namespace EngrCADOCWrapper {
 		NativeWrapper^ Translate(float x, float y, float z);
 
 		NativeWrapper^ Subtract(NativeWrapper^ other);
+		NativeWrapper^ Union(NativeWrapper^ other);
+		NativeWrapper^ Intersect(NativeWrapper^ other);
 
 
 

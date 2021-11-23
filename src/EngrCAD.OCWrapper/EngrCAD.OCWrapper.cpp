@@ -15,6 +15,8 @@
 #include <vcclr.h>
 #include <BRepMesh_IncrementalMesh.hxx>
 #include <BRepPrimAPI_MakeBox.hxx>
+#include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -118,6 +120,40 @@ namespace EngrCADOCWrapper {
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
 
+    }
+
+    NativeWrapper^ NativeWrapper::Union(NativeWrapper^ other)
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape first = *shape_pointer;
+
+        TopoDS_Shape* other_pointer = static_cast<TopoDS_Shape*>(other->m_Impl);
+        TopoDS_Shape other_shape = *other_pointer;
+
+
+        BRepAlgoAPI_Fuse combinedFuse = BRepAlgoAPI_Fuse(first, other_shape);
+        combinedFuse.SetFuzzyValue(0.1);
+        combinedFuse.Build();
+        TopoDS_Shape* retVal = new TopoDS_Shape(combinedFuse.Shape());
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Intersect(NativeWrapper^ other)
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape first = *shape_pointer;
+
+        TopoDS_Shape* other_pointer = static_cast<TopoDS_Shape*>(other->m_Impl);
+        TopoDS_Shape other_shape = *other_pointer;
+
+
+        BRepAlgoAPI_Common common = BRepAlgoAPI_Common(first, other_shape);
+        common.SetFuzzyValue(0.1);
+        common.Build();
+        TopoDS_Shape* retVal = new TopoDS_Shape(common.Shape());
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
     }
 
     void NativeWrapper::SaveSTP(System::String^ path)
