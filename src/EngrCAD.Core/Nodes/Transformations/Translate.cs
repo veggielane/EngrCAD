@@ -1,14 +1,10 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using System.Linq;
 using System.Numerics;
-using System.Text;
-using System.Threading.Tasks;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations
 {
-    public class Translate: BaseNode
+    public class Translate: BaseNode, INodeWithVolume
     {
         public Vector3 Position { get; init; } = Vector3.Zero;
 
@@ -16,5 +12,7 @@ namespace EngrCAD.Core.Nodes.Transformations
         {
             return Children.First().Wrapper.Translate(Position.X, Position.Y, Position.Z);
         }
+
+        public float CalculateVolume() => Wrapper.CalculateVolume();
     }
 }

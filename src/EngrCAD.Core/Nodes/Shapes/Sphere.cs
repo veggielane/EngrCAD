@@ -12,9 +12,6 @@ namespace EngrCAD.Core.Nodes.Shapes
             return NativeWrapper.Sphere(Radius);
         }
 
-        public float CalculateVolume()
-        {
-            return Wrapper.CalculateVolume();
-        }
+        public float CalculateVolume() => Wrapper.CalculateVolume();
     }
 }
