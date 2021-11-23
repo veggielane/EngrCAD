@@ -15,17 +15,11 @@ namespace EngrCAD.Client
                 Radius = 10f
             };
 
-            var sphereB = new Sphere()
-            {
-                Radius = 10f
-            }.Translate(new Vector3(5,5,5));
+            var sphereB = sphereA.Translate(new Vector3(5,5,5));
 
             var shape = sphereA.Subtract(sphereB);
-            //shape.SaveSTP("sphere_sub.stp");
-            new Sphere()
-            {
-                Radius = 100f
-            }.SaveSTL("test.stl");
+            shape.SaveSTP("test.stp");
+            shape.SaveSTL("test.stl");
         }
     }
 }
