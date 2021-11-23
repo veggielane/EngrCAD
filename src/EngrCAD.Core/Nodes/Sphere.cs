@@ -2,7 +2,7 @@
 
 namespace EngrCAD.Core.Nodes
 {
-    public class Sphere:BaseNode
+    public class Sphere:BaseNode, INodeWithVolume
     {
         public float Radius { get; init; } = 1f;
 
@@ -10,6 +10,11 @@ namespace EngrCAD.Core.Nodes
         public override NativeWrapper Generate()
         {
             return NativeWrapper.Sphere(Radius);
+        }
+
+        public float CalculateVolume()
+        {
+            return Generate().CalculateVolume();
         }
     }
 }

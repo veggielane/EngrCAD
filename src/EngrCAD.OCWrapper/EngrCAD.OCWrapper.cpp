@@ -7,7 +7,8 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <STEPControl_Writer.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
-
+#include <BRepGProp.hxx>
+#include <GProp_GProps.hxx>
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -16,6 +17,7 @@
 #pragma comment(lib, "TKService.lib")
 #pragma comment(lib, "TKTopAlgo.lib")
 #pragma comment(lib, "TKBO.lib")
+#pragma comment(lib, "TKG3d.lib")
 
 #pragma comment(lib, "TKPrim.lib")
 #pragma comment(lib, "TKV3d.lib")
@@ -97,6 +99,20 @@ namespace EngrCADOCWrapper {
         writer.Transfer(shape, STEPControl_AsIs);
         TCollection_AsciiString temp = toAsciiString(path);
         writer.Write(temp.ToCString());
+    }
+
+    float NativeWrapper::CalculateVolume()
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+
+        GProp_GProps gprops;
+
+
+        BRepGProp::VolumeProperties(shape, gprops);
+
+        Standard_Real vol = gprops.Mass();
+        return vol;
     }
 
 }

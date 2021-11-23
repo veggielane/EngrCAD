@@ -9,5 +9,12 @@ namespace EngrCAD.Core.Nodes
     public interface INode
     {
         NativeWrapper Generate();
+
+    }
+
+    public interface INodeWithVolume:INode
+    {
+
+        float CalculateVolume();
     }
 }

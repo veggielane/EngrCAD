@@ -30,6 +30,8 @@ namespace EngrCADOCWrapper {
 
 		void SaveSTP(String^ path);
 
+		float CalculateVolume();
+
 	private:
 		void* m_Impl;
 	};
