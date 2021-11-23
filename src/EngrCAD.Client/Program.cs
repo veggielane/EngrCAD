@@ -32,9 +32,9 @@ namespace EngrCAD.Client
             a.Intersect(b).SaveSTP("intersect.stp");
 
 
-            var sketch = new Sketch(Plane.XY).HorizontalLine(10).VerticalLine(10).HorizontalLine(-10).Close();
+            //var sketch = new Sketch(Plane.XY).HorizontalLine(10).VerticalLine(10).HorizontalLine(-10).Close();
 
-            var extrude =
+            //var extrude =
         }
     }
 }

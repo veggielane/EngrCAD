@@ -10,17 +10,17 @@ namespace EngrCAD.Core.Sketcher
 
         public ISketch HorizontalLine(float distance)
         {
-            throw new System.NotImplementedException();
+            return new Sketch(Plane, Objects, new LineSketchObject());
         }
 
         public ISketch VerticalLine(float distance)
         {
-            throw new System.NotImplementedException();
+            return new Sketch(Plane, Objects, new LineSketchObject());
         }
 
         public IClosedSketch Close()
         {
-            throw new System.NotImplementedException();
+            return new ClosedSketch(Plane, Objects, new LineSketchObject());
         }
 
         public Sketch(IPlane plane)

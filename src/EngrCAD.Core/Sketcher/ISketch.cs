@@ -11,9 +11,4 @@ namespace EngrCAD.Core.Sketcher
         ISketch VerticalLine(float distance);
         IClosedSketch Close();
     }
-
-    public interface ISketchObject
-    {
-
-    }
 }
