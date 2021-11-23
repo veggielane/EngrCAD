@@ -1,6 +1,7 @@
 ﻿using System.Numerics;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
+using EngrCAD.Core.Sketcher;
 
 namespace EngrCAD.Core.Nodes
 {
@@ -30,5 +31,7 @@ namespace EngrCAD.Core.Nodes
         {
             Children = { node, other }
         };
+
+        public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);
     }
 }

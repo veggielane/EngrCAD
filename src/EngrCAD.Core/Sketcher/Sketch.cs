@@ -1,8 +1,12 @@
-﻿namespace EngrCAD.Core.Sketcher
+﻿using System.Collections.Generic;
+using EngrCAD.Core.Nodes.Operations;
+
+namespace EngrCAD.Core.Sketcher
 {
     public class Sketch:ISketch
     {
         public IPlane Plane { get; init; }
+        public List<ISketchObject> Objects { get; }
 
         public ISketch HorizontalLine(float distance)
         {
@@ -22,30 +26,14 @@
         public Sketch(IPlane plane)
         {
             Plane = plane;
+            Objects = new List<ISketchObject>();
         }
-    }
 
-    public interface ISketch
-    {
-        IPlane Plane { get; }
-
-        ISketch HorizontalLine(float distance);
-        ISketch VerticalLine(float distance);
-        IClosedSketch Close();
-    }
-
-    public interface IClosedSketch:ISketch
-    {
-
-    }
-
-    public interface IPlane
-    {
-
-    }
-
-    public class Plane : IPlane
-    {
-        public static IPlane XY => new Plane();
+        protected Sketch(IPlane plane, IEnumerable<ISketchObject> sketchObjects, ISketchObject next)
+        {
+            Plane = plane;
+            Objects = new List<ISketchObject>(sketchObjects);
+            Objects.Add(next);
+        }
     }
 }
