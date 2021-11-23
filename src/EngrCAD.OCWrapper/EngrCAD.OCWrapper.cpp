@@ -111,12 +111,12 @@ namespace EngrCADOCWrapper {
         TopoDS_Shape* other_pointer = static_cast<TopoDS_Shape*>(other->m_Impl);
         TopoDS_Shape other_shape = *other_pointer;
 
-        BRepAlgoAPI_Cut differenceCut = BRepAlgoAPI_Cut(difference, other_shape);
-        differenceCut.SetFuzzyValue(0.1);
-        differenceCut.Build();
-        difference = differenceCut.Shape();
+        BRepAlgoAPI_Cut algo = BRepAlgoAPI_Cut(difference, other_shape);
+        //differenceCut.SetFuzzyValue(0.1);
+        algo.Build();
+        algo.SimplifyResult(true, true, 1e-3);
 
-        TopoDS_Shape* retVal = new TopoDS_Shape(difference);
+        TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
 
@@ -131,10 +131,11 @@ namespace EngrCADOCWrapper {
         TopoDS_Shape other_shape = *other_pointer;
 
 
-        BRepAlgoAPI_Fuse combinedFuse = BRepAlgoAPI_Fuse(first, other_shape);
-        combinedFuse.SetFuzzyValue(0.1);
-        combinedFuse.Build();
-        TopoDS_Shape* retVal = new TopoDS_Shape(combinedFuse.Shape());
+        BRepAlgoAPI_Fuse algo = BRepAlgoAPI_Fuse(first, other_shape);
+        //combinedFuse.SetFuzzyValue(0.1);
+        algo.Build();
+        algo.SimplifyResult(true, true, 1e-3);
+        TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
     }
@@ -148,10 +149,11 @@ namespace EngrCADOCWrapper {
         TopoDS_Shape other_shape = *other_pointer;
 
 
-        BRepAlgoAPI_Common common = BRepAlgoAPI_Common(first, other_shape);
-        common.SetFuzzyValue(0.1);
-        common.Build();
-        TopoDS_Shape* retVal = new TopoDS_Shape(common.Shape());
+        BRepAlgoAPI_Common algo = BRepAlgoAPI_Common(first, other_shape);
+        //.SetFuzzyValue(0.1);
+        algo.Build();
+        algo.SimplifyResult(true, true, 1e-3);
+        TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
     }
@@ -180,7 +182,7 @@ namespace EngrCADOCWrapper {
 
         TCollection_AsciiString temp = toAsciiString(path);
 
-        writer.Write(shape, temp.ToCString());
+        bool t = writer.Write(shape, temp.ToCString());
     }
 
     float NativeWrapper::CalculateVolume()

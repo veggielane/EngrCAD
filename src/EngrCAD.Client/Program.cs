@@ -21,6 +21,13 @@ namespace EngrCAD.Client
             var shape = sphereA.Subtract(sphereB);
             shape.SaveSTP("test.stp");
             shape.SaveSTL("test.stl");
+
+            var a = new Box { X = 2, Y = 2, Z = 2 }.Translate(-0.25f, -0.25f, -0.25f);
+            var b = new Sphere { Radius = 1.3f }.Translate(0.25f, 0.25f, 0.25f);
+
+            a.Union(b).SaveSTP("union.stp");
+            a.Subtract(b).SaveSTP("subtract.stp");
+            a.Intersect(b).SaveSTP("intersect.stp");
         }
     }
 }
