@@ -1,5 +1,6 @@
 using EngrCAD.Core.Nodes;
 using System;
+using EngrCAD.Core.Nodes.Shapes;
 using Xunit;
 
 namespace EngrCAD.Tests

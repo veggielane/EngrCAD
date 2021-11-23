@@ -2,6 +2,7 @@
 using System.Numerics;
 using EngrCAD.Core;
 using EngrCAD.Core.Nodes;
+using EngrCAD.Core.Nodes.Shapes;
 
 namespace EngrCAD.Client
 {

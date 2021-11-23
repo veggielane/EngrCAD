@@ -14,7 +14,7 @@ namespace EngrCAD.Core.Nodes.Transformations
 
         public override NativeWrapper Generate()
         {
-            return Children.First().Generate().Translate(Position.X, Position.Y, Position.Z);
+            return Children.First().Wrapper.Translate(Position.X, Position.Y, Position.Z);
         }
     }
 }

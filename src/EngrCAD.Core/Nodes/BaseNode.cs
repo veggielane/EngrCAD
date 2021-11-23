@@ -13,6 +13,10 @@ namespace EngrCAD.Core.Nodes
         /// </summary>
         public List<INode> Children { get; protected set; } = new();
 
+        private NativeWrapper _cached;
+
+        public NativeWrapper Wrapper => _cached ??= Generate();
+
         /// <summary>
         /// Default BaseNode Constructor
         /// </summary>

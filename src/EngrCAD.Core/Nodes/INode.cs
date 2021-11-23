@@ -9,6 +9,7 @@ namespace EngrCAD.Core.Nodes
 {
     public interface INode
     {
+        NativeWrapper Wrapper { get; }
         NativeWrapper Generate();
 
         public List<INode> Children { get; }
