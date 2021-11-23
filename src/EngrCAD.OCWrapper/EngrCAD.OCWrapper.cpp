@@ -14,6 +14,7 @@
 
 #include <vcclr.h>
 #include <BRepMesh_IncrementalMesh.hxx>
+#include <BRepPrimAPI_MakeBox.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -58,10 +59,31 @@ namespace EngrCADOCWrapper {
     {
         gp_Ax2 anAxis;
         anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
-        TopoDS_Shape fshape = BRepPrimAPI_MakeSphere(anAxis, radius).Shape();
-        TopoDS_Shape* retVal = new TopoDS_Shape(fshape);
+        TopoDS_Shape shape = BRepPrimAPI_MakeSphere(anAxis, radius).Shape();
+        TopoDS_Shape* retVal = new TopoDS_Shape(shape);
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Box(float x, float y, float z, bool centered)
+    {
+        TopoDS_Shape shape = BRepPrimAPI_MakeBox(x, y, z).Shape();
+
+        if (centered) {
+
+            gp_Trsf transformation = gp_Trsf();
+            transformation.SetTranslation(gp_Vec(-x / 2.0f, -y / 2.0f, -z / 2.0f));
+            TopLoc_Location translation = TopLoc_Location(transformation);
+
+            TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
+            NativeWrapper^ f = gcnew NativeWrapper(retVal);
+            return f;
+        }
+        else {
+            TopoDS_Shape* retVal = new TopoDS_Shape(shape);
+            NativeWrapper^ f = gcnew NativeWrapper(retVal);
+            return f;
+        }
     }
 
     NativeWrapper^ NativeWrapper::Translate(float x, float y, float z)

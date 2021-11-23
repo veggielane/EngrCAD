@@ -20,6 +20,7 @@ namespace EngrCADOCWrapper {
 		void* GetPointer() { return m_Impl; }
 
 		static NativeWrapper^ Sphere(float radius);
+		static NativeWrapper^ Box(float x, float y, float z, bool centered);
 
 		NativeWrapper^ Translate(float x, float y, float z);
 
