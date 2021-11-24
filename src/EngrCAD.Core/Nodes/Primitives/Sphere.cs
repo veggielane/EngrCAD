@@ -1,6 +1,6 @@
 ﻿using EngrCADOCWrapper;
 
-namespace EngrCAD.Core.Nodes.Shapes
+namespace EngrCAD.Core.Nodes.Primitives
 {
     public class Sphere:BaseNode
     {

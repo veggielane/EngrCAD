@@ -1,6 +1,6 @@
 ﻿using EngrCADOCWrapper;
 
-namespace EngrCAD.Core.Nodes.Shapes
+namespace EngrCAD.Core.Nodes.Primitives
 {
     public class Box : BaseNode
     {
@@ -11,6 +11,5 @@ namespace EngrCAD.Core.Nodes.Shapes
         public bool Centered { get; init; } = true;
 
         public override NativeWrapper Generate() => NativeWrapper.Box(X, Y, Z, Centered);
-
     }
 }

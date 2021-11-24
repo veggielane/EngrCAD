@@ -19,11 +19,15 @@ namespace EngrCADOCWrapper {
 	public:
 		void* GetPointer() { return m_Impl; }
 
+		//c
 		static NativeWrapper^ Sphere(float radius);
 		static NativeWrapper^ Box(float x, float y, float z, bool centered);
+		static NativeWrapper^ Cylinder(float radius, float height, bool centered);
 
 		NativeWrapper^ Translate(float x, float y, float z);
 
+
+		//Operations
 		NativeWrapper^ Subtract(NativeWrapper^ other);
 		NativeWrapper^ Union(NativeWrapper^ other);
 		NativeWrapper^ Intersect(NativeWrapper^ other);

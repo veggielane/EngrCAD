@@ -2,7 +2,7 @@
 using System.Numerics;
 using EngrCAD.Core;
 using EngrCAD.Core.Nodes;
-using EngrCAD.Core.Nodes.Shapes;
+using EngrCAD.Core.Nodes.Primitives;
 using EngrCAD.Core.Sketcher;
 using Plane = EngrCAD.Core.Sketcher.Plane;
 

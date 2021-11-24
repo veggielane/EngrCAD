@@ -17,6 +17,7 @@
 #include <BRepPrimAPI_MakeBox.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepPrimAPI_MakeCylinder.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -72,11 +73,9 @@ namespace EngrCADOCWrapper {
         TopoDS_Shape shape = BRepPrimAPI_MakeBox(x, y, z).Shape();
 
         if (centered) {
-
             gp_Trsf transformation = gp_Trsf();
             transformation.SetTranslation(gp_Vec(-x / 2.0f, -y / 2.0f, -z / 2.0f));
             TopLoc_Location translation = TopLoc_Location(transformation);
-
             TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
             NativeWrapper^ f = gcnew NativeWrapper(retVal);
             return f;
@@ -86,6 +85,16 @@ namespace EngrCADOCWrapper {
             NativeWrapper^ f = gcnew NativeWrapper(retVal);
             return f;
         }
+    }
+
+    NativeWrapper^ NativeWrapper::Cylinder(float radius, float height, bool centered)
+    {
+        gp_Ax2 pos = gp_Ax2(gp_Pnt(0, 0, centered ? -height / 2.0 : 0), gp_Dir(0, 0, 1));
+        TopoDS_Shape shape = BRepPrimAPI_MakeCylinder(pos, radius, height).Shape();
+
+        TopoDS_Shape* retVal = new TopoDS_Shape(shape);
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
     }
 
     NativeWrapper^ NativeWrapper::Translate(float x, float y, float z)
