@@ -23,6 +23,8 @@ namespace EngrCADOCWrapper {
 		static NativeWrapper^ Sphere(float radius);
 		static NativeWrapper^ Box(float x, float y, float z, bool centered);
 		static NativeWrapper^ Cylinder(float radius, float height, bool centered);
+		static NativeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
+
 
 		NativeWrapper^ Translate(float x, float y, float z);
 

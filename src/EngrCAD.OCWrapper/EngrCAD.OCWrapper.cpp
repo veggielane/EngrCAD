@@ -18,6 +18,7 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
+#include <BRepPrimAPI_MakeCone.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -91,6 +92,16 @@ namespace EngrCADOCWrapper {
     {
         gp_Ax2 pos = gp_Ax2(gp_Pnt(0, 0, centered ? -height / 2.0 : 0), gp_Dir(0, 0, 1));
         TopoDS_Shape shape = BRepPrimAPI_MakeCylinder(pos, radius, height).Shape();
+
+        TopoDS_Shape* retVal = new TopoDS_Shape(shape);
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Cone(float bottomRadius, float topRadius, float height, bool centered)
+    {
+        gp_Ax2 pos = gp_Ax2(gp_Pnt(0, 0, centered ? -height / 2.0 : 0), gp_Dir(0, 0, 1));
+        TopoDS_Shape shape = BRepPrimAPI_MakeCone(pos, bottomRadius, topRadius, height).Shape();
 
         TopoDS_Shape* retVal = new TopoDS_Shape(shape);
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
