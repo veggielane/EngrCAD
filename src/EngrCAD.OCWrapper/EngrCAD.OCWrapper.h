@@ -33,7 +33,7 @@ namespace EngrCADOCWrapper {
 		NativeWrapper^ Subtract(NativeWrapper^ other);
 		NativeWrapper^ Union(NativeWrapper^ other);
 		NativeWrapper^ Intersect(NativeWrapper^ other);
-
+		NativeWrapper^ Shell(double thickness);
 
 
 		void SaveSTP(System::String^ path);

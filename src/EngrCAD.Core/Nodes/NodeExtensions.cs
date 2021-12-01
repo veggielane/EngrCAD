@@ -32,6 +32,12 @@ namespace EngrCAD.Core.Nodes
             Children = { node, other }
         };
 
+        public static INode Shell(this INode node, float thickness) => new Shell()
+        {
+            Child = node,
+            Thickness = thickness
+        };
+
         public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);
     }
 }

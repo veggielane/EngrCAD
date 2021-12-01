@@ -4,6 +4,7 @@
 #include <STEPControl_Reader.hxx>
 #include <STEPControl_Writer.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
+#include <BRepOffsetAPI_MakeThickSolid.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepGProp.hxx>
 #include <GProp_GProps.hxx>
@@ -30,7 +31,7 @@
 #pragma comment(lib, "TKMesh.lib")
 #pragma comment(lib, "TKBO.lib")
 #pragma comment(lib, "TKG3d.lib")
-
+#pragma comment(lib, "TKOffset.lib")
 #pragma comment(lib, "TKPrim.lib")
 #pragma comment(lib, "TKV3d.lib")
 #pragma comment(lib, "TKIGES.lib")
@@ -174,6 +175,21 @@ namespace EngrCADOCWrapper {
         algo.Build();
         algo.SimplifyResult(true, true, 1e-3);
         TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Shell(double thickness)
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+
+        TopTools_ListOfShape facesToRemove = TopTools_ListOfShape();
+        BRepOffsetAPI_MakeThickSolid builder = BRepOffsetAPI_MakeThickSolid();
+        builder.MakeThickSolidByJoin(shape, facesToRemove, thickness, 1e-3);
+
+
+        TopoDS_Shape* retVal = new TopoDS_Shape(builder.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
     }
