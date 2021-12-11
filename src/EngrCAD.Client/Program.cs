@@ -25,6 +25,14 @@ namespace EngrCAD.Client
             shape.SaveSTL("test.stl");
 
             var a = new Box { X = 2, Y = 2, Z = 2 }.Translate(-0.25f, -0.25f, -0.25f);
+
+            a.Round(0.25f).SaveSTL("round.stl");
+
+
+            var faces = a.Faces;
+
+
+
             var b = new Sphere { Radius = 1.3f }.Translate(0.25f, 0.25f, 0.25f);
 
             a.Union(b).SaveSTP("union.stp");

@@ -10,5 +10,7 @@ namespace EngrCAD.Core.Nodes
 
         //public List<INode> Children { get; }
         float CalculateVolume();
+
+        IEnumerable<Face> Faces { get; }
     }
 }

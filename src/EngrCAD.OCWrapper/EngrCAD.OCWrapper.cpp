@@ -10,6 +10,7 @@
 #include <GProp_GProps.hxx>
 #include <StlAPI_Writer.hxx>
 #include "TopoDS_Solid.hxx"
+#include <TopExp_Explorer.hxx>
 
 #include "EngrCAD.OCWrapper.h"
 
@@ -20,6 +21,8 @@
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
+#include <BRepFilletAPI_MakeFillet.hxx>
+
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -40,6 +43,7 @@
 #pragma comment(lib, "TKStl.lib")
 #pragma comment(lib, "TKVrml.lib")
 #pragma comment(lib, "TKLCAF.lib")
+#pragma comment(lib, "TKFillet.lib")
 
 static TCollection_AsciiString toAsciiString(System::String^ theString)
 {
@@ -124,6 +128,38 @@ namespace EngrCADOCWrapper {
 
     }
 
+    System::Collections::Generic::List<FaceWrapper^>^ NativeWrapper::GetFaces()
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+        int t = 0;
+        TopExp_Explorer Ex;
+        System::Collections::Generic::List<FaceWrapper^>^ list = gcnew System::Collections::Generic::List<FaceWrapper^>();
+        for (Ex.Init(shape, TopAbs_FACE); Ex.More(); Ex.Next()) {
+
+            TopoDS_Shape* t = new TopoDS_Shape(Ex.Current());
+            FaceWrapper^ face = gcnew FaceWrapper(t);
+            list->Add(face);
+        }
+        return list;
+    }
+
+    System::Collections::Generic::List<EdgeWrapper^>^ NativeWrapper::GetEdges()
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+        int t = 0;
+        TopExp_Explorer Ex;
+        System::Collections::Generic::List<EdgeWrapper^>^ list = gcnew System::Collections::Generic::List<EdgeWrapper^>();
+        for (Ex.Init(shape, TopAbs_EDGE); Ex.More(); Ex.Next()) {
+
+            TopoDS_Edge* t = static_cast<TopoDS_Edge*>(new TopoDS_Shape(Ex.Current()));
+            EdgeWrapper^ face = gcnew EdgeWrapper(t);
+            list->Add(face);
+        }
+        return list;
+    }
+
     NativeWrapper^ NativeWrapper::Subtract(NativeWrapper^ other)
     {
         TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
@@ -186,10 +222,24 @@ namespace EngrCADOCWrapper {
 
         TopTools_ListOfShape facesToRemove = TopTools_ListOfShape();
         BRepOffsetAPI_MakeThickSolid builder = BRepOffsetAPI_MakeThickSolid();
-        builder.MakeThickSolidByJoin(shape, facesToRemove, thickness, 1e-3);
+        builder.MakeThickSolidByJoin(shape, facesToRemove, thickness, 1e-4);
 
 
         TopoDS_Shape* retVal = new TopoDS_Shape(builder.Shape());
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Round(double radius)
+    {
+        TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
+        TopoDS_Shape shape = *shape_pointer;
+        BRepFilletAPI_MakeFillet fillet = BRepFilletAPI_MakeFillet(shape);
+        for each (EdgeWrapper^ edge in GetEdges()) {
+            TopoDS_Edge* edge_pointer = edge->GetPointer();
+            fillet.Add(radius, *edge_pointer);
+        }
+        TopoDS_Shape* retVal = new TopoDS_Shape(fillet.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
     }

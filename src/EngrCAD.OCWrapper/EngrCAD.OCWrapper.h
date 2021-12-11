@@ -2,6 +2,52 @@
 
 
 namespace EngrCADOCWrapper {
+
+
+	public ref class FaceWrapper
+	{
+	public:
+		FaceWrapper(void* shape) : m_Impl(shape) {
+		}
+
+		~FaceWrapper() {
+			this->!FaceWrapper();
+		}
+	protected:
+		!FaceWrapper() {
+			delete m_Impl;
+		}
+
+	public:
+		void* GetPointer() { return m_Impl; }
+
+
+	private:
+		void* m_Impl;
+	};
+
+	public ref class EdgeWrapper
+	{
+	public:
+		EdgeWrapper(TopoDS_Edge* shape) : m_Impl(shape) {
+		}
+
+		~EdgeWrapper() {
+			this->!EdgeWrapper();
+		}
+	protected:
+		!EdgeWrapper() {
+			delete m_Impl;
+		}
+
+	public:
+		TopoDS_Edge* GetPointer() { return m_Impl; }
+
+
+	private:
+		TopoDS_Edge* m_Impl;
+	};
+
 	public ref class NativeWrapper
 	{
 	public:
@@ -28,6 +74,8 @@ namespace EngrCADOCWrapper {
 
 		NativeWrapper^ Translate(float x, float y, float z);
 
+		System::Collections::Generic::List<FaceWrapper^>^ GetFaces();
+		System::Collections::Generic::List<EdgeWrapper^>^ GetEdges();
 
 		//Operations
 		NativeWrapper^ Subtract(NativeWrapper^ other);
@@ -35,6 +83,7 @@ namespace EngrCADOCWrapper {
 		NativeWrapper^ Intersect(NativeWrapper^ other);
 		NativeWrapper^ Shell(double thickness);
 
+		NativeWrapper^ Round(double radius);
 
 		void SaveSTP(System::String^ path);
 		void SaveSTL(System::String^ path);
@@ -44,5 +93,7 @@ namespace EngrCADOCWrapper {
 	private:
 		void* m_Impl;
 	};
+
+
 
 }

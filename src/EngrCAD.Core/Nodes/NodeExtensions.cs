@@ -38,6 +38,13 @@ namespace EngrCAD.Core.Nodes
             Thickness = thickness
         };
 
+        public static INode Round(this INode node, float radius) => new Round()
+        {
+            Child = node,
+            Radius = radius
+        };
+
         public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);
+
     }
 }
