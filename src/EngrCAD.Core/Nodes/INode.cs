@@ -12,5 +12,6 @@ namespace EngrCAD.Core.Nodes
         float CalculateVolume();
 
         IEnumerable<Face> Faces { get; }
+        IEnumerable<Edge> Edges { get; }
     }
 }

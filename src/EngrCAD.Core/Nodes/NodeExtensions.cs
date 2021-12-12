@@ -1,7 +1,11 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
 using EngrCAD.Core.Sketcher;
+using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes
 {
@@ -41,7 +45,26 @@ namespace EngrCAD.Core.Nodes
         public static INode Round(this INode node, float radius) => new Round()
         {
             Child = node,
-            Radius = radius
+            Definitions = new List<RadiusDefinition>()
+            {
+                new(radius,node.Edges.Select(edge => edge.Wrapper).ToList())
+            }
+
+        };
+
+        public static INode Round(this INode node, float radius, Func<Edge[], IEnumerable<Edge>> predicate) => new Round()
+        {
+            Child = node,
+            Definitions = new List<RadiusDefinition>()
+            {
+                new(radius,predicate(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())
+            }
+        };
+
+        public static INode Round(this INode node, params ValueTuple<float, Func<Edge[], IEnumerable<Edge>>>[] predicates) => new Round()
+        {
+            Child = node,
+            Definitions = predicates.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList()
         };
 
         public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);

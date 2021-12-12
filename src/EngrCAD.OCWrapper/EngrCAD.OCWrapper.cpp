@@ -230,14 +230,17 @@ namespace EngrCADOCWrapper {
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Round(double radius)
+    NativeWrapper^ NativeWrapper::Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions)
     {
         TopoDS_Shape* shape_pointer = static_cast<TopoDS_Shape*>(m_Impl);
         TopoDS_Shape shape = *shape_pointer;
         BRepFilletAPI_MakeFillet fillet = BRepFilletAPI_MakeFillet(shape);
-        for each (EdgeWrapper^ edge in GetEdges()) {
-            TopoDS_Edge* edge_pointer = edge->GetPointer();
-            fillet.Add(radius, *edge_pointer);
+
+        for each (RadiusDefinition^ def in definitions) {
+            for each (EdgeWrapper^ edge in def->Edges) {
+                TopoDS_Edge* edge_pointer = edge->GetPointer();
+                fillet.Add(def->Radius, *edge_pointer);
+            }
         }
         TopoDS_Shape* retVal = new TopoDS_Shape(fillet.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);

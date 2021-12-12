@@ -4,6 +4,7 @@
 namespace EngrCADOCWrapper {
 
 
+
 	public ref class FaceWrapper
 	{
 	public:
@@ -26,6 +27,7 @@ namespace EngrCADOCWrapper {
 		void* m_Impl;
 	};
 
+
 	public ref class EdgeWrapper
 	{
 	public:
@@ -46,6 +48,16 @@ namespace EngrCADOCWrapper {
 
 	private:
 		TopoDS_Edge* m_Impl;
+	};
+
+	public ref class RadiusDefinition
+	{
+	public:
+		explicit RadiusDefinition(float radius, System::Collections::Generic::List<EdgeWrapper^>^ edges) : Radius(radius), Edges(edges)
+		{
+		}
+		System::Collections::Generic::List<EdgeWrapper^>^ Edges;
+		float Radius;
 	};
 
 	public ref class NativeWrapper
@@ -82,8 +94,8 @@ namespace EngrCADOCWrapper {
 		NativeWrapper^ Union(NativeWrapper^ other);
 		NativeWrapper^ Intersect(NativeWrapper^ other);
 		NativeWrapper^ Shell(double thickness);
-
-		NativeWrapper^ Round(double radius);
+		
+		NativeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
 
 		void SaveSTP(System::String^ path);
 		void SaveSTL(System::String^ path);

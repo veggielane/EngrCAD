@@ -12,5 +12,6 @@ namespace EngrCAD.Core.Nodes
 
         public float CalculateVolume() => Wrapper.CalculateVolume();
         public IEnumerable<Face> Faces => Wrapper.GetFaces().Select(wrapper => new Face(wrapper));
+        public IEnumerable<Edge> Edges => Wrapper.GetEdges().Select(wrapper => new Edge(wrapper));
     }
 }

@@ -26,7 +26,11 @@ namespace EngrCAD.Client
 
             var a = new Box { X = 2, Y = 2, Z = 2 }.Translate(-0.25f, -0.25f, -0.25f);
 
-            a.Round(0.25f).SaveSTL("round.stl");
+            a.Round(0.8f).SaveSTL("round_2.stl");
+
+            a.Round(0.5f, edges => edges[..4]).SaveSTL("round_3.stl");
+
+            a.Round((0.1f, edges => edges[0..12]), (0.8f, edges => edges[13..^0])).SaveSTL("round_5.stl");
 
 
             var faces = a.Faces;

@@ -11,8 +11,10 @@ namespace EngrCAD.Core.Nodes.Operations
     {
         public INode Child { get; init; }
 
-        public float Radius { get; init; } = 0.1f;
+        //public float Radius { get; init; } = 0.1f;
 
-        public override NativeWrapper Generate() => Child.Wrapper.Round(Radius);
+        public List<RadiusDefinition> Definitions = new();
+
+        public override NativeWrapper Generate() => Child.Wrapper.Round(Definitions);
     }
 }
