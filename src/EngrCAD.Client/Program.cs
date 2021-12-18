@@ -33,6 +33,12 @@ namespace EngrCAD.Client
             a.Round((0.1f, edges => edges[0..12]), (0.8f, edges => edges[13..^0])).SaveSTL("round_5.stl");
 
 
+            a.Round(edge => edge switch
+            {
+
+                _ => 0.1f
+            }).SaveSTL("switch.stl");
+
             var faces = a.Faces;
 
 
