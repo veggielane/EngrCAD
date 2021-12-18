@@ -63,7 +63,7 @@ namespace EngrCADOCWrapper {
 	public ref class NativeWrapper
 	{
 	public:
-		NativeWrapper(void* shape) : m_Impl(shape) {
+		NativeWrapper(TopoDS_Shape* shape) : m_Impl(shape) {
 		}
 
 		~NativeWrapper() {
@@ -103,7 +103,7 @@ namespace EngrCADOCWrapper {
 		float CalculateVolume();
 
 	private:
-		void* m_Impl;
+		TopoDS_Shape* m_Impl;
 	};
 
 

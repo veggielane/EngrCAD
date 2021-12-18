@@ -16,14 +16,4 @@ namespace EngrCAD.Core
             _wrapper = wrapper;
         }
     }
-
-    public class Edge
-    {
-        public EdgeWrapper Wrapper { get; }
-
-        internal Edge(EdgeWrapper wrapper)
-        {
-            Wrapper = wrapper;
-        }
-    }
 }
