@@ -1,6 +1,7 @@
 ﻿using System.Collections.Generic;
 using System.Numerics;
 using EngrCAD.Core.Nodes.Operations;
+using EngrCAD.Core.Sketcher.Edges;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Sketcher;
@@ -8,7 +9,7 @@ namespace EngrCAD.Core.Sketcher;
 public class Sketch:ISketch
 {
     public IPlane Plane { get; init; }
-    public List<ISketchObject> Objects { get; protected set; }
+    public List<ISketchEdge> Edges { get; protected set; }
 
     protected Vector3 _firstPoint;
     protected Vector3 _pointer;
@@ -23,7 +24,7 @@ public class Sketch:ISketch
     public ISketch LineTo(Vector2 v)
     {
         var endPoint = (Vector3)_mapper.ToWorldCoords(v);
-        Objects.Add(new LineSketchObject
+        Edges.Add(new LineSketchObject
         {
             Start = _pointer,
             End = endPoint
@@ -56,18 +57,18 @@ public class Sketch:ISketch
     public IClosedSketch Close()
     {
 
-        Objects.Add(new LineSketchObject
+        Edges.Add(new LineSketchObject
         {
             Start = _pointer,
             End = _firstPoint
         });
-        return new ClosedSketch(Plane, Objects);
+        return new ClosedSketch(Plane, Edges);
     }
 
     public Sketch(IPlane plane)
     {
         Plane = plane;
-        Objects = new List<ISketchObject>();
+        Edges = new List<ISketchEdge>();
         _mapper = new CoordMapper(Plane.Origin, Plane.Normal, Plane.XDirection);
 
         _firstPoint = Plane.Origin;

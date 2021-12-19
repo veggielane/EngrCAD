@@ -18,7 +18,7 @@ public class Extrude : BaseNode
 
     public override NativeWrapper Generate()
     {
-        var edges = Sketch.Objects.Select(o => o.ToEdge()).ToList();
+        var edges = Sketch.Edges.Select(o => o.ToEdge()).ToList();
         var wire = WireWrapper.FromEdges(edges);
 
         return NativeWrapper.Extrude(wire, Sketch.Plane.Normal*Distance);
