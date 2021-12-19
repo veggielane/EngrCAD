@@ -2,11 +2,14 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net5.0</TargetFramework>
+    <TargetFramework>net6.0</TargetFramework>
     <Platforms>x64</Platforms>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
   </ItemGroup>
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="xcopy %25CASROOT%25\..\ffmpeg-3.3.4-64\bin\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\freeimage-3.17.0-vc14-64\bin\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\freetype-2.5.5-vc14-64\bin\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\openvr-1.14.15-64\bin\win64\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\qt5.11.2-vc14-64\bin\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\tbb_2017.0.100\bin\intel64\vc14_ui\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\tcltk-86-64\bin\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\vtk-6.1.0-vc14-64\bin\*  $(OutDir) /y /D&#xD;&#xA;xcopy %25CASROOT%25\..\opencascade-7.6.0\win64\vc14\bin\*  $(OutDir) /y /D" />
+  </Target>
 
 </Project>

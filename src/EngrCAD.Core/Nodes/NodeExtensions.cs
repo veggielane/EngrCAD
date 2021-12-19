@@ -1,7 +1,11 @@
-﻿using System.Numerics;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Numerics;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
 using EngrCAD.Core.Sketcher;
+using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes
 {
@@ -32,6 +36,44 @@ namespace EngrCAD.Core.Nodes
             Children = { node, other }
         };
 
+        public static INode Shell(this INode node, float thickness) => new Shell()
+        {
+            Child = node,
+            Thickness = thickness
+        };
+
+        public static INode Round(this INode node, float radius) => new Round()
+        {
+            Child = node,
+            Definitions = new List<RadiusDefinition>()
+            {
+                new(radius,node.Edges.Select(edge => edge.Wrapper).ToList())
+            }
+
+        };
+
+        public static INode Round(this INode node, Func<Edge, float?> predicate) => new Round()
+        {
+            Child = node,
+            Definitions = node.Edges.Select(edge => (edge,predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new RadiusDefinition(tuple.Item2.Value, new List<EdgeWrapper>(){ tuple.edge.Wrapper})).ToList()
+        };
+
+        public static INode Round(this INode node, float radius, Func<Edge[], IEnumerable<Edge>> filter) => new Round()
+        {
+            Child = node,
+            Definitions = new List<RadiusDefinition>
+            {
+                new(radius,filter(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())
+            }
+        };
+
+        public static INode Round(this INode node, params ValueTuple<float, Func<Edge[], IEnumerable<Edge>>>[] filter) => new Round()
+        {
+            Child = node,
+            Definitions = filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList()
+        };
+
         public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);
+
     }
 }
