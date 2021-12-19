@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Linq;
 using System.Numerics;
 using EngrCAD.Core.Nodes.Operations;
@@ -107,6 +108,18 @@ namespace EngrCAD.Core.Nodes
         };
 
         public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);
+
+        public static Body ToBody(this INode node, Color color) => new Body()
+        {
+            Node = node,
+            Color = color
+        };
+
+        public static Body ToBody(this INode node) => new Body()
+        {
+            Node = node,
+            Color = Color.DimGray
+        };
 
     }
 }

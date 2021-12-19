@@ -6,13 +6,15 @@ using System.Threading.Tasks;
 
 namespace EngrCAD.Core
 {
-    public class Part<T> where T : IPartMetadata
+    public abstract class Part<T> where T : class, IPartMetadata, new()
     {
-        
-    }
+        public string Name
+        {
+            get => Metadata.Name;
+            set => Metadata.Name = value;
+        }
 
-    public interface IPartMetadata
-    {
-        string Name { get; set; }
+        public T Metadata { get; init; } = new T();
+        public abstract IEnumerable<Body> Generate();
     }
 }
