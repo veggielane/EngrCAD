@@ -308,4 +308,40 @@ namespace EngrCADOCWrapper {
         return vol;
     }
 
+    CoordMapper::CoordMapper(System::Numerics::Vector3^ origin, System::Numerics::Vector3^ normal, System::Numerics::Vector3^ xDirection)
+    {
+        gp_Ax3 globalCoordSystem = gp_Ax3();
+
+        gp_Pnt origin_pnt = gp_Pnt(origin->X, origin->Y, origin->Z);
+        gp_Dir normal_dir = gp_Dir(normal->X, normal->Y, normal->Z);
+        gp_Dir xDirection_dir = gp_Dir(xDirection->X, xDirection->Y, xDirection->Z);
+
+        gp_Ax3 localCoordSystem = gp_Ax3(origin_pnt, normal_dir, xDirection_dir);
+
+        gp_Trsf globalToLocal = gp_Trsf();
+        globalToLocal.SetTransformation(globalCoordSystem, localCoordSystem);
+        _globalToLocal = &globalToLocal;
+
+        gp_Trsf localToGlobal = gp_Trsf();
+        localToGlobal.SetTransformation(localCoordSystem, globalCoordSystem);
+        _localToGlobal = &localToGlobal;
+    }
+
+    System::Numerics::Vector2^ CoordMapper::ToLocalCoords(System::Numerics::Vector3^ vec)
+    {
+        gp_Pnt point = gp_Pnt(vec->X, vec->Y, vec->Z);
+        gp_Trsf trsf = *_globalToLocal;
+        gp_Pnt transformed = point.Transformed(trsf);
+
+        return gcnew System::Numerics::Vector2(transformed.X(), transformed.Y());
+    }
+
+    System::Numerics::Vector3^ CoordMapper::ToWorldCoords(System::Numerics::Vector2^ vec)
+    {
+        gp_Pnt point = gp_Pnt(vec->X, vec->Y, 0);
+        gp_Trsf trsf = *_localToGlobal;
+        gp_Pnt transformed = point.Transformed(trsf);
+        return gcnew System::Numerics::Vector3(transformed.X(), transformed.Y(), transformed.Z());
+    }
+
 }

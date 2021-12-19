@@ -1,6 +1,9 @@
-﻿namespace EngrCAD.Core.Sketcher;
+﻿using System.Numerics;
 
-public class LineSketchObject:ISketchObject
+namespace EngrCAD.Core.Sketcher;
+
+internal class LineSketchObject:ISketchObject
 {
-
+    public Vector3 Start { get; init; }
+    public Vector3 End { get; init; }
 }

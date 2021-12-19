@@ -1,14 +1,12 @@
 ﻿using System.Collections.Generic;
+using System.Linq;
 
 namespace EngrCAD.Core.Sketcher;
 
 public class ClosedSketch : Sketch, IClosedSketch
 {
-    public ClosedSketch(IPlane plane) : base(plane)
+    internal ClosedSketch(IPlane plane, IEnumerable<ISketchObject> sketchObjects) : base(plane)
     {
-    }
-
-    internal ClosedSketch(IPlane plane, IEnumerable<ISketchObject> sketchObjects, ISketchObject next) : base(plane, sketchObjects, next)
-    {
+        Objects = sketchObjects.ToList();
     }
 }

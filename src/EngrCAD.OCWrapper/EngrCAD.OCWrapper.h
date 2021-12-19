@@ -3,7 +3,17 @@
 
 namespace EngrCADOCWrapper 
 {
+	public ref class CoordMapper
+	{
+	public:
+		CoordMapper(System::Numerics::Vector3^ origin, System::Numerics::Vector3^ normal, System::Numerics::Vector3^ xDirection);
 
+		System::Numerics::Vector2^ ToLocalCoords(System::Numerics::Vector3^ vec);
+		System::Numerics::Vector3^ ToWorldCoords(System::Numerics::Vector2^ vec);
+	private:
+		gp_Trsf* _globalToLocal;
+		gp_Trsf* _localToGlobal;
+	};
 
 
 	public ref class FaceWrapper
