@@ -6,7 +6,13 @@ using System.Threading.Tasks;
 
 namespace EngrCAD.Core
 {
-    internal class Part
+    public class Part<T> where T : IPartMetadata
     {
+        
+    }
+
+    public interface IPartMetadata
+    {
+        string Name { get; set; }
     }
 }
