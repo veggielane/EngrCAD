@@ -258,10 +258,15 @@ namespace EngrCADOCWrapper {
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Extrude(WireWrapper^ wire, System::Numerics::Vector3^ direction)
+    NativeWrapper^ NativeWrapper::Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction)
     {
-        TopoDS_Wire wireDS = *wire->GetPointer();
-        BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireDS, false);
+        BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
+        for each (EdgeWrapper ^ edge in edges) {
+            TopoDS_Edge* edge_pointer = edge->GetPointer();
+            wireBuilder.Add(*edge_pointer);
+        }
+        wireBuilder.Build();
+        BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireBuilder.Wire(), false);
         TopoDS_Face face = faceBuilder.Face();
         BRepPrimAPI_MakePrism solidBuilder = BRepPrimAPI_MakePrism(face, gp_Vec(direction->X, direction->Y, direction->Z),false, true);
         TopoDS_Shape* retVal = new TopoDS_Shape(solidBuilder.Shape());

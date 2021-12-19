@@ -122,7 +122,7 @@ namespace EngrCADOCWrapper
 		static NativeWrapper^ Box(float x, float y, float z, bool centered);
 		static NativeWrapper^ Cylinder(float radius, float height, bool centered);
 		static NativeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
-		static NativeWrapper^ Extrude(WireWrapper^ wire, System::Numerics::Vector3^ direction);
+		static NativeWrapper^ Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction);
 
 		NativeWrapper^ Translate(float x, float y, float z);
 		NativeWrapper^ Rotate(float radians, System::Numerics::Vector3^ position, System::Numerics::Vector3^ direction);
