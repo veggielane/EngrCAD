@@ -89,6 +89,9 @@ namespace EngrCADOCWrapper
 
 
 		NativeWrapper^ Translate(float x, float y, float z);
+		NativeWrapper^ Rotate(float radians, System::Numerics::Vector3^ position, System::Numerics::Vector3^ direction);
+		NativeWrapper^ Transform(System::Numerics::Matrix4x4^ matrix);
+
 
 		System::Collections::Generic::List<FaceWrapper^>^ GetFaces();
 		System::Collections::Generic::List<EdgeWrapper^>^ GetEdges();
