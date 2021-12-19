@@ -133,9 +133,10 @@ namespace EngrCADOCWrapper {
         int t = 0;
         TopExp_Explorer Ex;
         System::Collections::Generic::List<FaceWrapper^>^ list = gcnew System::Collections::Generic::List<FaceWrapper^>();
-        for (Ex.Init(shape, TopAbs_FACE); Ex.More(); Ex.Next()) {
+        for (Ex.Init(shape, TopAbs_FACE); Ex.More(); Ex.Next()) 
+        {
 
-            TopoDS_Shape* t = new TopoDS_Shape(Ex.Current());
+            TopoDS_Face* t = static_cast<TopoDS_Face*>(new TopoDS_Shape(Ex.Current()));
             FaceWrapper^ face = gcnew FaceWrapper(t);
             list->Add(face);
         }
