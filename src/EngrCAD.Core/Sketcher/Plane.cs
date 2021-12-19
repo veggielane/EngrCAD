@@ -1,7 +1,6 @@
-﻿namespace EngrCAD.Core.Sketcher
+﻿namespace EngrCAD.Core.Sketcher;
+
+public class Plane : IPlane
 {
-    public class Plane : IPlane
-    {
-        public static IPlane XY => new Plane();
-    }
+    public static IPlane XY => new Plane();
 }

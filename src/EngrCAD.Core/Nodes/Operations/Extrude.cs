@@ -1,23 +1,22 @@
 ﻿using EngrCAD.Core.Sketcher;
 using EngrCADOCWrapper;
 
-namespace EngrCAD.Core.Nodes.Operations
+namespace EngrCAD.Core.Nodes.Operations;
+
+public class Extrude : BaseNode
 {
-    public class Extrude : BaseNode
-    {
-        public IClosedSketch Sketch { get; }
+    public IClosedSketch Sketch { get; }
 
-        public float Distance { get; }
+    public float Distance { get; }
         
-        public Extrude(IClosedSketch sketch, float distance)
-        {
-            Sketch = sketch;
-            Distance = distance;
-        }
+    public Extrude(IClosedSketch sketch, float distance)
+    {
+        Sketch = sketch;
+        Distance = distance;
+    }
 
-        public override NativeWrapper Generate()
-        {
-            throw new System.NotImplementedException();
-        }
+    public override NativeWrapper Generate()
+    {
+        throw new System.NotImplementedException();
     }
 }

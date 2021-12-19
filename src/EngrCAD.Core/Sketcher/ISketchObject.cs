@@ -1,7 +1,6 @@
-﻿namespace EngrCAD.Core.Sketcher
-{
-    public interface ISketchObject
-    {
+﻿namespace EngrCAD.Core.Sketcher;
 
-    }
+public interface ISketchObject
+{
+
 }

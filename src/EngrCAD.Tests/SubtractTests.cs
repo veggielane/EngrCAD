@@ -3,26 +3,25 @@ using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
 using Xunit;
 
-namespace EngrCAD.Tests
-{
-    public class SubtractTests
-    {
-        [Fact]
-        public void Volume()
-        {
-            var sphere = new Sphere
-            {
-                Radius = 5f
-            };
-            var box = new Box()
-            {
-                X = 10,
-                Y = 10,
-                Z = 10
-            }.Translate(5, 0, 0);
+namespace EngrCAD.Tests;
 
-            var calc = (4f / 3f) * MathF.PI * MathF.Pow(sphere.Radius, 3) / 2f;
-            Assert.Equal(calc, (sphere.Subtract(box)).CalculateVolume(), 3);
-        }
+public class SubtractTests
+{
+    [Fact]
+    public void Volume()
+    {
+        var sphere = new Sphere
+        {
+            Radius = 5f
+        };
+        var box = new Box()
+        {
+            X = 10,
+            Y = 10,
+            Z = 10
+        }.Translate(5, 0, 0);
+
+        var calc = (4f / 3f) * MathF.PI * MathF.Pow(sphere.Radius, 3) / 2f;
+        Assert.Equal(calc, (sphere.Subtract(box)).CalculateVolume(), 3);
     }
 }

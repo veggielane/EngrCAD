@@ -5,16 +5,15 @@ using System.Text;
 using System.Threading.Tasks;
 using EngrCADOCWrapper;
 
-namespace EngrCAD.Core.Nodes.Operations
+namespace EngrCAD.Core.Nodes.Operations;
+
+public class Round : BaseNode
 {
-    public class Round : BaseNode
-    {
-        public INode Child { get; init; }
+    public INode Child { get; init; }
 
-        //public float Radius { get; init; } = 0.1f;
+    //public float Radius { get; init; } = 0.1f;
 
-        public List<RadiusDefinition> Definitions = new();
+    public List<RadiusDefinition> Definitions = new();
 
-        public override NativeWrapper Generate() => Child.Wrapper.Round(Definitions);
-    }
+    public override NativeWrapper Generate() => Child.Wrapper.Round(Definitions);
 }

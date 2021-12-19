@@ -1,7 +1,6 @@
-﻿namespace EngrCAD.Core.Sketcher
-{
-    public interface IPlane
-    {
+﻿namespace EngrCAD.Core.Sketcher;
 
-    }
+public interface IPlane
+{
+
 }

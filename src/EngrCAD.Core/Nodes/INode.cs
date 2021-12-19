@@ -1,17 +1,16 @@
 ﻿using System.Collections.Generic;
 using EngrCADOCWrapper;
 
-namespace EngrCAD.Core.Nodes
+namespace EngrCAD.Core.Nodes;
+
+public interface INode
 {
-    public interface INode
-    {
-        NativeWrapper Wrapper { get; }
-        NativeWrapper Generate();
+    NativeWrapper Wrapper { get; }
+    NativeWrapper Generate();
 
-        //public List<INode> Children { get; }
-        float CalculateVolume();
+    //public List<INode> Children { get; }
+    float CalculateVolume();
 
-        IEnumerable<Face> Faces { get; }
-        IEnumerable<Edge> Edges { get; }
-    }
+    IEnumerable<Face> Faces { get; }
+    IEnumerable<Edge> Edges { get; }
 }

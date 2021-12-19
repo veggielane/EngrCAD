@@ -2,20 +2,19 @@ using System;
 using EngrCAD.Core.Nodes.Primitives;
 using Xunit;
 
-namespace EngrCAD.Tests
+namespace EngrCAD.Tests;
+
+public class ConeTests
 {
-    public class ConeTests
+    [Fact]
+    public void Volume()
     {
-        [Fact]
-        public void Volume()
+        var cone = new Cone()
         {
-            var cone = new Cone()
-            {
-                BottomRadius = 5f,
-                Height = 10f
-            };
-            var calc = (1f / 3f) * MathF.PI * MathF.Pow(cone.BottomRadius,2) * cone.Height;
-            Assert.Equal(calc, cone.CalculateVolume(), 3);
-        }
+            BottomRadius = 5f,
+            Height = 10f
+        };
+        var calc = (1f / 3f) * MathF.PI * MathF.Pow(cone.BottomRadius,2) * cone.Height;
+        Assert.Equal(calc, cone.CalculateVolume(), 3);
     }
 }

@@ -1,7 +1,6 @@
-﻿namespace EngrCAD.Core.Sketcher
-{
-    public class LineSketchObject:ISketchObject
-    {
+﻿namespace EngrCAD.Core.Sketcher;
 
-    }
+public class LineSketchObject:ISketchObject
+{
+
 }
