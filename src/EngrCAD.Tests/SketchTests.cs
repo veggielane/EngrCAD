@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Sketcher;
 using Xunit;
 
@@ -8,8 +11,10 @@ public class SketchTests
     [Fact]
     public void Create()
     {
-        var sketch = new Sketch(Plane.XY).HorizontalLine(5).VerticalLine(6).Close();
-
-
+        var size = 5f;
+        var sketch = new Sketch(Plane.XY).HorizontalLine(size).VerticalLine(size).HorizontalLine(-size).Close();
+        var extrude = sketch.Extrude(size);
+        var calc = MathF.Pow(size, 3);
+        Assert.Equal(calc, extrude.CalculateVolume(), 3);
     }
 }

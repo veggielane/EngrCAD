@@ -70,7 +70,7 @@ public class Sketch:ISketch
         Objects = new List<ISketchObject>();
         _mapper = new CoordMapper(Plane.Origin, Plane.Normal, Plane.XDirection);
 
-        //_firstPoint = Plane.Origin.
+        _firstPoint = Plane.Origin;
     }
 
 

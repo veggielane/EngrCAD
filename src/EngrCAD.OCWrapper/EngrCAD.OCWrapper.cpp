@@ -24,6 +24,10 @@
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <gp_GTrsf.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
+#include <BRepBuilderAPI_MakeEdge.hxx>
+#include <BRepBuilderAPI_MakeWire.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepPrimAPI_MakePrism.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -65,7 +69,7 @@ static TCollection_AsciiString toAsciiString(System::String^ theString)
 
 namespace EngrCADOCWrapper {
 
-    NativeWrapper^ EngrCADOCWrapper::NativeWrapper::Sphere(float radius)
+    NativeWrapper^ NativeWrapper::Sphere(float radius)
     {
         gp_Ax2 anAxis;
         anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
@@ -254,6 +258,17 @@ namespace EngrCADOCWrapper {
         return f;
     }
 
+    NativeWrapper^ NativeWrapper::Extrude(WireWrapper^ wire, System::Numerics::Vector3^ direction)
+    {
+        TopoDS_Wire wireDS = *wire->GetPointer();
+        BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireDS, false);
+        TopoDS_Face face = faceBuilder.Face();
+        BRepPrimAPI_MakePrism solidBuilder = BRepPrimAPI_MakePrism(face, gp_Vec(direction->X, direction->Y, direction->Z),false, true);
+        TopoDS_Shape* retVal = new TopoDS_Shape(solidBuilder.Shape());
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
     NativeWrapper^ NativeWrapper::Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions)
     {
         TopoDS_Shape shape = *m_Impl;
@@ -342,6 +357,28 @@ namespace EngrCADOCWrapper {
         gp_Trsf trsf = *_localToGlobal;
         gp_Pnt transformed = point.Transformed(trsf);
         return gcnew System::Numerics::Vector3(transformed.X(), transformed.Y(), transformed.Z());
+    }
+
+    EdgeWrapper^ EdgeWrapper::Line(System::Numerics::Vector3^ v1, System::Numerics::Vector3^ v2)
+    {
+        BRepBuilderAPI_MakeEdge brep = BRepBuilderAPI_MakeEdge(gp_Pnt(v1->X, v1->Y, v1->Z), gp_Pnt(v2->X, v2->Y, v2->Z));
+        TopoDS_Edge* edge = new TopoDS_Edge(brep.Edge());
+        EdgeWrapper^ edgeWrapper = gcnew EdgeWrapper(edge);
+        return edgeWrapper;
+    }
+
+    WireWrapper^ WireWrapper::FromEdges(System::Collections::Generic::List<EdgeWrapper^>^ edges)
+    {
+        BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
+
+        for each (EdgeWrapper^ edge in edges) {
+            TopoDS_Edge* edge_pointer = edge->GetPointer();
+            wireBuilder.Add(*edge_pointer);
+        }
+        wireBuilder.Build();
+        TopoDS_Wire* wire = new TopoDS_Wire(wireBuilder.Wire());
+        WireWrapper^ wrapper = gcnew WireWrapper(wire);
+        return wrapper;
     }
 
 }

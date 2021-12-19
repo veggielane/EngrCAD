@@ -1,4 +1,5 @@
-﻿using EngrCAD.Core.Sketcher;
+﻿using System.Linq;
+using EngrCAD.Core.Sketcher;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
@@ -17,6 +18,9 @@ public class Extrude : BaseNode
 
     public override NativeWrapper Generate()
     {
-        throw new System.NotImplementedException();
+        var edges = Sketch.Objects.Select(o => o.ToEdge()).ToList();
+        var wire = WireWrapper.FromEdges(edges);
+
+        return NativeWrapper.Extrude(wire, Sketch.Plane.Normal*Distance);
     }
 }

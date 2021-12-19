@@ -41,7 +41,6 @@ namespace EngrCADOCWrapper
 		TopoDS_Face* m_Impl;
 	};
 
-
 	public ref class EdgeWrapper
 	{
 	public:
@@ -59,10 +58,37 @@ namespace EngrCADOCWrapper
 	public:
 		TopoDS_Edge* GetPointer() { return m_Impl; }
 
+		static EdgeWrapper^ Line(System::Numerics::Vector3^ v1, System::Numerics::Vector3^ v2);
 
 	private:
 		TopoDS_Edge* m_Impl;
 	};
+
+	public ref class WireWrapper
+	{
+	public:
+		WireWrapper(TopoDS_Wire* wire) : m_Impl(wire) {
+		}
+
+		~WireWrapper() {
+			this->!WireWrapper();
+		}
+	protected:
+		!WireWrapper() {
+			delete m_Impl;
+		}
+
+	public:
+		TopoDS_Wire* GetPointer() { return m_Impl; }
+
+		static WireWrapper^ FromEdges(System::Collections::Generic::List<EdgeWrapper^>^ edges);
+
+	private:
+		TopoDS_Wire* m_Impl;
+	};
+
+
+
 
 	public ref class RadiusDefinition
 	{
@@ -96,7 +122,7 @@ namespace EngrCADOCWrapper
 		static NativeWrapper^ Box(float x, float y, float z, bool centered);
 		static NativeWrapper^ Cylinder(float radius, float height, bool centered);
 		static NativeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
-
+		static NativeWrapper^ Extrude(WireWrapper^ wire, System::Numerics::Vector3^ direction);
 
 		NativeWrapper^ Translate(float x, float y, float z);
 		NativeWrapper^ Rotate(float radians, System::Numerics::Vector3^ position, System::Numerics::Vector3^ direction);
@@ -111,6 +137,8 @@ namespace EngrCADOCWrapper
 		NativeWrapper^ Union(NativeWrapper^ other);
 		NativeWrapper^ Intersect(NativeWrapper^ other);
 		NativeWrapper^ Shell(double thickness);
+
+
 		
 		NativeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
 

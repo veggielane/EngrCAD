@@ -1,6 +1,8 @@
-﻿namespace EngrCAD.Core.Sketcher;
+﻿using EngrCADOCWrapper;
+
+namespace EngrCAD.Core.Sketcher;
 
 public interface ISketchObject
 {
-
+    EdgeWrapper ToEdge();
 }
