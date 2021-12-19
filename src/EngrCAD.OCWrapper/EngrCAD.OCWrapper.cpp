@@ -22,7 +22,8 @@
 #include <BRepPrimAPI_MakeCylinder.hxx>
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
-
+#include <gp_GTrsf.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -122,6 +123,42 @@ namespace EngrCADOCWrapper {
         TopLoc_Location translation = TopLoc_Location(transformation);
 
         TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+
+    }
+
+    NativeWrapper^ NativeWrapper::Rotate(float radians, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction)
+    {
+        TopoDS_Shape shape = *m_Impl;
+        gp_Dir dir = gp_Dir(direction->X, direction->Y, direction->Z);
+        gp_Pnt ori = gp_Pnt(origin->X, origin->Y, origin->Z);
+        gp_Ax1 axis = gp_Ax1(ori, dir);
+
+        gp_Trsf transformation = gp_Trsf();
+        transformation.SetRotation(axis, radians);
+        TopLoc_Location translation = TopLoc_Location(transformation);
+        TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
+    NativeWrapper^ NativeWrapper::Transform(System::Numerics::Matrix4x4^ matrix)
+    {
+        TopoDS_Shape shape = *m_Impl;
+
+
+        gp_Mat mat = gp_Mat(matrix->M11, matrix->M21, matrix->M31,
+            matrix->M12, matrix->M22, matrix->M32,
+            matrix->M13, matrix->M23, matrix->M33);
+
+
+        gp_XYZ pos = gp_XYZ(matrix->M41, matrix->M42, matrix->M43);
+        gp_GTrsf transformation = gp_GTrsf(mat, pos);
+
+        BRepBuilderAPI_GTransform brep = BRepBuilderAPI_GTransform(shape, transformation);
+        brep.Build();
+        TopoDS_Shape * retVal = new TopoDS_Shape(brep.Shape());
         NativeWrapper^ f = gcnew NativeWrapper(retVal);
         return f;
 

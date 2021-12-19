@@ -14,6 +14,12 @@ namespace EngrCAD.Core.Nodes
         public static void SaveSTL(this INode node, string path) => node.Generate().SaveSTL(path);
         public static void SaveSTP(this INode node, string path) => node.Generate().SaveSTP(path);
 
+        public static INode Transform(this INode node, Matrix4x4 matrix) => new Transform
+        {
+            Child = node,
+            Matrix = matrix
+        };
+
         public static INode Translate(this INode node, Vector3 position) => new Translate
         {
             Child = node,
@@ -21,6 +27,33 @@ namespace EngrCAD.Core.Nodes
         };
 
         public static INode Translate(this INode node, float x, float y, float z) => node.Translate(new Vector3(x, y, z));
+
+        public static INode Rotate(this INode node, float radians, Vector3 origin, Vector3 direction) => new Rotate()
+        {
+            Child = node,
+            Radians = radians,
+            Origin = origin,
+            Direction = direction
+        };
+
+        public static INode RotateX(this INode node, float radians) => new Rotate()
+        {
+            Child = node,
+            Radians = radians,
+            Direction = Vector3.UnitX
+        };
+        public static INode RotateY(this INode node, float radians) => new Rotate()
+        {
+            Child = node,
+            Radians = radians,
+            Direction = Vector3.UnitY
+        };
+        public static INode RotateZ(this INode node, float radians) => new Rotate()
+        {
+            Child = node,
+            Radians = radians,
+            Direction = Vector3.UnitZ
+        };
 
         public static INode Subtract(this INode node, INode other) => new Subtract()
         {
