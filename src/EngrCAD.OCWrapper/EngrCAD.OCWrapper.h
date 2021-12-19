@@ -1,30 +1,34 @@
 #pragma once
 
 
-namespace EngrCADOCWrapper {
+namespace EngrCADOCWrapper 
+{
 
 
 
 	public ref class FaceWrapper
 	{
 	public:
-		FaceWrapper(void* shape) : m_Impl(shape) {
+		FaceWrapper(TopoDS_Face* face) : m_Impl(face)
+		{
 		}
 
-		~FaceWrapper() {
+		~FaceWrapper() 
+		{
 			this->!FaceWrapper();
 		}
+
+		void* GetPointer() 
+		{ 
+			return m_Impl; 
+		}
 	protected:
-		!FaceWrapper() {
+		!FaceWrapper() 
+		{
 			delete m_Impl;
 		}
-
-	public:
-		void* GetPointer() { return m_Impl; }
-
-
 	private:
-		void* m_Impl;
+		TopoDS_Face* m_Impl;
 	};
 
 
