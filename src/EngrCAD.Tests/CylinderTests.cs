@@ -17,7 +17,7 @@ public class CylinderTests
         };
 
         var calc = MathF.PI * MathF.Pow(cylinder.Radius, 2) * cylinder.Height;
-        Assert.Equal(calc, cylinder.CalculateVolume(), 3);
+        Assert.Equal(calc, cylinder.Volume, 3);
     }
 
     [Fact]
@@ -43,8 +43,8 @@ public class CylinderTests
             Z = 10
         }.Translate(5, 0, 0);
 
-        var aVolume = a.Subtract(box).CalculateVolume();
-        var bVolume = b.CalculateVolume();
+        var aVolume = a.Subtract(box).Volume;
+        var bVolume = b.Volume;
 
         Assert.Equal(aVolume, bVolume/ 2f, 3);
     }

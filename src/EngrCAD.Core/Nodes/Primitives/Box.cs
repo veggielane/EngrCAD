@@ -10,5 +10,5 @@ public class Box : BaseNode
 
     public bool Centered { get; init; } = true;
 
-    public override NativeWrapper Generate() => NativeWrapper.Box(X, Y, Z, Centered);
+    public override ShapeWrapper Generate() => ShapeWrapper.Box(X, Y, Z, Centered);
 }

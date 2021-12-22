@@ -15,6 +15,6 @@ public class ConeTests
             Height = 10f
         };
         var calc = (1f / 3f) * MathF.PI * MathF.Pow(cone.BottomRadius,2) * cone.Height;
-        Assert.Equal(calc, cone.CalculateVolume(), 3);
+        Assert.Equal(calc, cone.Volume, 3);
     }
 }

@@ -18,6 +18,6 @@ public class BoxTests
         };
 
         var calc = MathF.Pow(size, 3);
-        Assert.Equal(calc, box.CalculateVolume(), 3);
+        Assert.Equal(calc, box.Volume, 3);
     }
 }

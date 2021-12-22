@@ -10,7 +10,7 @@ public class Translate: BaseNode
 
     public INode Child { get; init; }
 
-    public override NativeWrapper Generate()
+    public override ShapeWrapper Generate()
     {
         return Child.Wrapper.Translate(Position.X, Position.Y, Position.Z);
     }

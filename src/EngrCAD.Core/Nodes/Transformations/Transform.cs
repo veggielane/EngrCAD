@@ -9,7 +9,7 @@ public class Transform : BaseNode
 
     public INode Child { get; init; }
 
-    public override NativeWrapper Generate()
+    public override ShapeWrapper Generate()
     {
         return Child.Wrapper.Transform(Matrix);
     }
@@ -29,7 +29,7 @@ public class Rotate : BaseNode
 
     public INode Child { get; init; }
 
-    public override NativeWrapper Generate()
+    public override ShapeWrapper Generate()
     {
         return Child.Wrapper.Rotate(Radians, Origin, Direction);
     }

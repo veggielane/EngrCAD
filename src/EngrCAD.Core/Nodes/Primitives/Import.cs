@@ -8,11 +8,11 @@ public class Import : BaseNode
 {
     public string FilePath { get; init; }
 
-    public override NativeWrapper Generate()
+    public override ShapeWrapper Generate()
     {
         return Path.GetExtension(FilePath)?.ToLowerInvariant() switch
         {
-            ".stp" or ".step" => NativeWrapper.ImportSTP(FilePath),
+            ".stp" or ".step" => ShapeWrapper.ImportSTP(FilePath),
             _ => throw new NotImplementedException("Extension not supported")
         };
     }

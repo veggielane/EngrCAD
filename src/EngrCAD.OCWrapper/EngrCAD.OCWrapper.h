@@ -59,6 +59,9 @@ namespace EngrCADOCWrapper
 		TopoDS_Edge* GetPointer() { return m_Impl; }
 
 		static EdgeWrapper^ Line(System::Numerics::Vector3^ v1, System::Numerics::Vector3^ v2);
+		System::Numerics::Vector3^ Normal();
+		int CurveType();
+
 
 	private:
 		TopoDS_Edge* m_Impl;
@@ -100,17 +103,17 @@ namespace EngrCADOCWrapper
 		float Radius;
 	};
 
-	public ref class NativeWrapper
+	public ref class ShapeWrapper
 	{
 	public:
-		NativeWrapper(TopoDS_Shape* shape) : m_Impl(shape) {
+		ShapeWrapper(TopoDS_Shape* shape) : m_Impl(shape) {
 		}
 
-		~NativeWrapper() {
-			this->!NativeWrapper();
+		~ShapeWrapper() {
+			this->!ShapeWrapper();
 		}
 	protected:
-		!NativeWrapper() {
+		!ShapeWrapper() {
 			delete m_Impl;
 		}
 
@@ -118,16 +121,16 @@ namespace EngrCADOCWrapper
 		void* GetPointer() { return m_Impl; }
 
 		//c
-		static NativeWrapper^ Sphere(float radius);
-		static NativeWrapper^ Box(float x, float y, float z, bool centered);
-		static NativeWrapper^ Cylinder(float radius, float height, bool centered);
-		static NativeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
-		static NativeWrapper^ Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction);
-		static NativeWrapper^ ImportSTP(System::String^ filenpathame);
+		static ShapeWrapper^ Sphere(float radius);
+		static ShapeWrapper^ Box(float x, float y, float z, bool centered);
+		static ShapeWrapper^ Cylinder(float radius, float height, bool centered);
+		static ShapeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
+		static ShapeWrapper^ Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction);
+		static ShapeWrapper^ ImportSTP(System::String^ filenpathame);
 
-		NativeWrapper^ Translate(float x, float y, float z);
-		NativeWrapper^ Rotate(float radians, System::Numerics::Vector3^ position, System::Numerics::Vector3^ direction);
-		NativeWrapper^ Transform(System::Numerics::Matrix4x4^ matrix);
+		ShapeWrapper^ Translate(float x, float y, float z);
+		ShapeWrapper^ Rotate(float radians, System::Numerics::Vector3^ position, System::Numerics::Vector3^ direction);
+		ShapeWrapper^ Transform(System::Numerics::Matrix4x4^ matrix);
 
 
 		System::Collections::Generic::List<FaceWrapper^>^ GetFaces();
@@ -137,14 +140,14 @@ namespace EngrCADOCWrapper
 		int ShapeType();
 
 		//Operations
-		NativeWrapper^ Subtract(NativeWrapper^ other);
-		NativeWrapper^ Union(NativeWrapper^ other);
-		NativeWrapper^ Intersect(NativeWrapper^ other);
-		NativeWrapper^ Shell(double thickness);
+		ShapeWrapper^ Subtract(ShapeWrapper^ other);
+		ShapeWrapper^ Union(ShapeWrapper^ other);
+		ShapeWrapper^ Intersect(ShapeWrapper^ other);
+		ShapeWrapper^ Shell(double thickness);
 
 
 		
-		NativeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
+		ShapeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
 
 		void SaveSTP(System::String^ path);
 		void SaveSTL(System::String^ path);

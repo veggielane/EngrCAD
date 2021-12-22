@@ -28,6 +28,8 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
 #include <BRepPrimAPI_MakePrism.hxx>
+#include <BRepAdaptor_Curve.hxx>
+#include <Geom_Line.hxx>
 
 
 #pragma comment(lib, "TKernel.lib")
@@ -69,17 +71,17 @@ static TCollection_AsciiString toAsciiString(System::String^ theString)
 
 namespace EngrCADOCWrapper {
 
-    NativeWrapper^ NativeWrapper::Sphere(float radius)
+    ShapeWrapper^ ShapeWrapper::Sphere(float radius)
     {
         gp_Ax2 anAxis;
         anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
         TopoDS_Shape shape = BRepPrimAPI_MakeSphere(anAxis, radius).Shape();
         TopoDS_Shape* retVal = new TopoDS_Shape(shape);
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Box(float x, float y, float z, bool centered)
+    ShapeWrapper^ ShapeWrapper::Box(float x, float y, float z, bool centered)
     {
         TopoDS_Shape shape = BRepPrimAPI_MakeBox(x, y, z).Shape();
 
@@ -88,37 +90,37 @@ namespace EngrCADOCWrapper {
             transformation.SetTranslation(gp_Vec(-x / 2.0f, -y / 2.0f, -z / 2.0f));
             TopLoc_Location translation = TopLoc_Location(transformation);
             TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
-            NativeWrapper^ f = gcnew NativeWrapper(retVal);
+            ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
             return f;
         }
         else {
             TopoDS_Shape* retVal = new TopoDS_Shape(shape);
-            NativeWrapper^ f = gcnew NativeWrapper(retVal);
+            ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
             return f;
         }
     }
 
-    NativeWrapper^ NativeWrapper::Cylinder(float radius, float height, bool centered)
+    ShapeWrapper^ ShapeWrapper::Cylinder(float radius, float height, bool centered)
     {
         gp_Ax2 pos = gp_Ax2(gp_Pnt(0, 0, centered ? -height / 2.0 : 0), gp_Dir(0, 0, 1));
         TopoDS_Shape shape = BRepPrimAPI_MakeCylinder(pos, radius, height).Shape();
 
         TopoDS_Shape* retVal = new TopoDS_Shape(shape);
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Cone(float bottomRadius, float topRadius, float height, bool centered)
+    ShapeWrapper^ ShapeWrapper::Cone(float bottomRadius, float topRadius, float height, bool centered)
     {
         gp_Ax2 pos = gp_Ax2(gp_Pnt(0, 0, centered ? -height / 2.0 : 0), gp_Dir(0, 0, 1));
         TopoDS_Shape shape = BRepPrimAPI_MakeCone(pos, bottomRadius, topRadius, height).Shape();
 
         TopoDS_Shape* retVal = new TopoDS_Shape(shape);
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Translate(float x, float y, float z)
+    ShapeWrapper^ ShapeWrapper::Translate(float x, float y, float z)
     {
         TopoDS_Shape shape = *m_Impl;
 
@@ -127,12 +129,12 @@ namespace EngrCADOCWrapper {
         TopLoc_Location translation = TopLoc_Location(transformation);
 
         TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
 
     }
 
-    NativeWrapper^ NativeWrapper::Rotate(float radians, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction)
+    ShapeWrapper^ ShapeWrapper::Rotate(float radians, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction)
     {
         TopoDS_Shape shape = *m_Impl;
         gp_Dir dir = gp_Dir(direction->X, direction->Y, direction->Z);
@@ -143,11 +145,11 @@ namespace EngrCADOCWrapper {
         transformation.SetRotation(axis, radians);
         TopLoc_Location translation = TopLoc_Location(transformation);
         TopoDS_Shape* retVal = new TopoDS_Shape(shape.Moved(translation));
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Transform(System::Numerics::Matrix4x4^ matrix)
+    ShapeWrapper^ ShapeWrapper::Transform(System::Numerics::Matrix4x4^ matrix)
     {
         TopoDS_Shape shape = *m_Impl;
 
@@ -163,12 +165,12 @@ namespace EngrCADOCWrapper {
         BRepBuilderAPI_GTransform brep = BRepBuilderAPI_GTransform(shape, transformation);
         brep.Build();
         TopoDS_Shape * retVal = new TopoDS_Shape(brep.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
 
     }
 
-    System::Collections::Generic::List<FaceWrapper^>^ NativeWrapper::GetFaces()
+    System::Collections::Generic::List<FaceWrapper^>^ ShapeWrapper::GetFaces()
     {
         TopoDS_Shape shape = *m_Impl;
         int t = 0;
@@ -184,10 +186,9 @@ namespace EngrCADOCWrapper {
         return list;
     }
 
-    System::Collections::Generic::List<EdgeWrapper^>^ NativeWrapper::GetEdges()
+    System::Collections::Generic::List<EdgeWrapper^>^ ShapeWrapper::GetEdges()
     {
         TopoDS_Shape shape = *m_Impl;
-        int t = 0;
         TopExp_Explorer Ex;
         System::Collections::Generic::List<EdgeWrapper^>^ list = gcnew System::Collections::Generic::List<EdgeWrapper^>();
         for (Ex.Init(shape, TopAbs_EDGE); Ex.More(); Ex.Next()) {
@@ -199,13 +200,13 @@ namespace EngrCADOCWrapper {
         return list;
     }
 
-    int NativeWrapper::ShapeType()
+    int ShapeWrapper::ShapeType()
     {
         TopoDS_Shape shape = *m_Impl;
         return shape.ShapeType();
     }
 
-    NativeWrapper^ NativeWrapper::Subtract(NativeWrapper^ other)
+    ShapeWrapper^ ShapeWrapper::Subtract(ShapeWrapper^ other)
     {
         TopoDS_Shape difference = *m_Impl;
         TopoDS_Shape other_shape = *other->m_Impl;
@@ -216,12 +217,12 @@ namespace EngrCADOCWrapper {
         algo.SimplifyResult(true, true, 1e-3);
 
         TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
 
     }
 
-    NativeWrapper^ NativeWrapper::Union(NativeWrapper^ other)
+    ShapeWrapper^ ShapeWrapper::Union(ShapeWrapper^ other)
     {
         TopoDS_Shape first = *m_Impl;
         TopoDS_Shape other_shape = *other->m_Impl;
@@ -231,11 +232,11 @@ namespace EngrCADOCWrapper {
         algo.Build();
         algo.SimplifyResult(true, true, 1e-3);
         TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Intersect(NativeWrapper^ other)
+    ShapeWrapper^ ShapeWrapper::Intersect(ShapeWrapper^ other)
     {
         TopoDS_Shape first = *m_Impl;
         TopoDS_Shape other_shape = *other->m_Impl;
@@ -246,11 +247,11 @@ namespace EngrCADOCWrapper {
         algo.Build();
         algo.SimplifyResult(true, true, 1e-3);
         TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Shell(double thickness)
+    ShapeWrapper^ ShapeWrapper::Shell(double thickness)
     {
         TopoDS_Shape shape = *m_Impl;
 
@@ -260,11 +261,11 @@ namespace EngrCADOCWrapper {
 
 
         TopoDS_Shape* retVal = new TopoDS_Shape(builder.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction)
+    ShapeWrapper^ ShapeWrapper::Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction)
     {
         BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
         for each (EdgeWrapper ^ edge in edges) {
@@ -276,23 +277,23 @@ namespace EngrCADOCWrapper {
         TopoDS_Face face = faceBuilder.Face();
         BRepPrimAPI_MakePrism solidBuilder = BRepPrimAPI_MakePrism(face, gp_Vec(direction->X, direction->Y, direction->Z),false, true);
         TopoDS_Shape* retVal = new TopoDS_Shape(solidBuilder.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    NativeWrapper^ NativeWrapper::ImportSTP(System::String^ path)
+    ShapeWrapper^ ShapeWrapper::ImportSTP(System::String^ path)
     {
         STEPControl_Reader reader = STEPControl_Reader();
         reader.ReadFile(toAsciiString(path).ToCString());
         reader.TransferRoots();
         TopoDS_Shape* retVal = new TopoDS_Shape(reader.OneShape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
 
 
-    NativeWrapper^ NativeWrapper::Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions)
+    ShapeWrapper^ ShapeWrapper::Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions)
     {
         TopoDS_Shape shape = *m_Impl;
         BRepFilletAPI_MakeFillet fillet = BRepFilletAPI_MakeFillet(shape);
@@ -304,11 +305,11 @@ namespace EngrCADOCWrapper {
             }
         }
         TopoDS_Shape* retVal = new TopoDS_Shape(fillet.Shape());
-        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
         return f;
     }
 
-    void NativeWrapper::SaveSTP(System::String^ path)
+    void ShapeWrapper::SaveSTP(System::String^ path)
     {
         STEPControl_Writer writer;
 
@@ -319,7 +320,7 @@ namespace EngrCADOCWrapper {
         writer.Write(temp.ToCString());
     }
 
-    void NativeWrapper::SaveSTL(System::String^ path)
+    void ShapeWrapper::SaveSTL(System::String^ path)
     {
         StlAPI_Writer writer;
         writer.ASCIIMode() = true;
@@ -333,7 +334,7 @@ namespace EngrCADOCWrapper {
         bool t = writer.Write(shape, temp.ToCString());
     }
 
-    float NativeWrapper::CalculateVolume()
+    float ShapeWrapper::CalculateVolume()
     {
         TopoDS_Shape shape = *m_Impl;
 
@@ -388,6 +389,45 @@ namespace EngrCADOCWrapper {
         TopoDS_Edge* edge = new TopoDS_Edge(brep.Edge());
         EdgeWrapper^ edgeWrapper = gcnew EdgeWrapper(edge);
         return edgeWrapper;
+    }
+
+    System::Numerics::Vector3^ EdgeWrapper::Normal()
+    {
+        TopoDS_Edge edge = *m_Impl;
+
+        Standard_Real first, last;
+        //BRep_Tool::Curve
+        //Geom_Curve aCurve = BRep_Tool::Curve(anEdge, first, last);
+        //Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+
+        BRepAdaptor_Curve curve(edge);
+        GeomAbs_CurveType theTyp = curve.GetType();
+
+        if (theTyp == GeomAbs_Line)
+        {
+            gp_Lin line = curve.Line();
+
+            gp_Dir dir = line.Direction();
+
+            return System::Numerics::Vector3::Normalize(System::Numerics::Vector3(dir.X(), dir.Y(), dir.Z()));
+        }
+
+
+
+        //if (curve->IsKind(STANDARD_TYPE(Geom_Line)))
+        {
+            // do something with line
+        }
+        //tangentAt
+        throw gcnew System::NotImplementedException();
+        // TODO: insert return statement here
+    }
+
+    int EdgeWrapper::CurveType()
+    {
+        TopoDS_Edge edge = *m_Impl;
+        BRepAdaptor_Curve theCrv(edge);
+        return theCrv.GetType();
     }
 
     WireWrapper^ WireWrapper::FromEdges(System::Collections::Generic::List<EdgeWrapper^>^ edges)

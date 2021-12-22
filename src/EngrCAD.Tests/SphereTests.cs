@@ -15,6 +15,6 @@ public class SphereTests
         };
 
         var calc = (4f / 3f) * MathF.PI * MathF.Pow(sphere.Radius, 3);
-        Assert.Equal(calc,sphere.CalculateVolume(),3);
+        Assert.Equal(calc,sphere.Volume,3);
     }
 }

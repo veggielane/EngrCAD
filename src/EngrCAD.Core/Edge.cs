@@ -11,13 +11,4 @@ public class Edge
         Wrapper = wrapper;
     }
 
-    public bool ParallelTo(Axis axis)
-    {
-        return false;
-    }
-}
-
-public class Axis
-{
-
 }

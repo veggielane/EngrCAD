@@ -16,9 +16,9 @@ public class Extrude : BaseNode
         Distance = distance;
     }
 
-    public override NativeWrapper Generate()
+    public override ShapeWrapper Generate()
     {
         var edges = Sketch.Edges.Select(o => o.ToEdge()).ToList();
-        return NativeWrapper.Extrude(edges, Sketch.Plane.Normal*Distance);
+        return ShapeWrapper.Extrude(edges, Sketch.Plane.Normal*Distance);
     }
 }

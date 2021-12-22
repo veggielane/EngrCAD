@@ -15,5 +15,5 @@ public class Round : BaseNode
 
     public List<RadiusDefinition> Definitions = new();
 
-    public override NativeWrapper Generate() => Child.Wrapper.Round(Definitions);
+    public override ShapeWrapper Generate() => Child.Wrapper.Round(Definitions);
 }

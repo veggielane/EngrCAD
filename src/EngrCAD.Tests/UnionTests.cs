@@ -23,6 +23,6 @@ public class UnionTests
 
         var calc = (4f / 3f) * MathF.PI * MathF.Pow(sphere.Radius, 3) / 2f + MathF.Pow(10,3);
 
-        Assert.Equal(calc, (sphere.Union(box)).CalculateVolume(), 3);
+        Assert.Equal(calc, (sphere.Union(box)).Volume, 3);
     }
 }

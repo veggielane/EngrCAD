@@ -10,7 +10,7 @@ public class Cylinder : BaseNode
 
     public bool Centered { get; init; } = true;
 
-    public override NativeWrapper Generate() => NativeWrapper.Cylinder(Radius, Height, Centered);
+    public override ShapeWrapper Generate() => ShapeWrapper.Cylinder(Radius, Height, Centered);
 }
 
 public class Cone : BaseNode
@@ -23,5 +23,5 @@ public class Cone : BaseNode
         
     public bool Centered { get; init; } = true;
 
-    public override NativeWrapper Generate() => NativeWrapper.Cone(BottomRadius, TopRadius, Height, Centered);
+    public override ShapeWrapper Generate() => ShapeWrapper.Cone(BottomRadius, TopRadius, Height, Centered);
 }

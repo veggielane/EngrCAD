@@ -22,6 +22,6 @@ public class SubtractTests
         }.Translate(5, 0, 0);
 
         var calc = (4f / 3f) * MathF.PI * MathF.Pow(sphere.Radius, 3) / 2f;
-        Assert.Equal(calc, (sphere.Subtract(box)).CalculateVolume(), 3);
+        Assert.Equal(calc, (sphere.Subtract(box)).Volume, 3);
     }
 }

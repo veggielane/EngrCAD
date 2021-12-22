@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Numerics;
 using EngrCAD.Core;
 using EngrCAD.Core.Nodes;
@@ -26,9 +27,12 @@ class Program
 
         var a = new Box { X = 2, Y = 2, Z = 2 }.Translate(-0.25f, -0.25f, -0.25f);
 
+        var esges = a.Edges.ToList();
+
         a.Round(0.8f).SaveSTL("round_2.stl");
 
         a.Round(0.5f, edges => edges[..4]).SaveSTL("round_3.stl");
+        a.Round(0.5f, edges => edges.OfType<EdgeLine>().Where(line => line.ParallelTo(Vector3.UnitZ))).SaveSTL("round_z.stl");
 
         a.Round((0.1f, edges => edges[0..12]), (0.8f, edges => edges[13..^0])).SaveSTL("round_5.stl");
 

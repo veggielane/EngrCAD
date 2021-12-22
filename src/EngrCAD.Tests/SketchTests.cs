@@ -16,6 +16,6 @@ public class SketchTests
         var sketch = new Sketch(Plane.XY).HorizontalLine(size).VerticalLine(size).HorizontalLine(-size).Close();
         var extrude = sketch.Extrude(height);
         var calc = MathF.Pow(size, 2)* height;
-        Assert.Equal(calc, extrude.CalculateVolume(), 3);
+        Assert.Equal(calc, extrude.Volume, 3);
     }
 }

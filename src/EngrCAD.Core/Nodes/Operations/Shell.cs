@@ -9,5 +9,5 @@ public class Shell : BaseNode
 
     public float Thickness { get; init; } = 0.5f;
 
-    public override NativeWrapper Generate() => Child.Wrapper.Shell(-1.0*Thickness);
+    public override ShapeWrapper Generate() => Child.Wrapper.Shell(-1.0*Thickness);
 }
