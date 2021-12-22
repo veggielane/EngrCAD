@@ -123,6 +123,7 @@ namespace EngrCADOCWrapper
 		static NativeWrapper^ Cylinder(float radius, float height, bool centered);
 		static NativeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
 		static NativeWrapper^ Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction);
+		static NativeWrapper^ ImportSTP(System::String^ filenpathame);
 
 		NativeWrapper^ Translate(float x, float y, float z);
 		NativeWrapper^ Rotate(float radians, System::Numerics::Vector3^ position, System::Numerics::Vector3^ direction);
@@ -130,7 +131,10 @@ namespace EngrCADOCWrapper
 
 
 		System::Collections::Generic::List<FaceWrapper^>^ GetFaces();
+
 		System::Collections::Generic::List<EdgeWrapper^>^ GetEdges();
+
+		int ShapeType();
 
 		//Operations
 		NativeWrapper^ Subtract(NativeWrapper^ other);

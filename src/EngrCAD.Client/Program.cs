@@ -50,6 +50,7 @@ class Program
         a.Intersect(b).SaveSTP("intersect.stp");
 
 
+        new Import() { FilePath = @"C:\temp\n20.stp" }.SaveSTL("n20.stl");
         //var sketch = new Sketch(Plane.XY).HorizontalLine(10).VerticalLine(10).HorizontalLine(-10).Close();
 
         //var extrude =

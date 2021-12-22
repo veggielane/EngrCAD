@@ -199,6 +199,12 @@ namespace EngrCADOCWrapper {
         return list;
     }
 
+    int NativeWrapper::ShapeType()
+    {
+        TopoDS_Shape shape = *m_Impl;
+        return shape.ShapeType();
+    }
+
     NativeWrapper^ NativeWrapper::Subtract(NativeWrapper^ other)
     {
         TopoDS_Shape difference = *m_Impl;
@@ -274,6 +280,18 @@ namespace EngrCADOCWrapper {
         return f;
     }
 
+    NativeWrapper^ NativeWrapper::ImportSTP(System::String^ path)
+    {
+        STEPControl_Reader reader = STEPControl_Reader();
+        reader.ReadFile(toAsciiString(path).ToCString());
+        reader.TransferRoots();
+        TopoDS_Shape* retVal = new TopoDS_Shape(reader.OneShape());
+        NativeWrapper^ f = gcnew NativeWrapper(retVal);
+        return f;
+    }
+
+
+
     NativeWrapper^ NativeWrapper::Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions)
     {
         TopoDS_Shape shape = *m_Impl;
@@ -340,11 +358,11 @@ namespace EngrCADOCWrapper {
 
         gp_Trsf globalToLocal = gp_Trsf();
         globalToLocal.SetTransformation(globalCoordSystem, localCoordSystem);
-        _globalToLocal = &globalToLocal;
+        _globalToLocal = new gp_Trsf(globalToLocal);
 
         gp_Trsf localToGlobal = gp_Trsf();
         localToGlobal.SetTransformation(localCoordSystem, globalCoordSystem);
-        _localToGlobal = &localToGlobal;
+        _localToGlobal = new gp_Trsf(localToGlobal);
     }
 
     System::Numerics::Vector2^ CoordMapper::ToLocalCoords(System::Numerics::Vector3^ vec)
