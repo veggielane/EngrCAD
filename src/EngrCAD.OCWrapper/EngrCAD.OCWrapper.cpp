@@ -30,7 +30,7 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <Geom_Line.hxx>
-
+#include <Geom_BezierCurve.hxx>
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -268,7 +268,7 @@ namespace EngrCADOCWrapper {
     ShapeWrapper^ ShapeWrapper::Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction)
     {
         BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
-        for each (EdgeWrapper ^ edge in edges) {
+        for each (EdgeWrapper^ edge in edges) {
             TopoDS_Edge* edge_pointer = edge->GetPointer();
             wireBuilder.Add(*edge_pointer);
         }
@@ -387,6 +387,24 @@ namespace EngrCADOCWrapper {
     {
         BRepBuilderAPI_MakeEdge brep = BRepBuilderAPI_MakeEdge(gp_Pnt(v1->X, v1->Y, v1->Z), gp_Pnt(v2->X, v2->Y, v2->Z));
         TopoDS_Edge* edge = new TopoDS_Edge(brep.Edge());
+        EdgeWrapper^ edgeWrapper = gcnew EdgeWrapper(edge);
+        return edgeWrapper;
+    }
+
+    EdgeWrapper^ EdgeWrapper::BezierCurve(System::Collections::Generic::List<System::Numerics::Vector3>^ points)
+    {
+        TColgp_Array1OfPnt pointArray = TColgp_Array1OfPnt(1, points->Count);
+        int i = 1;
+        for each (System::Numerics::Vector3^ p in points) {
+            pointArray.SetValue(i++, gp_Pnt(p->X, p->Y, p->Z));
+        }
+
+        Handle_Geom_Curve bezierCurve = new Geom_BezierCurve(pointArray);
+
+        BRepBuilderAPI_MakeEdge edgeMaker;
+        edgeMaker.Init(bezierCurve);
+        TopoDS_Edge* edge = new TopoDS_Edge(edgeMaker.Edge());
+
         EdgeWrapper^ edgeWrapper = gcnew EdgeWrapper(edge);
         return edgeWrapper;
     }

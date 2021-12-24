@@ -1,4 +1,6 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Numerics;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Sketcher.Edges;
@@ -8,23 +10,49 @@ namespace EngrCAD.Core.Sketcher;
 
 public class Sketch:ISketch
 {
-    public IPlane Plane { get; init; }
-    public List<ISketchEdge> Edges { get; protected set; }
-
-    protected Vector3 _firstPoint;
-    protected Vector3 _pointer;
-
+    private Vector3 _firstPoint;
+    private Vector3 _pointer;
     private readonly CoordMapper _mapper;
+
+    public IPlane Plane { get; init; }
+    public List<ISketchEdge> Edges { get; protected init; }
+
+
+    public ISketch MoveTo(Vector2 v)
+    {
+        if (Edges.Any())
+        {
+            throw new Exception("MoveTo can only be used at the start");
+        }
+        var point = ToWorldCoords(v);
+        _pointer = point;
+        _firstPoint = point;
+        return this;
+    }
+
+    public ISketch MoveTo(float x, float y) => MoveTo(new Vector2(x, y));
+
 
     private void UpdatePointer(Vector3 v)
     {
         _pointer = v;
     }
 
+
+    private Vector3 ToWorldCoords(Vector2 v)
+    {
+        return (Vector3)_mapper.ToWorldCoords(v);
+    }
+
+    private Vector2 ToLocalCoords(Vector3 v)
+    {
+        return (Vector2)_mapper.ToLocalCoords(v);
+    }
+
     public ISketch LineTo(Vector2 v)
     {
-        var endPoint = (Vector3)_mapper.ToWorldCoords(v);
-        Edges.Add(new LineSketchObject
+        var endPoint = ToWorldCoords(v);
+        Edges.Add(new SketchEdgeLine
         {
             Start = _pointer,
             End = endPoint
@@ -38,10 +66,25 @@ public class Sketch:ISketch
         return LineTo(new Vector2(x, y));
     }
 
-    public ISketch Line(float x, float y)
+    public ISketch Line(Vector2 v)
     {
-        var pointer = (Vector2)_mapper.ToLocalCoords(_pointer);
-        return LineTo(x + pointer.X, y + pointer.Y);
+        var pointer = ToLocalCoords(_pointer);
+        return LineTo(v.X + pointer.X, v.Y + pointer.Y);
+    }
+
+    public ISketch Line(float x, float y) => Line(new Vector2(x, y));
+    public ISketch BezierCurveTo(Vector2 end, params Vector2[] controlPoints)
+    {
+        var endPoint = ToWorldCoords(end);
+        Edges.Add(new SketchEdgeBezierCurve
+        {
+            Start = _pointer,
+            End = endPoint,
+            ControlPoints = controlPoints.Select(ToWorldCoords).ToList()
+        });
+
+        UpdatePointer(endPoint);
+        return this;
     }
 
     public ISketch HorizontalLine(float distance)
@@ -57,7 +100,7 @@ public class Sketch:ISketch
     public IClosedSketch Close()
     {
 
-        Edges.Add(new LineSketchObject
+        Edges.Add(new SketchEdgeLine
         {
             Start = _pointer,
             End = _firstPoint

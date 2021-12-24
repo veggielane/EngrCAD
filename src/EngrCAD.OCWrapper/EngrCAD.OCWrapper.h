@@ -59,6 +59,8 @@ namespace EngrCADOCWrapper
 		TopoDS_Edge* GetPointer() { return m_Impl; }
 
 		static EdgeWrapper^ Line(System::Numerics::Vector3^ v1, System::Numerics::Vector3^ v2);
+		static EdgeWrapper^ BezierCurve(System::Collections::Generic::List<System::Numerics::Vector3>^ points);
+
 		System::Numerics::Vector3^ Normal();
 		int CurveType();
 

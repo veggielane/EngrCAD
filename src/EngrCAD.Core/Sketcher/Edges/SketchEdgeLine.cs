@@ -3,7 +3,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Sketcher.Edges;
 
-internal class LineSketchObject: ISketchEdge
+internal class SketchEdgeLine: ISketchEdge
 {
     public Vector3 Start { get; init; }
     public Vector3 End { get; init; }
