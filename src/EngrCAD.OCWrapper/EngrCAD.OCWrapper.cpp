@@ -69,12 +69,23 @@ static TCollection_AsciiString toAsciiString(System::String^ theString)
     return TCollection_AsciiString(aWCharPtr);
 }
 
+static gp_Pnt ToPnt(System::Numerics::Vector3^ v) {
+    return gp_Pnt(v->X, v->Y, v->Z);
+}
+
+static gp_Dir ToDir(System::Numerics::Vector3^ v) {
+    return gp_Dir(v->X, v->Y, v->Z);
+}
+static gp_Vec ToVec(System::Numerics::Vector3^ v) {
+    return gp_Vec(v->X, v->Y, v->Z);
+}
+
 namespace EngrCADOCWrapper {
 
     ShapeWrapper^ ShapeWrapper::Sphere(float radius)
     {
         gp_Ax2 anAxis;
-        anAxis.SetLocation(gp_Pnt(0.0, 0, 0.0));
+        anAxis.SetLocation(gp_Pnt(0, 0, 0));
         TopoDS_Shape shape = BRepPrimAPI_MakeSphere(anAxis, radius).Shape();
         TopoDS_Shape* retVal = new TopoDS_Shape(shape);
         ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
@@ -137,10 +148,9 @@ namespace EngrCADOCWrapper {
     ShapeWrapper^ ShapeWrapper::Rotate(float radians, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction)
     {
         TopoDS_Shape shape = *m_Impl;
-        gp_Dir dir = gp_Dir(direction->X, direction->Y, direction->Z);
-        gp_Pnt ori = gp_Pnt(origin->X, origin->Y, origin->Z);
+        gp_Dir dir = ToDir(direction);
+        gp_Pnt ori = ToPnt(origin);
         gp_Ax1 axis = gp_Ax1(ori, dir);
-
         gp_Trsf transformation = gp_Trsf();
         transformation.SetRotation(axis, radians);
         TopLoc_Location translation = TopLoc_Location(transformation);
@@ -173,12 +183,10 @@ namespace EngrCADOCWrapper {
     System::Collections::Generic::List<FaceWrapper^>^ ShapeWrapper::GetFaces()
     {
         TopoDS_Shape shape = *m_Impl;
-        int t = 0;
         TopExp_Explorer Ex;
         System::Collections::Generic::List<FaceWrapper^>^ list = gcnew System::Collections::Generic::List<FaceWrapper^>();
         for (Ex.Init(shape, TopAbs_FACE); Ex.More(); Ex.Next()) 
         {
-
             TopoDS_Face* t = static_cast<TopoDS_Face*>(new TopoDS_Shape(Ex.Current()));
             FaceWrapper^ face = gcnew FaceWrapper(t);
             list->Add(face);
@@ -210,45 +218,30 @@ namespace EngrCADOCWrapper {
     {
         TopoDS_Shape difference = *m_Impl;
         TopoDS_Shape other_shape = *other->m_Impl;
-
         BRepAlgoAPI_Cut algo = BRepAlgoAPI_Cut(difference, other_shape);
-        //differenceCut.SetFuzzyValue(0.1);
         algo.Build();
         algo.SimplifyResult(true, true, 1e-3);
-
-        TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
-
+        return gcnew ShapeWrapper(new TopoDS_Shape(algo.Shape()));
     }
 
     ShapeWrapper^ ShapeWrapper::Union(ShapeWrapper^ other)
     {
         TopoDS_Shape first = *m_Impl;
         TopoDS_Shape other_shape = *other->m_Impl;
-
         BRepAlgoAPI_Fuse algo = BRepAlgoAPI_Fuse(first, other_shape);
-        //combinedFuse.SetFuzzyValue(0.1);
         algo.Build();
         algo.SimplifyResult(true, true, 1e-3);
-        TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
+        return gcnew ShapeWrapper(new TopoDS_Shape(algo.Shape()));
     }
 
     ShapeWrapper^ ShapeWrapper::Intersect(ShapeWrapper^ other)
     {
         TopoDS_Shape first = *m_Impl;
         TopoDS_Shape other_shape = *other->m_Impl;
-
-
         BRepAlgoAPI_Common algo = BRepAlgoAPI_Common(first, other_shape);
-        //.SetFuzzyValue(0.1);
         algo.Build();
         algo.SimplifyResult(true, true, 1e-3);
-        TopoDS_Shape* retVal = new TopoDS_Shape(algo.Shape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
+        return gcnew ShapeWrapper(new TopoDS_Shape(algo.Shape()));
     }
 
     ShapeWrapper^ ShapeWrapper::Shell(double thickness)
@@ -259,10 +252,7 @@ namespace EngrCADOCWrapper {
         BRepOffsetAPI_MakeThickSolid builder = BRepOffsetAPI_MakeThickSolid();
         builder.MakeThickSolidByJoin(shape, facesToRemove, thickness, 1e-4);
 
-
-        TopoDS_Shape* retVal = new TopoDS_Shape(builder.Shape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
+        return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
     }
 
     ShapeWrapper^ ShapeWrapper::Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction)
@@ -275,10 +265,8 @@ namespace EngrCADOCWrapper {
         wireBuilder.Build();
         BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireBuilder.Wire(), false);
         TopoDS_Face face = faceBuilder.Face();
-        BRepPrimAPI_MakePrism solidBuilder = BRepPrimAPI_MakePrism(face, gp_Vec(direction->X, direction->Y, direction->Z),false, true);
-        TopoDS_Shape* retVal = new TopoDS_Shape(solidBuilder.Shape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
+        BRepPrimAPI_MakePrism builder = BRepPrimAPI_MakePrism(face, ToVec(direction),false, true);
+        return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
     }
 
     ShapeWrapper^ ShapeWrapper::ImportSTP(System::String^ path)
@@ -286,12 +274,8 @@ namespace EngrCADOCWrapper {
         STEPControl_Reader reader = STEPControl_Reader();
         reader.ReadFile(toAsciiString(path).ToCString());
         reader.TransferRoots();
-        TopoDS_Shape* retVal = new TopoDS_Shape(reader.OneShape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
+        return gcnew ShapeWrapper(new TopoDS_Shape(reader.OneShape()));
     }
-
-
 
     ShapeWrapper^ ShapeWrapper::Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions)
     {
@@ -304,9 +288,7 @@ namespace EngrCADOCWrapper {
                 fillet.Add(def->Radius, *edge_pointer);
             }
         }
-        TopoDS_Shape* retVal = new TopoDS_Shape(fillet.Shape());
-        ShapeWrapper^ f = gcnew ShapeWrapper(retVal);
-        return f;
+        return gcnew ShapeWrapper(new TopoDS_Shape(fillet.Shape()));
     }
 
     void ShapeWrapper::SaveSTP(System::String^ path)
@@ -351,9 +333,9 @@ namespace EngrCADOCWrapper {
     {
         gp_Ax3 globalCoordSystem = gp_Ax3();
 
-        gp_Pnt origin_pnt = gp_Pnt(origin->X, origin->Y, origin->Z);
-        gp_Dir normal_dir = gp_Dir(normal->X, normal->Y, normal->Z);
-        gp_Dir xDirection_dir = gp_Dir(xDirection->X, xDirection->Y, xDirection->Z);
+        gp_Pnt origin_pnt = ToPnt(origin);
+        gp_Dir normal_dir = ToDir(normal);
+        gp_Dir xDirection_dir = ToDir(xDirection);
 
         gp_Ax3 localCoordSystem = gp_Ax3(origin_pnt, normal_dir, xDirection_dir);
 
@@ -368,7 +350,7 @@ namespace EngrCADOCWrapper {
 
     System::Numerics::Vector2^ CoordMapper::ToLocalCoords(System::Numerics::Vector3^ vec)
     {
-        gp_Pnt point = gp_Pnt(vec->X, vec->Y, vec->Z);
+        gp_Pnt point = ToPnt(vec);
         gp_Trsf trsf = *_globalToLocal;
         gp_Pnt transformed = point.Transformed(trsf);
 
