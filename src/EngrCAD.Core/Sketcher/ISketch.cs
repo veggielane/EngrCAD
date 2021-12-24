@@ -22,4 +22,5 @@ public interface ISketch
     ISketch Line(float x, float y);
 
     ISketch BezierCurveTo(Vector2 end, params Vector2[] controlPoints);
+    ISketch BezierCurve(Vector2 end, params Vector2[] controlPoints);
 }

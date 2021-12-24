@@ -87,6 +87,14 @@ public class Sketch:ISketch
         return this;
     }
 
+    public ISketch BezierCurve(Vector2 end, params Vector2[] controlPoints)
+    {
+        var pointer = ToLocalCoords(_pointer);
+
+        return BezierCurveTo(end + pointer, controlPoints.Select(v => v + pointer).ToArray());
+
+    }
+
     public ISketch HorizontalLine(float distance)
     {
         return Line(distance, 0);
@@ -99,12 +107,15 @@ public class Sketch:ISketch
 
     public IClosedSketch Close()
     {
-
-        Edges.Add(new SketchEdgeLine
+        if (_firstPoint != _pointer)
         {
-            Start = _pointer,
-            End = _firstPoint
-        });
+            Edges.Add(new SketchEdgeLine
+            {
+                Start = _pointer,
+                End = _firstPoint
+            });
+        }
+
         return new ClosedSketch(Plane, Edges);
     }
 
