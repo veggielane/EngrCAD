@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
+using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
 using EngrCAD.Core.Sketcher;
@@ -86,13 +87,13 @@ public static class NodeExtensions
 
     };
 
-    public static INode Round(this INode node, Func<Edge, float?> predicate) => new Round()
+    public static INode Round(this INode node, Func<IEdge, float?> predicate) => new Round()
     {
         Child = node,
         Definitions = node.Edges.Select(edge => (edge,predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new RadiusDefinition(tuple.Item2.Value, new List<EdgeWrapper>(){ tuple.edge.Wrapper})).ToList()
     };
 
-    public static INode Round(this INode node, float radius, Func<Edge[], IEnumerable<Edge>> filter) => new Round()
+    public static INode Round(this INode node, float radius, Func<IEdge[], IEnumerable<IEdge>> filter) => new Round()
     {
         Child = node,
         Definitions = new List<RadiusDefinition>
@@ -101,7 +102,7 @@ public static class NodeExtensions
         }
     };
 
-    public static INode Round(this INode node, params ValueTuple<float, Func<Edge[], IEnumerable<Edge>>>[] filter) => new Round()
+    public static INode Round(this INode node, params ValueTuple<float, Func<IEdge[], IEnumerable<IEdge>>>[] filter) => new Round()
     {
         Child = node,
         Definitions = filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList()

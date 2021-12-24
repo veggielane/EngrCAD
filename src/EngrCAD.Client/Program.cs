@@ -2,6 +2,7 @@
 using System.Linq;
 using System.Numerics;
 using EngrCAD.Core;
+using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
 using EngrCAD.Core.Sketcher;

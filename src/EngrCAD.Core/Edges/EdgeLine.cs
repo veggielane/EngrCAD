@@ -1,7 +1,7 @@
 ﻿using System.Numerics;
 using EngrCADOCWrapper;
 
-namespace EngrCAD.Core;
+namespace EngrCAD.Core.Edges;
 
 public class EdgeLine : Edge
 {

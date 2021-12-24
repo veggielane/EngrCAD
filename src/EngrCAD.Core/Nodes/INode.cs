@@ -1,4 +1,5 @@
 ﻿using System.Collections.Generic;
+using EngrCAD.Core.Edges;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
@@ -15,7 +16,7 @@ public interface INode
 
 
     IEnumerable<Face> Faces { get; }
-    IEnumerable<Edge> Edges { get; }
+    IEnumerable<IEdge> Edges { get; }
 }
 
 public enum ShapeType

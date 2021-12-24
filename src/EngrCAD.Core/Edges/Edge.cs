@@ -1,8 +1,13 @@
 ﻿using EngrCADOCWrapper;
 
-namespace EngrCAD.Core;
+namespace EngrCAD.Core.Edges;
 
-public class Edge
+public interface IEdge
+{
+    public EdgeWrapper Wrapper { get; }
+}
+
+public abstract class Edge: IEdge
 {
     public EdgeWrapper Wrapper { get; }
 
