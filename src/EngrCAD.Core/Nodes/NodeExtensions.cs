@@ -28,6 +28,16 @@ public static class NodeExtensions
         Position = position
     };
 
+    public static INode Centered(this INode node)
+    {
+        var aabb = node.BoundingBox;
+        return new Translate
+        {
+            Child = node,
+            Position = -aabb.Center
+        };
+    }
+
     public static INode Translate(this INode node, float x, float y, float z) => node.Translate(new Vector3(x, y, z));
 
     public static INode Rotate(this INode node, float radians, Vector3 origin, Vector3 direction) => new Rotate()

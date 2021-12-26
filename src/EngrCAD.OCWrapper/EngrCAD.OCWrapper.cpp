@@ -11,6 +11,7 @@
 #include <StlAPI_Writer.hxx>
 #include "TopoDS_Solid.hxx"
 #include <TopExp_Explorer.hxx>
+#include <BRepBndLib.hxx>
 
 #include "EngrCAD.OCWrapper.h"
 
@@ -314,6 +315,21 @@ namespace EngrCADOCWrapper {
         TCollection_AsciiString temp = toAsciiString(path);
 
         bool t = writer.Write(shape, temp.ToCString());
+    }
+
+    System::Tuple<System::Numerics::Vector3, System::Numerics::Vector3>^ ShapeWrapper::CalculateBoundingBox()
+    {
+        Bnd_Box box;
+        BRepBndLib::Add(*m_Impl, box);
+
+        Standard_Real xmind, ymind, zmind, xmaxd, ymaxd, zmaxd;
+        box.Get(xmind, ymind, zmind, xmaxd, ymaxd, zmaxd);
+
+        System::Numerics::Vector3 min = System::Numerics::Vector3(xmind, ymind, zmind);
+        System::Numerics::Vector3 max = System::Numerics::Vector3(xmaxd, ymaxd, zmaxd);
+
+        return gcnew System::Tuple<System::Numerics::Vector3, System::Numerics::Vector3>(min, max);
+
     }
 
     float ShapeWrapper::CalculateVolume()

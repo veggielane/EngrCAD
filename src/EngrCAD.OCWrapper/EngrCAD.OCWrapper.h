@@ -147,13 +147,11 @@ namespace EngrCADOCWrapper
 		ShapeWrapper^ Intersect(ShapeWrapper^ other);
 		ShapeWrapper^ Shell(double thickness);
 
-
-		
 		ShapeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
 
 		void SaveSTP(System::String^ path);
 		void SaveSTL(System::String^ path);
-
+		System::Tuple<System::Numerics::Vector3, System::Numerics::Vector3>^ CalculateBoundingBox();
 		float CalculateVolume();
 
 	private:

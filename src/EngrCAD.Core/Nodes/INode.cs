@@ -11,23 +11,12 @@ public interface INode
 
     //public List<INode> Children { get; }
     float Volume { get; }
+    IAABB BoundingBox { get; }
+
 
     ShapeType ShapeType { get; }
 
 
     IEnumerable<Face> Faces { get; }
     IEnumerable<IEdge> Edges { get; }
-}
-
-public enum ShapeType
-{
-    Compound, 
-    CompSolid, 
-    Solid, 
-    Shell,
-    Face,
-    Wire,
-    Edge,
-    Vertex,
-    Shape
 }

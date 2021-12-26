@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using EngrCAD.Core.Edges;
 using EngrCADOCWrapper;
 
@@ -12,6 +13,16 @@ public abstract class BaseNode : INode
     public ShapeWrapper Wrapper => _cached ??= Generate();
     public abstract ShapeWrapper Generate();
     public float Volume => Wrapper.CalculateVolume();
+
+    public IAABB BoundingBox
+    {
+        get
+        {
+            (Vector3 min, Vector3 max) = Wrapper.CalculateBoundingBox();
+            return new AABB(min, max);
+        }
+    }
+
     public ShapeType ShapeType => (ShapeType)Wrapper.ShapeType();
     public IEnumerable<Face> Faces => Wrapper.GetFaces().Select(wrapper => new Face(wrapper));
     public IEnumerable<IEdge> Edges => Wrapper.GetEdges().Select(wrapper =>
