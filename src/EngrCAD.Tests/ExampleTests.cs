@@ -1,7 +1,5 @@
-﻿using System;
-using System.IO;
+﻿using System.IO;
 using EngrCAD.Core.Nodes;
-using EngrCAD.Core.Nodes.Primitives;
 using EngrCAD.Examples;
 using Xunit;
 
@@ -13,7 +11,7 @@ public class ExampleTests
     [Fact]
     public void GenerateExamples()
     {
-        var classic = ExampleShapes.Classic();
-        classic.SaveSTL(Path.Combine(_examplePath, "classic.stl"));
+        ExampleShapes.Classic().SaveSTL(Path.Combine(_examplePath, "classic.stl"));
+        ExampleShapes.Heart().SaveSTL(Path.Combine(_examplePath, "heart.stl"));
     }
 }

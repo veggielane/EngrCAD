@@ -1,18 +1,14 @@
-﻿using System;
-using System.Linq;
+﻿using System.Linq;
 using System.Numerics;
-using EngrCAD.Core;
 using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
-using EngrCAD.Core.Sketcher;
-using Plane = EngrCAD.Core.Sketcher.Plane;
 
 namespace EngrCAD.Client;
 
 class Program
 {
-    static void Main(string[] args)
+    static void Main()
     {
 
         var sphereA = new Sphere()

@@ -1,5 +1,4 @@
-﻿using System.Linq;
-using System.Numerics;
+﻿using System.Numerics;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations;

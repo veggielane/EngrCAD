@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
-using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Sketcher.Edges;
 using EngrCADOCWrapper;
 

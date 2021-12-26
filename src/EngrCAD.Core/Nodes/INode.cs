@@ -1,7 +1,5 @@
 ﻿using System.Collections.Generic;
-using System.Numerics;
 using EngrCAD.Core.Edges;
-using EngrCAD.Core.Nodes.Transformations;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;

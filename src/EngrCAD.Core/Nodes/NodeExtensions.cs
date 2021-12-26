@@ -127,15 +127,15 @@ public static class NodeExtensions
         Definitions = filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList()
     };
 
-    public static Extrude Extrude(this IClosedSketch sketch, float distance) => new Extrude(sketch, distance);
+    public static Extrude Extrude(this IClosedSketch sketch, float distance) => new(sketch, distance);
 
-    public static Body ToBody(this INode node, Color color) => new Body()
+    public static Body ToBody(this INode node, Color color) => new()
     {
         Node = node,
         Color = color
     };
 
-    public static Body ToBody(this INode node) => new Body()
+    public static Body ToBody(this INode node) => new()
     {
         Node = node,
         Color = Color.DimGray

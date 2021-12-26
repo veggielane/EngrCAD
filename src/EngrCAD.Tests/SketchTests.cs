@@ -1,5 +1,4 @@
 using System;
-using System.Linq;
 using System.Numerics;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Sketcher;

@@ -1,5 +1,4 @@
-﻿using System;
-using EngrCADOCWrapper;
+﻿using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
