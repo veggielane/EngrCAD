@@ -31,7 +31,7 @@ public class UnionTests
     {
         var box = new Box()
         {
-            
-        }
+
+        };
     }
 }
