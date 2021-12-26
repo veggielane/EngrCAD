@@ -13,6 +13,16 @@ namespace EngrCAD.Core.Nodes;
 
 public static class NodeExtensions
 {
+
+    public static INode Union(this INode node, INode other) => new Union()
+    {
+        Children = { node, other }
+    };
+
+
+
+
+
     public static void SaveSTL(this INode node, string path) => node.Generate().SaveSTL(path);
     public static void SaveSTP(this INode node, string path) => node.Generate().SaveSTP(path);
 
@@ -72,10 +82,6 @@ public static class NodeExtensions
         Children = {node, other}
     };
 
-    public static INode Union(this INode node, INode other) => new Union()
-    {
-        Children = { node, other }
-    };
     public static INode Intersect(this INode node, INode other) => new Intersect()
     {
         Children = { node, other }

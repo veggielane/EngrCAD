@@ -143,7 +143,7 @@ namespace EngrCADOCWrapper
 
 		//Operations
 		ShapeWrapper^ Subtract(ShapeWrapper^ other);
-		ShapeWrapper^ Union(ShapeWrapper^ other);
+		ShapeWrapper^ Union(System::Collections::Generic::List<ShapeWrapper^>^ others);
 		ShapeWrapper^ Intersect(ShapeWrapper^ other);
 		ShapeWrapper^ Shell(double thickness);
 

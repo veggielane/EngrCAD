@@ -30,6 +30,7 @@ class Program
 
         var esges = a.Edges.ToList();
 
+
         a.Round(0.8f).SaveSTL("round_2.stl");
 
         a.Round(0.5f, edges => edges[..4]).SaveSTL("round_3.stl");

@@ -1,10 +1,12 @@
 ﻿using System.Collections.Generic;
+using System.Numerics;
 using EngrCAD.Core.Edges;
+using EngrCAD.Core.Nodes.Transformations;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
 
-public interface INode
+public partial interface INode
 {
     ShapeWrapper Wrapper { get; }
     ShapeWrapper Generate();
@@ -19,4 +21,5 @@ public interface INode
 
     IEnumerable<Face> Faces { get; }
     IEnumerable<IEdge> Edges { get; }
+
 }
