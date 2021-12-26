@@ -16,6 +16,6 @@ public static class ExampleShapes
         //var cylinderB = cylinderA.Transform(Matrix4x4.CreateRotationX(MathHelper.DegreesToRadians(90)));
         var cylinderC = cylinderA.RotateY(MathHelper.DegreesToRadians(90));
         //var cylinderC = cylinderA.Transform(Matrix4x4.CreateRotationY(MathHelper.DegreesToRadians(90)));
-        return cube.Intersect(sphere).Subtract(cylinderA.Union(cylinderB).Union(cylinderC));
+        return cube.Intersect(sphere).Subtract((cylinderA, cylinderB, cylinderC).Union());
     }
 }

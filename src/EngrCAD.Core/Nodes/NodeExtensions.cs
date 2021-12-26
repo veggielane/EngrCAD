@@ -14,12 +14,80 @@ namespace EngrCAD.Core.Nodes;
 public static class NodeExtensions
 {
 
-    public static INode Union(this INode node, INode other) => new Union()
+    private static IEnumerable<INode> Merge(INode node, IEnumerable<INode> others)
     {
-        Children = { node, other }
-    };
+        yield return node;
+        foreach (var child in others)
+        {
+            yield return child;
+        }
+    }
 
+    private static IEnumerable<INode> Merge(this ValueTuple<INode> tuple)
+    {
+        yield return tuple.Item1;
+    }
 
+    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode> tuple)
+    {
+        yield return tuple.Item1;
+        yield return tuple.Item2;
+    }
+
+    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode> tuple)
+    {
+        yield return tuple.Item1;
+        yield return tuple.Item2;
+        yield return tuple.Item3;
+    }
+
+    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode> tuple)
+    {
+        yield return tuple.Item1;
+        yield return tuple.Item2;
+        yield return tuple.Item3;
+        yield return tuple.Item4;
+    }
+
+    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode> tuple)
+    {
+        yield return tuple.Item1;
+        yield return tuple.Item2;
+        yield return tuple.Item3;
+        yield return tuple.Item4;
+        yield return tuple.Item5;
+    }
+
+    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode> tuple)
+    {
+        yield return tuple.Item1;
+        yield return tuple.Item2;
+        yield return tuple.Item3;
+        yield return tuple.Item4;
+        yield return tuple.Item5;
+        yield return tuple.Item6;
+    }
+    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode, INode> tuple)
+    {
+        yield return tuple.Item1;
+        yield return tuple.Item2;
+        yield return tuple.Item3;
+        yield return tuple.Item4;
+        yield return tuple.Item5;
+        yield return tuple.Item6;
+        yield return tuple.Item7;
+    }
+
+    public static INode Union(this INode node, params INode[] others) => new Union(Merge(node, others));
+    public static INode Union(this IEnumerable<INode> nodes) => new Union(nodes);
+
+    public static INode Union(this ValueTuple<INode> tuple) => new Union(Merge(tuple));
+    public static INode Union(this ValueTuple<INode, INode> tuple) => new Union(Merge(tuple));
+    public static INode Union(this ValueTuple<INode, INode, INode> tuple) => new Union(Merge(tuple));
+    public static INode Union(this ValueTuple<INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
+    public static INode Union(this ValueTuple<INode, INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
+    public static INode Union(this ValueTuple<INode, INode, INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
+    public static INode Union(this ValueTuple<INode, INode, INode, INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
 
 
 

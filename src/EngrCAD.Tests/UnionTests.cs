@@ -25,4 +25,13 @@ public class UnionTests
 
         Assert.Equal(calc, (sphere.Union(box)).Volume, 3);
     }
+
+    [Fact]
+    public void Multiple()
+    {
+        var box = new Box()
+        {
+            
+        }
+    }
 }

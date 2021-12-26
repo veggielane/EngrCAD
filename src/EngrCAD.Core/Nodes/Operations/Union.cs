@@ -8,4 +8,14 @@ public class Union : BaseNode
 {
     public List<INode> Children { get; init; } = new();
     public override ShapeWrapper Generate() => Children.First().Wrapper.Union(Children.Skip(1).Select(n => n.Wrapper).ToList());
+
+    public Union()
+    {
+
+    }
+
+    public Union(IEnumerable<INode> nodes)
+    {
+        Children = new List<INode>(nodes);
+    }
 }
