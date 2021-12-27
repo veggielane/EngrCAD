@@ -20,7 +20,7 @@ public static class ExampleShapes
 
     public static INode Heart()
     {
-        return new Sketch(Core.Sketcher.Plane.XY)
+        return new Sketch(Plane.XY)
             .MoveTo(140, 20)
             .BezierCurveTo(new Vector2(20, 140), new Vector2(73, 20), new Vector2(20, 74))
             .BezierCurve(new Vector2(228, 303), new Vector2(0, 135), new Vector2(136, 170))

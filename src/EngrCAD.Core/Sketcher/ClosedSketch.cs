@@ -4,7 +4,7 @@ using EngrCAD.Core.Sketcher.Edges;
 
 namespace EngrCAD.Core.Sketcher;
 
-public class ClosedSketch : Sketch, IClosedSketch
+public class ClosedSketch : Sketch
 {
     internal ClosedSketch(IPlane plane, IEnumerable<ISketchEdge> sketchObjects) : base(plane)
     {
