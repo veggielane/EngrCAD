@@ -5,11 +5,17 @@ namespace EngrCAD.Core.Nodes.Operations;
 
 public class Round : BaseNode
 {
-    public INode Child { get; init; }
-
-    //public float Radius { get; init; } = 0.1f;
-
+    public INode Node { get; init; }
     public List<RadiusDefinition> Definitions = new();
-
-    public override ShapeWrapper Generate() => Child.Wrapper.Round(Definitions);
+    public Round(INode node, RadiusDefinition definition)
+    {
+        Node = node;
+        Definitions = new List<RadiusDefinition>(){definition};
+    }
+    public Round(INode node, IEnumerable<RadiusDefinition> definitions)
+    {
+        Node = node;
+        Definitions = new List<RadiusDefinition>(definitions);
+    }
+    public override ShapeWrapper Generate() => Node.Wrapper.Round(Definitions);
 }

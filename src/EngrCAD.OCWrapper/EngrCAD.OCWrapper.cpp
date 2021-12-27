@@ -246,14 +246,19 @@ namespace EngrCADOCWrapper {
         return gcnew ShapeWrapper(new TopoDS_Shape(combined));
     }
 
-    ShapeWrapper^ ShapeWrapper::Intersect(ShapeWrapper^ other)
+    ShapeWrapper^ ShapeWrapper::Intersect(System::Collections::Generic::List<ShapeWrapper^>^ others)
     {
-        TopoDS_Shape first = *m_Impl;
-        TopoDS_Shape other_shape = *other->m_Impl;
-        BRepAlgoAPI_Common algo = BRepAlgoAPI_Common(first, other_shape);
-        algo.Build();
-        algo.SimplifyResult(true, true, 1e-3);
-        return gcnew ShapeWrapper(new TopoDS_Shape(algo.Shape()));
+        TopoDS_Shape combined = TopoDS_Shape(*m_Impl);
+
+        for each (ShapeWrapper ^ otherWrapper in others) {
+
+            TopoDS_Shape other_shape = *otherWrapper->m_Impl;
+            BRepAlgoAPI_Common algo = BRepAlgoAPI_Common(combined, other_shape);
+            algo.Build();
+            algo.SimplifyResult(true, true, 1e-3);
+            combined = TopoDS_Shape(algo.Shape());
+        }
+        return gcnew ShapeWrapper(new TopoDS_Shape(combined));
     }
 
     ShapeWrapper^ ShapeWrapper::Shell(double thickness)

@@ -3,32 +3,15 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
-using EngrCAD.Core.Datums;
 using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
-using EngrCAD.Core.Sketcher;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
 
 public static class NodeExtensions
 {
-
-
-    public static INode Union(this INode node, params INode[] others) => new Union(Merge(node, others));
-    public static INode Union(this IEnumerable<INode> nodes) => new Union(nodes);
-    public static INode Union(this ValueTuple<INode> tuple) => new Union(Merge(tuple));
-    public static INode Union(this ValueTuple<INode, INode> tuple) => new Union(Merge(tuple));
-    public static INode Union(this ValueTuple<INode, INode, INode> tuple) => new Union(Merge(tuple));
-    public static INode Union(this ValueTuple<INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
-    public static INode Union(this ValueTuple<INode, INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
-    public static INode Union(this ValueTuple<INode, INode, INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
-    public static INode Union(this ValueTuple<INode, INode, INode, INode, INode, INode, INode> tuple) => new Union(Merge(tuple));
-
-    public static INode Subtract(this INode node, params INode[] others) => new Subtract(Merge(node, others));
-    public static INode Subtract(this IEnumerable<INode> nodes) => new Subtract(nodes);
-
 
 
     public static void SaveSTL(this INode node, string path) => node.Generate().SaveSTL(path);
@@ -86,52 +69,12 @@ public static class NodeExtensions
     };
 
 
-    public static INode Intersect(this INode node, INode other) => new Intersect()
-    {
-        Children = { node, other }
-    };
-
     public static INode Shell(this INode node, float thickness) => new Shell()
     {
         Child = node,
         Thickness = thickness
     };
 
-    public static INode Round(this INode node, float radius) => new Round()
-    {
-        Child = node,
-        Definitions = new List<RadiusDefinition>()
-        {
-            new(radius,node.Edges.Select(edge => edge.Wrapper).ToList())
-        }
-
-    };
-
-    public static INode Round(this INode node, Func<IEdge, float?> predicate) => new Round()
-    {
-        Child = node,
-        Definitions = node.Edges.Select(edge => (edge,predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new RadiusDefinition(tuple.Item2.Value, new List<EdgeWrapper>(){ tuple.edge.Wrapper})).ToList()
-    };
-
-    public static INode Round(this INode node, float radius, Func<IEdge[], IEnumerable<IEdge>> filter) => new Round()
-    {
-        Child = node,
-        Definitions = new List<RadiusDefinition>
-        {
-            new(radius,filter(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())
-        }
-    };
-
-    public static INode Round(this INode node, params ValueTuple<float, Func<IEdge[], IEnumerable<IEdge>>>[] filter) => new Round()
-    {
-        Child = node,
-        Definitions = filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList()
-    };
-
-    public static Extrude Extrude(this ClosedSketch sketch, float distance) => new(sketch, distance);
-
-    public static RevolveAngle Revolve(this ClosedSketch sketch, IAxis axis, float angle) => new(sketch, axis, angle);
-    public static Revolve Revolve(this ClosedSketch sketch, IAxis axis) => new(sketch, axis);
 
     public static Body ToBody(this INode node, Color color) => new()
     {
@@ -154,25 +97,25 @@ public static class NodeExtensions
         }
     }
 
-    private static IEnumerable<INode> Merge(this ValueTuple<INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode> tuple)
     {
         yield return tuple.Item1;
     }
 
-    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
     }
 
-    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
         yield return tuple.Item3;
     }
 
-    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -180,7 +123,7 @@ public static class NodeExtensions
         yield return tuple.Item4;
     }
 
-    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -189,7 +132,7 @@ public static class NodeExtensions
         yield return tuple.Item5;
     }
 
-    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -198,7 +141,7 @@ public static class NodeExtensions
         yield return tuple.Item5;
         yield return tuple.Item6;
     }
-    private static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode, INode> tuple)
+    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode, INode> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -208,5 +151,4 @@ public static class NodeExtensions
         yield return tuple.Item6;
         yield return tuple.Item7;
     }
-
 }

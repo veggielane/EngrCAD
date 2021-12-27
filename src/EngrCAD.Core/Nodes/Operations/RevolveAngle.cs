@@ -5,15 +5,15 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Revolve : BaseNode
+public class RevolveAngle : Revolve
 {
-    public ClosedSketch Sketch { get; }
-    public IAxis Axis { get; }
 
-    public Revolve(ClosedSketch sketch, IAxis axis)
+    public float Angle { get; }
+
+    public RevolveAngle(ClosedSketch sketch, IAxis axis, float angle)
+        :base(sketch,axis)
     {
-        Sketch = sketch;
-        Axis = axis;
+        Angle = angle;
     }
 
     public override ShapeWrapper Generate() => ShapeWrapper.Revolve(Sketch.Edges.Select(o => o.ToEdge()).ToList(), Axis.Origin, Axis.Direction);

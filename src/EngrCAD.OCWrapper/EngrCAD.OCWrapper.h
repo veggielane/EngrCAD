@@ -148,7 +148,7 @@ namespace EngrCADOCWrapper
 		//Operations
 		ShapeWrapper^ Subtract(System::Collections::Generic::List<ShapeWrapper^>^ others);
 		ShapeWrapper^ Union(System::Collections::Generic::List<ShapeWrapper^>^ others);
-		ShapeWrapper^ Intersect(ShapeWrapper^ other);
+		ShapeWrapper^ Intersect(System::Collections::Generic::List<ShapeWrapper^>^ others);
 		ShapeWrapper^ Shell(double thickness);
 
 		ShapeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
