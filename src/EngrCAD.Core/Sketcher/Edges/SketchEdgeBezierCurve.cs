@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Sketcher.Edges;
 
-internal class SketchEdgeBezierCurve : ISketchEdge
+public class SketchEdgeBezierCurve : ISketchEdge
 {
     public Vector3 Start { get; init; }
     public Vector3 End { get; init; }
