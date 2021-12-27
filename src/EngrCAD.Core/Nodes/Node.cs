@@ -8,7 +8,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
 
-public abstract class Node
+public abstract partial class Node
 {
     private ShapeWrapper _cached;
     public ShapeWrapper Wrapper => _cached ??= Generate();

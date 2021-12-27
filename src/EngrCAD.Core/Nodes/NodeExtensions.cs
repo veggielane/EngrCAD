@@ -3,70 +3,34 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
+using EngrCAD.Core.Sketcher;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
 
 public static class NodeExtensions
 {
+    public static Node Union(this IEnumerable<Node> nodes) => new Union(nodes);
+    public static Node Union(this ValueTuple<Node> tuple) => new Union(tuple.Merge());
+    public static Node Union(this ValueTuple<Node, Node> tuple) => new Union(tuple.Merge());
+    public static Node Union(this ValueTuple<Node, Node, Node> tuple) => new Union(tuple.Merge());
+    public static Node Union(this ValueTuple<Node, Node, Node, Node> tuple) => new Union(tuple.Merge());
+    public static Node Union(this ValueTuple<Node, Node, Node, Node, Node> tuple) => new Union(tuple.Merge());
+    public static Node Union(this ValueTuple<Node, Node, Node, Node, Node, Node> tuple) => new Union(tuple.Merge());
+    public static Node Union(this ValueTuple<Node, Node, Node, Node, Node, Node, Node> tuple) => new Union(tuple.Merge());
+
+    public static Node Extrude(this ClosedSketch sketch, float distance) => new Extrude(sketch, distance);
+    public static Node Revolve(this ClosedSketch sketch, IAxis axis) => new Revolve(sketch, axis);
+    public static Node Revolve(this ClosedSketch sketch, IAxis axis, float angle) => new RevolveAngle(sketch, axis, angle);
 
 
     public static void SaveSTL(this Node node, string path) => node.Generate().SaveSTL(path);
     public static void SaveSTP(this Node node, string path) => node.Generate().SaveSTP(path);
 
-    public static Node Transform(this Node node, Matrix4x4 matrix) => new Transform
-    {
-        Child = node,
-        Matrix = matrix
-    };
-
-    public static Node Translate(this Node node, Vector3 position) => new Translate
-    {
-        Child = node,
-        Position = position
-    };
-
-    public static Node Centered(this Node node)
-    {
-        var aabb = node.BoundingBox;
-        return new Translate
-        {
-            Child = node,
-            Position = -aabb.Center
-        };
-    }
-
-    public static Node Translate(this Node node, float x, float y, float z) => node.Translate(new Vector3(x, y, z));
-
-    public static Node Rotate(this Node node, float radians, Vector3 origin, Vector3 direction) => new Rotate()
-    {
-        Child = node,
-        Radians = radians,
-        Origin = origin,
-        Direction = direction
-    };
-
-    public static Node RotateX(this Node node, float radians) => new Rotate()
-    {
-        Child = node,
-        Radians = radians,
-        Direction = Vector3.UnitX
-    };
-    public static Node RotateY(this Node node, float radians) => new Rotate()
-    {
-        Child = node,
-        Radians = radians,
-        Direction = Vector3.UnitY
-    };
-    public static Node RotateZ(this Node node, float radians) => new Rotate()
-    {
-        Child = node,
-        Radians = radians,
-        Direction = Vector3.UnitZ
-    };
 
 
     public static Node Shell(this Node node, float thickness) => new Shell()
