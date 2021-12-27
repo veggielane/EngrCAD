@@ -2,7 +2,7 @@
 
 namespace EngrCAD.Core.Nodes.Primitives;
 
-public class Box : BaseNode
+public class Box : Node
 {
     public float X { get; init; } = 1f;
     public float Y { get; init; } = 1f;

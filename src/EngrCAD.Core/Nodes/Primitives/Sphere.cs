@@ -2,7 +2,7 @@
 
 namespace EngrCAD.Core.Nodes.Primitives;
 
-public class Sphere:BaseNode
+public class Sphere:Node
 {
     public float Radius { get; init; } = 1f;
         

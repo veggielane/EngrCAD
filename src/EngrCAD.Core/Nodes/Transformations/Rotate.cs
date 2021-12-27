@@ -3,7 +3,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations;
 
-public class Rotate : BaseNode
+public class Rotate : Node
 {
     public Vector3 Origin { get; set; } = Vector3.Zero;
     public Vector3 Direction { get; init; } = Vector3.UnitZ;

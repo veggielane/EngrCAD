@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Subtract : BaseNode
+public class Subtract : Node
 {
     public INode Node { get; }
     public List<INode> Tools { get; }

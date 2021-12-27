@@ -2,7 +2,7 @@
 
 namespace EngrCAD.Core.Nodes.Primitives;
 
-public class Cylinder : BaseNode
+public class Cylinder : Node
 {
     public float Height { get; init; } = 1f;
     public float Radius { get; init; } = 1f;
@@ -13,7 +13,7 @@ public class Cylinder : BaseNode
     public override ShapeWrapper Generate() => ShapeWrapper.Cylinder(Radius, Height, Centered);
 }
 
-public class Cone : BaseNode
+public class Cone : Node
 {
     public float BottomRadius { get; init; } = 1f;
 

@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Primitives;
 
-public class Import : BaseNode
+public class Import : Node
 {
     public string FilePath { get; init; }
 

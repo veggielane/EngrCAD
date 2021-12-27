@@ -2,7 +2,7 @@
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Shell : BaseNode
+public class Shell : Node
 {
     public INode Child { get; init; }
     public float Thickness { get; init; } = 0.5f;

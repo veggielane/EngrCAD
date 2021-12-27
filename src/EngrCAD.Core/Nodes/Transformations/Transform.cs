@@ -3,7 +3,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations;
 
-public class Transform : BaseNode
+public class Transform : Node
 {
     public Matrix4x4 Matrix { get; set; } = Matrix4x4.Identity;
 

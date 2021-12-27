@@ -5,7 +5,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Revolve : BaseNode
+public class Revolve : Node
 {
     public IClosedSketch Sketch { get; }
     public IAxis Axis { get; }
