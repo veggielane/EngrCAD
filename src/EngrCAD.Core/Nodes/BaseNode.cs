@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Edges;
 using EngrCADOCWrapper;
 

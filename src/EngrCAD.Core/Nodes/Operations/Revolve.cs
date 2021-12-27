@@ -7,10 +7,10 @@ namespace EngrCAD.Core.Nodes.Operations;
 
 public class Revolve : BaseNode
 {
-    public ClosedSketch Sketch { get; }
+    public IClosedSketch Sketch { get; }
     public IAxis Axis { get; }
 
-    public Revolve(ClosedSketch sketch, IAxis axis)
+    public Revolve(IClosedSketch sketch, IAxis axis)
     {
         Sketch = sketch;
         Axis = axis;

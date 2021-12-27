@@ -6,11 +6,11 @@ namespace EngrCAD.Core.Nodes.Operations;
 
 public class Extrude : BaseNode
 {
-    public ClosedSketch Sketch { get; }
+    public IClosedSketch Sketch { get; }
 
     public float Distance { get; }
         
-    public Extrude(ClosedSketch sketch, float distance)
+    public Extrude(IClosedSketch sketch, float distance)
     {
         Sketch = sketch;
         Distance = distance;

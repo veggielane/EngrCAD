@@ -10,7 +10,7 @@ public class RevolveAngle : Revolve
 
     public float Angle { get; }
 
-    public RevolveAngle(ClosedSketch sketch, IAxis axis, float angle)
+    public RevolveAngle(IClosedSketch sketch, IAxis axis, float angle)
         :base(sketch,axis)
     {
         Angle = angle;

@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Numerics;
 
-namespace EngrCAD.Core.Nodes;
+namespace EngrCAD.Core.Datums;
 
 public class AABB : IAABB
 {

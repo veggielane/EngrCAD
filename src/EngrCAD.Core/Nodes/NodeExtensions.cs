@@ -88,7 +88,7 @@ public static class NodeExtensions
         Color = Color.DimGray
     };
 
-    private static IEnumerable<INode> Merge(INode node, IEnumerable<INode> others)
+    public static IEnumerable<INode> Merge(INode node, IEnumerable<INode> others)
     {
         yield return node;
         foreach (var child in others)

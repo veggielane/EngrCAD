@@ -28,10 +28,25 @@ public static class NodeOperationExtensions
 
     public static INode Extrude(this ClosedSketch sketch, float distance) => new Extrude(sketch, distance);
 
-    public static INode Revolve(this ClosedSketch sketch, IAxis axis, float angle) => new RevolveAngle(sketch, axis, angle);
     public static INode Revolve(this ClosedSketch sketch, IAxis axis) => new Revolve(sketch, axis);
+    public static INode Revolve(this ClosedSketch sketch, IAxis axis, float angle) => new RevolveAngle(sketch, axis, angle);
 
+    /// <summary>
+    /// Round All Edges
+    /// </summary>
+    /// <param name="node">Node to Round</param>
+    /// <param name="radius">Round Radius</param>
+    /// <example>
+    /// node.Round(5f);
+    /// </example>
+    /// <returns>Node with all edges rounded</returns>
     public static INode Round(this INode node, float radius) => new Round(node, new RadiusDefinition(radius, node.Edges.Select(edge => edge.Wrapper).ToList()));
+   /// <summary>
+   /// Round edges filtered by predicate
+   /// </summary>
+   /// <param name="node">Node to Round</param>
+   /// <param name="predicate">Predicate </param>
+   /// <returns></returns>
     public static INode Round(this INode node, Func<IEdge, float?> predicate) => new Round(node, node.Edges.Select(edge => (edge, predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new RadiusDefinition(tuple.Item2.Value, new List<EdgeWrapper>() { tuple.edge.Wrapper })).ToList());
     public static INode Round(this INode node, float radius, Func<IEdge[], IEnumerable<IEdge>> filter) => new Round(node, new RadiusDefinition(radius, filter(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList()));
     public static INode Round(this INode node, params ValueTuple<float, Func<IEdge[], IEnumerable<IEdge>>>[] filter) => new Round(node, filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList());

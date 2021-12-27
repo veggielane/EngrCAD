@@ -1,19 +1,21 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Edges;
+using EngrCAD.Core.Nodes.Operations;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
 
-public partial interface INode
+public interface INode
 {
     ShapeWrapper Wrapper { get; }
     ShapeWrapper Generate();
 
-    //public List<INode> Children { get; }
     float Volume { get; }
     IAABB BoundingBox { get; }
-
-
+    
     ShapeType ShapeType { get; }
 
 
