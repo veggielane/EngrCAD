@@ -11,7 +11,9 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "EngrCAD.OCWrapper", "EngrCA
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Tests", "EngrCAD.Tests\EngrCAD.Tests.csproj", "{05AF21BC-FC1B-4367-9DCE-F83B85D8A8E2}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EngrCAD.Examples", "EngrCAD.Examples\EngrCAD.Examples.csproj", "{5CF05C92-E937-4627-9B96-DA98EB9A128B}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Examples", "EngrCAD.Examples\EngrCAD.Examples.csproj", "{5CF05C92-E937-4627-9B96-DA98EB9A128B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EngrCAD.Documentation", "EngrCAD.Documentation\EngrCAD.Documentation.csproj", "{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -59,6 +61,14 @@ Global
 		{5CF05C92-E937-4627-9B96-DA98EB9A128B}.Release|Any CPU.Build.0 = Release|Any CPU
 		{5CF05C92-E937-4627-9B96-DA98EB9A128B}.Release|x64.ActiveCfg = Release|Any CPU
 		{5CF05C92-E937-4627-9B96-DA98EB9A128B}.Release|x64.Build.0 = Release|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Debug|x64.Build.0 = Debug|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Release|x64.ActiveCfg = Release|Any CPU
+		{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}.Release|x64.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
