@@ -23,7 +23,7 @@ public interface IClosedSketch
     public ICSYS CSYS { get; }
     public IReadOnlyList<ISketchEdge> Edges { get; }
 
-    public INode Extrude(float distance) => new Extrude(this, distance);
-    public INode Revolve(IAxis axis) => new Revolve(this, axis);
-    public INode Revolve(IAxis axis, float angle) => new RevolveAngle(this, axis, angle);
+    public Node Extrude(float distance) => new Extrude(this, distance);
+    public Node Revolve(IAxis axis) => new Revolve(this, axis);
+    public Node Revolve(IAxis axis, float angle) => new RevolveAngle(this, axis, angle);
 }

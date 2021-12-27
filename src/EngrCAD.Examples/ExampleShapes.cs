@@ -10,7 +10,7 @@ namespace EngrCAD.Examples;
 
 public static class ExampleShapes
 {
-    public static INode Classic()
+    public static Node Classic()
     {
         var cube = new Box {X = 2f, Y = 2f, Z = 2f };
         var sphere = new Sphere { Radius = 1.35f };
@@ -20,7 +20,7 @@ public static class ExampleShapes
         return cube.Intersect(sphere).Subtract((cylinderA, cylinderB, cylinderC).Union());
     }
 
-    public static INode Heart()
+    public static Node Heart()
     {
         return new Sketch(CSYS.XY)
             .MoveTo(140, 20)

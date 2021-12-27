@@ -6,13 +6,13 @@ namespace EngrCAD.Core.Nodes.Operations;
 
 public class Intersect : Node
 {
-    public INode Node { get; }
-    public List<INode> Others { get; }
+    public Node Node { get; }
+    public List<Node> Others { get; }
 
-    public Intersect(INode node, IEnumerable<INode> others)
+    public Intersect(Node node, IEnumerable<Node> others)
     {
         Node = node;
-        Others = new List<INode>(others);
+        Others = new List<Node>(others);
     }
 
     public override ShapeWrapper Generate() => Node.Wrapper.Intersect(Others.Select(n => n.Wrapper).ToList());

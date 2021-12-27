@@ -15,7 +15,7 @@ public class Rotate : Node
 
     public float Radians { get; set; } = 0f;
 
-    public INode Child { get; init; }
+    public Node Child { get; init; }
 
     public override ShapeWrapper Generate()
     {

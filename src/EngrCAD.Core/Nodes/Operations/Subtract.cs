@@ -6,13 +6,13 @@ namespace EngrCAD.Core.Nodes.Operations;
 
 public class Subtract : Node
 {
-    public INode Node { get; }
-    public List<INode> Tools { get; }
+    public Node Node { get; }
+    public List<Node> Tools { get; }
 
-    public Subtract(INode node, IEnumerable<INode> tools)
+    public Subtract(Node node, IEnumerable<Node> tools)
     {
         Node = node;
-        Tools = new List<INode>(tools);
+        Tools = new List<Node>(tools);
     }
     public override ShapeWrapper Generate() => Node.Wrapper.Subtract(Tools.Select(n => n.Wrapper).ToList());
 }

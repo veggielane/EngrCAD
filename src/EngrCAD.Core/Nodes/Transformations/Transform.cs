@@ -7,7 +7,7 @@ public class Transform : Node
 {
     public Matrix4x4 Matrix { get; set; } = Matrix4x4.Identity;
 
-    public INode Child { get; init; }
+    public Node Child { get; init; }
 
     public override ShapeWrapper Generate()
     {

@@ -14,22 +14,22 @@ public static class NodeExtensions
 {
 
 
-    public static void SaveSTL(this INode node, string path) => node.Generate().SaveSTL(path);
-    public static void SaveSTP(this INode node, string path) => node.Generate().SaveSTP(path);
+    public static void SaveSTL(this Node node, string path) => node.Generate().SaveSTL(path);
+    public static void SaveSTP(this Node node, string path) => node.Generate().SaveSTP(path);
 
-    public static INode Transform(this INode node, Matrix4x4 matrix) => new Transform
+    public static Node Transform(this Node node, Matrix4x4 matrix) => new Transform
     {
         Child = node,
         Matrix = matrix
     };
 
-    public static INode Translate(this INode node, Vector3 position) => new Translate
+    public static Node Translate(this Node node, Vector3 position) => new Translate
     {
         Child = node,
         Position = position
     };
 
-    public static INode Centered(this INode node)
+    public static Node Centered(this Node node)
     {
         var aabb = node.BoundingBox;
         return new Translate
@@ -39,9 +39,9 @@ public static class NodeExtensions
         };
     }
 
-    public static INode Translate(this INode node, float x, float y, float z) => node.Translate(new Vector3(x, y, z));
+    public static Node Translate(this Node node, float x, float y, float z) => node.Translate(new Vector3(x, y, z));
 
-    public static INode Rotate(this INode node, float radians, Vector3 origin, Vector3 direction) => new Rotate()
+    public static Node Rotate(this Node node, float radians, Vector3 origin, Vector3 direction) => new Rotate()
     {
         Child = node,
         Radians = radians,
@@ -49,19 +49,19 @@ public static class NodeExtensions
         Direction = direction
     };
 
-    public static INode RotateX(this INode node, float radians) => new Rotate()
+    public static Node RotateX(this Node node, float radians) => new Rotate()
     {
         Child = node,
         Radians = radians,
         Direction = Vector3.UnitX
     };
-    public static INode RotateY(this INode node, float radians) => new Rotate()
+    public static Node RotateY(this Node node, float radians) => new Rotate()
     {
         Child = node,
         Radians = radians,
         Direction = Vector3.UnitY
     };
-    public static INode RotateZ(this INode node, float radians) => new Rotate()
+    public static Node RotateZ(this Node node, float radians) => new Rotate()
     {
         Child = node,
         Radians = radians,
@@ -69,26 +69,26 @@ public static class NodeExtensions
     };
 
 
-    public static INode Shell(this INode node, float thickness) => new Shell()
+    public static Node Shell(this Node node, float thickness) => new Shell()
     {
         Child = node,
         Thickness = thickness
     };
 
 
-    public static Body ToBody(this INode node, Color color) => new()
+    public static Body ToBody(this Node node, Color color) => new()
     {
         Node = node,
         Color = color
     };
 
-    public static Body ToBody(this INode node) => new()
+    public static Body ToBody(this Node node) => new()
     {
         Node = node,
         Color = Color.DimGray
     };
 
-    public static IEnumerable<INode> Merge(INode node, IEnumerable<INode> others)
+    public static IEnumerable<Node> Merge(Node node, IEnumerable<Node> others)
     {
         yield return node;
         foreach (var child in others)
@@ -97,25 +97,25 @@ public static class NodeExtensions
         }
     }
 
-    public static IEnumerable<INode> Merge(this ValueTuple<INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node> tuple)
     {
         yield return tuple.Item1;
     }
 
-    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node, Node> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
     }
 
-    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node, Node, Node> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
         yield return tuple.Item3;
     }
 
-    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node, Node, Node, Node> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -123,7 +123,7 @@ public static class NodeExtensions
         yield return tuple.Item4;
     }
 
-    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node, Node, Node, Node, Node> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -132,7 +132,7 @@ public static class NodeExtensions
         yield return tuple.Item5;
     }
 
-    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node, Node, Node, Node, Node, Node> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;
@@ -141,7 +141,7 @@ public static class NodeExtensions
         yield return tuple.Item5;
         yield return tuple.Item6;
     }
-    public static IEnumerable<INode> Merge(this ValueTuple<INode, INode, INode, INode, INode, INode, INode> tuple)
+    public static IEnumerable<Node> Merge(this ValueTuple<Node, Node, Node, Node, Node, Node, Node> tuple)
     {
         yield return tuple.Item1;
         yield return tuple.Item2;

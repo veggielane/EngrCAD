@@ -7,7 +7,7 @@ public class Translate: Node
 {
     public Vector3 Position { get; init; } = Vector3.Zero;
 
-    public INode Child { get; init; }
+    public Node Child { get; init; }
 
     public override ShapeWrapper Generate()
     {
