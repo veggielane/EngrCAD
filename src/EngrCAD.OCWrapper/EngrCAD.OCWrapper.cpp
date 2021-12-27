@@ -32,6 +32,7 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <Geom_Line.hxx>
 #include <Geom_BezierCurve.hxx>
+#include <BRepPrimAPI_MakeRevol.hxx>
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -277,6 +278,46 @@ namespace EngrCADOCWrapper {
         BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireBuilder.Wire(), false);
         TopoDS_Face face = faceBuilder.Face();
         BRepPrimAPI_MakePrism builder = BRepPrimAPI_MakePrism(face, ToVec(direction),false, true);
+        return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
+    }
+
+    ShapeWrapper^ ShapeWrapper::Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction, float angle)
+    {
+        BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
+        for each (EdgeWrapper ^ edge in edges) {
+            TopoDS_Edge* edge_pointer = edge->GetPointer();
+            wireBuilder.Add(*edge_pointer);
+        }
+        wireBuilder.Build();
+        BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireBuilder.Wire(), false);
+        TopoDS_Face face = faceBuilder.Face();
+
+        gp_Dir dir = ToDir(direction);
+        gp_Pnt ori = ToPnt(origin);
+        gp_Ax1 axis = gp_Ax1(ori, dir);
+
+        BRepPrimAPI_MakeRevol builder = BRepPrimAPI_MakeRevol(face, axis, angle);
+
+        return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
+    }
+
+    ShapeWrapper^ ShapeWrapper::Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction)
+    {
+        BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
+        for each (EdgeWrapper ^ edge in edges) {
+            TopoDS_Edge* edge_pointer = edge->GetPointer();
+            wireBuilder.Add(*edge_pointer);
+        }
+        wireBuilder.Build();
+        BRepBuilderAPI_MakeFace faceBuilder = BRepBuilderAPI_MakeFace(wireBuilder.Wire(), false);
+        TopoDS_Face face = faceBuilder.Face();
+
+        gp_Dir dir = ToDir(direction);
+        gp_Pnt ori = ToPnt(origin);
+        gp_Ax1 axis = gp_Ax1(ori, dir);
+
+        BRepPrimAPI_MakeRevol builder = BRepPrimAPI_MakeRevol(face, axis);
+
         return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
     }
 

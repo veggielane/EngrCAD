@@ -1,9 +1,10 @@
 using System;
 using System.Numerics;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Sketcher;
 using Xunit;
-using Plane = EngrCAD.Core.Sketcher.Plane;
+
 
 namespace EngrCAD.Tests;
 
@@ -14,13 +15,13 @@ public class SketchTests
     {
         var size = 5f;
         var height = 10f;
-        var sketch = new Sketch(Plane.XY).HorizontalLine(size).VerticalLine(size).HorizontalLine(-size).Close();
+        var sketch = new Sketch(CSYS.XY).HorizontalLine(size).VerticalLine(size).HorizontalLine(-size).Close();
         var extrude = sketch.Extrude(height);
         var calc = MathF.Pow(size, 2)* height;
         Assert.Equal(calc, extrude.Volume, 3);
 
 
-        var heart = new Sketch(Plane.XY)
+        var heart = new Sketch(CSYS.XY)
             .MoveTo(140, 20)
             .BezierCurveTo(new Vector2(20, 140), new Vector2(73, 20), new Vector2(20, 74))
             .BezierCurve(new Vector2(228, 303), new Vector2(0, 135), new Vector2(136, 170))

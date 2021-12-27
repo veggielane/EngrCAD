@@ -1,12 +1,13 @@
 ﻿using System.Collections.Generic;
 using System.Numerics;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Sketcher.Edges;
 
 namespace EngrCAD.Core.Sketcher;
 
 public interface ISketch
 {
-    IPlane Plane { get; }
+    ICSYS CSYS { get; }
     List<ISketchEdge> Edges { get; }
 
     ISketch MoveTo(Vector2 v);
@@ -14,7 +15,7 @@ public interface ISketch
 
     ISketch HorizontalLine(float distance);
     ISketch VerticalLine(float distance);
-    IClosedSketch Close();
+    ClosedSketch Close();
     ISketch LineTo(Vector2 v);
     ISketch LineTo(float x, float y);
 

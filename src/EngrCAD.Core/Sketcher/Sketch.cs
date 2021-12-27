@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Sketcher.Edges;
 using EngrCADOCWrapper;
 
@@ -13,7 +14,7 @@ public class Sketch:ISketch
     private Vector3 _pointer;
     private readonly CoordMapper _mapper;
 
-    public IPlane Plane { get; init; }
+    public ICSYS CSYS { get; init; }
     public List<ISketchEdge> Edges { get; protected init; }
 
 
@@ -104,7 +105,7 @@ public class Sketch:ISketch
         return Line(0, distance);
     }
 
-    public IClosedSketch Close()
+    public ClosedSketch Close()
     {
         if (_firstPoint != _pointer)
         {
@@ -115,16 +116,15 @@ public class Sketch:ISketch
             });
         }
 
-        return new ClosedSketch(Plane, Edges);
+        return new ClosedSketch(CSYS, Edges);
     }
 
-    public Sketch(IPlane plane)
+    public Sketch(ICSYS csys)
     {
-        Plane = plane;
+        CSYS = csys;
         Edges = new List<ISketchEdge>();
-        _mapper = new CoordMapper(Plane.Origin, Plane.Normal, Plane.XDirection);
-
-        _firstPoint = Plane.Origin;
+        _mapper = new CoordMapper(CSYS.Origin, CSYS.Normal, CSYS.XDirection);
+        _firstPoint = CSYS.Origin;
     }
 
 

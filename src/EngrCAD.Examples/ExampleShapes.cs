@@ -1,8 +1,10 @@
 ﻿using System.Numerics;
 using EngrCAD.Core;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
 using EngrCAD.Core.Sketcher;
+
 
 namespace EngrCAD.Examples;
 
@@ -20,7 +22,7 @@ public static class ExampleShapes
 
     public static INode Heart()
     {
-        return new Sketch(Plane.XY)
+        return new Sketch(CSYS.XY)
             .MoveTo(140, 20)
             .BezierCurveTo(new Vector2(20, 140), new Vector2(73, 20), new Vector2(20, 74))
             .BezierCurve(new Vector2(228, 303), new Vector2(0, 135), new Vector2(136, 170))

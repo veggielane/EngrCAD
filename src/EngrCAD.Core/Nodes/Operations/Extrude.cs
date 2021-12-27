@@ -6,11 +6,11 @@ namespace EngrCAD.Core.Nodes.Operations;
 
 public class Extrude : BaseNode
 {
-    public IClosedSketch Sketch { get; }
+    public ClosedSketch Sketch { get; }
 
     public float Distance { get; }
         
-    public Extrude(IClosedSketch sketch, float distance)
+    public Extrude(ClosedSketch sketch, float distance)
     {
         Sketch = sketch;
         Distance = distance;
@@ -19,6 +19,6 @@ public class Extrude : BaseNode
     public override ShapeWrapper Generate()
     {
         var edges = Sketch.Edges.Select(o => o.ToEdge()).ToList();
-        return ShapeWrapper.Extrude(edges, Sketch.Plane.Normal*Distance);
+        return ShapeWrapper.Extrude(edges, Sketch.CSYS.Normal*Distance);
     }
 }

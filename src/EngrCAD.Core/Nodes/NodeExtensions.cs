@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Numerics;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
@@ -127,7 +128,10 @@ public static class NodeExtensions
         Definitions = filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(node.Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList()
     };
 
-    public static Extrude Extrude(this IClosedSketch sketch, float distance) => new(sketch, distance);
+    public static Extrude Extrude(this ClosedSketch sketch, float distance) => new(sketch, distance);
+
+    public static RevolveAngle Revolve(this ClosedSketch sketch, IAxis axis, float angle) => new(sketch, axis, angle);
+    public static Revolve Revolve(this ClosedSketch sketch, IAxis axis) => new(sketch, axis);
 
     public static Body ToBody(this INode node, Color color) => new()
     {

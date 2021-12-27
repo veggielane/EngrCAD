@@ -128,6 +128,10 @@ namespace EngrCADOCWrapper
 		static ShapeWrapper^ Cylinder(float radius, float height, bool centered);
 		static ShapeWrapper^ Cone(float bottomRadius, float topRadius, float height, bool centered);
 		static ShapeWrapper^ Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction);
+		static ShapeWrapper^ Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction);
+		static ShapeWrapper^ Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction, float angle);
+
+
 		static ShapeWrapper^ ImportSTP(System::String^ filenpathame);
 
 		ShapeWrapper^ Translate(float x, float y, float z);
