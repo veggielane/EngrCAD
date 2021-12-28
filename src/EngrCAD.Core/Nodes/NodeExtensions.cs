@@ -7,6 +7,7 @@ using EngrCAD.Core.Datums;
 using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
 using EngrCAD.Core.Nodes.Transformations;
+using EngrCAD.Core.Numerics;
 using EngrCAD.Core.Sketcher;
 using EngrCADOCWrapper;
 
@@ -25,7 +26,7 @@ public static class NodeExtensions
 
     public static Node Extrude(this ClosedSketch sketch, float distance) => new Extrude(sketch, distance);
     public static Node Revolve(this ClosedSketch sketch, IAxis axis) => new Revolve(sketch, axis);
-    public static Node Revolve(this ClosedSketch sketch, IAxis axis, float angle) => new RevolveAngle(sketch, axis, angle);
+    public static Node Revolve(this ClosedSketch sketch, IAxis axis, Angle angle) => new RevolveAngle(sketch, axis, angle);
 
 
     public static void SaveSTL(this Node node, string path) => node.Generate().SaveSTL(path);

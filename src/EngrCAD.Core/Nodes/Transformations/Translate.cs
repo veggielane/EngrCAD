@@ -5,12 +5,22 @@ namespace EngrCAD.Core.Nodes.Transformations;
 
 public class Translate: Node
 {
+    public Node Node { get; init; }
     public Vector3 Position { get; init; } = Vector3.Zero;
 
-    public Node Child { get; init; }
+    public Translate()
+    {
+
+    }
+
+    public Translate(Node node, Vector3 position)
+    {
+        Node = node;
+        Position = position;
+    }
 
     public override ShapeWrapper Generate()
     {
-        return Child.Wrapper.Translate(Position.X, Position.Y, Position.Z);
+        return Node.Wrapper.Translate(Position.X, Position.Y, Position.Z);
     }
 }

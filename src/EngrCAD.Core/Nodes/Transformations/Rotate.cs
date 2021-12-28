@@ -1,24 +1,35 @@
 ﻿using System.Numerics;
+using EngrCAD.Core.Numerics;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations;
 
 public class Rotate : Node
 {
-    public Vector3 Origin { get; set; } = Vector3.Zero;
-    public Vector3 Direction { get; init; } = Vector3.UnitZ;
+    public Node Node { get; }
 
-    public float Degrees
+    public Vector3 Origin { get; }
+    public Vector3 Direction { get; }
+    public Angle Angle { get; }
+
+    public Rotate(Node node, Vector3 direction, Angle angle)
     {
-        set => Radians = MathHelper.DegreesToRadians(value);
+        Node = node;
+        Origin = Vector3.Zero;
+        Direction = direction;
+        Angle = angle;
     }
 
-    public float Radians { get; set; } = 0f;
-
-    public Node Child { get; init; }
+    public Rotate(Node node, Vector3 origin, Vector3 direction, Angle angle)
+    {
+        Node = node;
+        Origin = origin;
+        Direction = direction;
+        Angle = angle;
+    }
 
     public override ShapeWrapper Generate()
     {
-        return Child.Wrapper.Rotate(Radians, Origin, Direction);
+        return Node.Wrapper.Rotate(Angle.Radians, Origin, Direction);
     }
 }

@@ -2,6 +2,7 @@ using System;
 using EngrCAD.Core.Datums;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
+using EngrCAD.Core.Numerics;
 using EngrCAD.Core.Sketcher;
 using Xunit;
 
@@ -26,6 +27,10 @@ public class RevolveTests
         Assert.Equal(ShapeType.Solid,revolve.ShapeType);
         var outer = MathF.PI * MathF.Pow(od, 2) * thickness;
         var inner = MathF.PI * MathF.Pow(id, 2) * thickness;
-        Assert.Equal(outer - inner, revolve.Volume, 1);
+        var calc = outer - inner;
+        Assert.Equal(calc, revolve.Volume, 1);
+
+        var revolveHalf = sketch.Revolve(Axis.Y, Angle.PI);
+        Assert.Equal(calc/2, revolveHalf.Volume, 1);
     }
 }
