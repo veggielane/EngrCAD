@@ -1,15 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Drawing;
-using System.Linq;
-using System.Numerics;
 using EngrCAD.Core.Datums;
-using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
-using EngrCAD.Core.Nodes.Transformations;
 using EngrCAD.Core.Numerics;
 using EngrCAD.Core.Sketcher;
-using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes;
 
