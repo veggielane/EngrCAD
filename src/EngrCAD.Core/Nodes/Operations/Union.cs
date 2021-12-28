@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Union : Node
+internal class Union : Node
 {
     public Node Node { get; }
     public List<Node> Others { get; }

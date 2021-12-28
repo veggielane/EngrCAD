@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Intersect : Node
+internal class Intersect : Node
 {
     public Node Node { get; }
     public List<Node> Others { get; }

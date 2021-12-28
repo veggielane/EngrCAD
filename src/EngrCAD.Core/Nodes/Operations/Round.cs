@@ -3,7 +3,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Round : Node
+internal class Round : Node
 {
     public Node Node { get; init; }
     public List<RadiusDefinition> Definitions { get; }

@@ -8,7 +8,7 @@ namespace EngrCAD.Core.Nodes
     {
         public Node Transform(Matrix4x4 matrix) => new Transform
         {
-            Child = this,
+            Node = this,
             Matrix = matrix
         };
 

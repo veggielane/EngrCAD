@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Extrude : Node
+internal class Extrude : Node
 {
     public IClosedSketch Sketch { get; }
 

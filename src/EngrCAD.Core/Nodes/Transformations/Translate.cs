@@ -3,7 +3,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations;
 
-public class Translate: Node
+internal class Translate: Node
 {
     public Node Node { get; init; }
     public Vector3 Position { get; init; } = Vector3.Zero;

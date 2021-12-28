@@ -6,7 +6,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class RevolveAngle : Revolve
+internal class RevolveAngle : Revolve
 {
 
     public Angle Angle { get; }

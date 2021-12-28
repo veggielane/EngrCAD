@@ -3,7 +3,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
-public class Chamfer : Node
+internal class Chamfer : Node
 {
     public Node Node { get; init; }
     public List<ChamferDefinition> Definitions { get; }

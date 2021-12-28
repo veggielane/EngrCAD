@@ -4,7 +4,7 @@ using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Transformations;
 
-public class Rotate : Node
+internal class Rotate : Node
 {
     public Node Node { get; }
 
