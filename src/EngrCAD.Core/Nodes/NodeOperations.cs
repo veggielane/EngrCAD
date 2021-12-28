@@ -47,5 +47,10 @@ namespace EngrCAD.Core.Nodes
         public Node Round(Func<IEdge, float?> predicate) => new Round(this, Edges.Select(edge => (edge, predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new RadiusDefinition(tuple.Item2.Value, new List<EdgeWrapper>() { tuple.edge.Wrapper })).ToList());
         public Node Round(float radius, Func<IEdge[], IEnumerable<IEdge>> filter) => new Round(this, new RadiusDefinition(radius, filter(Edges.ToArray()).Select(edge => edge.Wrapper).ToList()));
         public Node Round(params ValueTuple<float, Func<IEdge[], IEnumerable<IEdge>>>[] filter) => new Round(this, filter.Select(tuple => new RadiusDefinition(tuple.Item1, tuple.Item2(Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList());
+        
+        public Node Chamfer(float length) => new Chamfer(this, new ChamferDefinition(length, Edges.Select(edge => edge.Wrapper).ToList()));
+        public Node Chamfer(Func<IEdge, float?> predicate) => new Chamfer(this, Edges.Select(edge => (edge, predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new ChamferDefinition(tuple.Item2.Value, new List<EdgeWrapper>() { tuple.edge.Wrapper })).ToList());
+        public Node Chamfer(float length, Func<IEdge[], IEnumerable<IEdge>> filter) => new Chamfer(this, new ChamferDefinition(length, filter(Edges.ToArray()).Select(edge => edge.Wrapper).ToList()));
+        public Node Chamfer(params ValueTuple<float, Func<IEdge[], IEnumerable<IEdge>>>[] filter) => new Chamfer(this, filter.Select(tuple => new ChamferDefinition(tuple.Item1, tuple.Item2(Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList());
     }
 }

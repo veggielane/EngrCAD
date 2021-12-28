@@ -8,4 +8,8 @@
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.OCWrapper\EngrCAD.OCWrapper.vcxproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="Numerics\" />
+  </ItemGroup>
 </Project>

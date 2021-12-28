@@ -33,6 +33,7 @@
 #include <Geom_Line.hxx>
 #include <Geom_BezierCurve.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
+#include <BRepFilletAPI_MakeChamfer.hxx>
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -346,6 +347,20 @@ namespace EngrCADOCWrapper {
             }
         }
         return gcnew ShapeWrapper(new TopoDS_Shape(fillet.Shape()));
+    }
+
+    ShapeWrapper^ ShapeWrapper::Chamfer(System::Collections::Generic::List<ChamferDefinition^>^ definitions)
+    {
+        TopoDS_Shape shape = *m_Impl;
+        BRepFilletAPI_MakeChamfer algo = BRepFilletAPI_MakeChamfer(shape);
+
+        for each (ChamferDefinition ^ def in definitions) {
+            for each (EdgeWrapper ^ edge in def->Edges) {
+                TopoDS_Edge* edge_pointer = edge->GetPointer();
+                algo.Add(def->Length, *edge_pointer);
+            }
+        }
+        return gcnew ShapeWrapper(new TopoDS_Shape(algo.Shape()));
     }
 
     void ShapeWrapper::SaveSTP(System::String^ path)

@@ -2,11 +2,6 @@
 
 namespace EngrCAD.Core.Edges;
 
-public interface IEdge
-{
-    public EdgeWrapper Wrapper { get; }
-}
-
 public abstract class Edge: IEdge
 {
     public EdgeWrapper Wrapper { get; }

@@ -92,7 +92,15 @@ namespace EngrCADOCWrapper
 		TopoDS_Wire* m_Impl;
 	};
 
-
+	public ref class ChamferDefinition
+	{
+	public:
+		explicit ChamferDefinition(float length, System::Collections::Generic::List<EdgeWrapper^>^ edges) : Length(length), Edges(edges)
+		{
+		}
+		System::Collections::Generic::List<EdgeWrapper^>^ Edges;
+		float Length;
+	};
 
 
 	public ref class RadiusDefinition
@@ -152,6 +160,7 @@ namespace EngrCADOCWrapper
 		ShapeWrapper^ Shell(double thickness);
 
 		ShapeWrapper^ Round(System::Collections::Generic::List<RadiusDefinition^>^ definitions);
+		ShapeWrapper^ Chamfer(System::Collections::Generic::List<ChamferDefinition^>^ definitions);
 
 		void SaveSTP(System::String^ path);
 		void SaveSTL(System::String^ path);

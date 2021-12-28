@@ -6,7 +6,7 @@ namespace EngrCAD.Core.Nodes.Operations;
 public class Round : Node
 {
     public Node Node { get; init; }
-    public List<RadiusDefinition> Definitions = new();
+    public List<RadiusDefinition> Definitions { get; }
     public Round(Node node, RadiusDefinition definition)
     {
         Node = node;

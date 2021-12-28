@@ -10,7 +10,6 @@ public class EdgeLine : Edge
 
 
     }
-
     public Vector3 Normal => (Vector3)Wrapper.Normal();
 
     public bool ParallelTo(Vector3 other)
