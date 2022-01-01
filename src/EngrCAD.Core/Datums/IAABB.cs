@@ -21,7 +21,6 @@ public interface IAABB : IEquatable<IAABB>
 
     public void Inflate(Vector3 toPoint);
 
-    public bool Equals(IAABB other);
     public bool Equals(object obj);
 
 }

@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
 using Xunit;
@@ -16,9 +17,7 @@ public class SubtractTests
         };
         var box = new Box()
         {
-            X = 10,
-            Y = 10,
-            Z = 10
+            Size = new Vector3(10,10,10)
         }.Translate(5, 0, 0);
 
         var calc = (4f / 3f) * MathF.PI * MathF.Pow(sphere.Radius, 3) / 2f;

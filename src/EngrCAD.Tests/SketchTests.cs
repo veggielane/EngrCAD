@@ -30,7 +30,7 @@ public class SketchTests
             .BezierCurve(new Vector2(-109, 69), new Vector2(-48, 0), new Vector2(-90, 28))
             .BezierCurve(new Vector2(-108, -69), new Vector2(-19, -41), new Vector2(-60, -69))
             .Close()
-            .Extrude(10).Centered();
+            .Extrude(10).Center();
         heart.SaveSTL("heart.stl");
         //  
 

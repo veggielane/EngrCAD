@@ -54,12 +54,7 @@ public class AABB : IAABB
         throw new NotImplementedException();
     }
 
-    bool IAABB.Equals(IAABB other)
-    {
-        throw new NotImplementedException();
-    }
-
-    bool IEquatable<IAABB>.Equals(IAABB? other)
+    bool IEquatable<IAABB>.Equals(IAABB other)
     {
         throw new NotImplementedException();
     }

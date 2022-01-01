@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using EngrCAD.Core.Nodes.Primitives;
 using Xunit;
 
@@ -12,9 +13,7 @@ public class BoxTests
         var size = 5f;
         var box = new Box
         {
-            X = size,
-            Y = size,
-            Z = size
+            Size = new Vector3(size)
         };
 
         var calc = MathF.Pow(size, 3);

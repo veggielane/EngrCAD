@@ -32,24 +32,26 @@ public abstract partial class Node
         {
             case EdgeType.GeomAbs_Line:
                 return new EdgeLine(wrapper);
-            //case EdgeType.GeomAbs_Circle:
-            //    break;
-            //case EdgeType.GeomAbs_Ellipse:
-            //    break;
-            //case EdgeType.GeomAbs_Hyperbola:
-            //    break;
-            //case EdgeType.GeomAbs_Parabola:
-            //    break;
-            //case EdgeType.GeomAbs_BezierCurve:
-            //    break;
-            //case EdgeType.GeomAbs_BSplineCurve:
-            //    break;
-            //case EdgeType.GeomAbs_OffsetCurve:
-            //    break;
-            //case EdgeType.GeomAbs_OtherCurve:
-            //    break;
+            case EdgeType.GeomAbs_Circle:
+                break;
+            case EdgeType.GeomAbs_Ellipse:
+                break;
+            case EdgeType.GeomAbs_Hyperbola:
+                break;
+            case EdgeType.GeomAbs_Parabola:
+                break;
+            case EdgeType.GeomAbs_BezierCurve:
+                break;
+            case EdgeType.GeomAbs_BSplineCurve:
+                break;
+            case EdgeType.GeomAbs_OffsetCurve:
+                break;
+            case EdgeType.GeomAbs_OtherCurve:
+                break;
             default:
                 throw new ArgumentOutOfRangeException();
         }
+
+        throw new NotImplementedException();
     });
 }

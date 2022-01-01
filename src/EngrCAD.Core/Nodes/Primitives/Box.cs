@@ -1,14 +1,13 @@
-﻿using EngrCADOCWrapper;
+﻿using System.Numerics;
+using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Primitives;
 
 public class Box : Node
 {
-    public float X { get; init; } = 1f;
-    public float Y { get; init; } = 1f;
-    public float Z { get; init; } = 1f;
+    public Vector3 Size { get; init; } = Vector3.Zero;
 
     public bool Centered { get; init; } = true;
 
-    public override ShapeWrapper Generate() => ShapeWrapper.Box(X, Y, Z, Centered);
+    public override ShapeWrapper Generate() => ShapeWrapper.Box(Size.X, Size.Y, Size.Z, Centered);
 }

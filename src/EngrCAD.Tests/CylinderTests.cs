@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 using EngrCAD.Core.Nodes;
 using EngrCAD.Core.Nodes.Primitives;
 using Xunit;
@@ -38,9 +39,7 @@ public class CylinderTests
 
         var box = new Box()
         {
-            X = 10,
-            Y = 10,
-            Z = 10
+            Size = new Vector3(10, 10, 10)
         }.Translate(5, 0, 0);
 
         var aVolume = a.Subtract(box).Volume;

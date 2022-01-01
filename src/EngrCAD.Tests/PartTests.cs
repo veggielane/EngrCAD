@@ -12,7 +12,7 @@ public class PartTests
     public void Volume()
     {
         var part = new TestPart();
-        Assert.Equal("Test Part", part.Name);
+        Assert.Equal("Test Part", part.Metadata.Name);
 
     }
 
@@ -20,13 +20,15 @@ public class PartTests
     {
         public TestPart()
         {
-            Name = "Test Part";
+            Metadata = new PartMetadata()
+            {
+                Name = "Test Part"
+            };
         }
 
-        public override IEnumerable<Body> Generate()
+        public override Body Generate()
         {
-
-            yield return new Box().ToBody();
+            return new Box().ToBody();
         }
     }
 }

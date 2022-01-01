@@ -12,7 +12,7 @@ public static class ExampleShapes
 {
     public static Node Classic()
     {
-        var cube = new Box {X = 2f, Y = 2f, Z = 2f };
+        var cube = new Box {Size = new Vector3(2,2,2)};
         var sphere = new Sphere { Radius = 1.35f };
         var cylinderA = new Cylinder { Radius = 0.7f, Height = 3 };
         var cylinderB = cylinderA.RotateX(MathHelper.DegreesToRadians(90));
@@ -32,6 +32,6 @@ public static class ExampleShapes
             .BezierCurve(new Vector2(-108, -69), new Vector2(-19, -41), new Vector2(-60, -69))
             .Close()
             .Extrude(10)
-            .Centered();
+            .Center();
     }
 }

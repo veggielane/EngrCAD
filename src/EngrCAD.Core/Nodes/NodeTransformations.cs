@@ -13,7 +13,7 @@ namespace EngrCAD.Core.Nodes
         };
 
         public Node Translate(Vector3 position) => new Translate(this, position);
-        public Node Centered() => new Translate(this, -BoundingBox.Center);
+        public Node Center() => new Translate(this, -BoundingBox.Center);
 
         public Node Translate(float x, float y, float z) => Translate(new Vector3(x, y, z));
 
