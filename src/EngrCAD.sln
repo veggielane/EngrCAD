@@ -13,7 +13,7 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Tests", "EngrCAD.Te
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Examples", "EngrCAD.Examples\EngrCAD.Examples.csproj", "{5CF05C92-E937-4627-9B96-DA98EB9A128B}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EngrCAD.Documentation", "EngrCAD.Documentation\EngrCAD.Documentation.csproj", "{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "EngrCAD.Documentation", "EngrCAD.Documentation\EngrCAD.Documentation.csproj", "{EDD72366-A13E-44F4-8D37-FEE477E4BDE8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

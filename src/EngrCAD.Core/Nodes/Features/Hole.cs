@@ -13,7 +13,7 @@ public class Hole : Node
 {
     private readonly IClosedSketch _sketch;
 
-    public Hole(ICSYS csys)
+    public Hole(float dia, float depth, ICSYS csys)
     {
         _sketch = new Sketch(csys).Close();
     }
@@ -21,12 +21,5 @@ public class Hole : Node
     public override ShapeWrapper Generate()
     {
         return ShapeWrapper.Revolve(_sketch.Edges.Select(o => o.ToEdge()).ToList(), _sketch.CSYS.Origin, _sketch.CSYS.XDirection);
-    }
-}
-
-public class TappedHole : Hole
-{
-    public TappedHole(ICSYS csys) : base(csys)
-    {
     }
 }
