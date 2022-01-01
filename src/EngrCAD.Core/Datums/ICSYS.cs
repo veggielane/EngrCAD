@@ -9,4 +9,5 @@ public interface ICSYS
     Vector3 YDirection { get; }
     Vector3 ZDirection { get; }
     Vector3 Normal { get; init; }
+    ICSYS Translate(Vector3 position);
 }

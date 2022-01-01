@@ -58,9 +58,12 @@ namespace EngrCADOCWrapper
 	public:
 		TopoDS_Edge* GetPointer() { return m_Impl; }
 
+
 		static EdgeWrapper^ Line(System::Numerics::Vector3^ v1, System::Numerics::Vector3^ v2);
 		static EdgeWrapper^ BezierCurve(System::Collections::Generic::List<System::Numerics::Vector3>^ points);
 
+
+		static EdgeWrapper^ Circle(float radius, System::Numerics::Vector3^ center, System::Numerics::Vector3^ direction);
 		System::Numerics::Vector3^ Normal();
 		int CurveType();
 
@@ -138,7 +141,7 @@ namespace EngrCADOCWrapper
 		static ShapeWrapper^ Extrude(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ direction);
 		static ShapeWrapper^ Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction);
 		static ShapeWrapper^ Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction, float angle);
-
+		static ShapeWrapper^ Loft(System::Collections::Generic::List<System::Collections::Generic::List<EdgeWrapper^>^>^ listOfEdges);
 
 		static ShapeWrapper^ ImportSTP(System::String^ filenpathame);
 

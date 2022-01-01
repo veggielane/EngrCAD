@@ -18,5 +18,9 @@ class Program
         var provider = Runner.Configure(collection => collection.AddSingleton<IPart,TestPart>());
 
         var t = provider.GetServices<IPart>();
+        foreach (var part in t)
+        {
+            part.Generate();
+        }
     }
 }

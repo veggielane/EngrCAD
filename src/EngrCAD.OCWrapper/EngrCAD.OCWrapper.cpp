@@ -24,6 +24,7 @@
 #include <BRepPrimAPI_MakeCone.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <gp_GTrsf.hxx>
+#include <gp_Circ.hxx>
 #include <BRepBuilderAPI_GTransform.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
@@ -34,6 +35,7 @@
 #include <Geom_BezierCurve.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
+#include <BRepOffsetAPI_ThruSections.hxx>
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -307,6 +309,22 @@ namespace EngrCADOCWrapper {
         return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
     }
 
+    ShapeWrapper^ ShapeWrapper::Loft(System::Collections::Generic::List<System::Collections::Generic::List<EdgeWrapper^>^>^ listOfEdges)
+    {
+        BRepOffsetAPI_ThruSections builder = new BRepOffsetAPI_ThruSections(true, true, 1e-6);
+        for each (System::Collections::Generic::List<EdgeWrapper^>^ edges in listOfEdges) {
+            BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
+            for each (EdgeWrapper ^ edge in edges) {
+                TopoDS_Edge* edge_pointer = edge->GetPointer();
+                wireBuilder.Add(*edge_pointer);
+            }
+            wireBuilder.Build();
+            builder.AddWire(wireBuilder.Wire());
+        }
+        builder.Build();
+        return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
+    }
+
     ShapeWrapper^ ShapeWrapper::Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction)
     {
         BRepBuilderAPI_MakeWire wireBuilder = BRepBuilderAPI_MakeWire();
@@ -474,6 +492,16 @@ namespace EngrCADOCWrapper {
         edgeMaker.Init(bezierCurve);
         TopoDS_Edge* edge = new TopoDS_Edge(edgeMaker.Edge());
 
+        EdgeWrapper^ edgeWrapper = gcnew EdgeWrapper(edge);
+        return edgeWrapper;
+    }
+
+    EdgeWrapper^ EdgeWrapper::Circle(float radius, System::Numerics::Vector3^ center, System::Numerics::Vector3^ direction)
+    {
+        gp_Ax2 axis = gp_Ax2(ToPnt(center), ToDir(direction));
+        gp_Circ circle = gp_Circ(axis, radius);
+        BRepBuilderAPI_MakeEdge brep = BRepBuilderAPI_MakeEdge(circle);
+        TopoDS_Edge* edge = new TopoDS_Edge(brep.Edge());
         EdgeWrapper^ edgeWrapper = gcnew EdgeWrapper(edge);
         return edgeWrapper;
     }

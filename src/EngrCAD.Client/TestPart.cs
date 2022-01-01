@@ -19,6 +19,9 @@ public class TestPart : Part<PartMetadata>
 
     public override Body Generate()
     {
+        return sketchRectangle(5, 10).loftWith(sketchCircle(3, { origin: 10 }));
+
+
 
         var a = new Box { Size = new Vector3(2, 2, 2) };
         var node =  a.Round(0.5f, edges => edges.OfType<EdgeLine>().Where(line => line.ParallelTo(Vector3.UnitZ)));

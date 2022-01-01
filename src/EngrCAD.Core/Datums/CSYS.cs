@@ -10,10 +10,22 @@ public class CSYS : ICSYS
     public Vector3 ZDirection => Normal;
     public Vector3 Normal { get; init; } = Vector3.UnitZ;
 
+
+    public ICSYS Translate(Vector3 position)
+    {
+        return new CSYS
+        {
+            Origin = Origin + position,
+            Normal = Normal,
+            XDirection = XDirection,
+        };
+    }
     public static ICSYS XY => new CSYS
     {
         Origin = Vector3.Zero,
         Normal = Vector3.UnitZ,
         XDirection = Vector3.UnitX,
     };
+
+
 }
