@@ -16,6 +16,15 @@ jobs:
         working-directory: ./src
 
     steps:
+    - uses: suisei-cn/actions-download-file@v1
+      id: downloadfile  # Remember to give an ID if you need the output filename
+      name: Download occ
+      with:
+         url: " https://github.com/tpaviot/oce/releases/download/OCE-0.18.3/oce-0.18.3.Win64.MSVC2015.zip"
+         target: ./
+    - uses: montudor/action-zip@v1
+      with:
+        args: unzip -qq oce-0.18.3.Win64.MSVC2015.zip -d occ
     - uses: actions/checkout@v2
     - name: Setup .NET
       uses: actions/setup-dotnet@v1
