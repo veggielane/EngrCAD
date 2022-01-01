@@ -22,13 +22,13 @@ jobs:
       with:
          url: " https://github.com/tpaviot/oce/releases/download/OCE-0.18.3/oce-0.18.3.Win64.MSVC2015.zip"
          target: ./
+    - uses: actions/checkout@v2
     - name: Display the path
       run: echo ${env:PATH}
       shell: pwsh
     - name: Extract OCC
       run: Expand-Archive -Path oce-0.18.3.Win64.MSVC2015.zip -DestinationPath OCC
       shell: pwsh
-    - uses: actions/checkout@v2
     - name: Setup .NET
       uses: actions/setup-dotnet@v1
       with:
