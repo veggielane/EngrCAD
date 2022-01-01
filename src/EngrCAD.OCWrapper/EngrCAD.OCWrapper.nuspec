@@ -13,7 +13,7 @@
     <releaseNotes>.</releaseNotes>
     <copyright>$</copyright>
     <tags>OC</tags>
-        <dependencies>
+    <dependencies>
       <group targetFramework="net6.0" />
     </dependencies>
   </metadata>
