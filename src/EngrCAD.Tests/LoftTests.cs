@@ -15,5 +15,8 @@ public class LoftTests
     {
         var loft = new Rectangle(CSYS.XY, 5, 10).Loft(new Circle(CSYS.XY.Translate(new Vector3(0, 0, 10)), 3));
         Assert.True(loft.Volume > 0);
+
+        var loftRectangle = new Rectangle(CSYS.XY, 5, 10).Loft(new Rectangle(CSYS.XY.Translate(new Vector3(0, 0, 8)), 5, 10));
+        Assert.Equal(5f*10f*8f, loftRectangle.Volume, 3);
     }
 }
