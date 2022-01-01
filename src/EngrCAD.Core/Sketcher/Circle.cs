@@ -4,19 +4,10 @@ using EngrCAD.Core.Sketcher.Edges;
 
 namespace EngrCAD.Core.Sketcher;
 
-public class Circle:IClosedSketch
+public class Circle:ClosedSketch
 {
-    public ICSYS CSYS { get; }
-    public IReadOnlyList<ISketchEdge> Edges { get; }
-
-    public Circle(ICSYS csys, float radius)
+    public Circle(ICSYS csys, float radius):base(csys, new List<ISketchEdge>() { new SketchEdgeCircle { Center = csys.Origin, Radius = radius, Direction = csys.Normal } })
     {
-        CSYS = csys;
-        Edges = new List<ISketchEdge>() { new SketchEdgeCircle()
-        {
-            Center = csys.Origin,
-            Radius = radius,
-            Direction = csys.Normal
-        } };
+
     }
 }

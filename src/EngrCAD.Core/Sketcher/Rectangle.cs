@@ -1,23 +1,16 @@
-﻿using System.Collections.Generic;
-using EngrCAD.Core.Datums;
-using EngrCAD.Core.Sketcher.Edges;
+﻿using EngrCAD.Core.Datums;
 
 namespace EngrCAD.Core.Sketcher;
 
-public class Rectangle : IClosedSketch
+public class Rectangle : ClosedSketch
 {
-    public ICSYS CSYS { get; }
-    public IReadOnlyList<ISketchEdge> Edges { get; }
-
-    public Rectangle(ICSYS csys, float x, float y)
+    public Rectangle(ICSYS csys, float x, float y):base(csys, new Sketch(csys)
+        .MoveTo(-x / 2f, -y / 2f)
+        .HorizontalLine(x)
+        .VerticalLine(y)
+        .HorizontalLine(-x)
+        .VerticalLine(-y).Edges)
     {
-        CSYS = csys;
-        var sketch = new Sketch(csys)
-            .MoveTo(-x / 2f, -y / 2f)
-            .HorizontalLine(x)
-            .VerticalLine(y)
-            .HorizontalLine(-x)
-            .VerticalLine(-y);
-        Edges = sketch.Edges;
+
     }
 }
