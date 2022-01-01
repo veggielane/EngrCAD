@@ -16,15 +16,9 @@ jobs:
         working-directory: ./src
 
     steps:
-    - uses: suisei-cn/actions-download-file@v1
-      id: downloadfile  # Remember to give an ID if you need the output filename
-      name: Download occ
-      with:
-         url: " https://github.com/tpaviot/oce/releases/download/OCE-0.18.3/oce-0.18.3.Win64.MSVC2015.zip"
-         target: ./src
     - uses: actions/checkout@v2
     - name: Display the path
-      run: echo ${env:PATH}
+      run: Invoke-WebRequest https://github.com/tpaviot/oce/releases/download/OCE-0.18.3/oce-0.18.3.Win64.MSVC2015.zip -OutFile oce-0.18.3.Win64.MSVC2015.zip
       shell: pwsh
     - name: Extract OCC
       run: Expand-Archive -Path oce-0.18.3.Win64.MSVC2015.zip -DestinationPath OCC
