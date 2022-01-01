@@ -23,7 +23,7 @@ jobs:
          url: " https://github.com/tpaviot/oce/releases/download/OCE-0.18.3/oce-0.18.3.Win64.MSVC2015.zip"
          target: ./
     - name: Extract some files
-      run: 7z x oce-0.18.3.Win64.MSVC2015.zip
+      run: 7z x ./oce-0.18.3.Win64.MSVC2015.zip
     - uses: actions/checkout@v2
     - name: Setup .NET
       uses: actions/setup-dotnet@v1
