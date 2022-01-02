@@ -35,4 +35,4 @@ jobs:
       uses: JamesIves/github-pages-deploy-action@4.1.7
       with:
         branch: gh-pages # The branch the action should deploy to.
-        folder: EngrCAD.Documentation/_site
+        folder: /src/EngrCAD.Documentation/_site
