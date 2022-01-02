@@ -1338,6 +1338,45 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.Node.Round
   nameWithType: Node.Round
+- uid: EngrCAD.Core.Nodes.Node.Save(System.String)
+  name: Save(String)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Save_System_String_
+  commentId: M:EngrCAD.Core.Nodes.Node.Save(System.String)
+  fullName: EngrCAD.Core.Nodes.Node.Save(System.String)
+  nameWithType: Node.Save(String)
+- uid: EngrCAD.Core.Nodes.Node.Save*
+  name: Save
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Save_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Save
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Save
+  nameWithType: Node.Save
+- uid: EngrCAD.Core.Nodes.Node.SaveSTL(System.String)
+  name: SaveSTL(String)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_SaveSTL_System_String_
+  commentId: M:EngrCAD.Core.Nodes.Node.SaveSTL(System.String)
+  fullName: EngrCAD.Core.Nodes.Node.SaveSTL(System.String)
+  nameWithType: Node.SaveSTL(String)
+- uid: EngrCAD.Core.Nodes.Node.SaveSTL*
+  name: SaveSTL
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_SaveSTL_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.SaveSTL
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.SaveSTL
+  nameWithType: Node.SaveSTL
+- uid: EngrCAD.Core.Nodes.Node.SaveSTP(System.String)
+  name: SaveSTP(String)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_SaveSTP_System_String_
+  commentId: M:EngrCAD.Core.Nodes.Node.SaveSTP(System.String)
+  fullName: EngrCAD.Core.Nodes.Node.SaveSTP(System.String)
+  nameWithType: Node.SaveSTP(String)
+- uid: EngrCAD.Core.Nodes.Node.SaveSTP*
+  name: SaveSTP
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_SaveSTP_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.SaveSTP
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.SaveSTP
+  nameWithType: Node.SaveSTP
 - uid: EngrCAD.Core.Nodes.Node.ShapeType
   name: ShapeType
   href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_ShapeType
@@ -1576,32 +1615,6 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.NodeExtensions.Revolve
   nameWithType: NodeExtensions.Revolve
-- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL(EngrCAD.Core.Nodes.Node,System.String)
-  name: SaveSTL(Node, String)
-  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTL_EngrCAD_Core_Nodes_Node_System_String_
-  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.SaveSTL(EngrCAD.Core.Nodes.Node,System.String)
-  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL(EngrCAD.Core.Nodes.Node, System.String)
-  nameWithType: NodeExtensions.SaveSTL(Node, String)
-- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL*
-  name: SaveSTL
-  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTL_
-  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.SaveSTL
-  isSpec: "True"
-  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL
-  nameWithType: NodeExtensions.SaveSTL
-- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP(EngrCAD.Core.Nodes.Node,System.String)
-  name: SaveSTP(Node, String)
-  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTP_EngrCAD_Core_Nodes_Node_System_String_
-  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.SaveSTP(EngrCAD.Core.Nodes.Node,System.String)
-  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP(EngrCAD.Core.Nodes.Node, System.String)
-  nameWithType: NodeExtensions.SaveSTP(Node, String)
-- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP*
-  name: SaveSTP
-  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTP_
-  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.SaveSTP
-  isSpec: "True"
-  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP
-  nameWithType: NodeExtensions.SaveSTP
 - uid: EngrCAD.Core.Nodes.NodeExtensions.Shell(EngrCAD.Core.Nodes.Node,System.Single)
   name: Shell(Node, Single)
   href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Shell_EngrCAD_Core_Nodes_Node_System_Single_
