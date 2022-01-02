@@ -17,6 +17,25 @@ public interface IClosedSketch
     Node Extrude(float distance);
     Node Revolve(IAxis axis);
     Node Revolve(IAxis axis, Angle angle);
+
+    /// <summary>
+    /// Loft current sketch to one or more other sketches
+    /// </summary>
+    /// <example>
+    ///  sketch.Loft(otherSketch);
+    ///  sketch.Loft(otherSketchA, otherSketchB);
+    /// </example>
+    /// <param name="sketches">other sketches to loft through</param>
+    /// <returns>Solid created by lofting sketches</returns>
     Node Loft(params IClosedSketch[] sketches);
+
+    /// <summary>
+    /// Loft current sketch to one or more other sketches
+    /// </summary>
+    /// <example>
+    ///  sketch.Loft(new List&lt;IClosedSketch&gt;(){otherSketchA, otherSketchB});
+    /// </example>
+    /// <param name="sketches">other sketches to loft through</param>
+    /// <returns>Solid created by lofting sketches</returns>
     Node Loft(IEnumerable<IClosedSketch> sketches);
 }

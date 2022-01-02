@@ -17,7 +17,7 @@ namespace EngrCAD.Core.Nodes
         public static Node operator ^(Node a, Node b) => a.Subtract(b);
 
         public Node Union(params Node[] others) => new Union(this, others);
-        public Node Union(IEnumerable<Node> nodes) => new Union(nodes);
+        public Node Union(IEnumerable<Node> nodes) => new Union(this, nodes);
         public Node Subtract(params Node[] others) => new Subtract(this, others);
         public Node Subtract(IEnumerable<Node> others) => new Subtract(this, others);
         public Node Intersect(params Node[] others) => new Intersect(this, others);

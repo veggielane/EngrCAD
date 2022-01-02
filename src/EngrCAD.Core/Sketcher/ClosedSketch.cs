@@ -22,6 +22,16 @@ public class ClosedSketch: IClosedSketch
     public Node Extrude(float distance) => new Extrude(this, distance);
     public Node Revolve(IAxis axis) => new Revolve(this, axis);
     public Node Revolve(IAxis axis, Angle angle) => new RevolveAngle(this, axis, angle);
+
+    /// <summary>
+    /// Loft current sketch to one or more other sketches
+    /// </summary>
+    /// <example>
+    ///  sketch.Loft(otherSketch);
+    ///  sketch.Loft(otherSketchA, otherSketchB);
+    /// </example>
+    /// <param name="sketches">other sketches to loft through</param>
+    /// <returns>Solid created by lofting sketches</returns>
     public Node Loft(params IClosedSketch[] sketches)
     {
         if (!sketches.Any()) throw new ArgumentException("Must contain at least 1", nameof(sketches));
@@ -30,6 +40,14 @@ public class ClosedSketch: IClosedSketch
         return new Loft(list);
     }
 
+    /// <summary>
+    /// Loft current sketch to one or more other sketches
+    /// </summary>
+    /// <example>
+    ///  sketch.Loft(new List&lt;IClosedSketch&gt;(){otherSketchA, otherSketchB});
+    /// </example>
+    /// <param name="sketches">other sketches to loft through</param>
+    /// <returns>Solid created by lofting sketches</returns>
     public Node Loft(IEnumerable<IClosedSketch> sketches)
     {
         var closedSketches = sketches.ToList();
