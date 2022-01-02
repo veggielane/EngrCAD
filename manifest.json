@@ -1,0 +1,704 @@
+{
+  "homepages": [],
+  "source_base_path": "D:/a/EngrCAD/EngrCAD/src/EngrCAD.Documentation",
+  "xrefmap": "xrefmap.yml",
+  "files": [
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Body.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Body.html",
+          "hash": "ou/cKExLnlOx5kCZmYCPAt5yvNn0HZ4JW67OAkYrWHE="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.AABB.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.AABB.html",
+          "hash": "6GQ+kGQzLT1vvBU5EurH29fvlxx2ygrtE7ttagtHF5g="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.Axis.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.Axis.html",
+          "hash": "JSy0GZ9mZwEWvvUO7U4vyKj3FKy/ZOwbBRbi/fD30UE="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.CSYS.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.CSYS.html",
+          "hash": "/pSPiU1hNeg7UX7Qf1ksT5oiAUVfZ2JOTvfpdfqr73o="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.IAABB.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.IAABB.html",
+          "hash": "4kx93lwMgOkV27wT2NwzZ2DrTH3FjYaPJJBpJpWIhmM="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.IAxis.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.IAxis.html",
+          "hash": "gL/Tcb8VAbqmtmtWAhK/Gyuq0r4iLS9l+dcIcvIIRqQ="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.ICSYS.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.ICSYS.html",
+          "hash": "9qZJm3yU/Ckd7gqinFAIhfgOaPjgiccPnwJc6ZltOEY="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Datums.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Datums.html",
+          "hash": "EXxNlXLFMRYiW1uFgzHLrmXoKlf0RY+6XinomD9jqrU="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Edges.Edge.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Edges.Edge.html",
+          "hash": "a11wf0Ci7k3AgC2ccXTTkhemiUHHH0yo0m1ybD1SAFs="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Edges.EdgeLine.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Edges.EdgeLine.html",
+          "hash": "j1ehcSSUszg63UUuKk5U5yrwkvYk0biUxuko7tF1/ZY="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Edges.IEdge.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Edges.IEdge.html",
+          "hash": "24ilPPdiDx9ePAvg7F4q6GgAFXYh5eE9kha6mWr/5sc="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Edges.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Edges.html",
+          "hash": "OJU4KPL2Ys26EZq0i4bg6y1jOTgG24tmh9kuPpEQubc="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Face.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Face.html",
+          "hash": "yiNgHtBuMfzRBMiFI45CNi7V8hoUtyB5ySvcXjXZ/Wc="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.IPart.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.IPart.html",
+          "hash": "8WqWV9CU3P4gyIZjTEeJchrbbGXbEt6Q6WFfZfLtjEk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.IPartMetadata.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.IPartMetadata.html",
+          "hash": "LXjiYx5Dr6ZpD3cCnKO6etoIzLyTQsKzYgUmF0p2bGo="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.MathExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.MathExtensions.html",
+          "hash": "QVZ4BEohXYtP1qGTv8GU2RplDDvXTDE32u0YNSFXWuA="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.MathHelper.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.MathHelper.html",
+          "hash": "2nVQFfEPhNKTXRv3R0h0jHkpQ9ne7QYbR1uugFYWUhY="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.EdgeType.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.EdgeType.html",
+          "hash": "bpbQmKWbN8ZW5KAkZXdBzE881Ouv0UjvfXsgIp3lnnU="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Features.Hole.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Features.Hole.html",
+          "hash": "OjefBqxiy0KALH3SiPyRzCK97amdYBNUJ6tS1Saao4w="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Features.TappedHole.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Features.TappedHole.html",
+          "hash": "r08sMvKZA6nQnkX4ZbFjab+iDCqpUR1HCCcn4ufi4FU="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Features.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Features.html",
+          "hash": "pYbTHuflOrOEqujplX2cYahbi5NiumM3bz1JAv7A3j4="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Node.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Node.html",
+          "hash": "XLR9QLmwQr+TWmVGYfvTKtNKr0RYxcYYrMcVaCJAVes="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.NodeExtensions.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.NodeExtensions.html",
+          "hash": "kdAUWmq7PLHNeow9gi8hS7z1SVD2gKObjbXx1BuO3JU="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Box.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Box.html",
+          "hash": "gcN5m+HQZAWcwg7zen5FGHdiUM3qbIAriyEZii0yjxg="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Cone.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Cone.html",
+          "hash": "gInsh0RfXxjQhQ2SeKWclCvZLYQEFN+rsuIYykqMwMI="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Cylinder.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Cylinder.html",
+          "hash": "J4IGsBXzQgLl6ztUVn6Rb3JVmnjPA9fDxCxbNHkSzj8="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Import.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Import.html",
+          "hash": "CTK4/NYeHSeqIjFe4gGFrgnTs82wjCFcDT87Kf0fLL4="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Sphere.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Sphere.html",
+          "hash": "6ur4pRoKCdnyNX+pqLzewRlNpwnvzJRUNoqFTuhqN3I="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.html",
+          "hash": "3Jtb+vKJOwYXGCSvWIwN9WRlWX/V8ICdFeskYIv0Lvk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.ShapeType.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.ShapeType.html",
+          "hash": "WD37ASvpB93Z3vuhbqqMMWocbUG6d++amYVzVtIBmdM="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.html",
+          "hash": "VWFI9g9o6JlYXJxOX7iDaS3CVQN2CEC2eZP/JSJHA74="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Numerics.Angle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Numerics.Angle.html",
+          "hash": "IArXeuGvlxAylEY8lmSJfAanws7F/+S8EeNVj86fHCE="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Numerics.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Numerics.html",
+          "hash": "QiXN/MNOg7aXX0EfG7EFsYp9reo0AYBUxZZSp5lE36A="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Part-1.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Part-1.html",
+          "hash": "K1G0dVi+VLkuc+HsURoWiymM0ePPO4JkNNjZ1Ca9Nvw="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.PartMetadata.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.PartMetadata.html",
+          "hash": "iBBbeR4F1e3iqr8Y6LUBRuMDwIwnVmIkSKRr4dXOeo4="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Circle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Circle.html",
+          "hash": "a2yyzs+KQpgocUxScz9IrKUozS3TtyUll/wxk6K2fds="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.ClosedSketch.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.ClosedSketch.html",
+          "hash": "aT0+SXwO23y/WegmJ6mHnid21tz3hc9PEsEZu6AxgOk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Edges.ISketchEdge.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Edges.ISketchEdge.html",
+          "hash": "naz9oh2J0l14skGHT2xfXyqJ4vztnNA+TbCLvXmR1MQ="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html",
+          "hash": "iXTa5qVYeXwqRq/Kb+sPJtNQYkwbaMeCuKu6o5F1HMk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html",
+          "hash": "Zw1NZwMWsLY6F5cm327uoBPuDTr6Xrlsoj++4OA4dt0="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html",
+          "hash": "6X10V45JZMx05gKdVeT8VKnruzQch7jxcAos/YRj//A="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Edges.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Edges.html",
+          "hash": "rg0KYqudlGHFox8If+J3+n/+JlTti67fDe82IhJUOJk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.IClosedSketch.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.IClosedSketch.html",
+          "hash": "EUThQ0HRX+swwE3ItMuoKr4htdfOsdja11XtqGo468s="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.ISketch.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.ISketch.html",
+          "hash": "RHr9gKuUqCu/HTYEWcCa1FQ7xahZwHEuFkUdn7vgjTI="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Rectangle.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Rectangle.html",
+          "hash": "CNoorMfK078m4PAAQdiedJ80VaxPqhForFNFNvtfIlk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.Sketch.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.Sketch.html",
+          "hash": "7Hgie6dw3oOk5yT2cuingU2PdYoL7xX8GVYJWT5ue58="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Sketcher.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Sketcher.html",
+          "hash": "4TMULCVeGJeI2dZxK/b+cL0yWsS0ZjNP9FbbvmRHu50="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.html",
+          "hash": "EaCdqtfnlC8HjhvSO1WJheyJOjUCTizn2JLAY3sxn58="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "api/index.md",
+      "output": {
+        ".html": {
+          "relative_path": "api/index.html",
+          "hash": "GzZw/cIUlA3XJvo/GhWo/NKHW/w+QbjrHXIzTxoAVzg="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "api/toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/toc.html",
+          "hash": "svbhaLPEG7C3KXWfU2BAI+HCKPK79VaxyWoog7A+FHQ="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "articles/intro.md",
+      "output": {
+        ".html": {
+          "relative_path": "articles/intro.html",
+          "hash": "oUJfElM74RZLaHvNzK32hAaZIAxpCaklKo0AZaI1ULk="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "articles/toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "articles/toc.html",
+          "hash": "BlPxk5mtl2kgfcZUgkEguqiSAR/EUyUTT4EdebwkQvs="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "Conceptual",
+      "source_relative_path": "index.md",
+      "output": {
+        ".html": {
+          "relative_path": "index.html",
+          "hash": "OzKG85E/XgrDwZhYSPs/Z8MdkYetFJbgJHdRNK6XYBM="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "Toc",
+      "source_relative_path": "toc.yml",
+      "output": {
+        ".html": {
+          "relative_path": "toc.html",
+          "hash": "WSuRrYiGwKKMbtdG9z8W9fXmLoCyTnGg9AxbPKLXm2Y="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    }
+  ],
+  "incremental_info": [
+    {
+      "status": {
+        "can_incremental": false,
+        "details": "Cannot build incrementally because last build info is missing.",
+        "incrementalPhase": "build",
+        "total_file_count": 0,
+        "skipped_file_count": 0,
+        "full_build_reason_code": "NoAvailableBuildCache"
+      },
+      "processors": {
+        "ConceptualDocumentProcessor": {
+          "can_incremental": false,
+          "incrementalPhase": "build",
+          "total_file_count": 3,
+          "skipped_file_count": 0
+        },
+        "ManagedReferenceDocumentProcessor": {
+          "can_incremental": false,
+          "incrementalPhase": "build",
+          "total_file_count": 48,
+          "skipped_file_count": 0
+        },
+        "TocDocumentProcessor": {
+          "can_incremental": false,
+          "details": "Processor TocDocumentProcessor cannot support incremental build because the processor doesn't implement ISupportIncrementalDocumentProcessor interface.",
+          "incrementalPhase": "build",
+          "total_file_count": 0,
+          "skipped_file_count": 0
+        }
+      }
+    },
+    {
+      "status": {
+        "can_incremental": false,
+        "details": "Cannot support incremental post processing, the reason is: last post processor info is null.",
+        "incrementalPhase": "postProcessing",
+        "total_file_count": 0,
+        "skipped_file_count": 0
+      },
+      "processors": {}
+    }
+  ],
+  "version_info": {},
+  "groups": [
+    {
+      "xrefmap": "xrefmap.yml"
+    }
+  ]
+}

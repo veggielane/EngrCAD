@@ -1,0 +1,3062 @@
+### YamlMime:XRefMap
+sorted: true
+references:
+- uid: EngrCAD.Core
+  name: EngrCAD.Core
+  href: api/EngrCAD.Core.html
+  commentId: N:EngrCAD.Core
+  fullName: EngrCAD.Core
+  nameWithType: EngrCAD.Core
+- uid: EngrCAD.Core.Body
+  name: Body
+  href: api/EngrCAD.Core.Body.html
+  commentId: T:EngrCAD.Core.Body
+  fullName: EngrCAD.Core.Body
+  nameWithType: Body
+- uid: EngrCAD.Core.Body.Color
+  name: Color
+  href: api/EngrCAD.Core.Body.html#EngrCAD_Core_Body_Color
+  commentId: P:EngrCAD.Core.Body.Color
+  fullName: EngrCAD.Core.Body.Color
+  nameWithType: Body.Color
+- uid: EngrCAD.Core.Body.Color*
+  name: Color
+  href: api/EngrCAD.Core.Body.html#EngrCAD_Core_Body_Color_
+  commentId: Overload:EngrCAD.Core.Body.Color
+  isSpec: "True"
+  fullName: EngrCAD.Core.Body.Color
+  nameWithType: Body.Color
+- uid: EngrCAD.Core.Body.Node
+  name: Node
+  href: api/EngrCAD.Core.Body.html#EngrCAD_Core_Body_Node
+  commentId: P:EngrCAD.Core.Body.Node
+  fullName: EngrCAD.Core.Body.Node
+  nameWithType: Body.Node
+- uid: EngrCAD.Core.Body.Node*
+  name: Node
+  href: api/EngrCAD.Core.Body.html#EngrCAD_Core_Body_Node_
+  commentId: Overload:EngrCAD.Core.Body.Node
+  isSpec: "True"
+  fullName: EngrCAD.Core.Body.Node
+  nameWithType: Body.Node
+- uid: EngrCAD.Core.Datums
+  name: EngrCAD.Core.Datums
+  href: api/EngrCAD.Core.Datums.html
+  commentId: N:EngrCAD.Core.Datums
+  fullName: EngrCAD.Core.Datums
+  nameWithType: EngrCAD.Core.Datums
+- uid: EngrCAD.Core.Datums.AABB
+  name: AABB
+  href: api/EngrCAD.Core.Datums.AABB.html
+  commentId: T:EngrCAD.Core.Datums.AABB
+  fullName: EngrCAD.Core.Datums.AABB
+  nameWithType: AABB
+- uid: EngrCAD.Core.Datums.AABB.#ctor(System.Numerics.Vector3,System.Numerics.Vector3)
+  name: AABB(Vector3, Vector3)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB__ctor_System_Numerics_Vector3_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.AABB.#ctor(System.Numerics.Vector3,System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.AABB.AABB(System.Numerics.Vector3, System.Numerics.Vector3)
+  nameWithType: AABB.AABB(Vector3, Vector3)
+- uid: EngrCAD.Core.Datums.AABB.#ctor*
+  name: AABB
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB__ctor_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.AABB
+  nameWithType: AABB.AABB
+- uid: EngrCAD.Core.Datums.AABB.Center
+  name: Center
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Center
+  commentId: P:EngrCAD.Core.Datums.AABB.Center
+  fullName: EngrCAD.Core.Datums.AABB.Center
+  nameWithType: AABB.Center
+- uid: EngrCAD.Core.Datums.AABB.Center*
+  name: Center
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Center_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Center
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Center
+  nameWithType: AABB.Center
+- uid: EngrCAD.Core.Datums.AABB.Contains(EngrCAD.Core.Datums.IAABB)
+  name: Contains(IAABB)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Contains_EngrCAD_Core_Datums_IAABB_
+  commentId: M:EngrCAD.Core.Datums.AABB.Contains(EngrCAD.Core.Datums.IAABB)
+  fullName: EngrCAD.Core.Datums.AABB.Contains(EngrCAD.Core.Datums.IAABB)
+  nameWithType: AABB.Contains(IAABB)
+- uid: EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3)
+  name: Contains(Vector3)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Contains_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3)
+  nameWithType: AABB.Contains(Vector3)
+- uid: EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3,System.Boolean)
+  name: Contains(Vector3, Boolean)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Contains_System_Numerics_Vector3_System_Boolean_
+  commentId: M:EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3,System.Boolean)
+  fullName: EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3, System.Boolean)
+  nameWithType: AABB.Contains(Vector3, Boolean)
+- uid: EngrCAD.Core.Datums.AABB.Contains*
+  name: Contains
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Contains_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Contains
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Contains
+  nameWithType: AABB.Contains
+- uid: EngrCAD.Core.Datums.AABB.DistanceToNearestEdge(System.Numerics.Vector3)
+  name: DistanceToNearestEdge(Vector3)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_DistanceToNearestEdge_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.AABB.DistanceToNearestEdge(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.AABB.DistanceToNearestEdge(System.Numerics.Vector3)
+  nameWithType: AABB.DistanceToNearestEdge(Vector3)
+- uid: EngrCAD.Core.Datums.AABB.DistanceToNearestEdge*
+  name: DistanceToNearestEdge
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_DistanceToNearestEdge_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.DistanceToNearestEdge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.DistanceToNearestEdge
+  nameWithType: AABB.DistanceToNearestEdge
+- uid: EngrCAD.Core.Datums.AABB.Inflate(System.Numerics.Vector3)
+  name: Inflate(Vector3)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Inflate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.AABB.Inflate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.AABB.Inflate(System.Numerics.Vector3)
+  nameWithType: AABB.Inflate(Vector3)
+- uid: EngrCAD.Core.Datums.AABB.Inflate*
+  name: Inflate
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Inflate_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Inflate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Inflate
+  nameWithType: AABB.Inflate
+- uid: EngrCAD.Core.Datums.AABB.Max
+  name: Max
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Max
+  commentId: P:EngrCAD.Core.Datums.AABB.Max
+  fullName: EngrCAD.Core.Datums.AABB.Max
+  nameWithType: AABB.Max
+- uid: EngrCAD.Core.Datums.AABB.Max*
+  name: Max
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Max_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Max
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Max
+  nameWithType: AABB.Max
+- uid: EngrCAD.Core.Datums.AABB.Min
+  name: Min
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Min
+  commentId: P:EngrCAD.Core.Datums.AABB.Min
+  fullName: EngrCAD.Core.Datums.AABB.Min
+  nameWithType: AABB.Min
+- uid: EngrCAD.Core.Datums.AABB.Min*
+  name: Min
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Min_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Min
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Min
+  nameWithType: AABB.Min
+- uid: EngrCAD.Core.Datums.AABB.Scale(System.Numerics.Vector3,System.Numerics.Vector3)
+  name: Scale(Vector3, Vector3)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Scale_System_Numerics_Vector3_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.AABB.Scale(System.Numerics.Vector3,System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.AABB.Scale(System.Numerics.Vector3, System.Numerics.Vector3)
+  nameWithType: AABB.Scale(Vector3, Vector3)
+- uid: EngrCAD.Core.Datums.AABB.Scale*
+  name: Scale
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Scale_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Scale
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Scale
+  nameWithType: AABB.Scale
+- uid: EngrCAD.Core.Datums.AABB.Size
+  name: Size
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Size
+  commentId: P:EngrCAD.Core.Datums.AABB.Size
+  fullName: EngrCAD.Core.Datums.AABB.Size
+  nameWithType: AABB.Size
+- uid: EngrCAD.Core.Datums.AABB.Size*
+  name: Size
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Size_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Size
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Size
+  nameWithType: AABB.Size
+- uid: EngrCAD.Core.Datums.AABB.System#IEquatable{EngrCAD#Core#Datums#IAABB}#Equals(EngrCAD.Core.Datums.IAABB)
+  name: IEquatable<IAABB>.Equals(IAABB)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_System_IEquatable_EngrCAD_Core_Datums_IAABB__Equals_EngrCAD_Core_Datums_IAABB_
+  commentId: M:EngrCAD.Core.Datums.AABB.System#IEquatable{EngrCAD#Core#Datums#IAABB}#Equals(EngrCAD.Core.Datums.IAABB)
+  name.vb: System.IEquatable<EngrCAD.Core.Datums.IAABB>.Equals(IAABB)
+  fullName: EngrCAD.Core.Datums.AABB.System.IEquatable<EngrCAD.Core.Datums.IAABB>.Equals(EngrCAD.Core.Datums.IAABB)
+  nameWithType: AABB.IEquatable<IAABB>.Equals(IAABB)
+  nameWithType.vb: AABB.System.IEquatable<EngrCAD.Core.Datums.IAABB>.Equals(IAABB)
+- uid: EngrCAD.Core.Datums.AABB.System#IEquatable{EngrCAD#Core#Datums#IAABB}#Equals*
+  name: IEquatable<IAABB>.Equals
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_System_IEquatable_EngrCAD_Core_Datums_IAABB__Equals_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.System#IEquatable{EngrCAD#Core#Datums#IAABB}#Equals
+  isSpec: "True"
+  name.vb: System.IEquatable<EngrCAD.Core.Datums.IAABB>.Equals
+  fullName: EngrCAD.Core.Datums.AABB.System.IEquatable<EngrCAD.Core.Datums.IAABB>.Equals
+  nameWithType: AABB.IEquatable<IAABB>.Equals
+  nameWithType.vb: AABB.System.IEquatable<EngrCAD.Core.Datums.IAABB>.Equals
+- uid: EngrCAD.Core.Datums.AABB.Translate(System.Numerics.Vector3)
+  name: Translate(Vector3)
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Translate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.AABB.Translate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.AABB.Translate(System.Numerics.Vector3)
+  nameWithType: AABB.Translate(Vector3)
+- uid: EngrCAD.Core.Datums.AABB.Translate*
+  name: Translate
+  href: api/EngrCAD.Core.Datums.AABB.html#EngrCAD_Core_Datums_AABB_Translate_
+  commentId: Overload:EngrCAD.Core.Datums.AABB.Translate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.AABB.Translate
+  nameWithType: AABB.Translate
+- uid: EngrCAD.Core.Datums.Axis
+  name: Axis
+  href: api/EngrCAD.Core.Datums.Axis.html
+  commentId: T:EngrCAD.Core.Datums.Axis
+  fullName: EngrCAD.Core.Datums.Axis
+  nameWithType: Axis
+- uid: EngrCAD.Core.Datums.Axis.Direction
+  name: Direction
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Direction
+  commentId: P:EngrCAD.Core.Datums.Axis.Direction
+  fullName: EngrCAD.Core.Datums.Axis.Direction
+  nameWithType: Axis.Direction
+- uid: EngrCAD.Core.Datums.Axis.Direction*
+  name: Direction
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Direction_
+  commentId: Overload:EngrCAD.Core.Datums.Axis.Direction
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.Axis.Direction
+  nameWithType: Axis.Direction
+- uid: EngrCAD.Core.Datums.Axis.Origin
+  name: Origin
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Origin
+  commentId: P:EngrCAD.Core.Datums.Axis.Origin
+  fullName: EngrCAD.Core.Datums.Axis.Origin
+  nameWithType: Axis.Origin
+- uid: EngrCAD.Core.Datums.Axis.Origin*
+  name: Origin
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Origin_
+  commentId: Overload:EngrCAD.Core.Datums.Axis.Origin
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.Axis.Origin
+  nameWithType: Axis.Origin
+- uid: EngrCAD.Core.Datums.Axis.X
+  name: X
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_X
+  commentId: P:EngrCAD.Core.Datums.Axis.X
+  fullName: EngrCAD.Core.Datums.Axis.X
+  nameWithType: Axis.X
+- uid: EngrCAD.Core.Datums.Axis.X*
+  name: X
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_X_
+  commentId: Overload:EngrCAD.Core.Datums.Axis.X
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.Axis.X
+  nameWithType: Axis.X
+- uid: EngrCAD.Core.Datums.Axis.Y
+  name: Y
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Y
+  commentId: P:EngrCAD.Core.Datums.Axis.Y
+  fullName: EngrCAD.Core.Datums.Axis.Y
+  nameWithType: Axis.Y
+- uid: EngrCAD.Core.Datums.Axis.Y*
+  name: Y
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Y_
+  commentId: Overload:EngrCAD.Core.Datums.Axis.Y
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.Axis.Y
+  nameWithType: Axis.Y
+- uid: EngrCAD.Core.Datums.Axis.Z
+  name: Z
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Z
+  commentId: P:EngrCAD.Core.Datums.Axis.Z
+  fullName: EngrCAD.Core.Datums.Axis.Z
+  nameWithType: Axis.Z
+- uid: EngrCAD.Core.Datums.Axis.Z*
+  name: Z
+  href: api/EngrCAD.Core.Datums.Axis.html#EngrCAD_Core_Datums_Axis_Z_
+  commentId: Overload:EngrCAD.Core.Datums.Axis.Z
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.Axis.Z
+  nameWithType: Axis.Z
+- uid: EngrCAD.Core.Datums.CSYS
+  name: CSYS
+  href: api/EngrCAD.Core.Datums.CSYS.html
+  commentId: T:EngrCAD.Core.Datums.CSYS
+  fullName: EngrCAD.Core.Datums.CSYS
+  nameWithType: CSYS
+- uid: EngrCAD.Core.Datums.CSYS.Normal
+  name: Normal
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_Normal
+  commentId: P:EngrCAD.Core.Datums.CSYS.Normal
+  fullName: EngrCAD.Core.Datums.CSYS.Normal
+  nameWithType: CSYS.Normal
+- uid: EngrCAD.Core.Datums.CSYS.Normal*
+  name: Normal
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_Normal_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.Normal
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.Normal
+  nameWithType: CSYS.Normal
+- uid: EngrCAD.Core.Datums.CSYS.Origin
+  name: Origin
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_Origin
+  commentId: P:EngrCAD.Core.Datums.CSYS.Origin
+  fullName: EngrCAD.Core.Datums.CSYS.Origin
+  nameWithType: CSYS.Origin
+- uid: EngrCAD.Core.Datums.CSYS.Origin*
+  name: Origin
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_Origin_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.Origin
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.Origin
+  nameWithType: CSYS.Origin
+- uid: EngrCAD.Core.Datums.CSYS.Translate(System.Numerics.Vector3)
+  name: Translate(Vector3)
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_Translate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.CSYS.Translate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.CSYS.Translate(System.Numerics.Vector3)
+  nameWithType: CSYS.Translate(Vector3)
+- uid: EngrCAD.Core.Datums.CSYS.Translate*
+  name: Translate
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_Translate_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.Translate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.Translate
+  nameWithType: CSYS.Translate
+- uid: EngrCAD.Core.Datums.CSYS.XDirection
+  name: XDirection
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_XDirection
+  commentId: P:EngrCAD.Core.Datums.CSYS.XDirection
+  fullName: EngrCAD.Core.Datums.CSYS.XDirection
+  nameWithType: CSYS.XDirection
+- uid: EngrCAD.Core.Datums.CSYS.XDirection*
+  name: XDirection
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_XDirection_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.XDirection
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.XDirection
+  nameWithType: CSYS.XDirection
+- uid: EngrCAD.Core.Datums.CSYS.XY
+  name: XY
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_XY
+  commentId: P:EngrCAD.Core.Datums.CSYS.XY
+  fullName: EngrCAD.Core.Datums.CSYS.XY
+  nameWithType: CSYS.XY
+- uid: EngrCAD.Core.Datums.CSYS.XY*
+  name: XY
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_XY_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.XY
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.XY
+  nameWithType: CSYS.XY
+- uid: EngrCAD.Core.Datums.CSYS.YDirection
+  name: YDirection
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_YDirection
+  commentId: P:EngrCAD.Core.Datums.CSYS.YDirection
+  fullName: EngrCAD.Core.Datums.CSYS.YDirection
+  nameWithType: CSYS.YDirection
+- uid: EngrCAD.Core.Datums.CSYS.YDirection*
+  name: YDirection
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_YDirection_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.YDirection
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.YDirection
+  nameWithType: CSYS.YDirection
+- uid: EngrCAD.Core.Datums.CSYS.ZDirection
+  name: ZDirection
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_ZDirection
+  commentId: P:EngrCAD.Core.Datums.CSYS.ZDirection
+  fullName: EngrCAD.Core.Datums.CSYS.ZDirection
+  nameWithType: CSYS.ZDirection
+- uid: EngrCAD.Core.Datums.CSYS.ZDirection*
+  name: ZDirection
+  href: api/EngrCAD.Core.Datums.CSYS.html#EngrCAD_Core_Datums_CSYS_ZDirection_
+  commentId: Overload:EngrCAD.Core.Datums.CSYS.ZDirection
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.CSYS.ZDirection
+  nameWithType: CSYS.ZDirection
+- uid: EngrCAD.Core.Datums.IAABB
+  name: IAABB
+  href: api/EngrCAD.Core.Datums.IAABB.html
+  commentId: T:EngrCAD.Core.Datums.IAABB
+  fullName: EngrCAD.Core.Datums.IAABB
+  nameWithType: IAABB
+- uid: EngrCAD.Core.Datums.IAABB.Center
+  name: Center
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Center
+  commentId: P:EngrCAD.Core.Datums.IAABB.Center
+  fullName: EngrCAD.Core.Datums.IAABB.Center
+  nameWithType: IAABB.Center
+- uid: EngrCAD.Core.Datums.IAABB.Center*
+  name: Center
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Center_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Center
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Center
+  nameWithType: IAABB.Center
+- uid: EngrCAD.Core.Datums.IAABB.Contains(EngrCAD.Core.Datums.IAABB)
+  name: Contains(IAABB)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Contains_EngrCAD_Core_Datums_IAABB_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Contains(EngrCAD.Core.Datums.IAABB)
+  fullName: EngrCAD.Core.Datums.IAABB.Contains(EngrCAD.Core.Datums.IAABB)
+  nameWithType: IAABB.Contains(IAABB)
+- uid: EngrCAD.Core.Datums.IAABB.Contains(System.Numerics.Vector3)
+  name: Contains(Vector3)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Contains_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Contains(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.IAABB.Contains(System.Numerics.Vector3)
+  nameWithType: IAABB.Contains(Vector3)
+- uid: EngrCAD.Core.Datums.IAABB.Contains(System.Numerics.Vector3,System.Boolean)
+  name: Contains(Vector3, Boolean)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Contains_System_Numerics_Vector3_System_Boolean_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Contains(System.Numerics.Vector3,System.Boolean)
+  fullName: EngrCAD.Core.Datums.IAABB.Contains(System.Numerics.Vector3, System.Boolean)
+  nameWithType: IAABB.Contains(Vector3, Boolean)
+- uid: EngrCAD.Core.Datums.IAABB.Contains*
+  name: Contains
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Contains_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Contains
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Contains
+  nameWithType: IAABB.Contains
+- uid: EngrCAD.Core.Datums.IAABB.DistanceToNearestEdge(System.Numerics.Vector3)
+  name: DistanceToNearestEdge(Vector3)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_DistanceToNearestEdge_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.IAABB.DistanceToNearestEdge(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.IAABB.DistanceToNearestEdge(System.Numerics.Vector3)
+  nameWithType: IAABB.DistanceToNearestEdge(Vector3)
+- uid: EngrCAD.Core.Datums.IAABB.DistanceToNearestEdge*
+  name: DistanceToNearestEdge
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_DistanceToNearestEdge_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.DistanceToNearestEdge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.DistanceToNearestEdge
+  nameWithType: IAABB.DistanceToNearestEdge
+- uid: EngrCAD.Core.Datums.IAABB.Equals(System.Object)
+  name: Equals(Object)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Equals_System_Object_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Equals(System.Object)
+  fullName: EngrCAD.Core.Datums.IAABB.Equals(System.Object)
+  nameWithType: IAABB.Equals(Object)
+- uid: EngrCAD.Core.Datums.IAABB.Equals*
+  name: Equals
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Equals_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Equals
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Equals
+  nameWithType: IAABB.Equals
+- uid: EngrCAD.Core.Datums.IAABB.Inflate(System.Numerics.Vector3)
+  name: Inflate(Vector3)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Inflate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Inflate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.IAABB.Inflate(System.Numerics.Vector3)
+  nameWithType: IAABB.Inflate(Vector3)
+- uid: EngrCAD.Core.Datums.IAABB.Inflate*
+  name: Inflate
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Inflate_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Inflate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Inflate
+  nameWithType: IAABB.Inflate
+- uid: EngrCAD.Core.Datums.IAABB.Max
+  name: Max
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Max
+  commentId: P:EngrCAD.Core.Datums.IAABB.Max
+  fullName: EngrCAD.Core.Datums.IAABB.Max
+  nameWithType: IAABB.Max
+- uid: EngrCAD.Core.Datums.IAABB.Max*
+  name: Max
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Max_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Max
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Max
+  nameWithType: IAABB.Max
+- uid: EngrCAD.Core.Datums.IAABB.Min
+  name: Min
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Min
+  commentId: P:EngrCAD.Core.Datums.IAABB.Min
+  fullName: EngrCAD.Core.Datums.IAABB.Min
+  nameWithType: IAABB.Min
+- uid: EngrCAD.Core.Datums.IAABB.Min*
+  name: Min
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Min_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Min
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Min
+  nameWithType: IAABB.Min
+- uid: EngrCAD.Core.Datums.IAABB.Scale(System.Numerics.Vector3,System.Numerics.Vector3)
+  name: Scale(Vector3, Vector3)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Scale_System_Numerics_Vector3_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Scale(System.Numerics.Vector3,System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.IAABB.Scale(System.Numerics.Vector3, System.Numerics.Vector3)
+  nameWithType: IAABB.Scale(Vector3, Vector3)
+- uid: EngrCAD.Core.Datums.IAABB.Scale*
+  name: Scale
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Scale_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Scale
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Scale
+  nameWithType: IAABB.Scale
+- uid: EngrCAD.Core.Datums.IAABB.Size
+  name: Size
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Size
+  commentId: P:EngrCAD.Core.Datums.IAABB.Size
+  fullName: EngrCAD.Core.Datums.IAABB.Size
+  nameWithType: IAABB.Size
+- uid: EngrCAD.Core.Datums.IAABB.Size*
+  name: Size
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Size_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Size
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Size
+  nameWithType: IAABB.Size
+- uid: EngrCAD.Core.Datums.IAABB.Translate(System.Numerics.Vector3)
+  name: Translate(Vector3)
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Translate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.IAABB.Translate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.IAABB.Translate(System.Numerics.Vector3)
+  nameWithType: IAABB.Translate(Vector3)
+- uid: EngrCAD.Core.Datums.IAABB.Translate*
+  name: Translate
+  href: api/EngrCAD.Core.Datums.IAABB.html#EngrCAD_Core_Datums_IAABB_Translate_
+  commentId: Overload:EngrCAD.Core.Datums.IAABB.Translate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAABB.Translate
+  nameWithType: IAABB.Translate
+- uid: EngrCAD.Core.Datums.IAxis
+  name: IAxis
+  href: api/EngrCAD.Core.Datums.IAxis.html
+  commentId: T:EngrCAD.Core.Datums.IAxis
+  fullName: EngrCAD.Core.Datums.IAxis
+  nameWithType: IAxis
+- uid: EngrCAD.Core.Datums.IAxis.Direction
+  name: Direction
+  href: api/EngrCAD.Core.Datums.IAxis.html#EngrCAD_Core_Datums_IAxis_Direction
+  commentId: P:EngrCAD.Core.Datums.IAxis.Direction
+  fullName: EngrCAD.Core.Datums.IAxis.Direction
+  nameWithType: IAxis.Direction
+- uid: EngrCAD.Core.Datums.IAxis.Direction*
+  name: Direction
+  href: api/EngrCAD.Core.Datums.IAxis.html#EngrCAD_Core_Datums_IAxis_Direction_
+  commentId: Overload:EngrCAD.Core.Datums.IAxis.Direction
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAxis.Direction
+  nameWithType: IAxis.Direction
+- uid: EngrCAD.Core.Datums.IAxis.Origin
+  name: Origin
+  href: api/EngrCAD.Core.Datums.IAxis.html#EngrCAD_Core_Datums_IAxis_Origin
+  commentId: P:EngrCAD.Core.Datums.IAxis.Origin
+  fullName: EngrCAD.Core.Datums.IAxis.Origin
+  nameWithType: IAxis.Origin
+- uid: EngrCAD.Core.Datums.IAxis.Origin*
+  name: Origin
+  href: api/EngrCAD.Core.Datums.IAxis.html#EngrCAD_Core_Datums_IAxis_Origin_
+  commentId: Overload:EngrCAD.Core.Datums.IAxis.Origin
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.IAxis.Origin
+  nameWithType: IAxis.Origin
+- uid: EngrCAD.Core.Datums.ICSYS
+  name: ICSYS
+  href: api/EngrCAD.Core.Datums.ICSYS.html
+  commentId: T:EngrCAD.Core.Datums.ICSYS
+  fullName: EngrCAD.Core.Datums.ICSYS
+  nameWithType: ICSYS
+- uid: EngrCAD.Core.Datums.ICSYS.Normal
+  name: Normal
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_Normal
+  commentId: P:EngrCAD.Core.Datums.ICSYS.Normal
+  fullName: EngrCAD.Core.Datums.ICSYS.Normal
+  nameWithType: ICSYS.Normal
+- uid: EngrCAD.Core.Datums.ICSYS.Normal*
+  name: Normal
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_Normal_
+  commentId: Overload:EngrCAD.Core.Datums.ICSYS.Normal
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.ICSYS.Normal
+  nameWithType: ICSYS.Normal
+- uid: EngrCAD.Core.Datums.ICSYS.Origin
+  name: Origin
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_Origin
+  commentId: P:EngrCAD.Core.Datums.ICSYS.Origin
+  fullName: EngrCAD.Core.Datums.ICSYS.Origin
+  nameWithType: ICSYS.Origin
+- uid: EngrCAD.Core.Datums.ICSYS.Origin*
+  name: Origin
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_Origin_
+  commentId: Overload:EngrCAD.Core.Datums.ICSYS.Origin
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.ICSYS.Origin
+  nameWithType: ICSYS.Origin
+- uid: EngrCAD.Core.Datums.ICSYS.Translate(System.Numerics.Vector3)
+  name: Translate(Vector3)
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_Translate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Datums.ICSYS.Translate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Datums.ICSYS.Translate(System.Numerics.Vector3)
+  nameWithType: ICSYS.Translate(Vector3)
+- uid: EngrCAD.Core.Datums.ICSYS.Translate*
+  name: Translate
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_Translate_
+  commentId: Overload:EngrCAD.Core.Datums.ICSYS.Translate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.ICSYS.Translate
+  nameWithType: ICSYS.Translate
+- uid: EngrCAD.Core.Datums.ICSYS.XDirection
+  name: XDirection
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_XDirection
+  commentId: P:EngrCAD.Core.Datums.ICSYS.XDirection
+  fullName: EngrCAD.Core.Datums.ICSYS.XDirection
+  nameWithType: ICSYS.XDirection
+- uid: EngrCAD.Core.Datums.ICSYS.XDirection*
+  name: XDirection
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_XDirection_
+  commentId: Overload:EngrCAD.Core.Datums.ICSYS.XDirection
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.ICSYS.XDirection
+  nameWithType: ICSYS.XDirection
+- uid: EngrCAD.Core.Datums.ICSYS.YDirection
+  name: YDirection
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_YDirection
+  commentId: P:EngrCAD.Core.Datums.ICSYS.YDirection
+  fullName: EngrCAD.Core.Datums.ICSYS.YDirection
+  nameWithType: ICSYS.YDirection
+- uid: EngrCAD.Core.Datums.ICSYS.YDirection*
+  name: YDirection
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_YDirection_
+  commentId: Overload:EngrCAD.Core.Datums.ICSYS.YDirection
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.ICSYS.YDirection
+  nameWithType: ICSYS.YDirection
+- uid: EngrCAD.Core.Datums.ICSYS.ZDirection
+  name: ZDirection
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_ZDirection
+  commentId: P:EngrCAD.Core.Datums.ICSYS.ZDirection
+  fullName: EngrCAD.Core.Datums.ICSYS.ZDirection
+  nameWithType: ICSYS.ZDirection
+- uid: EngrCAD.Core.Datums.ICSYS.ZDirection*
+  name: ZDirection
+  href: api/EngrCAD.Core.Datums.ICSYS.html#EngrCAD_Core_Datums_ICSYS_ZDirection_
+  commentId: Overload:EngrCAD.Core.Datums.ICSYS.ZDirection
+  isSpec: "True"
+  fullName: EngrCAD.Core.Datums.ICSYS.ZDirection
+  nameWithType: ICSYS.ZDirection
+- uid: EngrCAD.Core.Edges
+  name: EngrCAD.Core.Edges
+  href: api/EngrCAD.Core.Edges.html
+  commentId: N:EngrCAD.Core.Edges
+  fullName: EngrCAD.Core.Edges
+  nameWithType: EngrCAD.Core.Edges
+- uid: EngrCAD.Core.Edges.Edge
+  name: Edge
+  href: api/EngrCAD.Core.Edges.Edge.html
+  commentId: T:EngrCAD.Core.Edges.Edge
+  fullName: EngrCAD.Core.Edges.Edge
+  nameWithType: Edge
+- uid: EngrCAD.Core.Edges.Edge.Wrapper
+  name: Wrapper
+  href: api/EngrCAD.Core.Edges.Edge.html#EngrCAD_Core_Edges_Edge_Wrapper
+  commentId: P:EngrCAD.Core.Edges.Edge.Wrapper
+  fullName: EngrCAD.Core.Edges.Edge.Wrapper
+  nameWithType: Edge.Wrapper
+- uid: EngrCAD.Core.Edges.Edge.Wrapper*
+  name: Wrapper
+  href: api/EngrCAD.Core.Edges.Edge.html#EngrCAD_Core_Edges_Edge_Wrapper_
+  commentId: Overload:EngrCAD.Core.Edges.Edge.Wrapper
+  isSpec: "True"
+  fullName: EngrCAD.Core.Edges.Edge.Wrapper
+  nameWithType: Edge.Wrapper
+- uid: EngrCAD.Core.Edges.EdgeLine
+  name: EdgeLine
+  href: api/EngrCAD.Core.Edges.EdgeLine.html
+  commentId: T:EngrCAD.Core.Edges.EdgeLine
+  fullName: EngrCAD.Core.Edges.EdgeLine
+  nameWithType: EdgeLine
+- uid: EngrCAD.Core.Edges.EdgeLine.Normal
+  name: Normal
+  href: api/EngrCAD.Core.Edges.EdgeLine.html#EngrCAD_Core_Edges_EdgeLine_Normal
+  commentId: P:EngrCAD.Core.Edges.EdgeLine.Normal
+  fullName: EngrCAD.Core.Edges.EdgeLine.Normal
+  nameWithType: EdgeLine.Normal
+- uid: EngrCAD.Core.Edges.EdgeLine.Normal*
+  name: Normal
+  href: api/EngrCAD.Core.Edges.EdgeLine.html#EngrCAD_Core_Edges_EdgeLine_Normal_
+  commentId: Overload:EngrCAD.Core.Edges.EdgeLine.Normal
+  isSpec: "True"
+  fullName: EngrCAD.Core.Edges.EdgeLine.Normal
+  nameWithType: EdgeLine.Normal
+- uid: EngrCAD.Core.Edges.EdgeLine.ParallelTo(System.Numerics.Vector3)
+  name: ParallelTo(Vector3)
+  href: api/EngrCAD.Core.Edges.EdgeLine.html#EngrCAD_Core_Edges_EdgeLine_ParallelTo_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Edges.EdgeLine.ParallelTo(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Edges.EdgeLine.ParallelTo(System.Numerics.Vector3)
+  nameWithType: EdgeLine.ParallelTo(Vector3)
+- uid: EngrCAD.Core.Edges.EdgeLine.ParallelTo*
+  name: ParallelTo
+  href: api/EngrCAD.Core.Edges.EdgeLine.html#EngrCAD_Core_Edges_EdgeLine_ParallelTo_
+  commentId: Overload:EngrCAD.Core.Edges.EdgeLine.ParallelTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Edges.EdgeLine.ParallelTo
+  nameWithType: EdgeLine.ParallelTo
+- uid: EngrCAD.Core.Edges.IEdge
+  name: IEdge
+  href: api/EngrCAD.Core.Edges.IEdge.html
+  commentId: T:EngrCAD.Core.Edges.IEdge
+  fullName: EngrCAD.Core.Edges.IEdge
+  nameWithType: IEdge
+- uid: EngrCAD.Core.Edges.IEdge.Wrapper
+  name: Wrapper
+  href: api/EngrCAD.Core.Edges.IEdge.html#EngrCAD_Core_Edges_IEdge_Wrapper
+  commentId: P:EngrCAD.Core.Edges.IEdge.Wrapper
+  fullName: EngrCAD.Core.Edges.IEdge.Wrapper
+  nameWithType: IEdge.Wrapper
+- uid: EngrCAD.Core.Edges.IEdge.Wrapper*
+  name: Wrapper
+  href: api/EngrCAD.Core.Edges.IEdge.html#EngrCAD_Core_Edges_IEdge_Wrapper_
+  commentId: Overload:EngrCAD.Core.Edges.IEdge.Wrapper
+  isSpec: "True"
+  fullName: EngrCAD.Core.Edges.IEdge.Wrapper
+  nameWithType: IEdge.Wrapper
+- uid: EngrCAD.Core.Face
+  name: Face
+  href: api/EngrCAD.Core.Face.html
+  commentId: T:EngrCAD.Core.Face
+  fullName: EngrCAD.Core.Face
+  nameWithType: Face
+- uid: EngrCAD.Core.IPart
+  name: IPart
+  href: api/EngrCAD.Core.IPart.html
+  commentId: T:EngrCAD.Core.IPart
+  fullName: EngrCAD.Core.IPart
+  nameWithType: IPart
+- uid: EngrCAD.Core.IPart.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.IPart.html#EngrCAD_Core_IPart_Generate
+  commentId: M:EngrCAD.Core.IPart.Generate
+  fullName: EngrCAD.Core.IPart.Generate()
+  nameWithType: IPart.Generate()
+- uid: EngrCAD.Core.IPart.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.IPart.html#EngrCAD_Core_IPart_Generate_
+  commentId: Overload:EngrCAD.Core.IPart.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.IPart.Generate
+  nameWithType: IPart.Generate
+- uid: EngrCAD.Core.IPartMetadata
+  name: IPartMetadata
+  href: api/EngrCAD.Core.IPartMetadata.html
+  commentId: T:EngrCAD.Core.IPartMetadata
+  fullName: EngrCAD.Core.IPartMetadata
+  nameWithType: IPartMetadata
+- uid: EngrCAD.Core.IPartMetadata.Name
+  name: Name
+  href: api/EngrCAD.Core.IPartMetadata.html#EngrCAD_Core_IPartMetadata_Name
+  commentId: P:EngrCAD.Core.IPartMetadata.Name
+  fullName: EngrCAD.Core.IPartMetadata.Name
+  nameWithType: IPartMetadata.Name
+- uid: EngrCAD.Core.IPartMetadata.Name*
+  name: Name
+  href: api/EngrCAD.Core.IPartMetadata.html#EngrCAD_Core_IPartMetadata_Name_
+  commentId: Overload:EngrCAD.Core.IPartMetadata.Name
+  isSpec: "True"
+  fullName: EngrCAD.Core.IPartMetadata.Name
+  nameWithType: IPartMetadata.Name
+- uid: EngrCAD.Core.MathExtensions
+  name: MathExtensions
+  href: api/EngrCAD.Core.MathExtensions.html
+  commentId: T:EngrCAD.Core.MathExtensions
+  fullName: EngrCAD.Core.MathExtensions
+  nameWithType: MathExtensions
+- uid: EngrCAD.Core.MathExtensions.Cross(System.Numerics.Vector3,System.Numerics.Vector3)
+  name: Cross(Vector3, Vector3)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_Cross_System_Numerics_Vector3_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.MathExtensions.Cross(System.Numerics.Vector3,System.Numerics.Vector3)
+  fullName: EngrCAD.Core.MathExtensions.Cross(System.Numerics.Vector3, System.Numerics.Vector3)
+  nameWithType: MathExtensions.Cross(Vector3, Vector3)
+- uid: EngrCAD.Core.MathExtensions.Cross*
+  name: Cross
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_Cross_
+  commentId: Overload:EngrCAD.Core.MathExtensions.Cross
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathExtensions.Cross
+  nameWithType: MathExtensions.Cross
+- uid: EngrCAD.Core.MathExtensions.Dot(System.Numerics.Vector3,System.Numerics.Vector3)
+  name: Dot(Vector3, Vector3)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_Dot_System_Numerics_Vector3_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.MathExtensions.Dot(System.Numerics.Vector3,System.Numerics.Vector3)
+  fullName: EngrCAD.Core.MathExtensions.Dot(System.Numerics.Vector3, System.Numerics.Vector3)
+  nameWithType: MathExtensions.Dot(Vector3, Vector3)
+- uid: EngrCAD.Core.MathExtensions.Dot*
+  name: Dot
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_Dot_
+  commentId: Overload:EngrCAD.Core.MathExtensions.Dot
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathExtensions.Dot
+  nameWithType: MathExtensions.Dot
+- uid: EngrCAD.Core.MathExtensions.NearlyEquals(System.Double,System.Double,System.Double)
+  name: NearlyEquals(Double, Double, Double)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyEquals_System_Double_System_Double_System_Double_
+  commentId: M:EngrCAD.Core.MathExtensions.NearlyEquals(System.Double,System.Double,System.Double)
+  fullName: EngrCAD.Core.MathExtensions.NearlyEquals(System.Double, System.Double, System.Double)
+  nameWithType: MathExtensions.NearlyEquals(Double, Double, Double)
+- uid: EngrCAD.Core.MathExtensions.NearlyEquals(System.Single,System.Single,System.Single)
+  name: NearlyEquals(Single, Single, Single)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyEquals_System_Single_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.MathExtensions.NearlyEquals(System.Single,System.Single,System.Single)
+  fullName: EngrCAD.Core.MathExtensions.NearlyEquals(System.Single, System.Single, System.Single)
+  nameWithType: MathExtensions.NearlyEquals(Single, Single, Single)
+- uid: EngrCAD.Core.MathExtensions.NearlyEquals*
+  name: NearlyEquals
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyEquals_
+  commentId: Overload:EngrCAD.Core.MathExtensions.NearlyEquals
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathExtensions.NearlyEquals
+  nameWithType: MathExtensions.NearlyEquals
+- uid: EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals(System.Double,System.Double,System.Double)
+  name: NearlyGreaterThanOrEquals(Double, Double, Double)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyGreaterThanOrEquals_System_Double_System_Double_System_Double_
+  commentId: M:EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals(System.Double,System.Double,System.Double)
+  fullName: EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals(System.Double, System.Double, System.Double)
+  nameWithType: MathExtensions.NearlyGreaterThanOrEquals(Double, Double, Double)
+- uid: EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals(System.Single,System.Single,System.Single)
+  name: NearlyGreaterThanOrEquals(Single, Single, Single)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyGreaterThanOrEquals_System_Single_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals(System.Single,System.Single,System.Single)
+  fullName: EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals(System.Single, System.Single, System.Single)
+  nameWithType: MathExtensions.NearlyGreaterThanOrEquals(Single, Single, Single)
+- uid: EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals*
+  name: NearlyGreaterThanOrEquals
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyGreaterThanOrEquals_
+  commentId: Overload:EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathExtensions.NearlyGreaterThanOrEquals
+  nameWithType: MathExtensions.NearlyGreaterThanOrEquals
+- uid: EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals(System.Double,System.Double,System.Double)
+  name: NearlyLessThanOrEquals(Double, Double, Double)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyLessThanOrEquals_System_Double_System_Double_System_Double_
+  commentId: M:EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals(System.Double,System.Double,System.Double)
+  fullName: EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals(System.Double, System.Double, System.Double)
+  nameWithType: MathExtensions.NearlyLessThanOrEquals(Double, Double, Double)
+- uid: EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals(System.Single,System.Single,System.Single)
+  name: NearlyLessThanOrEquals(Single, Single, Single)
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyLessThanOrEquals_System_Single_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals(System.Single,System.Single,System.Single)
+  fullName: EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals(System.Single, System.Single, System.Single)
+  nameWithType: MathExtensions.NearlyLessThanOrEquals(Single, Single, Single)
+- uid: EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals*
+  name: NearlyLessThanOrEquals
+  href: api/EngrCAD.Core.MathExtensions.html#EngrCAD_Core_MathExtensions_NearlyLessThanOrEquals_
+  commentId: Overload:EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathExtensions.NearlyLessThanOrEquals
+  nameWithType: MathExtensions.NearlyLessThanOrEquals
+- uid: EngrCAD.Core.MathHelper
+  name: MathHelper
+  href: api/EngrCAD.Core.MathHelper.html
+  commentId: T:EngrCAD.Core.MathHelper
+  fullName: EngrCAD.Core.MathHelper
+  nameWithType: MathHelper
+- uid: EngrCAD.Core.MathHelper.CircumscribedRadius(System.Single,System.Single)
+  name: CircumscribedRadius(Single, Single)
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_CircumscribedRadius_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.MathHelper.CircumscribedRadius(System.Single,System.Single)
+  fullName: EngrCAD.Core.MathHelper.CircumscribedRadius(System.Single, System.Single)
+  nameWithType: MathHelper.CircumscribedRadius(Single, Single)
+- uid: EngrCAD.Core.MathHelper.CircumscribedRadius*
+  name: CircumscribedRadius
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_CircumscribedRadius_
+  commentId: Overload:EngrCAD.Core.MathHelper.CircumscribedRadius
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathHelper.CircumscribedRadius
+  nameWithType: MathHelper.CircumscribedRadius
+- uid: EngrCAD.Core.MathHelper.DegreesToRadians(System.Single)
+  name: DegreesToRadians(Single)
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_DegreesToRadians_System_Single_
+  commentId: M:EngrCAD.Core.MathHelper.DegreesToRadians(System.Single)
+  fullName: EngrCAD.Core.MathHelper.DegreesToRadians(System.Single)
+  nameWithType: MathHelper.DegreesToRadians(Single)
+- uid: EngrCAD.Core.MathHelper.DegreesToRadians*
+  name: DegreesToRadians
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_DegreesToRadians_
+  commentId: Overload:EngrCAD.Core.MathHelper.DegreesToRadians
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathHelper.DegreesToRadians
+  nameWithType: MathHelper.DegreesToRadians
+- uid: EngrCAD.Core.MathHelper.MidRadius(System.Single,System.Single)
+  name: MidRadius(Single, Single)
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_MidRadius_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.MathHelper.MidRadius(System.Single,System.Single)
+  fullName: EngrCAD.Core.MathHelper.MidRadius(System.Single, System.Single)
+  nameWithType: MathHelper.MidRadius(Single, Single)
+- uid: EngrCAD.Core.MathHelper.MidRadius*
+  name: MidRadius
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_MidRadius_
+  commentId: Overload:EngrCAD.Core.MathHelper.MidRadius
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathHelper.MidRadius
+  nameWithType: MathHelper.MidRadius
+- uid: EngrCAD.Core.MathHelper.RadiansToDegrees(System.Single)
+  name: RadiansToDegrees(Single)
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_RadiansToDegrees_System_Single_
+  commentId: M:EngrCAD.Core.MathHelper.RadiansToDegrees(System.Single)
+  fullName: EngrCAD.Core.MathHelper.RadiansToDegrees(System.Single)
+  nameWithType: MathHelper.RadiansToDegrees(Single)
+- uid: EngrCAD.Core.MathHelper.RadiansToDegrees*
+  name: RadiansToDegrees
+  href: api/EngrCAD.Core.MathHelper.html#EngrCAD_Core_MathHelper_RadiansToDegrees_
+  commentId: Overload:EngrCAD.Core.MathHelper.RadiansToDegrees
+  isSpec: "True"
+  fullName: EngrCAD.Core.MathHelper.RadiansToDegrees
+  nameWithType: MathHelper.RadiansToDegrees
+- uid: EngrCAD.Core.Nodes
+  name: EngrCAD.Core.Nodes
+  href: api/EngrCAD.Core.Nodes.html
+  commentId: N:EngrCAD.Core.Nodes
+  fullName: EngrCAD.Core.Nodes
+  nameWithType: EngrCAD.Core.Nodes
+- uid: EngrCAD.Core.Nodes.EdgeType
+  name: EdgeType
+  href: api/EngrCAD.Core.Nodes.EdgeType.html
+  commentId: T:EngrCAD.Core.Nodes.EdgeType
+  fullName: EngrCAD.Core.Nodes.EdgeType
+  nameWithType: EdgeType
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_BezierCurve
+  name: GeomAbs_BezierCurve
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_BezierCurve
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_BezierCurve
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_BezierCurve
+  nameWithType: EdgeType.GeomAbs_BezierCurve
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_BSplineCurve
+  name: GeomAbs_BSplineCurve
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_BSplineCurve
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_BSplineCurve
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_BSplineCurve
+  nameWithType: EdgeType.GeomAbs_BSplineCurve
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Circle
+  name: GeomAbs_Circle
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_Circle
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_Circle
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Circle
+  nameWithType: EdgeType.GeomAbs_Circle
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Ellipse
+  name: GeomAbs_Ellipse
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_Ellipse
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_Ellipse
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Ellipse
+  nameWithType: EdgeType.GeomAbs_Ellipse
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Hyperbola
+  name: GeomAbs_Hyperbola
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_Hyperbola
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_Hyperbola
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Hyperbola
+  nameWithType: EdgeType.GeomAbs_Hyperbola
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Line
+  name: GeomAbs_Line
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_Line
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_Line
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Line
+  nameWithType: EdgeType.GeomAbs_Line
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_OffsetCurve
+  name: GeomAbs_OffsetCurve
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_OffsetCurve
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_OffsetCurve
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_OffsetCurve
+  nameWithType: EdgeType.GeomAbs_OffsetCurve
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_OtherCurve
+  name: GeomAbs_OtherCurve
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_OtherCurve
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_OtherCurve
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_OtherCurve
+  nameWithType: EdgeType.GeomAbs_OtherCurve
+- uid: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Parabola
+  name: GeomAbs_Parabola
+  href: api/EngrCAD.Core.Nodes.EdgeType.html#EngrCAD_Core_Nodes_EdgeType_GeomAbs_Parabola
+  commentId: F:EngrCAD.Core.Nodes.EdgeType.GeomAbs_Parabola
+  fullName: EngrCAD.Core.Nodes.EdgeType.GeomAbs_Parabola
+  nameWithType: EdgeType.GeomAbs_Parabola
+- uid: EngrCAD.Core.Nodes.Features
+  name: EngrCAD.Core.Nodes.Features
+  href: api/EngrCAD.Core.Nodes.Features.html
+  commentId: N:EngrCAD.Core.Nodes.Features
+  fullName: EngrCAD.Core.Nodes.Features
+  nameWithType: EngrCAD.Core.Nodes.Features
+- uid: EngrCAD.Core.Nodes.Features.Hole
+  name: Hole
+  href: api/EngrCAD.Core.Nodes.Features.Hole.html
+  commentId: T:EngrCAD.Core.Nodes.Features.Hole
+  fullName: EngrCAD.Core.Nodes.Features.Hole
+  nameWithType: Hole
+- uid: EngrCAD.Core.Nodes.Features.Hole.#ctor(System.Single,System.Single,EngrCAD.Core.Datums.ICSYS)
+  name: Hole(Single, Single, ICSYS)
+  href: api/EngrCAD.Core.Nodes.Features.Hole.html#EngrCAD_Core_Nodes_Features_Hole__ctor_System_Single_System_Single_EngrCAD_Core_Datums_ICSYS_
+  commentId: M:EngrCAD.Core.Nodes.Features.Hole.#ctor(System.Single,System.Single,EngrCAD.Core.Datums.ICSYS)
+  fullName: EngrCAD.Core.Nodes.Features.Hole.Hole(System.Single, System.Single, EngrCAD.Core.Datums.ICSYS)
+  nameWithType: Hole.Hole(Single, Single, ICSYS)
+- uid: EngrCAD.Core.Nodes.Features.Hole.#ctor*
+  name: Hole
+  href: api/EngrCAD.Core.Nodes.Features.Hole.html#EngrCAD_Core_Nodes_Features_Hole__ctor_
+  commentId: Overload:EngrCAD.Core.Nodes.Features.Hole.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Features.Hole.Hole
+  nameWithType: Hole.Hole
+- uid: EngrCAD.Core.Nodes.Features.Hole.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Features.Hole.html#EngrCAD_Core_Nodes_Features_Hole_Generate
+  commentId: M:EngrCAD.Core.Nodes.Features.Hole.Generate
+  fullName: EngrCAD.Core.Nodes.Features.Hole.Generate()
+  nameWithType: Hole.Generate()
+- uid: EngrCAD.Core.Nodes.Features.Hole.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Features.Hole.html#EngrCAD_Core_Nodes_Features_Hole_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Features.Hole.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Features.Hole.Generate
+  nameWithType: Hole.Generate
+- uid: EngrCAD.Core.Nodes.Features.TappedHole
+  name: TappedHole
+  href: api/EngrCAD.Core.Nodes.Features.TappedHole.html
+  commentId: T:EngrCAD.Core.Nodes.Features.TappedHole
+  fullName: EngrCAD.Core.Nodes.Features.TappedHole
+  nameWithType: TappedHole
+- uid: EngrCAD.Core.Nodes.Features.TappedHole.#ctor(System.Single,System.Single,EngrCAD.Core.Datums.ICSYS)
+  name: TappedHole(Single, Single, ICSYS)
+  href: api/EngrCAD.Core.Nodes.Features.TappedHole.html#EngrCAD_Core_Nodes_Features_TappedHole__ctor_System_Single_System_Single_EngrCAD_Core_Datums_ICSYS_
+  commentId: M:EngrCAD.Core.Nodes.Features.TappedHole.#ctor(System.Single,System.Single,EngrCAD.Core.Datums.ICSYS)
+  fullName: EngrCAD.Core.Nodes.Features.TappedHole.TappedHole(System.Single, System.Single, EngrCAD.Core.Datums.ICSYS)
+  nameWithType: TappedHole.TappedHole(Single, Single, ICSYS)
+- uid: EngrCAD.Core.Nodes.Features.TappedHole.#ctor*
+  name: TappedHole
+  href: api/EngrCAD.Core.Nodes.Features.TappedHole.html#EngrCAD_Core_Nodes_Features_TappedHole__ctor_
+  commentId: Overload:EngrCAD.Core.Nodes.Features.TappedHole.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Features.TappedHole.TappedHole
+  nameWithType: TappedHole.TappedHole
+- uid: EngrCAD.Core.Nodes.Features.TappedHole.M1_6(EngrCAD.Core.Datums.ICSYS,System.Single)
+  name: M1_6(ICSYS, Single)
+  href: api/EngrCAD.Core.Nodes.Features.TappedHole.html#EngrCAD_Core_Nodes_Features_TappedHole_M1_6_EngrCAD_Core_Datums_ICSYS_System_Single_
+  commentId: M:EngrCAD.Core.Nodes.Features.TappedHole.M1_6(EngrCAD.Core.Datums.ICSYS,System.Single)
+  fullName: EngrCAD.Core.Nodes.Features.TappedHole.M1_6(EngrCAD.Core.Datums.ICSYS, System.Single)
+  nameWithType: TappedHole.M1_6(ICSYS, Single)
+- uid: EngrCAD.Core.Nodes.Features.TappedHole.M1_6*
+  name: M1_6
+  href: api/EngrCAD.Core.Nodes.Features.TappedHole.html#EngrCAD_Core_Nodes_Features_TappedHole_M1_6_
+  commentId: Overload:EngrCAD.Core.Nodes.Features.TappedHole.M1_6
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Features.TappedHole.M1_6
+  nameWithType: TappedHole.M1_6
+- uid: EngrCAD.Core.Nodes.Node
+  name: Node
+  href: api/EngrCAD.Core.Nodes.Node.html
+  commentId: T:EngrCAD.Core.Nodes.Node
+  fullName: EngrCAD.Core.Nodes.Node
+  nameWithType: Node
+- uid: EngrCAD.Core.Nodes.Node.BoundingBox
+  name: BoundingBox
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_BoundingBox
+  commentId: P:EngrCAD.Core.Nodes.Node.BoundingBox
+  fullName: EngrCAD.Core.Nodes.Node.BoundingBox
+  nameWithType: Node.BoundingBox
+- uid: EngrCAD.Core.Nodes.Node.BoundingBox*
+  name: BoundingBox
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_BoundingBox_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.BoundingBox
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.BoundingBox
+  nameWithType: Node.BoundingBox
+- uid: EngrCAD.Core.Nodes.Node.Center
+  name: Center()
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Center
+  commentId: M:EngrCAD.Core.Nodes.Node.Center
+  fullName: EngrCAD.Core.Nodes.Node.Center()
+  nameWithType: Node.Center()
+- uid: EngrCAD.Core.Nodes.Node.Center*
+  name: Center
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Center_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Center
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Center
+  nameWithType: Node.Center
+- uid: EngrCAD.Core.Nodes.Node.Chamfer(System.Func{EngrCAD.Core.Edges.IEdge,System.Nullable{System.Single}})
+  name: Chamfer(Func<IEdge, Nullable<Single>>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Chamfer_System_Func_EngrCAD_Core_Edges_IEdge_System_Nullable_System_Single___
+  commentId: M:EngrCAD.Core.Nodes.Node.Chamfer(System.Func{EngrCAD.Core.Edges.IEdge,System.Nullable{System.Single}})
+  name.vb: Chamfer(Func(Of IEdge, Nullable(Of Single)))
+  fullName: EngrCAD.Core.Nodes.Node.Chamfer(System.Func<EngrCAD.Core.Edges.IEdge, System.Nullable<System.Single>>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Chamfer(System.Func(Of EngrCAD.Core.Edges.IEdge, System.Nullable(Of System.Single)))
+  nameWithType: Node.Chamfer(Func<IEdge, Nullable<Single>>)
+  nameWithType.vb: Node.Chamfer(Func(Of IEdge, Nullable(Of Single)))
+- uid: EngrCAD.Core.Nodes.Node.Chamfer(System.Single)
+  name: Chamfer(Single)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Chamfer_System_Single_
+  commentId: M:EngrCAD.Core.Nodes.Node.Chamfer(System.Single)
+  fullName: EngrCAD.Core.Nodes.Node.Chamfer(System.Single)
+  nameWithType: Node.Chamfer(Single)
+- uid: EngrCAD.Core.Nodes.Node.Chamfer(System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}})
+  name: Chamfer(Single, Func<IEdge[], IEnumerable<IEdge>>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Chamfer_System_Single_System_Func_EngrCAD_Core_Edges_IEdge___System_Collections_Generic_IEnumerable_EngrCAD_Core_Edges_IEdge___
+  commentId: M:EngrCAD.Core.Nodes.Node.Chamfer(System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}})
+  name.vb: Chamfer(Single, Func(Of IEdge(), IEnumerable(Of IEdge)))
+  fullName: EngrCAD.Core.Nodes.Node.Chamfer(System.Single, System.Func<EngrCAD.Core.Edges.IEdge[], System.Collections.Generic.IEnumerable<EngrCAD.Core.Edges.IEdge>>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Chamfer(System.Single, System.Func(Of EngrCAD.Core.Edges.IEdge(), System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Edges.IEdge)))
+  nameWithType: Node.Chamfer(Single, Func<IEdge[], IEnumerable<IEdge>>)
+  nameWithType.vb: Node.Chamfer(Single, Func(Of IEdge(), IEnumerable(Of IEdge)))
+- uid: EngrCAD.Core.Nodes.Node.Chamfer(System.ValueTuple{System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}}}[])
+  name: Chamfer((Single, Func<IEdge[], IEnumerable<IEdge>>)[])
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Chamfer_System_ValueTuple_System_Single_System_Func_EngrCAD_Core_Edges_IEdge___System_Collections_Generic_IEnumerable_EngrCAD_Core_Edges_IEdge______
+  commentId: M:EngrCAD.Core.Nodes.Node.Chamfer(System.ValueTuple{System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}}}[])
+  name.vb: Chamfer((Single, Func(Of IEdge(), IEnumerable(Of IEdge)))(Of Single, Func(Of IEdge(), IEnumerable(Of IEdge)))())
+  fullName: EngrCAD.Core.Nodes.Node.Chamfer(System.ValueTuple<System.Single, System.Func<EngrCAD.Core.Edges.IEdge[], System.Collections.Generic.IEnumerable<EngrCAD.Core.Edges.IEdge>>>[])
+  fullName.vb: EngrCAD.Core.Nodes.Node.Chamfer(System.ValueTuple(Of System.Single, System.Func(Of EngrCAD.Core.Edges.IEdge(), System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Edges.IEdge)))())
+  nameWithType: Node.Chamfer((Single, Func<IEdge[], IEnumerable<IEdge>>)[])
+  nameWithType.vb: Node.Chamfer((Single, Func(Of IEdge(), IEnumerable(Of IEdge)))(Of Single, Func(Of IEdge(), IEnumerable(Of IEdge)))())
+- uid: EngrCAD.Core.Nodes.Node.Chamfer*
+  name: Chamfer
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Chamfer_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Chamfer
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Chamfer
+  nameWithType: Node.Chamfer
+- uid: EngrCAD.Core.Nodes.Node.Edges
+  name: Edges
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Edges
+  commentId: P:EngrCAD.Core.Nodes.Node.Edges
+  fullName: EngrCAD.Core.Nodes.Node.Edges
+  nameWithType: Node.Edges
+- uid: EngrCAD.Core.Nodes.Node.Edges*
+  name: Edges
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Edges_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Edges
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Edges
+  nameWithType: Node.Edges
+- uid: EngrCAD.Core.Nodes.Node.Faces
+  name: Faces
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Faces
+  commentId: P:EngrCAD.Core.Nodes.Node.Faces
+  fullName: EngrCAD.Core.Nodes.Node.Faces
+  nameWithType: Node.Faces
+- uid: EngrCAD.Core.Nodes.Node.Faces*
+  name: Faces
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Faces_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Faces
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Faces
+  nameWithType: Node.Faces
+- uid: EngrCAD.Core.Nodes.Node.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Generate
+  commentId: M:EngrCAD.Core.Nodes.Node.Generate
+  fullName: EngrCAD.Core.Nodes.Node.Generate()
+  nameWithType: Node.Generate()
+- uid: EngrCAD.Core.Nodes.Node.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Generate
+  nameWithType: Node.Generate
+- uid: EngrCAD.Core.Nodes.Node.Intersect(EngrCAD.Core.Nodes.Node[])
+  name: Intersect(Node[])
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Intersect_EngrCAD_Core_Nodes_Node___
+  commentId: M:EngrCAD.Core.Nodes.Node.Intersect(EngrCAD.Core.Nodes.Node[])
+  name.vb: Intersect(Node())
+  fullName: EngrCAD.Core.Nodes.Node.Intersect(EngrCAD.Core.Nodes.Node[])
+  fullName.vb: EngrCAD.Core.Nodes.Node.Intersect(EngrCAD.Core.Nodes.Node())
+  nameWithType: Node.Intersect(Node[])
+  nameWithType.vb: Node.Intersect(Node())
+- uid: EngrCAD.Core.Nodes.Node.Intersect(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name: Intersect(IEnumerable<Node>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Intersect_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.Node.Intersect(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name.vb: Intersect(IEnumerable(Of Node))
+  fullName: EngrCAD.Core.Nodes.Node.Intersect(System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Intersect(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: Node.Intersect(IEnumerable<Node>)
+  nameWithType.vb: Node.Intersect(IEnumerable(Of Node))
+- uid: EngrCAD.Core.Nodes.Node.Intersect*
+  name: Intersect
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Intersect_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Intersect
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Intersect
+  nameWithType: Node.Intersect
+- uid: EngrCAD.Core.Nodes.Node.op_Addition(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  name: Addition(Node, Node)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_Addition_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_
+  commentId: M:EngrCAD.Core.Nodes.Node.op_Addition(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  fullName: EngrCAD.Core.Nodes.Node.Addition(EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node)
+  nameWithType: Node.Addition(Node, Node)
+- uid: EngrCAD.Core.Nodes.Node.op_Addition*
+  name: Addition
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_Addition_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.op_Addition
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Addition
+  nameWithType: Node.Addition
+- uid: EngrCAD.Core.Nodes.Node.op_BitwiseAnd(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  name: BitwiseAnd(Node, Node)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_BitwiseAnd_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_
+  commentId: M:EngrCAD.Core.Nodes.Node.op_BitwiseAnd(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  fullName: EngrCAD.Core.Nodes.Node.BitwiseAnd(EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node)
+  nameWithType: Node.BitwiseAnd(Node, Node)
+- uid: EngrCAD.Core.Nodes.Node.op_BitwiseAnd*
+  name: BitwiseAnd
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_BitwiseAnd_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.op_BitwiseAnd
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.BitwiseAnd
+  nameWithType: Node.BitwiseAnd
+- uid: EngrCAD.Core.Nodes.Node.op_BitwiseOr(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  name: BitwiseOr(Node, Node)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_BitwiseOr_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_
+  commentId: M:EngrCAD.Core.Nodes.Node.op_BitwiseOr(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  fullName: EngrCAD.Core.Nodes.Node.BitwiseOr(EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node)
+  nameWithType: Node.BitwiseOr(Node, Node)
+- uid: EngrCAD.Core.Nodes.Node.op_BitwiseOr*
+  name: BitwiseOr
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_BitwiseOr_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.op_BitwiseOr
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.BitwiseOr
+  nameWithType: Node.BitwiseOr
+- uid: EngrCAD.Core.Nodes.Node.op_ExclusiveOr(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  name: ExclusiveOr(Node, Node)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_ExclusiveOr_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_
+  commentId: M:EngrCAD.Core.Nodes.Node.op_ExclusiveOr(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  fullName: EngrCAD.Core.Nodes.Node.ExclusiveOr(EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node)
+  nameWithType: Node.ExclusiveOr(Node, Node)
+- uid: EngrCAD.Core.Nodes.Node.op_ExclusiveOr*
+  name: ExclusiveOr
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_ExclusiveOr_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.op_ExclusiveOr
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.ExclusiveOr
+  nameWithType: Node.ExclusiveOr
+- uid: EngrCAD.Core.Nodes.Node.op_Subtraction(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  name: Subtraction(Node, Node)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_Subtraction_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_
+  commentId: M:EngrCAD.Core.Nodes.Node.op_Subtraction(EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node)
+  fullName: EngrCAD.Core.Nodes.Node.Subtraction(EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node)
+  nameWithType: Node.Subtraction(Node, Node)
+- uid: EngrCAD.Core.Nodes.Node.op_Subtraction*
+  name: Subtraction
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_op_Subtraction_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.op_Subtraction
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Subtraction
+  nameWithType: Node.Subtraction
+- uid: EngrCAD.Core.Nodes.Node.Rotate(EngrCAD.Core.Numerics.Angle,System.Numerics.Vector3,System.Numerics.Vector3)
+  name: Rotate(Angle, Vector3, Vector3)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Rotate_EngrCAD_Core_Numerics_Angle_System_Numerics_Vector3_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Nodes.Node.Rotate(EngrCAD.Core.Numerics.Angle,System.Numerics.Vector3,System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Nodes.Node.Rotate(EngrCAD.Core.Numerics.Angle, System.Numerics.Vector3, System.Numerics.Vector3)
+  nameWithType: Node.Rotate(Angle, Vector3, Vector3)
+- uid: EngrCAD.Core.Nodes.Node.Rotate*
+  name: Rotate
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Rotate_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Rotate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Rotate
+  nameWithType: Node.Rotate
+- uid: EngrCAD.Core.Nodes.Node.RotateX(EngrCAD.Core.Numerics.Angle)
+  name: RotateX(Angle)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_RotateX_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Nodes.Node.RotateX(EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Nodes.Node.RotateX(EngrCAD.Core.Numerics.Angle)
+  nameWithType: Node.RotateX(Angle)
+- uid: EngrCAD.Core.Nodes.Node.RotateX*
+  name: RotateX
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_RotateX_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.RotateX
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.RotateX
+  nameWithType: Node.RotateX
+- uid: EngrCAD.Core.Nodes.Node.RotateY(EngrCAD.Core.Numerics.Angle)
+  name: RotateY(Angle)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_RotateY_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Nodes.Node.RotateY(EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Nodes.Node.RotateY(EngrCAD.Core.Numerics.Angle)
+  nameWithType: Node.RotateY(Angle)
+- uid: EngrCAD.Core.Nodes.Node.RotateY*
+  name: RotateY
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_RotateY_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.RotateY
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.RotateY
+  nameWithType: Node.RotateY
+- uid: EngrCAD.Core.Nodes.Node.RotateZ(EngrCAD.Core.Numerics.Angle)
+  name: RotateZ(Angle)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_RotateZ_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Nodes.Node.RotateZ(EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Nodes.Node.RotateZ(EngrCAD.Core.Numerics.Angle)
+  nameWithType: Node.RotateZ(Angle)
+- uid: EngrCAD.Core.Nodes.Node.RotateZ*
+  name: RotateZ
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_RotateZ_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.RotateZ
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.RotateZ
+  nameWithType: Node.RotateZ
+- uid: EngrCAD.Core.Nodes.Node.Round(System.Func{EngrCAD.Core.Edges.IEdge,System.Nullable{System.Single}})
+  name: Round(Func<IEdge, Nullable<Single>>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Round_System_Func_EngrCAD_Core_Edges_IEdge_System_Nullable_System_Single___
+  commentId: M:EngrCAD.Core.Nodes.Node.Round(System.Func{EngrCAD.Core.Edges.IEdge,System.Nullable{System.Single}})
+  name.vb: Round(Func(Of IEdge, Nullable(Of Single)))
+  fullName: EngrCAD.Core.Nodes.Node.Round(System.Func<EngrCAD.Core.Edges.IEdge, System.Nullable<System.Single>>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Round(System.Func(Of EngrCAD.Core.Edges.IEdge, System.Nullable(Of System.Single)))
+  nameWithType: Node.Round(Func<IEdge, Nullable<Single>>)
+  nameWithType.vb: Node.Round(Func(Of IEdge, Nullable(Of Single)))
+- uid: EngrCAD.Core.Nodes.Node.Round(System.Single)
+  name: Round(Single)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Round_System_Single_
+  commentId: M:EngrCAD.Core.Nodes.Node.Round(System.Single)
+  fullName: EngrCAD.Core.Nodes.Node.Round(System.Single)
+  nameWithType: Node.Round(Single)
+- uid: EngrCAD.Core.Nodes.Node.Round(System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}})
+  name: Round(Single, Func<IEdge[], IEnumerable<IEdge>>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Round_System_Single_System_Func_EngrCAD_Core_Edges_IEdge___System_Collections_Generic_IEnumerable_EngrCAD_Core_Edges_IEdge___
+  commentId: M:EngrCAD.Core.Nodes.Node.Round(System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}})
+  name.vb: Round(Single, Func(Of IEdge(), IEnumerable(Of IEdge)))
+  fullName: EngrCAD.Core.Nodes.Node.Round(System.Single, System.Func<EngrCAD.Core.Edges.IEdge[], System.Collections.Generic.IEnumerable<EngrCAD.Core.Edges.IEdge>>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Round(System.Single, System.Func(Of EngrCAD.Core.Edges.IEdge(), System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Edges.IEdge)))
+  nameWithType: Node.Round(Single, Func<IEdge[], IEnumerable<IEdge>>)
+  nameWithType.vb: Node.Round(Single, Func(Of IEdge(), IEnumerable(Of IEdge)))
+- uid: EngrCAD.Core.Nodes.Node.Round(System.ValueTuple{System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}}}[])
+  name: Round((Single, Func<IEdge[], IEnumerable<IEdge>>)[])
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Round_System_ValueTuple_System_Single_System_Func_EngrCAD_Core_Edges_IEdge___System_Collections_Generic_IEnumerable_EngrCAD_Core_Edges_IEdge______
+  commentId: M:EngrCAD.Core.Nodes.Node.Round(System.ValueTuple{System.Single,System.Func{EngrCAD.Core.Edges.IEdge[],System.Collections.Generic.IEnumerable{EngrCAD.Core.Edges.IEdge}}}[])
+  name.vb: Round((Single, Func(Of IEdge(), IEnumerable(Of IEdge)))(Of Single, Func(Of IEdge(), IEnumerable(Of IEdge)))())
+  fullName: EngrCAD.Core.Nodes.Node.Round(System.ValueTuple<System.Single, System.Func<EngrCAD.Core.Edges.IEdge[], System.Collections.Generic.IEnumerable<EngrCAD.Core.Edges.IEdge>>>[])
+  fullName.vb: EngrCAD.Core.Nodes.Node.Round(System.ValueTuple(Of System.Single, System.Func(Of EngrCAD.Core.Edges.IEdge(), System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Edges.IEdge)))())
+  nameWithType: Node.Round((Single, Func<IEdge[], IEnumerable<IEdge>>)[])
+  nameWithType.vb: Node.Round((Single, Func(Of IEdge(), IEnumerable(Of IEdge)))(Of Single, Func(Of IEdge(), IEnumerable(Of IEdge)))())
+- uid: EngrCAD.Core.Nodes.Node.Round*
+  name: Round
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Round_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Round
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Round
+  nameWithType: Node.Round
+- uid: EngrCAD.Core.Nodes.Node.ShapeType
+  name: ShapeType
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_ShapeType
+  commentId: P:EngrCAD.Core.Nodes.Node.ShapeType
+  fullName: EngrCAD.Core.Nodes.Node.ShapeType
+  nameWithType: Node.ShapeType
+- uid: EngrCAD.Core.Nodes.Node.ShapeType*
+  name: ShapeType
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_ShapeType_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.ShapeType
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.ShapeType
+  nameWithType: Node.ShapeType
+- uid: EngrCAD.Core.Nodes.Node.Subtract(EngrCAD.Core.Nodes.Node[])
+  name: Subtract(Node[])
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Subtract_EngrCAD_Core_Nodes_Node___
+  commentId: M:EngrCAD.Core.Nodes.Node.Subtract(EngrCAD.Core.Nodes.Node[])
+  name.vb: Subtract(Node())
+  fullName: EngrCAD.Core.Nodes.Node.Subtract(EngrCAD.Core.Nodes.Node[])
+  fullName.vb: EngrCAD.Core.Nodes.Node.Subtract(EngrCAD.Core.Nodes.Node())
+  nameWithType: Node.Subtract(Node[])
+  nameWithType.vb: Node.Subtract(Node())
+- uid: EngrCAD.Core.Nodes.Node.Subtract(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name: Subtract(IEnumerable<Node>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Subtract_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.Node.Subtract(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name.vb: Subtract(IEnumerable(Of Node))
+  fullName: EngrCAD.Core.Nodes.Node.Subtract(System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Subtract(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: Node.Subtract(IEnumerable<Node>)
+  nameWithType.vb: Node.Subtract(IEnumerable(Of Node))
+- uid: EngrCAD.Core.Nodes.Node.Subtract*
+  name: Subtract
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Subtract_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Subtract
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Subtract
+  nameWithType: Node.Subtract
+- uid: EngrCAD.Core.Nodes.Node.Transform(System.Numerics.Matrix4x4)
+  name: Transform(Matrix4x4)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Transform_System_Numerics_Matrix4x4_
+  commentId: M:EngrCAD.Core.Nodes.Node.Transform(System.Numerics.Matrix4x4)
+  fullName: EngrCAD.Core.Nodes.Node.Transform(System.Numerics.Matrix4x4)
+  nameWithType: Node.Transform(Matrix4x4)
+- uid: EngrCAD.Core.Nodes.Node.Transform*
+  name: Transform
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Transform_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Transform
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Transform
+  nameWithType: Node.Transform
+- uid: EngrCAD.Core.Nodes.Node.Translate(System.Numerics.Vector3)
+  name: Translate(Vector3)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Translate_System_Numerics_Vector3_
+  commentId: M:EngrCAD.Core.Nodes.Node.Translate(System.Numerics.Vector3)
+  fullName: EngrCAD.Core.Nodes.Node.Translate(System.Numerics.Vector3)
+  nameWithType: Node.Translate(Vector3)
+- uid: EngrCAD.Core.Nodes.Node.Translate(System.Single,System.Single,System.Single)
+  name: Translate(Single, Single, Single)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Translate_System_Single_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Nodes.Node.Translate(System.Single,System.Single,System.Single)
+  fullName: EngrCAD.Core.Nodes.Node.Translate(System.Single, System.Single, System.Single)
+  nameWithType: Node.Translate(Single, Single, Single)
+- uid: EngrCAD.Core.Nodes.Node.Translate*
+  name: Translate
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Translate_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Translate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Translate
+  nameWithType: Node.Translate
+- uid: EngrCAD.Core.Nodes.Node.Union(EngrCAD.Core.Nodes.Node[])
+  name: Union(Node[])
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Union_EngrCAD_Core_Nodes_Node___
+  commentId: M:EngrCAD.Core.Nodes.Node.Union(EngrCAD.Core.Nodes.Node[])
+  name.vb: Union(Node())
+  fullName: EngrCAD.Core.Nodes.Node.Union(EngrCAD.Core.Nodes.Node[])
+  fullName.vb: EngrCAD.Core.Nodes.Node.Union(EngrCAD.Core.Nodes.Node())
+  nameWithType: Node.Union(Node[])
+  nameWithType.vb: Node.Union(Node())
+- uid: EngrCAD.Core.Nodes.Node.Union(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name: Union(IEnumerable<Node>)
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Union_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.Node.Union(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name.vb: Union(IEnumerable(Of Node))
+  fullName: EngrCAD.Core.Nodes.Node.Union(System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.Node.Union(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: Node.Union(IEnumerable<Node>)
+  nameWithType.vb: Node.Union(IEnumerable(Of Node))
+- uid: EngrCAD.Core.Nodes.Node.Union*
+  name: Union
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Union_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Union
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Union
+  nameWithType: Node.Union
+- uid: EngrCAD.Core.Nodes.Node.Volume
+  name: Volume
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Volume
+  commentId: P:EngrCAD.Core.Nodes.Node.Volume
+  fullName: EngrCAD.Core.Nodes.Node.Volume
+  nameWithType: Node.Volume
+- uid: EngrCAD.Core.Nodes.Node.Volume*
+  name: Volume
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Volume_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Volume
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Volume
+  nameWithType: Node.Volume
+- uid: EngrCAD.Core.Nodes.Node.Wrapper
+  name: Wrapper
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Wrapper
+  commentId: P:EngrCAD.Core.Nodes.Node.Wrapper
+  fullName: EngrCAD.Core.Nodes.Node.Wrapper
+  nameWithType: Node.Wrapper
+- uid: EngrCAD.Core.Nodes.Node.Wrapper*
+  name: Wrapper
+  href: api/EngrCAD.Core.Nodes.Node.html#EngrCAD_Core_Nodes_Node_Wrapper_
+  commentId: Overload:EngrCAD.Core.Nodes.Node.Wrapper
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Node.Wrapper
+  nameWithType: Node.Wrapper
+- uid: EngrCAD.Core.Nodes.NodeExtensions
+  name: NodeExtensions
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html
+  commentId: T:EngrCAD.Core.Nodes.NodeExtensions
+  fullName: EngrCAD.Core.Nodes.NodeExtensions
+  nameWithType: NodeExtensions
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Extrude(EngrCAD.Core.Sketcher.ClosedSketch,System.Single)
+  name: Extrude(ClosedSketch, Single)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Extrude_EngrCAD_Core_Sketcher_ClosedSketch_System_Single_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Extrude(EngrCAD.Core.Sketcher.ClosedSketch,System.Single)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Extrude(EngrCAD.Core.Sketcher.ClosedSketch, System.Single)
+  nameWithType: NodeExtensions.Extrude(ClosedSketch, Single)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Extrude*
+  name: Extrude
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Extrude_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.Extrude
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Extrude
+  nameWithType: NodeExtensions.Extrude
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(EngrCAD.Core.Nodes.Node,System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name: Merge(Node, IEnumerable<Node>)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_EngrCAD_Core_Nodes_Node_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(EngrCAD.Core.Nodes.Node,System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name.vb: Merge(Node, IEnumerable(Of Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(EngrCAD.Core.Nodes.Node, System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(EngrCAD.Core.Nodes.Node, System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge(Node, IEnumerable<Node>)
+  nameWithType.vb: NodeExtensions.Merge(Node, IEnumerable(Of Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Merge((Node, Node, Node, Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node, Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node, Node, Node, Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Merge((Node, Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Merge((Node, Node, Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node, Node, Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Merge((Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Merge((Node, Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node, Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Merge((Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Merge((Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node, Node, Node, Node)(Of Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Merge((Node, Node, Node, Node)(Of Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Merge((Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node, Node, Node)(Of Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Merge((Node, Node, Node)(Of Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Merge((Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node, Node)(Of Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node, Node))
+  nameWithType.vb: NodeExtensions.Merge((Node, Node)(Of Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node})
+  name: Merge((Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_System_ValueTuple_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple{EngrCAD.Core.Nodes.Node})
+  name.vb: Merge((Node)(Of Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Merge(System.ValueTuple(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Merge((Node))
+  nameWithType.vb: NodeExtensions.Merge((Node)(Of Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Merge*
+  name: Merge
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Merge_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.Merge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Merge
+  nameWithType: NodeExtensions.Merge
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Revolve(EngrCAD.Core.Sketcher.ClosedSketch,EngrCAD.Core.Datums.IAxis)
+  name: Revolve(ClosedSketch, IAxis)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Revolve_EngrCAD_Core_Sketcher_ClosedSketch_EngrCAD_Core_Datums_IAxis_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Revolve(EngrCAD.Core.Sketcher.ClosedSketch,EngrCAD.Core.Datums.IAxis)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Revolve(EngrCAD.Core.Sketcher.ClosedSketch, EngrCAD.Core.Datums.IAxis)
+  nameWithType: NodeExtensions.Revolve(ClosedSketch, IAxis)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Revolve(EngrCAD.Core.Sketcher.ClosedSketch,EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)
+  name: Revolve(ClosedSketch, IAxis, Angle)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Revolve_EngrCAD_Core_Sketcher_ClosedSketch_EngrCAD_Core_Datums_IAxis_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Revolve(EngrCAD.Core.Sketcher.ClosedSketch,EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Revolve(EngrCAD.Core.Sketcher.ClosedSketch, EngrCAD.Core.Datums.IAxis, EngrCAD.Core.Numerics.Angle)
+  nameWithType: NodeExtensions.Revolve(ClosedSketch, IAxis, Angle)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Revolve*
+  name: Revolve
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Revolve_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.Revolve
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Revolve
+  nameWithType: NodeExtensions.Revolve
+- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL(EngrCAD.Core.Nodes.Node,System.String)
+  name: SaveSTL(Node, String)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTL_EngrCAD_Core_Nodes_Node_System_String_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.SaveSTL(EngrCAD.Core.Nodes.Node,System.String)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL(EngrCAD.Core.Nodes.Node, System.String)
+  nameWithType: NodeExtensions.SaveSTL(Node, String)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL*
+  name: SaveSTL
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTL_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.SaveSTL
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTL
+  nameWithType: NodeExtensions.SaveSTL
+- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP(EngrCAD.Core.Nodes.Node,System.String)
+  name: SaveSTP(Node, String)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTP_EngrCAD_Core_Nodes_Node_System_String_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.SaveSTP(EngrCAD.Core.Nodes.Node,System.String)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP(EngrCAD.Core.Nodes.Node, System.String)
+  nameWithType: NodeExtensions.SaveSTP(Node, String)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP*
+  name: SaveSTP
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_SaveSTP_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.SaveSTP
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.SaveSTP
+  nameWithType: NodeExtensions.SaveSTP
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Shell(EngrCAD.Core.Nodes.Node,System.Single)
+  name: Shell(Node, Single)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Shell_EngrCAD_Core_Nodes_Node_System_Single_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Shell(EngrCAD.Core.Nodes.Node,System.Single)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Shell(EngrCAD.Core.Nodes.Node, System.Single)
+  nameWithType: NodeExtensions.Shell(Node, Single)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Shell*
+  name: Shell
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Shell_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.Shell
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Shell
+  nameWithType: NodeExtensions.Shell
+- uid: EngrCAD.Core.Nodes.NodeExtensions.ToBody(EngrCAD.Core.Nodes.Node)
+  name: ToBody(Node)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_ToBody_EngrCAD_Core_Nodes_Node_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.ToBody(EngrCAD.Core.Nodes.Node)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.ToBody(EngrCAD.Core.Nodes.Node)
+  nameWithType: NodeExtensions.ToBody(Node)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.ToBody(EngrCAD.Core.Nodes.Node,System.Drawing.Color)
+  name: ToBody(Node, Color)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_ToBody_EngrCAD_Core_Nodes_Node_System_Drawing_Color_
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.ToBody(EngrCAD.Core.Nodes.Node,System.Drawing.Color)
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.ToBody(EngrCAD.Core.Nodes.Node, System.Drawing.Color)
+  nameWithType: NodeExtensions.ToBody(Node, Color)
+- uid: EngrCAD.Core.Nodes.NodeExtensions.ToBody*
+  name: ToBody
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_ToBody_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.ToBody
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.ToBody
+  nameWithType: NodeExtensions.ToBody
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name: Union(IEnumerable<Node>)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name.vb: Union(IEnumerable(Of Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union(IEnumerable<Node>)
+  nameWithType.vb: NodeExtensions.Union(IEnumerable(Of Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Union((Node, Node, Node, Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node, Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node, Node, Node, Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Union((Node, Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Union((Node, Node, Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node, Node, Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Union((Node, Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Union((Node, Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node, Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Union((Node, Node, Node, Node, Node)(Of Node, Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Union((Node, Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node, Node, Node, Node)(Of Node, Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node, Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Union((Node, Node, Node, Node)(Of Node, Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Union((Node, Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node, Node, Node)(Of Node, Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node, Node, Node))
+  nameWithType.vb: NodeExtensions.Union((Node, Node, Node)(Of Node, Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name: Union((Node, Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node, Node)(Of Node, Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node, EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node, Node))
+  nameWithType.vb: NodeExtensions.Union((Node, Node)(Of Node, Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node})
+  name: Union((Node))
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node})
+  name.vb: Union((Node)(Of Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.Union((Node))
+  nameWithType.vb: NodeExtensions.Union((Node)(Of Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.Union*
+  name: Union
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.Union
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union
+  nameWithType: NodeExtensions.Union
+- uid: EngrCAD.Core.Nodes.Primitives
+  name: EngrCAD.Core.Nodes.Primitives
+  href: api/EngrCAD.Core.Nodes.Primitives.html
+  commentId: N:EngrCAD.Core.Nodes.Primitives
+  fullName: EngrCAD.Core.Nodes.Primitives
+  nameWithType: EngrCAD.Core.Nodes.Primitives
+- uid: EngrCAD.Core.Nodes.Primitives.Box
+  name: Box
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.Box
+  fullName: EngrCAD.Core.Nodes.Primitives.Box
+  nameWithType: Box
+- uid: EngrCAD.Core.Nodes.Primitives.Box.Centered
+  name: Centered
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html#EngrCAD_Core_Nodes_Primitives_Box_Centered
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Box.Centered
+  fullName: EngrCAD.Core.Nodes.Primitives.Box.Centered
+  nameWithType: Box.Centered
+- uid: EngrCAD.Core.Nodes.Primitives.Box.Centered*
+  name: Centered
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html#EngrCAD_Core_Nodes_Primitives_Box_Centered_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Box.Centered
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Box.Centered
+  nameWithType: Box.Centered
+- uid: EngrCAD.Core.Nodes.Primitives.Box.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html#EngrCAD_Core_Nodes_Primitives_Box_Generate
+  commentId: M:EngrCAD.Core.Nodes.Primitives.Box.Generate
+  fullName: EngrCAD.Core.Nodes.Primitives.Box.Generate()
+  nameWithType: Box.Generate()
+- uid: EngrCAD.Core.Nodes.Primitives.Box.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html#EngrCAD_Core_Nodes_Primitives_Box_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Box.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Box.Generate
+  nameWithType: Box.Generate
+- uid: EngrCAD.Core.Nodes.Primitives.Box.Size
+  name: Size
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html#EngrCAD_Core_Nodes_Primitives_Box_Size
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Box.Size
+  fullName: EngrCAD.Core.Nodes.Primitives.Box.Size
+  nameWithType: Box.Size
+- uid: EngrCAD.Core.Nodes.Primitives.Box.Size*
+  name: Size
+  href: api/EngrCAD.Core.Nodes.Primitives.Box.html#EngrCAD_Core_Nodes_Primitives_Box_Size_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Box.Size
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Box.Size
+  nameWithType: Box.Size
+- uid: EngrCAD.Core.Nodes.Primitives.Cone
+  name: Cone
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.Cone
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone
+  nameWithType: Cone
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.BottomRadius
+  name: BottomRadius
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_BottomRadius
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cone.BottomRadius
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.BottomRadius
+  nameWithType: Cone.BottomRadius
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.BottomRadius*
+  name: BottomRadius
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_BottomRadius_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cone.BottomRadius
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.BottomRadius
+  nameWithType: Cone.BottomRadius
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.Centered
+  name: Centered
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_Centered
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cone.Centered
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.Centered
+  nameWithType: Cone.Centered
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.Centered*
+  name: Centered
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_Centered_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cone.Centered
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.Centered
+  nameWithType: Cone.Centered
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_Generate
+  commentId: M:EngrCAD.Core.Nodes.Primitives.Cone.Generate
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.Generate()
+  nameWithType: Cone.Generate()
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cone.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.Generate
+  nameWithType: Cone.Generate
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.Height
+  name: Height
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_Height
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cone.Height
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.Height
+  nameWithType: Cone.Height
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.Height*
+  name: Height
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_Height_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cone.Height
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.Height
+  nameWithType: Cone.Height
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.TopRadius
+  name: TopRadius
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_TopRadius
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cone.TopRadius
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.TopRadius
+  nameWithType: Cone.TopRadius
+- uid: EngrCAD.Core.Nodes.Primitives.Cone.TopRadius*
+  name: TopRadius
+  href: api/EngrCAD.Core.Nodes.Primitives.Cone.html#EngrCAD_Core_Nodes_Primitives_Cone_TopRadius_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cone.TopRadius
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cone.TopRadius
+  nameWithType: Cone.TopRadius
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder
+  name: Cylinder
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.Cylinder
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder
+  nameWithType: Cylinder
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Centered
+  name: Centered
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Centered
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cylinder.Centered
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Centered
+  nameWithType: Cylinder.Centered
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Centered*
+  name: Centered
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Centered_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cylinder.Centered
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Centered
+  nameWithType: Cylinder.Centered
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Generate
+  commentId: M:EngrCAD.Core.Nodes.Primitives.Cylinder.Generate
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Generate()
+  nameWithType: Cylinder.Generate()
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cylinder.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Generate
+  nameWithType: Cylinder.Generate
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Height
+  name: Height
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Height
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cylinder.Height
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Height
+  nameWithType: Cylinder.Height
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Height*
+  name: Height
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Height_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cylinder.Height
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Height
+  nameWithType: Cylinder.Height
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
+  name: Radius
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Radius
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
+  nameWithType: Cylinder.Radius
+- uid: EngrCAD.Core.Nodes.Primitives.Cylinder.Radius*
+  name: Radius
+  href: api/EngrCAD.Core.Nodes.Primitives.Cylinder.html#EngrCAD_Core_Nodes_Primitives_Cylinder_Radius_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
+  nameWithType: Cylinder.Radius
+- uid: EngrCAD.Core.Nodes.Primitives.Import
+  name: Import
+  href: api/EngrCAD.Core.Nodes.Primitives.Import.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.Import
+  fullName: EngrCAD.Core.Nodes.Primitives.Import
+  nameWithType: Import
+- uid: EngrCAD.Core.Nodes.Primitives.Import.FilePath
+  name: FilePath
+  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_FilePath
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Import.FilePath
+  fullName: EngrCAD.Core.Nodes.Primitives.Import.FilePath
+  nameWithType: Import.FilePath
+- uid: EngrCAD.Core.Nodes.Primitives.Import.FilePath*
+  name: FilePath
+  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_FilePath_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Import.FilePath
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Import.FilePath
+  nameWithType: Import.FilePath
+- uid: EngrCAD.Core.Nodes.Primitives.Import.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_Generate
+  commentId: M:EngrCAD.Core.Nodes.Primitives.Import.Generate
+  fullName: EngrCAD.Core.Nodes.Primitives.Import.Generate()
+  nameWithType: Import.Generate()
+- uid: EngrCAD.Core.Nodes.Primitives.Import.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Import.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Import.Generate
+  nameWithType: Import.Generate
+- uid: EngrCAD.Core.Nodes.Primitives.Sphere
+  name: Sphere
+  href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.Sphere
+  fullName: EngrCAD.Core.Nodes.Primitives.Sphere
+  nameWithType: Sphere
+- uid: EngrCAD.Core.Nodes.Primitives.Sphere.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html#EngrCAD_Core_Nodes_Primitives_Sphere_Generate
+  commentId: M:EngrCAD.Core.Nodes.Primitives.Sphere.Generate
+  fullName: EngrCAD.Core.Nodes.Primitives.Sphere.Generate()
+  nameWithType: Sphere.Generate()
+- uid: EngrCAD.Core.Nodes.Primitives.Sphere.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html#EngrCAD_Core_Nodes_Primitives_Sphere_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Sphere.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Sphere.Generate
+  nameWithType: Sphere.Generate
+- uid: EngrCAD.Core.Nodes.Primitives.Sphere.Radius
+  name: Radius
+  href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html#EngrCAD_Core_Nodes_Primitives_Sphere_Radius
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Sphere.Radius
+  fullName: EngrCAD.Core.Nodes.Primitives.Sphere.Radius
+  nameWithType: Sphere.Radius
+- uid: EngrCAD.Core.Nodes.Primitives.Sphere.Radius*
+  name: Radius
+  href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html#EngrCAD_Core_Nodes_Primitives_Sphere_Radius_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Sphere.Radius
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Sphere.Radius
+  nameWithType: Sphere.Radius
+- uid: EngrCAD.Core.Nodes.ShapeType
+  name: ShapeType
+  href: api/EngrCAD.Core.Nodes.ShapeType.html
+  commentId: T:EngrCAD.Core.Nodes.ShapeType
+  fullName: EngrCAD.Core.Nodes.ShapeType
+  nameWithType: ShapeType
+- uid: EngrCAD.Core.Nodes.ShapeType.Compound
+  name: Compound
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Compound
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Compound
+  fullName: EngrCAD.Core.Nodes.ShapeType.Compound
+  nameWithType: ShapeType.Compound
+- uid: EngrCAD.Core.Nodes.ShapeType.CompSolid
+  name: CompSolid
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_CompSolid
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.CompSolid
+  fullName: EngrCAD.Core.Nodes.ShapeType.CompSolid
+  nameWithType: ShapeType.CompSolid
+- uid: EngrCAD.Core.Nodes.ShapeType.Edge
+  name: Edge
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Edge
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Edge
+  fullName: EngrCAD.Core.Nodes.ShapeType.Edge
+  nameWithType: ShapeType.Edge
+- uid: EngrCAD.Core.Nodes.ShapeType.Face
+  name: Face
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Face
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Face
+  fullName: EngrCAD.Core.Nodes.ShapeType.Face
+  nameWithType: ShapeType.Face
+- uid: EngrCAD.Core.Nodes.ShapeType.Shape
+  name: Shape
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Shape
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Shape
+  fullName: EngrCAD.Core.Nodes.ShapeType.Shape
+  nameWithType: ShapeType.Shape
+- uid: EngrCAD.Core.Nodes.ShapeType.Shell
+  name: Shell
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Shell
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Shell
+  fullName: EngrCAD.Core.Nodes.ShapeType.Shell
+  nameWithType: ShapeType.Shell
+- uid: EngrCAD.Core.Nodes.ShapeType.Solid
+  name: Solid
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Solid
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Solid
+  fullName: EngrCAD.Core.Nodes.ShapeType.Solid
+  nameWithType: ShapeType.Solid
+- uid: EngrCAD.Core.Nodes.ShapeType.Vertex
+  name: Vertex
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Vertex
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Vertex
+  fullName: EngrCAD.Core.Nodes.ShapeType.Vertex
+  nameWithType: ShapeType.Vertex
+- uid: EngrCAD.Core.Nodes.ShapeType.Wire
+  name: Wire
+  href: api/EngrCAD.Core.Nodes.ShapeType.html#EngrCAD_Core_Nodes_ShapeType_Wire
+  commentId: F:EngrCAD.Core.Nodes.ShapeType.Wire
+  fullName: EngrCAD.Core.Nodes.ShapeType.Wire
+  nameWithType: ShapeType.Wire
+- uid: EngrCAD.Core.Numerics
+  name: EngrCAD.Core.Numerics
+  href: api/EngrCAD.Core.Numerics.html
+  commentId: N:EngrCAD.Core.Numerics
+  fullName: EngrCAD.Core.Numerics
+  nameWithType: EngrCAD.Core.Numerics
+- uid: EngrCAD.Core.Numerics.Angle
+  name: Angle
+  href: api/EngrCAD.Core.Numerics.Angle.html
+  commentId: T:EngrCAD.Core.Numerics.Angle
+  fullName: EngrCAD.Core.Numerics.Angle
+  nameWithType: Angle
+- uid: EngrCAD.Core.Numerics.Angle.Degrees
+  name: Degrees
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Degrees
+  commentId: P:EngrCAD.Core.Numerics.Angle.Degrees
+  fullName: EngrCAD.Core.Numerics.Angle.Degrees
+  nameWithType: Angle.Degrees
+- uid: EngrCAD.Core.Numerics.Angle.Degrees*
+  name: Degrees
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Degrees_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.Degrees
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Degrees
+  nameWithType: Angle.Degrees
+- uid: EngrCAD.Core.Numerics.Angle.Equals(EngrCAD.Core.Numerics.Angle)
+  name: Equals(Angle)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Equals_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Numerics.Angle.Equals(EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Numerics.Angle.Equals(EngrCAD.Core.Numerics.Angle)
+  nameWithType: Angle.Equals(Angle)
+- uid: EngrCAD.Core.Numerics.Angle.Equals(System.Object)
+  name: Equals(Object)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Equals_System_Object_
+  commentId: M:EngrCAD.Core.Numerics.Angle.Equals(System.Object)
+  fullName: EngrCAD.Core.Numerics.Angle.Equals(System.Object)
+  nameWithType: Angle.Equals(Object)
+- uid: EngrCAD.Core.Numerics.Angle.Equals*
+  name: Equals
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Equals_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.Equals
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Equals
+  nameWithType: Angle.Equals
+- uid: EngrCAD.Core.Numerics.Angle.FromDegrees(System.Single)
+  name: FromDegrees(Single)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_FromDegrees_System_Single_
+  commentId: M:EngrCAD.Core.Numerics.Angle.FromDegrees(System.Single)
+  fullName: EngrCAD.Core.Numerics.Angle.FromDegrees(System.Single)
+  nameWithType: Angle.FromDegrees(Single)
+- uid: EngrCAD.Core.Numerics.Angle.FromDegrees*
+  name: FromDegrees
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_FromDegrees_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.FromDegrees
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.FromDegrees
+  nameWithType: Angle.FromDegrees
+- uid: EngrCAD.Core.Numerics.Angle.FromGradians(System.Single)
+  name: FromGradians(Single)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_FromGradians_System_Single_
+  commentId: M:EngrCAD.Core.Numerics.Angle.FromGradians(System.Single)
+  fullName: EngrCAD.Core.Numerics.Angle.FromGradians(System.Single)
+  nameWithType: Angle.FromGradians(Single)
+- uid: EngrCAD.Core.Numerics.Angle.FromGradians*
+  name: FromGradians
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_FromGradians_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.FromGradians
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.FromGradians
+  nameWithType: Angle.FromGradians
+- uid: EngrCAD.Core.Numerics.Angle.FromRadians(System.Single)
+  name: FromRadians(Single)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_FromRadians_System_Single_
+  commentId: M:EngrCAD.Core.Numerics.Angle.FromRadians(System.Single)
+  fullName: EngrCAD.Core.Numerics.Angle.FromRadians(System.Single)
+  nameWithType: Angle.FromRadians(Single)
+- uid: EngrCAD.Core.Numerics.Angle.FromRadians*
+  name: FromRadians
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_FromRadians_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.FromRadians
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.FromRadians
+  nameWithType: Angle.FromRadians
+- uid: EngrCAD.Core.Numerics.Angle.GetHashCode
+  name: GetHashCode()
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_GetHashCode
+  commentId: M:EngrCAD.Core.Numerics.Angle.GetHashCode
+  fullName: EngrCAD.Core.Numerics.Angle.GetHashCode()
+  nameWithType: Angle.GetHashCode()
+- uid: EngrCAD.Core.Numerics.Angle.GetHashCode*
+  name: GetHashCode
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_GetHashCode_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.GetHashCode
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.GetHashCode
+  nameWithType: Angle.GetHashCode
+- uid: EngrCAD.Core.Numerics.Angle.Gradians
+  name: Gradians
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Gradians
+  commentId: P:EngrCAD.Core.Numerics.Angle.Gradians
+  fullName: EngrCAD.Core.Numerics.Angle.Gradians
+  nameWithType: Angle.Gradians
+- uid: EngrCAD.Core.Numerics.Angle.Gradians*
+  name: Gradians
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Gradians_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.Gradians
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Gradians
+  nameWithType: Angle.Gradians
+- uid: EngrCAD.Core.Numerics.Angle.op_Addition(EngrCAD.Core.Numerics.Angle,EngrCAD.Core.Numerics.Angle)
+  name: Addition(Angle, Angle)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Addition_EngrCAD_Core_Numerics_Angle_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Numerics.Angle.op_Addition(EngrCAD.Core.Numerics.Angle,EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Numerics.Angle.Addition(EngrCAD.Core.Numerics.Angle, EngrCAD.Core.Numerics.Angle)
+  nameWithType: Angle.Addition(Angle, Angle)
+- uid: EngrCAD.Core.Numerics.Angle.op_Addition*
+  name: Addition
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Addition_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.op_Addition
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Addition
+  nameWithType: Angle.Addition
+- uid: EngrCAD.Core.Numerics.Angle.op_Division(EngrCAD.Core.Numerics.Angle,System.Single)
+  name: Division(Angle, Single)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Division_EngrCAD_Core_Numerics_Angle_System_Single_
+  commentId: M:EngrCAD.Core.Numerics.Angle.op_Division(EngrCAD.Core.Numerics.Angle,System.Single)
+  fullName: EngrCAD.Core.Numerics.Angle.Division(EngrCAD.Core.Numerics.Angle, System.Single)
+  nameWithType: Angle.Division(Angle, Single)
+- uid: EngrCAD.Core.Numerics.Angle.op_Division*
+  name: Division
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Division_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.op_Division
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Division
+  nameWithType: Angle.Division
+- uid: EngrCAD.Core.Numerics.Angle.op_Implicit(EngrCAD.Core.Numerics.Angle)~System.Single
+  name: Implicit(Angle to Single)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Implicit_EngrCAD_Core_Numerics_Angle__System_Single
+  commentId: M:EngrCAD.Core.Numerics.Angle.op_Implicit(EngrCAD.Core.Numerics.Angle)~System.Single
+  name.vb: Widening(Angle to Single)
+  fullName: EngrCAD.Core.Numerics.Angle.Implicit(EngrCAD.Core.Numerics.Angle to System.Single)
+  fullName.vb: EngrCAD.Core.Numerics.Angle.Widening(EngrCAD.Core.Numerics.Angle to System.Single)
+  nameWithType: Angle.Implicit(Angle to Single)
+  nameWithType.vb: Angle.Widening(Angle to Single)
+- uid: EngrCAD.Core.Numerics.Angle.op_Implicit(System.Single)~EngrCAD.Core.Numerics.Angle
+  name: Implicit(Single to Angle)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Implicit_System_Single__EngrCAD_Core_Numerics_Angle
+  commentId: M:EngrCAD.Core.Numerics.Angle.op_Implicit(System.Single)~EngrCAD.Core.Numerics.Angle
+  name.vb: Widening(Single to Angle)
+  fullName: EngrCAD.Core.Numerics.Angle.Implicit(System.Single to EngrCAD.Core.Numerics.Angle)
+  fullName.vb: EngrCAD.Core.Numerics.Angle.Widening(System.Single to EngrCAD.Core.Numerics.Angle)
+  nameWithType: Angle.Implicit(Single to Angle)
+  nameWithType.vb: Angle.Widening(Single to Angle)
+- uid: EngrCAD.Core.Numerics.Angle.op_Implicit*
+  name: Implicit
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Implicit_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.op_Implicit
+  isSpec: "True"
+  name.vb: Widening
+  fullName: EngrCAD.Core.Numerics.Angle.Implicit
+  fullName.vb: EngrCAD.Core.Numerics.Angle.Widening
+  nameWithType: Angle.Implicit
+  nameWithType.vb: Angle.Widening
+- uid: EngrCAD.Core.Numerics.Angle.op_Multiply(EngrCAD.Core.Numerics.Angle,System.Single)
+  name: Multiply(Angle, Single)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Multiply_EngrCAD_Core_Numerics_Angle_System_Single_
+  commentId: M:EngrCAD.Core.Numerics.Angle.op_Multiply(EngrCAD.Core.Numerics.Angle,System.Single)
+  fullName: EngrCAD.Core.Numerics.Angle.Multiply(EngrCAD.Core.Numerics.Angle, System.Single)
+  nameWithType: Angle.Multiply(Angle, Single)
+- uid: EngrCAD.Core.Numerics.Angle.op_Multiply*
+  name: Multiply
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Multiply_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.op_Multiply
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Multiply
+  nameWithType: Angle.Multiply
+- uid: EngrCAD.Core.Numerics.Angle.op_Subtraction(EngrCAD.Core.Numerics.Angle,EngrCAD.Core.Numerics.Angle)
+  name: Subtraction(Angle, Angle)
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Subtraction_EngrCAD_Core_Numerics_Angle_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Numerics.Angle.op_Subtraction(EngrCAD.Core.Numerics.Angle,EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Numerics.Angle.Subtraction(EngrCAD.Core.Numerics.Angle, EngrCAD.Core.Numerics.Angle)
+  nameWithType: Angle.Subtraction(Angle, Angle)
+- uid: EngrCAD.Core.Numerics.Angle.op_Subtraction*
+  name: Subtraction
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_op_Subtraction_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.op_Subtraction
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Subtraction
+  nameWithType: Angle.Subtraction
+- uid: EngrCAD.Core.Numerics.Angle.PI
+  name: PI
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_PI
+  commentId: F:EngrCAD.Core.Numerics.Angle.PI
+  fullName: EngrCAD.Core.Numerics.Angle.PI
+  nameWithType: Angle.PI
+- uid: EngrCAD.Core.Numerics.Angle.Radians
+  name: Radians
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Radians
+  commentId: P:EngrCAD.Core.Numerics.Angle.Radians
+  fullName: EngrCAD.Core.Numerics.Angle.Radians
+  nameWithType: Angle.Radians
+- uid: EngrCAD.Core.Numerics.Angle.Radians*
+  name: Radians
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Radians_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.Radians
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Radians
+  nameWithType: Angle.Radians
+- uid: EngrCAD.Core.Numerics.Angle.ToString
+  name: ToString()
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_ToString
+  commentId: M:EngrCAD.Core.Numerics.Angle.ToString
+  fullName: EngrCAD.Core.Numerics.Angle.ToString()
+  nameWithType: Angle.ToString()
+- uid: EngrCAD.Core.Numerics.Angle.ToString*
+  name: ToString
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_ToString_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.ToString
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.ToString
+  nameWithType: Angle.ToString
+- uid: EngrCAD.Core.Numerics.Angle.TwoPI
+  name: TwoPI
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_TwoPI
+  commentId: F:EngrCAD.Core.Numerics.Angle.TwoPI
+  fullName: EngrCAD.Core.Numerics.Angle.TwoPI
+  nameWithType: Angle.TwoPI
+- uid: EngrCAD.Core.Numerics.Angle.Zero
+  name: Zero
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Zero
+  commentId: P:EngrCAD.Core.Numerics.Angle.Zero
+  fullName: EngrCAD.Core.Numerics.Angle.Zero
+  nameWithType: Angle.Zero
+- uid: EngrCAD.Core.Numerics.Angle.Zero*
+  name: Zero
+  href: api/EngrCAD.Core.Numerics.Angle.html#EngrCAD_Core_Numerics_Angle_Zero_
+  commentId: Overload:EngrCAD.Core.Numerics.Angle.Zero
+  isSpec: "True"
+  fullName: EngrCAD.Core.Numerics.Angle.Zero
+  nameWithType: Angle.Zero
+- uid: EngrCAD.Core.Part`1
+  name: Part<T>
+  href: api/EngrCAD.Core.Part-1.html
+  commentId: T:EngrCAD.Core.Part`1
+  name.vb: Part(Of T)
+  fullName: EngrCAD.Core.Part<T>
+  fullName.vb: EngrCAD.Core.Part(Of T)
+  nameWithType: Part<T>
+  nameWithType.vb: Part(Of T)
+- uid: EngrCAD.Core.Part`1.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Part-1.html#EngrCAD_Core_Part_1_Generate
+  commentId: M:EngrCAD.Core.Part`1.Generate
+  fullName: EngrCAD.Core.Part<T>.Generate()
+  fullName.vb: EngrCAD.Core.Part(Of T).Generate()
+  nameWithType: Part<T>.Generate()
+  nameWithType.vb: Part(Of T).Generate()
+- uid: EngrCAD.Core.Part`1.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Part-1.html#EngrCAD_Core_Part_1_Generate_
+  commentId: Overload:EngrCAD.Core.Part`1.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Part<T>.Generate
+  fullName.vb: EngrCAD.Core.Part(Of T).Generate
+  nameWithType: Part<T>.Generate
+  nameWithType.vb: Part(Of T).Generate
+- uid: EngrCAD.Core.Part`1.Metadata
+  name: Metadata
+  href: api/EngrCAD.Core.Part-1.html#EngrCAD_Core_Part_1_Metadata
+  commentId: P:EngrCAD.Core.Part`1.Metadata
+  fullName: EngrCAD.Core.Part<T>.Metadata
+  fullName.vb: EngrCAD.Core.Part(Of T).Metadata
+  nameWithType: Part<T>.Metadata
+  nameWithType.vb: Part(Of T).Metadata
+- uid: EngrCAD.Core.Part`1.Metadata*
+  name: Metadata
+  href: api/EngrCAD.Core.Part-1.html#EngrCAD_Core_Part_1_Metadata_
+  commentId: Overload:EngrCAD.Core.Part`1.Metadata
+  isSpec: "True"
+  fullName: EngrCAD.Core.Part<T>.Metadata
+  fullName.vb: EngrCAD.Core.Part(Of T).Metadata
+  nameWithType: Part<T>.Metadata
+  nameWithType.vb: Part(Of T).Metadata
+- uid: EngrCAD.Core.PartMetadata
+  name: PartMetadata
+  href: api/EngrCAD.Core.PartMetadata.html
+  commentId: T:EngrCAD.Core.PartMetadata
+  fullName: EngrCAD.Core.PartMetadata
+  nameWithType: PartMetadata
+- uid: EngrCAD.Core.PartMetadata.Name
+  name: Name
+  href: api/EngrCAD.Core.PartMetadata.html#EngrCAD_Core_PartMetadata_Name
+  commentId: P:EngrCAD.Core.PartMetadata.Name
+  fullName: EngrCAD.Core.PartMetadata.Name
+  nameWithType: PartMetadata.Name
+- uid: EngrCAD.Core.PartMetadata.Name*
+  name: Name
+  href: api/EngrCAD.Core.PartMetadata.html#EngrCAD_Core_PartMetadata_Name_
+  commentId: Overload:EngrCAD.Core.PartMetadata.Name
+  isSpec: "True"
+  fullName: EngrCAD.Core.PartMetadata.Name
+  nameWithType: PartMetadata.Name
+- uid: EngrCAD.Core.Sketcher
+  name: EngrCAD.Core.Sketcher
+  href: api/EngrCAD.Core.Sketcher.html
+  commentId: N:EngrCAD.Core.Sketcher
+  fullName: EngrCAD.Core.Sketcher
+  nameWithType: EngrCAD.Core.Sketcher
+- uid: EngrCAD.Core.Sketcher.Circle
+  name: Circle
+  href: api/EngrCAD.Core.Sketcher.Circle.html
+  commentId: T:EngrCAD.Core.Sketcher.Circle
+  fullName: EngrCAD.Core.Sketcher.Circle
+  nameWithType: Circle
+- uid: EngrCAD.Core.Sketcher.Circle.#ctor(EngrCAD.Core.Datums.ICSYS,System.Single)
+  name: Circle(ICSYS, Single)
+  href: api/EngrCAD.Core.Sketcher.Circle.html#EngrCAD_Core_Sketcher_Circle__ctor_EngrCAD_Core_Datums_ICSYS_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Circle.#ctor(EngrCAD.Core.Datums.ICSYS,System.Single)
+  fullName: EngrCAD.Core.Sketcher.Circle.Circle(EngrCAD.Core.Datums.ICSYS, System.Single)
+  nameWithType: Circle.Circle(ICSYS, Single)
+- uid: EngrCAD.Core.Sketcher.Circle.#ctor*
+  name: Circle
+  href: api/EngrCAD.Core.Sketcher.Circle.html#EngrCAD_Core_Sketcher_Circle__ctor_
+  commentId: Overload:EngrCAD.Core.Sketcher.Circle.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Circle.Circle
+  nameWithType: Circle.Circle
+- uid: EngrCAD.Core.Sketcher.ClosedSketch
+  name: ClosedSketch
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html
+  commentId: T:EngrCAD.Core.Sketcher.ClosedSketch
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch
+  nameWithType: ClosedSketch
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.CSYS
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_CSYS
+  commentId: P:EngrCAD.Core.Sketcher.ClosedSketch.CSYS
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.CSYS
+  nameWithType: ClosedSketch.CSYS
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.CSYS*
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_CSYS_
+  commentId: Overload:EngrCAD.Core.Sketcher.ClosedSketch.CSYS
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.CSYS
+  nameWithType: ClosedSketch.CSYS
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Edges
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Edges
+  commentId: P:EngrCAD.Core.Sketcher.ClosedSketch.Edges
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Edges
+  nameWithType: ClosedSketch.Edges
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Edges*
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Edges_
+  commentId: Overload:EngrCAD.Core.Sketcher.ClosedSketch.Edges
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Edges
+  nameWithType: ClosedSketch.Edges
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Extrude(System.Single)
+  name: Extrude(Single)
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Extrude_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.ClosedSketch.Extrude(System.Single)
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Extrude(System.Single)
+  nameWithType: ClosedSketch.Extrude(Single)
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Extrude*
+  name: Extrude
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Extrude_
+  commentId: Overload:EngrCAD.Core.Sketcher.ClosedSketch.Extrude
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Extrude
+  nameWithType: ClosedSketch.Extrude
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])
+  name: Loft(IClosedSketch[])
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Loft_EngrCAD_Core_Sketcher_IClosedSketch___
+  commentId: M:EngrCAD.Core.Sketcher.ClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])
+  name.vb: Loft(IClosedSketch())
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])
+  fullName.vb: EngrCAD.Core.Sketcher.ClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch())
+  nameWithType: ClosedSketch.Loft(IClosedSketch[])
+  nameWithType.vb: ClosedSketch.Loft(IClosedSketch())
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Loft(System.Collections.Generic.IEnumerable{EngrCAD.Core.Sketcher.IClosedSketch})
+  name: Loft(IEnumerable<IClosedSketch>)
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Loft_System_Collections_Generic_IEnumerable_EngrCAD_Core_Sketcher_IClosedSketch__
+  commentId: M:EngrCAD.Core.Sketcher.ClosedSketch.Loft(System.Collections.Generic.IEnumerable{EngrCAD.Core.Sketcher.IClosedSketch})
+  name.vb: Loft(IEnumerable(Of IClosedSketch))
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Loft(System.Collections.Generic.IEnumerable<EngrCAD.Core.Sketcher.IClosedSketch>)
+  fullName.vb: EngrCAD.Core.Sketcher.ClosedSketch.Loft(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Sketcher.IClosedSketch))
+  nameWithType: ClosedSketch.Loft(IEnumerable<IClosedSketch>)
+  nameWithType.vb: ClosedSketch.Loft(IEnumerable(Of IClosedSketch))
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Loft*
+  name: Loft
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Loft_
+  commentId: Overload:EngrCAD.Core.Sketcher.ClosedSketch.Loft
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Loft
+  nameWithType: ClosedSketch.Loft
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)
+  name: Revolve(IAxis)
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_
+  commentId: M:EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)
+  nameWithType: ClosedSketch.Revolve(IAxis)
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)
+  name: Revolve(IAxis, Angle)
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis, EngrCAD.Core.Numerics.Angle)
+  nameWithType: ClosedSketch.Revolve(IAxis, Angle)
+- uid: EngrCAD.Core.Sketcher.ClosedSketch.Revolve*
+  name: Revolve
+  href: api/EngrCAD.Core.Sketcher.ClosedSketch.html#EngrCAD_Core_Sketcher_ClosedSketch_Revolve_
+  commentId: Overload:EngrCAD.Core.Sketcher.ClosedSketch.Revolve
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ClosedSketch.Revolve
+  nameWithType: ClosedSketch.Revolve
+- uid: EngrCAD.Core.Sketcher.Edges
+  name: EngrCAD.Core.Sketcher.Edges
+  href: api/EngrCAD.Core.Sketcher.Edges.html
+  commentId: N:EngrCAD.Core.Sketcher.Edges
+  fullName: EngrCAD.Core.Sketcher.Edges
+  nameWithType: EngrCAD.Core.Sketcher.Edges
+- uid: EngrCAD.Core.Sketcher.Edges.ISketchEdge
+  name: ISketchEdge
+  href: api/EngrCAD.Core.Sketcher.Edges.ISketchEdge.html
+  commentId: T:EngrCAD.Core.Sketcher.Edges.ISketchEdge
+  fullName: EngrCAD.Core.Sketcher.Edges.ISketchEdge
+  nameWithType: ISketchEdge
+- uid: EngrCAD.Core.Sketcher.Edges.ISketchEdge.ToEdge
+  name: ToEdge()
+  href: api/EngrCAD.Core.Sketcher.Edges.ISketchEdge.html#EngrCAD_Core_Sketcher_Edges_ISketchEdge_ToEdge
+  commentId: M:EngrCAD.Core.Sketcher.Edges.ISketchEdge.ToEdge
+  fullName: EngrCAD.Core.Sketcher.Edges.ISketchEdge.ToEdge()
+  nameWithType: ISketchEdge.ToEdge()
+- uid: EngrCAD.Core.Sketcher.Edges.ISketchEdge.ToEdge*
+  name: ToEdge
+  href: api/EngrCAD.Core.Sketcher.Edges.ISketchEdge.html#EngrCAD_Core_Sketcher_Edges_ISketchEdge_ToEdge_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.ISketchEdge.ToEdge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.ISketchEdge.ToEdge
+  nameWithType: ISketchEdge.ToEdge
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve
+  name: SketchEdgeBezierCurve
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html
+  commentId: T:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve
+  nameWithType: SketchEdgeBezierCurve
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ControlPoints
+  name: ControlPoints
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_ControlPoints
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ControlPoints
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ControlPoints
+  nameWithType: SketchEdgeBezierCurve.ControlPoints
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ControlPoints*
+  name: ControlPoints
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_ControlPoints_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ControlPoints
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ControlPoints
+  nameWithType: SketchEdgeBezierCurve.ControlPoints
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.End
+  name: End
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_End
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.End
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.End
+  nameWithType: SketchEdgeBezierCurve.End
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.End*
+  name: End
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_End_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.End
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.End
+  nameWithType: SketchEdgeBezierCurve.End
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.Start
+  name: Start
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_Start
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.Start
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.Start
+  nameWithType: SketchEdgeBezierCurve.Start
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.Start*
+  name: Start
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_Start_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.Start
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.Start
+  nameWithType: SketchEdgeBezierCurve.Start
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ToEdge
+  name: ToEdge()
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_ToEdge
+  commentId: M:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ToEdge
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ToEdge()
+  nameWithType: SketchEdgeBezierCurve.ToEdge()
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ToEdge*
+  name: ToEdge
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeBezierCurve_ToEdge_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ToEdge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.ToEdge
+  nameWithType: SketchEdgeBezierCurve.ToEdge
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle
+  name: SketchEdgeCircle
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html
+  commentId: T:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle
+  nameWithType: SketchEdgeCircle
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Center
+  name: Center
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_Center
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Center
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Center
+  nameWithType: SketchEdgeCircle.Center
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Center*
+  name: Center
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_Center_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Center
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Center
+  nameWithType: SketchEdgeCircle.Center
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Direction
+  name: Direction
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_Direction
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Direction
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Direction
+  nameWithType: SketchEdgeCircle.Direction
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Direction*
+  name: Direction
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_Direction_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Direction
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Direction
+  nameWithType: SketchEdgeCircle.Direction
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Radius
+  name: Radius
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_Radius
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Radius
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Radius
+  nameWithType: SketchEdgeCircle.Radius
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Radius*
+  name: Radius
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_Radius_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Radius
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.Radius
+  nameWithType: SketchEdgeCircle.Radius
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.ToEdge
+  name: ToEdge()
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_ToEdge
+  commentId: M:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.ToEdge
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.ToEdge()
+  nameWithType: SketchEdgeCircle.ToEdge()
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.ToEdge*
+  name: ToEdge
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeCircle_ToEdge_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.ToEdge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.ToEdge
+  nameWithType: SketchEdgeCircle.ToEdge
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine
+  name: SketchEdgeLine
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html
+  commentId: T:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine
+  nameWithType: SketchEdgeLine
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.End
+  name: End
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeLine_End
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.End
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.End
+  nameWithType: SketchEdgeLine.End
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.End*
+  name: End
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeLine_End_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.End
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.End
+  nameWithType: SketchEdgeLine.End
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.Start
+  name: Start
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeLine_Start
+  commentId: P:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.Start
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.Start
+  nameWithType: SketchEdgeLine.Start
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.Start*
+  name: Start
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeLine_Start_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.Start
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.Start
+  nameWithType: SketchEdgeLine.Start
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.ToEdge
+  name: ToEdge()
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeLine_ToEdge
+  commentId: M:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.ToEdge
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.ToEdge()
+  nameWithType: SketchEdgeLine.ToEdge()
+- uid: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.ToEdge*
+  name: ToEdge
+  href: api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html#EngrCAD_Core_Sketcher_Edges_SketchEdgeLine_ToEdge_
+  commentId: Overload:EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.ToEdge
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.ToEdge
+  nameWithType: SketchEdgeLine.ToEdge
+- uid: EngrCAD.Core.Sketcher.IClosedSketch
+  name: IClosedSketch
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html
+  commentId: T:EngrCAD.Core.Sketcher.IClosedSketch
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch
+  nameWithType: IClosedSketch
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.CSYS
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_CSYS
+  commentId: P:EngrCAD.Core.Sketcher.IClosedSketch.CSYS
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.CSYS
+  nameWithType: IClosedSketch.CSYS
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.CSYS*
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_CSYS_
+  commentId: Overload:EngrCAD.Core.Sketcher.IClosedSketch.CSYS
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.CSYS
+  nameWithType: IClosedSketch.CSYS
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Edges
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Edges
+  commentId: P:EngrCAD.Core.Sketcher.IClosedSketch.Edges
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Edges
+  nameWithType: IClosedSketch.Edges
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Edges*
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Edges_
+  commentId: Overload:EngrCAD.Core.Sketcher.IClosedSketch.Edges
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Edges
+  nameWithType: IClosedSketch.Edges
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Extrude(System.Single)
+  name: Extrude(Single)
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Extrude_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.IClosedSketch.Extrude(System.Single)
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Extrude(System.Single)
+  nameWithType: IClosedSketch.Extrude(Single)
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Extrude*
+  name: Extrude
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Extrude_
+  commentId: Overload:EngrCAD.Core.Sketcher.IClosedSketch.Extrude
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Extrude
+  nameWithType: IClosedSketch.Extrude
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])
+  name: Loft(IClosedSketch[])
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Loft_EngrCAD_Core_Sketcher_IClosedSketch___
+  commentId: M:EngrCAD.Core.Sketcher.IClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])
+  name.vb: Loft(IClosedSketch())
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])
+  fullName.vb: EngrCAD.Core.Sketcher.IClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch())
+  nameWithType: IClosedSketch.Loft(IClosedSketch[])
+  nameWithType.vb: IClosedSketch.Loft(IClosedSketch())
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Loft(System.Collections.Generic.IEnumerable{EngrCAD.Core.Sketcher.IClosedSketch})
+  name: Loft(IEnumerable<IClosedSketch>)
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Loft_System_Collections_Generic_IEnumerable_EngrCAD_Core_Sketcher_IClosedSketch__
+  commentId: M:EngrCAD.Core.Sketcher.IClosedSketch.Loft(System.Collections.Generic.IEnumerable{EngrCAD.Core.Sketcher.IClosedSketch})
+  name.vb: Loft(IEnumerable(Of IClosedSketch))
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Loft(System.Collections.Generic.IEnumerable<EngrCAD.Core.Sketcher.IClosedSketch>)
+  fullName.vb: EngrCAD.Core.Sketcher.IClosedSketch.Loft(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Sketcher.IClosedSketch))
+  nameWithType: IClosedSketch.Loft(IEnumerable<IClosedSketch>)
+  nameWithType.vb: IClosedSketch.Loft(IEnumerable(Of IClosedSketch))
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Loft*
+  name: Loft
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Loft_
+  commentId: Overload:EngrCAD.Core.Sketcher.IClosedSketch.Loft
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Loft
+  nameWithType: IClosedSketch.Loft
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)
+  name: Revolve(IAxis)
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_
+  commentId: M:EngrCAD.Core.Sketcher.IClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)
+  nameWithType: IClosedSketch.Revolve(IAxis)
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)
+  name: Revolve(IAxis, Angle)
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_EngrCAD_Core_Numerics_Angle_
+  commentId: M:EngrCAD.Core.Sketcher.IClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis, EngrCAD.Core.Numerics.Angle)
+  nameWithType: IClosedSketch.Revolve(IAxis, Angle)
+- uid: EngrCAD.Core.Sketcher.IClosedSketch.Revolve*
+  name: Revolve
+  href: api/EngrCAD.Core.Sketcher.IClosedSketch.html#EngrCAD_Core_Sketcher_IClosedSketch_Revolve_
+  commentId: Overload:EngrCAD.Core.Sketcher.IClosedSketch.Revolve
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.IClosedSketch.Revolve
+  nameWithType: IClosedSketch.Revolve
+- uid: EngrCAD.Core.Sketcher.ISketch
+  name: ISketch
+  href: api/EngrCAD.Core.Sketcher.ISketch.html
+  commentId: T:EngrCAD.Core.Sketcher.ISketch
+  fullName: EngrCAD.Core.Sketcher.ISketch
+  nameWithType: ISketch
+- uid: EngrCAD.Core.Sketcher.ISketch.BezierCurve(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name: BezierCurve(Vector2, Vector2[])
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_BezierCurve_System_Numerics_Vector2_System_Numerics_Vector2___
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.BezierCurve(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name.vb: BezierCurve(Vector2, Vector2())
+  fullName: EngrCAD.Core.Sketcher.ISketch.BezierCurve(System.Numerics.Vector2, System.Numerics.Vector2[])
+  fullName.vb: EngrCAD.Core.Sketcher.ISketch.BezierCurve(System.Numerics.Vector2, System.Numerics.Vector2())
+  nameWithType: ISketch.BezierCurve(Vector2, Vector2[])
+  nameWithType.vb: ISketch.BezierCurve(Vector2, Vector2())
+- uid: EngrCAD.Core.Sketcher.ISketch.BezierCurve*
+  name: BezierCurve
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_BezierCurve_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.BezierCurve
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.BezierCurve
+  nameWithType: ISketch.BezierCurve
+- uid: EngrCAD.Core.Sketcher.ISketch.BezierCurveTo(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name: BezierCurveTo(Vector2, Vector2[])
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_BezierCurveTo_System_Numerics_Vector2_System_Numerics_Vector2___
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.BezierCurveTo(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name.vb: BezierCurveTo(Vector2, Vector2())
+  fullName: EngrCAD.Core.Sketcher.ISketch.BezierCurveTo(System.Numerics.Vector2, System.Numerics.Vector2[])
+  fullName.vb: EngrCAD.Core.Sketcher.ISketch.BezierCurveTo(System.Numerics.Vector2, System.Numerics.Vector2())
+  nameWithType: ISketch.BezierCurveTo(Vector2, Vector2[])
+  nameWithType.vb: ISketch.BezierCurveTo(Vector2, Vector2())
+- uid: EngrCAD.Core.Sketcher.ISketch.BezierCurveTo*
+  name: BezierCurveTo
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_BezierCurveTo_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.BezierCurveTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.BezierCurveTo
+  nameWithType: ISketch.BezierCurveTo
+- uid: EngrCAD.Core.Sketcher.ISketch.Close
+  name: Close()
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Close
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.Close
+  fullName: EngrCAD.Core.Sketcher.ISketch.Close()
+  nameWithType: ISketch.Close()
+- uid: EngrCAD.Core.Sketcher.ISketch.Close*
+  name: Close
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Close_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.Close
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.Close
+  nameWithType: ISketch.Close
+- uid: EngrCAD.Core.Sketcher.ISketch.CSYS
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_CSYS
+  commentId: P:EngrCAD.Core.Sketcher.ISketch.CSYS
+  fullName: EngrCAD.Core.Sketcher.ISketch.CSYS
+  nameWithType: ISketch.CSYS
+- uid: EngrCAD.Core.Sketcher.ISketch.CSYS*
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_CSYS_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.CSYS
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.CSYS
+  nameWithType: ISketch.CSYS
+- uid: EngrCAD.Core.Sketcher.ISketch.Edges
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Edges
+  commentId: P:EngrCAD.Core.Sketcher.ISketch.Edges
+  fullName: EngrCAD.Core.Sketcher.ISketch.Edges
+  nameWithType: ISketch.Edges
+- uid: EngrCAD.Core.Sketcher.ISketch.Edges*
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Edges_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.Edges
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.Edges
+  nameWithType: ISketch.Edges
+- uid: EngrCAD.Core.Sketcher.ISketch.HorizontalLine(System.Single)
+  name: HorizontalLine(Single)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_HorizontalLine_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.HorizontalLine(System.Single)
+  fullName: EngrCAD.Core.Sketcher.ISketch.HorizontalLine(System.Single)
+  nameWithType: ISketch.HorizontalLine(Single)
+- uid: EngrCAD.Core.Sketcher.ISketch.HorizontalLine*
+  name: HorizontalLine
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_HorizontalLine_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.HorizontalLine
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.HorizontalLine
+  nameWithType: ISketch.HorizontalLine
+- uid: EngrCAD.Core.Sketcher.ISketch.Line(System.Numerics.Vector2)
+  name: Line(Vector2)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Line_System_Numerics_Vector2_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.Line(System.Numerics.Vector2)
+  fullName: EngrCAD.Core.Sketcher.ISketch.Line(System.Numerics.Vector2)
+  nameWithType: ISketch.Line(Vector2)
+- uid: EngrCAD.Core.Sketcher.ISketch.Line(System.Single,System.Single)
+  name: Line(Single, Single)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Line_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.Line(System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.ISketch.Line(System.Single, System.Single)
+  nameWithType: ISketch.Line(Single, Single)
+- uid: EngrCAD.Core.Sketcher.ISketch.Line*
+  name: Line
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_Line_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.Line
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.Line
+  nameWithType: ISketch.Line
+- uid: EngrCAD.Core.Sketcher.ISketch.LineTo(System.Numerics.Vector2)
+  name: LineTo(Vector2)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_LineTo_System_Numerics_Vector2_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.LineTo(System.Numerics.Vector2)
+  fullName: EngrCAD.Core.Sketcher.ISketch.LineTo(System.Numerics.Vector2)
+  nameWithType: ISketch.LineTo(Vector2)
+- uid: EngrCAD.Core.Sketcher.ISketch.LineTo(System.Single,System.Single)
+  name: LineTo(Single, Single)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_LineTo_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.LineTo(System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.ISketch.LineTo(System.Single, System.Single)
+  nameWithType: ISketch.LineTo(Single, Single)
+- uid: EngrCAD.Core.Sketcher.ISketch.LineTo*
+  name: LineTo
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_LineTo_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.LineTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.LineTo
+  nameWithType: ISketch.LineTo
+- uid: EngrCAD.Core.Sketcher.ISketch.MoveTo(System.Numerics.Vector2)
+  name: MoveTo(Vector2)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_MoveTo_System_Numerics_Vector2_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.MoveTo(System.Numerics.Vector2)
+  fullName: EngrCAD.Core.Sketcher.ISketch.MoveTo(System.Numerics.Vector2)
+  nameWithType: ISketch.MoveTo(Vector2)
+- uid: EngrCAD.Core.Sketcher.ISketch.MoveTo(System.Single,System.Single)
+  name: MoveTo(Single, Single)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_MoveTo_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.MoveTo(System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.ISketch.MoveTo(System.Single, System.Single)
+  nameWithType: ISketch.MoveTo(Single, Single)
+- uid: EngrCAD.Core.Sketcher.ISketch.MoveTo*
+  name: MoveTo
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_MoveTo_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.MoveTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.MoveTo
+  nameWithType: ISketch.MoveTo
+- uid: EngrCAD.Core.Sketcher.ISketch.VerticalLine(System.Single)
+  name: VerticalLine(Single)
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_VerticalLine_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.ISketch.VerticalLine(System.Single)
+  fullName: EngrCAD.Core.Sketcher.ISketch.VerticalLine(System.Single)
+  nameWithType: ISketch.VerticalLine(Single)
+- uid: EngrCAD.Core.Sketcher.ISketch.VerticalLine*
+  name: VerticalLine
+  href: api/EngrCAD.Core.Sketcher.ISketch.html#EngrCAD_Core_Sketcher_ISketch_VerticalLine_
+  commentId: Overload:EngrCAD.Core.Sketcher.ISketch.VerticalLine
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.ISketch.VerticalLine
+  nameWithType: ISketch.VerticalLine
+- uid: EngrCAD.Core.Sketcher.Rectangle
+  name: Rectangle
+  href: api/EngrCAD.Core.Sketcher.Rectangle.html
+  commentId: T:EngrCAD.Core.Sketcher.Rectangle
+  fullName: EngrCAD.Core.Sketcher.Rectangle
+  nameWithType: Rectangle
+- uid: EngrCAD.Core.Sketcher.Rectangle.#ctor(EngrCAD.Core.Datums.ICSYS,System.Single,System.Single)
+  name: Rectangle(ICSYS, Single, Single)
+  href: api/EngrCAD.Core.Sketcher.Rectangle.html#EngrCAD_Core_Sketcher_Rectangle__ctor_EngrCAD_Core_Datums_ICSYS_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Rectangle.#ctor(EngrCAD.Core.Datums.ICSYS,System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.Rectangle.Rectangle(EngrCAD.Core.Datums.ICSYS, System.Single, System.Single)
+  nameWithType: Rectangle.Rectangle(ICSYS, Single, Single)
+- uid: EngrCAD.Core.Sketcher.Rectangle.#ctor*
+  name: Rectangle
+  href: api/EngrCAD.Core.Sketcher.Rectangle.html#EngrCAD_Core_Sketcher_Rectangle__ctor_
+  commentId: Overload:EngrCAD.Core.Sketcher.Rectangle.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Rectangle.Rectangle
+  nameWithType: Rectangle.Rectangle
+- uid: EngrCAD.Core.Sketcher.Sketch
+  name: Sketch
+  href: api/EngrCAD.Core.Sketcher.Sketch.html
+  commentId: T:EngrCAD.Core.Sketcher.Sketch
+  fullName: EngrCAD.Core.Sketcher.Sketch
+  nameWithType: Sketch
+- uid: EngrCAD.Core.Sketcher.Sketch.#ctor(EngrCAD.Core.Datums.ICSYS)
+  name: Sketch(ICSYS)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch__ctor_EngrCAD_Core_Datums_ICSYS_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.#ctor(EngrCAD.Core.Datums.ICSYS)
+  fullName: EngrCAD.Core.Sketcher.Sketch.Sketch(EngrCAD.Core.Datums.ICSYS)
+  nameWithType: Sketch.Sketch(ICSYS)
+- uid: EngrCAD.Core.Sketcher.Sketch.#ctor*
+  name: Sketch
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch__ctor_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.Sketch
+  nameWithType: Sketch.Sketch
+- uid: EngrCAD.Core.Sketcher.Sketch.BezierCurve(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name: BezierCurve(Vector2, Vector2[])
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_BezierCurve_System_Numerics_Vector2_System_Numerics_Vector2___
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.BezierCurve(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name.vb: BezierCurve(Vector2, Vector2())
+  fullName: EngrCAD.Core.Sketcher.Sketch.BezierCurve(System.Numerics.Vector2, System.Numerics.Vector2[])
+  fullName.vb: EngrCAD.Core.Sketcher.Sketch.BezierCurve(System.Numerics.Vector2, System.Numerics.Vector2())
+  nameWithType: Sketch.BezierCurve(Vector2, Vector2[])
+  nameWithType.vb: Sketch.BezierCurve(Vector2, Vector2())
+- uid: EngrCAD.Core.Sketcher.Sketch.BezierCurve*
+  name: BezierCurve
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_BezierCurve_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.BezierCurve
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.BezierCurve
+  nameWithType: Sketch.BezierCurve
+- uid: EngrCAD.Core.Sketcher.Sketch.BezierCurveTo(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name: BezierCurveTo(Vector2, Vector2[])
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_BezierCurveTo_System_Numerics_Vector2_System_Numerics_Vector2___
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.BezierCurveTo(System.Numerics.Vector2,System.Numerics.Vector2[])
+  name.vb: BezierCurveTo(Vector2, Vector2())
+  fullName: EngrCAD.Core.Sketcher.Sketch.BezierCurveTo(System.Numerics.Vector2, System.Numerics.Vector2[])
+  fullName.vb: EngrCAD.Core.Sketcher.Sketch.BezierCurveTo(System.Numerics.Vector2, System.Numerics.Vector2())
+  nameWithType: Sketch.BezierCurveTo(Vector2, Vector2[])
+  nameWithType.vb: Sketch.BezierCurveTo(Vector2, Vector2())
+- uid: EngrCAD.Core.Sketcher.Sketch.BezierCurveTo*
+  name: BezierCurveTo
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_BezierCurveTo_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.BezierCurveTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.BezierCurveTo
+  nameWithType: Sketch.BezierCurveTo
+- uid: EngrCAD.Core.Sketcher.Sketch.Close
+  name: Close()
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Close
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.Close
+  fullName: EngrCAD.Core.Sketcher.Sketch.Close()
+  nameWithType: Sketch.Close()
+- uid: EngrCAD.Core.Sketcher.Sketch.Close*
+  name: Close
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Close_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.Close
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.Close
+  nameWithType: Sketch.Close
+- uid: EngrCAD.Core.Sketcher.Sketch.CSYS
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_CSYS
+  commentId: P:EngrCAD.Core.Sketcher.Sketch.CSYS
+  fullName: EngrCAD.Core.Sketcher.Sketch.CSYS
+  nameWithType: Sketch.CSYS
+- uid: EngrCAD.Core.Sketcher.Sketch.CSYS*
+  name: CSYS
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_CSYS_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.CSYS
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.CSYS
+  nameWithType: Sketch.CSYS
+- uid: EngrCAD.Core.Sketcher.Sketch.Edges
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Edges
+  commentId: P:EngrCAD.Core.Sketcher.Sketch.Edges
+  fullName: EngrCAD.Core.Sketcher.Sketch.Edges
+  nameWithType: Sketch.Edges
+- uid: EngrCAD.Core.Sketcher.Sketch.Edges*
+  name: Edges
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Edges_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.Edges
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.Edges
+  nameWithType: Sketch.Edges
+- uid: EngrCAD.Core.Sketcher.Sketch.HorizontalLine(System.Single)
+  name: HorizontalLine(Single)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_HorizontalLine_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.HorizontalLine(System.Single)
+  fullName: EngrCAD.Core.Sketcher.Sketch.HorizontalLine(System.Single)
+  nameWithType: Sketch.HorizontalLine(Single)
+- uid: EngrCAD.Core.Sketcher.Sketch.HorizontalLine*
+  name: HorizontalLine
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_HorizontalLine_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.HorizontalLine
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.HorizontalLine
+  nameWithType: Sketch.HorizontalLine
+- uid: EngrCAD.Core.Sketcher.Sketch.Line(System.Numerics.Vector2)
+  name: Line(Vector2)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Line_System_Numerics_Vector2_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.Line(System.Numerics.Vector2)
+  fullName: EngrCAD.Core.Sketcher.Sketch.Line(System.Numerics.Vector2)
+  nameWithType: Sketch.Line(Vector2)
+- uid: EngrCAD.Core.Sketcher.Sketch.Line(System.Single,System.Single)
+  name: Line(Single, Single)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Line_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.Line(System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.Sketch.Line(System.Single, System.Single)
+  nameWithType: Sketch.Line(Single, Single)
+- uid: EngrCAD.Core.Sketcher.Sketch.Line*
+  name: Line
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_Line_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.Line
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.Line
+  nameWithType: Sketch.Line
+- uid: EngrCAD.Core.Sketcher.Sketch.LineTo(System.Numerics.Vector2)
+  name: LineTo(Vector2)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_LineTo_System_Numerics_Vector2_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.LineTo(System.Numerics.Vector2)
+  fullName: EngrCAD.Core.Sketcher.Sketch.LineTo(System.Numerics.Vector2)
+  nameWithType: Sketch.LineTo(Vector2)
+- uid: EngrCAD.Core.Sketcher.Sketch.LineTo(System.Single,System.Single)
+  name: LineTo(Single, Single)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_LineTo_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.LineTo(System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.Sketch.LineTo(System.Single, System.Single)
+  nameWithType: Sketch.LineTo(Single, Single)
+- uid: EngrCAD.Core.Sketcher.Sketch.LineTo*
+  name: LineTo
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_LineTo_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.LineTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.LineTo
+  nameWithType: Sketch.LineTo
+- uid: EngrCAD.Core.Sketcher.Sketch.MoveTo(System.Numerics.Vector2)
+  name: MoveTo(Vector2)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_MoveTo_System_Numerics_Vector2_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.MoveTo(System.Numerics.Vector2)
+  fullName: EngrCAD.Core.Sketcher.Sketch.MoveTo(System.Numerics.Vector2)
+  nameWithType: Sketch.MoveTo(Vector2)
+- uid: EngrCAD.Core.Sketcher.Sketch.MoveTo(System.Single,System.Single)
+  name: MoveTo(Single, Single)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_MoveTo_System_Single_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.MoveTo(System.Single,System.Single)
+  fullName: EngrCAD.Core.Sketcher.Sketch.MoveTo(System.Single, System.Single)
+  nameWithType: Sketch.MoveTo(Single, Single)
+- uid: EngrCAD.Core.Sketcher.Sketch.MoveTo*
+  name: MoveTo
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_MoveTo_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.MoveTo
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.MoveTo
+  nameWithType: Sketch.MoveTo
+- uid: EngrCAD.Core.Sketcher.Sketch.VerticalLine(System.Single)
+  name: VerticalLine(Single)
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_VerticalLine_System_Single_
+  commentId: M:EngrCAD.Core.Sketcher.Sketch.VerticalLine(System.Single)
+  fullName: EngrCAD.Core.Sketcher.Sketch.VerticalLine(System.Single)
+  nameWithType: Sketch.VerticalLine(Single)
+- uid: EngrCAD.Core.Sketcher.Sketch.VerticalLine*
+  name: VerticalLine
+  href: api/EngrCAD.Core.Sketcher.Sketch.html#EngrCAD_Core_Sketcher_Sketch_VerticalLine_
+  commentId: Overload:EngrCAD.Core.Sketcher.Sketch.VerticalLine
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Sketch.VerticalLine
+  nameWithType: Sketch.VerticalLine

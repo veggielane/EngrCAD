@@ -1,0 +1,673 @@
+﻿<!DOCTYPE html>
+<!--[if IE]><![endif]-->
+<html>
+  
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge,chrome=1">
+    <title>Class AABB
+   </title>
+    <meta name="viewport" content="width=device-width">
+    <meta name="title" content="Class AABB
+   ">
+    <meta name="generator" content="docfx 2.58.9.0">
+    
+    <link rel="shortcut icon" href="../favicon.ico">
+    <link rel="stylesheet" href="../styles/docfx.vendor.css">
+    <link rel="stylesheet" href="../styles/docfx.css">
+    <link rel="stylesheet" href="../styles/main.css">
+    <meta property="docfx:navrel" content="../toc.html">
+    <meta property="docfx:tocrel" content="toc.html">
+    
+    
+    
+  </head>
+  <body data-spy="scroll" data-target="#affix" data-offset="120">
+    <div id="wrapper">
+      <header>
+        
+        <nav id="autocollapse" class="navbar navbar-inverse ng-scope" role="navigation">
+          <div class="container">
+            <div class="navbar-header">
+              <button type="button" class="navbar-toggle" data-toggle="collapse" data-target="#navbar">
+                <span class="sr-only">Toggle navigation</span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+                <span class="icon-bar"></span>
+              </button>
+              
+              <a class="navbar-brand" href="../index.html">
+                <img id="logo" class="svg" src="../logo.svg" alt="">
+              </a>
+            </div>
+            <div class="collapse navbar-collapse" id="navbar">
+              <form class="navbar-form navbar-right" role="search" id="search">
+                <div class="form-group">
+                  <input type="text" class="form-control" id="search-query" placeholder="Search" autocomplete="off">
+                </div>
+              </form>
+            </div>
+          </div>
+        </nav>
+        
+        <div class="subnav navbar navbar-default">
+          <div class="container hide-when-search" id="breadcrumb">
+            <ul class="breadcrumb">
+              <li></li>
+            </ul>
+          </div>
+        </div>
+      </header>
+      <div role="main" class="container body-content hide-when-search">
+        
+        <div class="sidenav hide-when-search">
+          <a class="btn toc-toggle collapse" data-toggle="collapse" href="#sidetoggle" aria-expanded="false" aria-controls="sidetoggle">Show / Hide Table of Contents</a>
+          <div class="sidetoggle collapse" id="sidetoggle">
+            <div id="sidetoc"></div>
+          </div>
+        </div>
+        <div class="article row grid-right">
+          <div class="col-md-10">
+            <article class="content wrap" id="_content" data-uid="EngrCAD.Core.Datums.AABB">
+  
+  
+  <h1 id="EngrCAD_Core_Datums_AABB" data-uid="EngrCAD.Core.Datums.AABB" class="text-break">Class AABB
+  </h1>
+  <div class="markdown level0 summary"></div>
+  <div class="markdown level0 conceptual"></div>
+  <div class="inheritance">
+    <h5>Inheritance</h5>
+    <div class="level0"><span class="xref">System.Object</span></div>
+    <div class="level1"><span class="xref">AABB</span></div>
+  </div>
+  <div classs="implements">
+    <h5>Implements</h5>
+    <div><a class="xref" href="EngrCAD.Core.Datums.IAABB.html">IAABB</a></div>
+    <div><span class="xref">System.IEquatable</span>&lt;<a class="xref" href="EngrCAD.Core.Datums.IAABB.html">IAABB</a>&gt;</div>
+  </div>
+  <div class="inheritedMembers">
+    <h5>Inherited Members</h5>
+    <div>
+      <span class="xref">System.Object.Equals(System.Object)</span>
+    </div>
+    <div>
+      <span class="xref">System.Object.Equals(System.Object, System.Object)</span>
+    </div>
+    <div>
+      <span class="xref">System.Object.GetHashCode()</span>
+    </div>
+    <div>
+      <span class="xref">System.Object.GetType()</span>
+    </div>
+    <div>
+      <span class="xref">System.Object.MemberwiseClone()</span>
+    </div>
+    <div>
+      <span class="xref">System.Object.ReferenceEquals(System.Object, System.Object)</span>
+    </div>
+    <div>
+      <span class="xref">System.Object.ToString()</span>
+    </div>
+  </div>
+  <h6><strong>Namespace</strong>: <a class="xref" href="EngrCAD.Core.Datums.html">EngrCAD.Core.Datums</a></h6>
+  <h6><strong>Assembly</strong>: EngrCAD.Core.dll</h6>
+  <h5 id="EngrCAD_Core_Datums_AABB_syntax">Syntax</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public class AABB : IAABB, IEquatable&lt;IAABB&gt;</code></pre>
+  </div>
+  <h3 id="constructors">Constructors
+  </h3>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB__ctor_System_Numerics_Vector3_System_Numerics_Vector3_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.%23ctor(System.Numerics.Vector3%2CSystem.Numerics.Vector3)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L14">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB__ctor_" data-uid="EngrCAD.Core.Datums.AABB.#ctor*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB__ctor_System_Numerics_Vector3_System_Numerics_Vector3_" data-uid="EngrCAD.Core.Datums.AABB.#ctor(System.Numerics.Vector3,System.Numerics.Vector3)">AABB(Vector3, Vector3)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public AABB(Vector3 min, Vector3 max)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">min</span></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">max</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h3 id="properties">Properties
+  </h3>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Center.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Center%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L12">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Center_" data-uid="EngrCAD.Core.Datums.AABB.Center*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Center" data-uid="EngrCAD.Core.Datums.AABB.Center">Center</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Vector3 Center { get; }</code></pre>
+  </div>
+  <h5 class="propertyValue">Property Value</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Max.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Max%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L9">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Max_" data-uid="EngrCAD.Core.Datums.AABB.Max*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Max" data-uid="EngrCAD.Core.Datums.AABB.Max">Max</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Vector3 Max { get; }</code></pre>
+  </div>
+  <h5 class="propertyValue">Property Value</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Min.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Min%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L8">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Min_" data-uid="EngrCAD.Core.Datums.AABB.Min*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Min" data-uid="EngrCAD.Core.Datums.AABB.Min">Min</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Vector3 Min { get; }</code></pre>
+  </div>
+  <h5 class="propertyValue">Property Value</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Size.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Size%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L11">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Size_" data-uid="EngrCAD.Core.Datums.AABB.Size*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Size" data-uid="EngrCAD.Core.Datums.AABB.Size">Size</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public Vector3 Size { get; }</code></pre>
+  </div>
+  <h5 class="propertyValue">Property Value</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h3 id="methods">Methods
+  </h3>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Contains_EngrCAD_Core_Datums_IAABB_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Contains(EngrCAD.Core.Datums.IAABB)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L32">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Contains_" data-uid="EngrCAD.Core.Datums.AABB.Contains*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Contains_EngrCAD_Core_Datums_IAABB_" data-uid="EngrCAD.Core.Datums.AABB.Contains(EngrCAD.Core.Datums.IAABB)">Contains(IAABB)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Contains(IAABB other)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a class="xref" href="EngrCAD.Core.Datums.IAABB.html">IAABB</a></td>
+        <td><span class="parametername">other</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h5 class="returns">Returns</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Boolean</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Contains_System_Numerics_Vector3_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L22">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Contains_" data-uid="EngrCAD.Core.Datums.AABB.Contains*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Contains_System_Numerics_Vector3_" data-uid="EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3)">Contains(Vector3)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Contains(Vector3 point)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">point</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h5 class="returns">Returns</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Boolean</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Contains_System_Numerics_Vector3_System_Boolean_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3%2CSystem.Boolean)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L27">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Contains_" data-uid="EngrCAD.Core.Datums.AABB.Contains*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Contains_System_Numerics_Vector3_System_Boolean_" data-uid="EngrCAD.Core.Datums.AABB.Contains(System.Numerics.Vector3,System.Boolean)">Contains(Vector3, Boolean)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public bool Contains(Vector3 point, bool boundaryInclusive)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">point</span></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><span class="xref">System.Boolean</span></td>
+        <td><span class="parametername">boundaryInclusive</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h5 class="returns">Returns</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Boolean</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_DistanceToNearestEdge_System_Numerics_Vector3_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.DistanceToNearestEdge(System.Numerics.Vector3)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L37">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_DistanceToNearestEdge_" data-uid="EngrCAD.Core.Datums.AABB.DistanceToNearestEdge*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_DistanceToNearestEdge_System_Numerics_Vector3_" data-uid="EngrCAD.Core.Datums.AABB.DistanceToNearestEdge(System.Numerics.Vector3)">DistanceToNearestEdge(Vector3)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public float DistanceToNearestEdge(Vector3 point)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">point</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h5 class="returns">Returns</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Single</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Inflate_System_Numerics_Vector3_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Inflate(System.Numerics.Vector3)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L52">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Inflate_" data-uid="EngrCAD.Core.Datums.AABB.Inflate*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Inflate_System_Numerics_Vector3_" data-uid="EngrCAD.Core.Datums.AABB.Inflate(System.Numerics.Vector3)">Inflate(Vector3)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Inflate(Vector3 toPoint)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">toPoint</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Scale_System_Numerics_Vector3_System_Numerics_Vector3_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Scale(System.Numerics.Vector3%2CSystem.Numerics.Vector3)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L47">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Scale_" data-uid="EngrCAD.Core.Datums.AABB.Scale*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Scale_System_Numerics_Vector3_System_Numerics_Vector3_" data-uid="EngrCAD.Core.Datums.AABB.Scale(System.Numerics.Vector3,System.Numerics.Vector3)">Scale(Vector3, Vector3)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Scale(Vector3 scale, Vector3 anchor)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">scale</span></td>
+        <td></td>
+      </tr>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">anchor</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_Translate_System_Numerics_Vector3_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.Translate(System.Numerics.Vector3)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L42">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_Translate_" data-uid="EngrCAD.Core.Datums.AABB.Translate*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_Translate_System_Numerics_Vector3_" data-uid="EngrCAD.Core.Datums.AABB.Translate(System.Numerics.Vector3)">Translate(Vector3)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">public void Translate(Vector3 distance)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Numerics.Vector3</span></td>
+        <td><span class="parametername">distance</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h3 id="eii">Explicit Interface Implementations
+  </h3>
+  <span class="small pull-right mobile-hide">
+    <span class="divider">|</span>
+    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB_System_IEquatable_EngrCAD_Core_Datums_IAABB__Equals_EngrCAD_Core_Datums_IAABB_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB.System%23IEquatable%7BEngrCAD%23Core%23Datums%23IAABB%7D%23Equals(EngrCAD.Core.Datums.IAABB)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
+  </span>
+  <span class="small pull-right mobile-hide">
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L57">View Source</a>
+  </span>
+  <a id="EngrCAD_Core_Datums_AABB_System_IEquatable_EngrCAD_Core_Datums_IAABB__Equals_" data-uid="EngrCAD.Core.Datums.AABB.System#IEquatable{EngrCAD#Core#Datums#IAABB}#Equals*"></a>
+  <h4 id="EngrCAD_Core_Datums_AABB_System_IEquatable_EngrCAD_Core_Datums_IAABB__Equals_EngrCAD_Core_Datums_IAABB_" data-uid="EngrCAD.Core.Datums.AABB.System#IEquatable{EngrCAD#Core#Datums#IAABB}#Equals(EngrCAD.Core.Datums.IAABB)">IEquatable&lt;IAABB&gt;.Equals(IAABB)</h4>
+  <div class="markdown level1 summary"></div>
+  <div class="markdown level1 conceptual"></div>
+  <h5 class="decalaration">Declaration</h5>
+  <div class="codewrapper">
+    <pre><code class="lang-csharp hljs">bool IEquatable&lt;IAABB&gt;.Equals(IAABB other)</code></pre>
+  </div>
+  <h5 class="parameters">Parameters</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Name</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a class="xref" href="EngrCAD.Core.Datums.IAABB.html">IAABB</a></td>
+        <td><span class="parametername">other</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h5 class="returns">Returns</h5>
+  <table class="table table-bordered table-striped table-condensed">
+    <thead>
+      <tr>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><span class="xref">System.Boolean</span></td>
+        <td></td>
+      </tr>
+    </tbody>
+  </table>
+  <h3 id="implements">Implements</h3>
+  <div>
+      <a class="xref" href="EngrCAD.Core.Datums.IAABB.html">IAABB</a>
+  </div>
+  <div>
+      <span class="xref">System.IEquatable&lt;T&gt;</span>
+  </div>
+</article>
+          </div>
+          
+          <div class="hidden-sm col-md-2" role="complementary">
+            <div class="sideaffix">
+              <div class="contribution">
+                <ul class="nav">
+                  <li>
+                    <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Datums_AABB.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Datums.AABB%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A" class="contribution-link">Improve this Doc</a>
+                  </li>
+                  <li>
+                    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Datums/AABB.cs/#L6" class="contribution-link">View Source</a>
+                  </li>
+                </ul>
+              </div>
+              <nav class="bs-docs-sidebar hidden-print hidden-xs hidden-sm affix" id="affix">
+                <h5>In This Article</h5>
+                <div></div>
+              </nav>
+            </div>
+          </div>
+        </div>
+      </div>
+      
+      <footer>
+        <div class="grad-bottom"></div>
+        <div class="footer">
+          <div class="container">
+            <span class="pull-right">
+              <a href="#top">Back to top</a>
+            </span>
+            
+            <span>Generated by <strong>DocFX</strong></span>
+          </div>
+        </div>
+      </footer>
+    </div>
+    
+    <script type="text/javascript" src="../styles/docfx.vendor.js"></script>
+    <script type="text/javascript" src="../styles/docfx.js"></script>
+    <script type="text/javascript" src="../styles/main.js"></script>
+  </body>
+</html>
