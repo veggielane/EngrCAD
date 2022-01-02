@@ -1,0 +1,41 @@
+name: MSBuild
+
+on: [push]
+
+env:
+  # Configuration type to build.
+  # You can convert this to a build matrix if you need coverage of multiple configuration types.
+  # https://docs.github.com/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+  BUILD_CONFIGURATION: Debug
+
+jobs:
+  build:
+    runs-on: windows-2022
+    defaults:
+      run:
+        working-directory: ./src
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Display the path
+      run: Invoke-WebRequest https://github.com/tpaviot/oce/releases/download/OCE-0.18.3/oce-0.18.3.Win64.MSVC2015.zip -OutFile oce-0.18.3.Win64.MSVC2015.zip
+      shell: pwsh
+    - name: Extract OCC
+      run: Expand-Archive -Path oce-0.18.3.Win64.MSVC2015.zip -DestinationPath OCC
+      shell: pwsh
+    - name: Setup .NET
+      uses: actions/setup-dotnet@v1
+      with:
+        dotnet-version: 6.0.x
+    - name: Add MSBuild to PATH
+      uses: microsoft/setup-msbuild@v1.1
+      with:
+        vs-prerelease: true
+
+    - name: Restore NuGet packages
+      run: nuget restore
+
+    - name: Build
+      # Add additional options to the MSBuild command line here (like platform or verbosity level).
+      # See https://docs.microsoft.com/visualstudio/msbuild/msbuild-command-line-reference
+      run: msbuild /m /p:Configuration=${{env.BUILD_CONFIGURATION}} EngrCAD.sln
