@@ -17,8 +17,22 @@ namespace EngrCAD.Core.Nodes
         public static Node operator |(Node a, Node b) => a.Union(b);
         public static Node operator ^(Node a, Node b) => a.Subtract(b);
 
+        /// <summary>
+        /// Performs a Union operation
+        /// </summary>
+        /// <example>
+        /// node.Union(nodeB, nodeC);
+        /// </example>
+        /// <param name="others">Nodes to </param>
+        /// <returns></returns>
         public Node Union(params Node[] others) => new Union(this, others);
+
+        /// <inheritdoc cref="Union(EngrCAD.Core.Nodes.Node[])"/>
+        /// <example>
+        /// node.Union(new []{nodeB, nodeC});
+        /// </example>
         public Node Union(IEnumerable<Node> nodes) => new Union(this, nodes);
+
         public Node Subtract(params Node[] others) => new Subtract(this, others);
         public Node Subtract(IEnumerable<Node> others) => new Subtract(this, others);
         public Node Intersect(params Node[] others) => new Intersect(this, others);
