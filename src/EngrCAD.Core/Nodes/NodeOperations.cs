@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using EngrCAD.Core.Edges;
 using EngrCAD.Core.Nodes.Operations;
@@ -50,5 +51,23 @@ namespace EngrCAD.Core.Nodes
         public Node Chamfer(Func<IEdge, float?> predicate) => new Chamfer(this, Edges.Select(edge => (edge, predicate(edge))).Where(tuple => tuple.Item2.HasValue).Select(tuple => new ChamferDefinition(tuple.Item2.Value, new List<EdgeWrapper>() { tuple.edge.Wrapper })).ToList());
         public Node Chamfer(float length, Func<IEdge[], IEnumerable<IEdge>> filter) => new Chamfer(this, new ChamferDefinition(length, filter(Edges.ToArray()).Select(edge => edge.Wrapper).ToList()));
         public Node Chamfer(params ValueTuple<float, Func<IEdge[], IEnumerable<IEdge>>>[] filter) => new Chamfer(this, filter.Select(tuple => new ChamferDefinition(tuple.Item1, tuple.Item2(Edges.ToArray()).Select(edge => edge.Wrapper).ToList())).ToList());
+
+
+        public void Save(string path)
+        {
+            switch (Path.GetExtension(path).ToLowerInvariant())
+            {
+                case "stp" or "step":
+                    SaveSTP(path);
+                    return;
+                case "stl":
+                    SaveSTL(path);
+                    return;
+            }
+        }
+
+        public void SaveSTL(string path) => Wrapper.SaveSTL(path);
+        public void SaveSTP(string path) => Wrapper.SaveSTP(path);
+
     }
 }

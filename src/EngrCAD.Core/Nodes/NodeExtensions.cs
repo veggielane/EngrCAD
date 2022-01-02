@@ -24,11 +24,6 @@ public static class NodeExtensions
     public static Node Revolve(this ClosedSketch sketch, IAxis axis, Angle angle) => new RevolveAngle(sketch, axis, angle);
 
 
-    public static void SaveSTL(this Node node, string path) => node.Generate().SaveSTL(path);
-    public static void SaveSTP(this Node node, string path) => node.Generate().SaveSTP(path);
-
-
-
     public static Node Shell(this Node node, float thickness) => new Shell()
     {
         Child = node,
