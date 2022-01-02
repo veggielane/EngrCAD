@@ -9,7 +9,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Body.html",
-          "hash": "ou/cKExLnlOx5kCZmYCPAt5yvNn0HZ4JW67OAkYrWHE="
+          "hash": "X1Z/mqVcRXuGuMqDMccrETmoln8k0PpbVnjHX1cbTl0="
         }
       },
       "is_incremental": false,
@@ -21,7 +21,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Datums.AABB.html",
-          "hash": "KW18iCH4Aq6AZVgL568IiyIs1m/GFKSpiHhXcNkBW/I="
+          "hash": "mNxTyePjUcGRTXX79AryjrP6FvZ74LEpSUwP674wyx4="
         }
       },
       "is_incremental": false,
@@ -33,7 +33,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Datums.Axis.html",
-          "hash": "JSy0GZ9mZwEWvvUO7U4vyKj3FKy/ZOwbBRbi/fD30UE="
+          "hash": "mxvgleFG3j/9yl9dGMHOKhcOPY1ub3VAxYKLCF4S/dg="
         }
       },
       "is_incremental": false,
@@ -45,7 +45,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Datums.CSYS.html",
-          "hash": "/pSPiU1hNeg7UX7Qf1ksT5oiAUVfZ2JOTvfpdfqr73o="
+          "hash": "+a3Gq0/YIAkCiN0wCbf1EN4fwbUr3uQVW2JbwDlIWVU="
         }
       },
       "is_incremental": false,
@@ -57,7 +57,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Datums.IAABB.html",
-          "hash": "4kx93lwMgOkV27wT2NwzZ2DrTH3FjYaPJJBpJpWIhmM="
+          "hash": "Rz7/Fu6AGPAxAfcZgi5LAcyTkJmDej78Q2r7hk/rchU="
         }
       },
       "is_incremental": false,
@@ -69,7 +69,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Datums.IAxis.html",
-          "hash": "gL/Tcb8VAbqmtmtWAhK/Gyuq0r4iLS9l+dcIcvIIRqQ="
+          "hash": "+a0A96pR5RLpsKCi3XvnrCL6qsihZdT1Q33La3Mfq2M="
         }
       },
       "is_incremental": false,
@@ -81,7 +81,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Datums.ICSYS.html",
-          "hash": "9qZJm3yU/Ckd7gqinFAIhfgOaPjgiccPnwJc6ZltOEY="
+          "hash": "DRv9hirIR4N5cy7D4D6SVeBUe9UskvpKXaN+3HLe69s="
         }
       },
       "is_incremental": false,
@@ -105,7 +105,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Edges.Edge.html",
-          "hash": "a11wf0Ci7k3AgC2ccXTTkhemiUHHH0yo0m1ybD1SAFs="
+          "hash": "hPc1nFX6xCnchg0SmBe0AR6PvwK8iPqlK4HANLCDmVU="
         }
       },
       "is_incremental": false,
@@ -117,7 +117,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Edges.EdgeLine.html",
-          "hash": "j1ehcSSUszg63UUuKk5U5yrwkvYk0biUxuko7tF1/ZY="
+          "hash": "hBG8JxZfwlKr800XK85VHO2QfWlymUbledz2G2NZLpU="
         }
       },
       "is_incremental": false,
@@ -129,7 +129,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Edges.IEdge.html",
-          "hash": "24ilPPdiDx9ePAvg7F4q6GgAFXYh5eE9kha6mWr/5sc="
+          "hash": "ivj+nv6A5Z5K5habw7do/h9+H1WcJUQn4BoGQhgMnt0="
         }
       },
       "is_incremental": false,
@@ -153,7 +153,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Face.html",
-          "hash": "yiNgHtBuMfzRBMiFI45CNi7V8hoUtyB5ySvcXjXZ/Wc="
+          "hash": "Nx64dJHZLv8vzH0wNhjeoWLVqKwBHphET5Kydoe0tw0="
         }
       },
       "is_incremental": false,
@@ -165,7 +165,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.IPart.html",
-          "hash": "8WqWV9CU3P4gyIZjTEeJchrbbGXbEt6Q6WFfZfLtjEk="
+          "hash": "eeUVJi6IKJNmFKHJxJKTHVwTu+UT2xXIYjjS2Hg4QTU="
         }
       },
       "is_incremental": false,
@@ -177,7 +177,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.IPartMetadata.html",
-          "hash": "LXjiYx5Dr6ZpD3cCnKO6etoIzLyTQsKzYgUmF0p2bGo="
+          "hash": "MQdjL4Od7Wt4hnLvpsJQdNeRvw54EXGMeFsFgSEpJz4="
         }
       },
       "is_incremental": false,
@@ -189,7 +189,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.MathExtensions.html",
-          "hash": "QVZ4BEohXYtP1qGTv8GU2RplDDvXTDE32u0YNSFXWuA="
+          "hash": "N7K2isHqvHopgODtXAKFd0O62Si0AHotLNrzYkInLWI="
         }
       },
       "is_incremental": false,
@@ -201,7 +201,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.MathHelper.html",
-          "hash": "2nVQFfEPhNKTXRv3R0h0jHkpQ9ne7QYbR1uugFYWUhY="
+          "hash": "YsyVeOnW/AI9l78XKcCOHFjjXKfwE8SgaYHr7qtmM8E="
         }
       },
       "is_incremental": false,
@@ -213,7 +213,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.EdgeType.html",
-          "hash": "bpbQmKWbN8ZW5KAkZXdBzE881Ouv0UjvfXsgIp3lnnU="
+          "hash": "KW41uqtKtLH589hBaX1HrdMhAdjJ/N00RP7Ou0MoEnM="
         }
       },
       "is_incremental": false,
@@ -225,7 +225,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Features.Hole.html",
-          "hash": "/ad3dHwH0/FuHmZnyMc5t++rcengPAYw8ZKd5aVURIk="
+          "hash": "Yq6K6llKJ7LfoMVdJEpNN8/ToqfYO1Rmy8CrhTddhYk="
         }
       },
       "is_incremental": false,
@@ -237,7 +237,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Features.TappedHole.html",
-          "hash": "OFxFtJ9LOzjliHRebI1D7u6aFDrha044vg45HUK2ReI="
+          "hash": "ZgtXBq6IVs0QA7X+v7G2HsJwd/8VPbBen6i7RspcNAg="
         }
       },
       "is_incremental": false,
@@ -261,7 +261,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Node.html",
-          "hash": "PzaYUTZuLMw7ixvD+NOySNh/rnIW+SFFTrl7O/Kztdw="
+          "hash": "hoF2sCUKCeTsK3fKE2yNUug9zi9wVVuwf8YueiDwdIs="
         }
       },
       "is_incremental": false,
@@ -273,7 +273,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.NodeExtensions.html",
-          "hash": "T9uAw8Mdi6dkv8L9khsVy9OGsYzEjzg7xfukSUNDB4g="
+          "hash": "kKpqosFG+MYm6H51Q6vvzY4KntFeH1EZdcxt4r33jnc="
         }
       },
       "is_incremental": false,
@@ -285,7 +285,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Box.html",
-          "hash": "0R+YVtw8pEAYncw7Ez/2aqb6WMnCnBaG0KgzGJb+eLs="
+          "hash": "xJ3T5ve4u3HtBLo2ZEWzNR37kgH66NajhWg2OMHjhps="
         }
       },
       "is_incremental": false,
@@ -297,7 +297,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Cone.html",
-          "hash": "MWNGIUYFjqeL7ZNhLq5pn55lqGJJ7NqAZVF1veKhUT4="
+          "hash": "eFr/0rjQaI9bs23iMcHfdTef0PNMGRtTdUUu+oQxU9I="
         }
       },
       "is_incremental": false,
@@ -309,7 +309,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Cylinder.html",
-          "hash": "5ODl7ig4GJXoE5frBJLSTm36Cm9dyUPT2dN5Q4+DqGQ="
+          "hash": "xH3iIqth7MDJzMhij0myDutidCd0dpElXnFCCEDwwi0="
         }
       },
       "is_incremental": false,
@@ -321,7 +321,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Import.html",
-          "hash": "q2ZFT5u8+/44AQyXvw0q5svOIakq9ZgGd1fixtrwa44="
+          "hash": "OaPrTFu3hTxpK9a8G9Oj8eemW9KOfhY/T+5qL/d2rvY="
         }
       },
       "is_incremental": false,
@@ -333,7 +333,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Sphere.html",
-          "hash": "LRbzG7Ub4eazW5cstvNSWxEm2C16wD0lUSZEdRfl8Kg="
+          "hash": "hrmqthuUO6sZsiu3bfb8i+olrXuM229vpOhc257q1jA="
         }
       },
       "is_incremental": false,
@@ -357,7 +357,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.ShapeType.html",
-          "hash": "WD37ASvpB93Z3vuhbqqMMWocbUG6d++amYVzVtIBmdM="
+          "hash": "veXeHQuBFMbOa1cEQqZocCe6+T/43IA6HUzMH1LdG1g="
         }
       },
       "is_incremental": false,
@@ -381,7 +381,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Numerics.Angle.html",
-          "hash": "IArXeuGvlxAylEY8lmSJfAanws7F/+S8EeNVj86fHCE="
+          "hash": "buGxDosy6qfJO5EsrdTKuvEmSou7ezPMc+6/umerahM="
         }
       },
       "is_incremental": false,
@@ -405,7 +405,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Part-1.html",
-          "hash": "K1G0dVi+VLkuc+HsURoWiymM0ePPO4JkNNjZ1Ca9Nvw="
+          "hash": "Bd04xkxUf2OnkLirZ4hM7ucEZdMYKlMzKu+TeKjO1wc="
         }
       },
       "is_incremental": false,
@@ -417,7 +417,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.PartMetadata.html",
-          "hash": "iBBbeR4F1e3iqr8Y6LUBRuMDwIwnVmIkSKRr4dXOeo4="
+          "hash": "NCccqm00WAyRtInKBauQ2YViCPBL5ryfjQK4MAC8uek="
         }
       },
       "is_incremental": false,
@@ -429,7 +429,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Circle.html",
-          "hash": "a2yyzs+KQpgocUxScz9IrKUozS3TtyUll/wxk6K2fds="
+          "hash": "Dc0id60VZY8GzB+y32YDyoIXQHIIAsp2zxYOW6VTGSs="
         }
       },
       "is_incremental": false,
@@ -441,7 +441,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.ClosedSketch.html",
-          "hash": "aT0+SXwO23y/WegmJ6mHnid21tz3hc9PEsEZu6AxgOk="
+          "hash": "cRnUKPT5+79CYef4Q5EMC3AL2s1zNWGgv6zIUwVdMV0="
         }
       },
       "is_incremental": false,
@@ -453,7 +453,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Edges.ISketchEdge.html",
-          "hash": "naz9oh2J0l14skGHT2xfXyqJ4vztnNA+TbCLvXmR1MQ="
+          "hash": "ED3c09wLroRVI/Wn73ySuKdm3+ca8EpgcTI1uI0GMNw="
         }
       },
       "is_incremental": false,
@@ -465,7 +465,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeBezierCurve.html",
-          "hash": "iXTa5qVYeXwqRq/Kb+sPJtNQYkwbaMeCuKu6o5F1HMk="
+          "hash": "QXhiKrXkk5fn15f634COGXnBItMWv1nsVHQDrr3M6Dw="
         }
       },
       "is_incremental": false,
@@ -477,7 +477,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeCircle.html",
-          "hash": "Zw1NZwMWsLY6F5cm327uoBPuDTr6Xrlsoj++4OA4dt0="
+          "hash": "CqpxLliHP+6+qYaoq+dFqZWjd4Nz6mbpHxaLFJGpyFA="
         }
       },
       "is_incremental": false,
@@ -489,7 +489,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Edges.SketchEdgeLine.html",
-          "hash": "6X10V45JZMx05gKdVeT8VKnruzQch7jxcAos/YRj//A="
+          "hash": "OXiwIfXTTh6fjVVypKd/hUkp0NN38BUkGuh+HkSV3iM="
         }
       },
       "is_incremental": false,
@@ -513,7 +513,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.IClosedSketch.html",
-          "hash": "EUThQ0HRX+swwE3ItMuoKr4htdfOsdja11XtqGo468s="
+          "hash": "iddfniUwFPyYzBJfXO1ptwqEgYkGUZOxCF/+I+ENMeo="
         }
       },
       "is_incremental": false,
@@ -525,7 +525,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.ISketch.html",
-          "hash": "RHr9gKuUqCu/HTYEWcCa1FQ7xahZwHEuFkUdn7vgjTI="
+          "hash": "hgvd+uzGf8uWwqGYYi/KxIgEa2e8KKZRqvwnuCH0usY="
         }
       },
       "is_incremental": false,
@@ -537,7 +537,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Rectangle.html",
-          "hash": "CNoorMfK078m4PAAQdiedJ80VaxPqhForFNFNvtfIlk="
+          "hash": "6aGPoaBFk+11MMc9o3XgQQ0ToMgm4Amvm2+MCYlxZDM="
         }
       },
       "is_incremental": false,
@@ -549,7 +549,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Sketcher.Sketch.html",
-          "hash": "7Hgie6dw3oOk5yT2cuingU2PdYoL7xX8GVYJWT5ue58="
+          "hash": "qrA7gZ+vKiI/scdB6pKvjAtyBAus/qTv6QGF3kDZ740="
         }
       },
       "is_incremental": false,
@@ -585,7 +585,7 @@
       "output": {
         ".html": {
           "relative_path": "api/index.html",
-          "hash": "GzZw/cIUlA3XJvo/GhWo/NKHW/w+QbjrHXIzTxoAVzg="
+          "hash": "SbnVvcjFoE7LyB62QPFk5sUEyXwfjBBnbdl/ps9N8hE="
         }
       },
       "is_incremental": false,
@@ -609,7 +609,7 @@
       "output": {
         ".html": {
           "relative_path": "articles/boolean.html",
-          "hash": "dfO0C8UqUP64xr2mA4e3cNlbeTi9HPLVO89Y/snx84o="
+          "hash": "QQWcnuJVxQpU0V2ki+mH237/AwPXi2iH4e3+BjhTFgs="
         }
       },
       "is_incremental": false,
@@ -621,7 +621,7 @@
       "output": {
         ".html": {
           "relative_path": "articles/intro.html",
-          "hash": "oUJfElM74RZLaHvNzK32hAaZIAxpCaklKo0AZaI1ULk="
+          "hash": "FZlYCLtlo1XEgdt7kTvDmJ7TzAajAm7cqEfOXQXn+nQ="
         }
       },
       "is_incremental": false,
@@ -645,7 +645,7 @@
       "output": {
         ".html": {
           "relative_path": "index.html",
-          "hash": "OzKG85E/XgrDwZhYSPs/Z8MdkYetFJbgJHdRNK6XYBM="
+          "hash": "cgCUnRg2g9Z0LMkWaf5SXl8mipNwI9iYc0MjbWnwtWQ="
         }
       },
       "is_incremental": false,
