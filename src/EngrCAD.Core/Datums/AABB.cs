@@ -19,6 +19,11 @@ public class AABB : IAABB
         Size = Max - Min;
     }
 
+    internal AABB(Tuple<Vector3, Vector3> tuple):this(tuple.Item1, tuple.Item2)
+    {
+
+    }
+
     public bool Contains(Vector3 point)
     {
         throw new NotImplementedException();
