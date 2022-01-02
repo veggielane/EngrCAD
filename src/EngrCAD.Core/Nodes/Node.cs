@@ -13,19 +13,30 @@ public abstract partial class Node
     private ShapeWrapper _cached;
     public ShapeWrapper Wrapper => _cached ??= Generate();
     public abstract ShapeWrapper Generate();
+
+    /// <summary>
+    /// Calculate the Volume of the Node
+    /// </summary>
     public float Volume => Wrapper.CalculateVolume();
 
-    public IAABB BoundingBox
-    {
-        get
-        {
-            (Vector3 min, Vector3 max) = Wrapper.CalculateBoundingBox();
-            return new AABB(min, max);
-        }
-    }
+    /// <summary>
+    /// Calculate the AABB of the Node
+    /// </summary>
+    public IAABB BoundingBox => new AABB(Wrapper.CalculateBoundingBox());
 
+    /// <summary>
+    /// Gets the <see cref="ShapeType"/> of the Node
+    /// </summary>
     public ShapeType ShapeType => (ShapeType)Wrapper.ShapeType();
+
+    /// <summary>
+    /// Gets the Faces of the Node
+    /// </summary>
     public IEnumerable<Face> Faces => Wrapper.GetFaces().Select(wrapper => new Face(wrapper));
+
+    /// <summary>
+    /// Gets the Edges of the Node
+    /// </summary>
     public IEnumerable<IEdge> Edges => Wrapper.GetEdges().Select(wrapper =>
     {
         switch ((EdgeType)wrapper.CurveType())
