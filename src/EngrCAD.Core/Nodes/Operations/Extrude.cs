@@ -1,24 +1,29 @@
-﻿using System.Linq;
+﻿using System.Collections.Generic;
+using System.Linq;
+using EngrCAD.Core.Datums;
 using EngrCAD.Core.Sketcher;
+using EngrCAD.Core.Sketcher.Edges;
 using EngrCADOCWrapper;
 
 namespace EngrCAD.Core.Nodes.Operations;
 
 internal class Extrude : Node
 {
-    public IClosedSketch Sketch { get; }
-
+    public ICSYS CSYS { get; }
+    public IEnumerable<ISketchEdge> SketchEdges { get; }
     public float Distance { get; }
         
-    public Extrude(IClosedSketch sketch, float distance)
+    public Extrude(ICSYS csys, IEnumerable<ISketchEdge> edges, float distance)
     {
-        Sketch = sketch;
+
+        CSYS = csys;
+        SketchEdges = edges;
         Distance = distance;
     }
 
     public override ShapeWrapper Generate()
     {
-        var edges = Sketch.Edges.Select(o => o.ToEdge()).ToList();
-        return ShapeWrapper.Extrude(edges, Sketch.CSYS.Normal*Distance);
+        var edges = SketchEdges.Select(o => o.ToEdge()).ToList();
+        return ShapeWrapper.Extrude(edges, CSYS.Normal*Distance);
     }
 }

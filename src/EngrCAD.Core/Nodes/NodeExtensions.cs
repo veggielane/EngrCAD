@@ -19,7 +19,7 @@ public static class NodeExtensions
     public static Node Union(this ValueTuple<Node, Node, Node, Node, Node, Node> tuple) => new Union(tuple.Merge());
     public static Node Union(this ValueTuple<Node, Node, Node, Node, Node, Node, Node> tuple) => new Union(tuple.Merge());
 
-    public static Node Extrude(this ClosedSketch sketch, float distance) => new Extrude(sketch, distance);
+    public static Node Extrude(this ClosedSketch sketch, float distance) => new Extrude(sketch.CSYS, sketch.Edges, distance);
     public static Node Revolve(this ClosedSketch sketch, IAxis axis) => new Revolve(sketch, axis);
     public static Node Revolve(this ClosedSketch sketch, IAxis axis, Angle angle) => new RevolveAngle(sketch, axis, angle);
 

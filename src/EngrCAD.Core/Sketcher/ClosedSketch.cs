@@ -12,14 +12,19 @@ namespace EngrCAD.Core.Sketcher;
 public class ClosedSketch: IClosedSketch
 {
     public ICSYS CSYS { get; }
-    public IReadOnlyList<ISketchEdge> Edges { get; }
+    public IReadOnlyList<ISketchEdge> Edges { get; protected set; }
+
+    internal ClosedSketch(ICSYS csys)
+    {
+        CSYS = csys;
+    }
     internal ClosedSketch(ICSYS csys, IEnumerable<ISketchEdge> sketchObjects)
     {
         CSYS = csys;
         Edges = sketchObjects.ToList();
     }
 
-    public Node Extrude(float distance) => new Extrude(this, distance);
+    public Node Extrude(float distance) => new Extrude(CSYS, Edges, distance);
     public Node Revolve(IAxis axis) => new Revolve(this, axis);
     public Node Revolve(IAxis axis, Angle angle) => new RevolveAngle(this, axis, angle);
 
