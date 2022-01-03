@@ -36,6 +36,12 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepOffsetAPI_ThruSections.hxx>
+#include <Font_BRepFont.hxx>
+#include <Font_BRepTextBuilder.hxx>
+#include <Font_NameOfFont.hxx>
+#include <Graphic3d_HorizontalTextAlignment.hxx>
+
+
 
 #pragma comment(lib, "TKernel.lib")
 #pragma comment(lib, "TKMath.lib")
@@ -56,6 +62,26 @@
 #pragma comment(lib, "TKVrml.lib")
 #pragma comment(lib, "TKLCAF.lib")
 #pragma comment(lib, "TKFillet.lib")
+#pragma comment(lib, "TKGeomBase.lib")
+
+
+static NCollection_String toString(System::String^ theString)
+{
+    if (theString == nullptr)
+    {
+        return NCollection_String();
+    }
+
+    pin_ptr<const wchar_t> aPinChars = PtrToStringChars(theString);
+    const wchar_t* aWCharPtr = aPinChars;
+    if (aWCharPtr == NULL
+        || *aWCharPtr == L'\0')
+    {
+        return NCollection_String();
+    }
+    return NCollection_String(aWCharPtr);
+}
+
 
 static TCollection_AsciiString toAsciiString(System::String^ theString)
 {
@@ -322,6 +348,17 @@ namespace EngrCADOCWrapper {
             builder.AddWire(wireBuilder.Wire());
         }
         builder.Build();
+        return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
+    }
+
+    ShapeWrapper^ ShapeWrapper::Text(System::String^ text, float height, System::Numerics::Vector3^ direction, int hAlign, int vAlign)
+    {
+ 
+
+        Font_BRepFont aFont(Font_NOF_SANS_SERIF, Font_FontAspect_Bold, height);
+        Font_BRepTextBuilder aBuilder;
+        TopoDS_Shape aTextShape2d = aBuilder.Perform(aFont, toString(text), gp_Ax3(), (Graphic3d_HorizontalTextAlignment)hAlign,(Graphic3d_VerticalTextAlignment)vAlign);
+        BRepPrimAPI_MakePrism builder = BRepPrimAPI_MakePrism(aTextShape2d, ToVec(direction), false, true);
         return gcnew ShapeWrapper(new TopoDS_Shape(builder.Shape()));
     }
 

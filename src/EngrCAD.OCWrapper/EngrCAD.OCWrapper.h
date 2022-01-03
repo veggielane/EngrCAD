@@ -143,6 +143,8 @@ namespace EngrCADOCWrapper
 		static ShapeWrapper^ Revolve(System::Collections::Generic::List<EdgeWrapper^>^ edges, System::Numerics::Vector3^ origin, System::Numerics::Vector3^ direction, float angle);
 		static ShapeWrapper^ Loft(System::Collections::Generic::List<System::Collections::Generic::List<EdgeWrapper^>^>^ listOfEdges);
 
+		static ShapeWrapper^ Text(System::String^ text, float height, System::Numerics::Vector3^ direction, int hAlign, int vAlign);
+
 		static ShapeWrapper^ ImportSTP(System::String^ filenpathame);
 
 		ShapeWrapper^ Translate(float x, float y, float z);
