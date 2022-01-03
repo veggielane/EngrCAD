@@ -80,6 +80,7 @@
     <div class="level0"><span class="xref">System.Object</span></div>
     <div class="level1"><span class="xref">ClosedSketch</span></div>
       <div class="level2"><a class="xref" href="EngrCAD.Core.Sketcher.Circle.html">Circle</a></div>
+      <div class="level2"><a class="xref" href="EngrCAD.Core.Sketcher.Polygon.html">Polygon</a></div>
       <div class="level2"><a class="xref" href="EngrCAD.Core.Sketcher.Rectangle.html">Rectangle</a></div>
   </div>
   <div classs="implements">
@@ -161,7 +162,7 @@
   <div class="markdown level1 conceptual"></div>
   <h5 class="decalaration">Declaration</h5>
   <div class="codewrapper">
-    <pre><code class="lang-csharp hljs">public IReadOnlyList&lt;ISketchEdge&gt; Edges { get; }</code></pre>
+    <pre><code class="lang-csharp hljs">public IReadOnlyList&lt;ISketchEdge&gt; Edges { get; protected set; }</code></pre>
   </div>
   <h5 class="propertyValue">Property Value</h5>
   <table class="table table-bordered table-striped table-condensed">
@@ -185,7 +186,7 @@
     <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Sketcher_ClosedSketch_Extrude_System_Single_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Sketcher.ClosedSketch.Extrude(System.Single)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
   </span>
   <span class="small pull-right mobile-hide">
-    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L22">View Source</a>
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L27">View Source</a>
   </span>
   <a id="EngrCAD_Core_Sketcher_ClosedSketch_Extrude_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Extrude*"></a>
   <h4 id="EngrCAD_Core_Sketcher_ClosedSketch_Extrude_System_Single_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Extrude(System.Single)">Extrude(Single)</h4>
@@ -232,7 +233,7 @@
     <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Sketcher_ClosedSketch_Loft_EngrCAD_Core_Sketcher_IClosedSketch___.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Sketcher.ClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch%5B%5D)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
   </span>
   <span class="small pull-right mobile-hide">
-    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L35">View Source</a>
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L40">View Source</a>
   </span>
   <a id="EngrCAD_Core_Sketcher_ClosedSketch_Loft_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Loft*"></a>
   <h4 id="EngrCAD_Core_Sketcher_ClosedSketch_Loft_EngrCAD_Core_Sketcher_IClosedSketch___" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Loft(EngrCAD.Core.Sketcher.IClosedSketch[])">Loft(IClosedSketch[])</h4>
@@ -286,7 +287,7 @@ sketch.Loft(otherSketchA, otherSketchB);</p>
     <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Sketcher_ClosedSketch_Loft_System_Collections_Generic_IEnumerable_EngrCAD_Core_Sketcher_IClosedSketch__.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Sketcher.ClosedSketch.Loft(System.Collections.Generic.IEnumerable%7BEngrCAD.Core.Sketcher.IClosedSketch%7D)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
   </span>
   <span class="small pull-right mobile-hide">
-    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L51">View Source</a>
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L56">View Source</a>
   </span>
   <a id="EngrCAD_Core_Sketcher_ClosedSketch_Loft_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Loft*"></a>
   <h4 id="EngrCAD_Core_Sketcher_ClosedSketch_Loft_System_Collections_Generic_IEnumerable_EngrCAD_Core_Sketcher_IClosedSketch__" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Loft(System.Collections.Generic.IEnumerable{EngrCAD.Core.Sketcher.IClosedSketch})">Loft(IEnumerable&lt;IClosedSketch&gt;)</h4>
@@ -339,7 +340,7 @@ sketch.Loft(otherSketchA, otherSketchB);</p>
     <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Sketcher_ClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
   </span>
   <span class="small pull-right mobile-hide">
-    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L23">View Source</a>
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L28">View Source</a>
   </span>
   <a id="EngrCAD_Core_Sketcher_ClosedSketch_Revolve_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Revolve*"></a>
   <h4 id="EngrCAD_Core_Sketcher_ClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis)">Revolve(IAxis)</h4>
@@ -386,7 +387,7 @@ sketch.Loft(otherSketchA, otherSketchB);</p>
     <a href="https://github.com/veggielane/EngrCAD/new/main/apiSpec/new?filename=EngrCAD_Core_Sketcher_ClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_EngrCAD_Core_Numerics_Angle_.md&amp;value=---%0Auid%3A%20EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis%2CEngrCAD.Core.Numerics.Angle)%0Asummary%3A%20'*You%20can%20override%20summary%20for%20the%20API%20here%20using%20*MARKDOWN*%20syntax'%0A---%0A%0A*Please%20type%20below%20more%20information%20about%20this%20API%3A*%0A%0A">Improve this Doc</a>
   </span>
   <span class="small pull-right mobile-hide">
-    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L24">View Source</a>
+    <a href="https://github.com/veggielane/EngrCAD/blob/main/src/EngrCAD.Core/Sketcher/ClosedSketch.cs/#L29">View Source</a>
   </span>
   <a id="EngrCAD_Core_Sketcher_ClosedSketch_Revolve_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Revolve*"></a>
   <h4 id="EngrCAD_Core_Sketcher_ClosedSketch_Revolve_EngrCAD_Core_Datums_IAxis_EngrCAD_Core_Numerics_Angle_" data-uid="EngrCAD.Core.Sketcher.ClosedSketch.Revolve(EngrCAD.Core.Datums.IAxis,EngrCAD.Core.Numerics.Angle)">Revolve(IAxis, Angle)</h4>

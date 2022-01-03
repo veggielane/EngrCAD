@@ -1951,6 +1951,30 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
   nameWithType: Cylinder.Radius
+- uid: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment
+  name: HorizontalTextAlignment
+  href: api/EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment
+  fullName: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment
+  nameWithType: HorizontalTextAlignment
+- uid: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Center
+  name: Center
+  href: api/EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.html#EngrCAD_Core_Nodes_Primitives_HorizontalTextAlignment_Center
+  commentId: F:EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Center
+  fullName: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Center
+  nameWithType: HorizontalTextAlignment.Center
+- uid: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Left
+  name: Left
+  href: api/EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.html#EngrCAD_Core_Nodes_Primitives_HorizontalTextAlignment_Left
+  commentId: F:EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Left
+  fullName: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Left
+  nameWithType: HorizontalTextAlignment.Left
+- uid: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Right
+  name: Right
+  href: api/EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.html#EngrCAD_Core_Nodes_Primitives_HorizontalTextAlignment_Right
+  commentId: F:EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Right
+  fullName: EngrCAD.Core.Nodes.Primitives.HorizontalTextAlignment.Right
+  nameWithType: HorizontalTextAlignment.Right
 - uid: EngrCAD.Core.Nodes.Primitives.Sphere
   name: Sphere
   href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html
@@ -1983,6 +2007,114 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.Primitives.Sphere.Radius
   nameWithType: Sphere.Radius
+- uid: EngrCAD.Core.Nodes.Primitives.Text
+  name: Text
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.Text
+  fullName: EngrCAD.Core.Nodes.Primitives.Text
+  nameWithType: Text
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Generate
+  commentId: M:EngrCAD.Core.Nodes.Primitives.Text.Generate
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Generate()
+  nameWithType: Text.Generate()
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Text.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Generate
+  nameWithType: Text.Generate
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Height
+  name: Height
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Height
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Text.Height
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Height
+  nameWithType: Text.Height
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Height*
+  name: Height
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Height_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Text.Height
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Height
+  nameWithType: Text.Height
+- uid: EngrCAD.Core.Nodes.Primitives.Text.HorizontalAlignment
+  name: HorizontalAlignment
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_HorizontalAlignment
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Text.HorizontalAlignment
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.HorizontalAlignment
+  nameWithType: Text.HorizontalAlignment
+- uid: EngrCAD.Core.Nodes.Primitives.Text.HorizontalAlignment*
+  name: HorizontalAlignment
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_HorizontalAlignment_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Text.HorizontalAlignment
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.HorizontalAlignment
+  nameWithType: Text.HorizontalAlignment
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Line
+  name: Line
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Line
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Text.Line
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Line
+  nameWithType: Text.Line
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Line*
+  name: Line
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Line_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Text.Line
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Line
+  nameWithType: Text.Line
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Thickness
+  name: Thickness
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Thickness
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Text.Thickness
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Thickness
+  nameWithType: Text.Thickness
+- uid: EngrCAD.Core.Nodes.Primitives.Text.Thickness*
+  name: Thickness
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_Thickness_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Text.Thickness
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.Thickness
+  nameWithType: Text.Thickness
+- uid: EngrCAD.Core.Nodes.Primitives.Text.VerticalAlignment
+  name: VerticalAlignment
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_VerticalAlignment
+  commentId: P:EngrCAD.Core.Nodes.Primitives.Text.VerticalAlignment
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.VerticalAlignment
+  nameWithType: Text.VerticalAlignment
+- uid: EngrCAD.Core.Nodes.Primitives.Text.VerticalAlignment*
+  name: VerticalAlignment
+  href: api/EngrCAD.Core.Nodes.Primitives.Text.html#EngrCAD_Core_Nodes_Primitives_Text_VerticalAlignment_
+  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Text.VerticalAlignment
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.Primitives.Text.VerticalAlignment
+  nameWithType: Text.VerticalAlignment
+- uid: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment
+  name: VerticalTextAlignment
+  href: api/EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.html
+  commentId: T:EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment
+  fullName: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment
+  nameWithType: VerticalTextAlignment
+- uid: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Bottom
+  name: Bottom
+  href: api/EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.html#EngrCAD_Core_Nodes_Primitives_VerticalTextAlignment_Bottom
+  commentId: F:EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Bottom
+  fullName: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Bottom
+  nameWithType: VerticalTextAlignment.Bottom
+- uid: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Center
+  name: Center
+  href: api/EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.html#EngrCAD_Core_Nodes_Primitives_VerticalTextAlignment_Center
+  commentId: F:EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Center
+  fullName: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Center
+  nameWithType: VerticalTextAlignment.Center
+- uid: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Top
+  name: Top
+  href: api/EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.html#EngrCAD_Core_Nodes_Primitives_VerticalTextAlignment_Top
+  commentId: F:EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Top
+  fullName: EngrCAD.Core.Nodes.Primitives.VerticalTextAlignment.Top
+  nameWithType: VerticalTextAlignment.Top
 - uid: EngrCAD.Core.Nodes.ShapeType
   name: ShapeType
   href: api/EngrCAD.Core.Nodes.ShapeType.html
@@ -2894,6 +3026,28 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Sketcher.ISketch.VerticalLine
   nameWithType: ISketch.VerticalLine
+- uid: EngrCAD.Core.Sketcher.Polygon
+  name: Polygon
+  href: api/EngrCAD.Core.Sketcher.Polygon.html
+  commentId: T:EngrCAD.Core.Sketcher.Polygon
+  fullName: EngrCAD.Core.Sketcher.Polygon
+  nameWithType: Polygon
+- uid: EngrCAD.Core.Sketcher.Polygon.#ctor(EngrCAD.Core.Datums.ICSYS,System.Collections.Generic.IEnumerable{System.Numerics.Vector2})
+  name: Polygon(ICSYS, IEnumerable<Vector2>)
+  href: api/EngrCAD.Core.Sketcher.Polygon.html#EngrCAD_Core_Sketcher_Polygon__ctor_EngrCAD_Core_Datums_ICSYS_System_Collections_Generic_IEnumerable_System_Numerics_Vector2__
+  commentId: M:EngrCAD.Core.Sketcher.Polygon.#ctor(EngrCAD.Core.Datums.ICSYS,System.Collections.Generic.IEnumerable{System.Numerics.Vector2})
+  name.vb: Polygon(ICSYS, IEnumerable(Of Vector2))
+  fullName: EngrCAD.Core.Sketcher.Polygon.Polygon(EngrCAD.Core.Datums.ICSYS, System.Collections.Generic.IEnumerable<System.Numerics.Vector2>)
+  fullName.vb: EngrCAD.Core.Sketcher.Polygon.Polygon(EngrCAD.Core.Datums.ICSYS, System.Collections.Generic.IEnumerable(Of System.Numerics.Vector2))
+  nameWithType: Polygon.Polygon(ICSYS, IEnumerable<Vector2>)
+  nameWithType.vb: Polygon.Polygon(ICSYS, IEnumerable(Of Vector2))
+- uid: EngrCAD.Core.Sketcher.Polygon.#ctor*
+  name: Polygon
+  href: api/EngrCAD.Core.Sketcher.Polygon.html#EngrCAD_Core_Sketcher_Polygon__ctor_
+  commentId: Overload:EngrCAD.Core.Sketcher.Polygon.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.Sketcher.Polygon.Polygon
+  nameWithType: Polygon.Polygon
 - uid: EngrCAD.Core.Sketcher.Rectangle
   name: Rectangle
   href: api/EngrCAD.Core.Sketcher.Rectangle.html
