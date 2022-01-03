@@ -257,11 +257,35 @@
     },
     {
       "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.IO.Import.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.IO.Import.html",
+          "hash": "dPhqewC6ciMEXEYiRFFWq5nDdphzMwbw6K0lXlg+sz0="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.Nodes.IO.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.Nodes.IO.html",
+          "hash": "QFgvVeKtw9JyhQ+BNrw754T3VvMQnZPT8lJUSZwO+6g="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
       "source_relative_path": "api/EngrCAD.Core.Nodes.Node.yml",
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Node.html",
-          "hash": "PzaYUTZuLMw7ixvD+NOySNh/rnIW+SFFTrl7O/Kztdw="
+          "hash": "7EYSkGvnyt9GCiZg/KTdztzlYMi5Cyik/Qzkw4+52+I="
         }
       },
       "is_incremental": false,
@@ -273,7 +297,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.NodeExtensions.html",
-          "hash": "T9uAw8Mdi6dkv8L9khsVy9OGsYzEjzg7xfukSUNDB4g="
+          "hash": "CZaweVoAkmK94411WEUzJVXbnBlLsazsBVEDExCWU3U="
         }
       },
       "is_incremental": false,
@@ -317,18 +341,6 @@
     },
     {
       "type": "ManagedReference",
-      "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Import.yml",
-      "output": {
-        ".html": {
-          "relative_path": "api/EngrCAD.Core.Nodes.Primitives.Import.html",
-          "hash": "q2ZFT5u8+/44AQyXvw0q5svOIakq9ZgGd1fixtrwa44="
-        }
-      },
-      "is_incremental": false,
-      "version": ""
-    },
-    {
-      "type": "ManagedReference",
       "source_relative_path": "api/EngrCAD.Core.Nodes.Primitives.Sphere.yml",
       "output": {
         ".html": {
@@ -345,7 +357,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.Nodes.Primitives.html",
-          "hash": "3Jtb+vKJOwYXGCSvWIwN9WRlWX/V8ICdFeskYIv0Lvk="
+          "hash": "eVquRg4bTZJDMRwVDfGDM9i50xRg0dhLWZvx4YH1DvU="
         }
       },
       "is_incremental": false,
@@ -418,6 +430,18 @@
         ".html": {
           "relative_path": "api/EngrCAD.Core.PartMetadata.html",
           "hash": "iBBbeR4F1e3iqr8Y6LUBRuMDwIwnVmIkSKRr4dXOeo4="
+        }
+      },
+      "is_incremental": false,
+      "version": ""
+    },
+    {
+      "type": "ManagedReference",
+      "source_relative_path": "api/EngrCAD.Core.SVG.yml",
+      "output": {
+        ".html": {
+          "relative_path": "api/EngrCAD.Core.SVG.html",
+          "hash": "MIYUnFk5DUesHQiKzHVMPZ2Rm2GJ4swYwjqmTsO0OzM="
         }
       },
       "is_incremental": false,
@@ -573,7 +597,7 @@
       "output": {
         ".html": {
           "relative_path": "api/EngrCAD.Core.html",
-          "hash": "EaCdqtfnlC8HjhvSO1WJheyJOjUCTizn2JLAY3sxn58="
+          "hash": "CH9qG2t7w0jvFsQQqvXcCQmcmb6KEfCvs8JHvwTJI10="
         }
       },
       "is_incremental": false,
@@ -597,7 +621,7 @@
       "output": {
         ".html": {
           "relative_path": "api/toc.html",
-          "hash": "svbhaLPEG7C3KXWfU2BAI+HCKPK79VaxyWoog7A+FHQ="
+          "hash": "XYYuAnayDhG3b/BT4+T8QlpXNA53aiYpbX7zE/A49S4="
         }
       },
       "is_incremental": false,
@@ -609,7 +633,7 @@
       "output": {
         ".html": {
           "relative_path": "articles/boolean.html",
-          "hash": "dfO0C8UqUP64xr2mA4e3cNlbeTi9HPLVO89Y/snx84o="
+          "hash": "2mRbMmnH1KW8pO3/sZCFCxVXxw28MMNz+pLXi+thb2c="
         }
       },
       "is_incremental": false,
@@ -684,7 +708,7 @@
         "ManagedReferenceDocumentProcessor": {
           "can_incremental": false,
           "incrementalPhase": "build",
-          "total_file_count": 48,
+          "total_file_count": 50,
           "skipped_file_count": 0
         },
         "TocDocumentProcessor": {

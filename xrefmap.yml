@@ -1045,6 +1045,44 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.Features.TappedHole.M1_6
   nameWithType: TappedHole.M1_6
+- uid: EngrCAD.Core.Nodes.IO
+  name: EngrCAD.Core.Nodes.IO
+  href: api/EngrCAD.Core.Nodes.IO.html
+  commentId: N:EngrCAD.Core.Nodes.IO
+  fullName: EngrCAD.Core.Nodes.IO
+  nameWithType: EngrCAD.Core.Nodes.IO
+- uid: EngrCAD.Core.Nodes.IO.Import
+  name: Import
+  href: api/EngrCAD.Core.Nodes.IO.Import.html
+  commentId: T:EngrCAD.Core.Nodes.IO.Import
+  fullName: EngrCAD.Core.Nodes.IO.Import
+  nameWithType: Import
+- uid: EngrCAD.Core.Nodes.IO.Import.FilePath
+  name: FilePath
+  href: api/EngrCAD.Core.Nodes.IO.Import.html#EngrCAD_Core_Nodes_IO_Import_FilePath
+  commentId: P:EngrCAD.Core.Nodes.IO.Import.FilePath
+  fullName: EngrCAD.Core.Nodes.IO.Import.FilePath
+  nameWithType: Import.FilePath
+- uid: EngrCAD.Core.Nodes.IO.Import.FilePath*
+  name: FilePath
+  href: api/EngrCAD.Core.Nodes.IO.Import.html#EngrCAD_Core_Nodes_IO_Import_FilePath_
+  commentId: Overload:EngrCAD.Core.Nodes.IO.Import.FilePath
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.IO.Import.FilePath
+  nameWithType: Import.FilePath
+- uid: EngrCAD.Core.Nodes.IO.Import.Generate
+  name: Generate()
+  href: api/EngrCAD.Core.Nodes.IO.Import.html#EngrCAD_Core_Nodes_IO_Import_Generate
+  commentId: M:EngrCAD.Core.Nodes.IO.Import.Generate
+  fullName: EngrCAD.Core.Nodes.IO.Import.Generate()
+  nameWithType: Import.Generate()
+- uid: EngrCAD.Core.Nodes.IO.Import.Generate*
+  name: Generate
+  href: api/EngrCAD.Core.Nodes.IO.Import.html#EngrCAD_Core_Nodes_IO_Import_Generate_
+  commentId: Overload:EngrCAD.Core.Nodes.IO.Import.Generate
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.IO.Import.Generate
+  nameWithType: Import.Generate
 - uid: EngrCAD.Core.Nodes.Node
   name: Node
   href: api/EngrCAD.Core.Nodes.Node.html
@@ -1647,15 +1685,6 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.NodeExtensions.ToBody
   nameWithType: NodeExtensions.ToBody
-- uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
-  name: Union(IEnumerable<Node>)
-  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
-  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
-  name.vb: Union(IEnumerable(Of Node))
-  fullName: EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
-  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.Union(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
-  nameWithType: NodeExtensions.Union(IEnumerable<Node>)
-  nameWithType.vb: NodeExtensions.Union(IEnumerable(Of Node))
 - uid: EngrCAD.Core.Nodes.NodeExtensions.Union(System.ValueTuple{EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node,EngrCAD.Core.Nodes.Node})
   name: Union((Node, Node, Node, Node, Node, Node, Node))
   href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_Union_System_ValueTuple_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node_EngrCAD_Core_Nodes_Node__
@@ -1726,6 +1755,22 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.NodeExtensions.Union
   nameWithType: NodeExtensions.Union
+- uid: EngrCAD.Core.Nodes.NodeExtensions.UnionAll(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name: UnionAll(IEnumerable<Node>)
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_UnionAll_System_Collections_Generic_IEnumerable_EngrCAD_Core_Nodes_Node__
+  commentId: M:EngrCAD.Core.Nodes.NodeExtensions.UnionAll(System.Collections.Generic.IEnumerable{EngrCAD.Core.Nodes.Node})
+  name.vb: UnionAll(IEnumerable(Of Node))
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.UnionAll(System.Collections.Generic.IEnumerable<EngrCAD.Core.Nodes.Node>)
+  fullName.vb: EngrCAD.Core.Nodes.NodeExtensions.UnionAll(System.Collections.Generic.IEnumerable(Of EngrCAD.Core.Nodes.Node))
+  nameWithType: NodeExtensions.UnionAll(IEnumerable<Node>)
+  nameWithType.vb: NodeExtensions.UnionAll(IEnumerable(Of Node))
+- uid: EngrCAD.Core.Nodes.NodeExtensions.UnionAll*
+  name: UnionAll
+  href: api/EngrCAD.Core.Nodes.NodeExtensions.html#EngrCAD_Core_Nodes_NodeExtensions_UnionAll_
+  commentId: Overload:EngrCAD.Core.Nodes.NodeExtensions.UnionAll
+  isSpec: "True"
+  fullName: EngrCAD.Core.Nodes.NodeExtensions.UnionAll
+  nameWithType: NodeExtensions.UnionAll
 - uid: EngrCAD.Core.Nodes.Primitives
   name: EngrCAD.Core.Nodes.Primitives
   href: api/EngrCAD.Core.Nodes.Primitives.html
@@ -1906,38 +1951,6 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Nodes.Primitives.Cylinder.Radius
   nameWithType: Cylinder.Radius
-- uid: EngrCAD.Core.Nodes.Primitives.Import
-  name: Import
-  href: api/EngrCAD.Core.Nodes.Primitives.Import.html
-  commentId: T:EngrCAD.Core.Nodes.Primitives.Import
-  fullName: EngrCAD.Core.Nodes.Primitives.Import
-  nameWithType: Import
-- uid: EngrCAD.Core.Nodes.Primitives.Import.FilePath
-  name: FilePath
-  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_FilePath
-  commentId: P:EngrCAD.Core.Nodes.Primitives.Import.FilePath
-  fullName: EngrCAD.Core.Nodes.Primitives.Import.FilePath
-  nameWithType: Import.FilePath
-- uid: EngrCAD.Core.Nodes.Primitives.Import.FilePath*
-  name: FilePath
-  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_FilePath_
-  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Import.FilePath
-  isSpec: "True"
-  fullName: EngrCAD.Core.Nodes.Primitives.Import.FilePath
-  nameWithType: Import.FilePath
-- uid: EngrCAD.Core.Nodes.Primitives.Import.Generate
-  name: Generate()
-  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_Generate
-  commentId: M:EngrCAD.Core.Nodes.Primitives.Import.Generate
-  fullName: EngrCAD.Core.Nodes.Primitives.Import.Generate()
-  nameWithType: Import.Generate()
-- uid: EngrCAD.Core.Nodes.Primitives.Import.Generate*
-  name: Generate
-  href: api/EngrCAD.Core.Nodes.Primitives.Import.html#EngrCAD_Core_Nodes_Primitives_Import_Generate_
-  commentId: Overload:EngrCAD.Core.Nodes.Primitives.Import.Generate
-  isSpec: "True"
-  fullName: EngrCAD.Core.Nodes.Primitives.Import.Generate
-  nameWithType: Import.Generate
 - uid: EngrCAD.Core.Nodes.Primitives.Sphere
   name: Sphere
   href: api/EngrCAD.Core.Nodes.Primitives.Sphere.html
@@ -3073,3 +3086,87 @@ references:
   isSpec: "True"
   fullName: EngrCAD.Core.Sketcher.Sketch.VerticalLine
   nameWithType: Sketch.VerticalLine
+- uid: EngrCAD.Core.SVG
+  name: SVG
+  href: api/EngrCAD.Core.SVG.html
+  commentId: T:EngrCAD.Core.SVG
+  fullName: EngrCAD.Core.SVG
+  nameWithType: SVG
+- uid: EngrCAD.Core.SVG.#ctor(EngrCAD.Core.Datums.ICSYS,System.String)
+  name: SVG(ICSYS, String)
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG__ctor_EngrCAD_Core_Datums_ICSYS_System_String_
+  commentId: M:EngrCAD.Core.SVG.#ctor(EngrCAD.Core.Datums.ICSYS,System.String)
+  fullName: EngrCAD.Core.SVG.SVG(EngrCAD.Core.Datums.ICSYS, System.String)
+  nameWithType: SVG.SVG(ICSYS, String)
+- uid: EngrCAD.Core.SVG.#ctor*
+  name: SVG
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG__ctor_
+  commentId: Overload:EngrCAD.Core.SVG.#ctor
+  isSpec: "True"
+  fullName: EngrCAD.Core.SVG.SVG
+  nameWithType: SVG.SVG
+- uid: EngrCAD.Core.SVG.Contents
+  name: Contents
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_Contents
+  commentId: P:EngrCAD.Core.SVG.Contents
+  fullName: EngrCAD.Core.SVG.Contents
+  nameWithType: SVG.Contents
+- uid: EngrCAD.Core.SVG.Contents*
+  name: Contents
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_Contents_
+  commentId: Overload:EngrCAD.Core.SVG.Contents
+  isSpec: "True"
+  fullName: EngrCAD.Core.SVG.Contents
+  nameWithType: SVG.Contents
+- uid: EngrCAD.Core.SVG.CSYS
+  name: CSYS
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_CSYS
+  commentId: P:EngrCAD.Core.SVG.CSYS
+  fullName: EngrCAD.Core.SVG.CSYS
+  nameWithType: SVG.CSYS
+- uid: EngrCAD.Core.SVG.CSYS*
+  name: CSYS
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_CSYS_
+  commentId: Overload:EngrCAD.Core.SVG.CSYS
+  isSpec: "True"
+  fullName: EngrCAD.Core.SVG.CSYS
+  nameWithType: SVG.CSYS
+- uid: EngrCAD.Core.SVG.FromFile(EngrCAD.Core.Datums.ICSYS,System.String)
+  name: FromFile(ICSYS, String)
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_FromFile_EngrCAD_Core_Datums_ICSYS_System_String_
+  commentId: M:EngrCAD.Core.SVG.FromFile(EngrCAD.Core.Datums.ICSYS,System.String)
+  fullName: EngrCAD.Core.SVG.FromFile(EngrCAD.Core.Datums.ICSYS, System.String)
+  nameWithType: SVG.FromFile(ICSYS, String)
+- uid: EngrCAD.Core.SVG.FromFile*
+  name: FromFile
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_FromFile_
+  commentId: Overload:EngrCAD.Core.SVG.FromFile
+  isSpec: "True"
+  fullName: EngrCAD.Core.SVG.FromFile
+  nameWithType: SVG.FromFile
+- uid: EngrCAD.Core.SVG.FromString(EngrCAD.Core.Datums.ICSYS,System.String)
+  name: FromString(ICSYS, String)
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_FromString_EngrCAD_Core_Datums_ICSYS_System_String_
+  commentId: M:EngrCAD.Core.SVG.FromString(EngrCAD.Core.Datums.ICSYS,System.String)
+  fullName: EngrCAD.Core.SVG.FromString(EngrCAD.Core.Datums.ICSYS, System.String)
+  nameWithType: SVG.FromString(ICSYS, String)
+- uid: EngrCAD.Core.SVG.FromString*
+  name: FromString
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_FromString_
+  commentId: Overload:EngrCAD.Core.SVG.FromString
+  isSpec: "True"
+  fullName: EngrCAD.Core.SVG.FromString
+  nameWithType: SVG.FromString
+- uid: EngrCAD.Core.SVG.Sketches
+  name: Sketches
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_Sketches
+  commentId: P:EngrCAD.Core.SVG.Sketches
+  fullName: EngrCAD.Core.SVG.Sketches
+  nameWithType: SVG.Sketches
+- uid: EngrCAD.Core.SVG.Sketches*
+  name: Sketches
+  href: api/EngrCAD.Core.SVG.html#EngrCAD_Core_SVG_Sketches_
+  commentId: Overload:EngrCAD.Core.SVG.Sketches
+  isSpec: "True"
+  fullName: EngrCAD.Core.SVG.Sketches
+  nameWithType: SVG.Sketches
