@@ -2,7 +2,7 @@
 using System.IO;
 using EngrCADOCWrapper;
 
-namespace EngrCAD.Core.Nodes.Primitives;
+namespace EngrCAD.Core.Nodes.IO;
 
 public class Import : Node
 {

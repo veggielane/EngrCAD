@@ -69,14 +69,17 @@ namespace EngrCAD.Core.Nodes
 
         public void Save(string path)
         {
-            switch (Path.GetExtension(path).ToLowerInvariant())
+            var ext = Path.GetExtension(path).ToLowerInvariant();
+            switch (ext)
             {
-                case "stp" or "step":
+                case ".stp" or ".step":
                     SaveSTP(path);
                     return;
-                case "stl":
+                case ".stl":
                     SaveSTL(path);
                     return;
+                default:
+                    throw new NotImplementedException(ext);
             }
         }
 

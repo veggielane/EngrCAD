@@ -10,7 +10,7 @@ namespace EngrCAD.Core.Nodes;
 
 public static class NodeExtensions
 {
-    public static Node Union(this IEnumerable<Node> nodes) => new Union(nodes);
+    public static Node UnionAll(this IEnumerable<Node> nodes) => new Union(nodes);
     public static Node Union(this ValueTuple<Node> tuple) => new Union(tuple.Merge());
     public static Node Union(this ValueTuple<Node, Node> tuple) => new Union(tuple.Merge());
     public static Node Union(this ValueTuple<Node, Node, Node> tuple) => new Union(tuple.Merge());
