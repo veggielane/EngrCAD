@@ -23,7 +23,7 @@ public sealed class ViewportControl : OpenGlControlBase
 {
     private GL? _gl;
     private uint _program;
-    private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos;
+    private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
     private readonly List<GpuMesh> _meshes = [];
 
     private double _yaw = 0.7;
@@ -31,8 +31,15 @@ public sealed class ViewportControl : OpenGlControlBase
     private double _distance = 15.0;
     private Vector3d _target = (0, 1.6, 0.2);
     private Point _lastPointer;
+    private Point _pressPointer;
+    private int _selected = -1;
 
     private readonly record struct GpuMesh(uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color);
+
+    /// <summary>CPU-side pick data per object: triangles plus a BVH over them, in object space.</summary>
+    private sealed record PickData(RenderMesh Mesh, EngrCAD.Core.Spatial.Bvh Bvh);
+
+    private readonly List<PickData> _pickData = [];
 
     protected override void OnOpenGlInit(GlInterface gl)
     {
@@ -44,10 +51,31 @@ public sealed class ViewportControl : OpenGlControlBase
         _uColor = _gl.GetUniformLocation(_program, "uColor");
         _uLightDir = _gl.GetUniformLocation(_program, "uLightDir");
         _uEyePos = _gl.GetUniformLocation(_program, "uEyePos");
+        _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
 
         foreach (var (mesh, model, color) in DemoScene())
-            _meshes.Add(Upload(_gl, RenderMesh.CreateFlat(mesh), model, color));
+        {
+            var render = RenderMesh.CreateFlat(mesh);
+            _meshes.Add(Upload(_gl, render, model, color));
+
+            var boxes = new Aabb[render.TriangleCount];
+            for (int t = 0; t < render.TriangleCount; t++)
+            {
+                boxes[t] = Aabb.FromPoints(
+                [
+                    PickVertex(render, render.Indices[t * 3]),
+                    PickVertex(render, render.Indices[t * 3 + 1]),
+                    PickVertex(render, render.Indices[t * 3 + 2]),
+                ]);
+            }
+            _pickData.Add(new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)));
+        }
     }
+
+    private static Vector3d PickVertex(RenderMesh mesh, uint index) => new(
+        mesh.Positions[index * 3],
+        mesh.Positions[index * 3 + 1],
+        mesh.Positions[index * 3 + 2]);
 
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
@@ -97,15 +125,106 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.Uniform3(_uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(_uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
 
-        foreach (var m in _meshes)
+        for (int i = 0; i < _meshes.Count; i++)
         {
+            var m = _meshes[i];
             WriteColumnMajor(m.Model, matrix);
             gl.UniformMatrix4(_uModel, 1, false, matrix);
             gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
+            gl.Uniform1(_uHighlight, i == _selected ? 1f : 0f);
             gl.BindVertexArray(m.Vao);
             gl.DrawElements(PrimitiveType.Triangles, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
         }
         gl.BindVertexArray(0);
+    }
+
+    // ---- picking ----
+
+    public ViewportControl()
+    {
+        // The release can arrive already-handled (pointer gestures), so a plain override
+        // of OnPointerReleased never runs — register for handled events too.
+        AddHandler(PointerReleasedEvent, (_, e) =>
+        {
+            var pos = e.GetPosition(this);
+            var moved = pos - _pressPointer;
+            if (moved.X * moved.X + moved.Y * moved.Y < 16)
+                Pick(pos);
+        }, Avalonia.Interactivity.RoutingStrategies.Tunnel | Avalonia.Interactivity.RoutingStrategies.Bubble,
+           handledEventsToo: true);
+    }
+
+    private void Pick(Point pixel)
+    {
+        double width = Math.Max(1, Bounds.Width);
+        double height = Math.Max(1, Bounds.Height);
+        var eye = _target + new Vector3d(
+            _distance * Math.Cos(_pitch) * Math.Cos(_yaw),
+            _distance * Math.Cos(_pitch) * Math.Sin(_yaw),
+            _distance * Math.Sin(_pitch));
+        var viewProjection = Perspective(Math.PI / 4, width / height, 0.1, 200.0)
+                           * LookAt(eye, _target, Vector3d.UnitZ);
+        if (!viewProjection.TryInvert(out var unproject))
+            return;
+
+        double ndcX = 2 * pixel.X / width - 1;
+        double ndcY = 1 - 2 * pixel.Y / height;
+        var nearPoint = unproject.TransformPoint((ndcX, ndcY, -1));
+        var farPoint = unproject.TransformPoint((ndcX, ndcY, 1));
+
+        int best = -1;
+        double bestT = double.PositiveInfinity;
+        var hits = new List<int>();
+        for (int i = 0; i < _pickData.Count; i++)
+        {
+            if (!_meshes[i].Model.TryInvert(out var toLocal))
+                continue;
+            var origin = toLocal.TransformPoint(nearPoint);
+            var direction = toLocal.TransformPoint(farPoint) - origin;
+            var ray = new Ray3d(origin, direction);
+
+            hits.Clear();
+            _pickData[i].Bvh.Query(ray, hits);
+            foreach (int triangle in hits)
+            {
+                var mesh = _pickData[i].Mesh;
+                var a = PickVertex(mesh, mesh.Indices[triangle * 3]);
+                var b = PickVertex(mesh, mesh.Indices[triangle * 3 + 1]);
+                var c = PickVertex(mesh, mesh.Indices[triangle * 3 + 2]);
+                if (RayTriangle(ray, a, b, c, out double t) && t < bestT)
+                {
+                    bestT = t;
+                    best = i;
+                }
+            }
+        }
+        _selected = best == _selected ? -1 : best; // clicking the selection clears it
+        if (VisualRoot is Window window)
+            window.Title = _selected >= 0 ? $"EngrCAD — object {_selected} selected" : "EngrCAD — nothing selected";
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Möller–Trumbore; t is in units of the (unnormalized) ray direction.</summary>
+    private static bool RayTriangle(in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
+    {
+        t = 0;
+        var e1 = b - a;
+        var e2 = c - a;
+        var p = ray.Direction.Cross(e2);
+        double determinant = e1.Dot(p);
+        if (Math.Abs(determinant) < 1e-15)
+            return false;
+        double inverse = 1.0 / determinant;
+        var s = ray.Origin - a;
+        double u = s.Dot(p) * inverse;
+        if (u < 0 || u > 1)
+            return false;
+        var q = s.Cross(e1);
+        double v = ray.Direction.Dot(q) * inverse;
+        if (v < 0 || u + v > 1)
+            return false;
+        t = e2.Dot(q) * inverse;
+        return t > 1e-9;
     }
 
     private static IEnumerable<(HalfEdgeMesh Mesh, Matrix4d Model, (float, float, float) Color)> DemoScene()
@@ -256,6 +375,7 @@ public sealed class ViewportControl : OpenGlControlBase
             uniform vec3 uColor;
             uniform vec3 uLightDir;
             uniform vec3 uEyePos;
+            uniform float uHighlight;
             out vec4 fragColor;
             void main()
             {
@@ -264,7 +384,8 @@ public sealed class ViewportControl : OpenGlControlBase
                 vec3 v = normalize(uEyePos - vWorldPos);
                 vec3 h = normalize(v - uLightDir);
                 float specular = pow(max(dot(n, h), 0.0), 48.0) * 0.35;
-                vec3 c = uColor * (0.22 + 0.78 * diffuse) + vec3(specular);
+                vec3 base = mix(uColor, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
+                vec3 c = base * (0.22 + 0.78 * diffuse) + vec3(specular);
                 fragColor = vec4(c, 1.0);
             }
             """;
@@ -304,6 +425,7 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         base.OnPointerPressed(e);
         _lastPointer = e.GetPosition(this);
+        _pressPointer = _lastPointer;
         e.Pointer.Capture(this);
     }
 

@@ -28,7 +28,7 @@ public sealed class App : Application
                         new ViewportControl(),
                         new TextBlock
                         {
-                            Text = "drag orbit · shift+drag pan · ctrl+drag or scroll zoom",
+                            Text = "drag orbit · shift+drag pan · ctrl+drag or scroll zoom · click select",
                             Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
                             Margin = new Thickness(12, 8),
                             HorizontalAlignment = HorizontalAlignment.Left,

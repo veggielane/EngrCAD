@@ -207,10 +207,15 @@ on a band) is recognized as non-contractible and handled by `SplitBandByWrapCurv
 which cuts the band into two bands with exactly reconstructed sub-surfaces.
 
 v1 contract: transversal intersections only (no coplanar or tangent face pairs); the
-input solids are consumed; the result is geometrically sealed — it tessellates closed
-with exact volumes — but seam edges are not yet topologically unified between the A-side
-and B-side fragments, so `Validate()` does not apply to boolean output. Topological seam
-sealing (edge/vertex unification along seams) is the follow-up.
+input solids are consumed. Output is **topologically sealed** by
+`TopologyEditor.SealSeams`: edge uses contributed by discarded fragments are pruned,
+coincident vertices unify (edges have internally settable vertex references for this),
+and each seam edge merges with its twin from the other solid — the twins match exactly
+because both sides split their seams at the same mandatory break parameters. Difference
+reverses B's kept faces *properly*: loops re-wound (order and senses) in addition to the
+`IsReversed` normal flag, so seam edges are traversed oppositely by the faces meeting
+there. Boolean results therefore pass `Validate()` and Euler–Poincaré with the correct
+genus.
 
 ## 6. Interop
 
@@ -257,17 +262,31 @@ for `in`-parameters being illegal in expression trees.
 - Tolerances in tests are derived from the discretization (e.g. chord error), not
   hand-tuned magic numbers, so failures mean something.
 
-## 9. Known limitations / roadmap
+## 9. Further capabilities
 
-- **B-Rep**: surface–surface intersection exists (analytic + marching), but faces cannot
-  yet be trimmed/split along the resulting curves — so no B-Rep booleans or filleting
-  yet. Next steps: curve-on-surface (pullback of intersection curves into parameter
-  space), face splitting, and containment classification.
-- **Mesh booleans**: BSP-based; coplanar-face and tangent cases remain fragile until an
-  exact-intersection rewrite.
+- **Filleting** (`Filleting.FilletEdge`): closed circular rims where a planar cap meets a
+  coaxial cylindrical band are replaced by an exact quarter-torus (`RevolvedSurface` over
+  a `CurveSegment` arc), patching the cap and band in place through their loops. General
+  fillet chains (open edges, corner patches where fillets meet) are future work.
+- **STEP export** (`StepWriter`, AP214): topology maps one-to-one to
+  `MANIFOLD_SOLID_BREP`; analytic surfaces and curves export exactly (including rational
+  B-splines via the complex-instance form); wrapper curves simplify to analytic forms or
+  fall back to sampled degree-1 B-splines. Swept (RMF) surfaces and NURBS surfaces are
+  not exportable yet; import is future work.
+- **Viewer picking**: click-select by unprojecting the pixel through the inverse
+  view-projection, querying each object's triangle BVH (`Bvh.Query(ray)`), and
+  Möller–Trumbore on candidates; nearest hit is highlighted. Note for automation:
+  Avalonia's pointer stack ignores legacy synthetic `mouse_event` clicks — exercise
+  picking with real input.
+
+## 10. Known limitations / roadmap
+
+- **Booleans**: transversal cases only; coplanar-face and tangent configurations (both
+  mesh/BSP and B-Rep pipelines) remain future work.
+- **Trimmed generated faces**: splitting the closed edges of a generated band face (a
+  cut through a bore) outruns the full-domain grid tessellator; needs loop-driven
+  trimmed tessellation.
 - **Full revolve of profiles with holes** produces multiple shells (outer + tunnel tori)
   and is rejected until multi-shell construction is wired up.
 - **Performance**: SIMD batch SDF evaluation and SoA render extraction are designed-for
   but not yet implemented; BVH uses median split (SAH is a drop-in upgrade).
-- **Viewer**: display-only; picking/selection (ray + query layer are ready) and a scene
-  graph are next.
