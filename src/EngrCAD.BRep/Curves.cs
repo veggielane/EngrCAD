@@ -9,12 +9,69 @@ public abstract class Curve3d
     public abstract bool IsClosed { get; }
     public abstract Vector3d PointAt(double t);
 
-    /// <summary>Unit tangent by central differences; subclasses may override with exact derivatives.</summary>
+    /// <summary>
+    /// Unit tangent by finite differences: central in the interior, second-order one-sided
+    /// at the domain ends (a clamped central difference would be only first-order there,
+    /// and sweep frames are sensitive to start-tangent error). Subclasses may override
+    /// with exact derivatives.
+    /// </summary>
     public virtual Vector3d TangentAt(double t)
     {
-        double h = double.IsFinite(Domain.Length) ? Math.Max(1e-7, Domain.Length * 1e-7) : 1e-7;
-        double t0 = Domain.Clamp(t - h), t1 = Domain.Clamp(t + h);
-        return ((PointAt(t1) - PointAt(t0)) / (t1 - t0)).Normalized();
+        var d = Domain;
+        double h = double.IsFinite(d.Length) ? Math.Max(1e-7, d.Length * 1e-7) : 1e-7;
+
+        Vector3d derivative;
+        if (t - h < d.Start)
+            derivative = PointAt(d.Start) * -3 + PointAt(d.Start + h) * 4 - PointAt(d.Start + 2 * h);
+        else if (t + h > d.End)
+            derivative = PointAt(d.End) * 3 - PointAt(d.End - h) * 4 + PointAt(d.End - 2 * h);
+        else
+            derivative = PointAt(t + h) - PointAt(t - h);
+        return derivative.Normalized();
+    }
+
+    /// <summary>
+    /// The innermost curve beneath wrapper types (<see cref="ReversedCurve"/>,
+    /// <see cref="TransformedCurve"/>); consumers use it to pick sampling strategies.
+    /// </summary>
+    public virtual Curve3d Underlying => this;
+
+    public Curve3d Reversed() => this is ReversedCurve r ? r.Base : new ReversedCurve(this);
+
+    public Curve3d Transformed(in Matrix4d transform) => new TransformedCurve(this, transform);
+}
+
+/// <summary>The same geometry traversed backwards over the same domain.</summary>
+public sealed class ReversedCurve(Curve3d baseCurve) : Curve3d
+{
+    public Curve3d Base => baseCurve;
+
+    public override Interval Domain => baseCurve.Domain;
+    public override bool IsClosed => baseCurve.IsClosed;
+    public override Curve3d Underlying => baseCurve.Underlying;
+
+    private double Map(double t) => baseCurve.Domain.Start + baseCurve.Domain.End - t;
+
+    public override Vector3d PointAt(double t) => baseCurve.PointAt(Map(t));
+    public override Vector3d TangentAt(double t) => -baseCurve.TangentAt(Map(t));
+}
+
+/// <summary>A curve mapped through a rigid (or affine) transform.</summary>
+public sealed class TransformedCurve(Curve3d baseCurve, Matrix4d transform) : Curve3d
+{
+    public Curve3d Base => baseCurve;
+    public Matrix4d Transform => transform;
+
+    public override Interval Domain => baseCurve.Domain;
+    public override bool IsClosed => baseCurve.IsClosed;
+    public override Curve3d Underlying => baseCurve.Underlying;
+
+    public override Vector3d PointAt(double t) => transform.TransformPoint(baseCurve.PointAt(t));
+
+    public override Vector3d TangentAt(double t)
+    {
+        var v = transform.TransformVector(baseCurve.TangentAt(t));
+        return v.Normalized();
     }
 }
 

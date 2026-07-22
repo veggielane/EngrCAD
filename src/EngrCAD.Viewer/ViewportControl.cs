@@ -3,6 +3,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
+using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Interop;
@@ -27,8 +28,8 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private double _yaw = 0.7;
     private double _pitch = 0.45;
-    private double _distance = 13.0;
-    private Vector3d _target = (0, 0, 0.2);
+    private double _distance = 15.0;
+    private Vector3d _target = (0, 1.6, 0.2);
     private Point _lastPointer;
 
     private readonly record struct GpuMesh(uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color);
@@ -149,6 +150,38 @@ public sealed class ViewportControl : OpenGlControlBase
             SurfaceNets.Polygonize(Sdf.Sphere(1.1) & Sdf.Gyroid(0.75, 0.16), resolution: 88),
             Matrix4d.CreateTranslation((4.6, 1.9, 0)),
             (0.62f, 0.66f, 0.88f));
+
+        // Third row: B-Rep modeling operations (extrude, revolve, sweep), tessellated.
+        var bracket = SolidFactory.Extrude(
+            Profile.FromPoints([(0, 0, 0), (1.6, 0, 0), (1.6, 0.5, 0), (0.5, 0.5, 0), (0.5, 1.6, 0), (0, 1.6, 0)]),
+            (0, 0, 0.6));
+        yield return (
+            BRepTessellator.Tessellate(bracket),
+            Matrix4d.CreateTranslation((-5.4, 5.6, -0.3)) * Matrix4d.CreateRotationX(Math.PI / 2),
+            (0.86f, 0.60f, 0.50f));
+
+        var pulley = SolidFactory.Revolve(
+            Profile.FromPoints(
+            [
+                (0.55, 0, 0), (1.15, 0, 0), (1.15, 0, 0.22), (0.85, 0, 0.34),
+                (0.85, 0, 0.56), (1.15, 0, 0.68), (1.15, 0, 0.9), (0.55, 0, 0.9),
+            ]),
+            Vector3d.Zero, Vector3d.UnitZ);
+        yield return (
+            BRepTessellator.Tessellate(pulley, segmentsPerCircle: 64),
+            Matrix4d.CreateTranslation((-1.5, 5.6, -0.45)),
+            (0.55f, 0.68f, 0.84f));
+
+        var tubePath = new NurbsCurve(2,
+            [(0, 0, -1.1), (0, 0, 0.2), (0, 1.1, 1.3)],
+            null,
+            [0, 0, 0, 1, 1, 1]);
+        var tube = SolidFactory.Sweep(
+            Profile.Circle((0, 0, -1.1), Vector3d.UnitX, Vector3d.UnitY, 0.35), tubePath);
+        yield return (
+            BRepTessellator.Tessellate(tube, segmentsPerCircle: 40, curveSamples: 40),
+            Matrix4d.CreateTranslation((2.2, 5.6, 0)),
+            (0.63f, 0.78f, 0.58f));
     }
 
     private unsafe GpuMesh Upload(GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color)

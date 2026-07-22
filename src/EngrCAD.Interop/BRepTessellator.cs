@@ -33,6 +33,24 @@ public static class BRepTessellator
                 case CylinderSurface:
                     TessellateCylinderBand(face, edgePolylines, polygons);
                     break;
+                case ExtrudedSurface extruded:
+                    TessellateGrid(extruded,
+                        CurveParams(extruded.Generator, segmentsPerCircle, curveSamples),
+                        [0.0, 1.0],
+                        closedU: extruded.Generator.IsClosed, polygons);
+                    break;
+                case RevolvedSurface revolved:
+                    TessellateGrid(revolved,
+                        EvenParams(revolved.DomainU, segmentsPerCircle, includeEnd: false),
+                        CurveParams(revolved.Generator, segmentsPerCircle, curveSamples),
+                        closedU: true, polygons);
+                    break;
+                case SweptSurface swept:
+                    TessellateGrid(swept,
+                        CurveParams(swept.Generator, segmentsPerCircle, curveSamples),
+                        EvenParams(swept.Path.Domain, curveSamples, includeEnd: true),
+                        closedU: swept.Generator.IsClosed, polygons);
+                    break;
                 default:
                     throw new NotSupportedException(
                         $"Tessellation of {face.Surface.GetType().Name} faces is not implemented yet.");
@@ -47,20 +65,72 @@ public static class BRepTessellator
         var domain = edge.Domain;
         if (edge.IsClosedEdge)
         {
-            int n = edge.Curve is Circle3d ? segmentsPerCircle : curveSamples;
+            int n = edge.Curve.Underlying is Circle3d ? segmentsPerCircle : curveSamples;
             var points = new List<Vector3d>(n);
             for (int i = 0; i < n; i++)
                 points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
             return points;
         }
 
-        if (edge.Curve is Line3d)
+        if (edge.Curve.Underlying is Line3d)
             return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
 
         var samples = new List<Vector3d>(curveSamples + 1);
         for (int i = 0; i <= curveSamples; i++)
             samples.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / curveSamples)));
         return samples;
+    }
+
+    /// <summary>
+    /// Parameter samples over a curve's full domain, matching <see cref="SampleEdge"/>'s
+    /// rules exactly so face grids and shared boundary edges weld without cracks.
+    /// </summary>
+    private static double[] CurveParams(Curve3d curve, int segmentsPerCircle, int curveSamples)
+    {
+        var domain = curve.Domain;
+        if (curve.IsClosed)
+        {
+            int n = curve.Underlying is Circle3d ? segmentsPerCircle : curveSamples;
+            return EvenParams(domain, n, includeEnd: false);
+        }
+        if (curve.Underlying is Line3d)
+            return [domain.Start, domain.End];
+        return EvenParams(domain, curveSamples, includeEnd: true);
+    }
+
+    private static double[] EvenParams(in Interval domain, int segments, bool includeEnd)
+    {
+        var parameters = new double[includeEnd ? segments + 1 : segments];
+        for (int i = 0; i < parameters.Length; i++)
+            parameters[i] = domain.ParameterAt((double)i / segments);
+        return parameters;
+    }
+
+    /// <summary>
+    /// Full-domain grid tessellation for generated surfaces (extrusions, revolutions,
+    /// sweeps). Quads are emitted in (+u, +v) order, i.e. counter-clockwise around
+    /// ∂u × ∂v, which the modeling operations arrange to point outward.
+    /// </summary>
+    private static void TessellateGrid(
+        Surface surface, double[] uParams, double[] vParams, bool closedU,
+        List<IReadOnlyList<Vector3d>> polygons)
+    {
+        int nu = uParams.Length;
+        int nv = vParams.Length;
+        var grid = new Vector3d[nu, nv];
+        for (int j = 0; j < nu; j++)
+        {
+            for (int k = 0; k < nv; k++)
+                grid[j, k] = surface.PointAt(uParams[j], vParams[k]);
+        }
+
+        int columns = closedU ? nu : nu - 1;
+        for (int j = 0; j < columns; j++)
+        {
+            int j1 = (j + 1) % nu;
+            for (int k = 0; k < nv - 1; k++)
+                polygons.Add([grid[j, k], grid[j1, k], grid[j1, k + 1], grid[j, k + 1]]);
+        }
     }
 
     private static List<Vector3d> LoopPolyline(BrepLoop loop, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)

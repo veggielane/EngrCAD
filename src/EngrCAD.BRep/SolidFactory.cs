@@ -6,7 +6,7 @@ namespace EngrCAD.BRep;
 /// Construction of primitive solids with full topology. Faces are built so surface
 /// normals point outward and loops run counter-clockwise around them.
 /// </summary>
-public static class SolidFactory
+public static partial class SolidFactory
 {
     /// <summary>Axis-aligned box: 8 vertices, 12 line edges, 6 planar faces.</summary>
     public static BrepSolid MakeBox(in Aabb bounds)
