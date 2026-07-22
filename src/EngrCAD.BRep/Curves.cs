@@ -1,0 +1,156 @@
+using EngrCAD.Core;
+
+namespace EngrCAD.BRep;
+
+/// <summary>Parametric 3D curve, evaluated over <see cref="Domain"/>.</summary>
+public abstract class Curve3d
+{
+    public abstract Interval Domain { get; }
+    public abstract bool IsClosed { get; }
+    public abstract Vector3d PointAt(double t);
+
+    /// <summary>Unit tangent by central differences; subclasses may override with exact derivatives.</summary>
+    public virtual Vector3d TangentAt(double t)
+    {
+        double h = double.IsFinite(Domain.Length) ? Math.Max(1e-7, Domain.Length * 1e-7) : 1e-7;
+        double t0 = Domain.Clamp(t - h), t1 = Domain.Clamp(t + h);
+        return ((PointAt(t1) - PointAt(t0)) / (t1 - t0)).Normalized();
+    }
+}
+
+/// <summary>Straight segment; t ∈ [0, 1] from <see cref="Start"/> to <see cref="End"/>.</summary>
+public sealed class Line3d(Vector3d start, Vector3d end) : Curve3d
+{
+    public Vector3d Start => start;
+    public Vector3d End => end;
+
+    public override Interval Domain => Interval.Unit;
+    public override bool IsClosed => false;
+    public override Vector3d PointAt(double t) => Vector3d.Lerp(start, end, t);
+    public override Vector3d TangentAt(double t) => (end - start).Normalized();
+}
+
+/// <summary>
+/// Full circle in the plane spanned by <paramref name="xDirection"/>/<paramref name="yDirection"/>
+/// (unit, orthogonal); t is the angle in [0, 2π].
+/// </summary>
+public sealed class Circle3d(Vector3d center, Vector3d xDirection, Vector3d yDirection, double radius) : Curve3d
+{
+    public Vector3d Center => center;
+    public Vector3d XDirection => xDirection;
+    public Vector3d YDirection => yDirection;
+    public Vector3d Axis => xDirection.Cross(yDirection);
+    public double Radius => radius;
+
+    public override Interval Domain => new(0, 2 * Math.PI);
+    public override bool IsClosed => true;
+
+    public override Vector3d PointAt(double t) =>
+        center + xDirection * (radius * Math.Cos(t)) + yDirection * (radius * Math.Sin(t));
+
+    public override Vector3d TangentAt(double t) =>
+        (-xDirection * Math.Sin(t) + yDirection * Math.Cos(t)).Normalized();
+}
+
+/// <summary>
+/// Rational B-spline curve (NURBS). Weights of all 1 give a plain B-spline; rational
+/// weights represent conics exactly. Evaluation is Cox–de Boor over the knot span.
+/// </summary>
+public sealed class NurbsCurve : Curve3d
+{
+    public int Degree { get; }
+    public IReadOnlyList<Vector3d> ControlPoints { get; }
+    public IReadOnlyList<double> Weights { get; }
+    public IReadOnlyList<double> Knots { get; }
+
+    public NurbsCurve(int degree, IReadOnlyList<Vector3d> controlPoints, IReadOnlyList<double>? weights, IReadOnlyList<double> knots)
+    {
+        if (degree < 1)
+            throw new ArgumentOutOfRangeException(nameof(degree));
+        if (controlPoints.Count < degree + 1)
+            throw new ArgumentException($"A degree-{degree} curve needs at least {degree + 1} control points.");
+        if (knots.Count != controlPoints.Count + degree + 1)
+            throw new ArgumentException(
+                $"Expected {controlPoints.Count + degree + 1} knots for {controlPoints.Count} control points of degree {degree}, got {knots.Count}.");
+        for (int i = 1; i < knots.Count; i++)
+        {
+            if (knots[i] < knots[i - 1])
+                throw new ArgumentException("Knot vector must be non-decreasing.");
+        }
+        if (weights is not null && weights.Count != controlPoints.Count)
+            throw new ArgumentException("Weight count must match control point count.");
+
+        Degree = degree;
+        ControlPoints = controlPoints;
+        Weights = weights ?? [.. Enumerable.Repeat(1.0, controlPoints.Count)];
+        Knots = knots;
+    }
+
+    public override Interval Domain => new(Knots[Degree], Knots[ControlPoints.Count]);
+
+    public override bool IsClosed =>
+        PointAt(Domain.Start).AreEqual(PointAt(Domain.End), Tolerance.Default);
+
+    public override Vector3d PointAt(double t)
+    {
+        t = Domain.Clamp(t);
+        int span = NurbsBasis.FindSpan(t, Degree, ControlPoints.Count, Knots);
+        Span<double> basis = stackalloc double[Degree + 1];
+        NurbsBasis.Evaluate(span, t, Degree, Knots, basis);
+
+        var numerator = Vector3d.Zero;
+        double denominator = 0;
+        for (int i = 0; i <= Degree; i++)
+        {
+            int index = span - Degree + i;
+            double bw = basis[i] * Weights[index];
+            numerator += ControlPoints[index] * bw;
+            denominator += bw;
+        }
+        return numerator / denominator;
+    }
+}
+
+/// <summary>Shared B-spline basis evaluation (The NURBS Book, algorithms A2.1/A2.2).</summary>
+internal static class NurbsBasis
+{
+    public static int FindSpan(double u, int degree, int controlPointCount, IReadOnlyList<double> knots)
+    {
+        int n = controlPointCount - 1;
+        if (u >= knots[n + 1])
+            return n;
+        if (u <= knots[degree])
+            return degree;
+        int low = degree, high = n + 1;
+        int mid = (low + high) / 2;
+        while (u < knots[mid] || u >= knots[mid + 1])
+        {
+            if (u < knots[mid])
+                high = mid;
+            else
+                low = mid;
+            mid = (low + high) / 2;
+        }
+        return mid;
+    }
+
+    public static void Evaluate(int span, double u, int degree, IReadOnlyList<double> knots, Span<double> basis)
+    {
+        Span<double> left = stackalloc double[degree + 1];
+        Span<double> right = stackalloc double[degree + 1];
+        basis[0] = 1;
+        for (int j = 1; j <= degree; j++)
+        {
+            left[j] = u - knots[span + 1 - j];
+            right[j] = knots[span + j] - u;
+            double saved = 0;
+            for (int r = 0; r < j; r++)
+            {
+                double temp = basis[r] / (right[r + 1] + left[j - r]);
+                basis[r] = saved + right[r + 1] * temp;
+                saved = left[j - r] * temp;
+            }
+            basis[j] = saved;
+        }
+    }
+}
