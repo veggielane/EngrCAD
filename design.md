@@ -186,6 +186,32 @@ splitting and B-Rep booleans will consume.
   wall's circles when a cut passes through the hole) outruns the grid tessellator —
   trimmed-face tessellation is the companion work item to booleans.
 
+### B-Rep booleans (`BrepBoolean`, in Interop)
+
+The pipeline, per operation: (1) capture both solids' `MeshSdf` before mutating anything;
+(2) intersect every original face pair, recording — per curve — the *other* face's
+crossing parameters; (3) split each solid's faces by its curves, passing those opposing
+crossings as **mandatory seam breaks** so both sides subdivide the seam identically and
+welding closes it; (4) classify each fragment by probing a strictly-interior point
+(outer-loop triangle centroids, or the parametric midpoint for period-wrapping band
+fragments) against the other solid's SDF; (5) keep fragments per operation, with
+subtracted-tool faces marked `IsReversed` (the tessellator flips their triangles).
+
+Booleans deliberately live in Interop, not BRep: classification rides on the mesh
+engine's signed distance field — the hybrid kernel earning its keep.
+
+Two supporting mechanisms: circle-extrusions along their axis are **promoted to analytic
+cylinders** inside `SurfaceIntersection`, so drilled bores get exact circles rather than
+marched polylines; and a closed curve whose pullback drifts a full period (a bore circle
+on a band) is recognized as non-contractible and handled by `SplitBandByWrapCurve`,
+which cuts the band into two bands with exactly reconstructed sub-surfaces.
+
+v1 contract: transversal intersections only (no coplanar or tangent face pairs); the
+input solids are consumed; the result is geometrically sealed — it tessellates closed
+with exact volumes — but seam edges are not yet topologically unified between the A-side
+and B-side fragments, so `Validate()` does not apply to boolean output. Topological seam
+sealing (edge/vertex unification along seams) is the follow-up.
+
 ## 6. Interop
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:

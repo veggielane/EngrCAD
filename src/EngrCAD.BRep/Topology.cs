@@ -92,15 +92,22 @@ public sealed class BrepFace
     /// <summary>First loop is the outer boundary; the rest are holes.</summary>
     public IReadOnlyList<BrepLoop> Loops { get; }
 
+    /// <summary>
+    /// When true, the face's outward normal is the reverse of the surface normal
+    /// (booleans produce such faces, e.g. the wall of a subtracted tool).
+    /// </summary>
+    public bool IsReversed { get; }
+
     public BrepLoop OuterLoop => Loops[0];
     public BrepShell Shell { get; internal set; } = null!;
 
-    public BrepFace(Surface surface, IReadOnlyList<BrepLoop> loops)
+    public BrepFace(Surface surface, IReadOnlyList<BrepLoop> loops, bool isReversed = false)
     {
         if (loops.Count == 0)
             throw new ArgumentException("A face needs at least one loop.");
         Surface = surface;
         Loops = loops;
+        IsReversed = isReversed;
         foreach (var loop in loops)
             loop.Face = this;
     }

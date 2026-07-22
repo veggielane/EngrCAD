@@ -25,6 +25,7 @@ public static class BRepTessellator
         var polygons = new List<IReadOnlyList<Vector3d>>();
         foreach (var face in solid.Faces)
         {
+            int firstPolygon = polygons.Count;
             switch (face.Surface)
             {
                 case PlaneSurface plane:
@@ -61,6 +62,13 @@ public static class BRepTessellator
                 default:
                     throw new NotSupportedException(
                         $"Tessellation of {face.Surface.GetType().Name} faces is not implemented yet.");
+            }
+
+            // Reversed faces (boolean output) point opposite their surface normal.
+            if (face.IsReversed)
+            {
+                for (int i = firstPolygon; i < polygons.Count; i++)
+                    polygons[i] = [.. polygons[i].Reverse()];
             }
         }
 

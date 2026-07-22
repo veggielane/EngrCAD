@@ -182,6 +182,16 @@ public sealed class ViewportControl : OpenGlControlBase
             BRepTessellator.Tessellate(tube, segmentsPerCircle: 40, curveSamples: 40),
             Matrix4d.CreateTranslation((2.2, 5.6, 0)),
             (0.63f, 0.78f, 0.58f));
+
+        // A true B-Rep boolean: block minus drilled bore.
+        var block = SolidFactory.MakeBox(new Aabb((-0.9, -0.9, -0.55), (0.9, 0.9, 0.55)));
+        var bore = SolidFactory.Extrude(
+            Profile.Circle((0.25, 0.25, -1), Vector3d.UnitX, Vector3d.UnitY, 0.4), (0, 0, 2));
+        var drilled = BrepBoolean.Difference(block, bore);
+        yield return (
+            BRepTessellator.Tessellate(drilled, segmentsPerCircle: 48),
+            Matrix4d.CreateTranslation((5.4, 5.6, 0)),
+            (0.82f, 0.68f, 0.46f));
     }
 
     private unsafe GpuMesh Upload(GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color)

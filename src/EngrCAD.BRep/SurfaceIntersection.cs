@@ -19,6 +19,11 @@ public static class SurfaceIntersection
         if (region.IsEmpty)
             throw new ArgumentException("Region must be non-empty.", nameof(region));
 
+        // An extrusion of a full circle along its axis IS a cylinder — promote it so
+        // drilled bores get exact analytic intersection circles.
+        a = Promote(a);
+        b = Promote(b);
+
         return (a, b) switch
         {
             (PlaneSurface pa, PlaneSurface pb) => PlanePlane(pa, pb, region),
@@ -32,6 +37,13 @@ public static class SurfaceIntersection
             _ => March(a, b, region),
         };
     }
+
+    private static Surface Promote(Surface s) =>
+        s is ExtrudedSurface e &&
+        e.Generator.Underlying is Circle3d c &&
+        e.Direction.IsParallelTo(c.Axis, Tolerance.Default)
+            ? new CylinderSurface(c.Center, c.XDirection, c.YDirection, c.Radius)
+            : s;
 
     // ---- analytic cases ----
 

@@ -17,6 +17,10 @@ engines.
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
   edge polylines exactly; everything is welded (with seam zipping to repair T-junctions
   from earcut's collinear filtering).
+- **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
+  (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
+  subtracted faces). See design.md §5. v1: transversal cases; inputs consumed; output
+  tessellates closed with exact volumes but is not yet topologically seam-sealed.
 - **Mesh → Implicit**: `MeshSdf(mesh)` — signed distance to a closed manifold mesh:
   branch-and-bound nearest-triangle search over a BVH (Ericson closest-point-on-triangle);
   sign from the angle-weighted pseudonormal of the closest feature (Bærentzen–Aanæs),

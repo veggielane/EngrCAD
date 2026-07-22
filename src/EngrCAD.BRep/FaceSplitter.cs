@@ -76,9 +76,28 @@ public static class FaceSplitter
         return new ClosedSplitResult(faceWithHole, disk, edge);
     }
 
-    private sealed record Crossing(BrepEdge Edge, double EdgeParam, double CurveParam)
+    private sealed record Crossing(BrepEdge? Edge, double EdgeParam, double CurveParam)
     {
         public BrepVertex Vertex { get; set; } = null!;
+    }
+
+    /// <summary>
+    /// Curve parameters where the curve crosses the face's boundary. Used by booleans to
+    /// force matching seam subdivision on the other solid's faces. Empty when the curve
+    /// does not lie on the face's surface.
+    /// </summary>
+    public static IReadOnlyList<double> CrossingParameters(BrepFace face, Curve3d curve)
+    {
+        try
+        {
+            double period = FaceGeometry.PeriodU(face.Surface);
+            var pulled = PullCurveWithParams(curve, face.Surface);
+            return FindCrossings(face, curve, pulled, period).Select(c => c.CurveParam).ToList();
+        }
+        catch (ArgumentException)
+        {
+            return [];
+        }
     }
 
     /// <summary>
@@ -89,20 +108,40 @@ public static class FaceSplitter
     /// A closed curve with no crossings that lies inside the face falls back to
     /// <see cref="SplitByClosedCurve"/>; a curve entirely outside returns the face as-is.
     /// </summary>
-    public static IReadOnlyList<BrepFace> SplitByCurve(BrepFace face, Curve3d curve)
+    public static IReadOnlyList<BrepFace> SplitByCurve(
+        BrepFace face, Curve3d curve, IReadOnlyList<double>? mandatoryBreaks = null)
     {
         var surface = face.Surface;
         double period = FaceGeometry.PeriodU(surface);
-        var pulledCurve = PullCurveWithParams(curve, surface);
+        List<(double S, Vector2d Uv)> pulledCurve;
+        try
+        {
+            pulledCurve = PullCurveWithParams(curve, surface);
+        }
+        catch (ArgumentException)
+        {
+            return [face]; // the curve does not lie on this face's surface
+        }
         var rawLoops = FaceGeometry.PullLoops(face);
 
         var crossings = FindCrossings(face, curve, pulledCurve, period);
         if (crossings.Count == 0)
         {
-            if (curve.IsClosed && ParityContains(rawLoops, ProjectNear(surface, curve.PointAt(curve.Domain.Start), null, period), period))
+            if (curve.IsClosed)
             {
-                var split = SplitByClosedCurve(face, curve);
-                return [split.FaceWithHole, split.Disk!];
+                // A closed pulled curve that drifts a full period wraps the face's
+                // periodic direction (e.g. a bore circle on a cylinder band): it is not
+                // contractible and splits the band into two bands.
+                var endUv = ProjectNear(surface, curve.PointAt(curve.Domain.End), pulledCurve[^1].Uv, period);
+                double drift = endUv.X - pulledCurve[0].Uv.X;
+                if (period > 0 && Math.Abs(drift) > period / 2)
+                    return SplitBandByWrapCurve(face, curve, pulledCurve, drift > 0);
+
+                if (ParityContains(rawLoops, pulledCurve[0].Uv, period))
+                {
+                    var split = SplitByClosedCurve(face, curve);
+                    return [split.FaceWithHole, split.Disk!];
+                }
             }
             return [face];
         }
@@ -116,11 +155,24 @@ public static class FaceSplitter
             }
         }
 
+        // Mandatory breaks (the other solid's crossings, in booleans) subdivide the seam
+        // identically on both sides so tessellation welds; they become interior vertices.
+        foreach (double breakParam in mandatoryBreaks ?? [])
+        {
+            double s = WrapParam(curve, curve.Domain.Clamp(breakParam));
+            if (crossings.Any(c => Math.Abs(c.CurveParam - s) < 1e-8))
+                continue;
+            var uv = ProjectNear(surface, curve.PointAt(s), null, period);
+            if (!ParityContains(rawLoops, uv, period))
+                continue;
+            crossings.Add(new Crossing(null, 0, s) { Vertex = new BrepVertex(curve.PointAt(s)) });
+        }
+
         // 1. Split the boundary edges at the crossings (multiple crossings per edge are
         //    processed outward-in so earlier splits don't invalidate later parameters).
         //    A crossing at an edge endpoint — e.g. a vertex created by a previous split —
         //    reuses that vertex instead of splitting.
-        foreach (var group in crossings.GroupBy(c => c.Edge))
+        foreach (var group in crossings.Where(c => c.Edge is not null).GroupBy(c => c.Edge!))
         {
             var edge = group.Key;
             double endEpsilon = Math.Max(1e-9, edge.Domain.Length * 1e-7);
@@ -179,6 +231,49 @@ public static class FaceSplitter
 
         // 3. Trace sub-faces from the planar graph.
         return TraceFaces(face, segmentCoedges, period);
+    }
+
+    /// <summary>
+    /// Splits a two-loop band face (extruded closed generator) along a closed curve that
+    /// wraps the periodic direction at constant v — e.g. a bore wall cut by a plane. The
+    /// band becomes two bands with exactly reconstructed sub-surfaces, sharing one new
+    /// closed edge.
+    /// </summary>
+    private static IReadOnlyList<BrepFace> SplitBandByWrapCurve(
+        BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, bool traversesPlusU)
+    {
+        if (face.Surface is not ExtrudedSurface extruded)
+            throw new NotSupportedException(
+                "Period-wrapping split curves are only supported on extruded band faces yet.");
+        if (face.Loops.Count != 2)
+            throw new NotSupportedException("Wrap-splitting expects a two-loop band face.");
+
+        double vCut = pulledCurve.Average(p => p.Uv.Y);
+        if (pulledCurve.Any(p => Math.Abs(p.Uv.Y - vCut) > 1e-6))
+            throw new NotSupportedException("Wrap-splitting supports constant-parameter cuts only.");
+        if (vCut <= 1e-9 || vCut >= 1 - 1e-9)
+            return [face]; // the cut coincides with a boundary ring
+
+        var pulledLoops = FaceGeometry.PullLoops(face);
+        int bottomIndex = pulledLoops[0].Average(p => p.Y) <= pulledLoops[1].Average(p => p.Y) ? 0 : 1;
+        var bottomLoop = face.Loops[bottomIndex];
+        var topLoop = face.Loops[1 - bottomIndex];
+
+        var seam = new BrepVertex(curve.PointAt(curve.Domain.Start));
+        var edge = new BrepEdge(curve, curve.Domain, seam, seam);
+
+        var lowerSurface = new ExtrudedSurface(extruded.Generator, extruded.Direction * vCut);
+        var upperSurface = new ExtrudedSurface(
+            extruded.Generator.Transformed(Matrix4d.CreateTranslation(extruded.Direction * vCut)),
+            extruded.Direction * (1 - vCut));
+
+        // Band conventions: the bottom loop follows the generator's +u direction, the top
+        // loop opposes it. The cut is the lower band's top and the upper band's bottom.
+        var lower = new BrepFace(lowerSurface,
+            [bottomLoop, new BrepLoop([new BrepCoedge(edge, sameSense: !traversesPlusU)])]);
+        var upper = new BrepFace(upperSurface,
+            [new BrepLoop([new BrepCoedge(edge, sameSense: traversesPlusU)]), topLoop]);
+        return [lower, upper];
     }
 
     private static double WrapParam(Curve3d curve, double s)
