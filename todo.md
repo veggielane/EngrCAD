@@ -131,6 +131,97 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   `DijkstraGraphDistance` (approximate geodesics). Enables engraving/wrapping features.
 - [ ] **ICP registration** — `MeshICP` for aligning imported scans to models.
 
+## OpenSCAD feature parity
+
+OpenSCAD's feature set as a checklist of user expectations for a CSG modeler, mapped
+against EngrCAD. ✅ = have (sometimes better: exact B-Rep vs OpenSCAD's mesh-only CSG),
+🔶 = partial, [ ] = missing.
+
+### Primitives
+- ✅ `cube` — `MeshPrimitives.Box` / `SolidFactory.MakeBox` / `Sdf.Box`
+- ✅ `sphere` — `MeshPrimitives.UvSphere` / `Sdf.Sphere` (no B-Rep sphere *solid* yet)
+- 🔶 `cylinder(r1, r2)` — we have straight cylinders everywhere but **no cone** (r1≠r2):
+  add `ConeSurface` + `Sdf.Cone` + `MeshPrimitives.Cone`, tessellator support
+- ✅ `polyhedron` — `HalfEdgeMesh.Build(positions, faces)`
+- 🔶 2D `square/circle/polygon` — `Profile.FromPoints`/`Profile.Circle` cover modeling
+  input; a first-class 2D region type (polygon-with-holes + area/containment) is part of
+  the sketch-engine item above
+- [ ] `text()` — font outlines → `Profile`s (extrudable text). Parse font glyphs
+  (TrueType via a .NET lib) → polygon outlines with holes; g3's `PolygonFont2d` shows a
+  poor-man's variant
+- [ ] `surface()` — heightmap (image/data grid) → mesh terrain
+
+### Booleans & combinators
+- ✅ `union/difference/intersection` (3D) — `MeshBoolean` + `BrepBoolean` + Sdf `|&-`
+- [ ] 2D booleans — union/difference/intersection of profiles/regions (needed by the
+  sketch engine; `Arrangement2d`+`GraphCells2d` from the g3 list is the mechanism)
+- [ ] `hull()` — convex hull, 3D (quickhull over mesh/solid vertices → `HalfEdgeMesh`)
+  and 2D (`ConvexHull2` exists in g3). High value for quick bracket/enclosure modeling
+- [ ] `minkowski()` — general Minkowski sum is hard; note the important special case is
+  rounding, which we already have cheaply: SDF `Offset` (sphere-Minkowski ≡ offset) and
+  `Filleting`. Document the equivalence; general polyhedron⊕polyhedron is low priority
+
+### Transformations
+- ✅ `translate/rotate/scale/multmatrix` — `Matrix4d`/`Quaterniond` + Sdf transforms;
+  **but meshes/solids lack a one-call `Transform(Matrix4d)`** — add
+  `HalfEdgeMesh.Transformed(m)` and `BrepSolid` transform (surfaces/curves each need a
+  transform story — `TransformedCurve` exists; add `TransformedSurface` or per-type
+  transform methods)
+- [ ] `mirror()` — reflection transform incl. winding flip (mesh: reverse faces;
+  B-Rep: reverse faces/loops — the `ReverseFace` machinery already exists)
+- [ ] `resize()` — non-uniform scale to target bounds (mesh: easy; SDF: non-uniform
+  scale breaks distance metric — document lower-bound semantics; B-Rep: needs
+  affine-transformed surfaces)
+- [ ] `offset(r|delta, chamfer)` (2D) — polygon offsetting with round/miter/chamfer
+  corners for profiles (classic Clipper-style algorithm); feeds shells, pockets, and
+  toolpaths
+- ✅ `color()` — viewer-side concern; per-object color exists in the demo scene, but a
+  real scene/document model with per-body appearance is TODO (see App layer below)
+
+### Extrusion & projection
+- ✅ `linear_extrude(height)` — `SolidFactory.Extrude` (ours adds shear + holes)
+- [ ] `linear_extrude(twist, scale, slices)` — twisted/tapered extrusion: profile
+  rotates/scales along the path. Fits our generalized-sweep machinery (a `SweptSurface`
+  variant with per-v rotation/scale in the frame); g3's `GenCylGenerators` is the mesh
+  route
+- ✅ `rotate_extrude(angle)` — `SolidFactory.Revolve` (full + partial, holes on partial)
+- ✅ beyond OpenSCAD: `Sweep` along arbitrary paths with RMF (OpenSCAD cannot)
+- [ ] `projection(cut=false)` — flatten a solid's shadow to a 2D outline (silhouette:
+  project triangles, 2D-union them — needs 2D booleans)
+- [ ] `projection(cut=true)` — planar cross-section as a 2D region (mesh: plane cut +
+  boundary loops → polygons; B-Rep: `SurfaceIntersection` per face + loop assembly)
+- [ ] `roof()` (OpenSCAD dev) — straight-skeleton roof over a polygon; low priority
+
+### Quality / tessellation control
+- 🔶 `$fn/$fa/$fs` — we expose `segmentsPerCircle`/`curveSamples`/`resolution` per call;
+  unify into a `TessellationQuality` options type (max angle, max chord deviation,
+  min/max segments) with **adaptive** sampling from curvature rather than fixed counts
+
+### Language / app layer (OpenSCAD's essence)
+- [ ] **Parametric model layer** — OpenSCAD is really a *declarative script → CSG tree*
+  system. EngrCAD's analog, in order of ambition: (1) a fluent C# builder API over a
+  retained **document/scene model** (named bodies, parameters, re-evaluation on change —
+  the `TransformSequence` idea from g3); (2) C# scripting via Roslyn scripting API
+  (`.csx` models with live re-run — LINQ-native modeling was the founding vision, so C#
+  *is* our SCAD language); (3) module/function-style reusable parametric components as
+  plain C# methods — document the pattern
+- [ ] Debug modifiers (`#` highlight, `%` background/ghost, `!` isolate, `*` disable) —
+  per-body display flags in the viewer scene model (highlight ✓ exists via selection;
+  add ghost/isolate/hide)
+- [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame
+- [ ] `assert/echo` — we have exceptions/tests; a model-validation report (volumes,
+  bounds, manifoldness per body) shown in the viewer would serve the same role
+
+### Import / export
+- ✅ export STEP (beyond OpenSCAD), OBJ
+- [ ] export **STL** (trivial: binary+ASCII writer over `RenderMesh`/`HalfEdgeMesh`) —
+  highest-value quick win for 3D printing
+- [ ] export 3MF / AMF (zip+XML; 3MF is the modern printing format), OFF
+- [ ] import STL/OBJ/OFF (+ repair pipeline from the g3 section) — turns EngrCAD into a
+  tool that can work on existing models
+- [ ] import/export DXF + SVG (2D profiles in/out; SVG out also useful for drawings)
+- [ ] export PNG snapshot from the viewer (offscreen render to file)
+
 ## Not worth adopting (deliberate)
 
 - g3's mesh structure itself (index+edge-list) — our half-edge with explicit boundary
