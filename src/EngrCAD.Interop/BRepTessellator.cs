@@ -37,19 +37,26 @@ public static class BRepTessellator
                     TessellateGrid(extruded,
                         CurveParams(extruded.Generator, segmentsPerCircle, curveSamples),
                         [0.0, 1.0],
-                        closedU: extruded.Generator.IsClosed, polygons);
+                        closedU: extruded.Generator.IsClosed, closedV: false, polygons);
                     break;
                 case RevolvedSurface revolved:
+                    // Full turns are periodic in u; partial turns must sample u the same
+                    // way their arc rail edges do (curveSamples), so the boundaries weld.
+                    // A closed generator (e.g. a revolved circle = pipe elbow) is periodic
+                    // in v.
                     TessellateGrid(revolved,
-                        EvenParams(revolved.DomainU, segmentsPerCircle, includeEnd: false),
+                        revolved.IsFullTurn
+                            ? EvenParams(revolved.DomainU, segmentsPerCircle, includeEnd: false)
+                            : EvenParams(revolved.DomainU, curveSamples, includeEnd: true),
                         CurveParams(revolved.Generator, segmentsPerCircle, curveSamples),
-                        closedU: true, polygons);
+                        closedU: revolved.IsFullTurn,
+                        closedV: revolved.Generator.IsClosed, polygons);
                     break;
                 case SweptSurface swept:
                     TessellateGrid(swept,
                         CurveParams(swept.Generator, segmentsPerCircle, curveSamples),
                         EvenParams(swept.Path.Domain, curveSamples, includeEnd: true),
-                        closedU: swept.Generator.IsClosed, polygons);
+                        closedU: swept.Generator.IsClosed, closedV: false, polygons);
                     break;
                 default:
                     throw new NotSupportedException(
@@ -112,7 +119,7 @@ public static class BRepTessellator
     /// ∂u × ∂v, which the modeling operations arrange to point outward.
     /// </summary>
     private static void TessellateGrid(
-        Surface surface, double[] uParams, double[] vParams, bool closedU,
+        Surface surface, double[] uParams, double[] vParams, bool closedU, bool closedV,
         List<IReadOnlyList<Vector3d>> polygons)
     {
         int nu = uParams.Length;
@@ -125,11 +132,15 @@ public static class BRepTessellator
         }
 
         int columns = closedU ? nu : nu - 1;
+        int rows = closedV ? nv : nv - 1;
         for (int j = 0; j < columns; j++)
         {
             int j1 = (j + 1) % nu;
-            for (int k = 0; k < nv - 1; k++)
-                polygons.Add([grid[j, k], grid[j1, k], grid[j1, k + 1], grid[j, k + 1]]);
+            for (int k = 0; k < rows; k++)
+            {
+                int k1 = (k + 1) % nv;
+                polygons.Add([grid[j, k], grid[j1, k], grid[j1, k1], grid[j, k1]]);
+            }
         }
     }
 
@@ -160,16 +171,29 @@ public static class BRepTessellator
         Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
         List<IReadOnlyList<Vector3d>> polygons)
     {
-        if (face.Loops.Count != 1)
-            throw new NotSupportedException("Planar faces with holes are not supported yet.");
-
+        // Triangulator output is CCW in plane coordinates, whose 3D normal is
+        // x × y = the plane normal = the outward face normal by construction.
         var boundary = LoopPolyline(face.OuterLoop, edgePolylines);
         var boundary2d = boundary.Select(p => plane.Project(p)).ToList();
 
-        // Triangulator emits CCW triangles in plane coordinates, whose 3D normal is
-        // x × y = the plane normal = the outward face normal by construction.
-        foreach (var (a, b, c) in PolygonTriangulator.Triangulate(boundary2d))
-            polygons.Add([boundary[a], boundary[b], boundary[c]]);
+        if (face.Loops.Count == 1)
+        {
+            foreach (var (a, b, c) in PolygonTriangulator.Triangulate(boundary2d))
+                polygons.Add([boundary[a], boundary[b], boundary[c]]);
+            return;
+        }
+
+        // Holes: triangle indices refer to [outer..., hole0..., hole1...].
+        var combined = new List<Vector3d>(boundary);
+        var holes2d = new List<IReadOnlyList<Vector2d>>();
+        foreach (var loop in face.Loops.Skip(1))
+        {
+            var hole = LoopPolyline(loop, edgePolylines);
+            combined.AddRange(hole);
+            holes2d.Add(hole.Select(p => plane.Project(p)).ToList());
+        }
+        foreach (var (a, b, c) in PolygonTriangulator.TriangulateWithHoles(boundary2d, holes2d))
+            polygons.Add([combined[a], combined[b], combined[c]]);
     }
 
     private static void TessellateCylinderBand(

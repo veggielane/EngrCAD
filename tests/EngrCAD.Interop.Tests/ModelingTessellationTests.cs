@@ -66,6 +66,93 @@ public class ModelingTessellationTests
     }
 
     [Fact]
+    public void PlateWithCircularHole_ExactVolumeAndGenus()
+    {
+        int n = 32;
+        var plate = Profile.FromPoints([(0, 0, 0), (4, 0, 0), (4, 3, 0), (0, 3, 0)]);
+        var hole = Profile.Circle((2, 1.5, 0), Vector3d.UnitX, Vector3d.UnitY, 0.8);
+        var mesh = BRepTessellator.Tessellate(
+            SolidFactory.Extrude(plate, (0, 0, 0.5), holes: [hole]), segmentsPerCircle: n);
+        mesh.Validate();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(0, mesh.EulerCharacteristic); // genus 1
+
+        // The hole is tessellated as an n-gon, so the volume is exact.
+        double holeArea = 0.5 * n * 0.8 * 0.8 * Math.Sin(2 * Math.PI / n);
+        Assert.Equal((12 - holeArea) * 0.5, mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void PlateWithTwoSquareHoles_ExactVolumeAndGenusTwo()
+    {
+        var plate = Profile.FromPoints([(0, 0, 0), (6, 0, 0), (6, 3, 0), (0, 3, 0)]);
+        var holes = new[]
+        {
+            Profile.FromPoints([(1, 1, 0), (2, 1, 0), (2, 2, 0), (1, 2, 0)]),
+            Profile.FromPoints([(4, 1, 0), (5, 1, 0), (5, 2, 0), (4, 2, 0)]),
+        };
+        var mesh = BRepTessellator.Tessellate(SolidFactory.Extrude(plate, (0, 0, 1), holes));
+        mesh.Validate();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(-2, mesh.EulerCharacteristic); // genus 2
+        Assert.Equal(18 - 2, mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void PartialRevolve_ExactWedgeVolume()
+    {
+        int m = 24;
+        var profile = Profile.FromPoints([(1, 0, 0), (2, 0, 0), (2, 0, 1), (1, 0, 1)]);
+        var mesh = BRepTessellator.Tessellate(
+            SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ, angle: Math.PI / 2),
+            curveSamples: m);
+        mesh.Validate();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+
+        // m angular steps of straight chords: an exact sum of prismatic wedges.
+        double exact = 0.5 * (4 - 1) * 1.0 * m * Math.Sin(Math.PI / 2 / m);
+        Assert.Equal(exact, mesh.Volume(), 9);
+        double ideal = 0.5 * (4 - 1) * Math.PI / 2;
+        Assert.True(Math.Abs(mesh.Volume() - ideal) / ideal < 0.01);
+    }
+
+    [Fact]
+    public void PipeElbow_VolumeMatchesPappus()
+    {
+        double bendRadius = 1.5, pipeRadius = 0.4, angle = Math.PI / 2;
+        var profile = Profile.Circle((bendRadius, 0, 0), Vector3d.UnitX, Vector3d.UnitZ, pipeRadius);
+        var mesh = BRepTessellator.Tessellate(
+            SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ, angle),
+            segmentsPerCircle: 48, curveSamples: 48);
+        mesh.Validate();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+
+        double pappus = Math.PI * pipeRadius * pipeRadius * angle * bendRadius;
+        Assert.True(Math.Abs(mesh.Volume() - pappus) / pappus < 0.02,
+            $"elbow volume {mesh.Volume()} vs Pappus {pappus}");
+    }
+
+    [Fact]
+    public void SweepWithHole_ExactTubeWallVolume()
+    {
+        var square = Profile.FromPoints([(-0.5, -0.5, 0), (0.5, -0.5, 0), (0.5, 0.5, 0), (-0.5, 0.5, 0)]);
+        var inner = Profile.FromPoints([(-0.3, -0.3, 0), (0.3, -0.3, 0), (0.3, 0.3, 0), (-0.3, 0.3, 0)]);
+        var mesh = BRepTessellator.Tessellate(
+            SolidFactory.Sweep(square, new Line3d((0, 0, 0), (0, 0, 4)), holes: [inner]));
+        mesh.Validate();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(0, mesh.EulerCharacteristic); // hollow rectangular duct: genus 1
+        Assert.Equal((1.0 - 0.36) * 4, mesh.Volume(), 6);
+    }
+
+    [Fact]
     public void SweepAlongStraightPath_ExactPrism()
     {
         var square = Profile.FromPoints([(0, 0, 0), (1, 0, 0), (1, 1, 0), (0, 1, 0)]);

@@ -2,18 +2,19 @@ using EngrCAD.Core;
 
 namespace EngrCAD.BRep;
 
-// Modeling operations: extrude, revolve, sweep. All three share the same construction
-// shape — side faces from the profile segments plus rail edges at junctions, with caps
-// where the solid has open ends — differing only in how the "top" copy of the profile
-// and the rails are generated.
+// Modeling operations: extrude, revolve, sweep — with optional through-holes. All share
+// the same construction shape: side faces per profile segment plus rail edges at
+// junctions for every boundary profile (outer and holes), with multi-loop caps where the
+// solid has open ends.
 
 public static partial class SolidFactory
 {
     /// <summary>
     /// Extrudes a planar profile along <paramref name="direction"/> (length = distance;
     /// shear extrusions where the direction is not normal to the profile are allowed).
+    /// Optional hole profiles must be coplanar with the outer profile and inside it.
     /// </summary>
-    public static BrepSolid Extrude(Profile profile, in Vector3d direction)
+    public static BrepSolid Extrude(Profile profile, in Vector3d direction, IReadOnlyList<Profile>? holes = null)
     {
         if (direction.IsZero(Tolerance.Default))
             throw new ArgumentException("Extrude direction must be non-zero.", nameof(direction));
@@ -23,11 +24,19 @@ public static partial class SolidFactory
         if (alignment < 0)
             profile = profile.Reversed();
 
+        var profiles = new List<Profile> { profile };
+        foreach (var hole in holes ?? [])
+        {
+            ValidateCoplanarHole(profile, hole);
+            // Holes bound material on their outside: wind them opposite the outer profile.
+            profiles.Add(hole.Normal.Dot(direction) > 0 ? hole.Reversed() : hole);
+        }
+
         var translation = Matrix4d.CreateTranslation(direction);
         var dir = direction;
 
         return BuildSweptSolid(
-            profile,
+            profiles,
             makeSideSurface: segment => new ExtrudedSurface(segment, dir),
             topTransform: translation,
             makeRailCurve: (bottom, top) => new Line3d(bottom, top),
@@ -37,49 +46,101 @@ public static partial class SolidFactory
     }
 
     /// <summary>
-    /// Revolves a planar profile a full turn about the axis. The profile plane must
-    /// contain the axis and the profile must lie strictly on one side of it. The profile
-    /// needs at least two segments (a torus-like solid gets one face per segment).
+    /// Revolves a planar profile about an axis lying in its plane, through
+    /// <paramref name="angle"/> radians (default a full turn). The profile must lie
+    /// strictly on one side of the axis. Full turns produce cap-less torus-topology
+    /// solids and require a multi-segment profile without holes; partial revolves get
+    /// planar caps and support single-closed-curve profiles (pipe elbows) and holes.
     /// </summary>
-    public static BrepSolid Revolve(Profile profile, in Vector3d axisOrigin, in Vector3d axisDirection)
+    public static BrepSolid Revolve(
+        Profile profile, in Vector3d axisOrigin, in Vector3d axisDirection,
+        double angle = 2 * Math.PI, IReadOnlyList<Profile>? holes = null)
     {
-        var axis = axisDirection.Normalized();
-        if (Math.Abs(axis.Dot(profile.Normal)) > 1e-6)
-            throw new ArgumentException("The revolve axis must lie in the profile plane.");
-        if (Math.Abs((axisOrigin - profile.Origin).Dot(profile.Normal)) > 1e-6)
-            throw new ArgumentException("The revolve axis must lie in the profile plane.");
-        if (profile.IsSingleClosedCurve)
-            throw new NotSupportedException(
-                "Revolving a single closed curve needs a face with no edges; split the profile into two or more segments.");
+        if (angle <= 1e-9 || angle > 2 * Math.PI + 1e-9)
+            throw new ArgumentOutOfRangeException(nameof(angle));
+        bool fullTurn = Math.Abs(angle - 2 * Math.PI) < 1e-9;
 
-        // Radial direction of the half-plane, and one-sidedness check.
-        var samples = profile.SampleLoop();
+        var axis = axisDirection.Normalized();
         var origin = axisOrigin;
+        if (Math.Abs(axis.Dot(profile.Normal)) > 1e-6 ||
+            Math.Abs((origin - profile.Origin).Dot(profile.Normal)) > 1e-6)
+            throw new ArgumentException("The revolve axis must lie in the profile plane.");
+
+        var holeList = (holes ?? []).ToList();
+        if (fullTurn && holeList.Count > 0)
+            throw new NotSupportedException(
+                "A full revolve of a profile with holes produces multiple shells; revolve partially or model the shells separately.");
+        if (fullTurn && profile.IsSingleClosedCurve)
+            throw new NotSupportedException(
+                "Fully revolving a single closed curve needs a face with no edges; split the profile into two or more segments.");
+        foreach (var hole in holeList)
+            ValidateCoplanarHole(profile, hole);
+
+        // Radial direction of the half-plane, and one-sidedness of everything revolved.
+        var samples = profile.SampleLoop();
+        var allSamples = new List<Vector3d>(samples);
+        foreach (var hole in holeList)
+            allSamples.AddRange(hole.SampleLoop());
         Vector3d Radial(in Vector3d p)
         {
             var d = p - origin;
             return d - axis * d.Dot(axis);
         }
-        var radialDir = Radial(samples.MaxBy(p => Radial(p).LengthSquared)).Normalized();
-        foreach (var p in samples)
+        var radialDir = Radial(allSamples.MaxBy(p => Radial(p).LengthSquared)).Normalized();
+        foreach (var p in allSamples)
         {
             if ((p - origin).Dot(radialDir) < 1e-9)
                 throw new ArgumentException("The profile must lie strictly on one side of the revolve axis.");
         }
 
-        // Wind counter-clockwise in (radius, height) coordinates so revolution surfaces
-        // face outward.
-        double area = 0;
-        for (int i = 0; i < samples.Count; i++)
+        // Counter-clockwise in (radius, height) coordinates faces outward; holes clockwise.
+        double SignedRzArea(Profile p)
         {
-            var p = samples[i];
-            var q = samples[(i + 1) % samples.Count];
-            area += (p - origin).Dot(radialDir) * (q - origin).Dot(axis)
-                  - (q - origin).Dot(radialDir) * (p - origin).Dot(axis);
+            var loop = p.SampleLoop();
+            double area = 0;
+            for (int i = 0; i < loop.Count; i++)
+            {
+                var a = loop[i];
+                var b = loop[(i + 1) % loop.Count];
+                area += (a - origin).Dot(radialDir) * (b - origin).Dot(axis)
+                      - (b - origin).Dot(radialDir) * (a - origin).Dot(axis);
+            }
+            return area;
         }
-        if (area < 0)
+        if (SignedRzArea(profile) < 0)
             profile = profile.Reversed();
 
+        if (fullTurn)
+            return RevolveFullTurn(profile, origin, axis, radialDir);
+
+        var profiles = new List<Profile> { profile };
+        foreach (var hole in holeList)
+            profiles.Add(SignedRzArea(hole) > 0 ? hole.Reversed() : hole);
+
+        var rotation = Matrix4d.CreateTranslation(origin)
+                     * Matrix4d.CreateFromAxisAngle(axis, angle)
+                     * Matrix4d.CreateTranslation(-origin);
+        var endRadial = Quaterniond.FromAxisAngle(axis, angle).Rotate(radialDir);
+
+        return BuildSweptSolid(
+            profiles,
+            makeSideSurface: segment => new RevolvedSurface(segment, origin, axis, angle),
+            topTransform: rotation,
+            makeRailCurve: (bottom, _) =>
+            {
+                var center = origin + axis * (bottom - origin).Dot(axis);
+                var radiusVector = bottom - center;
+                double radius = radiusVector.Length;
+                var radial = radiusVector / radius;
+                return new Circle3d(center, radial, axis.Cross(radial), radius);
+            },
+            railDomain: new Interval(0, angle),
+            bottomCap: new PlaneSurface(origin, radialDir, axis),
+            topCap: new PlaneSurface(origin, axis, endRadial));
+    }
+
+    private static BrepSolid RevolveFullTurn(Profile profile, in Vector3d origin, in Vector3d axis, in Vector3d radialDir)
+    {
         int n = profile.Segments.Count;
         var circleY = axis.Cross(radialDir);
         var junctionEdges = new BrepEdge[n];
@@ -108,10 +169,10 @@ public static partial class SolidFactory
 
     /// <summary>
     /// Sweeps a planar profile along an open path using rotation-minimizing frames.
-    /// The profile must lie in the plane through the path's start point, perpendicular to
-    /// its start tangent.
+    /// The profile (and any holes) must lie in the plane through the path's start point,
+    /// perpendicular to its start tangent.
     /// </summary>
-    public static BrepSolid Sweep(Profile profile, Curve3d path)
+    public static BrepSolid Sweep(Profile profile, Curve3d path, IReadOnlyList<Profile>? holes = null)
     {
         if (path.IsClosed)
             throw new NotSupportedException("Closed sweep paths are not supported yet.");
@@ -123,6 +184,13 @@ public static partial class SolidFactory
             throw new ArgumentException("The profile must lie in the plane through the path's start point.");
         if (profile.Normal.Dot(startTangent) < 0)
             profile = profile.Reversed();
+
+        var profiles = new List<Profile> { profile };
+        foreach (var hole in holes ?? [])
+        {
+            ValidateCoplanarHole(profile, hole);
+            profiles.Add(hole.Normal.Dot(startTangent) > 0 ? hole.Reversed() : hole);
+        }
 
         // One frame master defines rails and the end transform; per-segment surfaces are
         // built with the same (path, startX), so their frames agree exactly.
@@ -138,7 +206,7 @@ public static partial class SolidFactory
         }
 
         return BuildSweptSolid(
-            profile,
+            profiles,
             makeSideSurface: segment => new SweptSurface(segment, path, profile.XAxis),
             topTransform: endTransform,
             makeRailCurve: (bottom, _) => new SweptRailCurve(master, LocalOffset(bottom)),
@@ -147,13 +215,21 @@ public static partial class SolidFactory
             topCap: new PlaneSurface(endOrigin, endX, endY));
     }
 
+    private static void ValidateCoplanarHole(Profile outer, Profile hole)
+    {
+        if (!hole.Normal.IsParallelTo(outer.Normal, new Tolerance(1e-9, 1e-6)) ||
+            Math.Abs((hole.Origin - outer.Origin).Dot(outer.Normal)) > 1e-6)
+            throw new ArgumentException("Hole profiles must be coplanar with the outer profile.");
+    }
+
     /// <summary>
-    /// Shared topology construction for extrude and sweep: N side faces, rails at
-    /// junctions, and two caps. The profile is already wound counter-clockwise about the
-    /// travel direction.
+    /// Shared topology construction for extrude, sweep and partial revolve: side faces
+    /// and junction rails for every boundary profile (profiles[0] = outer, wound for
+    /// outward side normals; the rest are holes, wound oppositely), plus two multi-loop
+    /// planar caps.
     /// </summary>
     private static BrepSolid BuildSweptSolid(
-        Profile profile,
+        IReadOnlyList<Profile> profiles,
         Func<Curve3d, Surface> makeSideSurface,
         in Matrix4d topTransform,
         Func<Vector3d, Vector3d, Curve3d> makeRailCurve,
@@ -162,75 +238,82 @@ public static partial class SolidFactory
         PlaneSurface topCap)
     {
         var faces = new List<BrepFace>();
+        var bottomCapLoops = new List<BrepLoop>();
+        var topCapLoops = new List<BrepLoop>();
 
-        if (profile.IsSingleClosedCurve)
+        foreach (var profile in profiles)
         {
-            var generator = profile.Segments[0];
-            var domain = generator.Domain;
-            var seamBottom = new BrepVertex(generator.PointAt(domain.Start));
-            var seamTop = new BrepVertex(topTransform.TransformPoint(seamBottom.Position));
-            var bottomEdge = new BrepEdge(generator, domain, seamBottom, seamBottom);
-            var topEdge = new BrepEdge(generator.Transformed(topTransform), domain, seamTop, seamTop);
+            if (profile.IsSingleClosedCurve)
+            {
+                var generator = profile.Segments[0];
+                var domain = generator.Domain;
+                var seamBottom = new BrepVertex(generator.PointAt(domain.Start));
+                var seamTop = new BrepVertex(topTransform.TransformPoint(seamBottom.Position));
+                var bottomEdge = new BrepEdge(generator, domain, seamBottom, seamBottom);
+                var topEdge = new BrepEdge(generator.Transformed(topTransform), domain, seamTop, seamTop);
 
-            faces.Add(new BrepFace(makeSideSurface(generator),
-            [
-                new BrepLoop([new BrepCoedge(bottomEdge, sameSense: true)]),
-                new BrepLoop([new BrepCoedge(topEdge, sameSense: false)]),
-            ]));
-            faces.Add(new BrepFace(bottomCap, [new BrepLoop([new BrepCoedge(bottomEdge, sameSense: false)])]));
-            faces.Add(new BrepFace(topCap, [new BrepLoop([new BrepCoedge(topEdge, sameSense: true)])]));
-            return new BrepSolid([new BrepShell(faces)]);
-        }
-
-        int n = profile.Segments.Count;
-        var bottomVertices = new BrepVertex[n];
-        var topVertices = new BrepVertex[n];
-        for (int i = 0; i < n; i++)
-        {
-            var q = profile.Segments[i].PointAt(profile.Segments[i].Domain.Start);
-            bottomVertices[i] = new BrepVertex(q);
-            topVertices[i] = new BrepVertex(topTransform.TransformPoint(q));
-        }
-
-        var bottomEdges = new BrepEdge[n];
-        var topEdges = new BrepEdge[n];
-        var railEdges = new BrepEdge[n];
-        for (int i = 0; i < n; i++)
-        {
-            var segment = profile.Segments[i];
-            int next = (i + 1) % n;
-            bottomEdges[i] = new BrepEdge(segment, segment.Domain, bottomVertices[i], bottomVertices[next]);
-            topEdges[i] = new BrepEdge(segment.Transformed(topTransform), segment.Domain, topVertices[i], topVertices[next]);
-            railEdges[i] = new BrepEdge(
-                makeRailCurve(bottomVertices[i].Position, topVertices[i].Position),
-                railDomain, bottomVertices[i], topVertices[i]);
-        }
-
-        for (int i = 0; i < n; i++)
-        {
-            int next = (i + 1) % n;
-            faces.Add(new BrepFace(makeSideSurface(profile.Segments[i]),
-            [
-                new BrepLoop(
+                faces.Add(new BrepFace(makeSideSurface(generator),
                 [
-                    new BrepCoedge(bottomEdges[i], sameSense: true),
-                    new BrepCoedge(railEdges[next], sameSense: true),
-                    new BrepCoedge(topEdges[i], sameSense: false),
-                    new BrepCoedge(railEdges[i], sameSense: false),
-                ]),
-            ]));
+                    new BrepLoop([new BrepCoedge(bottomEdge, sameSense: true)]),
+                    new BrepLoop([new BrepCoedge(topEdge, sameSense: false)]),
+                ]));
+                bottomCapLoops.Add(new BrepLoop([new BrepCoedge(bottomEdge, sameSense: false)]));
+                topCapLoops.Add(new BrepLoop([new BrepCoedge(topEdge, sameSense: true)]));
+                continue;
+            }
+
+            int n = profile.Segments.Count;
+            var bottomVertices = new BrepVertex[n];
+            var topVertices = new BrepVertex[n];
+            for (int i = 0; i < n; i++)
+            {
+                var q = profile.Segments[i].PointAt(profile.Segments[i].Domain.Start);
+                bottomVertices[i] = new BrepVertex(q);
+                topVertices[i] = new BrepVertex(topTransform.TransformPoint(q));
+            }
+
+            var bottomEdges = new BrepEdge[n];
+            var topEdges = new BrepEdge[n];
+            var railEdges = new BrepEdge[n];
+            for (int i = 0; i < n; i++)
+            {
+                var segment = profile.Segments[i];
+                int next = (i + 1) % n;
+                bottomEdges[i] = new BrepEdge(segment, segment.Domain, bottomVertices[i], bottomVertices[next]);
+                topEdges[i] = new BrepEdge(segment.Transformed(topTransform), segment.Domain, topVertices[i], topVertices[next]);
+                railEdges[i] = new BrepEdge(
+                    makeRailCurve(bottomVertices[i].Position, topVertices[i].Position),
+                    railDomain, bottomVertices[i], topVertices[i]);
+            }
+
+            for (int i = 0; i < n; i++)
+            {
+                int next = (i + 1) % n;
+                faces.Add(new BrepFace(makeSideSurface(profile.Segments[i]),
+                [
+                    new BrepLoop(
+                    [
+                        new BrepCoedge(bottomEdges[i], sameSense: true),
+                        new BrepCoedge(railEdges[next], sameSense: true),
+                        new BrepCoedge(topEdges[i], sameSense: false),
+                        new BrepCoedge(railEdges[i], sameSense: false),
+                    ]),
+                ]));
+            }
+
+            var bottomLoop = new List<BrepCoedge>(n);
+            for (int i = n - 1; i >= 0; i--)
+                bottomLoop.Add(new BrepCoedge(bottomEdges[i], sameSense: false));
+            bottomCapLoops.Add(new BrepLoop(bottomLoop));
+
+            var topLoop = new List<BrepCoedge>(n);
+            for (int i = 0; i < n; i++)
+                topLoop.Add(new BrepCoedge(topEdges[i], sameSense: true));
+            topCapLoops.Add(new BrepLoop(topLoop));
         }
 
-        var bottomLoop = new List<BrepCoedge>(n);
-        for (int i = n - 1; i >= 0; i--)
-            bottomLoop.Add(new BrepCoedge(bottomEdges[i], sameSense: false));
-        faces.Add(new BrepFace(bottomCap, [new BrepLoop(bottomLoop)]));
-
-        var topLoop = new List<BrepCoedge>(n);
-        for (int i = 0; i < n; i++)
-            topLoop.Add(new BrepCoedge(topEdges[i], sameSense: true));
-        faces.Add(new BrepFace(topCap, [new BrepLoop(topLoop)]));
-
+        faces.Add(new BrepFace(bottomCap, bottomCapLoops));
+        faces.Add(new BrepFace(topCap, topCapLoops));
         return new BrepSolid([new BrepShell(faces)]);
     }
 }

@@ -105,6 +105,85 @@ public class ModelingTests
     }
 
     [Fact]
+    public void Extrude_WithCircularHole_HasGenusOneTopology()
+    {
+        var plate = Profile.FromPoints([(0, 0, 0), (4, 0, 0), (4, 3, 0), (0, 3, 0)]);
+        var hole = Profile.Circle((2, 1.5, 0), Vector3d.UnitX, Vector3d.UnitY, 0.8);
+        var solid = SolidFactory.Extrude(plate, (0, 0, 0.5), holes: [hole]);
+        solid.Validate();
+
+        Assert.Equal(10, solid.Vertices.Count()); // 8 corners + 2 hole seams
+        Assert.Equal(14, solid.Edges.Count());    // 12 + 2 hole circles
+        Assert.Equal(7, solid.Faces.Count());     // 6 + hole band
+        Assert.Equal(10, solid.Loops.Count());    // 6 + 2 cap hole loops + 2 band loops
+        Assert.True(solid.SatisfiesEulerFormula(genus: 1));
+        Assert.Equal(2, solid.Faces.Max(f => f.Loops.Count)); // caps carry the hole loop
+    }
+
+    [Fact]
+    public void Extrude_WithTwoHoles_HasGenusTwoTopology()
+    {
+        var plate = Profile.FromPoints([(0, 0, 0), (6, 0, 0), (6, 3, 0), (0, 3, 0)]);
+        var holes = new[]
+        {
+            Profile.Circle((1.5, 1.5, 0), Vector3d.UnitX, Vector3d.UnitY, 0.7),
+            Profile.Circle((4.5, 1.5, 0), Vector3d.UnitX, Vector3d.UnitY, 0.7),
+        };
+        var solid = SolidFactory.Extrude(plate, (0, 0, 0.5), holes);
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus: 2));
+    }
+
+    [Fact]
+    public void Extrude_NonCoplanarHole_Throws()
+    {
+        var plate = Profile.FromPoints([(0, 0, 0), (4, 0, 0), (4, 3, 0), (0, 3, 0)]);
+        var lifted = Profile.Circle((2, 1.5, 0.2), Vector3d.UnitX, Vector3d.UnitY, 0.5);
+        Assert.Throws<ArgumentException>(() => SolidFactory.Extrude(plate, (0, 0, 1), holes: [lifted]));
+    }
+
+    [Fact]
+    public void PartialRevolve_Square_MatchesExtrudeTopology()
+    {
+        var profile = Profile.FromPoints([(1, 0, 0), (2, 0, 0), (2, 0, 1), (1, 0, 1)]);
+        var solid = SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ, angle: Math.PI / 2);
+        solid.Validate();
+
+        Assert.Equal(8, solid.Vertices.Count());
+        Assert.Equal(12, solid.Edges.Count());
+        Assert.Equal(6, solid.Faces.Count());
+        Assert.True(solid.SatisfiesEulerFormula(genus: 0));
+        Assert.Equal(4, solid.Faces.Count(f => f.Surface is RevolvedSurface));
+        Assert.Equal(2, solid.Faces.Count(f => f.Surface is PlaneSurface));
+    }
+
+    [Fact]
+    public void PartialRevolve_Circle_MakesElbowTopology()
+    {
+        // A pipe elbow: circular profile revolved a quarter turn.
+        var profile = Profile.Circle((1.5, 0, 0), Vector3d.UnitX, Vector3d.UnitZ, 0.4);
+        var solid = SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ, angle: Math.PI / 2);
+        solid.Validate();
+        Assert.Equal(2, solid.Vertices.Count());
+        Assert.Equal(2, solid.Edges.Count());
+        Assert.Equal(3, solid.Faces.Count());
+        Assert.True(solid.SatisfiesEulerFormula(genus: 0));
+    }
+
+    [Fact]
+    public void Revolve_FullTurnWithHoles_IsRejected()
+    {
+        var profile = Profile.FromPoints([(1, 0, 0), (3, 0, 0), (3, 0, 2), (1, 0, 2)]);
+        var hole = Profile.FromPoints([(1.5, 0, 0.5), (2.5, 0, 0.5), (2.5, 0, 1.5), (1.5, 0, 1.5)]);
+        Assert.Throws<NotSupportedException>(() =>
+            SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ, holes: [hole]));
+        // But a partial revolve with the same hole is fine.
+        var solid = SolidFactory.Revolve(profile, Vector3d.Zero, Vector3d.UnitZ, angle: Math.PI, holes: [hole]);
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus: 1));
+    }
+
+    [Fact]
     public void Sweep_AlongStraightPath_MatchesExtrudeTopology()
     {
         var path = new Line3d((0, 0, 0), (0, 0, 3));

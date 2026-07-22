@@ -32,14 +32,22 @@ public sealed class RevolvedSurface : Surface
     public Vector3d AxisOrigin { get; }
     public Vector3d AxisDirection { get; }
 
-    public RevolvedSurface(Curve3d generator, in Vector3d axisOrigin, in Vector3d axisDirection)
+    /// <summary>Total swept angle; 2π for a full surface of revolution.</summary>
+    public double Angle { get; }
+
+    public bool IsFullTurn => Math.Abs(Angle - 2 * Math.PI) < 1e-9;
+
+    public RevolvedSurface(Curve3d generator, in Vector3d axisOrigin, in Vector3d axisDirection, double angle = 2 * Math.PI)
     {
+        if (angle <= 0 || angle > 2 * Math.PI + 1e-9)
+            throw new ArgumentOutOfRangeException(nameof(angle));
         Generator = generator;
         AxisOrigin = axisOrigin;
         AxisDirection = axisDirection.Normalized();
+        Angle = angle;
     }
 
-    public override Interval DomainU => new(0, 2 * Math.PI);
+    public override Interval DomainU => new(0, Angle);
     public override Interval DomainV => Generator.Domain;
 
     public override Vector3d PointAt(double u, double v)

@@ -1,5 +1,22 @@
 # EngrCAD
 
+## ⚠️ WORK IN PROGRESS — handoff notes (2026-07-22, session ended mid-task)
+
+**State**: 194/195 tests pass. One failing test: `ModelingTessellationTests.PlateWithTwoSquareHoles_ExactVolumeAndGenusTwo` — "Directed edge 4→0 appears twice".
+
+**What was being built**: extrude/revolve/sweep with **hole profiles** (multi-loop caps) and **partial revolve** (angle < 2π, incl. pipe elbows). All of that WORKS (topology, validation, Euler with genus, single circular hole plate is volume-exact, elbow matches Pappus, sweep-with-hole exact) — except one case: a cap with TWO holes whose bridge rays hit the same outer region.
+
+**The bug**: `PolygonTriangulator.TriangulateWithHoles` (Mesh project) merges holes into the outer loop via earcut-style bridges (duplicated vertices, zero-width corridors). When two holes bridge to the same outer vertex, the ear clipper dead-ends; the recovery ladder implemented so far (reflex-only blockers, skip-blockers-equal-to-first-corner, diagonal split with corrected `LocallyInside` — note: interior of CCW loop = LEFT of both edges, i.e. `in×d>0 && out×d>0` convex / OR reflex — vertex-on-diagonal rejection, positive-area-halves check, pinch-split at duplicate vertices) gets close but one directed edge is still emitted twice (overlap or a fan fallback in a recursed half).
+
+**Debug harness**: `dotnet run <scratchpad>\tridebug.cs` — but scratchpad is session-specific; recreate: file-based C# script with `#:project ...\EngrCAD.Mesh.csproj` calling `TriangulateWithHoles([(3,0),(3,6),(0,6),(0,0)], [[(1,1),(1,2),(2,2),(2,1)], [(1,4),(1,5),(2,5),(2,4)]])`, printing per-triangle signed areas (must all be >0, sum to 16) and duplicate directed edges (must be none).
+
+**Recommended fix path**: stop hand-rolling the recovery ladder — port earcut (mapbox) faithfully: linked-list nodes, `isEar` (+ `pointInTriangleExceptFirst`), `filterPoints`, `cureLocalIntersections`, `splitEarcut` with its exact `isValidDiagonal`/`middleInside`/`intersects` (incl. collinear/onSegment handling), `eliminateHoles`/`findHoleBridge` (with `sectorContainsSector` tie-breaking when several holes bridge to one vertex). That is the battle-tested algorithm; the current code is ~80% there but the last 20% is precisely the hard part. Alternative quick unblock: make the two-hole test use holes with different y-bands (bridges then hit different edges) and file the earcut port as a TODO.
+
+**Also pending (user request, not started)**: a `README.md` in each `src/*` project describing what it does, plus a detailed `design.md` at repo root, linked from this file.
+
+**Uncommitted work**: holes + partial revolve implementation (SolidFactory.Modeling.cs rewritten with multi-profile `BuildSweptSolid`, `ValidateCoplanarHole`, `RevolvedSurface.Angle`/`IsFullTurn`, tessellator `closedV` + multi-loop planar faces, `PolygonTriangulator` hole support) — commit as WIP.
+
+
 A CAD application in modern .NET built around a **hybrid geometry kernel** that natively supports three representations:
 
 - **B-Rep** — parametric surfaces (planes, conics, NURBS) wrapped in topology, for precision modeling
