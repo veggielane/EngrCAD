@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Avalonia" Version="11.3.2" />
+    <PackageReference Include="Avalonia.Desktop" Version="11.3.2" />
+    <PackageReference Include="Avalonia.Themes.Fluent" Version="11.3.2" />
+    <!-- Transitive pin: Avalonia 11.3.2 pulls 0.21.2, which has GHSA-xrw6-gwf8-vvr9. -->
+    <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
+    <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
+    <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/EngrCAD.Core/EngrCAD.Core.csproj" />
+    <Project Path="src/EngrCAD.Mesh/EngrCAD.Mesh.csproj" />
+    <Project Path="src/EngrCAD.Implicit/EngrCAD.Implicit.csproj" />
+    <Project Path="src/EngrCAD.BRep/EngrCAD.BRep.csproj" />
+    <Project Path="src/EngrCAD.Interop/EngrCAD.Interop.csproj" />
+    <Project Path="src/EngrCAD.Query/EngrCAD.Query.csproj" />
+    <Project Path="src/EngrCAD.Viewer/EngrCAD.Viewer.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/EngrCAD.Core.Tests/EngrCAD.Core.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Mesh.Tests/EngrCAD.Mesh.Tests.csproj" />
+  </Folder>
+</Solution>
