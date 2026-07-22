@@ -140,18 +140,29 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // ---- picking ----
 
-    public ViewportControl()
+    /// <summary>Optional status sink for the overlay: shows the last input seen (debugging aid).</summary>
+    public Action<string>? Status { get; set; }
+
+    private void Report(string message) => Status?.Invoke(message);
+
+    protected override void OnAttachedToVisualTree(VisualTreeAttachmentEventArgs e)
     {
-        // The release can arrive already-handled (pointer gestures), so a plain override
-        // of OnPointerReleased never runs — register for handled events too.
-        AddHandler(PointerReleasedEvent, (_, e) =>
-        {
-            var pos = e.GetPosition(this);
-            var moved = pos - _pressPointer;
-            if (moved.X * moved.X + moved.Y * moved.Y < 16)
-                Pick(pos);
-        }, Avalonia.Interactivity.RoutingStrategies.Tunnel | Avalonia.Interactivity.RoutingStrategies.Bubble,
-           handledEventsToo: true);
+        base.OnAttachedToVisualTree(e);
+        // Input is registered at the window level with handledEventsToo so that nothing
+        // upstream (gesture recognizers, hit-test quirks over the GL surface) can starve
+        // the viewport of events — trackpads proved fragile with control-level handlers.
+        if (TopLevel.GetTopLevel(this) is not { } top)
+            return;
+        top.AddHandler(PointerPressedEvent, (_, args) => HandlePressed(args),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+        top.AddHandler(PointerMovedEvent, (_, args) => HandleMoved(args),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+        top.AddHandler(PointerReleasedEvent, (_, args) => HandleReleased(args),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+        top.AddHandler(PointerWheelChangedEvent, (_, args) => HandleWheel(args),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
+        top.AddHandler(KeyDownEvent, (_, args) => HandleKey(args),
+            Avalonia.Interactivity.RoutingStrategies.Tunnel, handledEventsToo: true);
     }
 
     private void Pick(Point pixel)
@@ -199,8 +210,9 @@ public sealed class ViewportControl : OpenGlControlBase
             }
         }
         _selected = best == _selected ? -1 : best; // clicking the selection clears it
+        Report(_selected >= 0 ? $"picked object {_selected}" : "picked nothing");
         if (VisualRoot is Window window)
-            window.Title = _selected >= 0 ? $"EngrCAD — object {_selected} selected" : "EngrCAD — nothing selected";
+            window.Title = _selected >= 0 ? $"EngrCAD — object {_selected} selected" : "EngrCAD";
         RequestNextFrameRendering();
     }
 
@@ -421,17 +433,15 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // ---- camera ----
 
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    private void HandlePressed(PointerPressedEventArgs e)
     {
-        base.OnPointerPressed(e);
         _lastPointer = e.GetPosition(this);
         _pressPointer = _lastPointer;
-        e.Pointer.Capture(this);
+        Report($"press at {_pressPointer.X:F0},{_pressPointer.Y:F0}");
     }
 
-    protected override void OnPointerMoved(PointerEventArgs e)
+    private void HandleMoved(PointerEventArgs e)
     {
-        base.OnPointerMoved(e);
         var point = e.GetCurrentPoint(this);
         var pos = point.Position;
         var delta = pos - _lastPointer;
@@ -446,30 +456,79 @@ public sealed class ViewportControl : OpenGlControlBase
 
         if (pan)
         {
-            var eyeDir = new Vector3d(Math.Cos(_pitch) * Math.Cos(_yaw), Math.Cos(_pitch) * Math.Sin(_yaw), Math.Sin(_pitch));
-            var right = eyeDir.Cross(Vector3d.UnitZ).Normalized();
-            var up = right.Cross(eyeDir); // eyeDir points from target toward eye, so this is screen-up
-            double scale = _distance * 0.0018;
-            _target += right * (delta.X * scale) + up * (delta.Y * scale);
-            RequestNextFrameRendering();
+            Pan(delta.X, delta.Y);
+            Report("pan (drag)");
         }
         else if (zoom)
         {
-            _distance = Math.Clamp(_distance * Math.Pow(1.006, delta.Y), 0.5, 120.0);
-            RequestNextFrameRendering();
+            Zoom(Math.Pow(1.006, delta.Y));
+            Report("zoom (drag)");
         }
         else if (point.Properties.IsLeftButtonPressed)
         {
-            _yaw -= delta.X * 0.01;
-            _pitch = Math.Clamp(_pitch + delta.Y * 0.01, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-            RequestNextFrameRendering();
+            Orbit(-delta.X * 0.01, delta.Y * 0.01);
+            Report("orbit (drag)");
         }
     }
 
-    protected override void OnPointerWheelChanged(PointerWheelEventArgs e)
+    private void HandleReleased(PointerReleasedEventArgs e)
     {
-        base.OnPointerWheelChanged(e);
-        _distance = Math.Clamp(_distance * Math.Pow(0.88, e.Delta.Y), 0.5, 120.0);
+        var pos = e.GetPosition(this);
+        var moved = pos - _pressPointer;
+        if (moved.X * moved.X + moved.Y * moved.Y < 16)
+            Pick(pos);
+        else
+            Report("release (drag end)");
+    }
+
+    private void HandleWheel(PointerWheelEventArgs e)
+    {
+        // Trackpad two-finger scrolls arrive as many small fractional deltas.
+        double delta = e.Delta.Y != 0 ? e.Delta.Y : e.Delta.X;
+        Zoom(Math.Pow(0.88, delta));
+        Report($"wheel Δ{delta:F2}");
+    }
+
+    private void HandleKey(KeyEventArgs e)
+    {
+        const double step = 0.07;
+        switch (e.Key)
+        {
+            case Key.Left: Orbit(step, 0); break;
+            case Key.Right: Orbit(-step, 0); break;
+            case Key.Up when !e.KeyModifiers.HasFlag(KeyModifiers.Shift): Orbit(0, step); break;
+            case Key.Down when !e.KeyModifiers.HasFlag(KeyModifiers.Shift): Orbit(0, -step); break;
+            case Key.OemPlus or Key.Add or Key.PageUp: Zoom(0.88); break;
+            case Key.OemMinus or Key.Subtract or Key.PageDown: Zoom(1 / 0.88); break;
+            case Key.W: Pan(0, 12); break;
+            case Key.S: Pan(0, -12); break;
+            case Key.A: Pan(12, 0); break;
+            case Key.D: Pan(-12, 0); break;
+            default: return;
+        }
+        Report($"key {e.Key}");
+    }
+
+    private void Orbit(double yawDelta, double pitchDelta)
+    {
+        _yaw += yawDelta;
+        _pitch = Math.Clamp(_pitch + pitchDelta, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+        RequestNextFrameRendering();
+    }
+
+    private void Zoom(double factor)
+    {
+        _distance = Math.Clamp(_distance * factor, 0.5, 120.0);
+        RequestNextFrameRendering();
+    }
+
+    private void Pan(double dx, double dy)
+    {
+        var eyeDir = new Vector3d(Math.Cos(_pitch) * Math.Cos(_yaw), Math.Cos(_pitch) * Math.Sin(_yaw), Math.Sin(_pitch));
+        var right = eyeDir.Cross(Vector3d.UnitZ).Normalized();
+        var up = right.Cross(eyeDir); // eyeDir points from target toward eye, so this is screen-up
+        double scale = _distance * 0.0018;
+        _target += right * (dx * scale) + up * (dy * scale);
         RequestNextFrameRendering();
     }
 

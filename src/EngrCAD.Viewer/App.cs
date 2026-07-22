@@ -16,27 +16,28 @@ public sealed class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
+            const string help =
+                "drag orbit · shift+drag pan · ctrl+drag/scroll zoom · click select · keys: arrows orbit, +/- zoom, WASD pan";
+            var status = new TextBlock
+            {
+                Text = help,
+                Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
+                Margin = new Thickness(12, 8),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Top,
+                IsHitTestVisible = false,
+            };
+            var viewport = new ViewportControl
+            {
+                Status = message => status.Text = $"{help}\nlast input: {message}",
+            };
+
             desktop.MainWindow = new Window
             {
                 Title = "EngrCAD",
                 Width = 1280,
                 Height = 800,
-                Content = new Panel
-                {
-                    Children =
-                    {
-                        new ViewportControl(),
-                        new TextBlock
-                        {
-                            Text = "drag orbit · shift+drag pan · ctrl+drag or scroll zoom · click select",
-                            Foreground = new SolidColorBrush(Color.FromArgb(160, 255, 255, 255)),
-                            Margin = new Thickness(12, 8),
-                            HorizontalAlignment = HorizontalAlignment.Left,
-                            VerticalAlignment = VerticalAlignment.Top,
-                            IsHitTestVisible = false,
-                        },
-                    },
-                },
+                Content = new Panel { Children = { viewport, status } },
             };
         }
 

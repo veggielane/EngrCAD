@@ -12,7 +12,13 @@ geometry. The only project allowed UI/rendering dependencies (Avalonia, Silk.NET
 - Meshes from any engine are turned into `RenderMesh` (flat-shaded) buffers and drawn
   with a simple directional-light shader.
 - **Camera** (laptop-friendly): drag orbits, Shift+drag pans, Ctrl+drag or scroll zooms;
-  right/middle-drag also pans. Z is up.
+  right/middle-drag also pans. Keyboard works everywhere: arrows orbit, +/−
+  (or PageUp/Down) zoom, WASD pans. Z is up.
+- **Input plumbing**: all pointer/keyboard handlers are registered on the *window* with
+  `handledEventsToo` — control-level handlers proved fragile (gesture recognizers and
+  hit-testing over the GL surface starved the viewport of events, breaking trackpads).
+  The overlay's second line reports the last input received, which makes input problems
+  diagnosable at a glance.
 - **Picking**: click selects the nearest object under the cursor (unprojected ray +
   per-object triangle BVH + Möller–Trumbore); the selection is highlighted gold and named
   in the title bar; clicking it again deselects.
