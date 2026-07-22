@@ -1,7 +1,23 @@
 # EngrCAD.Viewer
 
-Cross-platform desktop viewer: Avalonia UI with an OpenGL viewport rendering kernel
+Cross-platform viewer **library**: Avalonia UI with an OpenGL viewport rendering kernel
 geometry. The only project allowed UI/rendering dependencies (Avalonia, Silk.NET).
+
+## Usage
+
+Design code builds an `EngrCAD.Interop.Scene` and hands it over:
+
+```csharp
+var scene = new Scene();
+scene.Add("bracket", myBrepSolid, Palette.Steel);
+EngrCad.Show(scene, "My design");   // blocks until the window closes
+```
+
+`EngrCad.Show` may be called once per process (Avalonia allows a single application
+lifetime). Hosts that need live updates (the planned `engrcad watch`) pass an
+`onViewportReady` callback, capture the `ViewportControl`, and later call its
+thread-safe `SetScene` — GL resources are swapped inside the next render pass and the
+camera is preserved (auto-framed from `Scene.Bounds()` only on the first scene).
 
 ## How it works
 
@@ -19,15 +35,16 @@ geometry. The only project allowed UI/rendering dependencies (Avalonia, Silk.NET
   hit-testing over the GL surface starved the viewport of events, breaking trackpads).
   The overlay's second line reports the last input received, which makes input problems
   diagnosable at a glance.
-- **Picking**: click selects the nearest object under the cursor (unprojected ray +
-  per-object triangle BVH + Möller–Trumbore); the selection is highlighted gold and named
-  in the title bar; clicking it again deselects.
-- The demo scene exercises the whole kernel: mesh primitives, Loop subdivision, a mesh
-  boolean, SDF-derived meshes (smooth blend, torus, gyroid lattice via Surface Nets), and
-  B-Rep modeling results (extruded bracket, revolved pulley, swept tube).
+- **Picking**: click selects the nearest part under the cursor (unprojected ray +
+  per-object triangle BVH + Möller–Trumbore); the selection is highlighted gold and its
+  *part name* shown in the title bar; clicking it again deselects. `ShowStatus(string)`
+  lets a host surface messages (script errors) in the overlay.
 
-## Running
+## Demo
+
+The showcase scene lives in `samples/EngrCAD.Demo` (a console app using the Scene API —
+the exact consumer experience):
 
 ```
-dotnet run --project src/EngrCAD.Viewer
+dotnet run --project samples/EngrCAD.Demo
 ```

@@ -4,10 +4,11 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Themes.Fluent;
+using EngrCAD.Interop;
 
 namespace EngrCAD.Viewer;
 
-// Code-only Avalonia app (no XAML) until the UI grows enough to warrant it.
+// Code-only Avalonia app (no XAML) hosting the viewport; configured via EngrCad.Show.
 public sealed class App : Application
 {
     public override void Initialize() => Styles.Add(new FluentTheme());
@@ -30,15 +31,18 @@ public sealed class App : Application
             var viewport = new ViewportControl
             {
                 Status = message => status.Text = $"{help}\nlast input: {message}",
+                BaseTitle = EngrCad.WindowTitle,
             };
+            viewport.SetScene(EngrCad.InitialScene ?? new Scene());
 
             desktop.MainWindow = new Window
             {
-                Title = "EngrCAD",
+                Title = EngrCad.WindowTitle,
                 Width = 1280,
                 Height = 800,
                 Content = new Panel { Children = { viewport, status } },
             };
+            EngrCad.OnViewportReady?.Invoke(viewport);
         }
 
         base.OnFrameworkInitializationCompleted();

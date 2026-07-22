@@ -25,6 +25,11 @@ public sealed class ViewportControl : OpenGlControlBase
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
     private readonly List<GpuMesh> _meshes = [];
+    private readonly List<string> _partNames = [];
+
+    private readonly object _sceneLock = new();
+    private Scene? _pendingScene;
+    private bool _cameraFramed;
 
     private double _yaw = 0.7;
     private double _pitch = 0.45;
@@ -41,6 +46,22 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private readonly List<PickData> _pickData = [];
 
+    /// <summary>
+    /// Replaces the displayed scene. Thread-safe: geometry is uploaded on the next
+    /// rendered frame (the GL context is only current there). The camera is preserved
+    /// across scene updates; the first scene auto-frames it.
+    /// </summary>
+    public void SetScene(Scene scene)
+    {
+        lock (_sceneLock)
+            _pendingScene = scene;
+        Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
+    }
+
+    /// <summary>Shows a message in the status overlay (used by script hosts for errors).</summary>
+    public void ShowStatus(string message) =>
+        Avalonia.Threading.Dispatcher.UIThread.Post(() => Report(message));
+
     protected override void OnOpenGlInit(GlInterface gl)
     {
         _gl = GL.GetApi(new LamdaNativeContext(name => gl.GetProcAddress(name)));
@@ -52,11 +73,27 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLightDir = _gl.GetUniformLocation(_program, "uLightDir");
         _uEyePos = _gl.GetUniformLocation(_program, "uEyePos");
         _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
+    }
 
-        foreach (var (mesh, model, color) in DemoScene())
+    /// <summary>Uploads a scene's parts, replacing existing GPU resources. GL context must be current.</summary>
+    private void ApplyScene(GL gl, Scene scene)
+    {
+        foreach (var m in _meshes)
         {
-            var render = RenderMesh.CreateFlat(mesh);
-            _meshes.Add(Upload(_gl, render, model, color));
+            gl.DeleteBuffer(m.Vbo);
+            gl.DeleteBuffer(m.Ebo);
+            gl.DeleteVertexArray(m.Vao);
+        }
+        _meshes.Clear();
+        _pickData.Clear();
+        _partNames.Clear();
+        _selected = -1;
+
+        foreach (var part in scene.Parts)
+        {
+            var render = RenderMesh.CreateFlat(part.Mesh);
+            _meshes.Add(Upload(gl, render, part.Transform, (part.Color.R, part.Color.G, part.Color.B)));
+            _partNames.Add(part.Name);
 
             var boxes = new Aabb[render.TriangleCount];
             for (int t = 0; t < render.TriangleCount; t++)
@@ -69,6 +106,18 @@ public sealed class ViewportControl : OpenGlControlBase
                 ]);
             }
             _pickData.Add(new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)));
+        }
+
+        if (!_cameraFramed)
+        {
+            var bounds = scene.Bounds();
+            if (!bounds.IsEmpty)
+            {
+                _target = bounds.Center;
+                double diagonal = bounds.Size.Length;
+                _distance = Math.Clamp(diagonal * 1.25 + 1, 2, 110);
+            }
+            _cameraFramed = true;
         }
     }
 
@@ -98,6 +147,18 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_gl is null)
             return;
         var gl = _gl;
+
+        Scene? newScene = null;
+        lock (_sceneLock)
+        {
+            if (_pendingScene is not null)
+            {
+                newScene = _pendingScene;
+                _pendingScene = null;
+            }
+        }
+        if (newScene is not null)
+            ApplyScene(gl, newScene);
 
         double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         uint width = (uint)Math.Max(1, Bounds.Width * scaling);
@@ -210,11 +271,15 @@ public sealed class ViewportControl : OpenGlControlBase
             }
         }
         _selected = best == _selected ? -1 : best; // clicking the selection clears it
-        Report(_selected >= 0 ? $"picked object {_selected}" : "picked nothing");
+        string? name = _selected >= 0 && _selected < _partNames.Count ? _partNames[_selected] : null;
+        Report(name is not null ? $"picked '{name}'" : "picked nothing");
         if (VisualRoot is Window window)
-            window.Title = _selected >= 0 ? $"EngrCAD — object {_selected} selected" : "EngrCAD";
+            window.Title = name is not null ? $"{BaseTitle} — {name}" : BaseTitle;
         RequestNextFrameRendering();
     }
+
+    /// <summary>Window title stem, restored when nothing is selected.</summary>
+    public string BaseTitle { get; set; } = "EngrCAD";
 
     /// <summary>Möller–Trumbore; t is in units of the (unnormalized) ray direction.</summary>
     private static bool RayTriangle(in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
@@ -237,92 +302,6 @@ public sealed class ViewportControl : OpenGlControlBase
             return false;
         t = e2.Dot(q) * inverse;
         return t > 1e-9;
-    }
-
-    private static IEnumerable<(HalfEdgeMesh Mesh, Matrix4d Model, (float, float, float) Color)> DemoScene()
-    {
-        // Front row: mesh-engine primitives and algorithms.
-        yield return (
-            MeshPrimitives.Box(1.8, 1.8, 1.8),
-            Matrix4d.CreateTranslation((-4.6, -1.9, 0)),
-            (0.42f, 0.62f, 0.86f));
-        yield return (
-            MeshPrimitives.UvSphere(1.05, segments: 48, rings: 24),
-            Matrix4d.CreateTranslation((-1.5, -1.9, 0)),
-            (0.88f, 0.52f, 0.40f));
-        yield return (
-            MeshPrimitives.Cylinder(0.85, 1.9, segments: 48),
-            Matrix4d.CreateTranslation((1.5, -1.9, -0.95)),
-            (0.55f, 0.75f, 0.48f));
-        yield return (
-            LoopSubdivision.Subdivide(MeshPrimitives.Box(2.0, 2.0, 2.0).Triangulated(), 3),
-            Matrix4d.CreateTranslation((4.6, -1.9, 0)),
-            (0.72f, 0.55f, 0.83f));
-
-        // Back row: booleans and the implicit engine surfaced through SurfaceNets.
-        yield return (
-            MeshBoolean.Difference(
-                MeshPrimitives.Box(1.8, 1.8, 1.8),
-                MeshPrimitives.UvSphere(1.15, segments: 32, rings: 16)),
-            Matrix4d.CreateTranslation((-4.6, 1.9, 0)),
-            (0.85f, 0.72f, 0.38f));
-        yield return (
-            SurfaceNets.Polygonize(
-                Sdf.Sphere(0.72).Translate((-0.5, 0, 0))
-                    .SmoothUnion(Sdf.Sphere(0.72).Translate((0.5, 0, 0)), 0.45),
-                resolution: 56),
-            Matrix4d.CreateTranslation((-1.5, 1.9, 0)),
-            (0.47f, 0.79f, 0.77f));
-        yield return (
-            SurfaceNets.Polygonize(Sdf.Torus(0.85, 0.34), resolution: 56),
-            Matrix4d.CreateTranslation((1.5, 1.9, 0)),
-            (0.83f, 0.47f, 0.62f));
-        yield return (
-            SurfaceNets.Polygonize(Sdf.Sphere(1.1) & Sdf.Gyroid(0.75, 0.16), resolution: 88),
-            Matrix4d.CreateTranslation((4.6, 1.9, 0)),
-            (0.62f, 0.66f, 0.88f));
-
-        // Third row: B-Rep modeling operations (extrude, revolve, sweep), tessellated.
-        var bracket = SolidFactory.Extrude(
-            Profile.FromPoints([(0, 0, 0), (1.6, 0, 0), (1.6, 0.5, 0), (0.5, 0.5, 0), (0.5, 1.6, 0), (0, 1.6, 0)]),
-            (0, 0, 0.6));
-        yield return (
-            BRepTessellator.Tessellate(bracket),
-            Matrix4d.CreateTranslation((-5.4, 5.6, -0.3)) * Matrix4d.CreateRotationX(Math.PI / 2),
-            (0.86f, 0.60f, 0.50f));
-
-        var pulley = SolidFactory.Revolve(
-            Profile.FromPoints(
-            [
-                (0.55, 0, 0), (1.15, 0, 0), (1.15, 0, 0.22), (0.85, 0, 0.34),
-                (0.85, 0, 0.56), (1.15, 0, 0.68), (1.15, 0, 0.9), (0.55, 0, 0.9),
-            ]),
-            Vector3d.Zero, Vector3d.UnitZ);
-        yield return (
-            BRepTessellator.Tessellate(pulley, segmentsPerCircle: 64),
-            Matrix4d.CreateTranslation((-1.5, 5.6, -0.45)),
-            (0.55f, 0.68f, 0.84f));
-
-        var tubePath = new NurbsCurve(2,
-            [(0, 0, -1.1), (0, 0, 0.2), (0, 1.1, 1.3)],
-            null,
-            [0, 0, 0, 1, 1, 1]);
-        var tube = SolidFactory.Sweep(
-            Profile.Circle((0, 0, -1.1), Vector3d.UnitX, Vector3d.UnitY, 0.35), tubePath);
-        yield return (
-            BRepTessellator.Tessellate(tube, segmentsPerCircle: 40, curveSamples: 40),
-            Matrix4d.CreateTranslation((2.2, 5.6, 0)),
-            (0.63f, 0.78f, 0.58f));
-
-        // A true B-Rep boolean: block minus drilled bore.
-        var block = SolidFactory.MakeBox(new Aabb((-0.9, -0.9, -0.55), (0.9, 0.9, 0.55)));
-        var bore = SolidFactory.Extrude(
-            Profile.Circle((0.25, 0.25, -1), Vector3d.UnitX, Vector3d.UnitY, 0.4), (0, 0, 2));
-        var drilled = BrepBoolean.Difference(block, bore);
-        yield return (
-            BRepTessellator.Tessellate(drilled, segmentsPerCircle: 48),
-            Matrix4d.CreateTranslation((5.4, 5.6, 0)),
-            (0.82f, 0.68f, 0.46f));
     }
 
     private unsafe GpuMesh Upload(GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color)

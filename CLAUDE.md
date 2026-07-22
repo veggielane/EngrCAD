@@ -17,7 +17,7 @@ A distinctive design goal is **LINQ-native geometry querying**: a custom `IQuery
 
 ## Current status
 
-Phases 1–4 plus Query v1 implemented (~150 tests): `EngrCAD.Core` (math + spatial incl. `Bvh.Nearest`), `EngrCAD.Mesh` (half-edge engine: booleans with seam zipping, Loop subdivision, QEM decimation), `EngrCAD.Implicit` (SDF AST), `EngrCAD.BRep` (curves/surfaces/topology foundations), `EngrCAD.Interop` (the full conversion triangle: implicit→mesh via manifold Surface Nets, B-Rep→mesh via tessellation, mesh→implicit via `MeshSdf` with angle-weighted pseudonormals), `EngrCAD.Query` (BVH-backed IQueryable). The Viewer renders a two-row demo scene — mesh primitives/subdivision/boolean and SDF-derived meshes (blend, torus, gyroid lattice) — through an OpenGL viewport (Avalonia `OpenGlControlBase` + Silk.NET over ANGLE/GLES3) with a laptop-friendly orbit camera (drag orbit, shift+drag pan, ctrl+drag/scroll zoom). Remaining big rocks: B-Rep surface–surface intersection/booleans/trimming, SIMD passes, viewer scene graph/selection.
+Phases 1–4 plus Query v1 implemented (~229 tests): `EngrCAD.Core` (math + spatial incl. `Bvh.Nearest`), `EngrCAD.Mesh` (half-edge engine: booleans with seam zipping, Loop subdivision, QEM decimation), `EngrCAD.Implicit` (SDF AST), `EngrCAD.BRep` (curves/surfaces/topology foundations), `EngrCAD.Interop` (the full conversion triangle: implicit→mesh via manifold Surface Nets, B-Rep→mesh via tessellation, mesh→implicit via `MeshSdf` with angle-weighted pseudonormals — plus the `Scene`/`Part` document model that tessellates any-engine geometry for display), `EngrCAD.Query` (BVH-backed IQueryable). **The Viewer is a library, not an app**: design code builds a `Scene` and calls `EngrCad.Show(scene)` (blocking; one call per process — Avalonia lifetime constraint; `onViewportReady` callback + thread-safe `ViewportControl.SetScene` support live-reload hosts). Rendering is an OpenGL viewport (Avalonia `OpenGlControlBase` + Silk.NET over ANGLE/GLES3) with a laptop-friendly orbit camera (drag orbit, shift+drag pan, ctrl+drag/scroll zoom, keyboard fallbacks), camera auto-framing from `Scene.Bounds()` on the first scene (preserved on later `SetScene` calls), and click-picking that reports part *names*. The former hardcoded showcase now lives in `samples/EngrCAD.Demo` (console app calling the Scene API — the consumer experience). Remaining big rocks: NuGet packaging (Phase B of the current plan), `engrcad` watch CLI (Phase C), SIMD passes.
 
 - .NET SDK 10.0.302 installed **user-local** at `%USERPROFILE%\.dotnet` (win-arm64), on the user PATH with `DOTNET_ROOT` set. Build with `dotnet build EngrCAD.slnx`, test with `dotnet test EngrCAD.slnx`.
 - Git repository initialized; commit only when Chris asks.
@@ -69,7 +69,9 @@ src/
   EngrCAD.BRep/       parametric geometry + topology
   EngrCAD.Interop/    conversions between representations
   EngrCAD.Query/      IQueryable provider, spatial/topology LINQ
-  EngrCAD.Viewer/     Avalonia + Silk.NET (OpenGL) desktop app
+  EngrCAD.Viewer/     Avalonia + Silk.NET (OpenGL) viewer *library* (EngrCad.Show)
+samples/
+  EngrCAD.Demo/       console showcase: builds a Scene, calls EngrCad.Show
 tests/
   EngrCAD.Core.Tests/ (one xUnit test project per src project)
   ...

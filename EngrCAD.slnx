@@ -8,6 +8,9 @@
     <Project Path="src/EngrCAD.Query/EngrCAD.Query.csproj" />
     <Project Path="src/EngrCAD.Viewer/EngrCAD.Viewer.csproj" />
   </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/EngrCAD.Demo/EngrCAD.Demo.csproj" />
+  </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/EngrCAD.Core.Tests/EngrCAD.Core.Tests.csproj" />
     <Project Path="tests/EngrCAD.Mesh.Tests/EngrCAD.Mesh.Tests.csproj" />
