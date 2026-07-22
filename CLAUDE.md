@@ -10,7 +10,7 @@ A distinctive design goal is **LINQ-native geometry querying**: a custom `IQuery
 
 ## Current status
 
-Phases 1–3 complete (118 tests): `EngrCAD.Core` (math + spatial), `EngrCAD.Mesh` (half-edge engine incl. BSP booleans with seam zipping), `EngrCAD.Implicit` (SDF AST), and implicit→mesh in `EngrCAD.Interop` (manifold Surface Nets). The Viewer renders a two-row demo scene — mesh primitives/subdivision/boolean and SDF-derived meshes (blend, torus, gyroid lattice) — through an OpenGL viewport (Avalonia `OpenGlControlBase` + Silk.NET over ANGLE/GLES3) with a laptop-friendly orbit camera (drag orbit, shift+drag pan, ctrl+drag/scroll zoom). BRep and Query are still stubs; remaining Interop work: B-Rep tessellation, mesh→SDF.
+Phases 1–4 plus Query v1 implemented (146 tests): `EngrCAD.Core` (math + spatial), `EngrCAD.Mesh` (half-edge engine incl. BSP booleans with seam zipping), `EngrCAD.Implicit` (SDF AST), `EngrCAD.BRep` (curves/surfaces/topology foundations), `EngrCAD.Interop` (manifold Surface Nets + B-Rep tessellation), `EngrCAD.Query` (BVH-backed IQueryable). The Viewer renders a two-row demo scene — mesh primitives/subdivision/boolean and SDF-derived meshes (blend, torus, gyroid lattice) — through an OpenGL viewport (Avalonia `OpenGlControlBase` + Silk.NET over ANGLE/GLES3) with a laptop-friendly orbit camera (drag orbit, shift+drag pan, ctrl+drag/scroll zoom). Remaining big rocks: B-Rep surface–surface intersection/booleans/trimming, mesh→SDF interop, mesh decimation, SIMD passes.
 
 - .NET SDK 10.0.302 installed **user-local** at `%USERPROFILE%\.dotnet` (win-arm64), on the user PATH with `DOTNET_ROOT` set. Build with `dotnet build EngrCAD.slnx`, test with `dotnet test EngrCAD.slnx`.
 - Git repository initialized; commit only when Chris asks.
@@ -45,10 +45,11 @@ Three engines with different mathematics and data structures, plus interop and q
 - B-Rep → Mesh: tessellation (also feeds the viewer)
 - Mesh/B-Rep → Implicit: distance querying against discrete geometry
 
-### Query layer (LINQ)
-- Custom `IQueryProvider` + `ExpressionVisitor` that intercepts spatial predicates (`Intersects`, `Contains`, `DistanceTo(...) < x`) and answers them from the BVH/octree in O(log N), falling back to LINQ-to-Objects for residual predicates
-- Metadata indexes for feature queries (e.g. cylindrical faces by radius) so B-Rep queries avoid re-evaluating surface math
-- Topology-traversal extension methods for fluent mesh/B-Rep navigation (`vertex.OutgoingEdges().Where(e => e.IsSharp())…`)
+### Query layer (LINQ) — v1 implemented
+- `SpatialCollection<T>` (items + bounds expression + BVH) with `AsQueryable()`: a custom `IQueryProvider` rewrites expression trees, recognizes `SpatialPredicates` clauses (`.Within(box)`, `.WithinDistance(p, d)`, `.HitBy(ray)`) applied to the registered bounds accessor, answers them from the BVH, and re-applies the full predicate over candidates (interception is a pure optimization). Residual/non-spatial queries fall back to LINQ-to-Objects. `LastQueryUsedIndex` is the diagnostic.
+- IMPORTANT: query predicates use the by-value `SpatialPredicates` extension methods, NOT `Aabb.Intersects` — expression trees cannot contain calls with `in` parameters, which the kernel API uses.
+- Topology-traversal LINQ exists on mesh handles (`vertex.OutgoingHalfEdges().Where(...)`, `face.AdjacentFaces()`, `Face.Bounds`).
+- Future: metadata indexes for B-Rep feature queries (cylindrical faces by radius), expression-tree→SDF compilation.
 
 ## Planned solution layout
 

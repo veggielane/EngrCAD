@@ -14,5 +14,6 @@
     <Project Path="tests/EngrCAD.Implicit.Tests/EngrCAD.Implicit.Tests.csproj" />
     <Project Path="tests/EngrCAD.BRep.Tests/EngrCAD.BRep.Tests.csproj" />
     <Project Path="tests/EngrCAD.Interop.Tests/EngrCAD.Interop.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Query.Tests/EngrCAD.Query.Tests.csproj" />
   </Folder>
 </Solution>

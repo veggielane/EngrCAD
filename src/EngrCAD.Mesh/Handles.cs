@@ -159,6 +159,18 @@ public readonly struct Face : IEquatable<Face>
 
     public int Degree => HalfEdges().Count();
 
+    /// <summary>Axis-aligned bounds of the face's vertices.</summary>
+    public Aabb Bounds
+    {
+        get
+        {
+            var box = Aabb.Empty;
+            foreach (var v in Vertices())
+                box = box.Union(v.Position);
+            return box;
+        }
+    }
+
     /// <summary>Unnormalized Newell normal; its magnitude is the face area.</summary>
     public Vector3d NormalRaw => Mesh.FaceNormalRaw(Index);
 
