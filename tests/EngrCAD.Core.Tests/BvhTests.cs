@@ -122,6 +122,36 @@ public class BvhTests
     }
 
     [Fact]
+    public void Nearest_MatchesBruteForce()
+    {
+        var rng = new Random(29);
+        var boxes = RandomBoxes(rng, 400, 100, 6);
+        var bvh = Bvh.Build(boxes);
+
+        for (int trial = 0; trial < 50; trial++)
+        {
+            var point = new Vector3d(
+                rng.NextDouble() * 120 - 10,
+                rng.NextDouble() * 120 - 10,
+                rng.NextDouble() * 120 - 10);
+
+            Assert.True(bvh.Nearest(point, i => boxes[i].DistanceTo(point), out _, out double distance));
+
+            double expected = double.PositiveInfinity;
+            foreach (var box in boxes)
+                expected = Math.Min(expected, box.DistanceTo(point));
+            Assert.Equal(expected, distance, 12);
+        }
+    }
+
+    [Fact]
+    public void Nearest_EmptyReturnsFalse()
+    {
+        var bvh = Bvh.Build([]);
+        Assert.False(bvh.Nearest(Vector3d.Zero, _ => 0, out _, out _));
+    }
+
+    [Fact]
     public void SingleItem_Works()
     {
         var box = new Aabb(Vector3d.Zero, Vector3d.One);

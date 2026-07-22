@@ -145,6 +145,63 @@ public sealed class Bvh
         }
     }
 
+    /// <summary>
+    /// Finds the item minimizing <paramref name="distanceTo"/> by branch-and-bound: subtrees
+    /// whose bounds are farther than the best hit so far are pruned. The exact per-item
+    /// distance (e.g. point-to-triangle) is the caller's; boxes only prune.
+    /// </summary>
+    public bool Nearest(in Vector3d point, Func<int, double> distanceTo, out int nearestItem, out double nearestDistance)
+    {
+        nearestItem = -1;
+        nearestDistance = double.PositiveInfinity;
+        if (_items.Length == 0)
+            return false;
+
+        Span<int> stack = stackalloc int[64];
+        int top = 0;
+        stack[top++] = 0;
+
+        while (top > 0)
+        {
+            ref readonly var node = ref _nodes[stack[--top]];
+            if (node.Bounds.DistanceTo(point) >= nearestDistance)
+                continue;
+
+            if (node.Count > 0)
+            {
+                for (int i = node.First; i < node.First + node.Count; i++)
+                {
+                    int item = _items[i];
+                    double distance = distanceTo(item);
+                    if (distance < nearestDistance)
+                    {
+                        nearestDistance = distance;
+                        nearestItem = item;
+                    }
+                }
+            }
+            else
+            {
+                // Push the farther child first so the nearer one is explored first and
+                // tightens the bound sooner.
+                int left = node.Left, right = node.Left + 1;
+                double dl = _nodes[left].Bounds.DistanceTo(point);
+                double dr = _nodes[right].Bounds.DistanceTo(point);
+                if (dl <= dr)
+                {
+                    stack[top++] = right;
+                    stack[top++] = left;
+                }
+                else
+                {
+                    stack[top++] = left;
+                    stack[top++] = right;
+                }
+            }
+        }
+        return true;
+    }
+
     /// <summary>Appends the indices of all items whose box the ray passes through.</summary>
     public void Query(in Ray3d ray, List<int> results)
     {
