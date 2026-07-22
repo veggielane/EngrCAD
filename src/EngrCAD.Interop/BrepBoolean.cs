@@ -64,12 +64,11 @@ public static class BrepBoolean
         {
             bool inside = sdfA.Evaluate(ProbePoint(fragment)) < 0;
             if (keepBOutside ? !inside : inside)
-                kept.Add(reverseB
-                    ? new BrepFace(fragment.Surface, fragment.Loops, isReversed: !fragment.IsReversed)
-                    : fragment);
+                kept.Add(reverseB ? ReverseFace(fragment) : fragment);
         }
         if (kept.Count == 0)
             throw new InvalidOperationException("Boolean result is empty.");
+        TopologyEditor.SealSeams(kept);
         return new BrepSolid([new BrepShell(kept)]);
     }
 
@@ -84,6 +83,19 @@ public static class BrepBoolean
             foreach (var fragment in fragments)
                 yield return fragment;
         }
+    }
+
+    /// <summary>
+    /// A properly reversed face: the outward normal flips (IsReversed) and every loop is
+    /// re-wound (reversed coedge order and senses), so seam edges end up traversed
+    /// oppositely by the two faces meeting there — keeping the result two-manifold.
+    /// </summary>
+    private static BrepFace ReverseFace(BrepFace face)
+    {
+        var loops = face.Loops
+            .Select(l => new BrepLoop([.. l.Coedges.Reverse().Select(c => new BrepCoedge(c.Edge, !c.SameSense))]))
+            .ToList();
+        return new BrepFace(face.Surface, loops, isReversed: !face.IsReversed);
     }
 
     /// <summary>A point strictly interior to the face, for inside/outside classification.</summary>

@@ -22,9 +22,12 @@ public sealed class BrepEdge(Curve3d curve, Interval domain, BrepVertex startVer
 {
     public Curve3d Curve => curve;
     public Interval Domain => domain;
-    public BrepVertex StartVertex => startVertex;
-    public BrepVertex EndVertex => endVertex;
-    public bool IsClosedEdge => ReferenceEquals(startVertex, endVertex);
+
+    /// <summary>Settable internally for seam sealing (vertex unification after booleans).</summary>
+    public BrepVertex StartVertex { get; internal set; } = startVertex;
+
+    public BrepVertex EndVertex { get; internal set; } = endVertex;
+    public bool IsClosedEdge => ReferenceEquals(StartVertex, EndVertex);
 
     internal readonly List<BrepCoedge> UsesInternal = [];
 

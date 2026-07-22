@@ -11,8 +11,12 @@ public class BrepBooleanTests
     private static BrepSolid BoxA() => SolidFactory.MakeBox(new Aabb((0, 0, 0), (2, 2, 2)));
     private static BrepSolid BoxB() => SolidFactory.MakeBox(new Aabb((1, 1, 1), (3, 3, 3)));
 
-    private static double MeshedVolume(BrepSolid solid, out EngrCAD.Mesh.HalfEdgeMesh mesh, int segments = 32)
+    private static double MeshedVolume(BrepSolid solid, out EngrCAD.Mesh.HalfEdgeMesh mesh, int segments = 32, int genus = 0)
     {
+        // Seam sealing makes boolean output a fully valid topological solid.
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus), "boolean result must satisfy Euler–Poincaré");
+
         mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle: segments);
         mesh.Validate();
         Assert.True(mesh.IsClosed, "boolean result must tessellate closed");
@@ -61,7 +65,7 @@ public class BrepBooleanTests
             (0, 0, 3));
 
         var result = BrepBoolean.Difference(box, tool);
-        double volume = MeshedVolume(result, out var mesh, n);
+        double volume = MeshedVolume(result, out var mesh, n, genus: 1);
 
         Assert.Equal(0, mesh.EulerCharacteristic); // through-hole: genus 1
         double boreArea = 0.5 * n * radius * radius * Math.Sin(2 * Math.PI / n);

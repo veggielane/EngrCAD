@@ -33,6 +33,77 @@ public static class TopologyEditor
         }
         return (first, second, vertex);
     }
+
+    /// <summary>
+    /// Topologically seals a face set assembled from two split solids (boolean output):
+    /// prunes edge uses left by discarded fragments, unifies coincident vertices, and
+    /// merges each seam edge with its geometrically identical twin from the other side
+    /// (they match exactly when both sides were split with the same mandatory break
+    /// parameters). After sealing, the assembled solid passes <see cref="BrepSolid.Validate"/>.
+    /// </summary>
+    public static void SealSeams(IReadOnlyList<BrepFace> keptFaces)
+    {
+        const double tolerance = 1e-7;
+        var keptSet = keptFaces.ToHashSet();
+        var edges = keptFaces.SelectMany(f => f.Loops).SelectMany(l => l.Coedges)
+            .Select(c => c.Edge).Distinct().ToList();
+
+        // 1. Uses contributed by discarded fragments no longer count.
+        foreach (var edge in edges)
+            edge.UsesInternal.RemoveAll(c => c.Loop is null || !keptSet.Contains(c.Loop.Face));
+
+        // 2. Vertex unification by position.
+        var pool = new List<BrepVertex>();
+        BrepVertex Canonical(BrepVertex v)
+        {
+            foreach (var candidate in pool)
+            {
+                if (candidate.Position.AreEqual(v.Position, new Tolerance(tolerance, tolerance)))
+                    return candidate;
+            }
+            pool.Add(v);
+            return v;
+        }
+        foreach (var edge in edges)
+        {
+            edge.StartVertex = Canonical(edge.StartVertex);
+            edge.EndVertex = Canonical(edge.EndVertex);
+        }
+
+        // 3. Merge coincident seam edge pairs (each currently used once, from opposite sides).
+        static Vector3d Mid(BrepEdge e) => e.Curve.PointAt(e.Domain.Mid);
+        var seamEdges = edges.Where(e => e.UsesInternal.Count == 1).ToList();
+        var merged = new HashSet<BrepEdge>();
+        for (int i = 0; i < seamEdges.Count; i++)
+        {
+            var keep = seamEdges[i];
+            if (merged.Contains(keep))
+                continue;
+            for (int j = i + 1; j < seamEdges.Count; j++)
+            {
+                var duplicate = seamEdges[j];
+                if (merged.Contains(duplicate))
+                    continue;
+                bool endpointsMatch =
+                    (ReferenceEquals(keep.StartVertex, duplicate.StartVertex) && ReferenceEquals(keep.EndVertex, duplicate.EndVertex)) ||
+                    (ReferenceEquals(keep.StartVertex, duplicate.EndVertex) && ReferenceEquals(keep.EndVertex, duplicate.StartVertex));
+                if (!endpointsMatch || !Mid(keep).AreEqual(Mid(duplicate), new Tolerance(1e-6, 1e-6)))
+                    continue;
+
+                // Redirect the duplicate's single use onto the kept edge, preserving the
+                // traversal direction (compared at the quarter point for closed edges).
+                var use = duplicate.UsesInternal.Single();
+                var quarterAlongUse = duplicate.Curve.PointAt(
+                    duplicate.Domain.ParameterAt(use.SameSense ? 0.25 : 0.75));
+                bool sense =
+                    quarterAlongUse.DistanceSquaredTo(keep.Curve.PointAt(keep.Domain.ParameterAt(0.25))) <=
+                    quarterAlongUse.DistanceSquaredTo(keep.Curve.PointAt(keep.Domain.ParameterAt(0.75)));
+                use.Loop.ReplaceCoedge(use, [new BrepCoedge(keep, sense)]);
+                merged.Add(duplicate);
+                break;
+            }
+        }
+    }
 }
 
 /// <summary>
