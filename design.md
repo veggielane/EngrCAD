@@ -150,6 +150,25 @@ Each engine uses the data structure its mathematics wants:
 This is the gateway to trimming: the traced/analytic curves are exactly what face
 splitting and B-Rep booleans will consume.
 
+### Trimming groundwork
+
+- **Inverse evaluation** `Surface.TryProjectPoint(point) → (u, v)`: exact overrides for
+  plane/cylinder/sphere; the base implementation grid-seeds and runs damped 2-unknown
+  Gauss–Newton (finite domains only).
+- **`FaceGeometry`** works in parameter space: `PullCurve`/`PullLoops` sample 3D curves /
+  face loops and project them, unwrapping the periodic u direction stepwise so pulled
+  polylines are continuous across seams. `Contains(face, point)` classifies by parity of
+  an upward-v ray; periodic handling first compacts each segment (endpoints stored a
+  period apart get rejoined) and then shifts it into the test point's period — the
+  wrap-around segment of a pulled circle otherwise double-counts.
+- **`FaceSplitter.SplitByClosedCurve`** handles the drilled-hole/boss case: a closed
+  curve interior to a face becomes a hole loop (wound opposite the outer loop, decided by
+  the pulled curve's signed area) plus a disk face, sharing one new closed edge — always
+  two-manifold. `createDisk: false` leaves the edge's second use free for another face
+  (e.g. a bore wall), which is how the end-to-end drill test assembles a genus-1 solid
+  with exact volume. Open curves crossing the face boundary (true arrangements) are the
+  next step.
+
 ## 6. Interop
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:

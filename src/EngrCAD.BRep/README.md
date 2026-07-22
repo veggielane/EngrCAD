@@ -31,8 +31,14 @@ operations. Depends only on `EngrCAD.Core`.
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm.
 
+- **`FaceGeometry` / `FaceSplitter`** — trimming groundwork: inverse surface evaluation
+  (`Surface.TryProjectPoint`), curve pullback into parameter space (periodic-aware),
+  point-in-face classification, and splitting faces by closed interior curves (hole +
+  disk sharing one manifold edge).
+
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator`).
 
 ## Not yet implemented
 
-Face trimming/splitting along intersection curves, B-Rep booleans, filleting.
+Open-curve face splitting (boundary-crossing arrangements), automatic B-Rep booleans,
+filleting.

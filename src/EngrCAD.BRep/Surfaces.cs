@@ -20,6 +20,69 @@ public abstract class Surface
         var dv = (PointAt(u, v1) - PointAt(u, v0)) / (v1 - v0);
         return du.Cross(dv).Normalized();
     }
+
+    /// <summary>
+    /// Inverse evaluation: parameters of a point lying on (or near) the surface. The base
+    /// implementation seeds from a coarse grid and runs damped Gauss–Newton (finite
+    /// domains only); plane/cylinder/sphere override with exact formulas. Returns false
+    /// when the point cannot be brought within <paramref name="tolerance"/> of the surface.
+    /// </summary>
+    public virtual bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
+    {
+        uv = default;
+        var domainU = DomainU;
+        var domainV = DomainV;
+        if (!double.IsFinite(domainU.Length) || !double.IsFinite(domainV.Length))
+            return false;
+
+        const int seedResolution = 16;
+        double bestU = domainU.Mid, bestV = domainV.Mid, bestDistance = double.PositiveInfinity;
+        for (int i = 0; i <= seedResolution; i++)
+        {
+            for (int j = 0; j <= seedResolution; j++)
+            {
+                double su = domainU.ParameterAt((double)i / seedResolution);
+                double sv = domainV.ParameterAt((double)j / seedResolution);
+                double d = PointAt(su, sv).DistanceSquaredTo(point);
+                if (d < bestDistance)
+                {
+                    bestDistance = d;
+                    bestU = su;
+                    bestV = sv;
+                }
+            }
+        }
+
+        double u = bestU, v = bestV;
+        double hu = Math.Max(1e-7, domainU.Length * 1e-7);
+        double hv = Math.Max(1e-7, domainV.Length * 1e-7);
+        for (int iteration = 0; iteration < 25; iteration++)
+        {
+            var residual = PointAt(u, v) - point;
+            if (residual.Length < tolerance)
+            {
+                uv = new Vector2d(u, v);
+                return true;
+            }
+            var du = (PointAt(domainU.Clamp(u + hu), v) - PointAt(domainU.Clamp(u - hu), v)) / (2 * hu);
+            var dv = (PointAt(u, domainV.Clamp(v + hv)) - PointAt(u, domainV.Clamp(v - hv))) / (2 * hv);
+
+            // Normal equations for the 2-unknown least squares step, lightly damped.
+            double a11 = du.Dot(du) + 1e-12, a12 = du.Dot(dv), a22 = dv.Dot(dv) + 1e-12;
+            double b1 = -du.Dot(residual), b2 = -dv.Dot(residual);
+            double det = a11 * a22 - a12 * a12;
+            if (Math.Abs(det) < 1e-30)
+                return false;
+            u = domainU.Clamp(u + (b1 * a22 - b2 * a12) / det);
+            v = domainV.Clamp(v + (b2 * a11 - b1 * a12) / det);
+        }
+        if ((PointAt(u, v) - point).Length < tolerance)
+        {
+            uv = new Vector2d(u, v);
+            return true;
+        }
+        return false;
+    }
 }
 
 /// <summary>
@@ -48,6 +111,12 @@ public sealed class PlaneSurface(Vector3d origin, Vector3d xDirection, Vector3d 
         var d = point - origin;
         return new Vector2d(d.Dot(xDirection), d.Dot(yDirection));
     }
+
+    public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
+    {
+        uv = Project(point);
+        return Math.Abs((point - origin).Dot(Normal)) < tolerance;
+    }
 }
 
 /// <summary>
@@ -70,6 +139,16 @@ public sealed class CylinderSurface(Vector3d origin, Vector3d xDirection, Vector
 
     public override Vector3d NormalAt(double u, double v) =>
         xDirection * Math.Cos(u) + yDirection * Math.Sin(u);
+
+    public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
+    {
+        var d = point - origin;
+        double u = Math.Atan2(d.Dot(yDirection), d.Dot(xDirection));
+        if (u < 0)
+            u += 2 * Math.PI;
+        uv = new Vector2d(u, d.Dot(Axis));
+        return Math.Abs((d - Axis * d.Dot(Axis)).Length - radius) < tolerance;
+    }
 }
 
 /// <summary>Sphere; u is azimuth [0, 2π], v is latitude [−π/2, π/2]. Normal points outward.</summary>
@@ -87,6 +166,16 @@ public sealed class SphereSurface(Vector3d center, double radius) : Surface
         Math.Cos(v) * Math.Cos(u),
         Math.Cos(v) * Math.Sin(u),
         Math.Sin(v));
+
+    public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
+    {
+        var d = point - center;
+        double u = Math.Atan2(d.Y, d.X);
+        if (u < 0)
+            u += 2 * Math.PI;
+        uv = new Vector2d(u, Math.Asin(Math.Clamp(d.Z / Math.Max(d.Length, 1e-300), -1, 1)));
+        return Math.Abs(d.Length - radius) < tolerance;
+    }
 }
 
 /// <summary>Tensor-product rational B-spline surface.</summary>
