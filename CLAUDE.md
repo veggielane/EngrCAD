@@ -80,7 +80,7 @@ Kernel projects (`Core`, `Mesh`, `Implicit`, `BRep`, `Interop`, `Query`) must st
 ## Roadmap (bottom-up — do not skip ahead)
 
 1. **Core math & spatial acceleration** ✅ done — `Tolerance`, `Vector2d`/`Vector3d` (implicit conversion from tuples), `Matrix4d` (column-vector convention), `Quaterniond`, `Aabb`, `Ray3d`, `Bvh` (static, median-split), `Octree` (dynamic)
-2. **Mesh engine** 🔶 mostly done — half-edge structure (`HalfEdgeMesh` + `Vertex`/`HalfEdge`/`Face` handles for LINQ traversal), manifold-validating `Build`, boundary loops, metrics (area/volume/Euler), primitives (box, uv-sphere, n-gon-capped cylinder), triangulation, Loop subdivision, `RenderMesh` extraction, OBJ export; viewer renders meshes. **Still to do: booleans, decimation** (each a sizable increment)
+2. **Mesh engine** ✅ done — half-edge structure (`HalfEdgeMesh` + `Vertex`/`HalfEdge`/`Face` handles for LINQ traversal), manifold-validating `Build`, boundary loops, metrics (area/volume/Euler), primitives (box, uv-sphere, n-gon-capped cylinder), triangulation, Loop subdivision, booleans (`MeshBoolean`: BSP/csg.js clipping + seam zipping for closed results; exact-intersection rewrite and decimation are future work), `RenderMesh` extraction, OBJ export; viewer renders meshes
 3. **Implicit engine** — SDF AST, primitives, operators, evaluator; marching cubes in Interop to visualize
 4. **B-Rep engine** — geometry + topology, tessellation, intersection engine
 5. **Interop completion** — remaining conversions, mesh↔SDF, robustness passes

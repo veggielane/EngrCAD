@@ -240,13 +240,21 @@ public sealed class HalfEdgeMesh
 
     /// <summary>
     /// Signed enclosed volume via the divergence theorem; positive for outward
-    /// counter-clockwise winding. Requires a closed mesh.
+    /// counter-clockwise winding. Requires a topologically closed mesh.
     /// </summary>
     public double Volume()
     {
         if (!IsClosed)
             throw new InvalidOperationException("Volume is only defined for a closed mesh.");
+        return SignedVolume();
+    }
 
+    /// <summary>
+    /// Signed volume without the closed-topology check. Meaningful whenever the surface is
+    /// geometrically watertight — e.g. boolean results whose seams carry T-junctions.
+    /// </summary>
+    public double SignedVolume()
+    {
         double volume = 0;
         for (int f = 0; f < FaceCount; f++)
         {
