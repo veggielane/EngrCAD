@@ -127,6 +127,29 @@ Each engine uses the data structure its mathematics wants:
   second-order at domain endpoints — a first-order one-sided difference puts ~1e-8 error
   into the start frame, which is larger than the weld tolerance and opens cracks.
 
+### Surface–surface intersection
+
+`SurfaceIntersection.Intersect(a, b, region)` is two-tiered:
+
+- **Analytic tier** — exact curve objects for the common quadric pairs: plane/plane →
+  clipped `Line3d`; plane/cylinder → `Circle3d`, exact `Ellipse3d` (semi-major
+  r/|n·axis|), or two parallel lines; plane/sphere and sphere/sphere → `Circle3d`;
+  parallel cylinders → two lines. Unbounded results are clipped to the caller's region.
+  Tangential contacts are deliberately not reported (they are not curves).
+- **Marching tier** for every other pair: grid-sample both surfaces, pair nearby samples
+  with a BVH `Nearest` query, refine each pair onto the intersection with damped
+  Gauss–Newton, then trace each branch with a tangent predictor (`n_a × n_b`) and a
+  4×4 Newton corrector (3 closure equations + 1 step-plane constraint) over the
+  parameter 4-tuple. Periodic parameter directions (cylinder/sphere azimuth, closed
+  generators, full revolutions) are handled by wrapping, so branches crossing seams
+  don't split; closed loops are detected by proximity to the start; consumed seeds
+  prevent duplicate branches. Output is `PolylineCurve3d` — exact at the traced
+  vertices (corrector converges to ~1e-10), chordal in between; step size derives from
+  the region diagonal.
+
+This is the gateway to trimming: the traced/analytic curves are exactly what face
+splitting and B-Rep booleans will consume.
+
 ## 6. Interop
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:
@@ -174,10 +197,10 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Known limitations / roadmap
 
-- **B-Rep**: no surface–surface intersection yet — therefore no trimmed faces beyond the
-  generated cases, no B-Rep booleans, no filleting. This is the largest remaining work
-  item; the intended path is analytic curve cases (plane/plane, plane/quadric) plus
-  marching for general pairs, then face splitting and classification.
+- **B-Rep**: surface–surface intersection exists (analytic + marching), but faces cannot
+  yet be trimmed/split along the resulting curves — so no B-Rep booleans or filleting
+  yet. Next steps: curve-on-surface (pullback of intersection curves into parameter
+  space), face splitting, and containment classification.
 - **Mesh booleans**: BSP-based; coplanar-face and tangent cases remain fragile until an
   exact-intersection rewrite.
 - **Full revolve of profiles with holes** produces multiple shells (outer + tunnel tori)

@@ -168,6 +168,69 @@ public sealed class NurbsCurve : Curve3d
     }
 }
 
+/// <summary>
+/// Ellipse: center + A·cos t + B·sin t for orthogonal semi-axis vectors A and B;
+/// t ∈ [0, 2π]. A circle when |A| = |B|.
+/// </summary>
+public sealed class Ellipse3d(Vector3d center, Vector3d semiAxisX, Vector3d semiAxisY) : Curve3d
+{
+    public Vector3d Center => center;
+    public Vector3d SemiAxisX => semiAxisX;
+    public Vector3d SemiAxisY => semiAxisY;
+
+    public override Interval Domain => new(0, 2 * Math.PI);
+    public override bool IsClosed => true;
+
+    public override Vector3d PointAt(double t) =>
+        center + semiAxisX * Math.Cos(t) + semiAxisY * Math.Sin(t);
+
+    public override Vector3d TangentAt(double t) =>
+        (-semiAxisX * Math.Sin(t) + semiAxisY * Math.Cos(t)).Normalized();
+}
+
+/// <summary>
+/// Piecewise-linear curve through a point sequence, chord-length parameterized over
+/// [0, total length]. Used for numerically traced curves (e.g. surface–surface
+/// intersections); refine or fit downstream if smoothness is needed.
+/// </summary>
+public sealed class PolylineCurve3d : Curve3d
+{
+    private readonly Vector3d[] _points;
+    private readonly double[] _cumulative;
+    private readonly bool _isClosed;
+
+    public IReadOnlyList<Vector3d> Points => _points;
+
+    public PolylineCurve3d(IReadOnlyList<Vector3d> points, bool isClosed = false)
+    {
+        if (points.Count < 2)
+            throw new ArgumentException("A polyline needs at least 2 points.");
+        // A closed polyline repeats its first point at the end for seamless evaluation.
+        _points = isClosed && !points[0].AreEqual(points[^1], Tolerance.Default)
+            ? [.. points, points[0]]
+            : [.. points];
+        _isClosed = isClosed;
+        _cumulative = new double[_points.Length];
+        for (int i = 1; i < _points.Length; i++)
+            _cumulative[i] = _cumulative[i - 1] + _points[i].DistanceTo(_points[i - 1]);
+    }
+
+    public override Interval Domain => new(0, _cumulative[^1]);
+    public override bool IsClosed => _isClosed;
+
+    public override Vector3d PointAt(double t)
+    {
+        t = Domain.Clamp(t);
+        int index = Array.BinarySearch(_cumulative, t);
+        if (index >= 0)
+            return _points[index];
+        index = ~index; // first element greater than t
+        double segment = _cumulative[index] - _cumulative[index - 1];
+        double f = segment > 0 ? (t - _cumulative[index - 1]) / segment : 0;
+        return Vector3d.Lerp(_points[index - 1], _points[index], f);
+    }
+}
+
 /// <summary>Shared B-spline basis evaluation (The NURBS Book, algorithms A2.1/A2.2).</summary>
 internal static class NurbsBasis
 {

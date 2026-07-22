@@ -26,9 +26,13 @@ operations. Depends only on `EngrCAD.Core`.
     no caps) or partial (planar caps; closed profiles give pipe elbows; holes allowed).
   - `Sweep(profile, path, holes?)` — rotation-minimizing frames along an open path.
 
+- **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
+  common quadric pairs (lines, circles, exact ellipses) and a general marching tracer
+  (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
+  everything else. See design.md §5 for the algorithm.
+
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator`).
 
 ## Not yet implemented
 
-Surface–surface intersection, trimmed faces beyond the generated cases, B-Rep booleans,
-filleting.
+Face trimming/splitting along intersection curves, B-Rep booleans, filleting.
