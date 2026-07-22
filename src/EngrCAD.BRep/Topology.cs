@@ -57,16 +57,31 @@ public sealed class BrepCoedge
 
 public sealed class BrepLoop
 {
+    private readonly List<BrepCoedge> _coedges;
+
     public BrepFace Face { get; internal set; } = null!;
-    public IReadOnlyList<BrepCoedge> Coedges { get; }
+    public IReadOnlyList<BrepCoedge> Coedges => _coedges;
 
     public BrepLoop(IReadOnlyList<BrepCoedge> coedges)
     {
         if (coedges.Count == 0)
             throw new ArgumentException("A loop needs at least one coedge.");
-        Coedges = coedges;
-        foreach (var coedge in coedges)
+        _coedges = [.. coedges];
+        foreach (var coedge in _coedges)
             coedge.Loop = this;
+    }
+
+    /// <summary>Replaces one coedge in place with a chain (used by edge splitting).</summary>
+    internal void ReplaceCoedge(BrepCoedge old, IReadOnlyList<BrepCoedge> replacements)
+    {
+        int index = _coedges.IndexOf(old);
+        if (index < 0)
+            throw new InvalidOperationException("Coedge is not part of this loop.");
+        _coedges.RemoveAt(index);
+        _coedges.InsertRange(index, replacements);
+        foreach (var coedge in replacements)
+            coedge.Loop = this;
+        old.Edge.UsesInternal.Remove(old);
     }
 }
 

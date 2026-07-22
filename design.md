@@ -166,8 +166,25 @@ splitting and B-Rep booleans will consume.
   the pulled curve's signed area) plus a disk face, sharing one new closed edge — always
   two-manifold. `createDisk: false` leaves the edge's second use free for another face
   (e.g. a bore wall), which is how the end-to-end drill test assembles a genus-1 solid
-  with exact volume. Open curves crossing the face boundary (true arrangements) are the
-  next step.
+  with exact volume.
+- **`FaceSplitter.SplitByCurve`** handles curves crossing the face boundary — the real
+  arrangement machinery:
+  1. crossings found by sampling boundary coedges and the curve into parameter space and
+     intersecting polylines, then refined by 2×2 Newton on (edge-param, curve-param);
+  2. boundary edges split at the crossings via `TopologyEditor.SplitEdge`, which patches
+     *every* loop using the edge — neighboring faces evolve consistently, which is what
+     makes whole-solid tests (Validate + Euler + exact volume) possible after a split;
+     crossings landing on an edge endpoint (e.g. a vertex created by an earlier split)
+     reuse that vertex instead;
+  3. interior curve stretches (classified by midpoint parity) become new edges
+     (`CurveSegment` reparameterizes a piece of the curve), each used twice;
+  4. sub-faces are traced from the planar graph by walking half-edges with the
+     smallest-clockwise-turn rule; CCW traced loops bound sub-faces, CW loops (including
+     uncrossed original holes) are assigned to the smallest containing CCW loop.
+  Constraints: crossings must be transversal, and open curves must start/end outside the
+  face. Known limitation: splitting the closed edges of a generated face (e.g. a bore
+  wall's circles when a cut passes through the hole) outruns the grid tessellator —
+  trimmed-face tessellation is the companion work item to booleans.
 
 ## 6. Interop
 
