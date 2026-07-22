@@ -2,7 +2,10 @@
 
 **Detailed design rationale lives in [design.md](design.md)** (architecture, conventions,
 algorithm choices, numerical lessons, roadmap); each `src/*` project also has a
-`README.md` describing its contents. Keep all three in sync when landing features.
+`README.md` describing its contents. **[todo.md](todo.md)** is the idea backlog
+(largely harvested from a survey of geometry3Sharp at
+`C:\Users\chris\projects\git\geometry3Sharp` — study the referenced g3 classes before
+implementing an item). Keep all of these in sync when landing features.
 
 A CAD application in modern .NET built around a **hybrid geometry kernel** that natively supports three representations:
 
