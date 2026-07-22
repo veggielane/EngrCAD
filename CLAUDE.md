@@ -10,7 +10,7 @@ A distinctive design goal is **LINQ-native geometry querying**: a custom `IQuery
 
 ## Current status
 
-Phase 1 complete; Phase 2 core landed: `EngrCAD.Core` and the half-edge mesh engine in `EngrCAD.Mesh` are implemented and tested (89 tests). The Viewer renders meshes through an OpenGL viewport (Avalonia `OpenGlControlBase` + Silk.NET over ANGLE/GLES3 on Windows) with an orbit camera (drag orbit, shift+drag pan, ctrl+drag/scroll zoom — laptop-friendly). Remaining Phase 2 work: mesh booleans and decimation. Implicit/BRep/Interop/Query are still stubs.
+Phases 1–3 complete (118 tests): `EngrCAD.Core` (math + spatial), `EngrCAD.Mesh` (half-edge engine incl. BSP booleans with seam zipping), `EngrCAD.Implicit` (SDF AST), and implicit→mesh in `EngrCAD.Interop` (manifold Surface Nets). The Viewer renders a two-row demo scene — mesh primitives/subdivision/boolean and SDF-derived meshes (blend, torus, gyroid lattice) — through an OpenGL viewport (Avalonia `OpenGlControlBase` + Silk.NET over ANGLE/GLES3) with a laptop-friendly orbit camera (drag orbit, shift+drag pan, ctrl+drag/scroll zoom). BRep and Query are still stubs; remaining Interop work: B-Rep tessellation, mesh→SDF.
 
 - .NET SDK 10.0.302 installed **user-local** at `%USERPROFILE%\.dotnet` (win-arm64), on the user PATH with `DOTNET_ROOT` set. Build with `dotnet build EngrCAD.slnx`, test with `dotnet test EngrCAD.slnx`.
 - Git repository initialized; commit only when Chris asks.
@@ -81,7 +81,7 @@ Kernel projects (`Core`, `Mesh`, `Implicit`, `BRep`, `Interop`, `Query`) must st
 
 1. **Core math & spatial acceleration** ✅ done — `Tolerance`, `Vector2d`/`Vector3d` (implicit conversion from tuples), `Matrix4d` (column-vector convention), `Quaterniond`, `Aabb`, `Ray3d`, `Bvh` (static, median-split), `Octree` (dynamic)
 2. **Mesh engine** ✅ done — half-edge structure (`HalfEdgeMesh` + `Vertex`/`HalfEdge`/`Face` handles for LINQ traversal), manifold-validating `Build`, boundary loops, metrics (area/volume/Euler), primitives (box, uv-sphere, n-gon-capped cylinder), triangulation, Loop subdivision, booleans (`MeshBoolean`: BSP/csg.js clipping + seam zipping for closed results; exact-intersection rewrite and decimation are future work), `RenderMesh` extraction, OBJ export; viewer renders meshes
-3. **Implicit engine** — SDF AST, primitives, operators, evaluator; marching cubes in Interop to visualize
+3. **Implicit engine** ✅ done — `Sdf` AST (`Evaluate`/batch/`Normal`/conservative `Bounds`), primitives (sphere, box, cylinder, torus, capsule, half-space, gyroid lattice), operators (union/intersect/subtract with `|`/`&`/`-` overloads, smooth blends, offset, shell, translate/rotate/scale); `SurfaceNets.Polygonize` in Interop converts implicit→mesh (manifold variant: one vertex per inside-corner component per cell). Future: SIMD batch evaluation, expression-tree→SDF compilation for the Query layer
 4. **B-Rep engine** — geometry + topology, tessellation, intersection engine
 5. **Interop completion** — remaining conversions, mesh↔SDF, robustness passes
 

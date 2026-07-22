@@ -4,6 +4,8 @@ using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
 using EngrCAD.Core;
+using EngrCAD.Implicit;
+using EngrCAD.Interop;
 using EngrCAD.Mesh;
 using Silk.NET.Core.Contexts;
 using GL = Silk.NET.OpenGL.GL;
@@ -25,7 +27,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private double _yaw = 0.7;
     private double _pitch = 0.45;
-    private double _distance = 11.0;
+    private double _distance = 13.0;
     private Vector3d _target = (0, 0, 0.2);
     private Point _lastPointer;
 
@@ -107,22 +109,46 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private static IEnumerable<(HalfEdgeMesh Mesh, Matrix4d Model, (float, float, float) Color)> DemoScene()
     {
+        // Front row: mesh-engine primitives and algorithms.
         yield return (
             MeshPrimitives.Box(1.8, 1.8, 1.8),
-            Matrix4d.CreateTranslation((-4.6, 0, 0)),
+            Matrix4d.CreateTranslation((-4.6, -1.9, 0)),
             (0.42f, 0.62f, 0.86f));
         yield return (
             MeshPrimitives.UvSphere(1.05, segments: 48, rings: 24),
-            Matrix4d.CreateTranslation((-1.5, 0, 0)),
+            Matrix4d.CreateTranslation((-1.5, -1.9, 0)),
             (0.88f, 0.52f, 0.40f));
         yield return (
             MeshPrimitives.Cylinder(0.85, 1.9, segments: 48),
-            Matrix4d.CreateTranslation((1.5, 0, -0.95)),
+            Matrix4d.CreateTranslation((1.5, -1.9, -0.95)),
             (0.55f, 0.75f, 0.48f));
         yield return (
             LoopSubdivision.Subdivide(MeshPrimitives.Box(2.0, 2.0, 2.0).Triangulated(), 3),
-            Matrix4d.CreateTranslation((4.6, 0, 0)),
+            Matrix4d.CreateTranslation((4.6, -1.9, 0)),
             (0.72f, 0.55f, 0.83f));
+
+        // Back row: booleans and the implicit engine surfaced through SurfaceNets.
+        yield return (
+            MeshBoolean.Difference(
+                MeshPrimitives.Box(1.8, 1.8, 1.8),
+                MeshPrimitives.UvSphere(1.15, segments: 32, rings: 16)),
+            Matrix4d.CreateTranslation((-4.6, 1.9, 0)),
+            (0.85f, 0.72f, 0.38f));
+        yield return (
+            SurfaceNets.Polygonize(
+                Sdf.Sphere(0.72).Translate((-0.5, 0, 0))
+                    .SmoothUnion(Sdf.Sphere(0.72).Translate((0.5, 0, 0)), 0.45),
+                resolution: 56),
+            Matrix4d.CreateTranslation((-1.5, 1.9, 0)),
+            (0.47f, 0.79f, 0.77f));
+        yield return (
+            SurfaceNets.Polygonize(Sdf.Torus(0.85, 0.34), resolution: 56),
+            Matrix4d.CreateTranslation((1.5, 1.9, 0)),
+            (0.83f, 0.47f, 0.62f));
+        yield return (
+            SurfaceNets.Polygonize(Sdf.Sphere(1.1) & Sdf.Gyroid(0.75, 0.16), resolution: 88),
+            Matrix4d.CreateTranslation((4.6, 1.9, 0)),
+            (0.62f, 0.66f, 0.88f));
     }
 
     private unsafe GpuMesh Upload(GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color)

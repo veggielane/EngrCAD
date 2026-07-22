@@ -11,5 +11,7 @@
   <Folder Name="/tests/">
     <Project Path="tests/EngrCAD.Core.Tests/EngrCAD.Core.Tests.csproj" />
     <Project Path="tests/EngrCAD.Mesh.Tests/EngrCAD.Mesh.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Implicit.Tests/EngrCAD.Implicit.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Interop.Tests/EngrCAD.Interop.Tests.csproj" />
   </Folder>
 </Solution>
