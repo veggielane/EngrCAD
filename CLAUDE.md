@@ -1,5 +1,9 @@
 # EngrCAD
 
+**Detailed design rationale lives in [design.md](design.md)** (architecture, conventions,
+algorithm choices, numerical lessons, roadmap); each `src/*` project also has a
+`README.md` describing its contents. Keep all three in sync when landing features.
+
 A CAD application in modern .NET built around a **hybrid geometry kernel** that natively supports three representations:
 
 - **B-Rep** — parametric surfaces (planes, conics, NURBS) wrapped in topology, for precision modeling
