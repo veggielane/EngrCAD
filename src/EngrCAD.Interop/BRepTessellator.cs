@@ -64,7 +64,10 @@ public static class BRepTessellator
             }
         }
 
-        return MeshWelder.WeldPolygons(polygons, tolerance: 1e-9);
+        // Zip seams: cap triangulation may merge exactly-collinear boundary runs (earcut
+        // filters them), leaving T-junctions against the finer neighboring faces; zipping
+        // reinserts the missing vertices so the mesh closes.
+        return MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
     }
 
     private static List<Vector3d> SampleEdge(BrepEdge edge, int segmentsPerCircle, int curveSamples)
