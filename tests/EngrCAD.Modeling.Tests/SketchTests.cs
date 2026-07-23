@@ -146,24 +146,53 @@ public class SketchTests
     }
 
     [Fact]
-    public void AxisTouchingRevolve_ImplicitOnly()
+    public void AxisTouchingRevolve_WorksInAllRepresentations()
     {
-        // A vase profile touching the axis: no B-Rep, exact implicit, mesh via SDF.
+        // A vase profile touching the axis: the on-axis closing line revolves to
+        // nothing and its endpoints become B-Rep poles.
         var vase = Sketch.Start(0, 0).LineTo(1, 0)
             .BezierTo(new(1.6, 0.8), new(0.3, 1.6), new(0.8, 2.4))
             .LineTo(0, 2.4)
             .Close();
         var shape = Shape.Revolve(vase);
 
-        Assert.False(shape.CanConvertTo(TargetRep.Brep));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        var brepMesh = BRepTessellator.Tessellate(solid, 128, 48);
+        Assert.True(brepMesh.IsClosed);
+        Assert.Equal(2, brepMesh.EulerCharacteristic);
+
         Assert.True(shape.Explain(TargetRep.Implicit).Entries.All(e => e.Support == NodeSupport.Native));
+        double sdfVolume = SurfaceNets.Polygonize(shape.ToImplicit(), 128).Volume();
+        Assert.True(Math.Abs(brepMesh.Volume() - sdfVolume) / sdfVolume < 0.03,
+            $"brep {brepMesh.Volume()} vs sdf {sdfVolume}");
 
-        var mesh = shape.ToMesh(new MeshQuality { SdfResolution = 96 });
-        Assert.True(mesh.IsClosed);
-        Assert.True(mesh.Volume() > 0);
-
-        // Partial axis-touching revolve is rejected up front.
+        // Partial axis-touching revolve is still rejected up front.
         Assert.Throws<NotSupportedException>(() => Shape.Revolve(vase, Math.PI));
+    }
+
+    [Fact]
+    public void AxisTouchingRevolve_CylinderAndSphereAreExact()
+    {
+        // Rectangle touching the axis revolves to a cylinder: n-gon prism volume.
+        var cylinder = Shape.Revolve(Sketch.Polygon([new(0, 0), new(1, 0), new(1, 2), new(0, 2)]));
+        var solid = cylinder.ToBrep();
+        solid.Validate();
+        int n = 256;
+        var mesh = BRepTessellator.Tessellate(solid, n, 24);
+        Assert.True(mesh.IsClosed);
+        double exact = 0.5 * n * Math.Sin(2 * Math.PI / n) * 2; // inscribed n-gon × height
+        Assert.True(Math.Abs(mesh.Volume() - exact) < 1e-9, $"volume {mesh.Volume()} vs {exact}");
+
+        // Pole-to-pole arc (half-disc) revolves to a sphere via the midpoint split.
+        var ball = Shape.Revolve(Sketch.Start(0, -1).ArcThrough(new(1, 0), new(0, 1)).Close());
+        var ballSolid = ball.ToBrep();
+        ballSolid.Validate();
+        var ballMesh = BRepTessellator.Tessellate(ballSolid, 128, 64);
+        Assert.True(ballMesh.IsClosed);
+        double sphere = 4.0 / 3.0 * Math.PI;
+        Assert.True(Math.Abs(ballMesh.Volume() - sphere) / sphere < 0.005,
+            $"volume {ballMesh.Volume()} vs {sphere}");
     }
 
     [Fact]

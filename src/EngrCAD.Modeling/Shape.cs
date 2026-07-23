@@ -80,8 +80,9 @@ public abstract class Shape
     /// <summary>
     /// Revolves a sketch about its plane's y axis (the sketch's x = 0 line); sketch x
     /// is the radial direction and must be ≥ 0. The default plane (XZ) puts the axis on
-    /// world Z. Sketches touching the axis are supported for full turns (implicit/mesh
-    /// lowerings only — B-Rep needs axis clearance).
+    /// world Z. Sketches may touch the axis on full turns in every representation:
+    /// on-axis stretches revolve to nothing and become poles (partial revolves still
+    /// need axis clearance).
     /// </summary>
     public static Shape Revolve(Sketch sketch, double angle = 2 * Math.PI, SketchPlane? plane = null)
     {

@@ -27,7 +27,7 @@ var vase = Sketch.Start(0, 0).LineTo(1, 0)
     .BezierTo(new(1.7, 0.9), new(0.35, 1.7), new(0.9, 2.6))
     .LineTo(0, 2.6).Close();
 sketches.Add(new Part("revolved vase", Shape.Revolve(vase), Palette.Teal,
-    Matrix4d.CreateTranslation((2.6, 0, -1.3))));                   // exact SDF route (touches the axis)
+    Matrix4d.CreateTranslation((2.6, 0, -1.3))));                   // axis-touching: on-axis line drops, poles close it
 
 // ---- tab 2: the mesh engine ----
 var meshes = scene.AddTab("mesh");

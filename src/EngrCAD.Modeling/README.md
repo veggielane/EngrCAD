@@ -32,7 +32,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Cylinder` | ✅ native (any affine — circle becomes ellipse) | ✅ native · 🔶 bridged if sheared | ✅ native |
 | `Torus` | ✅ native (rigid + uniform scale) · ❌ sheared | ✅ native · 🔶 bridged if sheared | ✅ / 🔶 |
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
-| `Revolve(Sketch)` full turn | ✅ native (off-axis) · ❌ axis-touching | ✅ **native** (exact 2D SDF) | ✅ / 🔶 |
+| `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
@@ -112,8 +112,9 @@ The payoff: a sketch knows its **exact 2D signed distance** (`ToRegion()`, compo
 with `Sdf.ExtrudedRegion`/`RevolvedRegion`), so sketch-based extrusions and full
 revolutions are *Native* in the implicit lowering — no mesh bridge — while B-Rep gets
 exact rational arcs/béziers and mesh gets crisp tessellation. Sketches touching the
-revolve axis (vases, domes) work in implicit/mesh; B-Rep needs axis clearance and
-`Explain` says so. A 2D constraint solver is future work (todo.md).
+revolve axis (vases, domes) work everywhere on full turns: on-axis stretches revolve
+to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
+still need axis clearance). A 2D constraint solver is future work (todo.md).
 
 ## The document model: Part, Tab, Scene
 

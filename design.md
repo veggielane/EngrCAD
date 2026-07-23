@@ -284,8 +284,13 @@ Design decisions:
   exact slab/revolution combines, so sketch extrude + full revolve are implicit-Native —
   the "exact 2D-profile SDF" roadmap item. Area is exact (arc terms analytic, cubics by
   3-point Gauss quadrature — the integrand is degree 5, within quadrature exactness).
-  Revolve convention: sketch x = radius, plane defaults to XZ (axis = world Z);
-  axis-touching sketches are implicit/mesh-only.
+  Revolve convention: sketch x = radius, plane defaults to XZ (axis = world Z).
+  Axis-touching profiles revolve in *every* representation on full turns: the B-Rep
+  `RevolveFullTurn` drops on-axis stretches (they sweep zero area — Chris's
+  observation), treats their endpoints as poles without junction edges (a disk face
+  then has a single rim loop, exactly like `MakeSphere`'s hemispheres), and splits
+  pole-to-pole generators at their midpoint so no face is left without a boundary
+  loop. Tessellation already handles the pole rows via degenerate-cell filtering.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

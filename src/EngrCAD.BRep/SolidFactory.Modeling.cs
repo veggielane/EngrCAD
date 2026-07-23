@@ -87,10 +87,16 @@ public static partial class SolidFactory
             return d - axis * d.Dot(axis);
         }
         var radialDir = Radial(allSamples.MaxBy(p => Radial(p).LengthSquared)).Normalized();
+        // Full turns may touch the axis: on-axis stretches revolve to nothing and are
+        // dropped, their endpoints becoming poles. Partial revolves need their cap and
+        // rail geometry off-axis.
+        double sideLimit = fullTurn ? -1e-9 : 1e-9;
         foreach (var p in allSamples)
         {
-            if ((p - origin).Dot(radialDir) < 1e-9)
-                throw new ArgumentException("The profile must lie strictly on one side of the revolve axis.");
+            if ((p - origin).Dot(radialDir) < sideLimit)
+                throw new ArgumentException(fullTurn
+                    ? "The profile must lie on one side of the revolve axis (touching is allowed)."
+                    : "The profile must lie strictly on one side of the revolve axis.");
         }
 
         // Counter-clockwise in (radius, height) coordinates faces outward; holes clockwise.
@@ -141,15 +147,58 @@ public static partial class SolidFactory
 
     private static BrepSolid RevolveFullTurn(Profile profile, in Vector3d origin, in Vector3d axis, in Vector3d radialDir)
     {
-        int n = profile.Segments.Count;
         var circleY = axis.Cross(radialDir);
-        var junctionEdges = new BrepEdge[n];
         var fullTurn = new Interval(0, 2 * Math.PI);
+        var axisOrigin = origin;
+        var axisDir = axis;
+        var radial = radialDir;
+        double RadiusOf(in Vector3d p) => (p - axisOrigin).Dot(radial);
+
+        // On-axis stretches revolve to nothing — drop them; their endpoints are poles
+        // (no junction edge there, like MakeSphere's pole).
+        var kept = new List<Curve3d>();
+        foreach (var segment in profile.Segments)
+        {
+            bool onAxis = true;
+            for (int i = 0; i <= 8 && onAxis; i++)
+                onAxis = RadiusOf(segment.PointAt(segment.Domain.ParameterAt(i / 8.0))) <= 1e-9;
+            if (!onAxis)
+                kept.Add(segment);
+        }
+        if (kept.Count == 0)
+            throw new ArgumentException("The profile lies entirely on the revolve axis.");
+
+        // A pole-to-pole generator would make a face with no boundary edges (the
+        // sphere case); split it at its midpoint so an equator junction exists.
+        var generators = new List<Curve3d>();
+        foreach (var segment in kept)
+        {
+            var domain = segment.Domain;
+            bool startPole = RadiusOf(segment.PointAt(domain.Start)) <= 1e-9;
+            bool endPole = RadiusOf(segment.PointAt(domain.End)) <= 1e-9;
+            if (startPole && endPole)
+            {
+                generators.Add(new CurveSegment(segment, domain.Start, domain.Mid));
+                generators.Add(new CurveSegment(segment, domain.Mid, domain.End));
+            }
+            else
+            {
+                generators.Add(segment);
+            }
+        }
+
+        // Junction circle at each generator's start (null at poles). Cyclic adjacency
+        // still holds after dropping axis segments: wherever two kept generators are
+        // not contiguous, both meet the axis, so both sides are poles.
+        int n = generators.Count;
+        var junctionEdges = new BrepEdge?[n];
         for (int i = 0; i < n; i++)
         {
-            var q = profile.Segments[i].PointAt(profile.Segments[i].Domain.Start);
+            var q = generators[i].PointAt(generators[i].Domain.Start);
+            double radius = RadiusOf(q);
+            if (radius <= 1e-9)
+                continue;
             var center = origin + axis * (q - origin).Dot(axis);
-            double radius = (q - origin).Dot(radialDir);
             var seam = new BrepVertex(q);
             junctionEdges[i] = new BrepEdge(new Circle3d(center, radialDir, circleY, radius), fullTurn, seam, seam);
         }
@@ -157,12 +206,12 @@ public static partial class SolidFactory
         var faces = new List<BrepFace>(n);
         for (int i = 0; i < n; i++)
         {
-            faces.Add(new BrepFace(
-                new RevolvedSurface(profile.Segments[i], origin, axis),
-                [
-                    new BrepLoop([new BrepCoedge(junctionEdges[i], sameSense: true)]),
-                    new BrepLoop([new BrepCoedge(junctionEdges[(i + 1) % n], sameSense: false)]),
-                ]));
+            var loops = new List<BrepLoop>(2);
+            if (junctionEdges[i] is { } startEdge)
+                loops.Add(new BrepLoop([new BrepCoedge(startEdge, sameSense: true)]));
+            if (junctionEdges[(i + 1) % n] is { } endEdge)
+                loops.Add(new BrepLoop([new BrepCoedge(endEdge, sameSense: false)]));
+            faces.Add(new BrepFace(new RevolvedSurface(generators[i], origin, axis), loops));
         }
         return new BrepSolid([new BrepShell(faces)]);
     }

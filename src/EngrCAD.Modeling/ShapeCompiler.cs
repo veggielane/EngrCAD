@@ -62,9 +62,6 @@ internal static class ShapeCompiler
                 if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
-                else if (sketch.Bounds.Min.X < 1e-9)
-                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "the sketch touches the revolve axis; only the implicit lowering supports that"));
                 else if (revolve.IsFullTurn && sketch.Holes.Count > 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a full revolve of a sketch with holes produces multiple shells"));
