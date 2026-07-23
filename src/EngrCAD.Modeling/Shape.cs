@@ -123,6 +123,79 @@ public abstract class Shape
         return result;
     }
 
+    // ---- Rim features (chamfer / fillet) ----
+
+    /// <summary>
+    /// 45° chamfer of the outer rims of planar faces selected by <paramref name="faces"/>
+    /// (a query over the lowered B-Rep, e.g.
+    /// <c>s => s.PlanarFacesWithNormal(Vector3d.UnitZ)</c>). Straight edges miter at
+    /// sharp corners; full circular rims get exact cone bands.
+    /// </summary>
+    public Shape Chamfer(double setback, Func<BrepSolid, IEnumerable<BrepFace>> faces) =>
+        Chamfer(setback, setback, faces);
+
+    public Shape Chamfer(double topSetback, double sideSetback, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        if (topSetback <= 0 || sideSetback <= 0)
+            throw new ArgumentOutOfRangeException(nameof(topSetback));
+        return new RimShape(this, fillet: false, topSetback, sideSetback, faces);
+    }
+
+    /// <summary>
+    /// Fillets the outer rims of selected planar faces. Rims must be full circles or
+    /// tangent-continuous line+arc chains (round sharp sketch corners first — chamfer
+    /// handles sharp corners).
+    /// </summary>
+    public Shape Fillet(double radius, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        if (radius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        return new RimShape(this, fillet: true, radius, radius, faces);
+    }
+
+    // ---- Patterns ----
+
+    /// <summary>This shape unioned with <paramref name="count"/> − 1 copies stepped
+    /// along <paramref name="step"/>.</summary>
+    public Shape PatternLinear(int count, in Vector3d step)
+    {
+        if (count < 1)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        var copies = new List<Shape>(count) { this };
+        for (int i = 1; i < count; i++)
+            copies.Add(Transform(Matrix4d.CreateTranslation(step * i)));
+        return UnionTree(copies);
+    }
+
+    /// <summary>This shape unioned with copies rotated about an axis
+    /// (<paramref name="angleStep"/> defaults to a full turn divided evenly).</summary>
+    public Shape PatternCircular(int count, in Vector3d axisOrigin, in Vector3d axisDirection, double? angleStep = null)
+    {
+        if (count < 1)
+            throw new ArgumentOutOfRangeException(nameof(count));
+        double step = angleStep ?? 2 * Math.PI / count;
+        var axis = axisDirection.Normalized();
+        var toOrigin = Matrix4d.CreateTranslation(-axisOrigin);
+        var back = Matrix4d.CreateTranslation(axisOrigin);
+        var copies = new List<Shape>(count) { this };
+        for (int i = 1; i < count; i++)
+            copies.Add(Transform(back * Matrix4d.CreateFromAxisAngle(axis, step * i) * toOrigin));
+        return UnionTree(copies);
+    }
+
+    private static Shape UnionTree(List<Shape> shapes)
+    {
+        // Balanced union tree keeps boolean operand complexity even.
+        while (shapes.Count > 1)
+        {
+            var next = new List<Shape>((shapes.Count + 1) / 2);
+            for (int i = 0; i < shapes.Count; i += 2)
+                next.Add(i + 1 < shapes.Count ? shapes[i] | shapes[i + 1] : shapes[i]);
+            shapes = next;
+        }
+        return shapes[0];
+    }
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);

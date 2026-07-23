@@ -41,16 +41,45 @@ public static class BrepBoolean
         // crossing parameters as mandatory seam breaks.
         var curvesA = a.Faces.ToDictionary(f => f, _ => new List<(Curve3d Curve, IReadOnlyList<double> Breaks)>());
         var curvesB = b.Faces.ToDictionary(f => f, _ => new List<(Curve3d Curve, IReadOnlyList<double> Breaks)>());
+        var boundsA = curvesA.Keys.ToDictionary(f => f, f => f.Bounds().Expanded(1e-6));
+        var boundsB = curvesB.Keys.ToDictionary(f => f, f => f.Bounds().Expanded(1e-6));
         foreach (var fa in curvesA.Keys)
         {
             foreach (var fb in curvesB.Keys)
             {
+                // Carrier surfaces are unbounded (planes, cylinders): skip pairs whose
+                // actual faces cannot meet, so spurious carrier intersections far from
+                // either face never reach the splitter.
+                if (!boundsA[fa].Intersects(boundsB[fb]))
+                    continue;
                 foreach (var curve in SurfaceIntersection.Intersect(fa.Surface, fb.Surface, region))
                 {
-                    curvesA[fa].Add((curve, FaceSplitter.CrossingParameters(fb, curve)));
-                    curvesB[fb].Add((curve, FaceSplitter.CrossingParameters(fa, curve)));
+                    // Identical carriers on repeated geometry (patterned faces sharing a
+                    // plane) produce the same curve once per pair; splitting a face
+                    // twice along the same curve breaks the arrangement tracer.
+                    if (!curvesA[fa].Any(existing => SameCurve(existing.Curve, curve)))
+                        curvesA[fa].Add((curve, FaceSplitter.CrossingParameters(fb, curve)));
+                    if (!curvesB[fb].Any(existing => SameCurve(existing.Curve, curve)))
+                        curvesB[fb].Add((curve, FaceSplitter.CrossingParameters(fa, curve)));
                 }
             }
+        }
+
+        // Disjoint or fully nested operands: no intersection curves anywhere. Classify
+        // whole bodies and combine shells — a multi-shell result for disjoint unions,
+        // a cavity (reversed inner shell) for a fully swallowed Difference tool.
+        if (curvesA.Values.All(list => list.Count == 0))
+        {
+            bool aInside = sdfB.Evaluate(ProbePoint(a.Faces.First())) < 0;
+            bool bInside = sdfA.Evaluate(ProbePoint(b.Faces.First())) < 0;
+            var shells = new List<BrepShell>();
+            if (keepAOutside ? !aInside : aInside)
+                shells.AddRange(a.Shells);
+            if (keepBOutside ? !bInside : bInside)
+                shells.AddRange(reverseB ? b.Shells.Select(CloneReversedShell) : b.Shells);
+            if (shells.Count == 0)
+                throw new InvalidOperationException("Boolean result is empty.");
+            return new BrepSolid(shells);
         }
 
         var kept = new List<BrepFace>();
@@ -96,6 +125,42 @@ public static class BrepBoolean
             .Select(l => new BrepLoop([.. l.Coedges.Reverse().Select(c => new BrepCoedge(c.Edge, !c.SameSense))]))
             .ToList();
         return new BrepFace(face.Surface, loops, isReversed: !face.IsReversed);
+    }
+
+    /// <summary>
+    /// A reversed deep copy of a shell for the disjoint fast path. Unlike
+    /// <see cref="ReverseFace"/> on split fragments (whose edges are freshly built and
+    /// later cleaned by SealSeams), reversing intact faces in place would add duplicate
+    /// coedge uses to the original edges — so edges are cloned.
+    /// </summary>
+    private static BrepShell CloneReversedShell(BrepShell shell)
+    {
+        var edgeClones = new Dictionary<BrepEdge, BrepEdge>();
+        BrepEdge Clone(BrepEdge edge)
+        {
+            if (!edgeClones.TryGetValue(edge, out var clone))
+                edgeClones[edge] = clone = new BrepEdge(edge.Curve, edge.Domain, edge.StartVertex, edge.EndVertex);
+            return clone;
+        }
+        var faces = shell.Faces.Select(f => new BrepFace(
+            f.Surface,
+            [.. f.Loops.Select(l => new BrepLoop(
+                [.. l.Coedges.Reverse().Select(c => new BrepCoedge(Clone(c.Edge), !c.SameSense))]))],
+            !f.IsReversed)).ToList();
+        return new BrepShell(faces);
+    }
+
+    private static bool SameCurve(Curve3d a, Curve3d b)
+    {
+        const double tolerance = 1e-9;
+        var a0 = a.PointAt(a.Domain.Start);
+        var a1 = a.PointAt(a.Domain.End);
+        var b0 = b.PointAt(b.Domain.Start);
+        var b1 = b.PointAt(b.Domain.End);
+        bool forward = a0.DistanceTo(b0) < tolerance && a1.DistanceTo(b1) < tolerance;
+        bool backward = a0.DistanceTo(b1) < tolerance && a1.DistanceTo(b0) < tolerance;
+        return (forward || backward)
+            && a.PointAt(a.Domain.Mid).DistanceTo(b.PointAt(b.Domain.Mid)) < tolerance;
     }
 
     /// <summary>A point strictly interior to the face, for inside/outside classification.</summary>

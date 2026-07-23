@@ -159,6 +159,19 @@ internal sealed class LatticeShape(Shape child, Sdf pattern) : Shape
     internal override string Describe() => "Lattice";
 }
 
+/// <summary>Rim chamfer/fillet applied to faces selected by a query on the lowered solid.</summary>
+internal sealed class RimShape(
+    Shape child, bool fillet, double amount, double sideAmount,
+    Func<BrepSolid, IEnumerable<BrepFace>> selector) : Shape
+{
+    public Shape Child => child;
+    public bool IsFillet => fillet;
+    public double Amount => amount;
+    public double SideAmount => sideAmount;
+    public Func<BrepSolid, IEnumerable<BrepFace>> Selector => selector;
+    internal override string Describe() => fillet ? $"Fillet(r={amount:g4})" : $"Chamfer({amount:g4})";
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;

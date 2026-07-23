@@ -301,6 +301,22 @@ Design decisions:
   built for this: analytic plane⊥revolved-surface circles, wrap-splitting of revolved
   bands with geometrically refined cut parameters (projection error would crack cone
   welds), and pole-aware boolean probe points.
+- **Queries and rim features**: `BrepQueries` gives B-Rep topology the LINQ vocabulary
+  (classification, adjacency, convexity, normal-directed face selection); `Shape.Chamfer/
+  Fillet(amount, faceSelector)` run `Filleting.ChamferRim/FilletRim` topology surgery
+  on the lowered solid. Design choices: all new rim edges are built in the rim face's
+  traversal direction (every coedge sense follows mechanically); rim circle geometry
+  comes from edge *samples*, never `Underlying` (wrappers lie about position);
+  domain-driven neighbor surfaces (extruded/revolved) are trimmed when their rims are
+  lowered, because their tessellation grids ignore loops. Fillet corners are avoided,
+  not patched: chamfers miter (planar strips can), fillets require G1 rims so bands
+  join along shared junction arcs — the honest v1 boundary until trimmed-band
+  tessellation exists.
+- **Patterns** are union-tree sugar; the boolean engine gained the robustness they
+  need: a disjoint fast path (no intersection curves → whole-body classification,
+  multi-shell unions, clone-reversed swallowed tools), face-bounds pre-filtering of
+  carrier-surface intersections, and dedupe of identical curves from faces sharing
+  carriers.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

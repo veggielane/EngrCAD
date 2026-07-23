@@ -87,6 +87,15 @@ internal static class ShapeCompiler
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                     "only expressible as a signed distance field, and meshes cannot be imported into B-Rep"));
                 break;
+            case RimShape rim:
+                ClassifyBrep(rim.Child, m, entries);
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "planar-face rim feature; rim shape constraints validate at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with rim features"));
+                break;
+
             case TransformShape t:
                 ClassifyBrep(t.Child, m * t.Matrix, entries);
                 break;
@@ -128,7 +137,7 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared subtree goes through a tessellated mesh SDF"));
                 break;
-            case ExtrudeShape or RevolveShape or SweepShape:
+            case ExtrudeShape or RevolveShape or SweepShape or RimShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -343,6 +352,25 @@ internal static class ShapeCompiler
                 };
             }
 
+            case RimShape rim:
+            {
+                // Amounts scale with the accumulated uniform factor so a feature
+                // authored before a Scale behaves as if scaled with the part.
+                Decompose(m, shape, out _, out _, out double featureScale);
+                var solid = LowerBrep(rim.Child, m);
+                var selected = rim.Selector(solid).ToList();
+                if (selected.Count == 0)
+                    throw new InvalidOperationException(
+                        $"{rim.Describe()}: the face selector matched nothing on the lowered solid.");
+                foreach (var target in selected)
+                {
+                    solid = rim.IsFillet
+                        ? Filleting.FilletRim(solid, target, rim.Amount * featureScale)
+                        : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);
+                }
+                return solid;
+            }
+
             case TransformShape t:
                 return LowerBrep(t.Child, m * t.Matrix);
 
@@ -393,7 +421,7 @@ internal static class ShapeCompiler
                 return Place(Sdf.RevolvedRegion(new SketchRegion(sketch, forRevolution: true)), q, t, s);
             }
 
-            case ExtrudeShape or RevolveShape or SweepShape:
+            case ExtrudeShape or RevolveShape or SweepShape or RimShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 

@@ -40,6 +40,9 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `SmoothUnion` / `SmoothIntersect` / `SmoothSubtract` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Offset` / `Shell` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Lattice` (gyroid & co.) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
+| `Chamfer` (planar-face rims) | ✅ native (miters; cone bands on circles) | 🔶 bridged | ✅ native |
+| `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
+| `PatternLinear` / `PatternCircular` | ✅ native (multi-shell when disjoint) | ✅ native | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
@@ -115,6 +118,36 @@ exact rational arcs/béziers and mesh gets crisp tessellation. Sketches touching
 revolve axis (vases, domes) work everywhere on full turns: on-axis stretches revolve
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
+
+## Queries, chamfer & fillet
+
+B-Rep topology is LINQ-queryable (`EngrCAD.BRep.BrepQueries`): classify faces
+(`IsPlanar`, `IsCylindrical`) and edges (`IsLinear`, `IsCircular`, `Length`,
+`IsConvex`), walk adjacency (`face.Edges()`, `solid.FacesOf(edge)`), or use sugar
+like `solid.PlanarFacesWithNormal(Vector3d.UnitZ)`. Selectors drive the rim features:
+
+```csharp
+var plate = Shape.Extrude(Sketch.RoundedRectangle(36, 26, 5), 8)
+    .Fillet(2.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))      // smooth top rim
+    .Chamfer(1.5, s => s.PlanarFacesWithNormal(-Vector3d.UnitZ));   // beveled base
+```
+
+Scope (enforced with clear errors): both operate on the closed outer rim of planar
+faces. **Chamfer** takes straight edges (sharp corners miter exactly — planar strips)
+and full circular rims (exact cone bands). **Fillet** needs tangent-continuous rims —
+lines + arcs like rounded rectangles, slots, and circles (exact quarter-cylinder and
+torus-segment bands sharing junction arcs); round sharp sketch corners first. Both are
+B-Rep-native (implicit lowering bridges through the tessellation); selectors run on
+the *lowered* solid, so upstream transforms are visible and feature sizes scale with
+uniform scaling.
+
+## Patterns
+
+`shape.PatternLinear(count, step)` and
+`shape.PatternCircular(count, axisOrigin, axisDir)` union transformed copies (balanced
+tree, all representations). Disjoint results become valid multi-shell solids; a
+Difference tool swallowed whole becomes a cavity shell. For hole arrays, keep passing
+point lists to `Drill` — that stays the cheaper idiom.
 
 ## Holes
 

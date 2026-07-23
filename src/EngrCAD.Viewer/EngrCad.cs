@@ -212,11 +212,17 @@ public static class EngrCad
                 Console.WriteLine($"wrote {path} ({scene.AllParts.Count()} part(s), merged)");
                 return 0;
 
+            case ".stl":
+                StlWriter.WriteFile(
+                    [.. scene.AllParts.Select(p => (p.GetMesh(scene.Options), p.Transform))], path);
+                Console.WriteLine($"wrote {path} ({scene.AllParts.Count()} part(s), merged binary STL)");
+                return 0;
+
             case ".step" or ".stp":
                 return ExportStep(scene, path);
 
             default:
-                Console.Error.WriteLine($"Unsupported export format '{Path.GetExtension(path)}' — use .step or .obj.");
+                Console.Error.WriteLine($"Unsupported export format '{Path.GetExtension(path)}' — use .step, .stl, or .obj.");
                 return 2;
         }
     }

@@ -10,7 +10,20 @@ using EngrCAD.Viewer;
 
 var scene = new Scene(new MeshQuality { SegmentsPerCircle = 48, SdfResolution = 64 });
 
-// ---- tab 1: sketching — lines, arcs, béziers in every representation ----
+// ---- tab 1: feature modeling — queries, fillet/chamfer, patterns ----
+var features = scene.AddTab("features");
+var featurePlate = Shape.Extrude(Sketch.RoundedRectangle(3.6, 2.6, 0.5), 0.8)
+    .Fillet(0.25, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))      // smooth top rim
+    .Chamfer(0.15, s => s.PlanarFacesWithNormal(-Vector3d.UnitZ));   // beveled base
+features.Add(new Part("fillet + chamfer", featurePlate, Palette.Steel,
+    Matrix4d.CreateTranslation((-3.1, 0, -0.4))));
+
+var carousel = Shape.Cylinder(2.0, 0.4)
+    | Shape.Cylinder(0.3, 1.4).Translate(1.5, 0, 0.5).PatternCircular(6, Vector3d.Zero, Vector3d.UnitZ);
+features.Add(new Part("circular pattern", carousel, Palette.Brass,
+    Matrix4d.CreateTranslation((2.9, 0, 0))));
+
+// ---- tab 2: sketching — lines, arcs, béziers in every representation ----
 var sketches = scene.AddTab("sketch");
 var plate = Sketch.Start(-2, -1.2)
     .LineTo(2, -1.2)

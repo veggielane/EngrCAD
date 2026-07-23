@@ -64,9 +64,9 @@ in — camera untouched, sub-second. If the factory throws, the last good scene 
 the error shows in the overlay. Rude edits (signature changes) restart the process;
 the camera pose is persisted per title (30-minute freshness window) so the view
 survives those too. `EngrCad.Run` also gives every model program standard switches:
-`--view` (static show) and `--export part.step|part.obj` (headless: STEP for
-B-Rep-representable parts, OBJ merged with transforms applied — CI-friendly, no
-window).
+`--view` (static show) and `--export part.step|part.stl|part.obj` (headless: STEP for
+B-Rep-representable parts, binary STL or OBJ merged with transforms applied —
+CI/slicer-friendly, no window).
 
 ## How it works
 

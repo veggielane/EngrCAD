@@ -131,15 +131,21 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
     public override Curve3d ToCurve()
     {
         var center3 = new Vector3d(center.X, center.Y, 0);
-        var toStart = (Start - center).Normalized();
-        var x = new Vector3d(toStart.X, toStart.Y, 0);
-        // yDir chosen so increasing curve parameter follows the sweep direction.
-        var y = sweep > 0
-            ? new Vector3d(-toStart.Y, toStart.X, 0)
-            : new Vector3d(toStart.Y, -toStart.X, 0);
         if (IsFullCircle)
+        {
+            var toStart = (Start - center).Normalized();
+            var x = new Vector3d(toStart.X, toStart.Y, 0);
+            // yDir chosen so increasing curve parameter follows the sweep direction.
+            var y = sweep > 0
+                ? new Vector3d(-toStart.Y, toStart.X, 0)
+                : new Vector3d(toStart.Y, -toStart.X, 0);
             return new Circle3d(center3, x, y, radius);
-        return NurbsCurve.Arc(center3, x, y, radius, 0, Math.Abs(sweep));
+        }
+        // Partial arcs as trimmed circles (Underlying Circle3d) so downstream code —
+        // rim features, promotions — can classify them; the signed sweep encodes the
+        // direction (CurveSegment maps decreasing parameters too).
+        var circle = new Circle3d(center3, Vector3d.UnitX, Vector3d.UnitY, radius);
+        return new CurveSegment(circle, startAngle, startAngle + sweep);
     }
 
     public override double Distance(in Vector2d point)

@@ -96,6 +96,6 @@ public class RunTests
     public void Export_MissingPathOrBadExtension_FailsWithUsageCode()
     {
         Assert.Equal(2, EngrCad.Run(["--export"], BracketScene));
-        Assert.Equal(2, EngrCad.Run(["--export", TempFile(".stl")], BracketScene));
+        Assert.Equal(2, EngrCad.Run(["--export", TempFile(".3mf")], BracketScene));
     }
 }

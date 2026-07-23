@@ -234,8 +234,12 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 - [ ] Pipe shell with evolution law (scaling/twisting profile along the spine)
 - [x] Booleans: fuse/common/cut ✅ (`BrepBoolean`) — OCCT adds *section* (curve-only
   result), fuzzy-tolerance option, and full modification history
-- [ ] Fillets: edge chains, variable radius, corner blending (we have closed circular
-  rims only); chamfers entirely missing
+- [x] Fillets/chamfers on planar-face rims ✅ done via `Shape.Chamfer/Fillet` with
+  LINQ face selectors — chamfer: straight rims (mitered corners) + circular rims
+  (cone bands); fillet: tangent-continuous line+arc rims + circular rims (cylinder/
+  torus bands). Remaining: sharp-corner fillet corners (ball/miter patches need
+  trimmed-band tessellation), arbitrary edge sets (not just face rims), variable
+  radius, chamfer angles other than the two-setback form
 - [ ] Draft angles (`BRepOffsetAPI_DraftAngle`)
 - [ ] Offset surfaces / thick solid / shelling (B-Rep shell — we only shell as SDF)
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
@@ -260,8 +264,8 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   `BRepMesh` is chord-error-based — worth adopting a deflection criterion)
 - [ ] Topological naming / modification history (which output face came from which
   input face) — the foundation of parametric rebuilds surviving edits
-- [ ] Data exchange: STEP import (we export only), IGES, glTF, STL export, native BREP
-  serialization format
+- [ ] Data exchange: STEP import (we export only), IGES, glTF, native BREP
+  serialization format — STL export ✅ done (`StlWriter`, binary, `--export .stl`)
 - [ ] Hidden-line removal (HLR) projections for 2D drawings
 - [ ] OCAF-style document framework: undo/redo, attributes, persistence
 
