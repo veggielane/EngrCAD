@@ -711,8 +711,10 @@ public sealed class ViewportControl : OpenGlControlBase
                     if (!gl_FrontFacing)
                     {
                         // Cut cue: interiors exposed by the section plane show their
-                        // backfaces as a flat, darker warm tint (no lighting) — the
+                        // backfaces as a flat, darker warm tint (no lighting), the
                         // standard CAD hint that you are looking at cut material.
+                        // NOTE: shader comments must stay pure ASCII - ANGLE's GLES
+                        // translator rejects the whole shader on non-ASCII bytes.
                         vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
                         fragColor = vec4(mix(cut, vec3(1.0, 0.85, 0.35), uHighlight * 0.4), 1.0);
                         return;
