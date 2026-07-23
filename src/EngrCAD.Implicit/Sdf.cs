@@ -100,4 +100,61 @@ public abstract class Sdf
     public static Sdf operator |(Sdf a, Sdf b) => a.Union(b);
     public static Sdf operator &(Sdf a, Sdf b) => a.Intersect(b);
     public static Sdf operator -(Sdf a, Sdf b) => a.Subtract(b);
+
+    // ---- n-ary combinators ----
+
+    /// <summary>
+    /// Exact union of any number of solids as a single flat AST node (min over children,
+    /// each evaluated once per query) — use instead of deep chains of binary unions.
+    /// A single operand is returned unchanged.
+    /// </summary>
+    public static Sdf Union(IReadOnlyList<Sdf> children)
+    {
+        var copy = NaryChildren.Copy(children);
+        return copy.Length == 1 ? copy[0] : new NaryUnionSdf(copy);
+    }
+
+    /// <inheritdoc cref="Union(IReadOnlyList{Sdf})"/>
+    public static Sdf Union(params Sdf[] children) => Union((IReadOnlyList<Sdf>)children);
+
+    /// <summary>
+    /// Exact intersection of any number of solids as a single flat AST node (max over
+    /// children, each evaluated once per query). A single operand is returned unchanged.
+    /// </summary>
+    public static Sdf Intersection(IReadOnlyList<Sdf> children)
+    {
+        var copy = NaryChildren.Copy(children);
+        return copy.Length == 1 ? copy[0] : new NaryIntersectionSdf(copy);
+    }
+
+    /// <inheritdoc cref="Intersection(IReadOnlyList{Sdf})"/>
+    public static Sdf Intersection(params Sdf[] children) => Intersection((IReadOnlyList<Sdf>)children);
+
+    /// <summary>
+    /// N-ary smooth union with fillet-like blend radius ~<paramref name="blend"/>: the
+    /// polynomial smooth minimum folded over the children (each evaluated once per
+    /// query). Coincides exactly with chained binary <see cref="SmoothUnion(Sdf, double)"/>;
+    /// see <see cref="NarySmoothUnionSdf"/> for the formulation rationale and the
+    /// lower-bound distance caveat near blend regions.
+    /// </summary>
+    public static Sdf SmoothUnion(IReadOnlyList<Sdf> children, double blend)
+    {
+        var copy = NaryChildren.Copy(children);
+        return copy.Length == 1 ? copy[0] : new NarySmoothUnionSdf(copy, blend);
+    }
+
+    /// <summary>
+    /// Union of <paramref name="a"/> and <paramref name="b"/> with a fillet-style blend:
+    /// material is added where both surfaces lie within <paramref name="blendDistance"/>,
+    /// weighted by the falloff <paramref name="kernel"/> (see <see cref="Falloff"/>).
+    /// Converges to the plain union as <paramref name="blendDistance"/> → 0 (and is the
+    /// plain union for <paramref name="blendDistance"/> ≤ 0). Correct sign everywhere;
+    /// distance magnitude is a lower bound near the seam.
+    /// </summary>
+    public static Sdf Blend(Sdf a, Sdf b, double blendDistance, Falloff kernel = Falloff.Wyvill)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(b);
+        return blendDistance <= 0 ? a.Union(b) : new FalloffBlendSdf(a, b, blendDistance, kernel);
+    }
 }

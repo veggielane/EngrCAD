@@ -9,5 +9,7 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
+    <!-- For polygonized-volume cross-checks of blend operators (SurfaceNets + mesh Volume). -->
+    <ProjectReference Include="..\..\src\EngrCAD.Interop\EngrCAD.Interop.csproj" />
   </ItemGroup>
 </Project>

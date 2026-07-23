@@ -1,4 +1,4 @@
-using EngrCAD.Core;
+﻿using EngrCAD.Core;
 
 namespace EngrCAD.Implicit;
 
@@ -25,7 +25,7 @@ internal sealed class DifferenceSdf(Sdf a, Sdf b) : Sdf
     public override Aabb Bounds => a.Bounds;
 }
 
-internal static class Blend
+internal static class BlendMath
 {
     /// <summary>Polynomial smooth minimum (Quilez); equals min outside the blend band k.</summary>
     public static double SmoothMin(double a, double b, double k)
@@ -39,7 +39,7 @@ internal static class Blend
 
 internal sealed class SmoothUnionSdf(Sdf a, Sdf b, double k) : Sdf
 {
-    public override double Evaluate(in Vector3d p) => Blend.SmoothMin(a.Evaluate(p), b.Evaluate(p), k);
+    public override double Evaluate(in Vector3d p) => BlendMath.SmoothMin(a.Evaluate(p), b.Evaluate(p), k);
 
     // The blend bulges outward by at most k/4 in the seam region.
     public override Aabb Bounds => a.Bounds.Union(b.Bounds).Expanded(k);
@@ -47,14 +47,14 @@ internal sealed class SmoothUnionSdf(Sdf a, Sdf b, double k) : Sdf
 
 internal sealed class SmoothIntersectionSdf(Sdf a, Sdf b, double k) : Sdf
 {
-    public override double Evaluate(in Vector3d p) => -Blend.SmoothMin(-a.Evaluate(p), -b.Evaluate(p), k);
+    public override double Evaluate(in Vector3d p) => -BlendMath.SmoothMin(-a.Evaluate(p), -b.Evaluate(p), k);
 
     public override Aabb Bounds => a.Bounds.Intersection(b.Bounds).Expanded(k);
 }
 
 internal sealed class SmoothDifferenceSdf(Sdf a, Sdf b, double k) : Sdf
 {
-    public override double Evaluate(in Vector3d p) => -Blend.SmoothMin(-a.Evaluate(p), b.Evaluate(p), k);
+    public override double Evaluate(in Vector3d p) => -BlendMath.SmoothMin(-a.Evaluate(p), b.Evaluate(p), k);
 
     public override Aabb Bounds => a.Bounds.Expanded(k);
 }
