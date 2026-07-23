@@ -3,9 +3,6 @@
     <Description>Conversions between EngrCAD's representations (Surface Nets, B-Rep tessellation, mesh SDF), automatic B-Rep booleans, and the Scene/Part display model.</Description>
   </PropertyGroup>
   <ItemGroup>
-    <InternalsVisibleTo Include="EngrCAD.Modeling" />
-  </ItemGroup>
-  <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
     <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
     <ProjectReference Include="..\EngrCAD.BRep\EngrCAD.BRep.csproj" />

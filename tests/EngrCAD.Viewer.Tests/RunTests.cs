@@ -1,5 +1,4 @@
 using EngrCAD.Core;
-using EngrCAD.Interop;
 using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
@@ -16,7 +15,7 @@ public class RunTests
     private static Scene BracketScene()
     {
         var scene = new Scene();
-        scene.Add("bracket", Shape.Box(4, 3, 1) - Shape.Cylinder(0.5, 3));
+        scene.Add(new Part("bracket", Shape.Box(4, 3, 1) - Shape.Cylinder(0.5, 3)));
         return scene;
     }
 
@@ -47,9 +46,9 @@ public class RunTests
             int code = EngrCad.Run(["--export", path], () =>
             {
                 var scene = new Scene();
-                scene.Add("a", MeshPrimitives.Box(1, 1, 1));
-                scene.Add("b", MeshPrimitives.Box(1, 1, 1),
-                    transform: Matrix4d.CreateTranslation((10, 0, 0)));
+                scene.Add(new Part("a", MeshPrimitives.Box(1, 1, 1)));
+                scene.Add(new Part("b", MeshPrimitives.Box(1, 1, 1),
+                    transform: Matrix4d.CreateTranslation((10, 0, 0))));
                 return scene;
             });
             Assert.Equal(0, code);
@@ -80,7 +79,7 @@ public class RunTests
             int code = EngrCad.Run(["--export", path], () =>
             {
                 var scene = new Scene();
-                scene.Add("blend", Shape.Sphere(1).SmoothUnion(Shape.Sphere(1).Translate(1, 0, 0), 0.3));
+                scene.Add(new Part("blend", Shape.Sphere(1).SmoothUnion(Shape.Sphere(1).Translate(1, 0, 0), 0.3)));
                 return scene;
             });
             Assert.Equal(1, code);

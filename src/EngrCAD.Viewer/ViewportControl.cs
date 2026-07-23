@@ -3,11 +3,9 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.OpenGL;
 using Avalonia.OpenGL.Controls;
-using EngrCAD.BRep;
 using EngrCAD.Core;
-using EngrCAD.Implicit;
-using EngrCAD.Interop;
 using EngrCAD.Mesh;
+using EngrCAD.Modeling;
 using Silk.NET.Core.Contexts;
 using GL = Silk.NET.OpenGL.GL;
 using Silk.NET.OpenGL;
@@ -31,8 +29,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly List<string> _partNames = [];
 
     private readonly object _sceneLock = new();
-    private Scene? _pendingScene;
-    private bool _cameraFramed;
+    private (IReadOnlyList<Part> Parts, bool Frame)? _pending;
 
     private double _yaw = 0.7;
     private double _pitch = 0.45;
@@ -50,14 +47,16 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly List<PickData> _pickData = [];
 
     /// <summary>
-    /// Replaces the displayed scene. Thread-safe: geometry is uploaded on the next
-    /// rendered frame (the GL context is only current there). The camera is preserved
-    /// across scene updates; the first scene auto-frames it.
+    /// Replaces the displayed parts (one tab's worth). Thread-safe: geometry is
+    /// uploaded on the next rendered frame (the GL context is only current there).
+    /// With <paramref name="frame"/> the camera auto-frames to the parts' bounds,
+    /// otherwise it is left untouched. Parts should be pre-meshed
+    /// (<c>Scene.PreMesh</c>) so no tessellation happens on the render thread.
     /// </summary>
-    public void SetScene(Scene scene)
+    public void SetParts(IReadOnlyList<Part> parts, bool frame)
     {
         lock (_sceneLock)
-            _pendingScene = scene;
+            _pending = (parts, frame);
         Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
     }
 
@@ -78,7 +77,12 @@ public sealed class ViewportControl : OpenGlControlBase
             _pitch = Math.Clamp(value.Pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
             _distance = Math.Clamp(value.Distance, 0.5, 120.0);
             _target = value.Target;
-            _cameraFramed = true;
+            lock (_sceneLock)
+            {
+                // An explicit pose wins over any auto-framing still queued.
+                if (_pending is { } pending)
+                    _pending = (pending.Parts, false);
+            }
             RequestNextFrameRendering();
         }
     }
@@ -96,8 +100,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
     }
 
-    /// <summary>Uploads a scene's parts, replacing existing GPU resources. GL context must be current.</summary>
-    private void ApplyScene(GL gl, Scene scene)
+    /// <summary>Uploads a part list, replacing existing GPU resources. GL context must be current.</summary>
+    private void ApplyParts(GL gl, IReadOnlyList<Part> parts, bool frame)
     {
         foreach (var m in _meshes)
         {
@@ -110,11 +114,14 @@ public sealed class ViewportControl : OpenGlControlBase
         _partNames.Clear();
         _selected = -1;
 
-        foreach (var part in scene.Parts)
+        var bounds = Aabb.Empty;
+        foreach (var part in parts)
         {
-            var render = RenderMesh.CreateFlat(part.Mesh);
-            _meshes.Add(Upload(gl, render, part.Transform, (part.Color.R, part.Color.G, part.Color.B)));
+            var color = part.Color ?? Palette.Steel;
+            var render = RenderMesh.CreateFlat(part.GetMesh());
+            _meshes.Add(Upload(gl, render, part.Transform, (color.R, color.G, color.B)));
             _partNames.Add(part.Name);
+            bounds = bounds.Union(part.Bounds());
 
             var boxes = new Aabb[render.TriangleCount];
             for (int t = 0; t < render.TriangleCount; t++)
@@ -129,16 +136,11 @@ public sealed class ViewportControl : OpenGlControlBase
             _pickData.Add(new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)));
         }
 
-        if (!_cameraFramed)
+        if (frame && !bounds.IsEmpty)
         {
-            var bounds = scene.Bounds();
-            if (!bounds.IsEmpty)
-            {
-                _target = bounds.Center;
-                double diagonal = bounds.Size.Length;
-                _distance = Math.Clamp(diagonal * 1.25 + 1, 2, 110);
-            }
-            _cameraFramed = true;
+            _target = bounds.Center;
+            double diagonal = bounds.Size.Length;
+            _distance = Math.Clamp(diagonal * 1.25 + 1, 2, 110);
         }
     }
 
@@ -169,17 +171,17 @@ public sealed class ViewportControl : OpenGlControlBase
             return;
         var gl = _gl;
 
-        Scene? newScene = null;
+        (IReadOnlyList<Part> Parts, bool Frame)? update = null;
         lock (_sceneLock)
         {
-            if (_pendingScene is not null)
+            if (_pending is not null)
             {
-                newScene = _pendingScene;
-                _pendingScene = null;
+                update = _pending;
+                _pending = null;
             }
         }
-        if (newScene is not null)
-            ApplyScene(gl, newScene);
+        if (update is { } u)
+            ApplyParts(gl, u.Parts, u.Frame);
 
         double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         uint width = (uint)Math.Max(1, Bounds.Width * scaling);

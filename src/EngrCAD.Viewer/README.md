@@ -5,19 +5,26 @@ geometry. The only project allowed UI/rendering dependencies (Avalonia, Silk.NET
 
 ## Usage
 
-Design code builds an `EngrCAD.Interop.Scene` and hands it over:
+Design code builds an `EngrCAD.Modeling.Scene` (parts grouped into tabs) and hands it
+over:
 
 ```csharp
 var scene = new Scene();
-scene.Add("bracket", myBrepSolid, Palette.Steel);
+scene.Add(new Part("bracket", myShape, Palette.Steel));   // default "Model" tab
+var drill = scene.AddTab("drill jig");
+drill.Add(new Part("jig", jigSolid));
 EngrCad.Show(scene, "My design");   // blocks until the window closes
 ```
 
+Multi-tab scenes get a tab strip; each tab remembers its own camera (auto-framed on
+first visit). Picking reports part names in the title bar.
+
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
 lifetime). Custom hosts pass an `onViewportReady` callback, capture the
-`ViewportControl`, and later call its thread-safe `SetScene` — GL resources are swapped
-inside the next render pass and the camera is preserved (auto-framed from
-`Scene.Bounds()` only on the first scene).
+`ViewportControl`, and later call its thread-safe `SetParts` — GL resources are swapped
+inside the next render pass; auto-framing is opt-in per call, so cameras survive
+updates. Parts should be pre-meshed (`Scene.PreMesh()`) so tessellation stays off the
+render thread.
 
 ## The live-modeling loop
 

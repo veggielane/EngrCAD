@@ -183,17 +183,18 @@ public class ShapeTests
     }
 
     [Fact]
-    public void SceneAdd_UsesBrepPathAndKeepsShapeAsSource()
+    public void SceneAdd_UsesBrepPathAndKeepsShapeAsGeometry()
     {
         var scene = new Scene();
         var shape = Shape.Box(1, 1, 1) - Shape.Cylinder(0.3, 2);
-        var part = scene.Add("drilled", shape);
+        var part = scene.Add(new Part("drilled", shape));
+        scene.PreMesh();
 
-        Assert.Same(shape, part.Source);
-        Assert.True(part.Mesh.IsClosed);
+        Assert.Same(shape, part.Geometry);
+        Assert.True(part.GetMesh().IsClosed);
         // The B-Rep path leaves crisp features: volume matches the exact difference
         // far better than any SDF polygonization would.
         double exact = 1 - Math.PI * 0.09;
-        Assert.True(Math.Abs(part.Mesh.Volume() - exact) / exact < 0.01);
+        Assert.True(Math.Abs(part.GetMesh().Volume() - exact) / exact < 0.01);
     }
 }

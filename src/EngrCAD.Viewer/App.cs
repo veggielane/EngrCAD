@@ -4,7 +4,7 @@ using Avalonia.Controls.ApplicationLifetimes;
 using Avalonia.Layout;
 using Avalonia.Media;
 using Avalonia.Themes.Fluent;
-using EngrCAD.Interop;
+using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
 
@@ -33,14 +33,16 @@ public sealed class App : Application
                 Status = message => status.Text = $"{help}\nlast input: {message}",
                 BaseTitle = EngrCad.WindowTitle,
             };
-            viewport.SetScene(EngrCad.InitialScene ?? new Scene());
+            var host = new SceneHost(viewport, status);
+            host.SetScene(EngrCad.InitialScene ?? new Scene());
+            EngrCad.Host = host;
 
             desktop.MainWindow = new Window
             {
                 Title = EngrCad.WindowTitle,
                 Width = 1280,
                 Height = 800,
-                Content = new Panel { Children = { viewport, status } },
+                Content = host.Root,
             };
             EngrCad.OnViewportReady?.Invoke(viewport);
         }

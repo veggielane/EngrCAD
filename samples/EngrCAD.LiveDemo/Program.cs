@@ -29,7 +29,7 @@ static Scene BuildScene()
         - Shape.Cylinder(3, thickness + 2).Translate(-width / 3, depth / 4, 0)
         - Shape.Cylinder(3, thickness + 2).Translate(-width / 3, -depth / 4, 0);
 
-    var scene = new Scene(new SceneOptions { SdfResolution = 96 });
-    scene.Add("bracket", body, Palette.Steel);
+    var scene = new Scene(new MeshQuality { SdfResolution = 96 });
+    scene.Add(new Part("bracket", body, Palette.Steel));
     return scene;
 }

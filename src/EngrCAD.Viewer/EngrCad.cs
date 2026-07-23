@@ -4,7 +4,6 @@ using System.Text;
 using Avalonia;
 using EngrCAD.BRep;
 using EngrCAD.Core;
-using EngrCAD.Interop;
 using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 
@@ -21,6 +20,7 @@ public static class EngrCad
     internal static Scene? InitialScene;
     internal static string WindowTitle = "EngrCAD";
     internal static Action<ViewportControl>? OnViewportReady;
+    internal static SceneHost? Host;
 
     private static Func<Scene>? _liveFactory;
     private static ViewportControl? _liveViewport;
@@ -34,6 +34,7 @@ public static class EngrCad
     /// </summary>
     public static void Show(Scene scene, string title = "EngrCAD", Action<ViewportControl>? onViewportReady = null)
     {
+        scene.PreMesh(); // tessellate here, not on the render thread
         InitialScene = scene;
         WindowTitle = title;
         OnViewportReady = onViewportReady;
@@ -137,8 +138,9 @@ public static class EngrCad
             try
             {
                 var scene = factory();
-                viewport.SetScene(scene);
-                viewport.ShowStatus($"reloaded at {DateTime.Now:HH:mm:ss} — {scene.Parts.Count} part(s)");
+                scene.PreMesh(); // heavy lifting stays on this worker thread
+                Avalonia.Threading.Dispatcher.UIThread.Post(() => Host?.SetScene(scene));
+                viewport.ShowStatus($"reloaded at {DateTime.Now:HH:mm:ss} — {scene.AllParts.Count()} part(s)");
             }
             catch (Exception e)
             {
@@ -197,7 +199,7 @@ public static class EngrCad
 
     private static int Export(Scene scene, string path)
     {
-        if (scene.Parts.Count == 0)
+        if (!scene.AllParts.Any())
         {
             Console.Error.WriteLine("The scene has no parts to export.");
             return 1;
@@ -207,7 +209,7 @@ public static class EngrCad
         {
             case ".obj":
                 WriteMergedObj(scene, path);
-                Console.WriteLine($"wrote {path} ({scene.Parts.Count} part(s), merged)");
+                Console.WriteLine($"wrote {path} ({scene.AllParts.Count()} part(s), merged)");
                 return 0;
 
             case ".step" or ".stp":
@@ -222,9 +224,9 @@ public static class EngrCad
     private static int ExportStep(Scene scene, string path)
     {
         var solids = new List<(string Name, BrepSolid Solid)>();
-        foreach (var part in scene.Parts)
+        foreach (var part in scene.AllParts)
         {
-            switch (part.Source)
+            switch (part.Geometry)
             {
                 case BrepSolid solid:
                     solids.Add((part.Name, solid));
@@ -270,10 +272,10 @@ public static class EngrCad
         var culture = CultureInfo.InvariantCulture;
         using var writer = new StreamWriter(path);
         int offset = 1; // OBJ is 1-based
-        foreach (var part in scene.Parts)
+        foreach (var part in scene.AllParts)
         {
             writer.WriteLine($"o {part.Name.Replace(' ', '_')}");
-            var (positions, faces) = part.Mesh.ToIndexed();
+            var (positions, faces) = part.GetMesh(scene.Options).ToIndexed();
             foreach (var position in positions)
             {
                 var p = part.Transform.TransformPoint(position);

@@ -274,8 +274,11 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 
 
 ## Viewer
-- add multiple tabs to the scene
-- add tabs to viewer
+- [x] add multiple tabs to the scene / viewer ✅ done — `Scene` holds named `Tab`s of
+  `Part`s; the viewer shows a tab strip with per-tab cameras (auto-framed on first
+  visit, remembered after).
+- [ ] properties window for model details (part/model type, volume, surface area,
+  bounds, triangle count) — shown for the selected part; pairs with click-picking.
 
 ## Other ideas
 - [x] unify scripting language, the type of modelling is set at the end. ✅ done —

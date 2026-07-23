@@ -274,6 +274,16 @@ Design decisions:
   periodic-seam clamping in the generic `TryProjectPoint`, arbitrary-phase
   plane⊥cylinder intersection circles (now aligned to the cylinder frame so band grids
   and edge polylines weld), and `ProbePoint` triangulating jitter-degenerate wrap loops.
+- **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
+  user-constructed object — name, geometry from any engine (including `Shape`), color,
+  transform — with a lazily produced, cached display mesh (`GetMesh`;
+  `Scene.PreMesh()` keeps tessellation off render threads). `Tab`s group parts (names
+  unique per tab, palette colors assigned on add) and `Scene` holds named tabs
+  (`Add(part)` shorthand targets a default "Model" tab). Design constraint kept
+  deliberately: `Part` is a *leaf* and `Tab` the container, so assembly occurrences
+  (placed instances of parts/sub-assemblies) can be added beside parts later without
+  reshaping the API. The viewer's `SceneHost` maps tabs to a tab strip over one shared
+  GL viewport with per-tab cameras.
 
 ## 7. Query layer
 

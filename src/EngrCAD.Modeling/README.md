@@ -82,11 +82,34 @@ and participates in mesh booleans directly. The support table above tells you wh
 exits are lossless for the graph you've built — `Explain(target)` tells you for a
 specific shape.
 
+## The document model: Part, Tab, Scene
+
+Parts carry all their own information — name, geometry from **any** engine (`Shape`,
+`BrepSolid`, `HalfEdgeMesh`, or `Sdf`), color, placement — and are grouped into a
+scene's named tabs, which the viewer shows as a tab strip (per-tab cameras):
+
+```csharp
+var scene = new Scene(new MeshQuality { SegmentsPerCircle = 48 });
+
+var housing = scene.AddTab("housing");
+housing.Add(new Part("body", bodyShape, Palette.Steel));
+housing.Add(new Part("lid", lidSolid));            // color auto-assigned from Palette
+
+scene.Add(new Part("jig", jigMesh));               // shorthand: default "Model" tab
+```
+
+`Part.GetMesh(quality)` produces the display mesh on first use and caches it (Shapes
+via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
+`Scene.PreMesh()` does this for every part up front so viewers never tessellate on the
+render thread. Part names are unique per tab. `Part` is deliberately a leaf — tabs are
+the containers — so assemblies (placed instances of parts/sub-assemblies) can slot in
+alongside parts later.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for
-tessellation, `SdfResolution` for polygonization). `Scene.Add(shape)` uses the scene's
-`SceneOptions` for the same knobs, and stores the `Shape` itself as `Part.Source`.
+tessellation, `SdfResolution` for polygonization); `Scene.Options` carries the same
+knobs for everything shown through a scene.
 
 ## Future work (todo.md)
 
