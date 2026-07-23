@@ -119,6 +119,38 @@ revolve axis (vases, domes) work everywhere on full turns: on-axis stretches rev
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
 
+## Parametric features (FeatureScript, but plain C#)
+
+A feature is a class with `[Param]` properties and an `Apply` body; a model is an
+ordered `FeatureHistory` that regenerates on change:
+
+```csharp
+sealed class BoltCircle : Feature
+{
+    [Param(Min = 2, Max = 24)] public int Count { get; init; } = 6;
+    [Param(Min = 1, Units = "mm")] public double Radius { get; init; } = 11;
+
+    public override Shape Apply(FeatureContext c) =>
+        c.Body!.Drill(StandardHoles.Counterbored(4), BoltPoints(Count, Radius), 30, c.TopPlane);
+}
+
+var history = new FeatureHistory();
+history.Add(new BasePlate { Width = 48 });
+history.Add(new BoltCircle());
+history.Add(new FilletRimFeature { Radius = 2 });
+scene.Add(history.ToPart("bracket"));
+```
+
+Regeneration replays with **prefix caching** (editing feature 5 re-runs only 5..n —
+keep `Apply` a pure function of parameters + context), validates `[Param]` ranges
+first, stops at the first failure keeping the last good body, supports suppression,
+and reports per-feature statuses. `SaveParameters`/`LoadParameters` round-trip values
+as JSON so a design is re-tunable without recompiling. Between-feature geometry
+references are **selector-based** (`FeatureContext.Lowered` + `BrepQueries`) — semantic
+queries that survive regeneration; persistent topological IDs are future work.
+Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, patterns,
+`BooleanFeature`) cover simple histories; `Feature.FromFunc` handles one-offs.
+
 ## Queries, chamfer & fillet
 
 B-Rep topology is LINQ-queryable (`EngrCAD.BRep.BrepQueries`): classify faces

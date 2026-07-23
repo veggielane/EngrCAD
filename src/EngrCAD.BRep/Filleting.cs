@@ -360,6 +360,39 @@ public static class Filleting
                 edges.Add(new RimEdgeInfo(use, edge, neighbor, neighborUse, start, end, downDir, arc, arcStart, arcSweep));
             }
 
+            for (int i = 0; i < n; i++)
+            {
+                if (edges[i].End.DistanceTo(edges[(i + 1) % n].Start) > 1e-9)
+                    throw new InvalidOperationException(
+                        $"Rim loop does not chain: edge {i} ends at {edges[i].End} but edge {(i + 1) % n} starts at {edges[(i + 1) % n].Start}.");
+            }
+
+            // Interior loops (holes) must stay clear of the band: the shrunk boundary
+            // may not cut through them.
+            foreach (var holeLoop in face.Loops.Where(l => !ReferenceEquals(l, outer)))
+            {
+                foreach (var coedge in holeLoop.Coedges)
+                {
+                    var domain = coedge.Edge.Domain;
+                    for (int s = 0; s < 16; s++)
+                    {
+                        var point = coedge.Edge.Curve.PointAt(domain.ParameterAt(s / 16.0));
+                        double clearance = edges.Min(e =>
+                        {
+                            double best = double.PositiveInfinity;
+                            var rimDomain = e.Edge.Domain;
+                            for (int r = 0; r <= 16; r++)
+                                best = Math.Min(best,
+                                    point.DistanceTo(e.Edge.Curve.PointAt(rimDomain.ParameterAt(r / 16.0))));
+                            return best;
+                        });
+                        if (clearance < top - 1e-9)
+                            throw new NotSupportedException(
+                                "The rim feature would cut into an interior loop (hole); reduce the size or move the holes inward.");
+                    }
+                }
+            }
+
             if (fillet)
                 ValidateTangentContinuity(edges);
 
@@ -504,6 +537,11 @@ public static class Filleting
             static double Wrap(double a) => a - 2 * Math.PI * Math.Floor(a / (2 * Math.PI));
         }
 
+        /// <summary>Whether an arc rim edge curves convexly about the face normal
+        /// (material inside the arc ⇒ offsets shrink its radius).</summary>
+        private static bool ConvexAboutUp(RimEdgeInfo info, in Vector3d up) =>
+            info.Arc is { } arc && arc.Axis.Dot(up) * Math.Sign(info.ArcSweep) > 0;
+
         private static Vector3d TangentAtStart(RimEdgeInfo info)
         {
             var t = info.Edge.Curve.TangentAt(info.Use.SameSense ? info.Edge.Domain.Start : info.Edge.Domain.End);
@@ -535,7 +573,18 @@ public static class Filleting
             // Tangent-continuous corners (finite-difference tangents agree to ~1e-9)
             // share the offset point; anything sharper miters.
             if (fillet || inPrev.Cross(inCurrent).Length < 1e-6)
+            {
+                // Arc corners offset exactly along the radial — finite-difference
+                // tangents carry ~1e-9 angular error, which is enough to rotate band
+                // generators past the weld tolerance at scale.
+                var arcInfo = current.Arc is not null ? current : previous.Arc is not null ? previous : null;
+                if (arcInfo?.Arc is Circle3d arc)
+                {
+                    double newRadius = arc.Radius + (ConvexAboutUp(arcInfo, up) ? -amount : amount);
+                    return arc.Center + (corner - arc.Center) * (newRadius / arc.Radius);
+                }
                 return corner + inCurrent * amount;
+            }
 
             // Miter: intersect the offset lines of the two edges within the top plane.
             var d1 = TangentAtEnd(previous);
@@ -559,8 +608,7 @@ public static class Filleting
         {
             if (info.Arc is Circle3d arc)
             {
-                bool convexAboutUp = arc.Axis.Dot(up) * Math.Sign(info.ArcSweep) > 0;
-                double newRadius = atTop ? arc.Radius + (convexAboutUp ? -amount : amount) : arc.Radius;
+                double newRadius = atTop ? arc.Radius + (ConvexAboutUp(info, up) ? -amount : amount) : arc.Radius;
                 if (newRadius <= 1e-9)
                     throw new ArgumentOutOfRangeException(nameof(amount), "The offset consumes an arc radius.");
                 var center = atTop ? arc.Center : arc.Center - up * amount;

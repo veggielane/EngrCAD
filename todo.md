@@ -294,6 +294,7 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   translucent), section planes, measure tool, screenshot/export-image button,
   ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
   mesh dihedrals (exact circles stay smooth at coarse tessellation).
+- Add a builder for EngrCad.Run and Show, so we can set defaults like render quality, and so it can consume IOptions, ILogger etc
 
 ## Other ideas
 - [x] unify scripting language, the type of modelling is set at the end. ✅ done —
@@ -304,11 +305,14 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   Onshape-style layer on top is constraints (coincident/tangent/parallel/dimensions)
   solved variationally. Also future: elliptical arcs, sketch offset/thicken,
   sketch-on-face (face → SketchPlane query).
-- [ ] **FeatureScript-style modeling in native C#** (à la Onshape's FeatureScript, but
-  no DSL — plain C#): user-defined *features* as composable functions/records over
-  `Shape` + `Profile` (inputs: named parameters with ranges/defaults; output: `Shape`),
-  a parametric model = an ordered feature list that regenerates on parameter change.
-  Needs: parameter objects with validation, feature registry, and (later) topological
-  naming so downstream features can reference faces/edges created by earlier ones —
-  pairs with the OCCT history item above and the `engrcad watch` live-reload loop.
+- [x] **FeatureScript-style modeling in native C#** ✅ done — `Feature` classes with
+  `[Param]` properties (ranges/units, reflection metadata), `FeatureContext` (body +
+  lowered B-Rep for selector queries + `TopPlane`), `FeatureHistory` (replay with
+  prefix caching, validation-first, failure keeps the last good prefix, suppression,
+  JSON parameter save/load), standard features, `Feature.FromFunc`. Follow-ups:
+  persistent topological IDs (selectors are the naming story today), property-panel
+  UI editing of `[Param]`s, feature list in the viewer model tree, a feature registry
+  for UI insertion.
 - ILogger Throughout
+- Sheet Metal
+- docfx static site on github pages

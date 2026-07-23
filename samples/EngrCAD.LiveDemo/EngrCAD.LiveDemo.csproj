@@ -6,4 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\EngrCAD.Viewer\EngrCAD.Viewer.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Content Include="bracket.params.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

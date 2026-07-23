@@ -317,6 +317,15 @@ Design decisions:
   multi-shell unions, clone-reversed swallowed tools), face-bounds pre-filtering of
   carrier-surface intersections, and dedupe of identical curves from faces sharing
   carriers.
+- **Parametric features** reify FeatureScript's idea in plain C#: `[Param]`-annotated
+  classes (reflection metadata → validation, JSON overrides, future property-panel
+  editing) with pure `Apply(FeatureContext)` bodies, composed in a `FeatureHistory`
+  replayed with prefix caching (cache key = instance identity + parameter snapshot +
+  upstream chain — fresh instances re-run, covering non-parameter inputs safely).
+  Failure semantics mirror the live loop: validate first, stop at the first failure,
+  keep the last good body, report per-feature statuses. Cross-feature geometry
+  references are deliberately *selector queries* over the lowered body rather than
+  persistent IDs — semantic references survive regeneration by re-running.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;
