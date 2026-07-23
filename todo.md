@@ -238,8 +238,9 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   rims only); chamfers entirely missing
 - [ ] Draft angles (`BRepOffsetAPI_DraftAngle`)
 - [ ] Offset surfaces / thick solid / shelling (B-Rep shell — we only shell as SDF)
-- [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot, drilled hole as
-  first-class features with faces-to-remove semantics
+- [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
+  with faces-to-remove semantics — drilled holes ✅ done (`Shape.Drill` +
+  `StandardHoles`; future: drill-tip angles, thread cosmetics/annotation, hole tables)
 - [ ] Shape healing (`ShapeFix`): fix wires/faces/gaps/small edges — needed the moment
   we import foreign STEP
 - [ ] Local operations: split shape by shape, glue faces

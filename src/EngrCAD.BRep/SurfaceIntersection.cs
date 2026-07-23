@@ -34,8 +34,65 @@ public static class SurfaceIntersection
             (SphereSurface sa, SphereSurface sb) => SphereSphere(sa, sb),
             (CylinderSurface ca, CylinderSurface cb) when ca.Axis.IsParallelTo(cb.Axis, Tolerance.Default)
                 => ParallelCylinders(ca, cb, region),
+            (PlaneSurface p, RevolvedSurface r) when IsPerpendicularFullTurn(p, r) => PlaneRevolved(p, r),
+            (RevolvedSurface r, PlaneSurface p) when IsPerpendicularFullTurn(p, r) => PlaneRevolved(p, r),
             _ => March(a, b, region),
         };
+    }
+
+    private static bool IsPerpendicularFullTurn(PlaneSurface plane, RevolvedSurface revolved) =>
+        revolved.IsFullTurn && plane.Normal.IsParallelTo(revolved.AxisDirection, Tolerance.Default);
+
+    /// <summary>
+    /// Plane ⊥ revolution axis, full turn: exact circles, one per generator crossing of
+    /// the plane's axial height. Circle frames are phase-aligned with the surface's
+    /// u = 0 (the generator position) so band grids and edges built from these curves
+    /// tessellate to identical points.
+    /// </summary>
+    private static List<Curve3d> PlaneRevolved(PlaneSurface plane, RevolvedSurface revolved)
+    {
+        var axis = revolved.AxisDirection;
+        var generator = revolved.Generator;
+        var domain = generator.Domain;
+        double planeHeight = (plane.Origin - revolved.AxisOrigin).Dot(axis);
+        double Axial(double t) => (generator.PointAt(t) - revolved.AxisOrigin).Dot(axis);
+
+        var curves = new List<Curve3d>();
+        const int samples = 128;
+        double previousT = domain.Start;
+        double previousF = Axial(previousT) - planeHeight;
+        for (int i = 1; i <= samples; i++)
+        {
+            double t = domain.ParameterAt((double)i / samples);
+            double f = Axial(t) - planeHeight;
+            if (previousF == 0 || previousF * f < 0)
+            {
+                double lo = previousT, hi = t, fLo = previousF;
+                for (int step = 0; step < 60; step++)
+                {
+                    double mid = (lo + hi) / 2;
+                    double fMid = Axial(mid) - planeHeight;
+                    if (fLo * fMid <= 0)
+                        hi = mid;
+                    else
+                    {
+                        lo = mid;
+                        fLo = fMid;
+                    }
+                }
+                var point = generator.PointAt((lo + hi) / 2);
+                var offset = point - revolved.AxisOrigin;
+                var radial = offset - axis * offset.Dot(axis);
+                if (radial.TryNormalize(Tolerance.Default, out var x)) // poles yield no curve
+                {
+                    var center = revolved.AxisOrigin + axis * planeHeight;
+                    curves.Add(new Circle3d(center, x, axis.Cross(x), radial.Length));
+                }
+            }
+            previousT = t;
+            previousF = f;
+        }
+        return curves;
     }
 
     private static Surface Promote(Surface s)

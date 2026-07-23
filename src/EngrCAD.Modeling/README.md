@@ -116,6 +116,27 @@ revolve axis (vases, domes) work everywhere on full turns: on-axis stretches rev
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
 
+## Holes
+
+`Shape.Drill` places one hole recipe at a list of 2D points on a plane, cutting along
+−normal; every tool is a revolved sketch, so drilling is exact in all representations:
+
+```csharp
+var plateTop = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
+var plate = Shape.Box(30, 20, 12)
+    .Drill(HoleSpec.Counterbore(4.5, 8, 4.5), [new(0, 5), new(10, 5)], depth: 14, plateTop)
+    .Drill(StandardHoles.Countersunk(3), [new(-10, 5)], depth: 14, plateTop)     // M3, ISO values
+    .Drill(StandardHoles.Trisert(4), [new(5, -5)], StandardHoles.TrisertMinimumDepth(4), plateTop);
+```
+
+`HoleSpec.Simple/Counterbore/Countersink` take explicit dimensions;
+**`StandardHoles`** (metric, mm) supplies ISO 273 clearance fits (close/normal/loose),
+DIN 974-style counterbores for socket cap screws, 90° countersinks for ISO 10642
+flat-heads, coarse tap pilot holes (`Tapped` — threads are not modeled), and Tappex
+Trisert® insert pilots (`Trisert`/`TrisertMinimumDepth` — ⚠ verify the insert table
+against the current Tappex datasheet before production use). Blind holes get flat
+bottoms; drill-tip angles are future work.
+
 ## The document model: Part, Tab, Scene
 
 Parts carry all their own information — name, geometry from **any** engine (`Shape`,

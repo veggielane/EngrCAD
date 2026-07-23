@@ -313,38 +313,120 @@ public static class FaceSplitter
     private static IReadOnlyList<BrepFace> SplitBandByWrapCurve(
         BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, bool traversesPlusU)
     {
-        if (face.Surface is not ExtrudedSurface extruded)
+        if (face.Surface is not (ExtrudedSurface or RevolvedSurface { IsFullTurn: true }))
             throw new NotSupportedException(
-                "Period-wrapping split curves are only supported on extruded band faces yet.");
-        if (face.Loops.Count != 2)
-            throw new NotSupportedException("Wrap-splitting expects a two-loop band face.");
+                "Period-wrapping split curves are only supported on extruded and fully revolved band faces yet.");
+        if (face.Loops.Count > 2)
+            throw new NotSupportedException("Wrap-splitting expects a band face (at most two loops).");
 
         double vCut = pulledCurve.Average(p => p.Uv.Y);
         if (pulledCurve.Any(p => Math.Abs(p.Uv.Y - vCut) > 1e-6))
             throw new NotSupportedException("Wrap-splitting supports constant-parameter cuts only.");
-        if (vCut <= 1e-9 || vCut >= 1 - 1e-9)
+
+        // Projections carry ~1e-7 parameter error; on slanted generators (cones) that
+        // shifts the cut ring radially past weld tolerance. Refine vCut so the
+        // sub-band ring passes exactly through the cut curve.
+        var curveStart = curve.PointAt(curve.Domain.Start);
+        switch (face.Surface)
+        {
+            case RevolvedSurface revolvedBand:
+            {
+                var generator = revolvedBand.Generator;
+                double target = (curveStart - revolvedBand.AxisOrigin).Dot(revolvedBand.AxisDirection);
+                double Axial(double v) =>
+                    (generator.PointAt(v) - revolvedBand.AxisOrigin).Dot(revolvedBand.AxisDirection) - target;
+                double delta = Math.Max(generator.Domain.Length / 32, 1e-9);
+                double lo = Math.Max(generator.Domain.Start, vCut - delta);
+                double hi = Math.Min(generator.Domain.End, vCut + delta);
+                double fLo = Axial(lo);
+                if (fLo * Axial(hi) <= 0)
+                {
+                    for (int i = 0; i < 80; i++)
+                    {
+                        double mid = (lo + hi) / 2;
+                        double fMid = Axial(mid);
+                        if (fLo * fMid <= 0)
+                            hi = mid;
+                        else
+                        {
+                            lo = mid;
+                            fLo = fMid;
+                        }
+                    }
+                    vCut = (lo + hi) / 2;
+                }
+                break;
+            }
+            case ExtrudedSurface extrudedBand:
+            {
+                // v is the fraction along the direction; solve it exactly from the
+                // curve start against the generator point at the same u.
+                var generatorDomain = extrudedBand.Generator.Domain;
+                double u0 = pulledCurve[0].Uv.X;
+                double wrapped = generatorDomain.Start
+                    + (((u0 - generatorDomain.Start) % generatorDomain.Length) + generatorDomain.Length) % generatorDomain.Length;
+                var basePoint = extrudedBand.Generator.PointAt(wrapped);
+                vCut = (curveStart - basePoint).Dot(extrudedBand.Direction) / extrudedBand.Direction.LengthSquared;
+                break;
+            }
+        }
+
+        var domainV = face.Surface.DomainV;
+        double vTolerance = Math.Max(1e-9, domainV.Length * 1e-9);
+        if (vCut <= domainV.Start + vTolerance || vCut >= domainV.End - vTolerance)
             return [face]; // the cut coincides with a boundary ring
 
+        // Pole-bounded bands (axis-touching revolves) can have a single loop; missing
+        // rings simply contribute no loop to the corresponding sub-band.
+        BrepLoop? bottomLoop = null, topLoop = null;
         var pulledLoops = FaceGeometry.PullLoops(face);
-        int bottomIndex = pulledLoops[0].Average(p => p.Y) <= pulledLoops[1].Average(p => p.Y) ? 0 : 1;
-        var bottomLoop = face.Loops[bottomIndex];
-        var topLoop = face.Loops[1 - bottomIndex];
+        for (int i = 0; i < face.Loops.Count; i++)
+        {
+            if (pulledLoops[i].Average(p => p.Y) <= vCut)
+                bottomLoop = face.Loops[i];
+            else
+                topLoop = face.Loops[i];
+        }
 
         var seam = new BrepVertex(curve.PointAt(curve.Domain.Start));
         var edge = new BrepEdge(curve, curve.Domain, seam, seam);
 
-        var lowerSurface = new ExtrudedSurface(extruded.Generator, extruded.Direction * vCut);
-        var upperSurface = new ExtrudedSurface(
-            extruded.Generator.Transformed(Matrix4d.CreateTranslation(extruded.Direction * vCut)),
-            extruded.Direction * (1 - vCut));
+        Surface lowerSurface, upperSurface;
+        switch (face.Surface)
+        {
+            case ExtrudedSurface extruded:
+                lowerSurface = new ExtrudedSurface(extruded.Generator, extruded.Direction * vCut);
+                upperSurface = new ExtrudedSurface(
+                    extruded.Generator.Transformed(Matrix4d.CreateTranslation(extruded.Direction * vCut)),
+                    extruded.Direction * (1 - vCut));
+                break;
+            case RevolvedSurface revolved:
+            {
+                // v is the generator parameter directly: split the generator at the cut.
+                var generatorDomain = revolved.Generator.Domain;
+                lowerSurface = new RevolvedSurface(
+                    new CurveSegment(revolved.Generator, generatorDomain.Start, vCut),
+                    revolved.AxisOrigin, revolved.AxisDirection);
+                upperSurface = new RevolvedSurface(
+                    new CurveSegment(revolved.Generator, vCut, generatorDomain.End),
+                    revolved.AxisOrigin, revolved.AxisDirection);
+                break;
+            }
+            default:
+                throw new NotSupportedException();
+        }
 
         // Band conventions: the bottom loop follows the generator's +u direction, the top
         // loop opposes it. The cut is the lower band's top and the upper band's bottom.
-        var lower = new BrepFace(lowerSurface,
-            [bottomLoop, new BrepLoop([new BrepCoedge(edge, sameSense: !traversesPlusU)])]);
-        var upper = new BrepFace(upperSurface,
-            [new BrepLoop([new BrepCoedge(edge, sameSense: traversesPlusU)]), topLoop]);
-        return [lower, upper];
+        // A missing ring (pole end of an axis-touching revolve) contributes no loop.
+        var lowerLoops = new List<BrepLoop>(2);
+        if (bottomLoop is not null)
+            lowerLoops.Add(bottomLoop);
+        lowerLoops.Add(new BrepLoop([new BrepCoedge(edge, sameSense: !traversesPlusU)]));
+        var upperLoops = new List<BrepLoop>(2) { new([new BrepCoedge(edge, sameSense: traversesPlusU)]) };
+        if (topLoop is not null)
+            upperLoops.Add(topLoop);
+        return [new BrepFace(lowerSurface, lowerLoops), new BrepFace(upperSurface, upperLoops)];
     }
 
     private static double WrapParam(Curve3d curve, double s)

@@ -29,6 +29,18 @@ var vase = Sketch.Start(0, 0).LineTo(1, 0)
 sketches.Add(new Part("revolved vase", Shape.Revolve(vase), Palette.Teal,
     Matrix4d.CreateTranslation((2.6, 0, -1.3))));                   // axis-touching: on-axis line drops, poles close it
 
+// The hole feature with the standards catalog (dimensions in mm, scaled for display):
+// M3 csk, M4 cbore, M5 clearance through-holes; blind M6 tap pilot and M4 Trisert.
+var plateTop = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
+var holePlate = Shape.Box(30, 20, 12)
+    .Drill(StandardHoles.Countersunk(3), [new(-10, 5)], depth: 14, plateTop)
+    .Drill(StandardHoles.Counterbored(4), [new(0, 5)], depth: 14, plateTop)
+    .Drill(StandardHoles.Clearance(5), [new(10, 5)], depth: 14, plateTop)
+    .Drill(StandardHoles.Tapped(6), [new(-5, -5)], depth: 10, plateTop)
+    .Drill(StandardHoles.Trisert(4), [new(5, -5)], StandardHoles.TrisertMinimumDepth(4), plateTop);
+sketches.Add(new Part("standard holes", holePlate, Palette.Brass,
+    Matrix4d.CreateTranslation((0, -4.4, 0)) * Matrix4d.CreateScale(0.14)));
+
 // ---- tab 2: the mesh engine ----
 var meshes = scene.AddTab("mesh");
 meshes.Add(new Part("box", MeshPrimitives.Box(1.8, 1.8, 1.8), Palette.Sky,

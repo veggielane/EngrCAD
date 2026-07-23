@@ -291,6 +291,16 @@ Design decisions:
   then has a single rim loop, exactly like `MakeSphere`'s hemispheres), and splits
   pole-to-pole generators at their midpoint so no face is left without a boundary
   loop. Tessellation already handles the pole rows via degenerate-cell filtering.
+- **Holes** (`HoleSpec.cs`/`StandardHoles.cs`): every hole tool — simple, counterbore,
+  countersink cone — is an axis-touching revolved sketch subtracted per placement
+  point, so the feature inherits sketching's exactness in all three representations.
+  Tools overshoot the surface (booleans never see coplanar faces; the countersink cone
+  continues its slope so the surface diameter is preserved). `StandardHoles` carries
+  the metric tables (ISO 273 / DIN 974 / ISO 10642 / coarse tap drills / Tappex
+  Trisert — the insert rows flagged for datasheet verification). Kernel prerequisites
+  built for this: analytic plane⊥revolved-surface circles, wrap-splitting of revolved
+  bands with geometrically refined cut parameters (projection error would crack cone
+  welds), and pole-aware boolean probe points.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

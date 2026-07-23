@@ -101,6 +101,28 @@ public abstract class Shape
     public static Shape Sweep(Sketch sketch, Curve3d path, SketchPlane? plane = null) =>
         new SweepShape(sketch, plane ?? SketchPlane.XY, path);
 
+    /// <summary>
+    /// Drills holes: one <paramref name="hole"/> at each 2D point on
+    /// <paramref name="plane"/> (default world XY), cutting along −normal to
+    /// <paramref name="depth"/> below the plane (give a depth past the far side for
+    /// through-holes). Each tool is a revolved sketch, so drilling stays exact in
+    /// every representation.
+    /// </summary>
+    public Shape Drill(HoleSpec hole, IReadOnlyList<Vector2d> points, double depth, SketchPlane? plane = null)
+    {
+        if (depth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(depth));
+        var placementPlane = plane ?? SketchPlane.XY;
+        var toolProfile = hole.ToolProfile(depth);
+        var result = this;
+        foreach (var point in points)
+        {
+            var tool = Revolve(toolProfile).Transform(placementPlane.ToMatrixAt(point));
+            result -= tool;
+        }
+        return result;
+    }
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);

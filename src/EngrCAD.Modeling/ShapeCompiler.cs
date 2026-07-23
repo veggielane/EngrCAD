@@ -390,7 +390,7 @@ internal static class ShapeCompiler
                 // re-place it with (m · plane · canonical⁻¹), which is rigid.
                 var placement = m * revolve.PlaneMatrix * CanonicalRevolveInverse;
                 placement.TryDecomposeRigidUniformScale(out var q, out var t, out double s);
-                return Place(Sdf.RevolvedRegion(new SketchRegion(sketch)), q, t, s);
+                return Place(Sdf.RevolvedRegion(new SketchRegion(sketch, forRevolution: true)), q, t, s);
             }
 
             case ExtrudeShape or RevolveShape or SweepShape:

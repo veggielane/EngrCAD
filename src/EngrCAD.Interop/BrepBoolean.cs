@@ -124,6 +124,18 @@ public static class BrepBoolean
         // Band-style faces (loops at constant v wrap the period, pulled area ~0).
         double u = loops.SelectMany(l => l).Average(p => p.X);
         double v = loops.Select(l => l.Average(p => p.Y)).Average();
+        if (loops.Count == 1 && wrapsU)
+        {
+            // Pole-bounded faces (discs of axis-touching revolves) have only their rim
+            // loop; averaging would probe ON the rim. Move halfway toward the pole —
+            // and skip the parity check: the upward-v ray convention cannot see a
+            // rim that lies below the probe, but everything between rim and pole
+            // belongs to the face by construction.
+            var domainV = face.Surface.DomainV;
+            double far = Math.Abs(v - domainV.Start) > Math.Abs(domainV.End - v) ? domainV.Start : domainV.End;
+            if (double.IsFinite(far))
+                return face.Surface.PointAt(u, (v + far) / 2);
+        }
         var mid = face.Surface.PointAt(u, v);
         if (FaceGeometry.Contains(face, mid))
             return mid;

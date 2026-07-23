@@ -32,13 +32,17 @@ public readonly struct SketchPlane
     public Vector3d ToWorld(in Vector2d point) => Origin + XAxis * point.X + YAxis * point.Y;
 
     /// <summary>Rigid map from sketch-local (x, y, 0) coordinates to world.</summary>
-    internal Matrix4d ToMatrix()
+    internal Matrix4d ToMatrix() => ToMatrixAt(default);
+
+    /// <summary>Rigid map of the plane frame re-originated at a 2D point (hole placement).</summary>
+    internal Matrix4d ToMatrixAt(in Vector2d point)
     {
         var n = Normal;
+        var origin = ToWorld(point);
         return new Matrix4d(
-            XAxis.X, YAxis.X, n.X, Origin.X,
-            XAxis.Y, YAxis.Y, n.Y, Origin.Y,
-            XAxis.Z, YAxis.Z, n.Z, Origin.Z,
+            XAxis.X, YAxis.X, n.X, origin.X,
+            XAxis.Y, YAxis.Y, n.Y, origin.Y,
+            XAxis.Z, YAxis.Z, n.Z, origin.Z,
             0, 0, 0, 1);
     }
 }

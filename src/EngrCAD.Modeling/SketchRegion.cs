@@ -16,19 +16,30 @@ public sealed class SketchRegion : IPlanarRegion
 
     public Aabb Bounds { get; }
 
-    public SketchRegion(Sketch sketch)
+    /// <param name="forRevolution">
+    /// When the region is destined for <c>Sdf.RevolvedRegion</c>, boundary segments
+    /// lying on the axis (x = 0) are excluded from the *distance* — the axis is
+    /// interior to the solid of revolution, not a surface. Parity is unaffected: a +x
+    /// ray from any r ≥ 0 query never crosses x = 0.
+    /// </param>
+    public SketchRegion(Sketch sketch, bool forRevolution = false)
     {
-        Collect(sketch);
+        Collect(sketch, forRevolution);
         foreach (var hole in sketch.Holes)
-            Collect(hole);
+            Collect(hole, forRevolution);
         Bounds = sketch.Bounds;
     }
 
-    private void Collect(Sketch sketch)
+    private void Collect(Sketch sketch, bool forRevolution)
     {
         foreach (var segment in sketch.Segments)
         {
-            _segments.Add(segment);
+            bool onAxis = forRevolution
+                && Math.Abs(segment.Start.X) <= 1e-9
+                && Math.Abs(segment.End.X) <= 1e-9
+                && segment.Bounds().Max.X <= 1e-9;
+            if (!onAxis)
+                _segments.Add(segment);
             _pieces.AddRange(segment.MonotonePieces());
         }
     }
