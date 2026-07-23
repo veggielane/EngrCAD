@@ -56,6 +56,9 @@ internal sealed class SceneHost
         var projection = new ToggleButton { Content = "Ortho", Padding = new Thickness(10, 4), FontSize = 12 };
         projection.IsCheckedChanged += (_, _) => Viewport.Orthographic = projection.IsChecked ?? false;
         toolbar.Children.Add(projection);
+        var section = new ToggleButton { Content = "Section", Padding = new Thickness(10, 4), FontSize = 12 };
+        section.IsCheckedChanged += (_, _) => Viewport.SectionEnabled = section.IsChecked ?? false;
+        toolbar.Children.Add(section);
 
         _tabStrip = new StackPanel
         {
@@ -85,7 +88,7 @@ internal sealed class SceneHost
                 {
                     new TextBlock
                     {
-                        Text = "drag orbit · shift+drag pan · ctrl+drag/scroll zoom · click select",
+                        Text = "drag orbit · shift+drag pan · ctrl+drag/scroll zoom · click select · [/] section plane",
                         Foreground = DimText,
                         FontSize = 11,
                         [DockPanel.DockProperty] = Dock.Right,

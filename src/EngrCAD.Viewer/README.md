@@ -23,9 +23,21 @@ first visit). Picking reports part names in the title bar.
 
 Dark-themed layout around one shared GL viewport:
 
-- **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views, and a
+- **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views, a
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
-  apparent size, so toggling doesn't jump).
+  apparent size, so toggling doesn't jump), and a **Section** toggle (see below).
+- **Section plane**: the classic CAD section view — a horizontal clip plane at an
+  adjustable world-z height hides everything above it so you can see inside (bores,
+  cavities, fillets in cross-section). Implemented as a fragment-shader `discard` in
+  the mesh shader; face culling stays off, and the interior surfaces the cut exposes
+  are backfaces, which the shader detects via `gl_FrontFacing` and renders as a flat
+  darker warm tint — the standard "cut material" cue. When first enabled the plane
+  defaults to the middle of the parts' bounds; `[` / `]` move it down/up by 2% of the
+  scene height per press (current height shown in the status bar). Feature edges are
+  clipped consistently with the fills (they belong to the model); the ground grid and
+  world axes are scene furniture and stay unclipped. Custom hosts drive it via
+  `ViewportControl.SectionEnabled` / `SectionHeight`. Picking ignores the section
+  plane in v1 — a click can select a part through the cut-away half.
 - **Model tree** (left): the current tab's parts with visibility checkboxes; clicking
   a name selects it (bold + gold in the viewport), and viewport picks highlight the
   tree row — selection stays in sync both ways.

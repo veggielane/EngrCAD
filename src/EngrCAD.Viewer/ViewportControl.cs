@@ -25,8 +25,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
+    private int _uSectionEnabled, _uSectionZ;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
+    private int _uLineSectionEnabled, _uLineSectionZ;
     private uint _bgProgram, _bgVao;
     private uint _gridVao, _gridVbo;
     private int _gridCount;
@@ -108,12 +110,16 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLightDir = _gl.GetUniformLocation(_program, "uLightDir");
         _uEyePos = _gl.GetUniformLocation(_program, "uEyePos");
         _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
+        _uSectionEnabled = _gl.GetUniformLocation(_program, "uSectionEnabled");
+        _uSectionZ = _gl.GetUniformLocation(_program, "uSectionZ");
 
         _lineProgram = CompileLineProgram(_gl);
         _uLineModel = _gl.GetUniformLocation(_lineProgram, "uModel");
         _uLineView = _gl.GetUniformLocation(_lineProgram, "uView");
         _uLineProj = _gl.GetUniformLocation(_lineProgram, "uProj");
         _uLineColor = _gl.GetUniformLocation(_lineProgram, "uColor");
+        _uLineSectionEnabled = _gl.GetUniformLocation(_lineProgram, "uSectionEnabled");
+        _uLineSectionZ = _gl.GetUniformLocation(_lineProgram, "uSectionZ");
 
         _bgProgram = CompileBackgroundProgram(_gl);
         _bgVao = _gl.GenVertexArray(); // vertexless fullscreen triangle via gl_VertexID
@@ -313,6 +319,7 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.UniformMatrix4(_uLineProj, 1, false, matrix);
         WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(_uLineModel, 1, false, matrix);
+        gl.Uniform1(_uLineSectionEnabled, 0f);   // grid/axes are scene furniture — never clipped
         if (_gridVbo != 0)
         {
             gl.Uniform3(_uLineColor, 0.24f, 0.26f, 0.29f);
@@ -337,7 +344,12 @@ public sealed class ViewportControl : OpenGlControlBase
         var lightDir = new Vector3d(-0.5, -0.7, -0.9).Normalized();
         gl.Uniform3(_uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(_uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
+        gl.Uniform1(_uSectionEnabled, _sectionEnabled ? 1f : 0f);
+        gl.Uniform1(_uSectionZ, (float)_sectionHeight);
 
+        // Section mode relies on face culling staying OFF (the GL default; nothing here
+        // enables CullFace): clipping a closed solid exposes its interior, and the
+        // fragment shader shades those backfaces as cut material via gl_FrontFacing.
         gl.Enable(EnableCap.PolygonOffsetFill);
         gl.PolygonOffset(1f, 1f);
         for (int i = 0; i < _meshes.Count; i++)
@@ -354,8 +366,11 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         gl.Disable(EnableCap.PolygonOffsetFill);
 
-        // Feature-edge overlay: the shaded-with-edges CAD look.
+        // Feature-edge overlay: the shaded-with-edges CAD look. Edges belong to the
+        // model, so the section plane clips them consistently with the fills.
         gl.UseProgram(_lineProgram);
+        gl.Uniform1(_uLineSectionEnabled, _sectionEnabled ? 1f : 0f);
+        gl.Uniform1(_uLineSectionZ, (float)_sectionHeight);
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (!_visible[i] || _meshes[i].EdgeVertexCount == 0)
@@ -516,6 +531,70 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    // ---- section plane ----
+
+    private bool _sectionEnabled;
+    private double _sectionHeight;
+    private bool _sectionHeightSet;
+
+    /// <summary>
+    /// Section mode: clips the model at a horizontal plane (world z = <see cref="SectionHeight"/>)
+    /// to reveal interiors — exposed backfaces render as flat cut material. When first
+    /// enabled, the height defaults to the middle of the current parts' bounds.
+    /// Picking ignores the section plane (v1).
+    /// </summary>
+    public bool SectionEnabled
+    {
+        get => _sectionEnabled;
+        set
+        {
+            _sectionEnabled = value;
+            if (value && !_sectionHeightSet)
+            {
+                var bounds = PartsBounds();
+                if (!bounds.IsEmpty)
+                {
+                    _sectionHeight = bounds.Center.Z;
+                    _sectionHeightSet = true;
+                }
+            }
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>World-z height of the section plane; geometry above it is clipped.</summary>
+    public double SectionHeight
+    {
+        get => _sectionHeight;
+        set
+        {
+            _sectionHeight = value;
+            _sectionHeightSet = true;
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>Moves the section plane by 2% of the parts' bounds height per step.</summary>
+    private void NudgeSection(int direction)
+    {
+        var bounds = PartsBounds();
+        double extent = bounds.IsEmpty ? 10 : bounds.Size.Z;
+        SectionHeight += direction * extent * 0.02;
+        Report($"section z = {_sectionHeight:G4}");
+    }
+
+    /// <summary>Union of all parts' world bounds (empty when no scene is loaded).</summary>
+    private Aabb PartsBounds()
+    {
+        var bounds = Aabb.Empty;
+        lock (_sceneLock)
+        {
+            foreach (var part in _parts)
+                bounds = bounds.Union(part.Bounds());
+        }
+        return bounds;
+    }
+
     private Matrix4d ProjectionMatrix(double aspect) => _orthographic
         ? OrthographicMatrix(_distance * Math.Tan(Math.PI / 8), aspect, 0.1, 200.0)
         : Perspective(Math.PI / 4, aspect, 0.1, 200.0);
@@ -620,9 +699,25 @@ public sealed class ViewportControl : OpenGlControlBase
             uniform vec3 uLightDir;
             uniform vec3 uEyePos;
             uniform float uHighlight;
+            uniform float uSectionEnabled;
+            uniform float uSectionZ;
             out vec4 fragColor;
             void main()
             {
+                if (uSectionEnabled > 0.5)
+                {
+                    if (vWorldPos.z > uSectionZ)
+                        discard;
+                    if (!gl_FrontFacing)
+                    {
+                        // Cut cue: interiors exposed by the section plane show their
+                        // backfaces as a flat, darker warm tint (no lighting) — the
+                        // standard CAD hint that you are looking at cut material.
+                        vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
+                        fragColor = vec4(mix(cut, vec3(1.0, 0.85, 0.35), uHighlight * 0.4), 1.0);
+                        return;
+                    }
+                }
                 vec3 n = normalize(vNormal);
                 float diffuse = max(dot(n, -uLightDir), 0.0);
                 vec3 v = normalize(uEyePos - vWorldPos);
@@ -662,12 +757,26 @@ public sealed class ViewportControl : OpenGlControlBase
             uniform mat4 uModel;
             uniform mat4 uView;
             uniform mat4 uProj;
-            void main() { gl_Position = uProj * uView * uModel * vec4(aPos, 1.0); }
+            out vec3 vWorldPos;
+            void main()
+            {
+                vec4 world = uModel * vec4(aPos, 1.0);
+                vWorldPos = world.xyz;
+                gl_Position = uProj * uView * world;
+            }
             """;
         string fragmentSource = header + """
+            in vec3 vWorldPos;
             uniform vec3 uColor;
+            uniform float uSectionEnabled;
+            uniform float uSectionZ;
             out vec4 fragColor;
-            void main() { fragColor = vec4(uColor, 1.0); }
+            void main()
+            {
+                if (uSectionEnabled > 0.5 && vWorldPos.z > uSectionZ)
+                    discard;
+                fragColor = vec4(uColor, 1.0);
+            }
             """;
         return LinkProgram(gl, vertexSource, fragmentSource, bindAttributes: true);
     }
@@ -805,6 +914,8 @@ public sealed class ViewportControl : OpenGlControlBase
             case Key.S: Pan(0, -12); break;
             case Key.A: Pan(12, 0); break;
             case Key.D: Pan(-12, 0); break;
+            case Key.OemOpenBrackets when SectionEnabled: NudgeSection(-1); return;  // reports the height itself
+            case Key.OemCloseBrackets when SectionEnabled: NudgeSection(+1); return;
             default: return;
         }
         Report($"key {e.Key}");
