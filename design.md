@@ -87,6 +87,13 @@ Each engine uses the data structure its mathematics wants:
 - **Decimation** is Garland–Heckbert QEM with the manifold link condition, a
   normal-flip/degeneracy guard, and a hard rule that boundary vertices never collapse
   (open meshes keep their outline exactly).
+- **Plane cutting** (`MeshPlaneCut.Cut`) keeps the side the plane normal points *away*
+  from and clips crossing faces with Sutherland–Hodgman. Crossing points are computed
+  once per undirected edge in a **canonical edge direction** (lower vertex index first)
+  so both faces sharing the edge get bit-identical intersection coordinates — welding
+  then closes the cut without tolerance games. Boundary loops are returned ordered;
+  optional caps go through earcut, whose collinear filtering is repaired by the same
+  collinear-chord zip the booleans use.
 
 ## 4. Implicit engine
 
@@ -98,6 +105,15 @@ Each engine uses the data structure its mathematics wants:
   contract Surface Nets needs.
 - Set operators are overloaded (`|`, `&`, `-`) for fluent composition; transforms
   evaluate at inverse-mapped points (rigid + uniform scale keep distances exact).
+- **N-ary operators** (`Sdf.Union`/`Intersection`/`SmoothUnion` over lists) evaluate
+  children once per query in a flat loop instead of a deep binary tree. The N-ary
+  smooth union **folds the pairwise polynomial smooth min** (bit-identical to chained
+  binary for two children, exact hard min outside the blend band, transcendental-free
+  for future SIMD — rejected log-sum-exp for all three reasons); order matters only
+  inside the blend band, and bounds expand by max(k, (n−1)k/4). **Falloff blends**
+  (`Sdf.Blend`, Wyvill/exponential kernels) bound their additive bump by the blend
+  distance, so bounds expand by exactly that; Wyvill's compact support makes the
+  result *exactly* the plain union outside the band.
 - Batch `Evaluate(ReadOnlySpan<Vector3d>, Span<double>)` is the future SIMD seam; the
   scalar loop is the current default implementation.
 
@@ -126,6 +142,15 @@ Each engine uses the data structure its mathematics wants:
   uses. A hard-won numerical note: the default finite-difference `TangentAt` must be
   second-order at domain endpoints — a first-order one-sided difference puts ~1e-8 error
   into the start frame, which is larger than the weld tolerance and opens cracks.
+- **NURBS curves have exact analytic derivatives** (`DerivativeAt`/`SecondDerivativeAt`:
+  The NURBS Book A2.3 basis derivatives + the generalized rational quotient rule, so
+  non-unit weights are handled; `TangentAt` is overridden, leaving finite differences
+  only for curves without an exact override). **`NurbsCurve.InterpolatePoints`** fits a
+  cubic through points: chord-length parameterization, natural (zero-C″) ends, and a
+  genuinely tridiagonal Thomas solve for the open case (collocation at a
+  multiplicity-1 knot leaves exactly 3 nonzero basis functions); the closed case uses a
+  periodic knot vector with wrapped control points, giving a C2 seam by construction.
+  Two points degrade to a degree-1 chord.
 
 ### Surface–surface intersection
 
@@ -375,6 +400,12 @@ for `in`-parameters being illegal in expression trees.
   Möller–Trumbore on candidates; nearest hit is highlighted. Note for automation:
   Avalonia's pointer stack ignores legacy synthetic `mouse_event` clicks — exercise
   picking with real input.
+- **Viewer section planes**: a horizontal clip at an adjustable world-z height,
+  implemented as fragment-shader `discard` with `gl_FrontFacing` backface detection
+  shading exposed interiors as a flat cut material. The clipping-consistency rule:
+  anything that *is* the model (fills **and** feature edges) clips identically —
+  the discard lives in both programs — while scene furniture (grid, axes) never
+  clips. Picking deliberately ignores the section plane in v1.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level

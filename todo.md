@@ -26,8 +26,8 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   removal → fill → non-manifold cleanup), `MeshRepairOrientation` (consistent winding
   across components), `MergeCoincidentEdges` (crack closing — overlaps our `MeshWelder`
   zip but edge-based). A repair entry point would let us ingest dirty STL files.
-- [ ] **Plane cut** — `MeshPlaneCut` (slice, keep one side, return boundary loops,
-  optional fill). Cheap to build on our splitter machinery; very common CAD op.
+- [x] **Plane cut** ✅ done — `MeshPlaneCut.Cut` (slice, keep the side the normal points
+  away from, return boundary loops, optional earcut caps with collinear-chord zip).
 - [ ] **Extrude/shell mesh ops** — `MeshExtrudeFaces` (face-set extrude),
   `MeshExtrudeMesh` (offset + stitch = thicken/shell). Complements our SDF
   `Shell`/`Offset` with a direct mesh route.
@@ -49,10 +49,12 @@ studying before implementing. Ordered roughly by value-for-effort within each se
 
 ## Implicit engine (EngrCAD.Implicit)
 
-- [ ] **Skeletal/blend operators** — we have polynomial smooth min; g3 adds
-  `ImplicitBlend3d`, `SkeletalBlend3d`, `SkeletalRicciBlend3d` + `FalloffFunctions`
-  (reusable falloff kernels) and N-ary operator variants (`ImplicitNaryUnion3d` etc. —
-  ours are binary-only; N-ary flattens deep trees).
+- [x] **Skeletal/blend operators** ✅ done — N-ary `Sdf.Union`/`Intersection`/
+  `SmoothUnion` (flat single-node loops) + `Sdf.Blend` falloff-kernel blend
+  (`Falloff.Wyvill`/`Exponential`), the g3 `ImplicitNaryUnion3d`/`ImplicitBlend3d`/
+  `FalloffFunctions` equivalents. Deliberately skipped: skeletal-*field* convolution ops
+  (`SkeletalBlend3d`/`SkeletalRicciBlend3d`, `DistanceFieldToSkeletalField`) — they work
+  on 0..1 skeletal fields, not signed distances, and would break sign-exactness.
 - [ ] **Sampled-grid implicits** — `DenseGridTrilinearImplicit` (grid → evaluable field
   with trilinear interpolation), `ImplicitFieldSampler3d` (bake any Sdf to a grid),
   `CachingGridImplicit3d` (lazy). Baking expensive ASTs (e.g. `MeshSdf`) to grids is the
@@ -252,7 +254,9 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 **Geometry**
 - [x] Conics (circle, ellipse), B-splines/NURBS with rationals ✅; parabola/hyperbola missing
 - [ ] Offset curves and offset surfaces as first-class geometry
-- [ ] Curve/surface approximation & interpolation APIs (`GeomAPI_PointsToBSpline` etc.)
+- [x] Curve interpolation ✅ (`NurbsCurve.InterpolatePoints`: open natural / closed
+  periodic cubic, chord-length parameterization); surface interpolation and
+  least-squares *approximation* (`GeomAPI_PointsToBSpline` proper) still missing
 - [x] Extrema / point projection ✅ (`TryProjectPoint`, `Bvh.Nearest`)
 - [x] Surface–surface intersection ✅ (analytic quadric pairs + marching tracer)
 - [x] Point-in-solid classification ✅ (via `MeshSdf` probing — OCCT's `BRepClass3d` is
@@ -290,8 +294,9 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 - CAD chrome landed alongside: dark theme, toolbar (Fit + Front/Top/Right/Iso +
   perspective/orthographic toggle), ground grid + RGB world axes, feature-edge overlay
   (`MeshFeatureEdges`, sharp-dihedral + boundary edges), gradient background, status
-  bar. Ideas for later: view cube widget, per-part display modes (wireframe/
-  translucent), section planes, measure tool, screenshot/export-image button,
+  bar. Section planes ✅ done (horizontal clip via fragment discard, `gl_FrontFacing`
+  cut-material cue, `[`/`]` height keys). Ideas for later: view cube widget,
+  per-part display modes (wireframe/translucent), measure tool, screenshot/export-image button,
   ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
   mesh dihedrals (exact circles stay smooth at coarse tessellation).
 - Add a builder for EngrCad.Run and Show, so we can set defaults like render quality, and so it can consume IOptions, ILogger etc
