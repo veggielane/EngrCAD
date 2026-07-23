@@ -1,4 +1,4 @@
-﻿using EngrCAD.Core;
+using EngrCAD.Core;
 
 namespace EngrCAD.Implicit;
 
