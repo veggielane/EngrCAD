@@ -38,12 +38,22 @@ public static class SurfaceIntersection
         };
     }
 
-    private static Surface Promote(Surface s) =>
-        s is ExtrudedSurface e &&
-        e.Generator.Underlying is Circle3d c &&
-        e.Direction.IsParallelTo(c.Axis, Tolerance.Default)
-            ? new CylinderSurface(c.Center, c.XDirection, c.YDirection, c.Radius)
-            : s;
+    private static Surface Promote(Surface s)
+    {
+        if (s is ExtrudedSurface e &&
+            e.Generator.Underlying is Circle3d c &&
+            e.Direction.IsParallelTo(c.Axis, Tolerance.Default))
+        {
+            var candidate = new CylinderSurface(c.Center, c.XDirection, c.YDirection, c.Radius);
+            // Wrapped generators (e.g. TransformedCurve) may sample away from the
+            // underlying circle; promote only when the actual generator lies on the
+            // candidate cylinder.
+            var start = e.Generator.PointAt(e.Generator.Domain.Start);
+            if (candidate.TryProjectPoint(start, out _, 1e-9))
+                return candidate;
+        }
+        return s;
+    }
 
     // ---- analytic cases ----
 
@@ -130,9 +140,11 @@ public static class SurfaceIntersection
         var majorDirection = axis - n * alignment;
         if (!majorDirection.TryNormalize(Tolerance.Default, out var major))
         {
-            // Axis perpendicular to the plane: a circle.
-            var x = n.ArbitraryPerpendicular(Tolerance.Default);
-            return [new Circle3d(center, x, n.Cross(x), cylinder.Radius)];
+            // Axis perpendicular to the plane: a circle. Use the cylinder's own frame
+            // (not an arbitrary perpendicular) so the circle's parameterization is
+            // phase-aligned with the cylinder's u — band grids and the edges created
+            // from this curve then sample identical points and weld without cracks.
+            return [new Circle3d(center, cylinder.XDirection, cylinder.YDirection, cylinder.Radius)];
         }
 
         var minor = n.Cross(major);

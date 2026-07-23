@@ -9,5 +9,6 @@
     <ProjectReference Include="..\EngrCAD.BRep\EngrCAD.BRep.csproj" />
     <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
     <ProjectReference Include="..\EngrCAD.Query\EngrCAD.Query.csproj" />
+    <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
   </ItemGroup>
 </Project>

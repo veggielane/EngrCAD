@@ -5,6 +5,7 @@ using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Interop;
 using EngrCAD.Mesh;
+using EngrCAD.Modeling;
 using EngrCAD.Viewer;
 
 var scene = new Scene(new SceneOptions { SegmentsPerCircle = 48, SdfResolution = 64 });
@@ -56,5 +57,17 @@ var boreTool = SolidFactory.Extrude(
     Profile.Circle((0.25, 0.25, -1), Vector3d.UnitX, Vector3d.UnitY, 0.4), (0, 0, 2));
 scene.Add("drilled block", BrepBoolean.Difference(block, boreTool), Palette.Brass,
     Matrix4d.CreateTranslation((5.4, 5.6, 0)));
+
+// Fourth row: the unified modeling API — ONE shape, lowered three ways at the end.
+var model = Shape.Box(2.0, 1.4, 0.8)
+    .SmoothUnion(Shape.Sphere(0.5).Translate(0, 0, 0.55), 0.25)
+    - Shape.Cylinder(0.3, 3).Translate(0.55, 0, 0);
+
+scene.Add("shape → B-Rep", (Shape.Box(2.0, 1.4, 0.8) - Shape.Cylinder(0.3, 3).Translate(0.55, 0, 0)).ToBrep(),
+    Palette.Steel, Matrix4d.CreateTranslation((-4.6, 9.3, 0)));      // blend dropped: exact solid
+scene.Add("shape → implicit", model.ToImplicit(), Palette.Teal,
+    Matrix4d.CreateTranslation((-1.5, 9.3, 0)));                     // polygonized SDF, blend intact
+scene.Add("shape → mesh", model, Palette.Coral,
+    Matrix4d.CreateTranslation((1.5, 9.3, 0)));                      // Scene picks the best route
 
 EngrCad.Show(scene, "EngrCAD demo");

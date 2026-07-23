@@ -131,6 +131,80 @@ public readonly struct Matrix4d : IEquatable<Matrix4d>
         M21 * v.X + M22 * v.Y + M23 * v.Z,
         M31 * v.X + M32 * v.Y + M33 * v.Z);
 
+    /// <summary>
+    /// Splits an affine transform into translation · rotation · uniform scale, when it
+    /// has exactly that form (orthogonal columns of equal length, no reflection, no
+    /// perspective). Returns false for shear, non-uniform scale, or mirroring.
+    /// </summary>
+    public bool TryDecomposeRigidUniformScale(out Quaterniond rotation, out Vector3d translation, out double scale)
+    {
+        rotation = default;
+        translation = new Vector3d(M14, M24, M34);
+        scale = 0;
+
+        const double eps = 1e-9;
+        if (Math.Abs(M41) > eps || Math.Abs(M42) > eps || Math.Abs(M43) > eps || Math.Abs(M44 - 1) > eps)
+            return false;
+
+        var c0 = new Vector3d(M11, M21, M31);
+        var c1 = new Vector3d(M12, M22, M32);
+        var c2 = new Vector3d(M13, M23, M33);
+        double s0 = c0.Length, s1 = c1.Length, s2 = c2.Length;
+        double s = (s0 + s1 + s2) / 3;
+        if (s < eps)
+            return false;
+        if (Math.Abs(s0 - s) > eps * s || Math.Abs(s1 - s) > eps * s || Math.Abs(s2 - s) > eps * s)
+            return false;
+        double s2sq = s * s;
+        if (Math.Abs(c0.Dot(c1)) > eps * s2sq || Math.Abs(c1.Dot(c2)) > eps * s2sq || Math.Abs(c0.Dot(c2)) > eps * s2sq)
+            return false;
+        if (c0.Cross(c1).Dot(c2) < 0)
+            return false; // reflection
+
+        // Shepperd's method on the normalized rotation part.
+        double r11 = M11 / s, r12 = M12 / s, r13 = M13 / s;
+        double r21 = M21 / s, r22 = M22 / s, r23 = M23 / s;
+        double r31 = M31 / s, r32 = M32 / s, r33 = M33 / s;
+        double trace = r11 + r22 + r33;
+        double qx, qy, qz, qw;
+        if (trace > 0)
+        {
+            double t = Math.Sqrt(trace + 1) * 2;
+            qw = 0.25 * t;
+            qx = (r32 - r23) / t;
+            qy = (r13 - r31) / t;
+            qz = (r21 - r12) / t;
+        }
+        else if (r11 > r22 && r11 > r33)
+        {
+            double t = Math.Sqrt(1 + r11 - r22 - r33) * 2;
+            qw = (r32 - r23) / t;
+            qx = 0.25 * t;
+            qy = (r12 + r21) / t;
+            qz = (r13 + r31) / t;
+        }
+        else if (r22 > r33)
+        {
+            double t = Math.Sqrt(1 + r22 - r11 - r33) * 2;
+            qw = (r13 - r31) / t;
+            qx = (r12 + r21) / t;
+            qy = 0.25 * t;
+            qz = (r23 + r32) / t;
+        }
+        else
+        {
+            double t = Math.Sqrt(1 + r33 - r11 - r22) * 2;
+            qw = (r21 - r12) / t;
+            qx = (r13 + r31) / t;
+            qy = (r23 + r32) / t;
+            qz = 0.25 * t;
+        }
+
+        rotation = new Quaterniond(qx, qy, qz, qw).Normalized();
+        scale = s;
+        return true;
+    }
+
     public Matrix4d Transposed() => new(
         M11, M21, M31, M41,
         M12, M22, M32, M42,

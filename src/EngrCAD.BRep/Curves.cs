@@ -143,6 +143,56 @@ public sealed class NurbsCurve : Curve3d
         Knots = knots;
     }
 
+    /// <summary>
+    /// Exact rational circular arc from <paramref name="startAngle"/> to
+    /// <paramref name="endAngle"/> (radians, counter-clockwise in the (x, y) frame;
+    /// the sweep must be positive and less than 2π). Built from quadratic rational
+    /// Bézier segments of at most 90° joined with interior double knots.
+    /// </summary>
+    public static NurbsCurve Arc(
+        in Vector3d center, in Vector3d xDirection, in Vector3d yDirection,
+        double radius, double startAngle, double endAngle)
+    {
+        double sweep = endAngle - startAngle;
+        if (sweep <= 0 || sweep >= 2 * Math.PI + 1e-12)
+            throw new ArgumentOutOfRangeException(nameof(endAngle),
+                "Arc sweep must be positive and less than a full turn; use Circle3d for full circles.");
+
+        int segmentCount = Math.Max(1, (int)Math.Ceiling(sweep / (Math.PI / 2) - 1e-12));
+        double delta = sweep / segmentCount;
+        double w = Math.Cos(delta / 2);
+
+        Vector3d c = center, x = xDirection, y = yDirection;
+        Vector3d OnArc(double angle) =>
+            c + x * (radius * Math.Cos(angle)) + y * (radius * Math.Sin(angle));
+
+        var controlPoints = new List<Vector3d>(2 * segmentCount + 1);
+        var weights = new List<double>(2 * segmentCount + 1);
+        controlPoints.Add(OnArc(startAngle));
+        weights.Add(1);
+        for (int i = 0; i < segmentCount; i++)
+        {
+            double mid = startAngle + (i + 0.5) * delta;
+            // Tangent-intersection control point: on the bisector, at radius r / cos(δ/2).
+            controlPoints.Add(c + x * (radius / w * Math.Cos(mid)) + y * (radius / w * Math.Sin(mid)));
+            weights.Add(w);
+            controlPoints.Add(OnArc(startAngle + (i + 1) * delta));
+            weights.Add(1);
+        }
+
+        var knots = new List<double>(2 * segmentCount + 4) { 0, 0, 0 };
+        for (int i = 1; i < segmentCount; i++)
+        {
+            knots.Add(i);
+            knots.Add(i);
+        }
+        knots.Add(segmentCount);
+        knots.Add(segmentCount);
+        knots.Add(segmentCount);
+
+        return new NurbsCurve(2, controlPoints, weights, knots);
+    }
+
     public override Interval Domain => new(Knots[Degree], Knots[ControlPoints.Count]);
 
     public override bool IsClosed =>

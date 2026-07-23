@@ -240,6 +240,41 @@ The conversion triangle is complete; each direction has a deliberately chosen al
   vertex — over BVH branch-and-bound nearest-triangle search. Verified to match the
   analytic box SDF to 1e-9 across all feature regions.
 
+## 6b. Unified modeling layer (`EngrCAD.Modeling`)
+
+`Shape` is a representation-agnostic operation graph — the hybrid kernel's front door.
+Design decisions:
+
+- **A deferred AST, not eager geometry** (mirrors the `Sdf` design): primitives,
+  extrude/revolve/sweep, booleans, smooth blends/offset/shell/lattice, transforms, and
+  `From(engine object)` leaves. Nothing is computed until `ToBrep()`, `ToImplicit()`,
+  or `ToMesh()` lowers the graph, so the *same* model can be lowered to all three.
+- **Transforms bake into construction inputs, never into finished geometry.** The B-Rep
+  lowering carries an accumulated matrix: boxes become extrusions of transformed
+  profiles (shear included), cylinders extrude transformed `Circle3d`/`Ellipse3d` rims,
+  spheres/tori take decomposed rigid+uniform-scale placement (`MakeSphere`/`MakeTorus`
+  with center/axis), profiles wrap segments in `TransformedCurve`. This keeps rotated
+  booleans exactly as accurate as axis-aligned ones. The implicit lowering decomposes
+  the matrix into `Scale→Rotate→Translate` SDF operators (blend radii and offsets scale
+  by the uniform factor); non-decomposable (sheared) subtrees bridge through a mesh.
+- **Best-effort bridging with honest reporting** (Chris's chosen policy): nodes without
+  a native form in the target bridge through another representation —
+  extrude/revolve/sweep → implicit goes B-Rep → tessellation → `MeshSdf`; blends →
+  mesh goes SDF → Surface Nets. Only truly impossible routes throw (`ToBrep` of a
+  blend: there is no mesh→B-Rep import). `Explain(target)` runs the same classification
+  as a dry run and labels every node Native / Bridged(route) / Impossible(reason);
+  `ShapeConversionException` carries that report.
+- **`ToMesh` picks the highest-fidelity whole-tree route**: (1) B-Rep-representable →
+  one tessellation of the exact solid (crisp edges); (2) blends present → polygonize
+  the SDF; (3) `From(mesh)` leaves in boolean trees → per-node `MeshBoolean`.
+- **Escape hatches are first-class**: `From(BrepSolid/HalfEdgeMesh/Sdf)` wraps raw
+  engine geometry, so a design can exit to any engine API for operations the graph
+  doesn't surface (filleting, hand-written SDF fields, mesh repair) and re-enter.
+- Hardening this feature fixed three latent robustness bugs (notes in CLAUDE.md):
+  periodic-seam clamping in the generic `TryProjectPoint`, arbitrary-phase
+  plane⊥cylinder intersection circles (now aligned to the cylinder frame so band grids
+  and edge polylines weld), and `ProbePoint` triangulating jitter-degenerate wrap loops.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

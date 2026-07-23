@@ -53,6 +53,14 @@ public abstract class Surface
             }
         }
 
+        // Periodic-u surfaces must wrap rather than clamp: the seed can land on the
+        // wrong side of the seam, and a clamped Newton step then pins at the domain
+        // edge forever instead of walking across it.
+        double periodU = FaceGeometry.PeriodU(this);
+        double WrapU(double x) => periodU > 0
+            ? domainU.Start + (((x - domainU.Start) % periodU) + periodU) % periodU
+            : domainU.Clamp(x);
+
         double u = bestU, v = bestV;
         double hu = Math.Max(1e-7, domainU.Length * 1e-7);
         double hv = Math.Max(1e-7, domainV.Length * 1e-7);
@@ -64,7 +72,7 @@ public abstract class Surface
                 uv = new Vector2d(u, v);
                 return true;
             }
-            var du = (PointAt(domainU.Clamp(u + hu), v) - PointAt(domainU.Clamp(u - hu), v)) / (2 * hu);
+            var du = (PointAt(WrapU(u + hu), v) - PointAt(WrapU(u - hu), v)) / (2 * hu);
             var dv = (PointAt(u, domainV.Clamp(v + hv)) - PointAt(u, domainV.Clamp(v - hv))) / (2 * hv);
 
             // Normal equations for the 2-unknown least squares step, lightly damped.
@@ -73,7 +81,7 @@ public abstract class Surface
             double det = a11 * a22 - a12 * a12;
             if (Math.Abs(det) < 1e-30)
                 return false;
-            u = domainU.Clamp(u + (b1 * a22 - b2 * a12) / det);
+            u = WrapU(u + (b1 * a22 - b2 * a12) / det);
             v = domainV.Clamp(v + (b2 * a11 - b1 * a12) / det);
         }
         if ((PointAt(u, v) - point).Length < tolerance)

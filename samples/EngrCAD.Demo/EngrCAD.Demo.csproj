@@ -5,5 +5,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\EngrCAD.Viewer\EngrCAD.Viewer.csproj" />
+    <ProjectReference Include="..\..\src\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
   </ItemGroup>
 </Project>

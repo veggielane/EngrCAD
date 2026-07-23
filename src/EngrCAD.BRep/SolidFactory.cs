@@ -116,4 +116,56 @@ public static partial class SolidFactory
 
         return new BrepSolid([new BrepShell([side, topCap, bottomCap])]);
     }
+
+    /// <summary>
+    /// Sphere: two revolved hemispherical faces (exact rational quarter-circle
+    /// generators) sharing the equator circle edge. V=1, E=1, F=2. The generators touch
+    /// the revolve axis at the poles, so this is built directly rather than through
+    /// <see cref="Revolve"/> (whose profiles must stay off-axis).
+    /// </summary>
+    public static BrepSolid MakeSphere(double radius, in Vector3d center = default)
+    {
+        if (radius <= 0) throw new ArgumentOutOfRangeException(nameof(radius));
+
+        var equator = new Circle3d(center, Vector3d.UnitX, Vector3d.UnitY, radius);
+        var seam = new BrepVertex(equator.PointAt(0));
+        var equatorEdge = new BrepEdge(equator, new Interval(0, 2 * Math.PI), seam, seam);
+
+        // Generators live in the XZ plane; revolving about +Z sweeps the sphere. Both
+        // run with +Z tangent at the equator so ∂u × ∂v points outward.
+        var northArc = NurbsCurve.Arc(center, Vector3d.UnitX, Vector3d.UnitZ, radius, 0, Math.PI / 2);
+        var southArc = NurbsCurve.Arc(center, Vector3d.UnitX, Vector3d.UnitZ, radius, -Math.PI / 2, 0);
+
+        // Equator at the north generator's start ⇒ loop follows the circle (like the
+        // cylinder side's bottom loop); at the south generator's end ⇒ opposes it.
+        var north = new BrepFace(
+            new RevolvedSurface(northArc, center, Vector3d.UnitZ),
+            [new BrepLoop([new BrepCoedge(equatorEdge, sameSense: true)])]);
+        var south = new BrepFace(
+            new RevolvedSurface(southArc, center, Vector3d.UnitZ),
+            [new BrepLoop([new BrepCoedge(equatorEdge, sameSense: false)])]);
+
+        return new BrepSolid([new BrepShell([north, south])]);
+    }
+
+    /// <summary>
+    /// Torus about +Z centered at the origin: the minor circle (radius
+    /// <paramref name="minorRadius"/> at distance <paramref name="majorRadius"/> from the
+    /// axis) split into two exact arcs and fully revolved — outer and inner bands sharing
+    /// the top and bottom junction circles. V=2, E=2, F=2, genus 1.
+    /// </summary>
+    public static BrepSolid MakeTorus(double majorRadius, double minorRadius, in Vector3d center = default, Vector3d? axis = null)
+    {
+        if (minorRadius <= 0) throw new ArgumentOutOfRangeException(nameof(minorRadius));
+        if (majorRadius <= minorRadius)
+            throw new ArgumentOutOfRangeException(nameof(majorRadius),
+                "The major radius must exceed the minor radius (the tube may not touch the axis).");
+
+        var a = (axis ?? Vector3d.UnitZ).Normalized();
+        var radial = a.ArbitraryPerpendicular(Tolerance.Default);
+        var tubeCenter = center + radial * majorRadius;
+        var outerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, -Math.PI / 2, Math.PI / 2);
+        var innerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, Math.PI / 2, 3 * Math.PI / 2);
+        return Revolve(new Profile([outerArc, innerArc]), center, a);
+    }
 }

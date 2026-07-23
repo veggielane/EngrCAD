@@ -83,7 +83,7 @@ public sealed class Scene
     public Part Add(string name, Sdf sdf, PartColor? color = null, Matrix4d? transform = null) =>
         AddPart(name, SurfaceNets.Polygonize(sdf, Options.SdfResolution), color, transform, sdf);
 
-    private Part AddPart(string name, HalfEdgeMesh mesh, PartColor? color, Matrix4d? transform, object source)
+    internal Part AddPart(string name, HalfEdgeMesh mesh, PartColor? color, Matrix4d? transform, object source)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("Part name must be non-empty.", nameof(name));

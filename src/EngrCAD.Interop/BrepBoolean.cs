@@ -103,9 +103,14 @@ public static class BrepBoolean
     {
         var loops = FaceGeometry.PullLoops(face);
 
-        // Planar-style faces: centroids of the outer loop's triangles.
+        // Planar-style faces: centroids of the outer loop's triangles. A loop whose
+        // unwrapped u-span covers the surface period wraps the band and cannot bound a
+        // planar region — projection jitter gives such loops a tiny nonzero area, and
+        // triangulating the sliver would put the probe on the fragment boundary.
         var outer = loops[0];
-        if (Math.Abs(FaceGeometry.LoopSignedArea(outer)) > 1e-12)
+        double periodU = FaceGeometry.PeriodU(face.Surface);
+        bool wrapsU = periodU > 0 && outer.Max(p => p.X) - outer.Min(p => p.X) > 0.75 * periodU;
+        if (!wrapsU && Math.Abs(FaceGeometry.LoopSignedArea(outer)) > 1e-12)
         {
             foreach (var (i0, i1, i2) in PolygonTriangulator.Triangulate(outer))
             {

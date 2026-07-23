@@ -222,6 +222,48 @@ against EngrCAD. ✅ = have (sometimes better: exact B-Rep vs OpenSCAD's mesh-on
 - [ ] import/export DXF + SVG (2D profiles in/out; SVG out also useful for drawings)
 - [ ] export PNG snapshot from the viewer (offscreen render to file)
 
+## OpenCASCADE (OCCT) feature parity
+
+The reference open-source B-Rep kernel. Checklist of its capabilities against ours
+(✅ = EngrCAD has an equivalent today, at least v1):
+
+**Modeling algorithms**
+- [x] Primitives: box, cylinder, sphere, torus ✅ (`SolidFactory`); cone, wedge missing
+- [x] Prism (extrude), revolution, pipe (sweep) ✅ (`Extrude`/`Revolve`/`Sweep`)
+- [ ] Loft / ThruSections (skin a solid through a list of profiles)
+- [ ] Pipe shell with evolution law (scaling/twisting profile along the spine)
+- [x] Booleans: fuse/common/cut ✅ (`BrepBoolean`) — OCCT adds *section* (curve-only
+  result), fuzzy-tolerance option, and full modification history
+- [ ] Fillets: edge chains, variable radius, corner blending (we have closed circular
+  rims only); chamfers entirely missing
+- [ ] Draft angles (`BRepOffsetAPI_DraftAngle`)
+- [ ] Offset surfaces / thick solid / shelling (B-Rep shell — we only shell as SDF)
+- [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot, drilled hole as
+  first-class features with faces-to-remove semantics
+- [ ] Shape healing (`ShapeFix`): fix wires/faces/gaps/small edges — needed the moment
+  we import foreign STEP
+- [ ] Local operations: split shape by shape, glue faces
+
+**Geometry**
+- [x] Conics (circle, ellipse), B-splines/NURBS with rationals ✅; parabola/hyperbola missing
+- [ ] Offset curves and offset surfaces as first-class geometry
+- [ ] Curve/surface approximation & interpolation APIs (`GeomAPI_PointsToBSpline` etc.)
+- [x] Extrema / point projection ✅ (`TryProjectPoint`, `Bvh.Nearest`)
+- [x] Surface–surface intersection ✅ (analytic quadric pairs + marching tracer)
+- [x] Point-in-solid classification ✅ (via `MeshSdf` probing — OCCT's `BRepClass3d` is
+  purely topological; consider a ray-parity B-Rep classifier to drop the mesh bridge)
+
+**Infrastructure**
+- [x] Global properties: volume, area ✅ (mesh-based); inertia/center-of-mass missing
+- [x] Deflection-controlled tessellation ✅ (`BRepTessellator` is count-based; OCCT's
+  `BRepMesh` is chord-error-based — worth adopting a deflection criterion)
+- [ ] Topological naming / modification history (which output face came from which
+  input face) — the foundation of parametric rebuilds surviving edits
+- [ ] Data exchange: STEP import (we export only), IGES, glTF, STL export, native BREP
+  serialization format
+- [ ] Hidden-line removal (HLR) projections for 2D drawings
+- [ ] OCAF-style document framework: undo/redo, attributes, persistence
+
 ## Not worth adopting (deliberate)
 
 - g3's mesh structure itself (index+edge-list) — our half-edge with explicit boundary
@@ -236,4 +278,14 @@ against EngrCAD. ✅ = have (sometimes better: exact B-Rep vs OpenSCAD's mesh-on
 - add tabs to viewer
 
 ## Other ideas
-- unify scripting language, the type of modelling is set at the end.
+- [x] unify scripting language, the type of modelling is set at the end. ✅ done —
+  `EngrCAD.Modeling`'s `Shape` graph: model once, `ToBrep()`/`ToImplicit()`/`ToMesh()`
+  at the end, `Explain(target)` reports native/bridged/impossible per node.
+- [ ] **FeatureScript-style modeling in native C#** (à la Onshape's FeatureScript, but
+  no DSL — plain C#): user-defined *features* as composable functions/records over
+  `Shape` + `Profile` (inputs: named parameters with ranges/defaults; output: `Shape`),
+  a parametric model = an ordered feature list that regenerates on parameter change.
+  Needs: parameter objects with validation, feature registry, and (later) topological
+  naming so downstream features can reference faces/edges created by earlier ones —
+  pairs with the OCCT history item above and the `engrcad watch` live-reload loop.
+- ILogger Throughout

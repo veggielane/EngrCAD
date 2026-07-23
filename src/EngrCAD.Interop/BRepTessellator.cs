@@ -150,9 +150,29 @@ public static class BRepTessellator
             for (int k = 0; k < rows; k++)
             {
                 int k1 = (k + 1) % nv;
-                polygons.Add([grid[j, k], grid[j1, k], grid[j1, k1], grid[j, k1]]);
+                AddGridCell(polygons, grid[j, k], grid[j1, k], grid[j1, k1], grid[j, k1]);
             }
         }
+    }
+
+    /// <summary>
+    /// Emits one grid cell, dropping repeated corners. Cells against a degenerate
+    /// surface row (a revolved generator touching the axis — sphere poles) collapse to
+    /// triangles; fully collapsed cells are skipped.
+    /// </summary>
+    private static void AddGridCell(
+        List<IReadOnlyList<Vector3d>> polygons,
+        in Vector3d a, in Vector3d b, in Vector3d c, in Vector3d d)
+    {
+        Span<Vector3d> corners = [a, b, c, d];
+        var distinct = new List<Vector3d>(4);
+        for (int i = 0; i < corners.Length; i++)
+        {
+            if (!corners[i].AreEqual(corners[(i + 1) % corners.Length], Tolerance.Default))
+                distinct.Add(corners[i]);
+        }
+        if (distinct.Count >= 3)
+            polygons.Add(distinct);
     }
 
     private static List<Vector3d> LoopPolyline(BrepLoop loop, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)

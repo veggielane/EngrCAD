@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD unified modeling API: build a Shape once with one vocabulary, then decide at the end whether it becomes a B-Rep, an implicit (SDF), or a mesh.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
+  </ItemGroup>
+</Project>

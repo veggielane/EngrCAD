@@ -34,12 +34,15 @@ public class DrillTests
         var topSplit = FaceSplitter.SplitByClosedCurve(top, topCircle, createDisk: false);
         var bottomSplit = FaceSplitter.SplitByClosedCurve(bottom, bottomCircle, createDisk: false);
 
-        // 3. The bore wall: an extrusion of the bottom circle (which winds clockwise about
-        //    +Z, so the wall's normal faces the hole — out of the material).
+        // 3. The bore wall. Intersection circles are phase-aligned with the cylinder's
+        //    frame and wind counter-clockwise about +Z, so the generator must be the
+        //    reversed bottom circle for the wall's normal to face the hole — out of the
+        //    material. The bottom loop follows the generator (against the edge's curve),
+        //    the top loop opposes it.
         var wall = new BrepFace(
-            new ExtrudedSurface(bottomCircle, (0, 0, 1)),
+            new ExtrudedSurface(bottomCircle.Reversed(), (0, 0, 1)),
             [
-                new BrepLoop([new BrepCoedge(bottomSplit.Edge, sameSense: true)]),
+                new BrepLoop([new BrepCoedge(bottomSplit.Edge, sameSense: false)]),
                 new BrepLoop([new BrepCoedge(topSplit.Edge, sameSense: true)]),
             ]);
 
