@@ -10,7 +10,26 @@ using EngrCAD.Viewer;
 
 var scene = new Scene(new MeshQuality { SegmentsPerCircle = 48, SdfResolution = 64 });
 
-// ---- tab 1: the mesh engine ----
+// ---- tab 1: sketching — lines, arcs, béziers in every representation ----
+var sketches = scene.AddTab("sketch");
+var plate = Sketch.Start(-2, -1.2)
+    .LineTo(2, -1.2)
+    .ArcTo(new(2, 1.2), 1.4, clockwise: false)                      // bulged arc end
+    .LineTo(-2, 1.2)
+    .BezierTo(new(-3.4, 0.7), new(-3.4, -0.7), new(-2, -1.2))       // bézier end
+    .Close()
+    .WithHole(Sketch.Circle(new(1.1, 0), 0.45))
+    .WithHole(Sketch.Circle(new(-1.3, 0), 0.3));
+sketches.Add(new Part("sketched plate", Shape.Extrude(plate, 0.5), Palette.Steel,
+    Matrix4d.CreateTranslation((-3.4, 0, 0))));                     // exact B-Rep route
+
+var vase = Sketch.Start(0, 0).LineTo(1, 0)
+    .BezierTo(new(1.7, 0.9), new(0.35, 1.7), new(0.9, 2.6))
+    .LineTo(0, 2.6).Close();
+sketches.Add(new Part("revolved vase", Shape.Revolve(vase), Palette.Teal,
+    Matrix4d.CreateTranslation((2.6, 0, -1.3))));                   // exact SDF route (touches the axis)
+
+// ---- tab 2: the mesh engine ----
 var meshes = scene.AddTab("mesh");
 meshes.Add(new Part("box", MeshPrimitives.Box(1.8, 1.8, 1.8), Palette.Sky,
     Matrix4d.CreateTranslation((-4.6, 0, 0))));

@@ -67,6 +67,39 @@ public abstract class Shape
     public static Shape Sweep(Profile profile, Curve3d path, IReadOnlyList<Profile>? holes = null) =>
         new SweepShape(profile, path, holes);
 
+    // ---- Sketch-based modeling operations (implicit lowerings become exact) ----
+
+    /// <summary>Extrudes a sketch along its plane normal (default plane: world XY).</summary>
+    public static Shape Extrude(Sketch sketch, double height, SketchPlane? plane = null)
+    {
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        return new ExtrudeShape(sketch, plane ?? SketchPlane.XY, height);
+    }
+
+    /// <summary>
+    /// Revolves a sketch about its plane's y axis (the sketch's x = 0 line); sketch x
+    /// is the radial direction and must be ≥ 0. The default plane (XZ) puts the axis on
+    /// world Z. Sketches touching the axis are supported for full turns (implicit/mesh
+    /// lowerings only — B-Rep needs axis clearance).
+    /// </summary>
+    public static Shape Revolve(Sketch sketch, double angle = 2 * Math.PI, SketchPlane? plane = null)
+    {
+        double minX = sketch.Bounds.Min.X;
+        if (minX < -1e-9)
+            throw new ArgumentException("A revolved sketch must lie in x ≥ 0 (x is the radial direction).", nameof(sketch));
+        bool fullTurn = Math.Abs(angle - 2 * Math.PI) < 1e-9;
+        if (!fullTurn && minX < 1e-9)
+            throw new NotSupportedException(
+                "A partial revolve of an axis-touching sketch is not representable yet; keep the sketch off the axis or revolve a full turn.");
+        return new RevolveShape(sketch, plane ?? SketchPlane.XZ, angle);
+    }
+
+    /// <summary>Sweeps a sketch (placed on <paramref name="plane"/>, default world XY,
+    /// which must sit at the path start, perpendicular to its tangent) along a path.</summary>
+    public static Shape Sweep(Sketch sketch, Curve3d path, SketchPlane? plane = null) =>
+        new SweepShape(sketch, plane ?? SketchPlane.XY, path);
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);

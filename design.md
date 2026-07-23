@@ -274,6 +274,18 @@ Design decisions:
   periodic-seam clamping in the generic `TryProjectPoint`, arbitrary-phase
   plane⊥cylinder intersection circles (now aligned to the cylinder frame so band grids
   and edge polylines weld), and `ProbePoint` triangulating jitter-degenerate wrap loops.
+- **Sketching** (`Sketch.cs`/`SketchSegments.cs`/`SketchRegion.cs`): one closed 2D
+  region (lines, arcs, béziers; holes by parity) with *every* lowering exact in its own
+  way — B-Rep via `Line3d`/`NurbsCurve.Arc`/Bézier NURBS profiles, implicit via the
+  sketch's own signed distance (exact segment distances; sign from even–odd parity over
+  precomputed y-monotone pieces — arcs split at y-extreme angles, cubics at y′ roots,
+  crossings solved exactly), mesh via the B-Rep tessellation. `Sdf.ExtrudedRegion`/
+  `RevolvedRegion` (over `IPlanarRegion`, defined in EngrCAD.Implicit) use the standard
+  exact slab/revolution combines, so sketch extrude + full revolve are implicit-Native —
+  the "exact 2D-profile SDF" roadmap item. Area is exact (arc terms analytic, cubics by
+  3-point Gauss quadrature — the integrand is degree 5, within quadrature exactness).
+  Revolve convention: sketch x = radius, plane defaults to XZ (axis = world Z);
+  axis-touching sketches are implicit/mesh-only.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

@@ -294,6 +294,11 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 - [x] unify scripting language, the type of modelling is set at the end. ✅ done —
   `EngrCAD.Modeling`'s `Shape` graph: model once, `ToBrep()`/`ToImplicit()`/`ToMesh()`
   at the end, `Explain(target)` reports native/bridged/impossible per node.
+- [ ] **2D sketch constraint solver** — sketching (lines/arcs/béziers with a fluent
+  builder, exact in all three representations) landed geometry-only by design; the
+  Onshape-style layer on top is constraints (coincident/tangent/parallel/dimensions)
+  solved variationally. Also future: elliptical arcs, sketch offset/thicken,
+  sketch-on-face (face → SketchPlane query).
 - [ ] **FeatureScript-style modeling in native C#** (à la Onshape's FeatureScript, but
   no DSL — plain C#): user-defined *features* as composable functions/records over
   `Shape` + `Profile` (inputs: named parameters with ranges/defaults; output: `Shape`),

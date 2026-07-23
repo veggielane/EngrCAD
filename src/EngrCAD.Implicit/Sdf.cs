@@ -73,6 +73,14 @@ public abstract class Sdf
     /// </summary>
     public static Sdf Gyroid(double cellSize, double thickness) => new GyroidSdf(cellSize, thickness);
 
+    /// <summary>The 2D region extruded along +Z from z = 0 to z = <paramref name="height"/>;
+    /// exact wherever the region's distance is exact.</summary>
+    public static Sdf ExtrudedRegion(IPlanarRegion region, double height) => new ExtrudedRegionSdf(region, height);
+
+    /// <summary>The 2D region — read as (radius, height), x ≥ 0 — revolved a full turn
+    /// about Z; exact wherever the region's distance is exact.</summary>
+    public static Sdf RevolvedRegion(IPlanarRegion region) => new RevolvedRegionSdf(region);
+
     // ---- combinators ----
 
     public Sdf Union(Sdf other) => new UnionSdf(this, other);

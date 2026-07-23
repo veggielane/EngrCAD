@@ -38,31 +38,87 @@ internal sealed class TorusShape(double majorRadius, double minorRadius) : Shape
     internal override string Describe() => $"Torus(R={majorRadius:g4}, r={minorRadius:g4})";
 }
 
-internal sealed class ExtrudeShape(Profile profile, Vector3d direction, IReadOnlyList<Profile>? holes) : Shape
+internal sealed class ExtrudeShape : Shape
 {
-    public Profile Profile => profile;
-    public Vector3d Direction => direction;
-    public IReadOnlyList<Profile>? Holes => holes;
-    internal override string Describe() => "Extrude";
+    public Profile? Profile { get; }
+    public Vector3d Direction { get; }
+    public IReadOnlyList<Profile>? Holes { get; }
+    public Sketch? Sketch { get; }
+    public Matrix4d PlaneMatrix { get; }
+    public double Height { get; }
+
+    public ExtrudeShape(Profile profile, Vector3d direction, IReadOnlyList<Profile>? holes)
+    {
+        Profile = profile;
+        Direction = direction;
+        Holes = holes;
+    }
+
+    public ExtrudeShape(Sketch sketch, SketchPlane plane, double height)
+    {
+        Sketch = sketch;
+        PlaneMatrix = plane.ToMatrix();
+        Height = height;
+    }
+
+    internal override string Describe() => Sketch is null ? "Extrude" : "Extrude(sketch)";
 }
 
-internal sealed class RevolveShape(
-    Profile profile, Vector3d axisOrigin, Vector3d axisDirection, double angle, IReadOnlyList<Profile>? holes) : Shape
+internal sealed class RevolveShape : Shape
 {
-    public Profile Profile => profile;
-    public Vector3d AxisOrigin => axisOrigin;
-    public Vector3d AxisDirection => axisDirection;
-    public double Angle => angle;
-    public IReadOnlyList<Profile>? Holes => holes;
-    internal override string Describe() => "Revolve";
+    public Profile? Profile { get; }
+    public Vector3d AxisOrigin { get; }
+    public Vector3d AxisDirection { get; }
+    public double Angle { get; }
+    public IReadOnlyList<Profile>? Holes { get; }
+    public Sketch? Sketch { get; }
+    public Matrix4d PlaneMatrix { get; }
+
+    public bool IsFullTurn => Math.Abs(Angle - 2 * Math.PI) < 1e-9;
+
+    public RevolveShape(
+        Profile profile, Vector3d axisOrigin, Vector3d axisDirection, double angle, IReadOnlyList<Profile>? holes)
+    {
+        Profile = profile;
+        AxisOrigin = axisOrigin;
+        AxisDirection = axisDirection;
+        Angle = angle;
+        Holes = holes;
+    }
+
+    public RevolveShape(Sketch sketch, SketchPlane plane, double angle)
+    {
+        Sketch = sketch;
+        PlaneMatrix = plane.ToMatrix();
+        Angle = angle;
+    }
+
+    internal override string Describe() => Sketch is null ? "Revolve" : "Revolve(sketch)";
 }
 
-internal sealed class SweepShape(Profile profile, Curve3d path, IReadOnlyList<Profile>? holes) : Shape
+internal sealed class SweepShape : Shape
 {
-    public Profile Profile => profile;
-    public Curve3d Path => path;
-    public IReadOnlyList<Profile>? Holes => holes;
-    internal override string Describe() => "Sweep";
+    public Profile? Profile { get; }
+    public Curve3d Path { get; }
+    public IReadOnlyList<Profile>? Holes { get; }
+    public Sketch? Sketch { get; }
+    public Matrix4d PlaneMatrix { get; }
+
+    public SweepShape(Profile profile, Curve3d path, IReadOnlyList<Profile>? holes)
+    {
+        Profile = profile;
+        Path = path;
+        Holes = holes;
+    }
+
+    public SweepShape(Sketch sketch, SketchPlane plane, Curve3d path)
+    {
+        Sketch = sketch;
+        PlaneMatrix = plane.ToMatrix();
+        Path = path;
+    }
+
+    internal override string Describe() => Sketch is null ? "Sweep" : "Sweep(sketch)";
 }
 
 internal sealed class BooleanShape(BooleanOp op, Shape a, Shape b) : Shape

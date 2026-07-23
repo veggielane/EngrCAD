@@ -58,6 +58,23 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear would need an ellipsoid surface"));
                 break;
+            case RevolveShape { Sketch: { } sketch } revolve:
+                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with this operation"));
+                else if (sketch.Bounds.Min.X < 1e-9)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "the sketch touches the revolve axis; only the implicit lowering supports that"));
+                else if (revolve.IsFullTurn && sketch.Holes.Count > 0)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a full revolve of a sketch with holes produces multiple shells"));
+                else if (revolve.IsFullTurn && sketch.Segments.Count == 1)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a full revolve of a single closed curve needs a multi-segment profile"));
+                else
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native));
+                break;
+
             case RevolveShape or SweepShape:
                 entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
@@ -101,6 +118,18 @@ internal static class ShapeCompiler
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared primitives go through a tessellated mesh SDF"));
+                break;
+            case ExtrudeShape { Sketch: not null }:
+                entries.Add(rigid
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native, "exact 2D sketch SDF, extruded")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                        "sheared subtree goes through a tessellated mesh SDF"));
+                break;
+            case RevolveShape { Sketch: not null } sketchRevolve when sketchRevolve.IsFullTurn:
+                entries.Add(rigid
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native, "exact 2D sketch SDF, revolved")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                        "sheared subtree goes through a tessellated mesh SDF"));
                 break;
             case ExtrudeShape or RevolveShape or SweepShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
@@ -247,21 +276,54 @@ internal static class ShapeCompiler
                     translation, rotation.Rotate(Vector3d.UnitZ));
             }
 
+            case ExtrudeShape { Sketch: { } sketch } extrude:
+            {
+                var effective = m * extrude.PlaneMatrix;
+                var (outer, holes) = sketch.ToProfiles();
+                return SolidFactory.Extrude(
+                    TransformProfile(outer, effective),
+                    effective.TransformVector((0, 0, extrude.Height)),
+                    TransformProfiles(holes, effective));
+            }
+
             case ExtrudeShape extrude:
                 return SolidFactory.Extrude(
-                    TransformProfile(extrude.Profile, m),
+                    TransformProfile(extrude.Profile!, m),
                     m.TransformVector(extrude.Direction),
                     TransformProfiles(extrude.Holes, m));
+
+            case RevolveShape { Sketch: { } sketch } revolve:
+            {
+                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                var effective = m * revolve.PlaneMatrix;
+                var (outer, holes) = sketch.ToProfiles();
+                return SolidFactory.Revolve(
+                    TransformProfile(outer, effective),
+                    effective.TransformPoint(Vector3d.Zero),
+                    effective.TransformVector((0, 1, 0)),   // the plane's y axis
+                    revolve.Angle,
+                    TransformProfiles(holes, effective));
+            }
 
             case RevolveShape revolve:
             {
                 Decompose(m, shape, out var rotation, out _, out _);
                 return SolidFactory.Revolve(
-                    TransformProfile(revolve.Profile, m),
+                    TransformProfile(revolve.Profile!, m),
                     m.TransformPoint(revolve.AxisOrigin),
                     rotation.Rotate(revolve.AxisDirection),
                     revolve.Angle,
                     TransformProfiles(revolve.Holes, m));
+            }
+
+            case SweepShape { Sketch: { } sketch } sweep:
+            {
+                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                var effective = m * sweep.PlaneMatrix;
+                var (outer, holes) = sketch.ToProfiles();
+                var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
+                return SolidFactory.Sweep(
+                    TransformProfile(outer, effective), path, TransformProfiles(holes, effective));
             }
 
             case SweepShape sweep:
@@ -269,7 +331,7 @@ internal static class ShapeCompiler
                 Decompose(m, shape, out _, out _, out _); // rigid + uniform only
                 var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
                 return SolidFactory.Sweep(
-                    TransformProfile(sweep.Profile, m), path, TransformProfiles(sweep.Holes, m));
+                    TransformProfile(sweep.Profile!, m), path, TransformProfiles(sweep.Holes, m));
             }
 
             case BooleanShape boolean:
@@ -316,6 +378,23 @@ internal static class ShapeCompiler
                 return Place(Sdf.Cylinder(cyl.Radius, cyl.Height), rotation, translation, scale);
             case TorusShape torus:
                 return Place(Sdf.Torus(torus.MajorRadius, torus.MinorRadius), rotation, translation, scale);
+
+            case ExtrudeShape { Sketch: { } sketch } extrude:
+            {
+                // Exact: the sketch's own 2D SDF extruded, placed rigidly.
+                var effective = m * extrude.PlaneMatrix; // plane is rigid, m decomposable ⇒ decomposable
+                effective.TryDecomposeRigidUniformScale(out var q, out var t, out double s);
+                return Place(Sdf.ExtrudedRegion(new SketchRegion(sketch), extrude.Height), q, t, s);
+            }
+
+            case RevolveShape { Sketch: { } sketch } revolve when revolve.IsFullTurn:
+            {
+                // Exact: the canonical solid of revolution lives in the XZ-plane frame;
+                // re-place it with (m · plane · canonical⁻¹), which is rigid.
+                var placement = m * revolve.PlaneMatrix * CanonicalRevolveInverse;
+                placement.TryDecomposeRigidUniformScale(out var q, out var t, out double s);
+                return Place(Sdf.RevolvedRegion(new SketchRegion(sketch)), q, t, s);
+            }
 
             case ExtrudeShape or RevolveShape or SweepShape:
             case SourceShape { Geometry: BrepSolid }:
@@ -489,6 +568,17 @@ internal static class ShapeCompiler
     }
 
     private static bool IsIdentity(in Matrix4d m) => m.Equals(Matrix4d.Identity);
+
+    /// <summary>Inverse of the XZ sketch plane's placement — the frame
+    /// <see cref="Sdf.RevolvedRegion"/> is canonical in (sketch x = radius, y = world z).</summary>
+    private static readonly Matrix4d CanonicalRevolveInverse = InvertRigid(SketchPlane.XZ.ToMatrix());
+
+    private static Matrix4d InvertRigid(in Matrix4d m)
+    {
+        if (!m.TryInvert(out var inverse))
+            throw new InvalidOperationException("Sketch plane matrix must be invertible.");
+        return inverse;
+    }
 
     private static bool IsTranslation(in Matrix4d m, out Vector3d offset)
     {

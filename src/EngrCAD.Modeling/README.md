@@ -31,6 +31,8 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Sphere` | ✅ native (rigid + uniform scale) · ❌ sheared (ellipsoid) | ✅ native · 🔶 bridged if sheared | ✅ / 🔶 |
 | `Cylinder` | ✅ native (any affine — circle becomes ellipse) | ✅ native · 🔶 bridged if sheared | ✅ native |
 | `Torus` | ✅ native (rigid + uniform scale) · ❌ sheared | ✅ native · 🔶 bridged if sheared | ✅ / 🔶 |
+| `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
+| `Revolve(Sketch)` full turn | ✅ native (off-axis) · ❌ axis-touching | ✅ **native** (exact 2D SDF) | ✅ / 🔶 |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
@@ -82,6 +84,37 @@ and participates in mesh booleans directly. The support table above tells you wh
 exits are lossless for the graph you've built — `Explain(target)` tells you for a
 specific shape.
 
+## Sketching
+
+2D sketches — lines, circular arcs, cubic/quadratic béziers — drawn with a fluent
+builder or primitives, then consumed by any representation:
+
+```csharp
+var plate = Sketch.Start(-2, -1)
+    .LineTo(2, -1)
+    .ArcTo(new(2, 1), radius: 1.4, clockwise: false)
+    .LineTo(-2, 1)
+    .BezierTo(new(-3.4, 0.6), new(-3.4, -0.6), new(-2, -1))
+    .Close()
+    .WithHole(Sketch.Circle(new(1, 0), 0.4));
+
+var body = Shape.Extrude(plate, 0.5);           // B-Rep: exact NURBS profile
+var vase = Shape.Revolve(vaseSketch);           // implicit: exact 2D signed distance
+```
+
+Primitives: `Rectangle`, `RoundedRectangle`, `Circle`, `Polygon`, `Slot`. Sketches are
+pure 2D; `Shape.Extrude/Revolve/Sweep` place them with a `SketchPlane` (`XY`/`XZ`/`YZ`
+presets or `At(origin, x, y)`; revolve defaults to `XZ` so the axis is world Z, sketch
+x = radius). `Area()` is exact (arc terms analytic, béziers by exact-degree Gauss
+quadrature).
+
+The payoff: a sketch knows its **exact 2D signed distance** (`ToRegion()`, composable
+with `Sdf.ExtrudedRegion`/`RevolvedRegion`), so sketch-based extrusions and full
+revolutions are *Native* in the implicit lowering — no mesh bridge — while B-Rep gets
+exact rational arcs/béziers and mesh gets crisp tessellation. Sketches touching the
+revolve axis (vases, domes) work in implicit/mesh; B-Rep needs axis clearance and
+`Explain` says so. A 2D constraint solver is future work (todo.md).
+
 ## The document model: Part, Tab, Scene
 
 Parts carry all their own information — name, geometry from **any** engine (`Shape`,
@@ -113,6 +146,6 @@ knobs for everything shown through a scene.
 
 ## Future work (todo.md)
 
-Exact 2D-profile SDF extrude/revolve nodes (drop the mesh bridge), mesh→B-Rep import
+Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
 non-uniformly scaled spheres.
