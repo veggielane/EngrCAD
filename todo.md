@@ -229,3 +229,11 @@ against EngrCAD. ✅ = have (sometimes better: exact B-Rep vs OpenSCAD's mesh-on
   the structure.
 - 2D-only NURBS — we already have 3D NURBS curves/surfaces.
 - Its subdivision gap — g3 has no Loop/Catmull-Clark; we already have Loop.
+
+
+## Viewer
+- add multiple tabs to the scene
+- add tabs to viewer
+
+## Other ideas
+- unify scripting language, the type of modelling is set at the end.

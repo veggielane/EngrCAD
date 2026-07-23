@@ -1,2 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Foundation math and spatial acceleration for EngrCAD: tolerance policy, vectors, matrices, quaternions, AABB/ray, BVH and octree.</Description>
+  </PropertyGroup>
 </Project>

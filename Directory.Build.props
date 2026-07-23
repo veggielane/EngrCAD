@@ -6,4 +6,20 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!-- Shared package metadata. Only src/* projects pack (tests and samples opt out). -->
+  <PropertyGroup>
+    <Version>0.1.0</Version>
+    <Authors>Chris Lane</Authors>
+    <!-- TODO(chris): confirm license + real URLs before any public (nuget.org) push. -->
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://example.invalid/engrcad</RepositoryUrl>
+    <PackageProjectUrl>https://example.invalid/engrcad</PackageProjectUrl>
+    <PackageTags>cad;geometry;brep;sdf;mesh;kernel</PackageTags>
+    <PackageReadmeFile Condition="Exists('$(MSBuildProjectDirectory)\README.md')">README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\README.md')">
+    <None Include="$(MSBuildProjectDirectory)\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 </Project>

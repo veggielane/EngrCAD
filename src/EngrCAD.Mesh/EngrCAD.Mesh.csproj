@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD half-edge triangle mesh engine: booleans, Loop subdivision, QEM decimation, primitives, welding, OBJ export.</Description>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
   </ItemGroup>

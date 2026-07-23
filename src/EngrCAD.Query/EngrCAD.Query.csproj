@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>LINQ-native spatial querying for EngrCAD: an IQueryable provider that routes spatial predicates to BVH indexes.</Description>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
   </ItemGroup>

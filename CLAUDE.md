@@ -22,6 +22,7 @@ Phases 1–4 plus Query v1 implemented (~229 tests): `EngrCAD.Core` (math + spat
 - .NET SDK 10.0.302 installed **user-local** at `%USERPROFILE%\.dotnet` (win-arm64), on the user PATH with `DOTNET_ROOT` set. Build with `dotnet build EngrCAD.slnx`, test with `dotnet test EngrCAD.slnx`.
 - Git repository initialized; commit only when Chris asks.
 - Target framework: **.NET 10 (LTS)** via `Directory.Build.props`.
+- **NuGet**: all `src/*` projects pack (shared metadata — `Version 0.1.0`, MIT, package READMEs — lives in `Directory.Build.props`; license/URLs are placeholders Chris must confirm before any nuget.org push). `src/EngrCAD` is a meta-package whose ProjectReferences become package dependencies (viewer kept separate so headless consumers don't pull Avalonia). Local feed workflow: bump `<Version>`, `dotnet pack EngrCAD.slnx -c Release -o C:\Users\chris\nuget-local`; the folder is registered as source `engrcad-local`, so consumers just `dotnet add package EngrCAD` (+ `EngrCAD.Viewer`). Note: NuGet caches by version — after repacking the *same* version, delete the cached copies under `%USERPROFILE%\.nuget\packages\engrcad*\<version>` (or just bump the version).
 
 ## Architecture
 

@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>The EngrCAD hybrid CAD kernel, one package: Core math, mesh/implicit/B-Rep engines, interop conversions with the Scene model, and LINQ spatial querying. Add EngrCAD.Viewer for the desktop viewer.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
+    <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
+    <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
+    <ProjectReference Include="..\EngrCAD.BRep\EngrCAD.BRep.csproj" />
+    <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
+    <ProjectReference Include="..\EngrCAD.Query\EngrCAD.Query.csproj" />
+  </ItemGroup>
+</Project>

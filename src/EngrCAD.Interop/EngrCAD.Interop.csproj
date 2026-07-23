@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Conversions between EngrCAD's representations (Surface Nets, B-Rep tessellation, mesh SDF), automatic B-Rep booleans, and the Scene/Part display model.</Description>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
     <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />

@@ -1,4 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD B-Rep engine: parametric curves and surfaces, manifold topology, extrude/revolve/sweep, surface intersection, face splitting, filleting, STEP export.</Description>
+  </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
   </ItemGroup>

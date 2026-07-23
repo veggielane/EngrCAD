@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/EngrCAD/EngrCAD.csproj" />
     <Project Path="src/EngrCAD.Core/EngrCAD.Core.csproj" />
     <Project Path="src/EngrCAD.Mesh/EngrCAD.Mesh.csproj" />
     <Project Path="src/EngrCAD.Implicit/EngrCAD.Implicit.csproj" />
