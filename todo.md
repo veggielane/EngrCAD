@@ -28,6 +28,10 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   zip but edge-based). A repair entry point would let us ingest dirty STL files.
 - [x] **Plane cut** ✅ done — `MeshPlaneCut.Cut` (slice, keep the side the normal points
   away from, return boundary loops, optional earcut caps with collinear-chord zip).
+  Known gap (code-quality review): the `crossings > 2` branch fan-triangulates from
+  vertex 0, which is only valid for polygons star-shaped from that vertex — a
+  non-convex n-gon face crossing the plane 3+ times can clip incorrectly; triangulate
+  via `PolygonTriangulator` first. Untested branch.
 - [ ] **Extrude/shell mesh ops** — `MeshExtrudeFaces` (face-set extrude),
   `MeshExtrudeMesh` (offset + stitch = thicken/shell). Complements our SDF
   `Shell`/`Offset` with a direct mesh route.
@@ -55,6 +59,10 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   `FalloffFunctions` equivalents. Deliberately skipped: skeletal-*field* convolution ops
   (`SkeletalBlend3d`/`SkeletalRicciBlend3d`, `DistanceFieldToSkeletalField`) — they work
   on 0..1 skeletal fields, not signed distances, and would break sign-exactness.
+  Follow-up (code-quality review): negative blend radii silently *shrink* the
+  conservative bounds in `SmoothUnion`/`SmoothIntersect`/`SmoothSubtract` (binary and
+  n-ary) — clamp the expansion at 0 or validate `blend > 0` consistently, the way
+  `Sdf.Blend` already degrades for `blendDistance <= 0`.
 - [ ] **Sampled-grid implicits** — `DenseGridTrilinearImplicit` (grid → evaluable field
   with trilinear interpolation), `ImplicitFieldSampler3d` (bake any Sdf to a grid),
   `CachingGridImplicit3d` (lazy). Baking expensive ASTs (e.g. `MeshSdf`) to grids is the
@@ -110,6 +118,11 @@ studying before implementing. Ordered roughly by value-for-effort within each se
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
+- [ ] **Bug: drilling into a cylinder fails** — `Shape.Cylinder(20, 10).Drill(cbore
+  holes...)` throws "Directed edge appears twice" in `BRepTessellator` via
+  `BrepBoolean.Difference` (drilling into extruded *boxes* works; the demo/tests only
+  drill boxes). Likely the cylindrical outer band or the revolved cap interacting with
+  multiple hole splits. Repro was 5 counterbored M5 holes into a Ø40×10 cylinder cap.
 - [ ] **2D sketch engine** — combine g3-style `Polygon2d`/`GeneralPolygon2d`
   (polygon-with-holes containment), `PlanarComplex` (nested loop hierarchy),
   `Arrangement2d` + `GraphCells2d` (regions from crossing sketch curves), and
