@@ -277,8 +277,18 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 - [x] add multiple tabs to the scene / viewer ✅ done — `Scene` holds named `Tab`s of
   `Part`s; the viewer shows a tab strip with per-tab cameras (auto-framed on first
   visit, remembered after).
-- [ ] properties window for model details (part/model type, volume, surface area,
-  bounds, triangle count) — shown for the selected part; pairs with click-picking.
+- [x] properties window for model details ✅ done — right panel: kind (Shape/B-Rep/
+  mesh/SDF), face count, closed, volume, area, size for the selected part.
+- [x] model tree panel ✅ done — left panel lists the current tab's parts with
+  visibility checkboxes; tree clicks and viewport picks stay in sync. Becomes the
+  assembly hierarchy view once tabs can hold assembly occurrences.
+- CAD chrome landed alongside: dark theme, toolbar (Fit + Front/Top/Right/Iso +
+  perspective/orthographic toggle), ground grid + RGB world axes, feature-edge overlay
+  (`MeshFeatureEdges`, sharp-dihedral + boundary edges), gradient background, status
+  bar. Ideas for later: view cube widget, per-part display modes (wireframe/
+  translucent), section planes, measure tool, screenshot/export-image button,
+  ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
+  mesh dihedrals (exact circles stay smooth at coarse tessellation).
 
 ## Other ideas
 - [x] unify scripting language, the type of modelling is set at the end. ✅ done —

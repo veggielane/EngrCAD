@@ -19,6 +19,24 @@ EngrCad.Show(scene, "My design");   // blocks until the window closes
 Multi-tab scenes get a tab strip; each tab remembers its own camera (auto-framed on
 first visit). Picking reports part names in the title bar.
 
+## The CAD chrome
+
+Dark-themed layout around one shared GL viewport:
+
+- **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views, and a
+  perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
+  apparent size, so toggling doesn't jump).
+- **Model tree** (left): the current tab's parts with visibility checkboxes; clicking
+  a name selects it (bold + gold in the viewport), and viewport picks highlight the
+  tree row — selection stays in sync both ways.
+- **Properties** (right): kind (Shape/B-Rep/mesh/SDF), face count, closed, volume,
+  surface area, and world size of the selected part.
+- **Viewport dressing**: vertical-gradient background, adaptive ground grid on z = 0
+  (1-2-5 spacing from the scene size) with RGB world axes, and a **feature-edge
+  overlay** (`MeshFeatureEdges`: boundary + sharp-dihedral edges, drawn over
+  polygon-offset fills) — the classic shaded-with-edges CAD look.
+- **Status bar** (bottom): last input on the left, control hints on the right.
+
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
 lifetime). Custom hosts pass an `onViewportReady` callback, capture the
 `ViewportControl`, and later call its thread-safe `SetParts` — GL resources are swapped

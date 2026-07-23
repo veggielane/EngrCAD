@@ -1,19 +1,32 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
+using EngrCAD.BRep;
+using EngrCAD.Implicit;
+using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
 
 /// <summary>
-/// Hosts the viewport plus a tab strip over a <see cref="Scene"/>'s tabs. Each tab
-/// shows its own parts with its own remembered camera (auto-framed on first visit).
-/// Scene swaps (live reload) keep the current tab by name and the camera untouched.
+/// The CAD chrome around the GL viewport: toolbar (standard views, fit), tab strip,
+/// model tree (parts per tab, visibility toggles, selection sync), properties panel
+/// (type/volume/area/bounds of the selection), and a status bar. One shared viewport;
+/// each tab keeps its own camera (auto-framed on first visit, remembered after).
 /// </summary>
 internal sealed class SceneHost
 {
-    private readonly StackPanel _strip;
+    private static readonly IBrush PanelBrush = new SolidColorBrush(Color.FromRgb(0x24, 0x26, 0x2b));
+    private static readonly IBrush ChromeBrush = new SolidColorBrush(Color.FromRgb(0x1d, 0x1f, 0x24));
+    private static readonly IBrush DimText = new SolidColorBrush(Color.FromRgb(0x9a, 0xa0, 0xaa));
+    private static readonly IBrush BrightText = new SolidColorBrush(Color.FromRgb(0xdd, 0xe1, 0xe6));
+
+    private readonly StackPanel _tabStrip;
+    private readonly StackPanel _tree;
+    private readonly StackPanel _properties;
+    private readonly TextBlock _statusText;
     private readonly Dictionary<string, CameraState> _tabCameras = [];
     private Scene? _scene;
     private string? _currentTab;
@@ -21,21 +34,93 @@ internal sealed class SceneHost
     public ViewportControl Viewport { get; }
     public Control Root { get; }
 
-    public SceneHost(ViewportControl viewport, Control overlay)
+    public SceneHost(string title)
     {
-        Viewport = viewport;
-        _strip = new StackPanel
+        Viewport = new ViewportControl { BaseTitle = title };
+        Viewport.SelectionChanged += OnViewportSelection;
+
+        // ---- toolbar ----
+        var toolbar = new StackPanel
         {
             Orientation = Orientation.Horizontal,
             Spacing = 4,
             Margin = new Thickness(8, 6),
+        };
+        toolbar.Children.Add(ToolButton("Fit", () => Viewport.Frame()));
+        toolbar.Children.Add(new Border { Width = 8 });
+        toolbar.Children.Add(ToolButton("Front", () => SetView(-Math.PI / 2, 0)));
+        toolbar.Children.Add(ToolButton("Top", () => SetView(-Math.PI / 2, Math.PI / 2)));
+        toolbar.Children.Add(ToolButton("Right", () => SetView(0, 0)));
+        toolbar.Children.Add(ToolButton("Iso", () => SetView(-Math.PI / 4, Math.Asin(1 / Math.Sqrt(3)))));
+        toolbar.Children.Add(new Border { Width = 8 });
+        var projection = new ToggleButton { Content = "Ortho", Padding = new Thickness(10, 4), FontSize = 12 };
+        projection.IsCheckedChanged += (_, _) => Viewport.Orthographic = projection.IsChecked ?? false;
+        toolbar.Children.Add(projection);
+
+        _tabStrip = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Margin = new Thickness(8, 0, 8, 4),
             IsVisible = false,
         };
-        var dock = new DockPanel();
-        DockPanel.SetDock(_strip, Dock.Top);
-        dock.Children.Add(_strip);
-        dock.Children.Add(new Panel { Children = { viewport, overlay } });
-        Root = dock;
+
+        // ---- model tree (left) ----
+        _tree = new StackPanel { Spacing = 2 };
+        var treePanel = SidePanel("PARTS", _tree, width: 190);
+
+        // ---- properties (right) ----
+        _properties = new StackPanel { Spacing = 3 };
+        var propertiesPanel = SidePanel("PROPERTIES", _properties, width: 235);
+
+        // ---- status bar (bottom) ----
+        _statusText = new TextBlock { Foreground = DimText, FontSize = 11 };
+        var statusBar = new Border
+        {
+            Background = ChromeBrush,
+            Padding = new Thickness(10, 4),
+            Child = new DockPanel
+            {
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = "drag orbit · shift+drag pan · ctrl+drag/scroll zoom · click select",
+                        Foreground = DimText,
+                        FontSize = 11,
+                        [DockPanel.DockProperty] = Dock.Right,
+                    },
+                    _statusText,
+                },
+            },
+        };
+        Viewport.Status = message => _statusText.Text = message;
+
+        // ---- assemble ----
+        var chrome = new Border
+        {
+            Background = ChromeBrush,
+            Child = new StackPanel { Children = { toolbar, _tabStrip } },
+        };
+        var root = new DockPanel();
+        DockPanel.SetDock(chrome, Dock.Top);
+        DockPanel.SetDock(statusBar, Dock.Bottom);
+        DockPanel.SetDock(treePanel, Dock.Left);
+        DockPanel.SetDock(propertiesPanel, Dock.Right);
+        root.Children.Add(chrome);
+        root.Children.Add(statusBar);
+        root.Children.Add(treePanel);
+        root.Children.Add(propertiesPanel);
+        root.Children.Add(Viewport);
+        Root = root;
+
+        ShowProperties(null);
+    }
+
+    private void SetView(double yaw, double pitch)
+    {
+        var camera = Viewport.Camera;
+        Viewport.Camera = new CameraState(yaw, pitch, camera.Distance, camera.Target);
     }
 
     /// <summary>Shows a scene (UI thread; parts should be pre-meshed). Keeps the
@@ -43,14 +128,12 @@ internal sealed class SceneHost
     public void SetScene(Scene scene)
     {
         _scene = scene;
-        _strip.Children.Clear();
-        _strip.IsVisible = scene.Tabs.Count > 1;
+        _tabStrip.Children.Clear();
+        _tabStrip.IsVisible = scene.Tabs.Count > 1;
         foreach (var tab in scene.Tabs)
         {
-            var button = new Button { Content = tab.Name, Padding = new Thickness(10, 4) };
             var name = tab.Name;
-            button.Click += (_, _) => ShowTab(name);
-            _strip.Children.Add(button);
+            _tabStrip.Children.Add(ToolButton(name, () => ShowTab(name)));
         }
 
         var target = scene.Tabs.FirstOrDefault(t => t.Name == _currentTab) ?? scene.Tabs.FirstOrDefault();
@@ -66,9 +149,7 @@ internal sealed class SceneHost
 
         _currentTab = name;
         var tab = _scene.Tabs.FirstOrDefault(t => t.Name == name);
-        bool restored = false;
-        if (!keepCamera && name is not null && _tabCameras.TryGetValue(name, out var camera))
-            restored = true;
+        bool restored = !keepCamera && name is not null && _tabCameras.ContainsKey(name);
 
         // keepCamera (live reload of the same tab) and a remembered pose both suppress
         // auto-framing; a first visit frames to the tab's bounds.
@@ -76,10 +157,144 @@ internal sealed class SceneHost
         if (restored)
             Viewport.Camera = _tabCameras[name!];
 
-        for (int i = 0; i < _strip.Children.Count; i++)
+        for (int i = 0; i < _tabStrip.Children.Count; i++)
         {
-            if (_strip.Children[i] is Button button)
+            if (_tabStrip.Children[i] is Button button)
                 button.FontWeight = _scene.Tabs[i].Name == name ? FontWeight.Bold : FontWeight.Normal;
         }
+
+        RebuildTree(tab);
+        ShowProperties(null);
     }
+
+    // ---- model tree ----
+
+    private void RebuildTree(Tab? tab)
+    {
+        _tree.Children.Clear();
+        if (tab is null)
+            return;
+        for (int i = 0; i < tab.Parts.Count; i++)
+        {
+            int index = i;
+            var part = tab.Parts[i];
+            var check = new CheckBox
+            {
+                IsChecked = true,
+                MinWidth = 0,
+                Padding = new Thickness(0),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            check.IsCheckedChanged += (_, _) => Viewport.SetVisible(index, check.IsChecked ?? true);
+            var label = new Button
+            {
+                Content = part.Name,
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(4, 2),
+                HorizontalAlignment = HorizontalAlignment.Stretch,
+                HorizontalContentAlignment = HorizontalAlignment.Left,
+                Foreground = BrightText,
+            };
+            label.Click += (_, _) =>
+            {
+                Viewport.Select(index == Viewport.Selected ? -1 : index);
+                OnViewportSelection(Viewport.Selected);
+            };
+            _tree.Children.Add(new DockPanel { Children = { check, label } });
+        }
+    }
+
+    private void OnViewportSelection(int index)
+    {
+        for (int i = 0; i < _tree.Children.Count; i++)
+        {
+            if (_tree.Children[i] is DockPanel row && row.Children[1] is Button label)
+                label.FontWeight = i == index ? FontWeight.Bold : FontWeight.Normal;
+        }
+        var tab = _scene?.Tabs.FirstOrDefault(t => t.Name == _currentTab);
+        ShowProperties(index >= 0 && tab is not null && index < tab.Parts.Count ? tab.Parts[index] : null);
+    }
+
+    // ---- properties ----
+
+    private void ShowProperties(Part? part)
+    {
+        _properties.Children.Clear();
+        if (part is null)
+        {
+            _properties.Children.Add(new TextBlock
+            {
+                Text = "nothing selected",
+                Foreground = DimText,
+                FontSize = 12,
+            });
+            return;
+        }
+
+        var mesh = part.GetMesh();
+        AddProperty("Name", part.Name);
+        AddProperty("Kind", part.Geometry switch
+        {
+            Shape => "Shape (unified)",
+            BrepSolid => "B-Rep solid",
+            HalfEdgeMesh => "mesh",
+            Sdf => "implicit (SDF)",
+            _ => part.Geometry.GetType().Name,
+        });
+        AddProperty("Faces", mesh.FaceCount.ToString("N0"));
+        AddProperty("Closed", mesh.IsClosed ? "yes" : "no");
+        AddProperty("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)");
+        AddProperty("Area", mesh.SurfaceArea().ToString("G6"));
+        var size = part.Bounds().Size;
+        AddProperty("Size", $"{size.X:G4} × {size.Y:G4} × {size.Z:G4}");
+    }
+
+    private void AddProperty(string label, string value)
+    {
+        _properties.Children.Add(new TextBlock { Text = label, Foreground = DimText, FontSize = 10 });
+        _properties.Children.Add(new TextBlock
+        {
+            Text = value,
+            Foreground = BrightText,
+            FontSize = 12,
+            Margin = new Thickness(0, 0, 0, 4),
+            TextWrapping = TextWrapping.Wrap,
+        });
+    }
+
+    // ---- widgets ----
+
+    private static Button ToolButton(string text, Action onClick)
+    {
+        var button = new Button { Content = text, Padding = new Thickness(10, 4), FontSize = 12 };
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    private static Border SidePanel(string header, Control content, double width) => new()
+    {
+        Background = PanelBrush,
+        Width = width,
+        Padding = new Thickness(10, 8),
+        Child = new ScrollViewer
+        {
+            Content = new StackPanel
+            {
+                Spacing = 6,
+                Children =
+                {
+                    new TextBlock
+                    {
+                        Text = header,
+                        Foreground = DimText,
+                        FontSize = 10,
+                        FontWeight = FontWeight.Bold,
+                        LetterSpacing = 1.2,
+                    },
+                    content,
+                },
+            },
+        },
+    };
 }
