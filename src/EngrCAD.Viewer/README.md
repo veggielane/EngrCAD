@@ -14,10 +14,34 @@ EngrCad.Show(scene, "My design");   // blocks until the window closes
 ```
 
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
-lifetime). Hosts that need live updates (the planned `engrcad watch`) pass an
-`onViewportReady` callback, capture the `ViewportControl`, and later call its
-thread-safe `SetScene` — GL resources are swapped inside the next render pass and the
-camera is preserved (auto-framed from `Scene.Bounds()` only on the first scene).
+lifetime). Custom hosts pass an `onViewportReady` callback, capture the
+`ViewportControl`, and later call its thread-safe `SetScene` — GL resources are swapped
+inside the next render pass and the camera is preserved (auto-framed from
+`Scene.Bounds()` only on the first scene).
+
+## The live-modeling loop
+
+Hand `EngrCad.ShowLive` a scene *factory* and run the model under `dotnet watch`:
+
+```csharp
+return EngrCad.Run(args, BuildScene, "my bracket");   // ShowLive by default
+
+static Scene BuildScene() { ... }                     // edit + save = live update
+```
+
+```
+dotnet watch --project samples/EngrCAD.LiveDemo
+```
+
+`dotnet watch` hot-reloads method-body edits into the running process; a
+`MetadataUpdateHandler` in this library re-invokes the factory and swaps the new scene
+in — camera untouched, sub-second. If the factory throws, the last good scene stays and
+the error shows in the overlay. Rude edits (signature changes) restart the process;
+the camera pose is persisted per title (30-minute freshness window) so the view
+survives those too. `EngrCad.Run` also gives every model program standard switches:
+`--view` (static show) and `--export part.step|part.obj` (headless: STEP for
+B-Rep-representable parts, OBJ merged with transforms applied — CI-friendly, no
+window).
 
 ## How it works
 

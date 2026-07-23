@@ -15,5 +15,6 @@
     <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
     <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
     <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
+    <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
   </ItemGroup>
 </Project>

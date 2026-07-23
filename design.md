@@ -313,6 +313,15 @@ for `in`-parameters being illegal in expression trees.
   Möller–Trumbore on candidates; nearest hit is highlighted. Note for automation:
   Avalonia's pointer stack ignores legacy synthetic `mouse_event` clicks — exercise
   picking with real input.
+- **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
+  scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
+  dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level
+  `MetadataUpdateHandler`: dotnet watch patches method bodies in-place, the handler
+  re-invokes the factory (debounced — it can fire several times per save) and posts
+  `SetScene`; the camera is untouched and factory exceptions keep the last good scene.
+  Rude edits restart the process, mitigated by persisting the camera pose per title.
+  `EngrCad.Run(args, factory)` adds `--view` and headless `--export .step/.obj` so a
+  model program doubles as its own exporter in CI.
 
 ## 10. Known limitations / roadmap
 

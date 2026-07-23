@@ -14,6 +14,9 @@ using Silk.NET.OpenGL;
 
 namespace EngrCAD.Viewer;
 
+/// <summary>Orbit camera pose, snapshotable for persistence across process restarts.</summary>
+public sealed record CameraState(double Yaw, double Pitch, double Distance, Vector3d Target);
+
 /// <summary>
 /// OpenGL viewport rendering kernel meshes with an orbit camera.
 /// Left-drag orbits, right/middle-drag pans, wheel zooms. Z is up.
@@ -61,6 +64,24 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Shows a message in the status overlay (used by script hosts for errors).</summary>
     public void ShowStatus(string message) =>
         Avalonia.Threading.Dispatcher.UIThread.Post(() => Report(message));
+
+    /// <summary>
+    /// The current camera pose. Setting it suppresses first-scene auto-framing — used
+    /// by <see cref="EngrCad.ShowLive"/> to restore the view across process restarts.
+    /// </summary>
+    public CameraState Camera
+    {
+        get => new(_yaw, _pitch, _distance, _target);
+        set
+        {
+            _yaw = value.Yaw;
+            _pitch = Math.Clamp(value.Pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+            _distance = Math.Clamp(value.Distance, 0.5, 120.0);
+            _target = value.Target;
+            _cameraFramed = true;
+            RequestNextFrameRendering();
+        }
+    }
 
     protected override void OnOpenGlInit(GlInterface gl)
     {

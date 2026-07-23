@@ -12,6 +12,7 @@
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/EngrCAD.Demo/EngrCAD.Demo.csproj" />
+    <Project Path="samples/EngrCAD.LiveDemo/EngrCAD.LiveDemo.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/EngrCAD.Core.Tests/EngrCAD.Core.Tests.csproj" />
@@ -21,5 +22,6 @@
     <Project Path="tests/EngrCAD.Interop.Tests/EngrCAD.Interop.Tests.csproj" />
     <Project Path="tests/EngrCAD.Query.Tests/EngrCAD.Query.Tests.csproj" />
     <Project Path="tests/EngrCAD.Modeling.Tests/EngrCAD.Modeling.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Viewer.Tests/EngrCAD.Viewer.Tests.csproj" />
   </Folder>
 </Solution>
