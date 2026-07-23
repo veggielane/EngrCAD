@@ -9,7 +9,14 @@ operations. Depends only on `EngrCAD.Core`.
   quadratics represent conics exactly), plus `ReversedCurve` / `TransformedCurve`
   wrappers. `Underlying` unwraps wrappers so consumers (tessellation) can pick sampling
   rules. The default `TangentAt` uses second-order one-sided differences at domain ends —
-  sweep frames are sensitive to start-tangent error.
+  sweep frames are sensitive to start-tangent error — but `NurbsCurve` overrides it with
+  the exact analytic derivative (algorithm A2.3 basis derivatives + the rational quotient
+  rule, eq. 4.8; also exposed as `DerivativeAt` / `SecondDerivativeAt`).
+  `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
+  through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
+  open curves use clamped knots + natural end conditions via a tridiagonal collocation
+  solve (two points degrade to a degree-1 chord); closed curves use periodic knots with
+  wrapped control points, so the seam is C2 by construction (cyclic system solved densely).
 - **Surfaces** (`Surface`): `PlaneSurface`, `CylinderSurface`, `SphereSurface`,
   tensor-product `NurbsSurface`, and the generated surfaces `ExtrudedSurface`,
   `RevolvedSurface` (partial or full angle), `SweptSurface` (rotation-minimizing frames

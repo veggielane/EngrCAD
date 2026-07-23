@@ -193,6 +193,236 @@ public sealed class NurbsCurve : Curve3d
         return new NurbsCurve(2, controlPoints, weights, knots);
     }
 
+    /// <summary>
+    /// Cubic B-spline that passes exactly through the given points
+    /// (<c>GeomAPI_PointsToBSpline</c>-style interpolation).
+    /// </summary>
+    /// <remarks>
+    /// Open (default): chord-length parameterization normalized to [0, 1], clamped end
+    /// knots, natural end conditions (zero second derivative at both ends); the control
+    /// points come from a tridiagonal collocation solve. Exactly two points produce a
+    /// degree-1 straight segment (an elevated cubic would add nothing but wasted control
+    /// points). Closed: periodic C2 interpolation — wrapped control points over a
+    /// periodically extended knot vector make position, tangent, and curvature match at
+    /// the seam; the cyclic-tridiagonal collocation system is solved densely with partial
+    /// pivoting (point counts are small). Do not repeat the seam point in the input.
+    /// </remarks>
+    public static NurbsCurve InterpolatePoints(IReadOnlyList<Vector3d> points, bool closed = false)
+    {
+        ArgumentNullException.ThrowIfNull(points);
+        int n = points.Count;
+        if (n < 2)
+            throw new ArgumentException("Interpolation needs at least 2 points.", nameof(points));
+        for (int i = 1; i < n; i++)
+        {
+            if (points[i].AreEqual(points[i - 1], Tolerance.Default))
+                throw new ArgumentException(
+                    $"Points {i - 1} and {i} coincide; remove duplicate consecutive points before interpolating.",
+                    nameof(points));
+        }
+        if (!closed)
+        {
+            return n == 2
+                ? new NurbsCurve(1, [points[0], points[1]], null, [0, 0, 1, 1])
+                : InterpolateOpen(points);
+        }
+
+        if (n < 3)
+            throw new ArgumentException("Closed interpolation needs at least 3 points.", nameof(points));
+        if (points[0].AreEqual(points[^1], Tolerance.Default))
+            throw new ArgumentException(
+                "For closed interpolation do not repeat the first point at the end; the curve closes back to it implicitly.",
+                nameof(points));
+        return InterpolateClosed(points);
+    }
+
+    /// <summary>
+    /// Chord-length parameters normalized to [0, 1]; for a closed curve the array has one
+    /// extra entry for the seam (the closing chord back to the first point).
+    /// </summary>
+    private static double[] ChordParameters(IReadOnlyList<Vector3d> points, bool closed)
+    {
+        int n = points.Count;
+        var parameters = new double[closed ? n + 1 : n];
+        double total = 0;
+        for (int i = 1; i < n; i++)
+        {
+            total += points[i].DistanceTo(points[i - 1]);
+            parameters[i] = total;
+        }
+        if (closed)
+        {
+            total += points[0].DistanceTo(points[n - 1]);
+            parameters[n] = total;
+        }
+        for (int i = 1; i < parameters.Length; i++)
+            parameters[i] /= total;
+        parameters[^1] = 1.0; // exact, despite the division round-off
+        return parameters;
+    }
+
+    private static NurbsCurve InterpolateOpen(IReadOnlyList<Vector3d> points)
+    {
+        int n = points.Count; // ≥ 3 here
+        double[] parameters = ChordParameters(points, closed: false);
+
+        // Clamped cubic knot vector whose interior knots are the interior parameters:
+        // n + 2 control points, so C(t̄_i) = Q_i (n equations) plus the two natural end
+        // conditions close the square system.
+        var knots = new double[n + 6];
+        for (int i = 0; i < 4; i++)
+        {
+            knots[i] = 0;
+            knots[n + 2 + i] = 1;
+        }
+        for (int j = 1; j <= n - 2; j++)
+            knots[j + 3] = parameters[j];
+
+        // P_0 = Q_0 and P_{n+1} = Q_{n-1} are known; the remaining unknowns y_k = P_{k+1}
+        // (k = 0..n-1) form a tridiagonal system:
+        //  - row 0: natural start, N″_1(0) P_1 + N″_2(0) P_2 = −N″_0(0) Q_0
+        //  - row j (1..n-2): collocation at t̄_j, which is knot u_{j+3} of multiplicity 1,
+        //    so exactly N_j, N_{j+1}, N_{j+2} are nonzero there → couples y_{j−1}, y_j, y_{j+1}
+        //  - row n-1: natural end, N″_{n-1}(1) P_{n-1} + N″_n(1) P_n = −N″_{n+1}(1) Q_{n-1}
+        var sub = new double[n];
+        var diag = new double[n];
+        var sup = new double[n];
+        var rhs = new Vector3d[n];
+
+        const int stride = 4;
+        Span<double> ders = stackalloc double[3 * stride];
+        NurbsBasis.EvaluateDerivatives(3, 0.0, 3, knots, 2, ders);
+        diag[0] = ders[2 * stride + 1];
+        sup[0] = ders[2 * stride + 2];
+        rhs[0] = points[0] * -ders[2 * stride + 0];
+
+        Span<double> basis = stackalloc double[4];
+        for (int j = 1; j <= n - 2; j++)
+        {
+            int span = NurbsBasis.FindSpan(parameters[j], 3, n + 2, knots);
+            NurbsBasis.Evaluate(span, parameters[j], 3, knots, basis);
+            sub[j] = CoefficientOf(basis, span, j);
+            diag[j] = CoefficientOf(basis, span, j + 1);
+            sup[j] = CoefficientOf(basis, span, j + 2);
+            rhs[j] = points[j];
+        }
+
+        NurbsBasis.EvaluateDerivatives(n + 1, 1.0, 3, knots, 2, ders);
+        sub[n - 1] = ders[2 * stride + 1];
+        diag[n - 1] = ders[2 * stride + 2];
+        rhs[n - 1] = points[n - 1] * -ders[2 * stride + 3];
+
+        SolveTridiagonal(sub, diag, sup, rhs);
+
+        var controlPoints = new Vector3d[n + 2];
+        controlPoints[0] = points[0];
+        for (int i = 0; i < n; i++)
+            controlPoints[i + 1] = rhs[i];
+        controlPoints[n + 1] = points[n - 1];
+        return new NurbsCurve(3, controlPoints, null, knots);
+    }
+
+    private static NurbsCurve InterpolateClosed(IReadOnlyList<Vector3d> points)
+    {
+        int n = points.Count; // ≥ 3 here
+        double[] parameters = ChordParameters(points, closed: true); // length n + 1; seam at 1
+
+        // Periodic (unclamped) cubic knot vector: u_{j+3} = t̄_j for j = 0..n, extended on
+        // both sides by wrapping the end interval lengths so the basis repeats with the
+        // curve's period. Control points wrap: P_n = P_0, P_{n+1} = P_1, P_{n+2} = P_2,
+        // which makes the spline C2-periodic — position, tangent, and curvature match at
+        // the seam by construction.
+        var knots = new double[n + 7];
+        for (int j = 0; j <= n; j++)
+            knots[j + 3] = parameters[j];
+        for (int i = 0; i < 3; i++)
+        {
+            knots[2 - i] = knots[3 - i] - (parameters[n - i] - parameters[n - 1 - i]);
+            knots[n + 4 + i] = knots[n + 3 + i] + (parameters[i + 1] - parameters[i]);
+        }
+
+        // Collocation at t̄_j (knot u_{j+3}, multiplicity 1): exactly N_j, N_{j+1}, N_{j+2}
+        // are nonzero, coupling P_j, P_{j+1}, P_{j+2} with indices wrapped mod n — a cyclic
+        // tridiagonal system. Solved densely with partial pivoting; interpolation point
+        // counts are small, so O(n³) at construction time is irrelevant.
+        var matrix = new double[n][];
+        var rhs = new Vector3d[n];
+        Span<double> basis = stackalloc double[4];
+        for (int j = 0; j < n; j++)
+        {
+            matrix[j] = new double[n];
+            int span = NurbsBasis.FindSpan(parameters[j], 3, n + 3, knots);
+            NurbsBasis.Evaluate(span, parameters[j], 3, knots, basis);
+            for (int k = 0; k <= 3; k++)
+                matrix[j][(span - 3 + k) % n] += basis[k]; // basis[3] is an exact 0 at its own knot
+            rhs[j] = points[j];
+        }
+        SolveDense(matrix, rhs);
+
+        var controlPoints = new Vector3d[n + 3];
+        for (int i = 0; i < n; i++)
+            controlPoints[i] = rhs[i];
+        controlPoints[n] = rhs[0];
+        controlPoints[n + 1] = rhs[1];
+        controlPoints[n + 2] = rhs[2];
+        return new NurbsCurve(3, controlPoints, null, knots);
+    }
+
+    /// <summary>Basis value of control point <paramref name="controlIndex"/> given the nonzero window.</summary>
+    private static double CoefficientOf(ReadOnlySpan<double> basis, int span, int controlIndex)
+    {
+        int offset = controlIndex - (span - 3);
+        return offset is >= 0 and <= 3 ? basis[offset] : 0.0;
+    }
+
+    /// <summary>Thomas algorithm; overwrites <paramref name="rhs"/> with the solution.</summary>
+    private static void SolveTridiagonal(double[] sub, double[] diag, double[] sup, Vector3d[] rhs)
+    {
+        int n = diag.Length;
+        for (int i = 1; i < n; i++)
+        {
+            double m = sub[i] / diag[i - 1];
+            diag[i] -= m * sup[i - 1];
+            rhs[i] -= rhs[i - 1] * m;
+        }
+        rhs[n - 1] /= diag[n - 1];
+        for (int i = n - 2; i >= 0; i--)
+            rhs[i] = (rhs[i] - rhs[i + 1] * sup[i]) / diag[i];
+    }
+
+    /// <summary>Gaussian elimination with partial pivoting; overwrites inputs, solution in <paramref name="rhs"/>.</summary>
+    private static void SolveDense(double[][] matrix, Vector3d[] rhs)
+    {
+        int n = rhs.Length;
+        for (int column = 0; column < n; column++)
+        {
+            int pivot = column;
+            for (int row = column + 1; row < n; row++)
+            {
+                if (Math.Abs(matrix[row][column]) > Math.Abs(matrix[pivot][column]))
+                    pivot = row;
+            }
+            if (Tolerance.Default.IsZero(matrix[pivot][column]))
+                throw new InvalidOperationException("Singular interpolation system; the input points are degenerate.");
+            (matrix[column], matrix[pivot]) = (matrix[pivot], matrix[column]);
+            (rhs[column], rhs[pivot]) = (rhs[pivot], rhs[column]);
+            for (int row = column + 1; row < n; row++)
+            {
+                double m = matrix[row][column] / matrix[column][column];
+                for (int k = column; k < n; k++)
+                    matrix[row][k] -= m * matrix[column][k];
+                rhs[row] -= rhs[column] * m;
+            }
+        }
+        for (int row = n - 1; row >= 0; row--)
+        {
+            var sum = rhs[row];
+            for (int k = row + 1; k < n; k++)
+                sum -= rhs[k] * matrix[row][k];
+            rhs[row] = sum / matrix[row][row];
+        }
+    }
+
     public override Interval Domain => new(Knots[Degree], Knots[ControlPoints.Count]);
 
     public override bool IsClosed =>
@@ -215,6 +445,79 @@ public sealed class NurbsCurve : Curve3d
             denominator += bw;
         }
         return numerator / denominator;
+    }
+
+    /// <summary>Exact first derivative dC/dt (rational quotient rule over the homogeneous form).</summary>
+    public Vector3d DerivativeAt(double t)
+    {
+        Span<Vector3d> derivatives = stackalloc Vector3d[2];
+        EvaluateDerivatives(t, 1, derivatives);
+        return derivatives[1];
+    }
+
+    /// <summary>Exact second derivative d²C/dt² (right-sided value at knots of reduced continuity).</summary>
+    public Vector3d SecondDerivativeAt(double t)
+    {
+        Span<Vector3d> derivatives = stackalloc Vector3d[3];
+        EvaluateDerivatives(t, 2, derivatives);
+        return derivatives[2];
+    }
+
+    /// <summary>
+    /// Exact unit tangent from the analytic derivative — never finite differences, which
+    /// carry ~1e-9 angular error that sweep frames and welded tessellation seams cannot
+    /// tolerate (see the numerical notes in CLAUDE.md).
+    /// </summary>
+    public override Vector3d TangentAt(double t)
+    {
+        var derivative = DerivativeAt(t);
+        // Fall back to the base finite differences only at (rare) stationary points.
+        return derivative.TryNormalize(new Tolerance(1e-14, 1e-14), out var unit)
+            ? unit
+            : base.TangentAt(t);
+    }
+
+    /// <summary>
+    /// Curve derivatives C, C′, …, C⁽ᵏ⁾ into <paramref name="result"/> (length order + 1).
+    /// Rational curves use the generalized quotient rule (The NURBS Book, eq. 4.8):
+    /// C⁽ᵏ⁾ = (A⁽ᵏ⁾ − Σᵢ₌₁..ₖ C(k,i) w⁽ⁱ⁾ C⁽ᵏ⁻ⁱ⁾) / w, where A is the weighted numerator.
+    /// </summary>
+    private void EvaluateDerivatives(double t, int order, Span<Vector3d> result)
+    {
+        t = Domain.Clamp(t);
+        int span = NurbsBasis.FindSpan(t, Degree, ControlPoints.Count, Knots);
+        int stride = Degree + 1;
+        Span<double> ders = stackalloc double[(order + 1) * stride];
+        NurbsBasis.EvaluateDerivatives(span, t, Degree, Knots, order, ders);
+
+        Span<Vector3d> numerator = stackalloc Vector3d[order + 1];
+        Span<double> weight = stackalloc double[order + 1];
+        for (int k = 0; k <= order; k++)
+        {
+            var a = Vector3d.Zero;
+            double w = 0;
+            for (int j = 0; j <= Degree; j++)
+            {
+                int index = span - Degree + j;
+                double bw = ders[k * stride + j] * Weights[index];
+                a += ControlPoints[index] * bw;
+                w += bw;
+            }
+            numerator[k] = a;
+            weight[k] = w;
+        }
+
+        for (int k = 0; k <= order; k++)
+        {
+            var v = numerator[k];
+            double binomial = 1;
+            for (int i = 1; i <= k; i++)
+            {
+                binomial = binomial * (k - i + 1) / i;
+                v -= result[k - i] * (binomial * weight[i]);
+            }
+            result[k] = v / weight[0];
+        }
     }
 }
 
@@ -302,6 +605,86 @@ internal static class NurbsBasis
             mid = (low + high) / 2;
         }
         return mid;
+    }
+
+    /// <summary>
+    /// Basis functions and their derivatives up to <paramref name="order"/> (algorithm
+    /// A2.3, DersBasisFuns). <paramref name="ders"/> is (order + 1) × (degree + 1)
+    /// row-major: ders[k * (degree + 1) + j] is the k-th derivative of basis function
+    /// span − degree + j at u. Derivatives of order above the degree are zero.
+    /// </summary>
+    public static void EvaluateDerivatives(int span, double u, int degree, IReadOnlyList<double> knots, int order, Span<double> ders)
+    {
+        int p = degree;
+        int stride = p + 1;
+        // ndu upper triangle holds basis values N_r^j, lower triangle the knot differences.
+        Span<double> ndu = stackalloc double[stride * stride];
+        Span<double> left = stackalloc double[stride];
+        Span<double> right = stackalloc double[stride];
+        Span<double> a = stackalloc double[2 * stride];
+
+        ndu[0] = 1.0;
+        for (int j = 1; j <= p; j++)
+        {
+            left[j] = u - knots[span + 1 - j];
+            right[j] = knots[span + j] - u;
+            double saved = 0;
+            for (int r = 0; r < j; r++)
+            {
+                ndu[j * stride + r] = right[r + 1] + left[j - r];
+                double temp = ndu[r * stride + j - 1] / ndu[j * stride + r];
+                ndu[r * stride + j] = saved + right[r + 1] * temp;
+                saved = left[j - r] * temp;
+            }
+            ndu[j * stride + j] = saved;
+        }
+
+        for (int j = 0; j <= p; j++)
+            ders[j] = ndu[j * stride + p];
+        int maxOrder = Math.Min(order, p);
+        for (int k = p + 1; k <= order; k++)
+        {
+            for (int j = 0; j <= p; j++)
+                ders[k * stride + j] = 0;
+        }
+
+        for (int r = 0; r <= p; r++)
+        {
+            int s1 = 0, s2 = 1;
+            a[0] = 1.0;
+            for (int k = 1; k <= maxOrder; k++)
+            {
+                double d = 0;
+                int rk = r - k, pk = p - k;
+                if (r >= k)
+                {
+                    a[s2 * stride] = a[s1 * stride] / ndu[(pk + 1) * stride + rk];
+                    d = a[s2 * stride] * ndu[rk * stride + pk];
+                }
+                int j1 = rk >= -1 ? 1 : -rk;
+                int j2 = r - 1 <= pk ? k - 1 : p - r;
+                for (int j = j1; j <= j2; j++)
+                {
+                    a[s2 * stride + j] = (a[s1 * stride + j] - a[s1 * stride + j - 1]) / ndu[(pk + 1) * stride + rk + j];
+                    d += a[s2 * stride + j] * ndu[(rk + j) * stride + pk];
+                }
+                if (r <= pk)
+                {
+                    a[s2 * stride + k] = -a[s1 * stride + k - 1] / ndu[(pk + 1) * stride + r];
+                    d += a[s2 * stride + k] * ndu[r * stride + pk];
+                }
+                ders[k * stride + r] = d;
+                (s1, s2) = (s2, s1);
+            }
+        }
+
+        double factor = p;
+        for (int k = 1; k <= maxOrder; k++)
+        {
+            for (int j = 0; j <= p; j++)
+                ders[k * stride + j] *= factor;
+            factor *= p - k;
+        }
     }
 
     public static void Evaluate(int span, double u, int degree, IReadOnlyList<double> knots, Span<double> basis)

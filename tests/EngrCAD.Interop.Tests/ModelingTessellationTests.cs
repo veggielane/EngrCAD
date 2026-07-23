@@ -197,6 +197,41 @@ public class ModelingTessellationTests
     }
 
     [Fact]
+    public void SweepAlongInterpolatedPath_ClosedTubeWithExpectedVolume()
+    {
+        // A 5-point interpolated sweep path: exercises rotation-minimizing frames against
+        // NurbsCurve's exact analytic tangents (finite-difference tangents here caused
+        // real weld cracks — sweeps are extremely sensitive to endpoint tangent error).
+        var path = NurbsCurve.InterpolatePoints(
+            [(0, 0, 0), (0, 0.3, 1), (0, 0.9, 2), (0.4, 1.6, 2.8), (1.0, 2.2, 3.4)]);
+        var tangent = path.TangentAt(path.Domain.Start);
+        var x = tangent.Cross(Vector3d.UnitX).Normalized();
+        var y = tangent.Cross(x);
+        double radius = 0.25;
+        var profile = Profile.Circle((0, 0, 0), x, y, radius);
+
+        var solid = SolidFactory.Sweep(profile, path);
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle: 32, curveSamples: 64);
+        mesh.Validate();
+
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+
+        double pathLength = 0;
+        var previous = path.PointAt(path.Domain.Start);
+        for (int i = 1; i <= 1000; i++)
+        {
+            var p = path.PointAt(path.Domain.ParameterAt(i / 1000.0));
+            pathLength += previous.DistanceTo(p);
+            previous = p;
+        }
+        double expected = Math.PI * radius * radius * pathLength;
+        Assert.True(Math.Abs(mesh.Volume() - expected) / expected < 0.05,
+            $"tube volume {mesh.Volume()} vs π·r²·L = {expected}");
+    }
+
+    [Fact]
     public void SweepSquareAlongCurvedPath_ClosedAndPlausible()
     {
         var path = new NurbsCurve(2,
