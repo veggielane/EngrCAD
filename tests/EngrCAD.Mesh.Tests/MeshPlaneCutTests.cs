@@ -194,4 +194,45 @@ public class MeshPlaneCutTests
         Assert.Equal(4.0, result.Mesh.Volume(), 12);
         Assert.Single(result.CutLoops);
     }
+
+    [Fact]
+    public void AnnularCutRegion_ThrowsOnCap_ReturnsBothLoopsUncapped()
+    {
+        // Cutting a vertical square tube horizontally leaves an annular cut region:
+        // the documented NotSupportedException with cap: true, both loops with cap: false.
+        var tube = SquareTube();
+        Assert.Throws<NotSupportedException>(() => MeshPlaneCut.Cut(tube, Vector3d.Zero, Vector3d.UnitZ));
+
+        var result = MeshPlaneCut.Cut(tube, Vector3d.Zero, Vector3d.UnitZ, cap: false);
+        result.Mesh.Validate();
+        Assert.False(result.Mesh.IsClosed);
+        Assert.Equal(2, result.CutLoops.Count);
+        Assert.Equal(2, result.Mesh.BoundaryLoops().Count());
+        foreach (var loop in result.CutLoops)
+            foreach (var p in loop)
+                Assert.Equal(0.0, p.Z, 12);
+    }
+
+    /// <summary>
+    /// Closed square tube: outer 4×4 square, inner 2×2 square hole, z ∈ [-1, 1];
+    /// annulus caps split into four trapezoids per end. All faces wound outward.
+    /// </summary>
+    private static HalfEdgeMesh SquareTube()
+    {
+        Vector3d[] positions =
+        [
+            (-2, -2, -1), (2, -2, -1), (2, 2, -1), (-2, 2, -1), // 0-3  outer bottom
+            (-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1), // 4-7  inner bottom
+            (-2, -2, 1), (2, -2, 1), (2, 2, 1), (-2, 2, 1),     // 8-11 outer top
+            (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1),     // 12-15 inner top
+        ];
+        List<int[]> faces =
+        [
+            [0, 1, 9, 8], [1, 2, 10, 9], [2, 3, 11, 10], [3, 0, 8, 11],     // outer walls
+            [5, 4, 12, 13], [6, 5, 13, 14], [7, 6, 14, 15], [4, 7, 15, 12], // inner walls (face the hole)
+            [8, 9, 13, 12], [9, 10, 14, 13], [10, 11, 15, 14], [11, 8, 12, 15], // top ring
+            [1, 0, 4, 5], [2, 1, 5, 6], [3, 2, 6, 7], [0, 3, 7, 4],         // bottom ring
+        ];
+        return HalfEdgeMesh.Build(positions, faces);
+    }
 }
