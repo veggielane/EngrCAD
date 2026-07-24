@@ -274,11 +274,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## Viewer
 
-- [ ] **Sub-wave-A review flags** (code-quality, all low; the builder-params,
-  axis-staleness-test, offscreen-isolines, and docs-cutaway items ✅ landed) —
-  `ViewCubeAnimation(0)` zero-duration fact; `SdfContours` saddle-cell
-  disambiguation test (hyperbolic field section); route one `SdfRoute` lowering-failure
-  diagnostic through the report sink; annotate `HandleReleased`'s 16 DIP² click threshold.
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).

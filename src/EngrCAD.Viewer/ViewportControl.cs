@@ -1160,6 +1160,11 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         var pos = e.GetPosition(this);
         var moved = pos - _pressPointer;
+        // Click-vs-drag discrimination: a release within 4 DIPs of the press (16 =
+        // 4 DIP squared, compared against the squared travel to skip the sqrt) is a
+        // click that picks; anything farther was an orbit/pan/zoom drag. A UI feel
+        // threshold matching HoverThrottle's 4-DIP re-pick distance — not a Tolerance
+        // decision, and DIP-based so it is monitor-scale independent.
         if (moved.X * moved.X + moved.Y * moved.Y < 16)
         {
             // View-cube pre-check: clicks inside the cube region go to the widget

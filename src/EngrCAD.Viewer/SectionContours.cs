@@ -64,30 +64,37 @@ internal static class SectionContours
     /// The SDF route for a part, cached by part reference: SDF geometry directly,
     /// Shapes through their implicit lowering (done once — lowering a bridged shape
     /// can build a MeshSdf), everything else (raw B-Rep/mesh parts) null = no
-    /// isolines. A failed lowering caches null rather than throwing per rebuild.
+    /// isolines. A failed lowering caches null rather than throwing per rebuild, and
+    /// reports the failure once through <paramref name="report"/> (the status
+    /// overlay) so a silently isoline-less part is diagnosable.
     /// </summary>
-    public static Sdf? SdfRoute(Part part, Dictionary<Part, Sdf?> cache)
+    public static Sdf? SdfRoute(Part part, Dictionary<Part, Sdf?> cache, Action<string>? report = null)
     {
         if (cache.TryGetValue(part, out var cached))
             return cached;
         Sdf? sdf = part.Geometry switch
         {
             Sdf direct => direct,
-            Shape shape => TryLower(shape),
+            Shape shape => TryLower(part, shape, report),
             _ => null,
         };
         cache[part] = sdf;
         return sdf;
 
-        static Sdf? TryLower(Shape shape)
+        static Sdf? TryLower(Part part, Shape shape, Action<string>? report)
         {
             try
             {
                 return shape.CanConvertTo(TargetRep.Implicit) ? shape.ToImplicit() : null;
             }
-            catch
+            catch (Exception e)
             {
-                return null;   // lowering failed — treat as no implicit route
+                // Reported once per part (the null is cached above); the part simply
+                // shows no isolines, which is otherwise indistinguishable from a
+                // deliberate no-implicit-route part.
+                report?.Invoke(
+                    $"section isolines: '{part.Name}' implicit lowering failed ({e.GetType().Name}: {e.Message})");
+                return null;
             }
         }
     }
@@ -107,14 +114,15 @@ internal static class SectionContours
     /// </summary>
     public static SectionContourGeometry Build(
         IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
-        in Frame3d plane, Dictionary<Part, Sdf?> cache)
+        in Frame3d plane, Dictionary<Part, Sdf?> cache, Action<string>? report = null)
     {
         // Candidates: visible instances with an SDF route; their union bounds set the
-        // level spacing so all parts share one legend.
+        // level spacing so all parts share one legend. This first pass primes the
+        // cache, so a lowering failure is reported exactly once per part.
         var bounds = Aabb.Empty;
         for (int i = 0; i < instances.Count; i++)
         {
-            if (visible[i] && SdfRoute(instances[i].Part, cache) is not null)
+            if (visible[i] && SdfRoute(instances[i].Part, cache, report) is not null)
                 bounds = bounds.Union(instances[i].Bounds());
         }
         if (bounds.IsEmpty)
@@ -253,7 +261,7 @@ internal sealed class SectionContourRenderer
         if (NeedsRebuild(axis, offset, visible))
         {
             _geometry = SectionContours.Build(
-                instances, visible, SectionContours.PlaneFrame(axis, offset), _sdfCache);
+                instances, visible, SectionContours.PlaneFrame(axis, offset), _sdfCache, report);
             _dirty = false;
             _builtAxis = axis;
             _builtOffset = offset;

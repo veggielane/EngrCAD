@@ -119,6 +119,19 @@ public class ViewCubeTests
     }
 
     [Fact]
+    public void AnimationZeroDurationLandsImmediately()
+    {
+        // durationSeconds: 0 must not divide by zero: the very first evaluation (even
+        // at elapsed 0) returns the exact target pose and reports Done, so the render
+        // loop's single Step lands the camera and clears the animation.
+        var animation = new ViewCubeAnimation(0.4, 0.1, -1.2, 0.6, durationSeconds: 0);
+        var (yaw, pitch, done) = animation.Evaluate(0);
+        Assert.Equal(-1.2, yaw, Tol);
+        Assert.Equal(0.6, pitch, Tol);
+        Assert.True(done);
+    }
+
+    [Fact]
     public void AnimationMidpointIsBetweenPoses()
     {
         var animation = new ViewCubeAnimation(0, 0, 1, 0.5, durationSeconds: 0.25);

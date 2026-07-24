@@ -79,7 +79,10 @@ Dark-themed layout around one shared GL viewport:
   to coincident lines). The plumbing is plane-general (`SectionContours.PlaneFrame`
   takes the clip rule `dot(p, axis) > offset`) and follows the active
   `SectionAxis`. Raw B-Rep/mesh parts show no isolines (wrap them in
-  `Shape.From(...)` if the implicit bridge is wanted). Offscreen section renders
+  `Shape.From(...)` if the implicit bridge is wanted); a part whose implicit
+  lowering *fails* (e.g. an open mesh behind `Shape.From`) reports the failure once
+  through the status overlay instead of being silently isoline-less. Offscreen
+  section renders
   draw the same isolines through the same `SectionContourRenderer` (one-shot — the
   staleness caching only matters in the window), so headless cutaways match the
   viewport exactly.
