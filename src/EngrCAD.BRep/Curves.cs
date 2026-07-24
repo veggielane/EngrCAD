@@ -31,6 +31,39 @@ public abstract class Curve3d
     }
 
     /// <summary>
+    /// First derivative dC/dt. The default is a finite difference (central in the
+    /// interior, second-order one-sided at domain ends) and is APPROXIMATE — analytic
+    /// curves override with the exact derivative, and weld-critical consumers
+    /// (offset curves, sweep frames) rely on those exact overrides.
+    /// </summary>
+    public virtual Vector3d DerivativeAt(double t)
+    {
+        var d = Domain;
+        double h = double.IsFinite(d.Length) ? Math.Max(1e-7, d.Length * 1e-7) : 1e-7;
+        if (t - h < d.Start)
+            return (PointAt(d.Start) * -3 + PointAt(d.Start + h) * 4 - PointAt(d.Start + 2 * h)) / (2 * h);
+        if (t + h > d.End)
+            return (PointAt(d.End) * 3 - PointAt(d.End - h) * 4 + PointAt(d.End - 2 * h)) / (2 * h);
+        return (PointAt(t + h) - PointAt(t - h)) / (2 * h);
+    }
+
+    /// <summary>
+    /// Second derivative d²C/dt². The default central difference is a rough fallback
+    /// (h ~ 1e-5 balances truncation against round-off; near a domain end it evaluates
+    /// at the nearest interior point instead) — analytic curves override exactly.
+    /// </summary>
+    public virtual Vector3d SecondDerivativeAt(double t)
+    {
+        var d = Domain;
+        double h = double.IsFinite(d.Length) ? Math.Max(1e-5, d.Length * 1e-5) : 1e-5;
+        if (double.IsFinite(d.Start))
+            t = Math.Max(t, d.Start + h);
+        if (double.IsFinite(d.End))
+            t = Math.Min(t, d.End - h);
+        return (PointAt(t + h) - PointAt(t) * 2 + PointAt(t - h)) / (h * h);
+    }
+
+    /// <summary>
     /// The innermost curve beneath wrapper types (<see cref="ReversedCurve"/>,
     /// <see cref="TransformedCurve"/>); consumers use it to pick sampling strategies.
     /// </summary>
@@ -54,6 +87,10 @@ public sealed class ReversedCurve(Curve3d baseCurve) : Curve3d
 
     public override Vector3d PointAt(double t) => baseCurve.PointAt(Map(t));
     public override Vector3d TangentAt(double t) => -baseCurve.TangentAt(Map(t));
+
+    // Chain rule with map′ = −1: odd derivatives flip sign, even ones don't.
+    public override Vector3d DerivativeAt(double t) => -baseCurve.DerivativeAt(Map(t));
+    public override Vector3d SecondDerivativeAt(double t) => baseCurve.SecondDerivativeAt(Map(t));
 }
 
 /// <summary>A curve mapped through a rigid (or affine) transform.</summary>
@@ -73,6 +110,10 @@ public sealed class TransformedCurve(Curve3d baseCurve, Matrix4d transform) : Cu
         var v = transform.TransformVector(baseCurve.TangentAt(t));
         return v.Normalized();
     }
+
+    // The transform is affine in t-independent coefficients, so derivatives map exactly.
+    public override Vector3d DerivativeAt(double t) => transform.TransformVector(baseCurve.DerivativeAt(t));
+    public override Vector3d SecondDerivativeAt(double t) => transform.TransformVector(baseCurve.SecondDerivativeAt(t));
 }
 
 /// <summary>Straight segment; t ∈ [0, 1] from <see cref="Start"/> to <see cref="End"/>.</summary>
@@ -85,6 +126,8 @@ public sealed class Line3d(Vector3d start, Vector3d end) : Curve3d
     public override bool IsClosed => false;
     public override Vector3d PointAt(double t) => Vector3d.Lerp(start, end, t);
     public override Vector3d TangentAt(double t) => (end - start).Normalized();
+    public override Vector3d DerivativeAt(double t) => end - start;
+    public override Vector3d SecondDerivativeAt(double t) => Vector3d.Zero;
 }
 
 /// <summary>
@@ -107,6 +150,12 @@ public sealed class Circle3d(Vector3d center, Vector3d xDirection, Vector3d yDir
 
     public override Vector3d TangentAt(double t) =>
         (-xDirection * Math.Sin(t) + yDirection * Math.Cos(t)).Normalized();
+
+    public override Vector3d DerivativeAt(double t) =>
+        -xDirection * (radius * Math.Sin(t)) + yDirection * (radius * Math.Cos(t));
+
+    public override Vector3d SecondDerivativeAt(double t) =>
+        -xDirection * (radius * Math.Cos(t)) - yDirection * (radius * Math.Sin(t));
 }
 
 /// <summary>
@@ -448,7 +497,7 @@ public sealed class NurbsCurve : Curve3d
     }
 
     /// <summary>Exact first derivative dC/dt (rational quotient rule over the homogeneous form).</summary>
-    public Vector3d DerivativeAt(double t)
+    public override Vector3d DerivativeAt(double t)
     {
         Span<Vector3d> derivatives = stackalloc Vector3d[2];
         EvaluateDerivatives(t, 1, derivatives);
@@ -456,7 +505,7 @@ public sealed class NurbsCurve : Curve3d
     }
 
     /// <summary>Exact second derivative d²C/dt² (right-sided value at knots of reduced continuity).</summary>
-    public Vector3d SecondDerivativeAt(double t)
+    public override Vector3d SecondDerivativeAt(double t)
     {
         Span<Vector3d> derivatives = stackalloc Vector3d[3];
         EvaluateDerivatives(t, 2, derivatives);
@@ -539,6 +588,12 @@ public sealed class Ellipse3d(Vector3d center, Vector3d semiAxisX, Vector3d semi
 
     public override Vector3d TangentAt(double t) =>
         (-semiAxisX * Math.Sin(t) + semiAxisY * Math.Cos(t)).Normalized();
+
+    public override Vector3d DerivativeAt(double t) =>
+        -semiAxisX * Math.Sin(t) + semiAxisY * Math.Cos(t);
+
+    public override Vector3d SecondDerivativeAt(double t) =>
+        -semiAxisX * Math.Cos(t) - semiAxisY * Math.Sin(t);
 }
 
 /// <summary>
