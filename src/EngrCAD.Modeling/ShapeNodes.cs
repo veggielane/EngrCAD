@@ -204,8 +204,12 @@ internal sealed class DrillShape(
 /// <see cref="Shape.ExternalThread(ThreadSpec, double, double, bool)"/> (with a negative
 /// <paramref name="profileOffset"/> = printing clearance) and, flipped, as the cutting
 /// tool of <see cref="Shape.ThreadedHole"/> (positive offset grows the void). Implicit-
-/// native via <see cref="Sdf.Thread"/>; no B-Rep lowering yet (a true helical sweep is
-/// future work), so B-Rep is Impossible and meshes bridge through Surface Nets.
+/// native via <see cref="Sdf.Thread"/>. B-Rep-native via
+/// <see cref="SolidFactory.MakeThreadedRod"/> (one boolean-free helical sweep, crest
+/// phase-aligned with the SDF) when the profile is unmodified — zero offset, no end
+/// chamfers — under proper rigid + uniform-scale placements; otherwise B-Rep is
+/// Impossible with a per-cause report (chamfer cones and distance-field profile offsets
+/// have no exact B-Rep counterpart yet, and a mirrored thread is left-handed).
 /// </summary>
 internal sealed class ThreadShape(ThreadSpec spec, double length, double profileOffset, double chamferLength) : Shape
 {
@@ -220,6 +224,38 @@ internal sealed class ThreadShape(ThreadSpec spec, double length, double profile
         profileOffset, startChamfer: chamferLength, endChamfer: chamferLength);
 
     internal override string Describe() => $"Thread({spec.Designation}, L={length:g4})";
+}
+
+/// <summary>
+/// An internally threaded hole feature: the body with, per point, a tap-drill pilot
+/// (via <see cref="Shape.Drill"/>) and the clearance-grown external thread form
+/// subtracted. Captured as a node — rather than a raw boolean chain — so each target
+/// takes its own route: implicit and mesh lower <see cref="Expanded"/> (exact SDF
+/// subtraction, no coplanarity concerns), while B-Rep reports Impossible in v1 with the
+/// precise blocker (subtracting the thread tool from the pilot-drilled body would put
+/// the tool's root band coaxially inside the pilot bore — splitting the bore wall by
+/// multi-turn wrapping helix curves and tessellating trimmed helical fragments are not
+/// implemented). Without this node the ThreadShape tool (chamferless, and clearance-less
+/// by default) would classify B-Rep-Native and the boolean would fail deep in the
+/// splitter instead of honestly up front.
+/// </summary>
+internal sealed class ThreadedHoleShape(
+    Shape child, Shape expanded, ThreadSpec spec, IReadOnlyList<Vector2d> points,
+    double depth, Matrix4d planeMatrix, double clearance) : Shape
+{
+    /// <summary>The body being threaded.</summary>
+    public Shape Child => child;
+
+    /// <summary>The equivalent pilot-drill + thread-tool subtraction chain.</summary>
+    public Shape Expanded => expanded;
+
+    public ThreadSpec Spec => spec;
+    public IReadOnlyList<Vector2d> Points => points;
+    public double Depth => depth;
+    public Matrix4d PlaneMatrix => planeMatrix;
+    public double Clearance => clearance;
+
+    internal override string Describe() => $"ThreadedHole({spec.Designation}, {points.Count} holes)";
 }
 
 /// <summary>Convex hull of the operands' mesh vertices (quickhull; mesh-native only).</summary>

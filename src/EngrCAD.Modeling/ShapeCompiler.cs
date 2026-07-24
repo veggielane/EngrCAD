@@ -117,9 +117,29 @@ internal static class ShapeCompiler
                 // far-face validation happens at lowering.
                 ClassifyBrep(drill.Expanded, m, entries);
                 break;
-            case ThreadShape:
-                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                    "helical thread surfaces have no B-Rep lowering yet (a true helical sweep is future work); use ToMesh or ToImplicit"));
+            case ThreadShape thread:
+                // Native only for the unmodified basic profile under proper similarity
+                // placements: the boolean-free helical sweep is exact, but chamfer
+                // cones and distance-field profile offsets have no B-Rep counterpart
+                // yet, and a mirrored thread is left-handed — each reported truthfully
+                // rather than lowered to silently different geometry.
+                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a mirrored, sheared, or non-uniformly scaled placement cannot re-place a helical thread exactly (a mirrored thread is left-handed)"));
+                else if (thread.ChamferLength > 0)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "end chamfers have no B-Rep form yet (the 45° cone ∩ helical-band cut is future surface-intersection work) — pass chamferEnds: false, or use ToMesh/ToImplicit"));
+                else if (thread.ProfileOffset != 0)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
+                else
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "boolean-free helical sweep (SolidFactory.MakeThreadedRod); not STEP-exportable"));
+                break;
+            case ThreadedHoleShape hole:
+                ClassifyBrep(hole.Child, m, entries);
+                entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
+                    "subtracting the thread tool from the pilot-drilled body puts the tool's root band coaxially inside the pilot bore: splitting the bore wall by multi-turn wrapping helix curves and tessellating trimmed helical fragments are not implemented yet — use ToMesh/ToImplicit"));
                 break;
             case TransformShape t:
                 ClassifyBrep(t.Child, m * t.Matrix, entries);
@@ -225,6 +245,9 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared thread goes through a polygonized, transformed mesh SDF"));
                 break;
+            case ThreadedHoleShape hole:
+                ClassifyImplicit(hole.Expanded, m, entries);
+                break;
             case TransformShape t:
                 ClassifyImplicit(t.Child, m * t.Matrix, entries);
                 break;
@@ -260,6 +283,7 @@ internal static class ShapeCompiler
         SourceShape { Geometry: Sdf } => true,
         BooleanShape b => UsesImplicitOnlyOps(b.A) || UsesImplicitOnlyOps(b.B),
         DrillShape d => UsesImplicitOnlyOps(d.Expanded),
+        ThreadedHoleShape h => UsesImplicitOnlyOps(h.Expanded),
         TransformShape t => UsesImplicitOnlyOps(t.Child),
         _ => false,
     };
@@ -434,6 +458,31 @@ internal static class ShapeCompiler
                 return LowerBrep(drill.Expanded, m);
             }
 
+            case ThreadShape thread when thread.ProfileOffset == 0 && thread.ChamferLength <= 0:
+            {
+                // The ISO 68-1 basic profile, crest centered at phase 0 — the SAME
+                // phase convention as Sdf.Thread (solid = {r ≤ R((z − P·θ/2π) mod P)}
+                // with the crest flat at |w| ≤ P/16), so every representation of one
+                // ThreadShape is the same geometry, not a rotated sibling. Corners run
+                // bottom→top: crest flat (P/8 at the major radius), descending flank
+                // (5P/16 axially), root flat (P/4 at the minor radius), ascending flank
+                // wrapping to the next crest.
+                Decompose(m, shape, out var rotation, out var translation, out double scale);
+                var spec = thread.Spec;
+                double pitch = spec.Pitch * scale;
+                double rMajor = spec.MajorDiameter / 2 * scale;
+                double rMinor = spec.MinorDiameter / 2 * scale;
+                var frame = Frame3d.FromOrthonormal(
+                    translation, rotation.Rotate(Vector3d.UnitX), rotation.Rotate(Vector3d.UnitY));
+                return SolidFactory.MakeThreadedRod(
+                [
+                    new Vector2d(rMajor, -pitch / 16),
+                    new Vector2d(rMajor, pitch / 16),
+                    new Vector2d(rMinor, 3 * pitch / 8),
+                    new Vector2d(rMinor, 5 * pitch / 8),
+                ], pitch, thread.Length * scale, frame);
+            }
+
             case TransformShape t:
                 return LowerBrep(t.Child, m * t.Matrix);
 
@@ -542,6 +591,10 @@ internal static class ShapeCompiler
 
             case ThreadShape thread:
                 return Place(thread.ToSdf(), rotation, translation, scale);
+
+            case ThreadedHoleShape hole:
+                // Exact SDF subtraction: pilot drill + thread tool, no coplanarity concerns.
+                return LowerImplicit(hole.Expanded, m, quality);
 
             case TransformShape t:
                 return LowerImplicit(t.Child, m * t.Matrix, quality);

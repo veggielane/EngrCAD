@@ -171,9 +171,16 @@ public abstract class Shape
     /// Typical FDM values: 0.1–0.25 mm. <paramref name="chamferEnds"/> cuts 45° lead-in
     /// cones on both ends down to the minor diameter.
     /// <para>Representation support: implicit-Native (<see cref="Sdf.Thread"/>, exact
-    /// sign); meshes bridge through Surface Nets — the printing route; B-Rep is not
-    /// representable yet (a true helical sweep is future work), so <see cref="ToBrep"/>
-    /// throws and <see cref="Explain"/> reports it.</para>
+    /// sign). B-Rep-<b>Native</b> for the unmodified basic profile — zero
+    /// <paramref name="clearance"/> and <c>chamferEnds: false</c> — as a boolean-free
+    /// helical sweep (<see cref="SolidFactory.MakeThreadedRod"/>: one exact
+    /// <see cref="HelicalSurface"/> band per profile facet sharing <see cref="Helix3d"/>
+    /// rails, spiral-bounded flat caps; not STEP-exportable). With chamfers or clearance
+    /// B-Rep stays Impossible — truthfully reported — because 45° chamfer cones cut the
+    /// helical bands (future surface-intersection work) and clearance offsets the
+    /// profile as a distance field (reflex corners round into arcs with no exact B-Rep
+    /// counterpart); meshes then bridge through Surface Nets — the printing route.
+    /// Unchamfered, clearance-free threads mesh via exact B-Rep tessellation.</para>
     /// </summary>
     public static Shape ExternalThread(ThreadSpec spec, double length, double clearance = 0, bool chamferEnds = true)
     {
@@ -198,8 +205,13 @@ public abstract class Shape
     /// <paramref name="clearance"/> normal to the flanks — the hole <em>grows</em> with
     /// clearance (typical FDM: 0.1–0.25 mm; default 0). The pilot truncates the
     /// internal thread's crests to the tap-drill diameter, as tapping does.
-    /// <para>The thread void has no B-Rep form, so the result is implicit-Native /
-    /// mesh-Bridged only (see <see cref="ExternalThread(ThreadSpec, double, double, bool)"/>).</para>
+    /// <para>The threaded hole stays implicit-Native / mesh-Bridged only: its B-Rep
+    /// would subtract the thread tool from the pilot-drilled body, but the tool's root
+    /// band sits coaxially inside the pilot bore, so the bore wall must be split by
+    /// multi-turn wrapping helix curves and the resulting trimmed helical fragments
+    /// tessellated — neither is implemented yet, and <see cref="Explain"/> reports the
+    /// blocker truthfully (external threads ARE B-Rep-Native, see
+    /// <see cref="ExternalThread(ThreadSpec, double, double, bool)"/>).</para>
     /// </summary>
     public Shape ThreadedHole(
         ThreadSpec spec, IReadOnlyList<Vector2d> points, double depth,
@@ -247,7 +259,11 @@ public abstract class Shape
                 .Transform(placementPlane.ToMatrixAt(point));
             result -= tool;
         }
-        return result;
+
+        // Wrapped in a node (like Drill) so B-Rep classification can report the real
+        // blocker instead of attempting the coaxial tool∩pilot-bore boolean, which the
+        // splitter cannot handle yet; implicit/mesh lower the expansion unchanged.
+        return new ThreadedHoleShape(this, result, spec, points, depth, placementPlane.ToMatrix(), clearance);
     }
 
     private static void ValidateThreadClearance(double clearance, ThreadSpec spec)

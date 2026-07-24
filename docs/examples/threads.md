@@ -96,24 +96,54 @@ catch (ArgumentOutOfRangeException) { }
 
 Threads are **implicit-native**: `Sdf.Thread` evaluates the helical profile with an
 exact sign (and a documented approximate distance), so thread shapes compose with
-every SDF operator. Meshing goes through Surface Nets polygonization — the 3D
-printing route (`ToMesh()` → [STL export](exports.md)). There is **no B-Rep
-lowering yet** (a true helical profile sweep is future work): `ToBrep()` throws and
-`Explain` reports the thread node as Impossible, so a design that mixes threads with
-precision B-Rep work stays honest about what it can export to STEP:
+every SDF operator, and chamfered or clearance-fitted threads mesh through Surface
+Nets polygonization — the 3D printing route (`ToMesh()` → [STL export](exports.md)).
+
+**External threads with the unmodified basic profile — zero clearance and
+`chamferEnds: false` — are also B-Rep-native.** The entire lateral boundary is ONE
+boolean-free helical sweep (`SolidFactory.MakeThreadedRod`): each facet of the
+per-pitch profile — root flat, flank, crest flat, flank — sweeps to a single exact
+`HelicalSurface` band wrapping *all* the turns, adjacent bands share exact `Helix3d`
+rail edges, and the flat end caps are disks bounded by the spiral arcs the cap planes
+cut from the bands. No core cylinder exists for a ridge to weld onto, so no tangent
+seams and zero booleans. Any length works (no whole-turn constraint), and such
+threads mesh through exact B-Rep tessellation with crisp helical edges:
+
+```csharp render:thread-brep
+// A B-Rep-native M8 stud: exact helical surfaces, tessellated with crisp rails —
+// no SDF resolution concerns.
+var stud = Shape.ExternalThread(8, length: 16, chamferEnds: false);
+
+var scene = new Scene();
+scene.Add(new Part("M8 B-Rep stud", stud, Palette.Steel));
+```
+
+![A B-Rep-native M8 threaded stud with crisp helical facet edges](images/thread-brep.png)
+
+`Explain` reports each case truthfully — Native for the basic profile, and a
+per-cause Impossible otherwise (45° chamfer cones cutting helical bands are future
+surface-intersection work; clearance offsets the profile as a distance field whose
+rounded reflex corners have no exact B-Rep counterpart; `ThreadedHole` needs the
+pilot bore wall split by multi-turn helix curves). Helical surfaces are not
+STEP-exportable yet (same bucket as swept surfaces):
 
 ```csharp run:thread-explain
-var stud = Shape.ExternalThread(8, length: 12);
+var plain = Shape.ExternalThread(8, length: 12, chamferEnds: false);
+var brep = plain.ToBrep();                          // B-Rep-native: exact helical sweep
+brep.Validate();
+if (!plain.CanConvertTo(TargetRep.Brep))
+    throw new Exception("unchamfered external threads are B-Rep-native");
 
-Console.WriteLine(stud.Explain(TargetRep.Brep));   // names the thread node as Impossible
-if (stud.CanConvertTo(TargetRep.Brep))
-    throw new Exception("threads must not claim B-Rep support");
-if (!stud.CanConvertTo(TargetRep.Implicit) || !stud.CanConvertTo(TargetRep.Mesh))
+var chamfered = Shape.ExternalThread(8, length: 12);   // default: 45° lead-in chamfers
+Console.WriteLine(chamfered.Explain(TargetRep.Brep));  // names the chamfer as the blocker
+if (chamfered.CanConvertTo(TargetRep.Brep))
+    throw new Exception("chamfered threads must not silently drop their chamfers");
+if (!chamfered.CanConvertTo(TargetRep.Implicit) || !chamfered.CanConvertTo(TargetRep.Mesh))
     throw new Exception("threads are implicit-native and meshable");
 
 try
 {
-    stud.ToBrep();
+    chamfered.ToBrep();
     throw new Exception("expected ShapeConversionException");
 }
 catch (ShapeConversionException) { }

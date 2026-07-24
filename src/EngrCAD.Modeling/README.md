@@ -48,7 +48,8 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) · ❌ revolve/sweep/rim/drill (no mirrored lowering yet) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
-| `ExternalThread` / `ThreadedHole` | ❌ no helical B-Rep yet | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
+| `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
+| `ExternalThread` (chamfers or clearance) / `ThreadedHole` | ❌ chamfer cones / distance-field profile offsets / coaxial tool-in-pilot splitting not implemented — reported per cause | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
 | `From(HalfEdgeMesh)` | ❌ no mesh→B-Rep import | ✅ exact mesh SDF (closed meshes) | ✅ as-is |
 | `From(Sdf)` | ❌ no SDF→B-Rep | ✅ native | 🔶 polygonized |
@@ -235,9 +236,21 @@ offsets perpendicular to its own boundary): the external thread *shrinks*, the i
 void *grows*; default 0, typical FDM 0.1–0.25 mm, capped at half the thread depth.
 
 Threads are **implicit-native** (`Sdf.Thread`: exact sign, documented approximate
-distance) and mesh through Surface Nets — the printing route. There is **no B-Rep
-lowering yet** (a true helical profile sweep is future work); `Explain` reports it and
-`ToBrep` throws, so thread features keep the rest of a design honest.
+distance). **External threads are also B-Rep-native** when the basic profile is
+unmodified — zero clearance and `chamferEnds: false` — via
+`SolidFactory.MakeThreadedRod`: the entire lateral boundary is ONE boolean-free
+co-rotating sweep (one exact `HelicalSurface` band per profile facet sharing `Helix3d`
+rails, flat caps bounded by spiral arcs; crest phase-aligned with the SDF so all three
+representations are the *same* geometry; any length, no whole-turn constraint; not
+STEP-exportable). Such threads mesh through exact B-Rep tessellation. With chamfers
+(the default) or clearance, B-Rep stays **Impossible with a per-cause report** — 45°
+chamfer cones cutting helical bands are future surface-intersection work, and
+clearance offsets the profile as a distance field (reflex corners round into arcs, no
+exact B-Rep counterpart) — and meshes come from Surface Nets, the printing route.
+`ThreadedHole` remains implicit-native/mesh-bridged only: its B-Rep would need the
+bore wall split by multi-turn wrapping helix curves plus trimmed-helical-face
+tessellation (the tool's root band sits coaxially inside the pilot bore); `Explain`
+names that blocker, so thread features keep the rest of a design honest.
 
 ## The document model: Part, Assembly, Tab, Scene
 

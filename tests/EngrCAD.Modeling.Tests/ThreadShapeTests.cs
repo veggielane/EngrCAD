@@ -10,22 +10,71 @@ public class ThreadShapeTests
     [Fact]
     public void ExternalThread_ExplainReportsTruthfully()
     {
-        var stud = Shape.ExternalThread(M8, 12);
-
-        // No B-Rep form yet: Impossible, and ToBrep throws.
-        var brep = stud.Explain(TargetRep.Brep);
+        // Default (chamfered) studs still have no B-Rep form — the 45° chamfer cones
+        // cutting the helical bands are future surface-intersection work — and the
+        // report says so instead of silently dropping the chamfers.
+        var chamfered = Shape.ExternalThread(M8, 12);
+        var brep = chamfered.Explain(TargetRep.Brep);
         Assert.False(brep.IsConvertible);
-        Assert.Throws<ShapeConversionException>(() => stud.ToBrep());
+        Assert.Contains(brep.Entries, e => e.Detail?.Contains("chamfer") == true);
+        Assert.Throws<ShapeConversionException>(() => chamfered.ToBrep());
 
-        // Implicit is the native representation.
-        var implicitReport = stud.Explain(TargetRep.Implicit);
+        // The unmodified basic profile is B-Rep-Native (boolean-free helical sweep).
+        var plain = Shape.ExternalThread(M8, 12, chamferEnds: false);
+        Assert.True(plain.Explain(TargetRep.Brep).IsConvertible);
+        Assert.All(plain.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+
+        // Printing clearance reshapes the profile as a distance field — honest Impossible.
+        var cleared = Shape.ExternalThread(M8, 12, clearance: 0.2, chamferEnds: false);
+        Assert.False(cleared.Explain(TargetRep.Brep).IsConvertible);
+        Assert.Contains(cleared.Explain(TargetRep.Brep).Entries, e => e.Detail?.Contains("clearance") == true);
+
+        // Implicit is native for all variants.
+        var implicitReport = chamfered.Explain(TargetRep.Implicit);
         Assert.True(implicitReport.IsConvertible);
         Assert.All(implicitReport.Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
 
-        // Meshes bridge through Surface Nets — the printing route.
-        var mesh = stud.Explain(TargetRep.Mesh);
+        // Chamfered/cleared threads mesh through Surface Nets — the printing route.
+        var mesh = chamfered.Explain(TargetRep.Mesh);
         Assert.True(mesh.IsConvertible);
         Assert.Contains(mesh.Entries, e => e.Support == NodeSupport.Bridged);
+    }
+
+    [Fact]
+    public void ExternalThread_UnchamferedLowersToExactBrep()
+    {
+        double length = 10;
+        var brep = Shape.ExternalThread(M8, length, chamferEnds: false).ToBrep();
+        brep.Validate();
+        Assert.True(brep.SatisfiesEulerFormula(genus: 0));
+
+        // Exact volume: V = L·(2π/P)·∫₀^P ½R²(s) ds over the ISO basic profile
+        // (crest flat P/8 at the major radius, root flat P/4 at the minor, 5P/16
+        // flanks); the tessellation inscribes chordally, ~0.6% low at 32 segments.
+        double p = M8.Pitch, rMaj = M8.MajorDiameter / 2, rMin = M8.MinorDiameter / 2;
+        double perPitch = 0.5 * rMaj * rMaj * (p / 8) + 0.5 * rMin * rMin * (p / 4)
+            + 2 * (5 * p / 16) * (rMaj * rMaj + rMaj * rMin + rMin * rMin) / 6;
+        double expected = length * (2 * Math.PI / p) * perPitch;
+
+        var mesh = EngrCAD.Interop.BRepTessellator.Tessellate(brep);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - expected) / expected < 0.01,
+            $"volume {mesh.Volume():g6} vs analytic {expected:g6}");
+
+        // Rigid + uniform-scale placements bake into the construction frame exactly.
+        var moved = Shape.ExternalThread(M8, length, chamferEnds: false)
+            .RotateY(0.7).Translate(3, -2, 1).Scale(2);
+        var movedBrep = moved.ToBrep();
+        movedBrep.Validate();
+        var movedMesh = EngrCAD.Interop.BRepTessellator.Tessellate(movedBrep);
+        Assert.True(movedMesh.IsClosed);
+        Assert.True(Math.Abs(movedMesh.Volume() - 8 * expected) / (8 * expected) < 0.01,
+            $"scaled volume {movedMesh.Volume():g6} vs analytic {8 * expected:g6}");
+
+        // A mirrored placement would be a left-hand thread: honest Impossible.
+        var mirrored = Shape.ExternalThread(M8, length, chamferEnds: false)
+            .Mirror(Vector3d.Zero, Vector3d.UnitZ);
+        Assert.False(mirrored.Explain(TargetRep.Brep).IsConvertible);
     }
 
     [Fact]
@@ -86,7 +135,11 @@ public class ThreadShapeTests
         var plate = Shape.Box(20, 20, 8);
         var tapped = plate.ThreadedHole(spec, [new(0, 0)], depth: 10, top);
 
-        Assert.False(tapped.Explain(TargetRep.Brep).IsConvertible);
+        // The hole's B-Rep blocker is reported precisely (coaxial tool-in-pilot-bore
+        // splitting), not attempted and failed deep in the boolean machinery.
+        var brepReport = tapped.Explain(TargetRep.Brep);
+        Assert.False(brepReport.IsConvertible);
+        Assert.Contains(brepReport.Entries, e => e.Detail?.Contains("pilot bore") == true);
         Assert.True(tapped.Explain(TargetRep.Implicit).IsConvertible);
 
         var mesh = tapped.ToMesh(new MeshQuality { SdfResolution = 128 });
