@@ -43,5 +43,10 @@ HalfEdgeMesh mesh  = body.ToMesh();      // rendering, FEA, 3D printing
   ([features](examples/features.md)).
 - **Standards-aware holes** — metric clearance / counterbore / countersink / tap
   pilot catalogs behind one `Drill` call ([holes](examples/holes.md)).
+- **Modeled threads** — the ISO metric coarse catalog with real helical geometry
+  and 3D-printing clearances ([threads](examples/threads.md)).
+- **Assemblies** — shared parts posed by rigid frames, nested sub-assemblies, and
+  flattened instances for viewers and exporters
+  ([assemblies](examples/assemblies.md)).
 - **A viewer that is a library** — build a `Scene`, call `EngrCad.Show`, or render
   headless PNGs for CI and agents ([viewer](examples/viewer.md)).

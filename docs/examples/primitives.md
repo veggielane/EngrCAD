@@ -1,7 +1,8 @@
 # Primitives
 
-`Shape` provides the four solid primitives. All are centered at the origin with their
-axis along +Z; position them with [transforms](transforms-patterns.md).
+`Shape` provides five solid primitives — box, cylinder, sphere, torus, and cone. All
+are centered at the origin with their axis along +Z; position them with
+[transforms](transforms-patterns.md).
 
 ```csharp render:primitives
 // Primitives are centered at the origin; the part transforms here sit each one
@@ -24,6 +25,25 @@ exact analytic surfaces (planes, cylinders, spheres, tori), `ToImplicit()` produ
 exact signed distance fields, and `ToMesh()` tessellates. A `Box(in Aabb)` overload
 builds a box from explicit bounds instead of a centered size.
 
-Rigid transforms and uniform scaling keep every primitive exact; shearing a sphere or
-torus has no analytic B-Rep surface and is rejected there (`Explain` names the node) —
-see the [support matrix](representations.md).
+## Cone
+
+`Shape.Cone(bottomRadius, topRadius, height)` is the cone frustum (OpenSCAD's
+`cylinder(r1, r2)`): the radius grows linearly from `bottomRadius` at z = −height/2
+to `topRadius` at z = +height/2. Setting either radius to zero makes that end a
+pointed apex:
+
+```csharp render:cone
+var scene = new Scene();
+scene.Add(new Part("frustum", Shape.Cone(bottomRadius: 10, topRadius: 5, height: 14),
+    Palette.Copper, Matrix4d.CreateTranslation((-16, 0, 7))));
+scene.Add(new Part("apex cone", Shape.Cone(8, 0, 18), Palette.Sage,
+    Matrix4d.CreateTranslation((16, 0, 9))));
+```
+
+![A cone frustum and an apex cone](images/cone.png)
+
+Cones are native in all three representations, like the other primitives.
+
+Rigid transforms and uniform scaling keep every primitive exact; shearing a sphere,
+torus, or cone has no analytic B-Rep surface and is rejected there (`Explain` names
+the node) — see the [support matrix](representations.md).

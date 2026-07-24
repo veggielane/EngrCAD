@@ -39,3 +39,35 @@ In the B-Rep lowering the result is **topologically sealed** — it passes `Vali
 and Euler–Poincaré with the correct genus, so downstream operations (tessellation,
 STEP export, further booleans) get a watertight solid. For soft, blended joins use
 [smooth booleans](implicit.md) instead.
+
+## Convex hull
+
+`Shape.Hull(operands...)` (OpenSCAD's `hull()`) wraps its operands in the tightest
+convex skin — the quick way to make rounded pads and tapered transitions without
+sketching them:
+
+```csharp render:hull
+var pad = Shape.Hull(                           // rounded mounting pad:
+    Shape.Sphere(4).Translate(-14, -9, 4),      // the hull of four corner spheres
+    Shape.Sphere(4).Translate(14, -9, 4),
+    Shape.Sphere(4).Translate(14, 9, 4),
+    Shape.Sphere(4).Translate(-14, 9, 4));
+
+var stand = Shape.Hull(                         // tapered transition, disc to ball
+    Shape.Cylinder(radius: 9, height: 4),
+    Shape.Sphere(4.5).Translate(0, 0, 20));
+
+var scene = new Scene();
+scene.Add(new Part("pad", pad, Palette.Sage, Matrix4d.CreateTranslation((-22, 0, 0))));
+scene.Add(new Part("stand", stand, Palette.Plum, Matrix4d.CreateTranslation((22, 0, 2))));
+```
+
+![A rounded pad hulled from four spheres and a tapered stand hulled from a disc and a ball](images/hull.png)
+
+The honest support story: the hull is computed by **quickhull over the operands'
+mesh vertices**. That is exact for polyhedral operands (boxes, polygonal
+extrusions); curved operands contribute their *tessellated* vertices, so the result
+is the hull of the tessellation — inscribed in the true hull, tightened by raising
+`MeshQuality.SegmentsPerCircle`. `Explain` reports hulls as Bridged for every
+target, and they can never become B-Rep (there is no mesh→B-Rep import) — see the
+[support matrix](representations.md).
