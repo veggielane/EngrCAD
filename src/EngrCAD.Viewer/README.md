@@ -38,6 +38,25 @@ Dark-themed layout around one shared GL viewport:
   world axes are scene furniture and stay unclipped. Custom hosts drive it via
   `ViewportControl.SectionEnabled` / `SectionHeight`. Picking ignores the section
   plane in v1 — a click can select a part through the cut-away half.
+- **SDF isolines on the section plane** (automatic when available): when the section
+  plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
+  exists (`CanConvertTo(Implicit)`; lowered once and cached per part, never per
+  frame) — iso-distance contours of the field are overlaid on the cut. The **gold**
+  d = 0 contour is the exact surface cross-section; **cool blue** positive and
+  **warm orange** negative families at d = ±k·spacing visualize the field itself —
+  wall thickness at a glance (count the warm rings), blend and offset debugging.
+  Spacing is 1-2-5-rounded from the contributing parts' bounds (shown in the status
+  bar; a wall thinner than one spacing simply shows no interior ring). Extraction is
+  `SdfContours` in EngrCAD.Interop (marching squares over one batch-`Evaluate` grid,
+  ~160 cells across, per part per rebuild); it reruns only when the section height,
+  scene, or visibility changes — never per frame. Lines draw through the shared line
+  program, pulled 1% of the spacing to the visible side of the clip so the fragment
+  discard never eats them; depth-tested like feature edges (polygon-offset fills lose
+  to coincident lines). The plumbing is plane-general (`SectionContours.PlaneFrame`
+  takes the clip rule `dot(p, axis) > offset`); the viewport currently passes the
+  z-axis section state. Raw B-Rep/mesh parts show no isolines (wrap them in
+  `Shape.From(...)` if the implicit bridge is wanted). Not yet in offscreen renders
+  (`OffscreenRenderer` section parity is a pending backlog item).
 - **Model tree** (left): the current tab's loose parts and **assembly hierarchies** —
   assembly/sub-assembly header rows with their occurrences indented one level per
   depth (always expanded in v1; the tree walks the tab exactly like

@@ -328,6 +328,17 @@ The conversion triangle is complete; each direction has a deliberately chosen al
   the sign — exact for watertight meshes even when the closest feature is an edge or
   vertex — over BVH branch-and-bound nearest-triangle search. Verified to match the
   analytic box SDF to 1e-9 across all feature regions.
+- **Planar iso-contours: `SdfContours.OnPlane`** (marching squares over a batch-sampled
+  planar grid) lives in Interop rather than the viewer deliberately: it is UI-free,
+  deterministic, and testable against analytic fields headlessly; the viewer only maps
+  the section plane into each instance's space (inverse transform — an affine map takes
+  the sample rectangle to a parallelogram, which the origin+two-sides parameterization
+  represents exactly) and draws the segments. Cell-edge crossings are interpolated from
+  the same two samples on both sides, so shared endpoints are bit-identical (loops chain
+  by exact equality — the same construct-shared-geometry-exactly discipline as
+  tessellation welds, at display scale); saddle cells resolve by the cell-center
+  average. Used by the viewer's section-plane isolines (d = 0 exact cross-section,
+  ±k·spacing field visualization).
 
 ## 6b. Unified modeling layer (`EngrCAD.Modeling`)
 
