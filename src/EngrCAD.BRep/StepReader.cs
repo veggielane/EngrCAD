@@ -376,17 +376,17 @@ public static class StepReader
 
         private Circle3d Circle(StepRecord record)
         {
-            var (origin, z, x) = Axis2(record.Args[1].AsReference());
+            var frame = Axis2(record.Args[1].AsReference());
             double radius = record.Args[2].AsNumber();
-            return new Circle3d(origin, x, z.Cross(x), radius);
+            return new Circle3d(frame.Origin, frame.X, frame.Y, radius);
         }
 
         private Ellipse3d Ellipse(StepRecord record)
         {
-            var (origin, z, x) = Axis2(record.Args[1].AsReference());
+            var frame = Axis2(record.Args[1].AsReference());
             double a = record.Args[2].AsNumber();
             double b = record.Args[3].AsNumber();
-            return new Ellipse3d(origin, x * a, z.Cross(x) * b);
+            return new Ellipse3d(frame.Origin, frame.X * a, frame.Y * b);
         }
 
         private NurbsCurve BsplineCurve(StepEntity entity)
@@ -453,17 +453,17 @@ public static class StepReader
             {
                 case "PLANE":
                 {
-                    var (origin, z, x) = Axis2(record.Args[1].AsReference());
-                    return new PlaneSurface(origin, x, z.Cross(x));
+                    var frame = Axis2(record.Args[1].AsReference());
+                    return new PlaneSurface(frame.Origin, frame.X, frame.Y);
                 }
                 case "CYLINDRICAL_SURFACE":
                 {
-                    var (origin, z, x) = Axis2(record.Args[1].AsReference());
-                    return new CylinderSurface(origin, x, z.Cross(x), record.Args[2].AsNumber());
+                    var frame = Axis2(record.Args[1].AsReference());
+                    return new CylinderSurface(frame.Origin, frame.X, frame.Y, record.Args[2].AsNumber());
                 }
                 case "SPHERICAL_SURFACE":
                 {
-                    var (origin, _, _) = Axis2(record.Args[1].AsReference());
+                    var origin = Axis2(record.Args[1].AsReference()).Origin;
                     return new SphereSurface(origin, record.Args[2].AsNumber());
                 }
                 case "SURFACE_OF_LINEAR_EXTRUSION":
@@ -839,18 +839,21 @@ public static class StepReader
             return Direction(record.Args[1].AsReference()) * record.Args[2].AsNumber();
         }
 
-        private (Vector3d Origin, Vector3d Z, Vector3d X) Axis2(int id)
+        private Frame3d Axis2(int id)
         {
             var entity = file.Entity(id);
             var record = entity.Find("AXIS2_PLACEMENT_3D")
                 ?? throw new NotSupportedException($"#{id} {entity.Keyword} is not an AXIS2_PLACEMENT_3D.");
             var origin = Point(record.Args[1].AsReference());
-            var z = (record.Args[2].IsNull ? Vector3d.UnitZ : Direction(record.Args[2].AsReference())).Normalized();
-            var xRaw = record.Args.Count > 3 && !record.Args[3].IsNull
+            var zRaw = record.Args[2].IsNull ? Vector3d.UnitZ : Direction(record.Args[2].AsReference());
+            var z = zRaw.Normalized();
+            var xHint = record.Args.Count > 3 && !record.Args[3].IsNull
                 ? Direction(record.Args[3].AsReference())
                 : z.ArbitraryPerpendicular(Tolerance.Default);
-            var x = (xRaw - z * z.Dot(xRaw)).Normalized();
-            return (origin, z, x);
+            // FromZX is the AXIS2_PLACEMENT_3D convention: z primary, x hint
+            // Gram-Schmidt-orthogonalized against it, y = z × x. Passing the raw z keeps
+            // the normalization bit-identical to the pre-Frame3d code.
+            return Frame3d.FromZX(origin, zRaw, xHint);
         }
 
         private (Vector3d Origin, Vector3d Direction) Axis1(int id)

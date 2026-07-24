@@ -100,6 +100,26 @@ public readonly struct Frame3d : IEquatable<Frame3d>
         return new Frame3d(origin, x, z.Cross(x), z);
     }
 
+    /// <summary>
+    /// Frame from axes that are <b>already</b> orthonormal: X and Y are stored exactly
+    /// as given (no Gram–Schmidt — callers whose axes must weld bit-for-bit with
+    /// geometry built elsewhere cannot tolerate re-derivation), Z = X × Y. Validates
+    /// (without modifying) that the axes are unit and perpendicular within
+    /// <paramref name="tolerance"/> and throws otherwise.
+    /// </summary>
+    public static Frame3d FromOrthonormal(in Vector3d origin, in Vector3d xAxis, in Vector3d yAxis) =>
+        FromOrthonormal(origin, xAxis, yAxis, Tolerance.Default);
+
+    /// <inheritdoc cref="FromOrthonormal(in Vector3d, in Vector3d, in Vector3d)"/>
+    public static Frame3d FromOrthonormal(in Vector3d origin, in Vector3d xAxis, in Vector3d yAxis, in Tolerance tolerance)
+    {
+        if (!tolerance.AreEqual(xAxis.Length, 1) || !tolerance.AreEqual(yAxis.Length, 1) ||
+            !tolerance.IsZero(xAxis.Dot(yAxis)))
+            throw new ArgumentException(
+                "FromOrthonormal requires unit, mutually perpendicular axes; use FromXY to orthonormalize.");
+        return new Frame3d(origin, xAxis, yAxis, xAxis.Cross(yAxis));
+    }
+
     // ---- point / vector / ray maps ----
 
     /// <summary>Maps frame-local coordinates to world space: Origin + X·p.X + Y·p.Y + Z·p.Z.</summary>

@@ -102,6 +102,24 @@ public class Frame3dTests
         Assert.Throws<ArgumentException>(() => Frame3d.FromZX(default, Vector3d.UnitZ, new Vector3d(0, 0, 5)));
     }
 
+    [Fact]
+    public void FromOrthonormal_PreservesAxesBitForBit()
+    {
+        // The trusted factory must not touch already-orthonormal axes (sweep frames
+        // must weld with geometry built from the same axes elsewhere).
+        var x = new Vector3d(0.6, 0.8, 0);
+        var y = new Vector3d(-0.8, 0.6, 0);
+        var frame = Frame3d.FromOrthonormal(new Vector3d(1, 2, 3), x, y);
+        Assert.Equal(x, frame.X);
+        Assert.Equal(y, frame.Y);
+        Assert.Equal(x.Cross(y), frame.Z);
+
+        Assert.Throws<ArgumentException>(() =>
+            Frame3d.FromOrthonormal(default, new Vector3d(2, 0, 0), Vector3d.UnitY));
+        Assert.Throws<ArgumentException>(() =>
+            Frame3d.FromOrthonormal(default, Vector3d.UnitX, new Vector3d(0.1, 1, 0)));
+    }
+
     // ---- FromNormal: the locked arbitrary-perpendicular convention ----
     // X must be Vector3d.ArbitraryPerpendicular of the normalized normal (cross with the
     // least-aligned canonical axis) — the convention used for axis frames across the

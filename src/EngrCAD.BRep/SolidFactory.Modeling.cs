@@ -244,14 +244,14 @@ public static partial class SolidFactory
         // One frame master defines rails and the end transform; per-segment surfaces are
         // built with the same (path, startX), so their frames agree exactly.
         var master = new SweptSurface(profile.Segments[0], path, profile.XAxis);
-        var (frameOrigin, frameX, frameY) = master.FrameAt(path.Domain.Start);
+        var startFrame = master.Frame(path.Domain.Start);
         var endTransform = master.TransformTo(path.Domain.End);
-        var (endOrigin, endX, endY) = master.FrameAt(path.Domain.End);
+        var endFrame = master.Frame(path.Domain.End);
 
         Vector2d LocalOffset(in Vector3d p)
         {
-            var d = p - frameOrigin;
-            return new Vector2d(d.Dot(frameX), d.Dot(frameY));
+            var local = startFrame.ToLocal(p);
+            return new Vector2d(local.X, local.Y);
         }
 
         return BuildSweptSolid(
@@ -260,8 +260,9 @@ public static partial class SolidFactory
             topTransform: endTransform,
             makeRailCurve: (bottom, _) => new SweptRailCurve(master, LocalOffset(bottom)),
             railDomain: path.Domain,
-            bottomCap: new PlaneSurface(frameOrigin, frameY, frameX),
-            topCap: new PlaneSurface(endOrigin, endX, endY));
+            // Bottom cap: axes swapped so the cap normal points backward along the path.
+            bottomCap: new PlaneSurface(startFrame.Origin, startFrame.Y, startFrame.X),
+            topCap: new PlaneSurface(endFrame.Origin, endFrame.X, endFrame.Y));
     }
 
     private static void ValidateCoplanarHole(Profile outer, Profile hole)

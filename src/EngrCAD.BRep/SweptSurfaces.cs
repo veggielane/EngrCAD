@@ -131,12 +131,17 @@ public sealed class SweptSurface : Surface
     /// <summary>Maps a profile-plane offset through the frame at path parameter <paramref name="v"/>.</summary>
     public Vector3d FramePoint(in Vector2d localOffset, double v)
     {
-        var (origin, x, y) = FrameAt(v);
-        return origin + x * localOffset.X + y * localOffset.Y;
+        var frame = Frame(v);
+        return frame.Origin + frame.X * localOffset.X + frame.Y * localOffset.Y;
     }
 
-    /// <summary>Frame (origin, x, y) at the path parameter; exact at the internal sample parameters.</summary>
-    public (Vector3d Origin, Vector3d X, Vector3d Y) FrameAt(double v)
+    /// <summary>
+    /// The rotation-minimizing frame at the path parameter (Z is the path tangent);
+    /// exact at the internal sample parameters. The axes are built from the sweep's own
+    /// interpolation, so <see cref="Frame3d.FromOrthonormal(in Vector3d, in Vector3d, in Vector3d)"/>
+    /// keeps them bit-for-bit (no re-orthonormalization drift against tessellation).
+    /// </summary>
+    public Frame3d Frame(double v)
     {
         double s = _path.Domain.NormalizedParameterOf(_path.Domain.Clamp(v)) * (_frameParams.Length - 1);
         int k = Math.Clamp((int)s, 0, _frameParams.Length - 2);
@@ -145,15 +150,23 @@ public sealed class SweptSurface : Surface
         var tangent = _path.TangentAt(v);
         var x = Vector3d.Lerp(_frameX[k], _frameX[k + 1], f);
         x = (x - tangent * x.Dot(tangent)).Normalized();
-        return (_path.PointAt(v), x, tangent.Cross(x));
+        return Frame3d.FromOrthonormal(_path.PointAt(v), x, tangent.Cross(x));
+    }
+
+    /// <summary>Frame (origin, x, y) at the path parameter; exact at the internal sample parameters.</summary>
+    public (Vector3d Origin, Vector3d X, Vector3d Y) FrameAt(double v)
+    {
+        var frame = Frame(v);
+        return (frame.Origin, frame.X, frame.Y);
     }
 
     /// <summary>Rigid transform mapping start-frame geometry to the frame at <paramref name="v"/>.</summary>
     public Matrix4d TransformTo(double v)
     {
         var t0 = _path.TangentAt(_path.Domain.Start);
-        var (origin, x, y) = FrameAt(v);
-        var t = x.Cross(y);
+        var frame = Frame(v);
+        var (origin, x, y) = (frame.Origin, frame.X, frame.Y);
+        var t = frame.Z;
 
         // Columns are the frame axes: B maps local (x, y, t) coordinates into world space.
         var basisStart = new Matrix4d(
