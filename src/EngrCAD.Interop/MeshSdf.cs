@@ -135,9 +135,11 @@ public sealed class MeshSdf : Sdf
 
     public override double Evaluate(in Vector3d point)
     {
-        var p = point; // capture for the closure
-        _bvh.Nearest(point, i => Math.Sqrt(ClosestPoint(i, p).Point.DistanceSquaredTo(p)),
-            out int triangle, out double distance);
+        var p = point;
+        // Struct metric through the generic Nearest — no closure/boxing allocation in the
+        // hottest kernel path (locked by MeshSdfTests.Evaluate_SteadyState_DoesNotAllocate).
+        var metric = new TriangleDistance(this, p);
+        _bvh.Nearest(point, ref metric, out int triangle, out double distance);
 
         if (_winding is not null)
             return _winding.FastWindingNumber(p) > 0.5 ? -distance : distance;
@@ -154,6 +156,13 @@ public sealed class MeshSdf : Sdf
             _ => _vertexNormals![_vertexIds![triangle * 3 + 2]],
         };
         return (p - closest).Dot(pseudonormal) >= 0 ? distance : -distance;
+    }
+
+    /// <summary>Allocation-free point-to-triangle distance metric for <see cref="Bvh.Nearest{TMetric}"/>.</summary>
+    private readonly struct TriangleDistance(MeshSdf sdf, Vector3d point) : IBvhDistance
+    {
+        public double DistanceTo(int item) =>
+            Math.Sqrt(sdf.ClosestPoint(item, point).Point.DistanceSquaredTo(point));
     }
 
     private enum Region

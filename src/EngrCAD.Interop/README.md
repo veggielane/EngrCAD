@@ -78,7 +78,10 @@ this project's conversions.)
 - **Mesh → Implicit**: `MeshSdf(mesh)` — signed distance to a closed manifold mesh:
   branch-and-bound nearest-triangle search over a BVH (Ericson closest-point-on-triangle);
   sign from the angle-weighted pseudonormal of the closest feature (Bærentzen–Aanæs),
-  exact for watertight meshes even at edges and vertices. The result is a first-class
+  exact for watertight meshes even at edges and vertices. `Evaluate` is allocation-free
+  in steady state — the nearest search goes through `Bvh.Nearest<TMetric>` with a struct
+  distance metric, not a closure (0 B measured over 100 k calls; locked by
+  `MeshSdfTests.Evaluate_SteadyState_DoesNotAllocate`). The result is a first-class
   `Sdf` node composable with the whole implicit engine.
   The sign source is opt-in via `new MeshSdf(mesh, MeshSignSource.WindingNumber)`, which
   drives the fast generalized winding number (`MeshWindingNumber` in EngrCAD.Mesh) instead

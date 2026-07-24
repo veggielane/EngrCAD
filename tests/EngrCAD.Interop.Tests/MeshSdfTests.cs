@@ -47,6 +47,46 @@ public class MeshSdfTests
     }
 
     [Fact]
+    public void Evaluate_SteadyState_DoesNotAllocate()
+    {
+        // Perf mandate: Evaluate is the hottest kernel path (every SDF sample of every
+        // bridged shape funnels through it). The BVH nearest-triangle search uses a
+        // struct metric (Bvh.Nearest<TMetric>), so steady-state evaluation must be
+        // allocation-free — the old lambda overload cost a closure per call.
+        var sdf = new MeshSdf(MeshPrimitives.UvSphere(1.0, segments: 24, rings: 12));
+
+        var rng = new Random(43);
+        var points = new Vector3d[256];
+        for (int i = 0; i < points.Length; i++)
+        {
+            points[i] = new Vector3d(
+                rng.NextDouble() * 4 - 2,
+                rng.NextDouble() * 4 - 2,
+                rng.NextDouble() * 4 - 2);
+        }
+
+        double sink = 0;
+        void RunBatch(int iterations)
+        {
+            for (int i = 0; i < iterations; i++)
+                sink += sdf.Evaluate(points[i & 255]);
+        }
+
+        RunBatch(5000); // warmup — let tiered compilation settle
+
+        const int iterations = 20_000;
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        RunBatch(iterations);
+        long delta = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        // A per-call closure would cost ≳ 88 B × 20 000 ≈ 1.7 MB; steady state must be
+        // (near-)zero. Allow a small one-time slack so background tiering can't flake.
+        Assert.True(delta < 1024,
+            $"MeshSdf.Evaluate allocated {delta} bytes over {iterations} calls ({(double)delta / iterations:F2} B/call)");
+        Assert.True(double.IsFinite(sink)); // keep the loop observable
+    }
+
+    [Fact]
     public void SignIsNegativeInsideAndPositiveOutside()
     {
         var sdf = new MeshSdf(MeshPrimitives.Cylinder(1, 2, segments: 32));
