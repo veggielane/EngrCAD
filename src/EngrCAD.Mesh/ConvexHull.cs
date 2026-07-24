@@ -49,7 +49,7 @@ public static class ConvexHull
         double extent = (max - min).Length;
         if (extent <= Tolerance.Default.Linear)
             throw new ArgumentException("All points are coincident; the hull is degenerate.", nameof(points));
-        double epsilon = Math.Max(1e-12, 1e-9 * extent);
+        double epsilon = Math.Max(1e-12, Tolerance.Default.Linear * extent);
 
         var faces = BuildInitialTetrahedron(points, epsilon);
 
