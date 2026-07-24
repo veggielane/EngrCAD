@@ -142,6 +142,9 @@ public readonly struct Matrix4d : IEquatable<Matrix4d>
         translation = new Vector3d(M14, M24, M34);
         scale = 0;
 
+        // Dimensionless slack on matrix entries (the perspective row and the normalized
+        // scale/orthogonality residuals are unit-scale, not model units); the value
+        // matches Tolerance.Default.Linear but is not a length comparison.
         const double eps = 1e-9;
         if (Math.Abs(M41) > eps || Math.Abs(M42) > eps || Math.Abs(M43) > eps || Math.Abs(M44 - 1) > eps)
             return false;

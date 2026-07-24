@@ -30,6 +30,9 @@ public readonly struct Interval : IEquatable<Interval>
 
     public double Clamp(double value) => Math.Clamp(value, Start, End);
 
+    // Equality is exact (bitwise) by design — value-type identity for hashing, and
+    // StepReader relies on bit equality as a was-the-domain-trimmed check. Tolerant
+    // comparison goes through Tolerance.Contains/AreEqual.
     public bool Equals(Interval other) => Start.Equals(other.Start) && End.Equals(other.End);
     public override bool Equals(object? obj) => obj is Interval i && Equals(i);
     public override int GetHashCode() => HashCode.Combine(Start, End);

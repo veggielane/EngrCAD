@@ -4,6 +4,8 @@ namespace EngrCAD.Core;
 
 /// <summary>
 /// Double-precision 2D vector, primarily for parametric (u, v) surface space.
+/// Operators and <see cref="Equals(Vector2d)"/> are exact (bitwise on components);
+/// tolerant comparison goes through the <see cref="Tolerance"/> policy.
 /// </summary>
 public readonly struct Vector2d : IEquatable<Vector2d>
 {

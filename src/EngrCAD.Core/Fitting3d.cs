@@ -53,6 +53,9 @@ public static class Fitting3d
     public static Frame3d FitPlane(IReadOnlyList<Vector3d> points)
     {
         var (centroid, values, vectors) = CovarianceEigen(points);
+        // Relative eigenvalue degeneracy test (eigenvalues are in length² units and scale
+        // with the cloud, so the model-unit Tolerance.Linear does not apply); 1e-300
+        // only guards the all-points-coincident case against 0 * 1e-12 = 0.
         if (points.Count < 3 || values[1] <= 1e-12 * Math.Max(values[0], 1e-300))
             throw new ArgumentException(
                 "The points do not determine a plane (coincident or collinear).", nameof(points));
@@ -147,6 +150,8 @@ internal static class SymmetricEigen3
         {
             double off = a[1] * a[1] + a[2] * a[2] + a[4] * a[4];
             double scale = a[0] * a[0] + a[3] * a[3] + a[5] * a[5];
+            // Jacobi convergence: relative ~machine-epsilon² threshold on squared entries —
+            // an algorithmic stop condition, not a geometric tolerance.
             if (off <= 1e-30 * Math.Max(scale, 1e-300))
                 break;
             Rotate(a, v, 0, 1); // (p, q) = (0, 1) zeroes a01
@@ -186,12 +191,16 @@ internal static class SymmetricEigen3
         };
 
         double apq = a[I(p, q)];
+        // Exact-zero guard: the rotation is exactly the identity (and theta below would
+        // divide by zero) only when the off-diagonal entry is bit-zero — deliberate ==.
         if (apq == 0)
             return;
         double app = a[I(p, p)];
         double aqq = a[I(q, q)];
 
         double theta = (aqq - app) / (2 * apq);
+        // theta == 0 is the exact equal-diagonal case where Math.Sign(0) = 0 would zero
+        // the rotation; treat sign(0) as +1 (standard Jacobi convention) — deliberate ==.
         double t = Math.Sign(theta == 0 ? 1 : theta) /
                    (Math.Abs(theta) + Math.Sqrt(theta * theta + 1));
         double c = 1 / Math.Sqrt(t * t + 1);

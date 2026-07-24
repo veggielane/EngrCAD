@@ -162,6 +162,8 @@ public static class Fitting2d
 
     private static bool Inside(in BoundingCircle2d circle, in Vector2d point)
     {
+        // Relative 1e-9 slack in r² units (documented on MinCircle) so support points
+        // re-test as inside; scale-free, so the model-unit Tolerance.Linear does not apply.
         double r = circle.Radius;
         return (point - circle.Center).LengthSquared <= r * r + 1e-9 * Math.Max(1e-9, r * r);
     }
@@ -177,7 +179,8 @@ public static class Fitting2d
         var ab = b - a;
         var ac = c - a;
         double det = 2 * ab.Cross(ac);
-        // Collinear support: fall back to the widest two-point circle.
+        // Collinear support: fall back to the widest two-point circle. Relative
+        // near-machine-epsilon degeneracy test in length² units, not a model-unit tolerance.
         double scale = Math.Max(ab.LengthSquared, ac.LengthSquared);
         if (Math.Abs(det) <= 1e-14 * scale)
         {
