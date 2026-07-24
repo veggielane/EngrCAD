@@ -56,10 +56,50 @@ public static class OffscreenRenderer
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
 
-        using var egl = EglContext.TryCreate(width, height, out var error)
+        // Render at 2x and box-downsample: deterministic anti-aliasing that works on
+        // every backend (MSAA pbuffers are unreliable under ANGLE/WARP). The projection
+        // uses the aspect ratio only, so the camera framing is identical.
+        const int supersample = 2;
+        using var egl = EglContext.TryCreate(width * supersample, height * supersample, out var error)
             ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
-        return Draw(gl, parts, width, height, camera, furniture);
+        var oversized = Draw(gl, parts, width * supersample, height * supersample, camera, furniture);
+        return Downsample(oversized, width, height, supersample);
+    }
+
+    /// <summary>Box-filter downsample of RGBA8 pixels by an integer factor.</summary>
+    private static byte[] Downsample(byte[] source, int width, int height, int factor)
+    {
+        if (factor == 1)
+            return source;
+        int sourceWidth = width * factor;
+        var result = new byte[width * height * 4];
+        int samples = factor * factor;
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                int r = 0, g = 0, b = 0, a = 0;
+                for (int sy = 0; sy < factor; sy++)
+                {
+                    int row = ((y * factor + sy) * sourceWidth + x * factor) * 4;
+                    for (int sx = 0; sx < factor; sx++)
+                    {
+                        r += source[row];
+                        g += source[row + 1];
+                        b += source[row + 2];
+                        a += source[row + 3];
+                        row += 4;
+                    }
+                }
+                int destination = (y * width + x) * 4;
+                result[destination] = (byte)(r / samples);
+                result[destination + 1] = (byte)(g / samples);
+                result[destination + 2] = (byte)(b / samples);
+                result[destination + 3] = (byte)(a / samples);
+            }
+        }
+        return result;
     }
 
     /// <summary>Renders <paramref name="parts"/> to a PNG file. See <see cref="Render"/>.</summary>
@@ -102,7 +142,13 @@ public static class OffscreenRenderer
             cam.Distance * Math.Cos(cam.Pitch) * Math.Sin(cam.Yaw),
             cam.Distance * Math.Sin(cam.Pitch));
         var view = LookAt(eye, cam.Target, Vector3d.UnitZ);
-        var proj = Perspective(Math.PI / 4, (double)width / height, 0.1, 200.0);
+        // Frustum scaled from the camera and scene so large scenes neither clip at a
+        // fixed far plane nor need a distance clamp (which cropped scenes wider than
+        // ~100 units when the far plane was a hardcoded 200).
+        double sceneReach = cam.Distance + (bounds.IsEmpty ? 10 : bounds.Size.Length);
+        double nearPlane = Math.Max(cam.Distance * 0.005, 0.01);
+        double farPlane = Math.Max(200.0, sceneReach * 2);
+        var proj = Perspective(Math.PI / 4, (double)width / height, nearPlane, farPlane);
 
         Span<float> matrix = stackalloc float[16];
 
@@ -221,7 +267,7 @@ public static class OffscreenRenderer
     /// <summary>The viewer's first-visit framing: default yaw/pitch, distance from bounds.</summary>
     private static CameraState DefaultCamera(in Aabb bounds) => bounds.IsEmpty
         ? new CameraState(0.7, 0.45, 15.0, (0, 0, 0))
-        : new CameraState(0.7, 0.45, Math.Clamp(bounds.Size.Length * 1.25 + 1, 2, 110), bounds.Center);
+        : new CameraState(0.7, 0.45, Math.Max(bounds.Size.Length * 1.25 + 1, 2), bounds.Center);
 
     // ---- geometry upload ----
 

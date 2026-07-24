@@ -154,20 +154,28 @@ internal sealed unsafe class EglContext : IDisposable
 
         _eglBindApi(EGL_OPENGL_ES_API);
 
-        int* configAttribs = stackalloc int[]
+        // 24-bit depth first: with only 16 bits, PolygonOffset(1,1) pushes glancing-angle
+        // fills past their own silhouettes and the background bites through as sawtooth
+        // notches. Fall back to 16 for drivers without a 24-bit pbuffer config.
+        nint config = 0;
+        int configCount = 0;
+        foreach (int depthBits in stackalloc int[] { 24, 16 })
         {
-            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-            EGL_RED_SIZE, 8,
-            EGL_GREEN_SIZE, 8,
-            EGL_BLUE_SIZE, 8,
-            EGL_ALPHA_SIZE, 8,
-            EGL_DEPTH_SIZE, 16,
-            EGL_NONE,
-        };
-        nint config;
-        int configCount;
-        if (_eglChooseConfig(display, configAttribs, &config, 1, &configCount) == 0 || configCount < 1)
+            int* configAttribs = stackalloc int[]
+            {
+                EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+                EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+                EGL_RED_SIZE, 8,
+                EGL_GREEN_SIZE, 8,
+                EGL_BLUE_SIZE, 8,
+                EGL_ALPHA_SIZE, 8,
+                EGL_DEPTH_SIZE, depthBits,
+                EGL_NONE,
+            };
+            if (_eglChooseConfig(display, configAttribs, &config, 1, &configCount) != 0 && configCount >= 1)
+                break;
+        }
+        if (configCount < 1)
         {
             error = $"eglChooseConfig found no pbuffer-capable GLES3 config (eglGetError=0x{_eglGetError():X})";
             return null;

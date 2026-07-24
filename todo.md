@@ -416,12 +416,12 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   renders a scene to PNG with no window via a direct EGL-pbuffer context over Avalonia's
   ANGLE natives (`OffscreenRenderer` + `EglContext`, `PngWriter`). This is the viewer
   self-verification loop — tests and agents render + inspect pixels instead of
-  screenshotting the demo app. Follow-ups (docs-site findings): `EglContext` requests
-  16-bit depth while the renderer uses `PolygonOffset(1,1)` → sawtooth silhouette
-  notching on far parts (request depth 24 with 16 fallback and/or reduce the slope
-  factor; regenerate docs PNGs after — `dotnet run --project tools/EngrCAD.DocsGen --
-  docs`); `DefaultCamera` clamps distance at 110 world units so scenes wider than
-  ~100 crop; `Part.DisplayMode` and section planes are ignored offscreen.
+  screenshotting the demo app. Render-quality fixes ✅ done: 24-bit depth (16
+  fallback) kills the PolygonOffset silhouette notching; 2× supersample +
+  box-downsample gives deterministic anti-aliasing on every backend (MSAA pbuffers
+  are unreliable under ANGLE/WARP); frustum near/far now scale from camera + scene
+  so the 110-unit distance clamp is gone (large scenes no longer crop). Remaining:
+  `Part.DisplayMode` and section planes are ignored offscreen.
 - [ ] **Extract a shared viewer render-core** (from a code-quality review) —
   `OffscreenRenderer` deliberately duplicates ~150 lines from `ViewportControl`
   (shader source strings, `LookAt`/`Perspective`/`WriteColumnMajor`, grid/axes build)
