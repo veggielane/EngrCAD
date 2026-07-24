@@ -38,6 +38,14 @@ internal sealed class TorusShape(double majorRadius, double minorRadius) : Shape
     internal override string Describe() => $"Torus(R={majorRadius:g4}, r={minorRadius:g4})";
 }
 
+internal sealed class ConeShape(double bottomRadius, double topRadius, double height) : Shape
+{
+    public double BottomRadius => bottomRadius;
+    public double TopRadius => topRadius;
+    public double Height => height;
+    internal override string Describe() => $"Cone(r1={bottomRadius:g4}, r2={topRadius:g4}, h={height:g4})";
+}
+
 internal sealed class ExtrudeShape : Shape
 {
     public Profile? Profile { get; }

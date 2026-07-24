@@ -42,6 +42,42 @@ internal sealed class CylinderSdf(double radius, double halfHeight) : Sdf
     public override Aabb Bounds => new((-radius, -radius, -halfHeight), (radius, radius, halfHeight));
 }
 
+/// <summary>
+/// Capped cone (frustum) along Z: radius <c>bottomRadius</c> at z = −h, <c>topRadius</c>
+/// at z = +h (Quilez's exact sdCappedCone, converted to Z-up). Exact for any radii,
+/// including a zero radius (pointed apex) and equal radii (a cylinder).
+/// </summary>
+internal sealed class ConeSdf(double bottomRadius, double topRadius, double halfHeight) : Sdf
+{
+    public override double Evaluate(in Vector3d p)
+    {
+        double qx = Math.Sqrt(p.X * p.X + p.Y * p.Y);
+        double qy = p.Z;
+        double h = halfHeight;
+        // ca: distance to the nearer cap disk (radially clamped); cb: distance to the
+        // slanted side segment from (bottomRadius, −h) to (topRadius, +h).
+        double cax = qx - Math.Min(qx, qy < 0 ? bottomRadius : topRadius);
+        double cay = Math.Abs(qy) - h;
+        double k2x = topRadius - bottomRadius;
+        double k2y = 2 * h;
+        double t = Math.Clamp(
+            ((topRadius - qx) * k2x + (h - qy) * k2y) / (k2x * k2x + k2y * k2y), 0, 1);
+        double cbx = qx - topRadius + k2x * t;
+        double cby = qy - h + k2y * t;
+        double s = cbx < 0 && cay < 0 ? -1 : 1;
+        return s * Math.Sqrt(Math.Min(cax * cax + cay * cay, cbx * cbx + cby * cby));
+    }
+
+    public override Aabb Bounds
+    {
+        get
+        {
+            double r = Math.Max(bottomRadius, topRadius);
+            return new Aabb((-r, -r, -halfHeight), (r, r, halfHeight));
+        }
+    }
+}
+
 internal sealed class TorusSdf(double majorRadius, double minorRadius) : Sdf
 {
     public override double Evaluate(in Vector3d p)

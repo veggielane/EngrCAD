@@ -54,6 +54,23 @@ public abstract class Shape
     /// <summary>Torus about +Z, centered at the origin.</summary>
     public static Shape Torus(double majorRadius, double minorRadius) => new TorusShape(majorRadius, minorRadius);
 
+    /// <summary>
+    /// Cone frustum along +Z, centered at the origin (OpenSCAD's <c>cylinder(r1, r2)</c>):
+    /// radius <paramref name="bottomRadius"/> at z = −height/2 growing linearly to
+    /// <paramref name="topRadius"/> at z = +height/2. A zero radius makes that end a
+    /// pointed apex. Native in all three representations.
+    /// </summary>
+    public static Shape Cone(double bottomRadius, double topRadius, double height)
+    {
+        if (bottomRadius < 0 || topRadius < 0)
+            throw new ArgumentOutOfRangeException(nameof(bottomRadius), "Radii must be non-negative.");
+        if (bottomRadius <= 0 && topRadius <= 0)
+            throw new ArgumentException("At least one of the two radii must be positive.", nameof(bottomRadius));
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        return new ConeShape(bottomRadius, topRadius, height);
+    }
+
     // ---- Modeling operations ----
 
     public static Shape Extrude(Profile profile, in Vector3d direction, IReadOnlyList<Profile>? holes = null) =>

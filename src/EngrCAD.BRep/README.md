@@ -44,7 +44,13 @@ operations. Depends only on `EngrCAD.Core`.
   edge use; `SatisfiesEulerFormula(genus)` checks V − E + F − (L − F) − 2(S − G) = 0.
 - **`Profile`** — planar closed chain of curve segments (or one closed curve) used by the
   modeling operations; winding is auto-corrected per operation.
-- **`SolidFactory`** — `MakeBox`, `MakeCylinder`, and the modeling operations:
+- **`SolidFactory`** — `MakeBox`, `MakeCylinder`, `MakeSphere`, `MakeTorus`,
+  `MakeCone(r1, r2, height[, baseCenter, axis])` (frustum; the side is an exact
+  `RevolvedSurface` of the slanted line generator, reusing the revolved-band machinery —
+  pole-fan tessellation, analytic plane⊥revolve circles, SURFACE_OF_REVOLUTION STEP
+  export — rather than a dedicated cone surface type; rim circles are phase-aligned with
+  u = 0; a zero radius makes that end an apex pole with no rim edge or cap), and the
+  modeling operations:
   - `Extrude(profile, direction, holes?)` — shear allowed; holes make genus-n solids.
   - `Revolve(profile, axisOrigin, axisDir, angle?, holes?)` — full turn (torus topology,
     no caps) or partial (planar caps; closed profiles give pipe elbows; holes allowed).

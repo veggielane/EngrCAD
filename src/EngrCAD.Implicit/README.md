@@ -8,9 +8,10 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 - **`Sdf`** (abstract base) — `Evaluate(point)`, batch `Evaluate(span, span)`,
   finite-difference `Normal`, and conservative `Bounds` propagated through every node
   (infinite for unbounded fields).
-- **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, torus, capsule,
-  half-space, and a gyroid lattice (approximate distance, unbounded — intersect with a
-  finite solid).
+- **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, cone
+  (`Sdf.Cone(r1, r2, height)` capped frustum; a zero radius gives a pointed apex),
+  torus, capsule, half-space, and a gyroid lattice (approximate distance, unbounded —
+  intersect with a finite solid).
 - **Operators**: union / intersection / difference (also as `a | b`, `a & b`, `a - b`),
   polynomial smooth blends (`SmoothUnion` etc. — lower-bound distances near the blend),
   `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`.

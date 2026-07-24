@@ -58,6 +58,12 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear would need an ellipsoid surface"));
                 break;
+            case ConeShape:
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear would need an elliptic cone surface"));
+                break;
             case RevolveShape { Sketch: { } sketch } revolve:
                 if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -124,7 +130,7 @@ internal static class ShapeCompiler
         bool rigid = m.TryDecomposeRigidUniformScale(out _, out _, out _);
         switch (shape)
         {
-            case BoxShape or SphereShape or CylinderShape or TorusShape:
+            case BoxShape or SphereShape or CylinderShape or TorusShape or ConeShape:
                 entries.Add(rigid
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
@@ -291,6 +297,17 @@ internal static class ShapeCompiler
                     translation, rotation.Rotate(Vector3d.UnitZ));
             }
 
+            case ConeShape cone:
+            {
+                // Base and top centers transform exactly; radii scale uniformly.
+                Decompose(m, shape, out _, out _, out double coneScale);
+                var coneBase = m.TransformPoint(new Vector3d(0, 0, -cone.Height / 2));
+                var coneTop = m.TransformPoint(new Vector3d(0, 0, cone.Height / 2));
+                return SolidFactory.MakeCone(
+                    cone.BottomRadius * coneScale, cone.TopRadius * coneScale, cone.Height * coneScale,
+                    coneBase, coneTop - coneBase);
+            }
+
             case ExtrudeShape { Sketch: { } sketch } extrude:
             {
                 var effective = m * extrude.PlaneMatrix;
@@ -418,6 +435,8 @@ internal static class ShapeCompiler
                 return Place(Sdf.Cylinder(cyl.Radius, cyl.Height), rotation, translation, scale);
             case TorusShape torus:
                 return Place(Sdf.Torus(torus.MajorRadius, torus.MinorRadius), rotation, translation, scale);
+            case ConeShape cone:
+                return Place(Sdf.Cone(cone.BottomRadius, cone.TopRadius, cone.Height), rotation, translation, scale);
 
             case ExtrudeShape { Sketch: { } sketch } extrude:
             {
