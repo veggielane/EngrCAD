@@ -3,31 +3,26 @@ using EngrCAD.Core;
 
 namespace EngrCAD.Modeling;
 
-/// <summary>A placement for 2D sketches: origin plus orthonormal in-plane axes.</summary>
+/// <summary>A placement for 2D sketches: a rigid <see cref="Frame3d"/> whose X/Y span
+/// the sketch plane (the sketch's 2D coordinates) and whose Z is the plane normal.</summary>
 public readonly struct SketchPlane
 {
-    public Vector3d Origin { get; }
-    public Vector3d XAxis { get; }
-    public Vector3d YAxis { get; }
-    public Vector3d Normal => XAxis.Cross(YAxis);
+    /// <summary>The underlying rigid frame (X/Y in-plane, Z = normal).</summary>
+    public Frame3d Frame { get; }
 
-    private SketchPlane(in Vector3d origin, in Vector3d xAxis, in Vector3d yAxis)
-    {
-        Origin = origin;
-        XAxis = xAxis;
-        YAxis = yAxis;
-    }
+    public Vector3d Origin => Frame.Origin;
+    public Vector3d XAxis => Frame.X;
+    public Vector3d YAxis => Frame.Y;
+    public Vector3d Normal => Frame.Z;
 
-    public static readonly SketchPlane XY = new(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY);
-    public static readonly SketchPlane XZ = new(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitZ);
-    public static readonly SketchPlane YZ = new(Vector3d.Zero, Vector3d.UnitY, Vector3d.UnitZ);
+    public SketchPlane(in Frame3d frame) => Frame = frame;
 
-    public static SketchPlane At(in Vector3d origin, in Vector3d xAxis, in Vector3d yAxis)
-    {
-        var x = xAxis.Normalized();
-        var y = (yAxis - x * yAxis.Dot(x)).Normalized(); // re-orthogonalized
-        return new SketchPlane(origin, x, y);
-    }
+    public static readonly SketchPlane XY = new(Frame3d.WorldXY);
+    public static readonly SketchPlane XZ = new(Frame3d.FromOrthonormal(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitZ));
+    public static readonly SketchPlane YZ = new(Frame3d.FromOrthonormal(Vector3d.Zero, Vector3d.UnitY, Vector3d.UnitZ));
+
+    public static SketchPlane At(in Vector3d origin, in Vector3d xAxis, in Vector3d yAxis) =>
+        new(Frame3d.FromXY(origin, xAxis, yAxis)); // same Gram-Schmidt order as before (locked by Core test)
 
     public Vector3d ToWorld(in Vector2d point) => Origin + XAxis * point.X + YAxis * point.Y;
 

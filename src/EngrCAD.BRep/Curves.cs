@@ -136,6 +136,10 @@ public sealed class Line3d(Vector3d start, Vector3d end) : Curve3d
 /// </summary>
 public sealed class Circle3d(Vector3d center, Vector3d xDirection, Vector3d yDirection, double radius) : Curve3d
 {
+    /// <summary>Circle of <paramref name="radius"/> in the frame's X/Y plane, centered
+    /// at its origin (axis = frame Z, t = 0 along frame X).</summary>
+    public Circle3d(in Frame3d frame, double radius) : this(frame.Origin, frame.X, frame.Y, radius) { }
+
     public Vector3d Center => center;
     public Vector3d XDirection => xDirection;
     public Vector3d YDirection => yDirection;
@@ -576,6 +580,12 @@ public sealed class NurbsCurve : Curve3d
 /// </summary>
 public sealed class Ellipse3d(Vector3d center, Vector3d semiAxisX, Vector3d semiAxisY) : Curve3d
 {
+    /// <summary>Ellipse in the frame's X/Y plane centered at its origin, with semi-axis
+    /// lengths <paramref name="semiMajor"/> along frame X and <paramref name="semiMinor"/>
+    /// along frame Y.</summary>
+    public Ellipse3d(in Frame3d frame, double semiMajor, double semiMinor)
+        : this(frame.Origin, frame.X * semiMajor, frame.Y * semiMinor) { }
+
     public Vector3d Center => center;
     public Vector3d SemiAxisX => semiAxisX;
     public Vector3d SemiAxisY => semiAxisY;

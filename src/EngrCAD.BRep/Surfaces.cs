@@ -102,6 +102,9 @@ public sealed class PlaneSurface(Vector3d origin, Vector3d xDirection, Vector3d 
 {
     private static readonly Interval Infinite = new(double.NegativeInfinity, double.PositiveInfinity);
 
+    /// <summary>Plane spanned by the frame's X/Y through its origin (normal = frame Z).</summary>
+    public PlaneSurface(in Frame3d frame) : this(frame.Origin, frame.X, frame.Y) { }
+
     public Vector3d Origin => origin;
     public Vector3d XDirection => xDirection;
     public Vector3d YDirection => yDirection;

@@ -29,6 +29,11 @@ public sealed class Parabola3d : Curve3d
         _domain = domain;
     }
 
+    /// <summary>Parabola in the frame's X/Y plane: apex at the frame origin, symmetry
+    /// axis along frame X, parameter along frame Y.</summary>
+    public Parabola3d(in Frame3d frame, double focalLength, Interval domain)
+        : this(frame.Origin, frame.X, frame.Y, focalLength, domain) { }
+
     public Vector3d Apex { get; }
     public Vector3d XDirection { get; }
     public Vector3d YDirection { get; }
@@ -86,6 +91,12 @@ public sealed class Hyperbola3d : Curve3d
         SemiAxisY = semiAxisY;
         _domain = domain;
     }
+
+    /// <summary>Hyperbola branch in the frame's X/Y plane centered at its origin, with
+    /// semi-axis lengths <paramref name="semiAxisX"/> along frame X (toward the apex)
+    /// and <paramref name="semiAxisY"/> along frame Y.</summary>
+    public Hyperbola3d(in Frame3d frame, double semiAxisX, double semiAxisY, Interval domain)
+        : this(frame.Origin, frame.X * semiAxisX, frame.Y * semiAxisY, domain) { }
 
     public Vector3d Center { get; }
     public Vector3d SemiAxisX { get; }
