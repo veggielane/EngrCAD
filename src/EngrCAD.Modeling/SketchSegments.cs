@@ -101,6 +101,8 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
     public override Vector2d Start => PointAt(startAngle);
     public override Vector2d End => PointAt(startAngle + sweep);
 
+    // Angular round-off slack: full circles are constructed with sweep = ±2π exactly,
+    // so 1e-12 only absorbs arithmetic noise (tighter than Tolerance.Default.Angular).
     public bool IsFullCircle => Math.Abs(Math.Abs(sweep) - 2 * Math.PI) < 1e-12;
 
     public override SketchSegment Reversed() => new ArcSeg(center, radius, startAngle + sweep, -sweep);

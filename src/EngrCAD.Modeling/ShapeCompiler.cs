@@ -129,6 +129,9 @@ internal static class ShapeCompiler
                 else if (thread.ChamferLength > 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "end chamfers have no B-Rep form yet (the 45° cone ∩ helical-band cut is future surface-intersection work) — pass chamferEnds: false, or use ToMesh/ToImplicit"));
+                // Deliberate exact-zero test: "no clearance requested" is a user-parameter
+                // contract (any nonzero offset means distance-field clearance), not a
+                // geometric comparison.
                 else if (thread.ProfileOffset != 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
@@ -145,6 +148,7 @@ internal static class ShapeCompiler
                 if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
                     entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
                         "a mirrored, sheared, or non-uniformly scaled placement cannot re-place a helical thread exactly (a mirrored thread is left-handed)"));
+                // Deliberate exact-zero test (see ThreadShape above).
                 else if (hole.Clearance != 0)
                     entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
                         "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
@@ -469,6 +473,8 @@ internal static class ShapeCompiler
                 return LowerBrep(drill.Expanded, m);
             }
 
+            // Exact-zero user-parameter gate (matches the Explain classification above):
+            // only the unmodified basic profile has an exact B-Rep form.
             case ThreadShape thread when thread.ProfileOffset == 0 && thread.ChamferLength <= 0:
             {
                 // The ISO 68-1 basic profile, crest centered at phase 0 — the SAME
@@ -691,6 +697,8 @@ internal static class ShapeCompiler
     private static Sdf Place(Sdf sdf, in Quaterniond rotation, in Vector3d translation, double scale)
     {
         var result = sdf;
+        // Round-off-scale no-op elision (pure optimization: taking the wrap branch for
+        // an identity transform would still be correct, just a redundant SDF node).
         if (Math.Abs(scale - 1) > 1e-12)
             result = result.Scale(scale);
         if (Math.Abs(rotation.W - 1) > 1e-12)
@@ -917,6 +925,8 @@ internal static class ShapeCompiler
     private static bool IsTranslation(in Matrix4d m, out Vector3d offset)
     {
         offset = new Vector3d(m.M14, m.M24, m.M34);
+        // Deliberate bit-exact test: pure translations built by CreateTranslation have
+        // exactly these entries; a near-translation correctly falls to the general path.
         return m.M11 == 1 && m.M12 == 0 && m.M13 == 0
             && m.M21 == 0 && m.M22 == 1 && m.M23 == 0
             && m.M31 == 0 && m.M32 == 0 && m.M33 == 1
