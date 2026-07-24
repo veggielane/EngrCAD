@@ -160,12 +160,22 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   with a planar body face with actionable guidance. Remaining gap: two *separate*
   `Drill` calls aren't cross-validated; a future optimization can avoid the read-only
   validation lowering (`DrillShape` lowers the body twice on the B-Rep path).
-- [ ] **Bug: cross-drill through a bore fails in `BrepBoolean`** (found by
-  TessStepFix) — `Difference(drilled box, perpendicular cylinder tool)` fails
-  `Validate` ("Edge is used by 1 coedges") inside the boolean, before tessellation:
-  the tool-side band wrap-split by NON-PLANAR tracer curves doesn't seal. The
-  tessellation side (band-with-holes) is ready; this is the remaining blocker for
-  true cross-drilled-bore booleans.
+- [x] **Bug: cross-drill through a bore fails in `BrepBoolean`** ✅ fixed — the real
+  root cause sat upstream of the suspected wrap-split: `PullCurveRuns` sampled tracer
+  polylines at uniform parameters (mid-chord points sit step²/8r ≈ 1e-4 off-surface,
+  past the 1e-6 inverse-evaluation tolerance) so pullback silently returned zero runs,
+  both bands went unsplit, and whole-band probes discarded them. Fix: one shared
+  sampling rule (`FaceGeometry.ExactSampleParameters` — polylines at vertex
+  parameters, `CurveSegment`-over-polyline mapped, else uniform), per-fragment loop
+  parity for multi-cut bands, and `SplitBandByNonPlanarWrapCurve` (sub-bands keep the
+  carrier surface, trimmed-face tessellated; loop assignment by v-range).
+  Difference/Union/Intersection + Shape-level tests with derived genus and
+  bicylinder-quadrature volumes. Remaining gaps: equal-radius perpendicular cylinders
+  (tangent bicylinder) rejected loudly by the overlapping-v-range guard;
+  `CylinderSurface` bands still can't wrap-split (unreachable today — tools lower to
+  extruded circles); `CurveSegment`-over-polyline edges not special-cased in
+  `SampleEdge` and `TraceFaces` angle probes still sample at 2%/98% (both unreachable
+  in current flows).
 - [ ] **Threads** — real modeled thread geometry, internal and external:
   - **Threaded holes**: `Shape.ThreadedHole(spec, points, depth, plane)` — drill the
     ISO 262 tap-drill pilot (the `StandardHoles.Tapped` table already has them), then
