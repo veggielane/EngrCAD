@@ -1,0 +1,39 @@
+{
+  "$schema": "https://raw.githubusercontent.com/dotnet/docfx/main/schemas/docfx.schema.json",
+  "metadata": [
+    {
+      "src": [
+        {
+          "src": "../src",
+          "files": ["**/*.csproj"]
+        }
+      ],
+      "dest": "api",
+      "outputFormat": "mref",
+      "memberLayout": "samePage",
+      "enumSortOrder": "declaringOrder"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["**/*.{md,yml}"],
+        "exclude": ["_site/**", "obj/**"]
+      }
+    ],
+    "resource": [
+      {
+        "files": ["examples/images/**"]
+      }
+    ],
+    "output": "_site",
+    "template": ["default", "modern"],
+    "globalMetadata": {
+      "_appName": "EngrCAD",
+      "_appTitle": "EngrCAD",
+      "_appFooter": "EngrCAD — a hybrid B-Rep / implicit / mesh geometry kernel for modern .NET",
+      "_enableSearch": true,
+      "pdf": false
+    }
+  }
+}

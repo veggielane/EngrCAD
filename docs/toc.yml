@@ -1,0 +1,8 @@
+- name: Getting started
+  href: getting-started.md
+- name: Examples
+  href: examples/toc.yml
+- name: Writing examples
+  href: writing-examples.md
+- name: API reference
+  href: api/

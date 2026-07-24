@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+    <RootNamespace>EngrCAD.DocsGen</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The viewer pulls in the whole kernel (Modeling -> Interop -> BRep/Mesh/Implicit -> Core). -->
+    <ProjectReference Include="..\..\src\EngrCAD.Viewer\EngrCAD.Viewer.csproj" />
+    <ProjectReference Include="..\..\src\EngrCAD.Query\EngrCAD.Query.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Tool-only dependency (never allowed in src/*): Roslyn scripting executes doc snippets. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp.Scripting" Version="4.14.0" />
+  </ItemGroup>
+
+</Project>
