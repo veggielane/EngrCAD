@@ -26,7 +26,9 @@ Dark-themed layout around one shared GL viewport:
 - **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views, a
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
-  a **Section** toggle with an **X/Y/Z axis cycler** button beside it (see below).
+  a **Section** toggle with an **X/Y/Z axis cycler** button beside it (see below),
+  an **Annot** toggle (3D annotations, on by default — see below), and a
+  **Measure** toggle (interactive dimensioning — see below).
 - **Global view style** (`ViewportControl.ViewStyle`, the toolbar dropdown): the
   classic CAD display-style selector — **Points / Wireframe / Shaded / Shaded +
   Edges** — applied to the whole viewport. Precedence rule (one place:
@@ -95,8 +97,8 @@ Dark-themed layout around one shared GL viewport:
   `ViewCube.cs`): drawn after the scene into its own ~104-DIP sub-viewport with the
   depth buffer cleared (always on top), reusing the existing flat-color line
   program — face fills are 6 flat-shaded tones (top lightest), edges and labels are
-  lines, and the labels are a tiny hardcoded **stroke font** (polyline letters — no
-  text renderer, no new shaders). The mini-projection is **always orthographic**
+  lines, and the labels are polyline lettering from the shared **`StrokeFont`**
+  (no text renderer, no new shaders). The mini-projection is **always orthographic**
   regardless of the main perspective/ortho toggle (standard for orientation
   widgets), which also makes the screen-space hit test an exact ortho
   ray-vs-unit-cube slab test with band classification (|face coordinate| > 0.55
@@ -118,6 +120,36 @@ Dark-themed layout around one shared GL viewport:
   changes, and hover clears when a drag/press starts or the pointer leaves the
   viewport or enters the cube region. Hover inherits picking's v1 behavior of
   ignoring the section plane (it can hover a part through the cut-away half).
+- **3D annotations (PMI)**: parts annotated in Modeling (`Part.Annotate` —
+  selector-measured `LinearDimension`/`RadialDimension`, `LeaderNote`,
+  `DatumLabel`, hole/thread callouts; see the Modeling README) render as classic
+  dimension graphics: extension lines with a gap at the model and an overshoot past
+  the dimension line, arrowheads, radial/note leaders, datum boxes, and **billboarded
+  screen-constant text** from the shared **`StrokeFont`** (`StrokeFont.cs`: digits,
+  A-Z, and the dimension symbols — diameter, degree, plus-minus, depth, counterbore,
+  countersink — as polyline glyphs; the view cube's labels use the same table).
+  Implementation is self-contained in `AnnotationLayer.cs` following the
+  isoline/cube precedents: `AnnotationGeometry` is pure math (unit-tested without
+  GL), billboarding is CPU-side and rebuilt **only when the camera pose, viewport,
+  or annotation set changes** (value-equality on `AnnotationCamera` is the cache
+  key — a static view costs one struct comparison per frame), and the batch draws
+  through the existing line program. Depth behavior is **always-on-top** in v1 (the
+  pass disables the depth test — dimensions read from any angle; occlusion-aware is
+  a follow-up), and annotations are never section-clipped (documentation, not model
+  geometry). Annotations pose with the instance transform, so assembly instances
+  show their part's annotations in place; per-part resolution failures (a selector
+  broken by an edit) surface in the status bar instead of killing the scene. The
+  toolbar **Annot** toggle (`ViewportControl.ShowAnnotations`, default on) hides
+  them. **Unlike the view cube, annotations DO render in headless offscreen output**
+  — they are documentation content, so docs images can carry dimensions.
+- **Measure tool** (toolbar **Measure**, `ViewportControl.MeasureMode`): while on,
+  clicks pick **surface points** (the existing pick raycast, returning the exact
+  hit point) instead of selecting parts; two picks create a **transient
+  point-to-point dimension** shown immediately (the same `LinearDimension`
+  machinery, world-anchored). Escape clears the measurement, toggling off clears
+  and exits, and a new pair replaces the last. Tests and custom hosts drive it via
+  `ViewportControl.MeasurePick(point)` (synthetic mouse input does not reach
+  Avalonia). Persistent face-selector dimensions are authored in code in v1.
 - **Model tree** (left): the current tab's loose parts and **assembly hierarchies** —
   assembly/sub-assembly header rows with their occurrences indented one level per
   depth (always expanded in v1; the tree walks the tab exactly like
@@ -274,10 +306,14 @@ EngrCad.RenderToImage(scene, "cut.png",                                     // r
 
 Headless renders honor everything the window draws — **per-part display modes**
 (wireframe, translucent with the same shared back-to-front ordering and opaque
-silhouette edges), the **global `ViewStyle`** with the same precedence rule, and
+silhouette edges), the **global `ViewStyle`** with the same precedence rule,
 **axis-aligned section planes** (`sectionAxis` + `sectionOffset`; enabled when the
-offset is non-null) — so a headless PNG matches what the viewer shows, and docs
-cutaways can use real section planes instead of boolean-cut workarounds.
+offset is non-null), and **3D annotations** (parts' dimensions/notes/callouts draw
+through the same `AnnotationGeometry` the window uses, always on when present —
+annotations are documentation, so docs renders carry them; the interactive view
+cube is the one deliberate exclusion) — so a headless PNG matches what the viewer
+shows, and docs cutaways can use real section planes instead of boolean-cut
+workarounds.
 
 `EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
 window (alongside `--view` and `--export`). Check `EngrCad.CanRenderToImage` first to

@@ -5,6 +5,7 @@
 // then edit a [Param] default below and SAVE — the history regenerates (cached
 // prefix skipped) and the viewer updates in place. bracket.params.json overrides
 // parameter values WITHOUT recompiling. Headless: dotnet run ... -- --export x.stl
+using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
@@ -34,7 +35,15 @@ static Scene BuildScene()
     Console.WriteLine(history.Regenerate().ToString());
 
     var scene = new Scene(); // no explicit quality: inherits the builder's 48-segment default
-    scene.Add(history.ToPart("bracket", Palette.Steel));
+    var bracket = history.ToPart("bracket", Palette.Steel);
+
+    // A PMI dimension that MEASURES the model: the face selectors re-run on every
+    // regeneration, so editing Width above re-measures live (toolbar "Annot" hides it).
+    bracket.Annotate(LinearDimension.BetweenFaces(
+        s => s.PlanarFacesWithNormal(-Vector3d.UnitX).First(),
+        s => s.PlanarFacesWithNormal(Vector3d.UnitX).First()));
+
+    scene.Add(bracket);
     return scene;
 }
 

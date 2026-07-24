@@ -293,33 +293,31 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] Section-plane follow-ups: arbitrary plane orientation from a `Frame3d` (the
   shader already takes a general axis vector + offset; v1 restricts it to X/Y/Z),
   per-part section opt-out, and picking that respects the cut.
-- [ ] **3D annotations (PMI)** — dimensions, notes, and markers attached to model
-  geometry in 3D space (the model-based-definition idea: the model carries its own
-  manufacturing information instead of 2D drawings). Building blocks:
-  - **Annotation objects in the document model** — `Annotation` types (linear/radial/
-    angular dimension, leader note, datum label, hole callout) attached to a `Part` (or
-    assembly occurrence) via geometry references: a `Frame3d` anchor, or better a
-    semantic B-Rep selector (`BrepQueries` — face/edge queries survive regeneration,
-    same topological-naming story as features). Dimensions auto-measure from the
-    geometry (`Length`, radius of `IsCircular` edges, face-to-face distance) so they
-    stay correct when parameters change.
-  - **Viewer rendering** — billboarded text (a small SDF/atlas text renderer in the GL
-    layer — no Avalonia dependency in the render pass), leader/extension/dimension
-    lines through the line program, screen-constant sizing (annotations don't scale
-    with zoom), optional occlusion behavior (always-on-top vs depth-tested), pickable
-    for selection. Offscreen renderer support so docs renders can carry dimensions.
-  - **Natural tie-ins**: the measure-tool idea below becomes "create dimension
-    interactively"; hole/thread callouts can generate from `HoleSpec`/`ThreadSpec`
-    (the cosmetic-thread-annotation follow-up: "M6×1.0 - 6H ⌀5.0 ↧14"); a hole-table
-    annotation from a `Drill` feature's point list; export view: annotations included
-    in `--render` output for documentation.
+- [ ] **3D-annotation (PMI) follow-ups** (v1 ✅ landed: `Annotation`/`LinearDimension`
+  (point-to-point + `BetweenFaces` selectors)/`RadialDimension.OnEdge`/`LeaderNote`/
+  `DatumLabel` + `HoleCallout`/`ThreadCallout` in Modeling; `StrokeFont` +
+  `AnnotationLayer` billboarded rendering with offscreen parity; measure tool) —
+  remaining ideas:
+  - **Angular dimensions** (two planar faces or three points → arc + degree text)
+    and ordinate/chain dimension styles.
+  - **Occlusion-aware rendering** (v1 is always-on-top with the depth test off;
+    depth-tested with a "hidden = dashed/dimmed" pass is the classic upgrade) and
+    **pickable annotations** (select/highlight/edit from the viewport).
+  - **Hole-table annotation** from a `Drill` call's point list (one balloon per
+    hole, a table note keyed by letter), and cosmetic-thread auto-callouts:
+    `Shape.ThreadedHole`/`Drill` could auto-attach `HoleCallout`/`ThreadCallout`
+    notes (v1 generates them; attachment is manual).
+  - **Multi-line note text** (the stroke-font layout is single-line; callout
+    continuation lines currently join with spaces) and tolerance text sugar
+    ("±0.1" via `Label` today).
+  - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
+    STEP AP242 PMI export (far future).
 - [ ] View-cube follow-ups (widget ✅ landed: stroke-font labels, face/edge/corner
   click-to-pose with eased animation, hover highlight, drag-orbits) — rotate-snap
   dragging like commercial cubes; SceneHost toolbar buttons could delegate to
   `ViewCubeMath.PoseFor` for one pose source.
-- [ ] Ideas: measure tool (→ interactive dimension creation, see 3D annotations),
-  ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
-  mesh dihedrals (exact circles stay smooth at coarse tessellation).
+- [ ] Ideas: ambient occlusion or matcap shading, edge silhouettes from B-Rep edges
+  instead of mesh dihedrals (exact circles stay smooth at coarse tessellation).
 
 ## Blazor web viewer
 

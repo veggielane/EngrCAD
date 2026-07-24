@@ -512,6 +512,43 @@ for `in`-parameters being illegal in expression trees.
   duplicated-shader phase drifted and was retired; the offscreen pass has full window
   parity (display modes, global view style, section planes), neutralizing only the
   selection highlight.
+- **3D annotations (PMI)** — model-based definition: the model carries dimensions,
+  notes, and datum labels instead of 2D drawings. Design decisions worth keeping:
+  - **Data + measurement live in Modeling; drawing lives in the Viewer.** An
+    `Annotation` resolves to a render-neutral `ResolvedAnnotation` (part-local
+    anchors, placement offset, formatted text, measured value); the viewer poses it
+    by the instance transform, so assemblies annotate for free and the kernel stays
+    UI-free.
+  - **Selectors, not stored values.** Auto-measuring dimensions store *semantic
+    queries* (`Func<BrepSolid, BrepFace/BrepEdge>` in the `BrepQueries` vocabulary)
+    and re-measure on every resolution — the same topological-naming answer the rim
+    features use, so a dimension tracks parameter edits and `FeatureHistory`
+    regeneration instead of going stale. `Resolve(Func<BrepSolid>)` takes the solid
+    *lazily* so point-anchored annotations never force a B-Rep lowering.
+  - **Failure is a diagnostic, not a crash**: `Part.TryResolveAnnotations` caches
+    per-part success *or* error (a selector broken by an edit becomes a status-bar
+    message); `Scene.PreMesh` pre-resolves so lowering stays off the render thread,
+    mirroring the mesh-prep contract.
+  - **Text is a stroke font, not a texture atlas** (`StrokeFont`, grown from the
+    view cube's lettering): polyline glyphs through the existing line program — no
+    new shaders, no font rasterization, resolution-independent, and the same table
+    serves flat labels (cube faces) and billboarded annotation text. Dimension
+    symbols (diameter, depth, counterbore, countersink...) are hand-built glyphs
+    keyed by unicode escapes; source files stay pure ASCII (the ANGLE lesson).
+  - **Billboarding is CPU-side and cached**: `AnnotationGeometry` rebuilds
+    world-space segments only when the camera pose, viewport, or annotation set
+    changes (`AnnotationCamera` value-equality is the key — a static view costs one
+    struct comparison per frame; orbiting rebuilds a few hundred segments, far below
+    one part draw). Screen-constant sizing = style pixels × world-per-pixel at each
+    element's own depth (perspective) or the frustum constant (ortho).
+  - **Always-on-top v1** (depth test off for the pass, never section-clipped):
+    dimensions must read from any angle; occlusion-aware dashing is a follow-up.
+    And unlike the view-cube widget, annotations **do** render in the headless pass
+    — they are documentation content, which is exactly what offscreen renders are
+    for (the docs example page exercises it).
+  - The **measure tool** is interactive dimensioning, not a separate feature: two
+    surface picks (the existing raycast, now returning the hit point) build a
+    transient point-to-point `LinearDimension` through the same layer.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level

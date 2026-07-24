@@ -18,6 +18,8 @@
   href: chamfer-fillet.md
 - name: Parametric features
   href: features.md
+- name: 3D annotations (PMI)
+  href: annotations.md
 - name: Three representations
   href: representations.md
 - name: Exports
