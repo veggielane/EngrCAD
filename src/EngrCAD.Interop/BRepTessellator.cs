@@ -42,6 +42,9 @@ public static class BRepTessellator
                         throw new NotSupportedException(
                             "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops.");
                     break;
+                case HelicalSurface helical:
+                    TessellateHelicalBand(face, helical, edgePolylines, polygons);
+                    break;
                 case ExtrudedSurface or RevolvedSurface or SweptSurface:
                 {
                     var (uParams, vParams, closedU, closedV) = GridParams(face.Surface, segmentsPerCircle, curveSamples);
@@ -91,6 +94,20 @@ public static class BRepTessellator
             }
             if (!edge.IsClosedEdge)
                 points.Add(edge.Curve.PointAt(domain.End));
+            return points;
+        }
+
+        // Helix rails and their cap-plane spiral cuts sample proportionally to their
+        // turning angle (the parameter IS the angle for both types): a rail spanning N
+        // turns gets N·segmentsPerCircle segments, a cut spanning a fraction of a turn
+        // the matching fraction. Helical band grids derive their column/row counts from
+        // these same polylines, so the sampling agrees by construction.
+        if (edge.Curve.Underlying is Helix3d or SpiralArc3d)
+        {
+            int n = AngularSegments(domain.Length, segmentsPerCircle);
+            var points = new List<Vector3d>(n + 1);
+            for (int i = 0; i <= n; i++)
+                points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
             return points;
         }
 
@@ -314,6 +331,110 @@ public static class BRepTessellator
         }
         foreach (var (a, b, c) in PolygonTriangulator.TriangulateWithHoles(boundary2d, holes2d))
             polygons.Add([combined[a], combined[b], combined[c]]);
+    }
+
+    /// <summary>Segments for an angular span at the given circle density; the epsilon
+    /// guards Ceiling at exact integer boundaries (equal spans computed through
+    /// different arithmetic may differ by an ulp and must not round apart).</summary>
+    private static int AngularSegments(double span, int segmentsPerCircle) =>
+        Math.Max(1, (int)Math.Ceiling(Math.Abs(span) * segmentsPerCircle / (2 * Math.PI) - 1e-9));
+
+    /// <summary>
+    /// A full helical band — the parallelogram in (u, v) between two helix rails
+    /// (v = 0 / v = 1) and two cap-plane spiral cuts. The natural grid is sheared:
+    /// columns are iso-axial spiral rungs connecting bottom-rail sample j to top-rail
+    /// sample j (each rail spans the same turning angle, offset by the generator's
+    /// axial extent), so the first and last columns ARE the cap cuts. All boundary
+    /// points are taken verbatim from the shared edge polylines (band↔band and
+    /// band↔cap welding is exact by construction); only interior points evaluate the
+    /// surface, at parameters interpolated from the exactly projected rail corners.
+    /// </summary>
+    private static void TessellateHelicalBand(
+        BrepFace face,
+        HelicalSurface surface,
+        Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
+        List<IReadOnlyList<Vector3d>> polygons)
+    {
+        var coedges = face.Loops.Count == 1 ? face.OuterLoop.Coedges : null;
+        var railEdges = coedges?.Where(c => c.Edge.Curve.Underlying is Helix3d).Select(c => c.Edge).Distinct().ToList();
+        var cutEdges = coedges?.Where(c => c.Edge.Curve.Underlying is SpiralArc3d).Select(c => c.Edge).Distinct().ToList();
+        if (coedges is null || coedges.Count != 4 || railEdges!.Count != 2 || cutEdges!.Count != 2)
+            throw new NotSupportedException(
+                "Helical faces must be full bands (one loop: two helix rails + two cap spiral cuts); " +
+                "trimmed helical faces are not supported yet.");
+
+        Vector2d Project(Vector3d p)
+        {
+            if (!surface.TryProjectPoint(p, out var uv, 1e-6))
+                throw new InvalidOperationException($"Helical band boundary point {p} does not lie on the band surface.");
+            return uv;
+        }
+
+        // Rails ordered bottom (v = 0) to top (v = 1); cuts ordered by u so the first
+        // is the grid's j = 0 column. Both classifications use the exact inverse
+        // evaluation of an interior sample.
+        var rails = railEdges
+            .OrderBy(e => Project(e.Curve.PointAt(e.Domain.Mid)).Y)
+            .Select(e => edgePolylines[e])
+            .ToList();
+        var cuts = cutEdges
+            .OrderBy(e => Project(e.Curve.PointAt(e.Domain.Mid)).X)
+            .Select(e =>
+            {
+                // Reorder each cut polyline by ascending v (rows), whichever way the
+                // spiral parameter runs.
+                var polyline = edgePolylines[e];
+                if (Project(polyline[0]).Y <= Project(polyline[^1]).Y)
+                    return polyline;
+                var reversed = new List<Vector3d>(polyline);
+                reversed.Reverse();
+                return reversed;
+            })
+            .ToList();
+
+        var bottomRail = rails[0];
+        var topRail = rails[1];
+        int n = bottomRail.Count - 1;
+        int m = cuts[0].Count - 1;
+        if (topRail.Count != n + 1 || cuts[1].Count != m + 1)
+            throw new InvalidOperationException(
+                "Helical band boundary polylines disagree in sample count (rails must share their span, cuts theirs).");
+
+        // Exact parameter anchors for interior evaluation: the projected rail corners.
+        double uBottomStart = Project(bottomRail[0]).X, uBottomEnd = Project(bottomRail[^1]).X;
+        double uTopStart = Project(topRail[0]).X, uTopEnd = Project(topRail[^1]).X;
+
+        var grid = new Vector3d[n + 1, m + 1];
+        for (int j = 0; j <= n; j++)
+        {
+            grid[j, 0] = bottomRail[j];
+            grid[j, m] = topRail[j];
+        }
+        for (int k = 1; k < m; k++)
+        {
+            grid[0, k] = cuts[0][k];
+            grid[n, k] = cuts[1][k];
+        }
+        for (int j = 1; j < n; j++)
+        {
+            double f = (double)j / n;
+            double uBottom = uBottomStart + (uBottomEnd - uBottomStart) * f;
+            double uTop = uTopStart + (uTopEnd - uTopStart) * f;
+            for (int k = 1; k < m; k++)
+            {
+                double v = (double)k / m;
+                grid[j, k] = surface.PointAt(uBottom + (uTop - uBottom) * v, v);
+            }
+        }
+
+        // (+u, +v) cell order — counter-clockwise around ∂u × ∂v, which the builder
+        // arranges to point outward (generator traversed with increasing axial
+        // coordinate), matching TessellateGrid's convention.
+        for (int j = 0; j < n; j++)
+        {
+            for (int k = 0; k < m; k++)
+                AddGridCell(polygons, grid[j, k], grid[j + 1, k], grid[j + 1, k + 1], grid[j, k + 1]);
+        }
     }
 
     private static void TessellateCylinderBand(
