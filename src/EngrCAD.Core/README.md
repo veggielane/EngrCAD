@@ -10,6 +10,14 @@ concerns.
   convertible from tuples: `(1, 2, 3)`), `Matrix4d` (row-major storage, column-vector
   convention: `p' = M·p`, so `A*B` applies `B` first), `Quaterniond` (Hamilton product
   matching matrix composition order), `Aabb`, `Ray3d`, `Interval`.
+- **`Frame3d`** — right-handed rigid coordinate frame (origin + orthonormal X/Y/Z,
+  Z = X × Y). World↔local maps for points, vectors, and rays; `Then` composition and
+  exact transpose `Inverse`; `ToMatrix()` (column-vector convention); `Renormalized()`
+  for iterated-frame drift. Factories: `FromXY` (Gram–Schmidt), `FromZX` (the STEP
+  AXIS2_PLACEMENT_3D convention), and `FromNormal`, whose deterministic X is
+  **exactly `Vector3d.ArbitraryPerpendicular`** — the codebase-wide perpendicular
+  convention; sites deriving frames for the same axis must agree bit-for-bit or welded
+  tessellation cracks (locked by tests).
 - **`Tolerance`** — the central floating-point comparison policy. Kernel code never
   compares doubles with `==`; geometric predicates take a `Tolerance` (linear + angular).
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
