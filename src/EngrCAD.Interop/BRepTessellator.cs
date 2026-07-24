@@ -74,9 +74,26 @@ public static class BRepTessellator
         return MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
     }
 
-    private static List<Vector3d> SampleEdge(BrepEdge edge, int segmentsPerCircle, int curveSamples)
+    internal static List<Vector3d> SampleEdge(BrepEdge edge, int segmentsPerCircle, int curveSamples)
     {
         var domain = edge.Domain;
+
+        // Marching-tracer polylines lie on their surfaces only at their vertices
+        // (chordal between): sample exactly those, or the trimmed path's inverse
+        // evaluation would reject mid-chord samples as off-surface.
+        if (edge.Curve is PolylineCurve3d polyline)
+        {
+            var points = new List<Vector3d> { edge.Curve.PointAt(domain.Start) };
+            foreach (double t in polyline.VertexParameters)
+            {
+                if (t > domain.Start + 1e-12 && t < domain.End - 1e-12)
+                    points.Add(edge.Curve.PointAt(t));
+            }
+            if (!edge.IsClosedEdge)
+                points.Add(edge.Curve.PointAt(domain.End));
+            return points;
+        }
+
         if (edge.IsClosedEdge)
         {
             int n = edge.Curve.Underlying is Circle3d ? segmentsPerCircle : curveSamples;

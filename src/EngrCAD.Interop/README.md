@@ -31,8 +31,17 @@ engines.
     iso-parameter run vertices (uv-collinear is *not* 3D-collinear — an unzippable
     crack), jittering breeds zero-area folds that refine into non-manifold welds, and
     ~1e-9 inverse-evaluation jitter demands an epsilon blocking band plus midpoint→vertex
-    snapping during refinement. Remaining gap: band-like trimmed faces with extra hole
-    loops fall back to the grid path.
+    snapping during refinement (the same band makes bridge visibility treat
+    nearly-collinear contact as touching — exact-zero cross products miss it by an ulp).
+    Two-ring bands with extra interior hole loops (a cross-drilled bore wall) are cut
+    open along a seam placed in the largest u-gap left free by the holes, unrolled into
+    a rectangle-with-holes, and ear-clipped; the two seam chords are exact one-period
+    translates with identical 3D endpoints, so they weld to each other. Marching-tracer
+    polyline edges are sampled at their exact vertices (`PolylineCurve3d.VertexParameters`
+    — chordal midpoints sit off the surface and would fail inverse evaluation).
+    Remaining gaps: pole-bounded single-chain bands with holes and |winding| > 1 loops
+    fall back to the grid path, and a hole straddling every possible seam (covering a
+    full period in u) is unsupported.
 - **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
   (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See

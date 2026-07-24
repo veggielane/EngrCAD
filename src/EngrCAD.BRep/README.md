@@ -84,8 +84,13 @@ operations. Depends only on `EngrCAD.Core`.
   exact derivatives for B-splines), and `SURFACE_OF_REVOLUTION` — which stores
   neither our swept angle nor generator trims — recovers the angle from rail arcs and
   re-trims generators from rim circles by bisection on the exact (radius, axial)
-  profile (root solves, never distance minimization, which stalls near √ε). Units:
-  millimetres assumed; other declared length units produce a diagnostic, not scaling.
+  profile (root solves, never distance minimization, which stalls near √ε). The
+  rim-circle off-axis rejection floor scales with the coordinate magnitude (foreign
+  files carry rounding noise proportional to their coordinates — an absolute 1e-6
+  floor silently rejected slightly-off-axis rims on large geometry, leaving generators
+  untrimmed), and near-miss rejections emit a diagnostic instead of failing silently.
+  Units: millimetres assumed; other declared length units produce a diagnostic, not
+  scaling.
 
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator` +
 `TrimmedFaceTessellator` for faces whose loops don't cover the surface's grid domain).
