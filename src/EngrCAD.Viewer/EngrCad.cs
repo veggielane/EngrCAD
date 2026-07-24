@@ -54,7 +54,7 @@ public static class EngrCad
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null)
     {
         scene.PreMesh(); // tessellate before touching GL
-        OffscreenRenderer.RenderToImage([.. scene.AllParts], path, width, height, camera);
+        OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
@@ -266,13 +266,13 @@ public static class EngrCad
         {
             case ".obj":
                 WriteMergedObj(scene, path);
-                Console.WriteLine($"wrote {path} ({scene.AllParts.Count()} part(s), merged)");
+                Console.WriteLine($"wrote {path} ({scene.AllInstances.Count()} instance(s), merged)");
                 return 0;
 
             case ".stl":
                 StlWriter.WriteFile(
-                    [.. scene.AllParts.Select(p => (p.GetMesh(scene.Options), p.Transform))], path);
-                Console.WriteLine($"wrote {path} ({scene.AllParts.Count()} part(s), merged binary STL)");
+                    [.. scene.AllInstances.Select(i => (i.Part.GetMesh(scene.Options), i.World))], path);
+                Console.WriteLine($"wrote {path} ({scene.AllInstances.Count()} instance(s), merged binary STL)");
                 return 0;
 
             case ".step" or ".stp":
@@ -329,19 +329,20 @@ public static class EngrCad
         return 0;
     }
 
-    /// <summary>All parts merged into one OBJ, with each part's transform applied.</summary>
+    /// <summary>All part instances merged into one OBJ (assemblies flattened), with
+    /// each instance's composed world transform applied.</summary>
     private static void WriteMergedObj(Scene scene, string path)
     {
         var culture = CultureInfo.InvariantCulture;
         using var writer = new StreamWriter(path);
         int offset = 1; // OBJ is 1-based
-        foreach (var part in scene.AllParts)
+        foreach (var instance in scene.AllInstances)
         {
-            writer.WriteLine($"o {part.Name.Replace(' ', '_')}");
-            var (positions, faces) = part.GetMesh(scene.Options).ToIndexed();
+            writer.WriteLine($"o {instance.Path.Replace(' ', '_')}");
+            var (positions, faces) = instance.Part.GetMesh(scene.Options).ToIndexed();
             foreach (var position in positions)
             {
-                var p = part.Transform.TransformPoint(position);
+                var p = instance.World.TransformPoint(position);
                 writer.WriteLine(string.Create(culture, $"v {p.X:R} {p.Y:R} {p.Z:R}"));
             }
             foreach (var face in faces)

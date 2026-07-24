@@ -205,7 +205,7 @@ Trisert® insert pilots (`Trisert`/`TrisertMinimumDepth` — ⚠ verify the inse
 against the current Tappex datasheet before production use). Blind holes get flat
 bottoms; drill-tip angles are future work.
 
-## The document model: Part, Tab, Scene
+## The document model: Part, Assembly, Tab, Scene
 
 Parts carry all their own information — name, geometry from **any** engine (`Shape`,
 `BrepSolid`, `HalfEdgeMesh`, or `Sdf`), color, placement — and are grouped into a
@@ -223,10 +223,49 @@ scene.Add(new Part("jig", jigMesh));               // shorthand: default "Model"
 
 `Part.GetMesh(quality)` produces the display mesh on first use and caches it (Shapes
 via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
-`Scene.PreMesh()` does this for every part up front so viewers never tessellate on the
-render thread. Part names are unique per tab. `Part` is deliberately a leaf — tabs are
-the containers — so assemblies (placed instances of parts/sub-assemblies) can slot in
-alongside parts later.
+`Scene.PreMesh()` does this for every **distinct** part up front so viewers never
+tessellate on the render thread. Part names are unique per tab. `Part` is
+deliberately a leaf — tabs and assemblies are the containers.
+
+### Assemblies (v1: occurrences)
+
+An `Assembly` is a named list of `Occurrence`s — a shared `Part` **or** a nested
+`Assembly`, each with a rigid `Frame3d` pose relative to its parent. Poses compose
+down the tree; tabs hold assemblies next to loose parts:
+
+```csharp
+var clamp = new Assembly("clamp");
+clamp.Add(platePart);                                     // occurrence "plate", identity
+foreach (var (x, y) in corners)
+    clamp.Add(boltPart, Frame3d.FromXY((x, y, 0.8), Vector3d.UnitX, Vector3d.UnitY));
+// one bolt Part, four occurrences: "bolt", "bolt.2", "bolt.3", "bolt.4"
+
+var stack = new Assembly("stack");
+stack.Add(clamp);                                         // sub-assembly at identity
+stack.Add(clamp, Frame3d.FromXY((0, 0, 2.2), Vector3d.UnitY, -Vector3d.UnitX));
+
+scene.AddTab("assembly").Add(stack);
+```
+
+Semantics worth knowing:
+
+- **References, not copies.** The same `Part` (or `Assembly`) placed many times is
+  shared: it is meshed **once** (`GetMesh` cache; `Scene.AllParts` enumerates each
+  distinct part once, which is what `PreMesh` walks) and every instance renders with
+  its own composed world matrix. `Occurrence.Frame` is mutable, so parametric design
+  code can re-pose between live reloads.
+- **Names.** Occurrence names are unique per assembly level: derived names
+  auto-suffix (`bolt`, `bolt.2`, …), explicit duplicates throw, `/` is reserved for
+  paths. Tab item names are unique across parts *and* assemblies.
+- **Flattening is the seam.** `Tab.Instances()` (and `Assembly.Flatten()`) resolve
+  the tree to `PartInstance`s — `(Part, World, Path)` with paths like
+  `"stack/clamp.2/bolt"` and `World = occurrenceFrames…ToMatrix() * part.Transform`.
+  Viewers and exporters consume that list and never walk assemblies themselves;
+  loose tab parts flatten too (path = name, world = `Part.Transform`).
+- **Cycles are rejected** at `Add` time; an assembly can appear in many parents
+  (a DAG), just never inside itself.
+- v1 is placement only: **mates/constraints, exploded views, and BOM are future
+  work** (mates would solve for the occurrence frames that `Flatten` composes).
 
 ## Quality
 

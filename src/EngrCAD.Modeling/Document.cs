@@ -113,7 +113,11 @@ public sealed class Part
     }
 
     /// <summary>World-space bounds of the display mesh with <see cref="Transform"/> applied.</summary>
-    public Aabb Bounds(MeshQuality? quality = null)
+    public Aabb Bounds(MeshQuality? quality = null) => Bounds(Transform, quality);
+
+    /// <summary>World-space bounds of the display mesh under an arbitrary placement —
+    /// assembly instances pass their composed <see cref="PartInstance.World"/>.</summary>
+    public Aabb Bounds(in Matrix4d world, MeshQuality? quality = null)
     {
         var local = GetMesh(quality).ComputeBounds();
         if (local.IsEmpty)
@@ -125,20 +129,23 @@ public sealed class Part
                 (i & 1) == 0 ? local.Min.X : local.Max.X,
                 (i & 2) == 0 ? local.Min.Y : local.Max.Y,
                 (i & 4) == 0 ? local.Min.Z : local.Max.Z);
-            bounds = bounds.Union(Transform.TransformPoint(corner));
+            bounds = bounds.Union(world.TransformPoint(corner));
         }
         return bounds;
     }
 }
 
 /// <summary>
-/// A named group of parts shown together — one viewer tab. (Future: tabs will also
-/// hold assembly occurrences — placed instances of parts/sub-assemblies — so keep
-/// <see cref="Part"/> a leaf and this the container.)
+/// A named group of content shown together — one viewer tab. Holds loose
+/// <see cref="Part"/>s (posed by their own <see cref="Part.Transform"/>) and
+/// <see cref="Assembly"/>s (posed occurrence trees); <see cref="Instances"/> flattens
+/// both into the posed <see cref="PartInstance"/> list viewers render.
+/// <see cref="Part"/> stays a leaf — this and <see cref="Assembly"/> are the containers.
 /// </summary>
 public sealed class Tab
 {
     private readonly List<Part> _parts = [];
+    private readonly List<Assembly> _assemblies = [];
     private int _nextColor;
 
     public string Name { get; }
@@ -152,23 +159,77 @@ public sealed class Tab
 
     public IReadOnlyList<Part> Parts => _parts;
 
-    /// <summary>Adds a part (names must be unique within the tab); assigns the next
-    /// palette color when the part has none. Returns the part for chaining.</summary>
+    public IReadOnlyList<Assembly> Assemblies => _assemblies;
+
+    /// <summary>Adds a part (names must be unique within the tab, across parts and
+    /// assemblies); assigns the next palette color when the part has none. Returns the
+    /// part for chaining.</summary>
     public Part Add(Part part)
     {
-        if (_parts.Any(p => p.Name == part.Name))
+        if (_parts.Any(p => p.Name == part.Name) || _assemblies.Any(a => a.Name == part.Name))
             throw new ArgumentException($"Tab '{Name}' already contains a part named '{part.Name}'.", nameof(part));
         part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
         _parts.Add(part);
         return part;
     }
 
-    /// <summary>World-space bounds of all parts; used for camera framing.</summary>
+    /// <summary>Adds an assembly (names must be unique within the tab, across parts and
+    /// assemblies); assigns palette colors to its distinct parts that have none.
+    /// Returns the assembly for chaining.</summary>
+    public Assembly Add(Assembly assembly)
+    {
+        if (_parts.Any(p => p.Name == assembly.Name) || _assemblies.Any(a => a.Name == assembly.Name))
+            throw new ArgumentException(
+                $"Tab '{Name}' already contains an item named '{assembly.Name}'.", nameof(assembly));
+        foreach (var part in assembly.DistinctParts())
+            part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+        _assemblies.Add(assembly);
+        return assembly;
+    }
+
+    /// <summary>
+    /// The tab flattened for display: loose parts first (world = the part's own
+    /// transform, path = its name), then each assembly's instances depth-first
+    /// (paths like "gearbox/stack.2/bolt"). This ordered list is the seam viewers
+    /// consume — instance index i here is instance index i in the viewport.
+    /// </summary>
+    public IReadOnlyList<PartInstance> Instances()
+    {
+        var instances = new List<PartInstance>(_parts.Count);
+        foreach (var part in _parts)
+            instances.Add(new PartInstance(part, part.Transform, part.Name));
+        foreach (var assembly in _assemblies)
+            assembly.FlattenInto(Frame3d.WorldXY, assembly.Name, instances);
+        return instances;
+    }
+
+    /// <summary>Every distinct part shown in this tab — loose parts plus assembly
+    /// parts, each exactly once (reference identity) however many times it is placed.</summary>
+    public IEnumerable<Part> AllParts
+    {
+        get
+        {
+            var seen = new HashSet<Part>(_parts);
+            foreach (var part in _parts)
+                yield return part;
+            foreach (var assembly in _assemblies)
+            {
+                foreach (var part in assembly.DistinctParts())
+                {
+                    if (seen.Add(part))
+                        yield return part;
+                }
+            }
+        }
+    }
+
+    /// <summary>World-space bounds of everything shown (loose parts and assembly
+    /// instances); used for camera framing.</summary>
     public Aabb Bounds(MeshQuality? quality = null)
     {
         var bounds = Aabb.Empty;
-        foreach (var part in _parts)
-            bounds = bounds.Union(part.Bounds(quality));
+        foreach (var instance in Instances())
+            bounds = bounds.Union(instance.Bounds(quality));
         return bounds;
     }
 }
@@ -188,7 +249,12 @@ public sealed class Scene
 
     public IReadOnlyList<Tab> Tabs => _tabs;
 
-    public IEnumerable<Part> AllParts => _tabs.SelectMany(t => t.Parts);
+    /// <summary>Every distinct part in the scene — loose tab parts plus assembly parts,
+    /// each exactly once (reference identity) however many times it is placed.</summary>
+    public IEnumerable<Part> AllParts => _tabs.SelectMany(t => t.AllParts).Distinct();
+
+    /// <summary>Every posed part instance across all tabs (see <see cref="Tab.Instances"/>).</summary>
+    public IEnumerable<PartInstance> AllInstances => _tabs.SelectMany(t => t.Instances());
 
     public Tab AddTab(string name)
     {
@@ -206,7 +272,8 @@ public sealed class Scene
         return tab.Add(part);
     }
 
-    /// <summary>Produces every part's display mesh at this scene's quality (idempotent).
+    /// <summary>Produces every distinct part's display mesh at this scene's quality
+    /// (idempotent; a part instanced many times through assemblies is meshed once).
     /// Hosts call this off the UI thread before handing tabs to the viewport.</summary>
     public void PreMesh()
     {

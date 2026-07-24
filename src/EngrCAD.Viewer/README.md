@@ -38,11 +38,19 @@ Dark-themed layout around one shared GL viewport:
   world axes are scene furniture and stay unclipped. Custom hosts drive it via
   `ViewportControl.SectionEnabled` / `SectionHeight`. Picking ignores the section
   plane in v1 — a click can select a part through the cut-away half.
-- **Model tree** (left): the current tab's parts with visibility checkboxes; clicking
-  a name selects it (bold + gold in the viewport), and viewport picks highlight the
-  tree row — selection stays in sync both ways. Each row also has a small
-  **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part through
-  Shaded → Wireframe → Translucent (see below).
+- **Model tree** (left): the current tab's loose parts and **assembly hierarchies** —
+  assembly/sub-assembly header rows with their occurrences indented one level per
+  depth (always expanded in v1; the tree walks the tab exactly like
+  `Tab.Instances()`, so row order matches viewport instance indices). Visibility
+  checkboxes exist at every level: a part row toggles that instance, an assembly row
+  hides its whole subtree (effective visibility = own checkbox AND all ancestors;
+  unchecking a parent does not touch the children's own state). Clicking a name
+  selects the *occurrence* (bold + gold in the viewport), and viewport picks
+  highlight the tree row — selection stays in sync both ways and reports occurrence
+  paths ("stack/clamp.2/bolt") in the title/status bar. Each part row also has a
+  small **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part
+  through Shaded → Wireframe → Translucent (see below); the mode lives on the
+  shared `Part`, so every instance of that part changes together.
 - **Per-part display modes** (`Part.DisplayMode`, default `Shaded`): design code sets
   it (`part.DisplayMode = DisplayMode.Translucent`) and the tree's per-row cycler
   changes it live; custom hosts drive `ViewportControl.SetDisplayMode(index, mode)`.
@@ -67,8 +75,9 @@ Dark-themed layout around one shared GL viewport:
   filter None, `System.IO.Compression` deflate) off the render thread. With no path
   the file lands in `Pictures/EngrCAD/engrcad-<timestamp>.png` (falling back to the
   working directory).
-- **Properties** (right): kind (Shape/B-Rep/mesh/SDF), face count, closed, volume,
-  surface area, and world size of the selected part.
+- **Properties** (right): occurrence path (plus the part name when they differ),
+  kind (Shape/B-Rep/mesh/SDF), face count, closed, volume, surface area, world size,
+  and world position of the selected instance.
 - **Viewport dressing**: vertical-gradient background, adaptive ground grid on z = 0
   (1-2-5 spacing from the scene size) with RGB world axes, and a **feature-edge
   overlay** (`MeshFeatureEdges`: boundary + sharp-dihedral edges, drawn over
@@ -77,10 +86,19 @@ Dark-themed layout around one shared GL viewport:
 
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
 lifetime). Custom hosts pass an `onViewportReady` callback, capture the
-`ViewportControl`, and later call its thread-safe `SetParts` — GL resources are swapped
-inside the next render pass; auto-framing is opt-in per call, so cameras survive
-updates. Parts should be pre-meshed (`Scene.PreMesh()`) so tessellation stays off the
-render thread.
+`ViewportControl`, and later call its thread-safe `SetInstances` (posed
+`PartInstance` list — `Tab.Instances()`; `SetParts` remains as the loose-part
+convenience) — GL resources are swapped inside the next render pass; auto-framing is
+opt-in per call, so cameras survive updates. Parts should be pre-meshed
+(`Scene.PreMesh()`) so tessellation stays off the render thread.
+
+**Assembly instancing**: both render paths (window and offscreen) upload each
+distinct `Part` once — one vertex/edge buffer set and one pick BVH per part,
+however many occurrences place it — and draw every instance with its own composed
+world matrix (`Frame3d` chain × `Part.Transform`). CPU prep (RenderMesh, feature
+edges, BVH) is deduped by part reference. A future optimization is true GPU
+instancing (one draw call per part with a matrix buffer); today it is one draw call
+per instance over shared buffers, which is already flat in memory.
 
 ## The live-modeling loop
 

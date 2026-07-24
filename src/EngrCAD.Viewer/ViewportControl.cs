@@ -34,12 +34,17 @@ public sealed class ViewportControl : OpenGlControlBase
     private int _gridCount;
     private uint _axesVao, _axesVbo;
     private readonly List<GpuMesh> _meshes = [];
-    private readonly List<string> _partNames = [];
     private readonly List<bool> _visible = [];
-    private readonly List<Part> _parts = [];
+    private readonly List<PartInstance> _instances = [];
+
+    // GPU buffers are shared between instances of the same Part (uploaded once per
+    // distinct part); this list owns them for deletion — never delete via _meshes,
+    // which references the same ids once per instance.
+    private readonly List<(uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo, uint WireVao, uint WireVbo)>
+        _gpuBuffers = [];
 
     private readonly object _sceneLock = new();
-    private (IReadOnlyList<Part> Parts, bool Frame)? _pending;
+    private (IReadOnlyList<PartInstance> Instances, bool Frame)? _pending;
 
     private double _yaw = 0.7;
     private double _pitch = 0.45;
@@ -65,16 +70,26 @@ public sealed class ViewportControl : OpenGlControlBase
     private double[] _translucentDepth = [];
 
     /// <summary>
-    /// Replaces the displayed parts (one tab's worth). Thread-safe: geometry is
-    /// uploaded on the next rendered frame (the GL context is only current there).
-    /// With <paramref name="frame"/> the camera auto-frames to the parts' bounds,
-    /// otherwise it is left untouched. Parts should be pre-meshed
-    /// (<c>Scene.PreMesh</c>) so no tessellation happens on the render thread.
+    /// Replaces the displayed parts (one tab's worth of loose parts, each posed by its
+    /// own <see cref="Part.Transform"/>). Convenience wrapper over
+    /// <see cref="SetInstances"/> for hosts without assemblies.
     /// </summary>
-    public void SetParts(IReadOnlyList<Part> parts, bool frame)
+    public void SetParts(IReadOnlyList<Part> parts, bool frame) =>
+        SetInstances([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))], frame);
+
+    /// <summary>
+    /// Replaces the displayed instances (one tab's worth — <c>Tab.Instances()</c>).
+    /// Thread-safe: geometry is uploaded on the next rendered frame (the GL context is
+    /// only current there); instances sharing a <see cref="Part"/> share its GPU
+    /// buffers and draw with their own world matrices. With <paramref name="frame"/>
+    /// the camera auto-frames to the instances' bounds, otherwise it is left
+    /// untouched. Parts should be pre-meshed (<c>Scene.PreMesh</c>) so no tessellation
+    /// happens on the render thread.
+    /// </summary>
+    public void SetInstances(IReadOnlyList<PartInstance> instances, bool frame)
     {
         lock (_sceneLock)
-            _pending = (parts, frame);
+            _pending = (instances, frame);
         Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
     }
 
@@ -99,7 +114,7 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 // An explicit pose wins over any auto-framing still queued.
                 if (_pending is { } pending)
-                    _pending = (pending.Parts, false);
+                    _pending = (pending.Instances, false);
             }
             RequestNextFrameRendering();
         }
@@ -132,54 +147,49 @@ public sealed class ViewportControl : OpenGlControlBase
         _bgVao = _gl.GenVertexArray(); // vertexless fullscreen triangle via gl_VertexID
     }
 
-    /// <summary>Uploads a part list, replacing existing GPU resources. GL context must be current.</summary>
-    private void ApplyParts(GL gl, IReadOnlyList<Part> parts, bool frame)
+    /// <summary>One distinct part's GPU buffers + pick data, shared by its instances.</summary>
+    private readonly record struct SharedMesh(
+        uint Vao, uint Vbo, uint Ebo, int IndexCount,
+        uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
+        uint WireVao, uint WireVbo, int WireVertexCount, PickData Pick);
+
+    /// <summary>Uploads an instance list, replacing existing GPU resources. Each
+    /// distinct part is prepared and uploaded once (cached display mesh → RenderMesh,
+    /// feature/wire edges, pick BVH); instances reference the shared buffers with
+    /// per-instance model matrices. GL context must be current.</summary>
+    private void ApplyInstances(GL gl, IReadOnlyList<PartInstance> instances, bool frame)
     {
-        foreach (var m in _meshes)
-        {
-            gl.DeleteBuffer(m.Vbo);
-            gl.DeleteBuffer(m.Ebo);
-            gl.DeleteVertexArray(m.Vao);
-            gl.DeleteBuffer(m.EdgeVbo);
-            gl.DeleteVertexArray(m.EdgeVao);
-            gl.DeleteBuffer(m.WireVbo);
-            gl.DeleteVertexArray(m.WireVao);
-        }
+        DeleteMeshBuffers(gl);
         lock (_sceneLock)
         {
             _meshes.Clear();
             _pickData.Clear();
-            _partNames.Clear();
             _visible.Clear();
-            _parts.Clear();
+            _instances.Clear();
             _selected = -1;
 
+            var shared = new Dictionary<Part, SharedMesh>(); // Part has reference identity
             var bounds = Aabb.Empty;
-            foreach (var part in parts)
+            foreach (var instance in instances)
             {
-                var color = part.Color ?? Palette.Steel;
-                var render = RenderMesh.CreateFlat(part.GetMesh());
-                var worldBounds = part.Bounds();
-                _meshes.Add(Upload(gl, render, part.Transform, (color.R, color.G, color.B),
-                    MeshFeatureEdges.Extract(part.GetMesh()),
-                    WireframeEdges.Extract(part.GetMesh()),
-                    worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
-                _partNames.Add(part.Name);
-                _visible.Add(true);
-                _parts.Add(part);
-                bounds = bounds.Union(worldBounds);
-
-                var boxes = new Aabb[render.TriangleCount];
-                for (int t = 0; t < render.TriangleCount; t++)
+                var part = instance.Part;
+                if (!shared.TryGetValue(part, out var s))
                 {
-                    boxes[t] = Aabb.FromPoints(
-                    [
-                        PickVertex(render, render.Indices[t * 3]),
-                        PickVertex(render, render.Indices[t * 3 + 1]),
-                        PickVertex(render, render.Indices[t * 3 + 2]),
-                    ]);
+                    s = UploadShared(gl, part);
+                    shared[part] = s;
                 }
-                _pickData.Add(new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)));
+
+                var color = part.Color ?? Palette.Steel;
+                var worldBounds = instance.Bounds();
+                _meshes.Add(new GpuMesh(
+                    s.Vao, s.Vbo, s.Ebo, s.IndexCount, instance.World, (color.R, color.G, color.B),
+                    s.EdgeVao, s.EdgeVbo, s.EdgeVertexCount,
+                    s.WireVao, s.WireVbo, s.WireVertexCount,
+                    worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
+                _pickData.Add(s.Pick);
+                _visible.Add(true);
+                _instances.Add(instance);
+                bounds = bounds.Union(worldBounds);
             }
 
             RebuildGrid(gl, bounds);
@@ -191,6 +201,50 @@ public sealed class ViewportControl : OpenGlControlBase
                 _distance = CameraMath.FrameDistance(bounds);
             }
         }
+    }
+
+    /// <summary>Uploads one distinct part's buffers and registers them for deletion.</summary>
+    private SharedMesh UploadShared(GL gl, Part part)
+    {
+        var mesh = part.GetMesh();
+        var render = RenderMesh.CreateFlat(mesh);
+        var featureEdges = MeshFeatureEdges.Extract(mesh);
+        var wireEdges = WireframeEdges.Extract(mesh);
+        var (vao, vbo, ebo) = RenderGeometry.UploadMesh(gl, render);
+        var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
+        var (wireVao, wireVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
+        _gpuBuffers.Add((vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo));
+
+        var boxes = new Aabb[render.TriangleCount];
+        for (int t = 0; t < render.TriangleCount; t++)
+        {
+            boxes[t] = Aabb.FromPoints(
+            [
+                PickVertex(render, render.Indices[t * 3]),
+                PickVertex(render, render.Indices[t * 3 + 1]),
+                PickVertex(render, render.Indices[t * 3 + 2]),
+            ]);
+        }
+        return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
+            edgeVao, edgeVbo, featureEdges.Count * 2,
+            wireVao, wireVbo, wireEdges.Count * 2,
+            new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)));
+    }
+
+    /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
+    private void DeleteMeshBuffers(GL gl)
+    {
+        foreach (var b in _gpuBuffers)
+        {
+            gl.DeleteBuffer(b.Vbo);
+            gl.DeleteBuffer(b.Ebo);
+            gl.DeleteVertexArray(b.Vao);
+            gl.DeleteBuffer(b.EdgeVbo);
+            gl.DeleteVertexArray(b.EdgeVao);
+            gl.DeleteBuffer(b.WireVbo);
+            gl.DeleteVertexArray(b.WireVao);
+        }
+        _gpuBuffers.Clear();
     }
 
     /// <summary>Ground grid on z = 0 sized to the scene, plus RGB world axes.</summary>
@@ -219,16 +273,7 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         if (_gl is null)
             return;
-        foreach (var m in _meshes)
-        {
-            _gl.DeleteBuffer(m.Vbo);
-            _gl.DeleteBuffer(m.Ebo);
-            _gl.DeleteVertexArray(m.Vao);
-            _gl.DeleteBuffer(m.EdgeVbo);
-            _gl.DeleteVertexArray(m.EdgeVao);
-            _gl.DeleteBuffer(m.WireVbo);
-            _gl.DeleteVertexArray(m.WireVao);
-        }
+        DeleteMeshBuffers(_gl);
         _meshes.Clear();
         if (_gridVbo != 0)
         {
@@ -252,7 +297,7 @@ public sealed class ViewportControl : OpenGlControlBase
             return;
         var gl = _gl;
 
-        (IReadOnlyList<Part> Parts, bool Frame)? update = null;
+        (IReadOnlyList<PartInstance> Instances, bool Frame)? update = null;
         lock (_sceneLock)
         {
             if (_pending is not null)
@@ -262,7 +307,7 @@ public sealed class ViewportControl : OpenGlControlBase
             }
         }
         if (update is { } u)
-            ApplyParts(gl, u.Parts, u.Frame);
+            ApplyInstances(gl, u.Instances, u.Frame);
 
         double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         uint width = (uint)Math.Max(1, Bounds.Width * scaling);
@@ -431,7 +476,7 @@ public sealed class ViewportControl : OpenGlControlBase
             CaptureFramebuffer(gl, (int)width, (int)height, screenshotPath);
     }
 
-    private DisplayMode Mode(int index) => _parts[index].DisplayMode;
+    private DisplayMode Mode(int index) => _instances[index].Part.DisplayMode;
 
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
@@ -528,7 +573,7 @@ public sealed class ViewportControl : OpenGlControlBase
             }
         }
         Select(best == _selected ? -1 : best); // clicking the selection clears it
-        Report(_selected >= 0 ? $"picked '{_partNames[_selected]}'" : "picked nothing");
+        Report(_selected >= 0 ? $"picked '{_instances[_selected].Path}'" : "picked nothing");
         SelectionChanged?.Invoke(_selected);
     }
 
@@ -542,8 +587,8 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <see cref="SelectionChanged"/>.</summary>
     public void Select(int index)
     {
-        _selected = index >= 0 && index < _partNames.Count ? index : -1;
-        string? name = _selected >= 0 ? _partNames[_selected] : null;
+        _selected = index >= 0 && index < _instances.Count ? index : -1;
+        string? name = _selected >= 0 ? _instances[_selected].Path : null;
         if (VisualRoot is Window window)
             window.Title = name is not null ? $"{BaseTitle} — {name}" : BaseTitle;
         RequestNextFrameRendering();
@@ -569,8 +614,8 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         lock (_sceneLock)
         {
-            if (index >= 0 && index < _parts.Count)
-                _parts[index].DisplayMode = mode;
+            if (index >= 0 && index < _instances.Count)
+                _instances[index].Part.DisplayMode = mode;
         }
         RequestNextFrameRendering();
     }
@@ -579,7 +624,9 @@ public sealed class ViewportControl : OpenGlControlBase
     public DisplayMode GetDisplayMode(int index)
     {
         lock (_sceneLock)
-            return index >= 0 && index < _parts.Count ? _parts[index].DisplayMode : DisplayMode.Shaded;
+            return index >= 0 && index < _instances.Count
+                ? _instances[index].Part.DisplayMode
+                : DisplayMode.Shaded;
     }
 
     // ---- screenshot ----
@@ -639,10 +686,10 @@ public sealed class ViewportControl : OpenGlControlBase
         var bounds = Aabb.Empty;
         lock (_sceneLock)
         {
-            for (int i = 0; i < _parts.Count; i++)
+            for (int i = 0; i < _instances.Count; i++)
             {
                 if (_visible[i])
-                    bounds = bounds.Union(_parts[i].Bounds());
+                    bounds = bounds.Union(_instances[i].Bounds());
             }
         }
         if (!bounds.IsEmpty)
@@ -728,8 +775,8 @@ public sealed class ViewportControl : OpenGlControlBase
         var bounds = Aabb.Empty;
         lock (_sceneLock)
         {
-            foreach (var part in _parts)
-                bounds = bounds.Union(part.Bounds());
+            foreach (var instance in _instances)
+                bounds = bounds.Union(instance.Bounds());
         }
         return bounds;
     }
@@ -765,19 +812,6 @@ public sealed class ViewportControl : OpenGlControlBase
             return false;
         t = e2.Dot(q) * inverse;
         return t > 1e-9;
-    }
-
-    private GpuMesh Upload(
-        GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color,
-        List<(Vector3d A, Vector3d B)> featureEdges,
-        List<(Vector3d A, Vector3d B)> wireEdges,
-        in Vector3d worldCenter)
-    {
-        var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
-        var (wireVao, wireVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
-        var (vao, vbo, ebo) = RenderGeometry.UploadMesh(gl, mesh);
-        return new GpuMesh(vao, vbo, ebo, mesh.Indices.Length, model, color, edgeVao, edgeVbo, featureEdges.Count * 2,
-            wireVao, wireVbo, wireEdges.Count * 2, worldCenter);
     }
 
     // Shader sources live in ViewerShaders (RenderCore.cs), shared verbatim with the

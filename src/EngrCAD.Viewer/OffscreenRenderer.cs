@@ -50,7 +50,18 @@ public static class OffscreenRenderer
     /// check <see cref="IsAvailable"/> first for a graceful skip.
     /// </summary>
     public static byte[] Render(
-        IReadOnlyList<Part> parts, int width, int height, CameraState? camera = null, bool furniture = true)
+        IReadOnlyList<Part> parts, int width, int height, CameraState? camera = null, bool furniture = true) =>
+        Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))], width, height, camera, furniture);
+
+    /// <summary>
+    /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
+    /// — assemblies flattened; instances of the same part share one uploaded mesh) and
+    /// returns RGBA8 pixels, top row first. See
+    /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool)"/>.
+    /// </summary>
+    public static byte[] Render(
+        IReadOnlyList<PartInstance> instances, int width, int height,
+        CameraState? camera = null, bool furniture = true)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -62,7 +73,7 @@ public static class OffscreenRenderer
         using var egl = EglContext.TryCreate(width * supersample, height * supersample, out var error)
             ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
-        var oversized = Draw(gl, parts, width * supersample, height * supersample, camera, furniture);
+        var oversized = Draw(gl, instances, width * supersample, height * supersample, camera, furniture);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -101,7 +112,8 @@ public static class OffscreenRenderer
         return result;
     }
 
-    /// <summary>Renders <paramref name="parts"/> to a PNG file. See <see cref="Render"/>.</summary>
+    /// <summary>Renders <paramref name="parts"/> to a PNG file. See
+    /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool)"/>.</summary>
     public static void RenderToImage(
         IReadOnlyList<Part> parts, string path, int width = 1280, int height = 800,
         CameraState? camera = null, bool furniture = true)
@@ -110,10 +122,20 @@ public static class OffscreenRenderer
         PngWriter.Write(path, pixels, width, height);
     }
 
+    /// <summary>Renders posed part instances to a PNG file. See
+    /// <see cref="Render(IReadOnlyList{PartInstance}, int, int, CameraState?, bool)"/>.</summary>
+    public static void RenderToImage(
+        IReadOnlyList<PartInstance> instances, string path, int width = 1280, int height = 800,
+        CameraState? camera = null, bool furniture = true)
+    {
+        var pixels = Render(instances, width, height, camera, furniture);
+        PngWriter.Write(path, pixels, width, height);
+    }
+
     // ---- the render pass (mirrors ViewportControl.OnOpenGlRender) ----
 
     private static unsafe byte[] Draw(
-        GL gl, IReadOnlyList<Part> parts, int width, int height, CameraState? camera, bool furniture)
+        GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture)
     {
         // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
         string header = ViewerShaders.Header(es: true);
@@ -125,8 +147,8 @@ public static class OffscreenRenderer
             gl, header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment, bindAttributes: false);
 
         var bounds = Aabb.Empty;
-        foreach (var part in parts)
-            bounds = bounds.Union(part.Bounds());
+        foreach (var instance in instances)
+            bounds = bounds.Union(instance.Bounds());
         var cam = camera ?? DefaultCamera(bounds);
 
         gl.Viewport(0, 0, (uint)width, (uint)height);
@@ -201,21 +223,30 @@ public static class OffscreenRenderer
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uSectionEnabled"), 0f);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAlpha"), 1f);
 
+        // One upload per distinct part; instances draw the shared buffers with their
+        // own world matrices (Part has reference identity, so the dictionary dedupes).
         var fillMeshes = new List<(uint Vao, int IndexCount, Matrix4d Model, PartColor Color)>();
         var edgeMeshes = new List<(uint Vao, int VertexCount, Matrix4d Model)>();
-        foreach (var part in parts)
+        var uploaded = new Dictionary<Part, (uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount)>();
+        foreach (var instance in instances)
         {
-            var mesh = part.GetMesh();
-            var render = RenderMesh.CreateFlat(mesh);
-            var (vao, _, _) = RenderGeometry.UploadMesh(gl, render);
-            fillMeshes.Add((vao, render.Indices.Length, part.Transform, part.Color ?? Palette.Steel));
-
-            var featureEdges = MeshFeatureEdges.Extract(mesh);
-            if (featureEdges.Count > 0)
+            var part = instance.Part;
+            if (!uploaded.TryGetValue(part, out var shared))
             {
-                var (edgeVao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
-                edgeMeshes.Add((edgeVao, featureEdges.Count * 2, part.Transform));
+                var mesh = part.GetMesh();
+                var render = RenderMesh.CreateFlat(mesh);
+                var (vao, _, _) = RenderGeometry.UploadMesh(gl, render);
+                var featureEdges = MeshFeatureEdges.Extract(mesh);
+                uint edgeVao = 0;
+                if (featureEdges.Count > 0)
+                    (edgeVao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
+                shared = (vao, render.Indices.Length, edgeVao, featureEdges.Count * 2);
+                uploaded[part] = shared;
             }
+
+            fillMeshes.Add((shared.Vao, shared.IndexCount, instance.World, part.Color ?? Palette.Steel));
+            if (shared.EdgeVertexCount > 0)
+                edgeMeshes.Add((shared.EdgeVao, shared.EdgeVertexCount, instance.World));
         }
 
         gl.Enable(EnableCap.PolygonOffsetFill);

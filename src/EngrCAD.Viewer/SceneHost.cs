@@ -4,6 +4,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Layout;
 using Avalonia.Media;
 using EngrCAD.BRep;
+using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Mesh;
 using EngrCAD.Modeling;
@@ -12,9 +13,11 @@ namespace EngrCAD.Viewer;
 
 /// <summary>
 /// The CAD chrome around the GL viewport: toolbar (standard views, fit), tab strip,
-/// model tree (parts per tab, visibility toggles, selection sync), properties panel
-/// (type/volume/area/bounds of the selection), and a status bar. One shared viewport;
-/// each tab keeps its own camera (auto-framed on first visit, remembered after).
+/// model tree (loose parts and assembly hierarchies per tab — indented occurrence
+/// rows, visibility toggles at any level with parent-off hiding the subtree,
+/// selection sync on occurrence paths), properties panel (occurrence path, part
+/// info, world pose of the selection), and a status bar. One shared viewport; each
+/// tab keeps its own camera (auto-framed on first visit, remembered after).
 /// </summary>
 internal sealed class SceneHost
 {
@@ -30,6 +33,14 @@ internal sealed class SceneHost
     private readonly Dictionary<string, CameraState> _tabCameras = [];
     private Scene? _scene;
     private string? _currentTab;
+
+    /// <summary>One model-tree row backed by a viewport instance (assembly header rows
+    /// are not instances — they only contribute an ancestor checkbox).</summary>
+    private sealed record PartRow(
+        int Index, Part Part, CheckBox Own, IReadOnlyList<CheckBox> Ancestors, Button Label, Button ModeButton);
+
+    private readonly List<PartRow> _partRows = [];
+    private IReadOnlyList<PartInstance> _instances = [];
 
     public ViewportControl Viewport { get; }
     public Control Root { get; }
@@ -74,7 +85,7 @@ internal sealed class SceneHost
 
         // ---- model tree (left) ----
         _tree = new StackPanel { Spacing = 2 };
-        var treePanel = SidePanel("PARTS", _tree, width: 190);
+        var treePanel = SidePanel("MODEL", _tree, width: 190);
 
         // ---- properties (right) ----
         _properties = new StackPanel { Spacing = 3 };
@@ -121,7 +132,7 @@ internal sealed class SceneHost
         root.Children.Add(Viewport);
         Root = root;
 
-        ShowProperties(null);
+        ShowProperties(-1);
     }
 
     private void SetView(double yaw, double pitch)
@@ -159,8 +170,10 @@ internal sealed class SceneHost
         bool restored = !keepCamera && name is not null && _tabCameras.ContainsKey(name);
 
         // keepCamera (live reload of the same tab) and a remembered pose both suppress
-        // auto-framing; a first visit frames to the tab's bounds.
-        Viewport.SetParts(tab?.Parts ?? [], frame: !keepCamera && !restored);
+        // auto-framing; a first visit frames to the tab's bounds. The tree walks the
+        // same tab structure Instances() flattens, so row instance indices line up.
+        var instances = tab?.Instances() ?? [];
+        Viewport.SetInstances(instances, frame: !keepCamera && !restored);
         if (restored)
             Viewport.Camera = _tabCameras[name!];
 
@@ -170,69 +183,144 @@ internal sealed class SceneHost
                 button.FontWeight = _scene.Tabs[i].Name == name ? FontWeight.Bold : FontWeight.Normal;
         }
 
-        RebuildTree(tab);
-        ShowProperties(null);
+        RebuildTree(tab, instances);
+        ShowProperties(-1);
     }
 
     // ---- model tree ----
 
-    private void RebuildTree(Tab? tab)
+    private void RebuildTree(Tab? tab, IReadOnlyList<PartInstance> instances)
     {
         _tree.Children.Clear();
+        _partRows.Clear();
+        _instances = instances;
         if (tab is null)
             return;
-        for (int i = 0; i < tab.Parts.Count; i++)
+
+        // Walk the tab exactly like Tab.Instances(): loose parts first, then each
+        // assembly depth-first — so the running instance index matches the viewport.
+        int next = 0;
+        foreach (var part in tab.Parts)
+            AddPartRow(part.Name, part, next++, depth: 0, ancestors: []);
+        foreach (var assembly in tab.Assemblies)
+            AddAssemblyRows(assembly, assembly.Name, depth: 0, ancestors: [], ref next);
+    }
+
+    /// <summary>An assembly header row (checkbox hides the whole subtree) plus its
+    /// occurrences, indented one level per nesting depth (always expanded in v1).</summary>
+    private void AddAssemblyRows(
+        Assembly assembly, string label, int depth, IReadOnlyList<CheckBox> ancestors, ref int next)
+    {
+        var check = new CheckBox
         {
-            int index = i;
-            var part = tab.Parts[i];
-            var check = new CheckBox
-            {
-                IsChecked = true,
-                MinWidth = 0,
-                Padding = new Thickness(0),
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            check.IsCheckedChanged += (_, _) => Viewport.SetVisible(index, check.IsChecked ?? true);
+            IsChecked = true,
+            MinWidth = 0,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        check.IsCheckedChanged += (_, _) => ApplyVisibility();
+        ToolTip.SetTip(check, "Show/hide the whole assembly");
 
-            // Display-mode cycler: a tiny per-row button, CAD-tree style. It writes
-            // through Part.DisplayMode, so the mode sticks across tab switches.
-            var mode = new Button
-            {
-                Content = ModeLabel(part.DisplayMode),
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(4, 2),
-                FontSize = 10,
-                Foreground = DimText,
-                VerticalAlignment = VerticalAlignment.Center,
-            };
-            ToolTip.SetTip(mode, "Display mode - click to cycle: shaded / wireframe / translucent");
-            mode.Click += (_, _) =>
-            {
-                var next = NextDisplayMode(part.DisplayMode);
-                Viewport.SetDisplayMode(index, next);
-                mode.Content = ModeLabel(next);
-                if (Viewport.Selected == index)
-                    ShowProperties(part); // keep the Display row current
-            };
-            DockPanel.SetDock(mode, Dock.Right);
+        var title = new TextBlock
+        {
+            Text = label,
+            Foreground = DimText,
+            FontSize = 12,
+            FontWeight = FontWeight.Bold,
+            Padding = new Thickness(4, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        _tree.Children.Add(new DockPanel
+        {
+            Margin = new Thickness(depth * 14, 0, 0, 0),
+            Children = { check, title },
+        });
 
-            var label = new Button
+        var groupAncestors = new List<CheckBox>(ancestors) { check };
+        foreach (var occurrence in assembly.Occurrences)
+        {
+            if (occurrence.Part is { } part)
+                AddPartRow(occurrence.Name, part, next++, depth + 1, groupAncestors);
+            else
+                AddAssemblyRows(occurrence.SubAssembly!, occurrence.Name, depth + 1, groupAncestors, ref next);
+        }
+    }
+
+    private void AddPartRow(string name, Part part, int index, int depth, IReadOnlyList<CheckBox> ancestors)
+    {
+        var check = new CheckBox
+        {
+            IsChecked = true,
+            MinWidth = 0,
+            Padding = new Thickness(0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        check.IsCheckedChanged += (_, _) => ApplyVisibility();
+
+        // Display-mode cycler: a tiny per-row button, CAD-tree style. It writes
+        // through Part.DisplayMode (shared by every instance of the part), so the
+        // mode sticks across tab switches and sibling rows update together.
+        var mode = new Button
+        {
+            Content = ModeLabel(part.DisplayMode),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(4, 2),
+            FontSize = 10,
+            Foreground = DimText,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(mode, "Display mode - click to cycle: shaded / wireframe / translucent");
+        mode.Click += (_, _) =>
+        {
+            var nextMode = NextDisplayMode(part.DisplayMode);
+            Viewport.SetDisplayMode(index, nextMode);
+            foreach (var row in _partRows)
             {
-                Content = part.Name,
-                Background = Brushes.Transparent,
-                BorderThickness = new Thickness(0),
-                Padding = new Thickness(4, 2),
-                HorizontalAlignment = HorizontalAlignment.Stretch,
-                HorizontalContentAlignment = HorizontalAlignment.Left,
-                Foreground = BrightText,
-            };
-            label.Click += (_, _) =>
-            {
-                Viewport.Select(index == Viewport.Selected ? -1 : index);
-                OnViewportSelection(Viewport.Selected);
-            };
-            _tree.Children.Add(new DockPanel { Children = { check, mode, label } });
+                if (ReferenceEquals(row.Part, part))
+                    row.ModeButton.Content = ModeLabel(nextMode);
+            }
+            int selected = Viewport.Selected;
+            if (selected >= 0 && selected < _instances.Count && ReferenceEquals(_instances[selected].Part, part))
+                ShowProperties(selected); // keep the Display row current
+        };
+        DockPanel.SetDock(mode, Dock.Right);
+
+        var label = new Button
+        {
+            Content = name,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(4, 2),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Foreground = BrightText,
+        };
+        label.Click += (_, _) =>
+        {
+            Viewport.Select(index == Viewport.Selected ? -1 : index);
+            OnViewportSelection(Viewport.Selected);
+        };
+
+        _tree.Children.Add(new DockPanel
+        {
+            Margin = new Thickness(depth * 14, 0, 0, 0),
+            Children = { check, mode, label },
+        });
+        _partRows.Add(new PartRow(index, part, check, ancestors, label, mode));
+    }
+
+    /// <summary>Effective visibility per instance: its own checkbox AND every ancestor
+    /// assembly checkbox — unchecking a parent hides the subtree without touching the
+    /// children's own check state.</summary>
+    private void ApplyVisibility()
+    {
+        foreach (var row in _partRows)
+        {
+            bool visible = row.Own.IsChecked ?? true;
+            foreach (var ancestor in row.Ancestors)
+                visible &= ancestor.IsChecked ?? true;
+            Viewport.SetVisible(row.Index, visible);
         }
     }
 
@@ -251,21 +339,17 @@ internal sealed class SceneHost
 
     private void OnViewportSelection(int index)
     {
-        for (int i = 0; i < _tree.Children.Count; i++)
-        {
-            if (_tree.Children[i] is DockPanel row && row.Children[2] is Button label)
-                label.FontWeight = i == index ? FontWeight.Bold : FontWeight.Normal;
-        }
-        var tab = _scene?.Tabs.FirstOrDefault(t => t.Name == _currentTab);
-        ShowProperties(index >= 0 && tab is not null && index < tab.Parts.Count ? tab.Parts[index] : null);
+        foreach (var row in _partRows)
+            row.Label.FontWeight = row.Index == index ? FontWeight.Bold : FontWeight.Normal;
+        ShowProperties(index);
     }
 
     // ---- properties ----
 
-    private void ShowProperties(Part? part)
+    private void ShowProperties(int index)
     {
         _properties.Children.Clear();
-        if (part is null)
+        if (index < 0 || index >= _instances.Count)
         {
             _properties.Children.Add(new TextBlock
             {
@@ -276,8 +360,12 @@ internal sealed class SceneHost
             return;
         }
 
+        var instance = _instances[index];
+        var part = instance.Part;
         var mesh = part.GetMesh();
-        AddProperty("Name", part.Name);
+        AddProperty("Name", instance.Path);
+        if (instance.Path != part.Name)
+            AddProperty("Part", part.Name);
         AddProperty("Kind", part.Geometry switch
         {
             Shape => "Shape (unified)",
@@ -291,8 +379,10 @@ internal sealed class SceneHost
         AddProperty("Closed", mesh.IsClosed ? "yes" : "no");
         AddProperty("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)");
         AddProperty("Area", mesh.SurfaceArea().ToString("G6"));
-        var size = part.Bounds().Size;
+        var size = instance.Bounds().Size;
         AddProperty("Size", $"{size.X:G4} × {size.Y:G4} × {size.Z:G4}");
+        var position = instance.World.TransformPoint(Vector3d.Zero);
+        AddProperty("Position", $"{position.X:G4}, {position.Y:G4}, {position.Z:G4}");
     }
 
     private void AddProperty(string label, string value)
