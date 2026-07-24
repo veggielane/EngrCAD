@@ -7,11 +7,14 @@ namespace EngrCAD.Interop;
 /// Parameter-space triangulation for trimmed faces on curved surfaces — faces whose loops
 /// do not cover the surface's natural grid domain (fragments produced by
 /// <see cref="FaceSplitter.SplitByCurve"/>, e.g. a bore wall cut through by a slot).
-/// The loops' shared edge-polyline samples are pulled into (u, v) space and ear-clipped
-/// with an exact-coordinate clipper, then oversized interior edges are midpoint-split
-/// down to the surface's natural grid density with the new vertices evaluated on the
-/// exact surface. Boundary vertices are the exact shared edge samples — never
-/// re-evaluated approximations — so neighboring faces weld without cracks.
+/// The loops' shared edge-polyline samples are pulled into (u, v) space; non-wrapping
+/// regions are ear-clipped with an exact-coordinate clipper, band-like regions (loops
+/// winding the periodic direction — rings subdivided into arcs, which the grid path can
+/// no longer match) are strip-zipped between their two ring chains (or fanned to the
+/// pole). Oversized interior edges are then midpoint-split down to the natural grid
+/// density with new vertices evaluated on the exact surface. Boundary vertices are the
+/// exact shared edge samples — never re-evaluated approximations — so neighboring faces
+/// weld without cracks.
 ///
 /// The clipper is deliberately not <see cref="Mesh.PolygonTriangulator"/> (earcut):
 /// iso-parameter boundary runs (ring arcs at constant v) are exactly collinear in uv, and
@@ -28,8 +31,8 @@ internal static class TrimmedFaceTessellator
     /// <paramref name="polygons"/> (counter-clockwise in uv, i.e. along the surface
     /// normal — the caller flips reversed faces). Returns false without touching
     /// <paramref name="polygons"/> when the face cannot be handled: a loop point fails
-    /// inverse evaluation, a loop winds the periodic direction (band-like regions are the
-    /// grid path's job), or clipping gets stuck on degenerate input.
+    /// inverse evaluation, the winding structure is unsupported (a band with extra hole
+    /// loops), or clipping gets stuck on degenerate input.
     /// </summary>
     public static bool TryTessellate(
         BrepFace face,
@@ -42,9 +45,10 @@ internal static class TrimmedFaceTessellator
         double period = FaceGeometry.PeriodU(surface);
 
         // 1. Pull every loop's shared edge samples into parameter space, unwrapping the
-        //    periodic u direction along the loop.
+        //    periodic u direction along the loop, and record each loop's winding number.
         var loopUv = new List<List<Vector2d>>(face.Loops.Count);
         var loopPoints = new List<List<Vector3d>>(face.Loops.Count);
+        var windings = new List<int>(face.Loops.Count);
         foreach (var loop in face.Loops)
         {
             var points = BRepTessellator.LoopPolyline(loop, edgePolylines);
@@ -59,13 +63,59 @@ internal static class TrimmedFaceTessellator
                     q = new Vector2d(q.X + period * Math.Round((uv[^1].X - q.X) / period), q.Y);
                 uv.Add(q);
             }
-            if (period > 0 && Math.Round((uv[^1].X - uv[0].X) / period) != 0)
-                return false; // the loop winds the periodic direction
+            int winding = period > 0 ? (int)Math.Round((uv[^1].X - uv[0].X) / period) : 0;
+            if (Math.Abs(winding) > 1)
+                return false;
             loopUv.Add(uv);
             loopPoints.Add(points);
+            windings.Add(winding);
         }
 
-        // 2. Bring hole loops into the outer loop's period window.
+        var uvAll = new List<Vector2d>();
+        var pointsAll = new List<Vector3d>();
+        var boundaryEdges = new HashSet<(int, int)>();
+        List<(int A, int B, int C)>? triangles;
+        if (windings.All(w => w == 0))
+        {
+            triangles = TriangulateRegion(loopUv, loopPoints, period, uvAll, pointsAll, boundaryEdges);
+        }
+        else
+        {
+            // Band-like: winding loops zip as strips; extra hole loops are unsupported.
+            if (windings.Any(w => w == 0))
+                return false;
+            triangles = TriangulateBand(surface, period, loopUv, loopPoints, windings, uvAll, pointsAll, boundaryEdges);
+        }
+        if (triangles is null || triangles.Count == 0)
+            return false;
+
+        // 2. Refine oversized interior edges to the natural grid density so the surface
+        //    keeps its curvature between distant boundary samples.
+        var (stepU, stepV) = NaturalSteps(surface, segmentsPerCircle, curveSamples);
+        Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV);
+
+        foreach (var (a, b, c) in triangles)
+            polygons.Add([pointsAll[a], pointsAll[b], pointsAll[c]]);
+        return true;
+    }
+
+    // ---- non-wrapping regions: exact ear clipping ----
+
+    /// <summary>
+    /// Triangulates a plain (non-wrapping) region: outer loop plus holes, ear-clipped on
+    /// exact coordinates. Fills the shared vertex arrays and the boundary edge set, and
+    /// verifies every boundary sample survived into the triangulation — a dropped vertex
+    /// would leave a chord across the curved boundary that welding cannot close.
+    /// </summary>
+    private static List<(int A, int B, int C)>? TriangulateRegion(
+        List<List<Vector2d>> loopUv,
+        List<List<Vector3d>> loopPoints,
+        double period,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges)
+    {
+        // Bring hole loops into the outer loop's period window.
         if (period > 0 && loopUv.Count > 1)
         {
             double outerMid = loopUv[0].Average(p => p.X);
@@ -80,11 +130,7 @@ internal static class TrimmedFaceTessellator
             }
         }
 
-        // Combined vertex arrays in [outer..., hole0..., hole1...] order.
-        var uvAll = new List<Vector2d>();
-        var pointsAll = new List<Vector3d>();
         var rings = new List<List<int>>();
-        var boundaryEdges = new HashSet<(int, int)>();
         for (int i = 0; i < loopUv.Count; i++)
         {
             int start = uvAll.Count;
@@ -99,17 +145,14 @@ internal static class TrimmedFaceTessellator
             uvAll.Max(p => p.X) - uvAll.Min(p => p.X),
             uvAll.Max(p => p.Y) - uvAll.Min(p => p.Y));
         if (extent <= 0)
-            return false;
+            return null;
         if (Math.Abs(FaceGeometry.LoopSignedArea(loopUv[0])) < 1e-12 * extent * extent)
-            return false;
+            return null;
 
-        // 3. Ear-clip on the exact coordinates.
         var triangles = EarClip(uvAll, rings);
-        if (triangles is null || triangles.Count == 0)
-            return false;
+        if (triangles is null)
+            return null;
 
-        // Every boundary sample must appear in the triangulation — a dropped vertex
-        // would leave a chord across the curved boundary that welding cannot close.
         var used = new bool[uvAll.Count];
         foreach (var (a, b, c) in triangles)
         {
@@ -117,17 +160,151 @@ internal static class TrimmedFaceTessellator
             used[b] = true;
             used[c] = true;
         }
-        if (Array.IndexOf(used, false) >= 0)
-            return false;
+        return Array.IndexOf(used, false) >= 0 ? null : triangles;
+    }
 
-        // 4. Refine oversized interior edges to the natural grid density so the surface
-        //    keeps its curvature between distant boundary samples.
-        var (stepU, stepV) = NaturalSteps(surface, segmentsPerCircle, curveSamples);
-        Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV);
+    // ---- band-like regions: strip zipping ----
 
-        foreach (var (a, b, c) in triangles)
-            polygons.Add([pointsAll[a], pointsAll[b], pointsAll[c]]);
-        return true;
+    /// <summary>
+    /// Triangulates a band-like region whose loops wind the periodic direction: two
+    /// opposite-winding ring chains are zipped into a triangle strip by a monotone
+    /// merge walk (like the cylinder band path, but tolerating rings subdivided into
+    /// arcs with unrelated sample phases); a single winding chain fans to the surface's
+    /// pole. Each chain gains a closure duplicate (same exact 3D point, uv one period
+    /// on), so the strip's first and last cross edges weld to each other; those two
+    /// cross edges are marked as boundary so refinement can never subdivide the welded
+    /// pair inconsistently.
+    /// </summary>
+    private static List<(int A, int B, int C)>? TriangulateBand(
+        Surface surface,
+        double period,
+        List<List<Vector2d>> loopUv,
+        List<List<Vector3d>> loopPoints,
+        List<int> windings,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges)
+    {
+        if (loopUv.Count is not (1 or 2))
+            return null;
+
+        // Build each chain oriented by increasing u, with a closing duplicate vertex.
+        List<int> BuildChain(int loopIndex, double alignToU)
+        {
+            var uv = loopUv[loopIndex];
+            var pts = loopPoints[loopIndex];
+            int n = uv.Count;
+            var order = new int[n];
+            for (int i = 0; i < n; i++)
+                order[i] = windings[loopIndex] > 0 ? i : n - 1 - i;
+
+            // Rotate the chain to start at the vertex closest above the alignment phase.
+            int startAt = 0;
+            double bestOffset = double.PositiveInfinity;
+            for (int i = 0; i < n; i++)
+            {
+                double offset = uv[order[i]].X - alignToU;
+                offset -= period * Math.Floor(offset / period); // into [0, period)
+                if (offset < bestOffset)
+                {
+                    bestOffset = offset;
+                    startAt = i;
+                }
+            }
+
+            var chain = new List<int>(n + 1);
+            double previousU = alignToU + bestOffset;
+            for (int i = 0; i < n; i++)
+            {
+                int src = order[(startAt + i) % n];
+                double u = uv[src].X;
+                u += period * Math.Round((previousU - u) / period);
+                chain.Add(uvAll.Count);
+                uvAll.Add(new Vector2d(u, uv[src].Y));
+                pointsAll.Add(pts[src]);
+                previousU = u;
+            }
+            // Closure duplicate: same exact 3D point, one period on.
+            int first = chain[0];
+            chain.Add(uvAll.Count);
+            uvAll.Add(new Vector2d(uvAll[first].X + period, uvAll[first].Y));
+            pointsAll.Add(pointsAll[first]);
+
+            for (int i = 0; i + 1 < chain.Count; i++)
+                boundaryEdges.Add(EdgeKey(chain[i], chain[i + 1]));
+            return chain;
+        }
+
+        var triangles = new List<(int, int, int)>();
+        if (loopUv.Count == 2)
+        {
+            if (windings[0] != -windings[1])
+                return null;
+            double anchor = loopUv[0][0].X;
+            var first = BuildChain(0, anchor);
+            var second = BuildChain(1, anchor);
+
+            // Bottom chain = lower mean v; triangles CCW in (u, v).
+            bool firstIsBottom =
+                loopUv[0].Average(p => p.Y) <= loopUv[1].Average(p => p.Y);
+            var bottom = firstIsBottom ? first : second;
+            var top = firstIsBottom ? second : first;
+            boundaryEdges.Add(EdgeKey(bottom[0], top[0]));
+            boundaryEdges.Add(EdgeKey(bottom[^1], top[^1]));
+
+            int i = 0, j = 0;
+            while (i < bottom.Count - 1 || j < top.Count - 1)
+            {
+                bool advanceBottom =
+                    i < bottom.Count - 1 &&
+                    (j >= top.Count - 1 || uvAll[bottom[i + 1]].X <= uvAll[top[j + 1]].X);
+                if (advanceBottom)
+                {
+                    triangles.Add((bottom[i], bottom[i + 1], top[j]));
+                    i++;
+                }
+                else
+                {
+                    triangles.Add((bottom[i], top[j + 1], top[j]));
+                    j++;
+                }
+            }
+        }
+        else
+        {
+            // A single winding loop bounds a pole cap: verify the far v row is
+            // degenerate and fan the chain to the pole point.
+            var domainV = surface.DomainV;
+            double meanV = loopUv[0].Average(p => p.Y);
+            double vFar = Math.Abs(meanV - domainV.Start) > Math.Abs(domainV.End - meanV)
+                ? domainV.Start
+                : domainV.End;
+            if (!double.IsFinite(vFar))
+                return null;
+            var pole = surface.PointAt(surface.DomainU.Start, vFar);
+            for (int k = 1; k <= 2; k++)
+            {
+                if (surface.PointAt(surface.DomainU.Start + period * k / 3.0, vFar)
+                    .DistanceSquaredTo(pole) > 1e-18)
+                    return null;
+            }
+
+            var chain = BuildChain(0, loopUv[0][0].X);
+            int poleIndex = uvAll.Count;
+            uvAll.Add(new Vector2d(uvAll[chain[0]].X + period / 2, vFar));
+            pointsAll.Add(pole);
+            boundaryEdges.Add(EdgeKey(chain[0], poleIndex));
+            boundaryEdges.Add(EdgeKey(chain[^1], poleIndex));
+
+            bool poleBelow = vFar < meanV;
+            for (int i = 0; i + 1 < chain.Count; i++)
+            {
+                triangles.Add(poleBelow
+                    ? (chain[i + 1], chain[i], poleIndex)
+                    : (chain[i], chain[i + 1], poleIndex));
+            }
+        }
+        return triangles;
     }
 
     // ---- exact ear clipping ----
@@ -169,27 +346,50 @@ internal static class TrimmedFaceTessellator
                 return null;
         }
 
+        // Inverse evaluation carries ~1e-9 jitter, so "on the boundary" needs a band:
+        // a vertex a hair outside a candidate ear must still block it — otherwise the
+        // ear's diagonal cuts that vertex off and the remaining polygon self-intersects.
+        double minX = double.PositiveInfinity, maxX = double.NegativeInfinity;
+        double minY = double.PositiveInfinity, maxY = double.NegativeInfinity;
+        foreach (var ring in rings)
+        {
+            foreach (int i in ring)
+            {
+                minX = Math.Min(minX, uv[i].X);
+                maxX = Math.Max(maxX, uv[i].X);
+                minY = Math.Min(minY, uv[i].Y);
+                maxY = Math.Max(maxY, uv[i].Y);
+            }
+        }
+        double blockBand = 1e-8 * Math.Max(maxX - minX, maxY - minY);
+
         var polygon = outer;
         var triangles = new List<(int, int, int)>(polygon.Count);
-        int cursor = 0;
         while (polygon.Count > 3)
         {
-            bool clipped = false;
-            for (int scan = 0; scan < polygon.Count; scan++)
+            // Shortest-diagonal-first: clipping the ear with the shortest cut keeps the
+            // triangulation zigzagging along boundary runs instead of fanning from the
+            // corners — fans breed long interior diagonals that the curvature
+            // refinement would then have to subdivide quadratically.
+            int best = -1;
+            double bestDiagonal = double.PositiveInfinity;
+            for (int ib = 0; ib < polygon.Count; ib++)
             {
-                int ib = (cursor + scan) % polygon.Count;
                 int ia = (ib + polygon.Count - 1) % polygon.Count;
                 int ic = (ib + 1) % polygon.Count;
-                if (!IsEar(uv, polygon, ia, ib, ic))
+                var diagonal = uv[polygon[ic]] - uv[polygon[ia]];
+                double length = diagonal.Dot(diagonal);
+                if (length >= bestDiagonal || !IsEar(uv, polygon, ia, ib, ic, blockBand))
                     continue;
-                triangles.Add((polygon[ia], polygon[ib], polygon[ic]));
-                polygon.RemoveAt(ib);
-                cursor = ib % polygon.Count;
-                clipped = true;
-                break;
+                best = ib;
+                bestDiagonal = length;
             }
-            if (!clipped)
+            if (best < 0)
                 return null;
+            int prev = (best + polygon.Count - 1) % polygon.Count;
+            int next = (best + 1) % polygon.Count;
+            triangles.Add((polygon[prev], polygon[best], polygon[next]));
+            polygon.RemoveAt(best);
         }
         // The final triangle can be collinear when the leftover region has zero area
         // (everything real is already covered); emit only genuine area.
@@ -202,11 +402,12 @@ internal static class TrimmedFaceTessellator
     }
 
     /// <summary>
-    /// Strictly convex corner with no other polygon vertex inside or on the closed ear
-    /// triangle. Points coincident with an ear corner (hole-bridge duplicates) do not
-    /// block — the diagonal merely ends at their position.
+    /// Strictly convex corner with no other polygon vertex inside or within
+    /// <paramref name="blockBand"/> of the closed ear triangle. Points coincident with
+    /// an ear corner (hole-bridge duplicates) do not block — the diagonal merely ends
+    /// at their position.
     /// </summary>
-    private static bool IsEar(List<Vector2d> uv, List<int> polygon, int ia, int ib, int ic)
+    private static bool IsEar(List<Vector2d> uv, List<int> polygon, int ia, int ib, int ic, double blockBand)
     {
         var a = uv[polygon[ia]];
         var b = uv[polygon[ib]];
@@ -214,6 +415,7 @@ internal static class TrimmedFaceTessellator
         if ((b - a).Cross(c - b) <= 0)
             return false; // reflex or exactly straight — never emit zero-area ears
 
+        double ab = (b - a).Length, bc = (c - b).Length, ca = (a - c).Length;
         for (int j = 0; j < polygon.Count; j++)
         {
             if (j == ia || j == ib || j == ic)
@@ -221,10 +423,10 @@ internal static class TrimmedFaceTessellator
             var p = uv[polygon[j]];
             if (Coincident(p, a) || Coincident(p, b) || Coincident(p, c))
                 continue;
-            if ((b - a).Cross(p - a) >= 0 &&
-                (c - b).Cross(p - b) >= 0 &&
-                (a - c).Cross(p - c) >= 0)
-                return false; // inside the ear, or exactly on one of its edges
+            if ((b - a).Cross(p - a) >= -blockBand * ab &&
+                (c - b).Cross(p - b) >= -blockBand * bc &&
+                (a - c).Cross(p - c) >= -blockBand * ca)
+                return false; // inside the ear, or within the jitter band of its edges
         }
         return true;
     }
@@ -367,10 +569,10 @@ internal static class TrimmedFaceTessellator
     }
 
     /// <summary>
-    /// Repeatedly splits the worst interior edge longer than one natural grid step
-    /// (measured per-axis in step units) at its uv midpoint, lifting the new vertex onto
-    /// the exact surface. Boundary edges are never split — their chords are the shared
-    /// seam geometry.
+    /// Splits interior edges longer than one natural grid step (measured per-axis in
+    /// step units) at their uv midpoints, lifting new vertices onto the exact surface,
+    /// until every interior edge fits. Boundary edges are never split — their chords
+    /// are the shared seam geometry.
     /// </summary>
     private static void Refine(
         Surface surface,
@@ -385,56 +587,117 @@ internal static class TrimmedFaceTessellator
         if (double.IsInfinity(stepU) && double.IsInfinity(stepV))
             return;
 
-        double MetricSquared((int, int) e)
+        bool Oversized((int, int) e)
         {
             double du = double.IsInfinity(stepU) ? 0 : (uv[e.Item2].X - uv[e.Item1].X) / stepU;
             double dv = double.IsInfinity(stepV) ? 0 : (uv[e.Item2].Y - uv[e.Item1].Y) / stepV;
-            return du * du + dv * dv;
+            return du * du + dv * dv > 1 + 1e-9;
         }
 
-        for (int guard = 0; guard < 20000; guard++)
+        var edgeOwners = new Dictionary<(int, int), List<int>>();
+        void Register(int triangle, (int, int) key)
         {
-            (int, int) worst = (-1, -1);
-            double worstMetric = 1 + 1e-9;
-            foreach (var (a, b, c) in triangles)
-            {
-                Span<(int, int)> edges = [EdgeKey(a, b), EdgeKey(b, c), EdgeKey(c, a)];
-                foreach (var key in edges)
-                {
-                    if (boundaryEdges.Contains(key))
-                        continue;
-                    double m = MetricSquared(key);
-                    if (m > worstMetric)
-                    {
-                        worstMetric = m;
-                        worst = key;
-                    }
-                }
-            }
-            if (worst.Item1 < 0)
-                break;
+            if (!edgeOwners.TryGetValue(key, out var owners))
+                edgeOwners[key] = owners = [];
+            owners.Add(triangle);
+        }
+        for (int t = 0; t < triangles.Count; t++)
+        {
+            var (a, b, c) = triangles[t];
+            Register(t, EdgeKey(a, b));
+            Register(t, EdgeKey(b, c));
+            Register(t, EdgeKey(c, a));
+        }
+
+        static (int A, int B, int C) Rotate((int A, int B, int C) triangle, (int, int) key)
+        {
+            var (a, b, c) = triangle;
+            if (EdgeKey(a, b) == key)
+                return (a, b, c);
+            if (EdgeKey(b, c) == key)
+                return (b, c, a);
+            if (EdgeKey(c, a) == key)
+                return (c, a, b);
+            return (-1, -1, -1); // already rewritten by a previous split
+        }
+
+        var queue = new Queue<(int, int)>(
+            edgeOwners.Keys.Where(k => !boundaryEdges.Contains(k) && Oversized(k)));
+        int guard = 200000;
+        while (queue.Count > 0 && guard-- > 0)
+        {
+            var key = queue.Dequeue();
+            if (!edgeOwners.TryGetValue(key, out var owners) || !Oversized(key))
+                continue;
 
             var mid = new Vector2d(
-                (uv[worst.Item1].X + uv[worst.Item2].X) / 2,
-                (uv[worst.Item1].Y + uv[worst.Item2].Y) / 2);
-            int midIndex = uv.Count;
-            uv.Add(mid);
-            points.Add(EvaluateAt(surface, period, mid));
+                (uv[key.Item1].X + uv[key.Item2].X) / 2,
+                (uv[key.Item1].Y + uv[key.Item2].Y) / 2);
+            var midPoint = EvaluateAt(surface, period, mid);
 
-            int count = triangles.Count;
-            for (int i = 0; i < count; i++)
+            // Inverse-evaluation jitter (~1e-9) makes iso-parameter runs only almost
+            // collinear, so a chord can skip a boundary vertex by a hair; its midpoint
+            // then lands exactly on that vertex's 3D position, and creating a second
+            // vertex there would weld the mesh non-manifold. Snap to the coincident
+            // opposite vertex instead and drop the degenerate sliver.
+            int midIndex = -1;
+            foreach (int t in owners)
             {
-                var (a, b, c) = triangles[i];
-                if (EdgeKey(b, c) == worst)
-                    (a, b, c) = (b, c, a);
-                else if (EdgeKey(c, a) == worst)
-                    (a, b, c) = (c, a, b);
-                else if (EdgeKey(a, b) != worst)
+                var (_, _, c) = Rotate(triangles[t], key);
+                if (c >= 0 && points[c].DistanceSquaredTo(midPoint) <= 1e-16)
+                {
+                    midIndex = c;
+                    break;
+                }
+            }
+            if (midIndex < 0)
+            {
+                midIndex = uv.Count;
+                uv.Add(mid);
+                points.Add(midPoint);
+            }
+
+            edgeOwners.Remove(key);
+            foreach (int t in owners.ToList())
+            {
+                var (a, b, c) = Rotate(triangles[t], key);
+                if (a < 0)
                     continue;
-                triangles[i] = (a, midIndex, c);
+                if (c == midIndex)
+                {
+                    // The chord ran exactly through c: the sliver between them vanishes.
+                    edgeOwners.TryGetValue(EdgeKey(b, c), out var bcOwners);
+                    bcOwners?.Remove(t);
+                    edgeOwners.TryGetValue(EdgeKey(c, a), out var caOwners);
+                    caOwners?.Remove(t);
+                    triangles[t] = (-1, -1, -1);
+                    continue;
+                }
+                int fresh = triangles.Count;
+                triangles[t] = (a, midIndex, c);
                 triangles.Add((midIndex, b, c));
+
+                // (c, a) stays with t; (b, c) moves to the fresh triangle.
+                var moved = EdgeKey(b, c);
+                if (edgeOwners.TryGetValue(moved, out var movedOwners))
+                {
+                    movedOwners.Remove(t);
+                    movedOwners.Add(fresh);
+                }
+                Register(t, EdgeKey(a, midIndex));
+                Register(t, EdgeKey(midIndex, c));
+                Register(fresh, EdgeKey(midIndex, b));
+                Register(fresh, EdgeKey(c, midIndex));
+
+                foreach (var candidate in (ReadOnlySpan<(int, int)>)
+                    [EdgeKey(a, midIndex), EdgeKey(midIndex, b), EdgeKey(midIndex, c)])
+                {
+                    if (!boundaryEdges.Contains(candidate) && Oversized(candidate))
+                        queue.Enqueue(candidate);
+                }
             }
         }
+        triangles.RemoveAll(t => t.A < 0);
     }
 
     /// <summary>Evaluates the surface at an unwrapped uv (periodic u brought back into the domain).</summary>

@@ -115,4 +115,96 @@ public class TrimmedFaceTests
         double smooth = Math.PI * 0.35 * 0.35 / 2 * 5.0;
         Assert.InRange(mesh.Volume(), inscribed - 1e-9, smooth + 1e-9);
     }
+
+    [Fact]
+    public void SplitConeBand_TwoTrimmedHalves_SolidStaysClosed()
+    {
+        // Frustum ring: trapezoid profile revolved a full turn. Splitting the outer cone
+        // band along two surface generator lines produces two trimmed RevolvedSurface
+        // faces; the ring splits propagate into the neighboring annular faces, which
+        // also become trimmed (their rings turn into arcs).
+        var frustum = SolidFactory.Revolve(
+            Profile.FromPoints([(1, 0, 0), (2, 0, 0), (1.5, 0, 1), (1, 0, 1)]),
+            Vector3d.Zero, Vector3d.UnitZ);
+        frustum.Validate();
+        double referenceVolume = BRepTessellator
+            .Tessellate(frustum, segmentsPerCircle: 48, curveSamples: 24)
+            .Volume();
+
+        static double Radius(Vector3d p) => Math.Sqrt(p.X * p.X + p.Y * p.Y);
+        var cone = frustum.Faces.Single(f =>
+        {
+            var rs = (RevolvedSurface)f.Surface;
+            var g = rs.Generator;
+            double r0 = Radius(g.PointAt(g.Domain.Start));
+            double r1 = Radius(g.PointAt(g.Domain.End));
+            return Math.Abs(Math.Min(r0, r1) - 1.5) < 1e-9 && Math.Abs(Math.Max(r0, r1) - 2.0) < 1e-9;
+        });
+        var surface = (RevolvedSurface)cone.Surface;
+
+        // Surface generator lines at two angles, extended past both rings — the curve
+        // only partially lies on the bounded surface, exercising the tolerant pullback.
+        Line3d GeneratorLine(double u)
+        {
+            var p0 = surface.PointAt(u, surface.DomainV.Start);
+            var p1 = surface.PointAt(u, surface.DomainV.End);
+            var d = p1 - p0;
+            return new Line3d(p0 - d, p1 + d);
+        }
+
+        IReadOnlyList<BrepFace> parts = [cone];
+        foreach (double u in (double[])[0.7, 0.7 + Math.PI])
+            parts = parts.SelectMany(f => FaceSplitter.SplitByCurve(f, GeneratorLine(u))).ToList();
+        Assert.Equal(2, parts.Count);
+
+        var faces = frustum.Faces.Where(f => !ReferenceEquals(f, cone)).Concat(parts).ToList();
+        var solid = new BrepSolid([new BrepShell(faces)]);
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus: 1)); // the ring keeps its bore
+
+        var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle: 48, curveSamples: 24);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(0, mesh.EulerCharacteristic); // genus 1
+
+        // The split solid resamples its rings as arcs, so its volume differs from the
+        // unsplit tessellation only by chordal discretization (~lateral area × sagitta).
+        double sagitta = 2 * (1 - Math.Cos(Math.PI / 48));
+        Assert.InRange(mesh.Volume(), referenceVolume - 30 * sagitta, referenceVolume + 30 * sagitta);
+    }
+
+    [Fact]
+    public void Difference_SlotThroughBore_TrimmedBoreWallFragments()
+    {
+        // The roadmap's known-limitation scenario: drill a box, then subtract a slot
+        // narrower than the bore that passes through it. The bore wall (a reversed
+        // extruded band) is cut by the slot's side planes (vertical lines) and top and
+        // bottom planes (wrap circles) into trimmed fragments.
+        const int n = 32;
+        const double r = 0.4;
+        const double h = 0.15; // slot half-width < bore radius
+        var box = SolidFactory.MakeBox(new Aabb((-1, -1, 0), (1, 1, 1)));
+        var drill = SolidFactory.Extrude(
+            Profile.Circle((0, 0, -1), Vector3d.UnitX, Vector3d.UnitY, r),
+            (0, 0, 3));
+        var drilled = BrepBoolean.Difference(box, drill);
+
+        var slab = SolidFactory.MakeBox(new Aabb((-2, -h, 0.3), (2, h, 0.7)));
+        var result = BrepBoolean.Difference(drilled, slab);
+
+        result.Validate();
+        Assert.True(result.SatisfiesEulerFormula(genus: 3)); // bore + two slot arms
+
+        var mesh = BRepTessellator.Tessellate(result, segmentsPerCircle: n);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(-4, mesh.EulerCharacteristic); // genus 3
+
+        // Smooth-solid volume: box − bore − (slot inside box − slot∩bore).
+        double boreArea = Math.PI * r * r;
+        double chordArea = 2 * (h * Math.Sqrt(r * r - h * h) + r * r * Math.Asin(h / r));
+        double expected = 4.0 - boreArea - (2.0 * 2 * h * 0.4 - 0.4 * chordArea);
+        double sagitta = r * (1 - Math.Cos(Math.PI / n));
+        Assert.InRange(mesh.Volume(), expected - 20 * sagitta, expected + 20 * sagitta);
+    }
 }
