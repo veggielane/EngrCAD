@@ -4,10 +4,10 @@ using System.IO.Compression;
 namespace EngrCAD.Viewer;
 
 /// <summary>
-/// Minimal PNG encoder (8-bit RGBA, filter None, no interlace) so screenshots need no
-/// image-library dependency. Handles the two framebuffer quirks in one place:
-/// OpenGL reads pixels bottom-up (<c>flipVertically</c>) and its alpha channel is
-/// whatever compositing left behind (<c>forceOpaque</c>).
+/// Minimal PNG encoder (8-bit RGBA, filter None, no interlace) so screenshots and
+/// headless renders need no image-library dependency. Handles the two framebuffer
+/// quirks in one place: OpenGL reads pixels bottom-up (<c>flipVertically</c>) and its
+/// alpha channel is whatever compositing left behind (<c>forceOpaque</c>).
 /// </summary>
 internal static class PngWriter
 {
@@ -66,6 +66,17 @@ internal static class PngWriter
 
         WriteChunk(output, "IEND", []);
         return output.ToArray();
+    }
+
+    /// <summary>Encodes <paramref name="rgbaTopDown"/> (top row first) and writes it to
+    /// <paramref name="path"/>, creating the directory if needed. The convenience form
+    /// used by headless rendering, where rows are already top-down.</summary>
+    public static void Write(string path, ReadOnlySpan<byte> rgbaTopDown, int width, int height)
+    {
+        var png = Encode(width, height, rgbaTopDown);
+        if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
+            Directory.CreateDirectory(directory);
+        File.WriteAllBytes(path, png);
     }
 
     private static void WriteChunk(MemoryStream output, string type, ReadOnlySpan<byte> data)
