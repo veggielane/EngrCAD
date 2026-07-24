@@ -34,6 +34,13 @@ operations. Depends only on `EngrCAD.Core`.
   analytic derivative overrides (constant speed √(r² + (p/2π)²)), closed-form arc
   length turns·√((2πr)² + p²), lead angle, negative pitch descends; the origin+axis
   constructor delegates to `Frame3d.FromNormal` (the shared perpendicular convention).
+  `SpiralArc3d` is a planar Archimedean spiral arc, P(t) = O + X·r(t)·cos t +
+  Y·r(t)·sin t with r(t) linear in the angle t (zero slope = circular arc, kept in the
+  type so all helical cap cuts share one sampling rule); exact derivatives. It is
+  exactly the curve a plane ⊥ axis cuts from a `HelicalSurface` band — with a linear
+  generator, solving z(v) + pitch·u/2π = z_cap makes v (hence radius) linear in u —
+  and is always built on the band's own axis frame so its parameter IS the surface u
+  (phase alignment).
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
@@ -42,7 +49,15 @@ operations. Depends only on `EngrCAD.Core`.
 - **Surfaces** (`Surface`): `PlaneSurface`, `CylinderSurface`, `SphereSurface`,
   tensor-product `NurbsSurface`, and the generated surfaces `ExtrudedSurface`,
   `RevolvedSurface` (partial or full angle), `SweptSurface` (rotation-minimizing frames
-  via double reflection; exact at its frame samples).
+  via double reflection; exact at its frame samples), and `HelicalSurface` — the
+  co-rotating sweep of a straight profile segment (one screw-thread facet):
+  P(u, v) = O + X·r(v)·cos u + Y·r(v)·sin u + Z·(z(v) + pitch·u/2π) with (r(v), z(v))
+  linear from `ProfileStart` to `ProfileEnd`, u a finite turning-angle interval spanning
+  all turns (NOT periodic — the axial advance makes every u distinct, so inverse
+  evaluation never wraps a seam), v ∈ [0, 1]. Exact analytic normals and exact
+  closed-form `TryProjectPoint` (the point's angle fixes u up to whole turns, the axial
+  coordinate solves v linearly; in-range v preferred so steep generators can't alias
+  onto the neighboring turn; dz = 0 helicoid ramps solve v from the radius).
 - **Topology**: `BrepSolid → BrepShell → BrepFace → BrepLoop → BrepCoedge → BrepEdge →
   BrepVertex`. Faces are built so surface normals point outward and loops run CCW around
   them (first loop outer, rest holes). `Validate()` checks loop chaining and two-manifold
@@ -60,6 +75,20 @@ operations. Depends only on `EngrCAD.Core`.
   - `Revolve(profile, axisOrigin, axisDir, angle?, holes?)` — full turn (torus topology,
     no caps) or partial (planar caps; closed profiles give pipe elbows; holes allowed).
   - `Sweep(profile, path, holes?)` — rotation-minimizing frames along an open path.
+  - `MakeThreadedRod(pitchProfile, pitch, length[, frame])` — a helically threaded rod
+    whose entire lateral boundary is ONE co-rotating sweep of a per-pitch profile
+    (boolean-free by design: winding a ridge onto a core cylinder would be the
+    unsupported coaxial-tangent boolean; here the root flats ARE part of the sweep).
+    The profile is a list of (radius, axial) corners spanning < 1 pitch (strictly
+    increasing axial, radii positive; the closing segment wraps to corner 0 + pitch);
+    each of the K segments becomes one `HelicalSurface` band spanning ALL turns,
+    adjacent bands share exact `Helix3d` rails on the rod's own frame rotated to each
+    corner's phase (rails start on the z = 0 cap plane), and the flat caps are disks
+    bounded by the closed chain of K `SpiralArc3d` cuts covering one full turn. Any
+    positive length works (no whole-turn constraint — rails just end at different
+    phases). Right-hand only (positive pitch). V = 2K, E = 3K, F = L = K + 2 ⇒
+    Euler–Poincaré 0 at genus 0. Exact volume for ANY length:
+    L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
 
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
   common quadric pairs (lines, circles, exact ellipses) and a general marching tracer
@@ -136,8 +165,14 @@ operations. Depends only on `EngrCAD.Core`.
 
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator` +
 `TrimmedFaceTessellator` for faces whose loops don't cover the surface's grid domain).
+Helical bands tessellate as sheared grids whose columns are iso-axial rungs — the
+first/last columns ARE the cap cuts — with every boundary point taken verbatim from
+the shared edge polylines (band↔band and band↔cap welds exact by construction); helix
+rails and spiral cuts sample proportionally to their turning angle.
 
 ## Not yet implemented
 
 Coplanar/tangent boolean cases, general fillet chains with corner patches,
-NURBS surface export.
+NURBS surface export. `HelicalSurface` faces cannot be exported to STEP (same bucket
+as swept surfaces) and trimmed helical faces (loops beyond the full band
+parallelogram) have no tessellation path yet.
