@@ -121,7 +121,7 @@ public sealed class ViewportControl : OpenGlControlBase
         set
         {
             _yaw = value.Yaw;
-            _pitch = Math.Clamp(value.Pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+            _pitch = Math.Clamp(value.Pitch, -ViewCubeMath.PitchLimit, ViewCubeMath.PitchLimit);
             _distance = Math.Clamp(value.Distance, 0.5, CameraMath.MaxOrbitDistance(_sceneBounds));
             _target = value.Target;
             lock (_sceneLock)
@@ -561,9 +561,9 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>
     /// Draws SDF iso-distance contours on the section plane for parts with an implicit
     /// route (SDF geometry, or a Shape convertible to implicit — lowered once and
-    /// cached). Geometry recomputes only when the plane, scene, or visibility changes.
-    /// The plane is passed as its clip rule (axis, offset); today the section state is
-    /// z-only, so this is the single line to update when a SectionAxis property lands.
+    /// cached). Geometry recomputes only when the plane (axis or offset), scene, or
+    /// visibility changes. The plane is passed as its clip rule (axis, offset), which
+    /// keeps the renderer plane-general.
     /// </summary>
     private void DrawSectionContours(GL gl, Span<float> matrix) =>
         _sectionContours.Draw(gl, _instances, _visible, _sectionAxis.Direction(), _sectionOffset,
@@ -736,6 +736,10 @@ public sealed class ViewportControl : OpenGlControlBase
         SelectionChanged?.Invoke(_selected);
     }
 
+    // BVH candidate scratch reused across HitTest calls (hover re-picks on pointer
+    // moves — no allocation there; UI-thread only, like all input handling).
+    private readonly List<int> _hitScratch = [];
+
     /// <summary>The nearest visible part under a control-space position (−1 for none):
     /// unprojected ray + per-part BVH + Möller–Trumbore. Shared by click picking and
     /// the hover highlight. Ignores the section plane (documented v1 behavior).</summary>
@@ -756,7 +760,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
         int best = -1;
         double bestT = double.PositiveInfinity;
-        var hits = new List<int>();
+        var hits = _hitScratch;
         for (int i = 0; i < _pickData.Count; i++)
         {
             if (!_visible[i])
@@ -1201,7 +1205,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private void Orbit(double yawDelta, double pitchDelta)
     {
         _yaw += yawDelta;
-        _pitch = Math.Clamp(_pitch + pitchDelta, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+        _pitch = Math.Clamp(_pitch + pitchDelta, -ViewCubeMath.PitchLimit, ViewCubeMath.PitchLimit);
         RequestNextFrameRendering();
     }
 

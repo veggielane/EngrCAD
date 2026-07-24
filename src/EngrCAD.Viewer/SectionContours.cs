@@ -219,6 +219,7 @@ internal sealed class SectionContourRenderer
     private readonly Dictionary<Part, Sdf?> _sdfCache = [];
     private SectionContourGeometry _geometry = SectionContourGeometry.Empty;
     private bool _dirty = true;
+    private Vector3d _builtAxis;
     private double _builtOffset = double.NaN;
     private bool[] _builtVisible = [];
     private int _builtVisibleCount;
@@ -239,19 +240,22 @@ internal sealed class SectionContourRenderer
     /// Draws the isolines for the current section plane, rebuilding geometry and GPU
     /// buffers first when stale. The plane arrives as its clip rule (axis, offset);
     /// the caller passes the line program and its uModel/uColor locations (view/proj
-    /// uniforms are already set for the frame). The offset comparison for staleness is
-    /// deliberate exact double equality — it is change detection, not geometry.
+    /// uniforms are already set for the frame). The axis/offset comparisons for
+    /// staleness are deliberate exact equality — change detection, not geometry (and
+    /// the axis must be part of the key: switching axes can leave the offset
+    /// numerically identical, e.g. 0 for an origin-centered scene).
     /// </summary>
     public void Draw(
         GL gl, IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
         in Vector3d axis, double offset,
         uint lineProgram, int uModel, int uColor, Span<float> matrix, Action<string> report)
     {
-        if (NeedsRebuild(visible, offset))
+        if (NeedsRebuild(axis, offset, visible))
         {
             _geometry = SectionContours.Build(
                 instances, visible, SectionContours.PlaneFrame(axis, offset), _sdfCache);
             _dirty = false;
+            _builtAxis = axis;
             _builtOffset = offset;
             SnapshotVisibility(visible);
             Upload(gl);
@@ -291,9 +295,9 @@ internal sealed class SectionContourRenderer
         _uploaded = false;
     }
 
-    private bool NeedsRebuild(IReadOnlyList<bool> visible, double offset)
+    private bool NeedsRebuild(in Vector3d axis, double offset, IReadOnlyList<bool> visible)
     {
-        if (_dirty || offset != _builtOffset || visible.Count != _builtVisibleCount)
+        if (_dirty || axis != _builtAxis || offset != _builtOffset || visible.Count != _builtVisibleCount)
             return true;
         for (int i = 0; i < visible.Count; i++)
         {
