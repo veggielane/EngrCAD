@@ -94,3 +94,26 @@ this project's conversions.)
   (non-watertight) meshes, where the distance is still to the existing surface and the sign
   degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
   and still requires a closed mesh.
+
+## Planar iso-contours (`SdfContours`)
+
+`SdfContours.OnPlane(sdf, origin, uSide, vSide, uSamples, vSamples, levels)` samples an
+SDF on an arbitrary planar grid (the parallelogram `origin + u·uSide + v·vSide`, one
+batch `Evaluate` call for the whole grid) and marching-squares each requested iso level
+into line segments with 3D endpoints in the SDF's own space — the geometry behind the
+viewer's section-plane isolines (d = 0 is the surface cross-section; ±k·spacing
+visualizes the field). Properties the consumers rely on, locked by `SdfContoursTests`:
+
+- **Deterministic and chainable**: crossings on a cell edge are interpolated from the
+  same two samples with the same expression on both sides, so touching segments meet
+  *bit-identically* — loops close under exact endpoint equality (a contour passing
+  exactly through a sample node is shared by all four surrounding cells, multiplicity
+  above two there).
+- **Accuracy**: linear interpolation places crossings within O(h² · field curvature)
+  of the true iso point for grid step h (a radius-r circle section errs by ~h²/8r).
+- Ambiguous saddle cells resolve by the cell-center average; the plane is fully
+  general (pass the section plane mapped through an inverse instance transform —
+  affine maps take the sample rectangle to a parallelogram, which the
+  parameterization represents exactly).
+- Sample/value scratch comes from `ArrayPool`; levels that never cross return empty
+  segment lists.

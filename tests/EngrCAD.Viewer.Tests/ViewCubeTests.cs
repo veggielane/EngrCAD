@@ -250,6 +250,86 @@ public class ViewCubeTests
 
     // ---- labels ----
 
+    // ---- hover ----
+
+    [Fact]
+    public void HoverThrottleAcceptsFirstSampleAndGatesByDistance()
+    {
+        var throttle = new HoverThrottle(4.0);
+        Assert.True(throttle.ShouldSample(100, 100));    // first sample always accepted
+        Assert.False(throttle.ShouldSample(101, 102));   // sqrt(5) < 4: gated
+        Assert.False(throttle.ShouldSample(103, 100));   // still within 4 of (100,100)
+        Assert.True(throttle.ShouldSample(104, 100));    // exactly 4: accepted
+        Assert.False(throttle.ShouldSample(105, 100));   // now gated against (104,100)
+    }
+
+    [Fact]
+    public void HoverThrottleResetForcesResample()
+    {
+        var throttle = new HoverThrottle(4.0);
+        Assert.True(throttle.ShouldSample(50, 50));
+        Assert.False(throttle.ShouldSample(51, 51));
+        throttle.Reset();
+        Assert.True(throttle.ShouldSample(51, 51));      // same spot, but reset re-picks
+    }
+
+    [Fact]
+    public void CubeHoverTracksRegionAndReportsChangesOnly()
+    {
+        var cube = new ViewCube();
+        double width = 800, height = 600;
+        double cx = width - ViewCubeMath.RegionMarginDip - ViewCubeMath.RegionSizeDip / 2;
+        double cy = ViewCubeMath.RegionMarginDip + ViewCubeMath.RegionSizeDip / 2;
+
+        // Center of the region at the front view: hovering the FRONT face.
+        Assert.True(cube.UpdateHover(cx, cy, width, height, FrontYaw, 0, out bool changed));
+        Assert.True(changed);
+        Assert.Equal(new Vector3d(0, -1, 0), cube.Hover);
+
+        // Same spot again: still inside, no change.
+        Assert.True(cube.UpdateHover(cx, cy, width, height, FrontYaw, 0, out changed));
+        Assert.False(changed);
+
+        // Slide toward the right band: the front-right edge, one change.
+        double edgeX = cx + 0.45 * ViewCubeMath.RegionSizeDip / 2;
+        Assert.True(cube.UpdateHover(edgeX, cy, width, height, FrontYaw, 0, out changed));
+        Assert.True(changed);
+        Assert.Equal(new Vector3d(1, -1, 0), cube.Hover);
+
+        // Outside the region: not inside, hover cleared (one change).
+        Assert.False(cube.UpdateHover(400, 300, width, height, FrontYaw, 0, out changed));
+        Assert.True(changed);
+        Assert.Null(cube.Hover);
+        Assert.False(cube.UpdateHover(400, 300, width, height, FrontYaw, 0, out changed));
+        Assert.False(changed);
+    }
+
+    [Fact]
+    public void ClearHoverReportsChangeOnlyWhenSomethingWasHovered()
+    {
+        var cube = new ViewCube();
+        Assert.False(cube.ClearHover());                 // nothing hovered yet
+        double width = 800, height = 600;
+        double cx = width - ViewCubeMath.RegionMarginDip - ViewCubeMath.RegionSizeDip / 2;
+        double cy = ViewCubeMath.RegionMarginDip + ViewCubeMath.RegionSizeDip / 2;
+        cube.UpdateHover(cx, cy, width, height, FrontYaw, 0, out _);
+        Assert.True(cube.ClearHover());
+        Assert.Null(cube.Hover);
+        Assert.False(cube.ClearHover());
+    }
+
+    [Fact]
+    public void CubeHoverInRegionButOffTheCubeIsNull()
+    {
+        var cube = new ViewCube();
+        double width = 800, height = 600;
+        // Region corner: inside the square but outside the cube's silhouette.
+        double x = width - ViewCubeMath.RegionMarginDip - 1;
+        double y = ViewCubeMath.RegionMarginDip + 1;
+        Assert.True(cube.UpdateHover(x, y, width, height, FrontYaw, 0, out _));
+        Assert.Null(cube.Hover);
+    }
+
     [Theory]
     [InlineData(0, -1, 0, "front")]
     [InlineData(0, 1, 0, "back")]

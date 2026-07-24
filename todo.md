@@ -274,18 +274,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## Viewer
 
-- [ ] **View-type selector** (toolbar): **points / mesh (wireframe) / shaded / shaded
-  with edges** — a global viewport display mode, the classic CAD view-style dropdown.
-  (Distinct from the per-part display modes; per-part overrides global where set.)
-- [ ] **SDF isolines on the section plane** — when the section plane cuts a part whose
-  geometry is an `Sdf` (or a `Shape` with implicit lowering), overlay iso-distance
-  contours on the cut: d = 0 is the exact surface cross-section; d = ±k·spacing
-  visualizes the field (debugging blends/offsets, wall thickness at a glance).
-  Sketch: sample the SDF on a 2D grid over the cut plane (batch `Evaluate`;
-  `Sdf.Sampled` makes it cheap), marching-squares, draw via the line program clipped
-  like model geometry, color by sign or a diverging ramp.
-- [ ] **Offscreen parity** — `Part.DisplayMode` and section planes are ignored by
-  `OffscreenRenderer`; honor them so headless renders match the window.
+- [ ] **Offscreen isolines** — the last offscreen-parity gap: `OffscreenRenderer` now
+  honors display modes, view styles, and sections, but not the section-plane SDF
+  isolines (`SectionContourRenderer` — CPU geometry is already GL-free in
+  `SectionContours.Build`, so the offscreen pass only needs the draw calls); once
+  that lands, add an isoline screenshot example to the viewer docs page.
+- [ ] **Docs cutaway examples via real section planes** — `EngrCad.RenderToImage` now
+  takes `style`/`sectionAxis`/`sectionOffset`, so docs pages that fake cutaways with
+  boolean cuts could show the real section-plane look instead. Needs DocsGen support
+  for per-snippet render options (today it calls `RenderToImage` with defaults);
+  fold the new render options into `EngrCadOptions` too.
+- [ ] Section-plane follow-ups: arbitrary plane orientation from a `Frame3d` (the
+  shader already takes a general axis vector + offset; v1 restricts it to X/Y/Z),
+  per-part section opt-out, and picking that respects the cut.
 - [ ] **3D annotations (PMI)** — dimensions, notes, and markers attached to model
   geometry in 3D space (the model-based-definition idea: the model carries its own
   manufacturing information instead of 2D drawings). Building blocks:

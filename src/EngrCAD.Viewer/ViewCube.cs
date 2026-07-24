@@ -7,10 +7,12 @@ namespace EngrCAD.Viewer;
 
 // The view cube: the standard CAD orientation widget in the viewport's top-right.
 // Everything cube-related lives in this file — pure pose/hit math (ViewCubeMath,
-// unit-tested without GL), the camera animation (ViewCubeAnimation), and the GL
-// widget itself (ViewCube). ViewportControl only calls three hooks: Step (animation,
-// before the camera matrices are built), Draw (end of the render pass), and
-// HandleClick (pointer pre-check before scene picking).
+// unit-tested without GL), the camera animation (ViewCubeAnimation), the GL
+// widget itself (ViewCube), and the small HoverThrottle helper the viewport's
+// model-hover highlight shares. ViewportControl only calls four hooks: Step
+// (animation, before the camera matrices are built), Draw (end of the render
+// pass), HandleClick (pointer pre-check before scene picking), and UpdateHover
+// (pointer-move pre-check for the hover highlight).
 //
 // Deliberate choices:
 // - The mini-projection is ALWAYS orthographic regardless of the main projection
@@ -231,6 +233,12 @@ internal sealed class ViewCube
     private bool _initialized;
     private ViewCubeAnimation? _animation;
     private long _animationStart;
+    private Vector3d? _hover;
+
+    /// <summary>The hovered region's direction (components in {-1,0,1}; null when the
+    /// pointer is not over the cube). Every face contributing a component highlights,
+    /// so an edge lights two faces and a corner three.</summary>
+    public Vector3d? Hover => _hover;
 
     /// <summary>Face table: outward normal, in-plane right/up for the label, word,
     /// and flat fill tone (top lightest, bottom darkest — a baked-in light cue).</summary>
@@ -267,6 +275,34 @@ internal sealed class ViewCube
             view = ViewCubeMath.Label(direction);
         }
         return true;
+    }
+
+    /// <summary>
+    /// Updates the hover state for a pointer-move at a control-space position.
+    /// Returns true when the position lies inside the cube's screen region (the
+    /// caller suppresses model hover there); <paramref name="changed"/> is true when
+    /// the hovered face/edge/corner actually changed, so the caller redraws only on
+    /// transitions, not every move.
+    /// </summary>
+    public bool UpdateHover(
+        double x, double y, double controlWidth, double controlHeight,
+        double yaw, double pitch, out bool changed)
+    {
+        bool inside = ViewCubeMath.TryMapToRegion(x, y, controlWidth, controlHeight, out double u, out double v);
+        Vector3d? hover = inside && ViewCubeMath.TryHit(yaw, pitch, u, v, out var direction)
+            ? direction
+            : null;
+        changed = !Nullable.Equals(hover, _hover);
+        _hover = hover;
+        return inside;
+    }
+
+    /// <summary>Clears the hover highlight (drag started / pointer left).</summary>
+    public bool ClearHover()
+    {
+        bool changed = _hover is not null;
+        _hover = null;
+        return changed;
     }
 
     /// <summary>True while a pose animation is in flight (the render loop keeps
@@ -335,6 +371,11 @@ internal sealed class ViewCube
         for (int face = 0; face < Faces.Length; face++)
         {
             var c = Faces[face].Color;
+            // Hover highlight: every face contributing a component of the hovered
+            // direction brightens (one face for a face hover, two for an edge, three
+            // for a corner), so the click target reads before clicking.
+            if (_hover is { } hover && hover.Dot(Faces[face].N) > 0.5)
+                c = (c.R + (1 - c.R) * 0.35f, c.G + (1 - c.G) * 0.35f, c.B + (1 - c.B) * 0.35f);
             gl.Uniform3(line.Color, c.R, c.G, c.B);
             gl.DrawArrays(PrimitiveType.Triangles, face * 6, 6);
         }
@@ -478,4 +519,37 @@ internal sealed class ViewCube
         ['R'] = [[0, 0, 0, 1, 0.45, 1, 0.6, 0.85, 0.6, 0.6, 0.45, 0.45, 0, 0.45], [0.3, 0.45, 0.6, 0]],
         ['T'] = [[0, 1, 0.6, 1], [0.3, 1, 0.3, 0]],
     };
+}
+
+/// <summary>
+/// Distance-based sampling throttle for the viewport's model-hover highlight: the
+/// hover raycast re-runs only when the pointer has traveled at least the threshold
+/// since the last sample, so slow jitter costs nothing and fast sweeps still track.
+/// Pure state machine — unit-tested without UI.
+/// </summary>
+internal struct HoverThrottle(double thresholdDips)
+{
+    private readonly double _thresholdSquared = thresholdDips * thresholdDips;
+    private double _lastX, _lastY;
+    private bool _hasSample;
+
+    /// <summary>True when the position is far enough from the last accepted sample
+    /// (or no sample exists); accepting records the position.</summary>
+    public bool ShouldSample(double x, double y)
+    {
+        if (_hasSample)
+        {
+            double dx = x - _lastX, dy = y - _lastY;
+            if (dx * dx + dy * dy < _thresholdSquared)
+                return false;
+        }
+        _lastX = x;
+        _lastY = y;
+        _hasSample = true;
+        return true;
+    }
+
+    /// <summary>Forgets the last sample so the next move re-picks immediately
+    /// (drag ended, scene changed).</summary>
+    public void Reset() => _hasSample = false;
 }

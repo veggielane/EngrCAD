@@ -328,6 +328,17 @@ The conversion triangle is complete; each direction has a deliberately chosen al
   the sign — exact for watertight meshes even when the closest feature is an edge or
   vertex — over BVH branch-and-bound nearest-triangle search. Verified to match the
   analytic box SDF to 1e-9 across all feature regions.
+- **Planar iso-contours: `SdfContours.OnPlane`** (marching squares over a batch-sampled
+  planar grid) lives in Interop rather than the viewer deliberately: it is UI-free,
+  deterministic, and testable against analytic fields headlessly; the viewer only maps
+  the section plane into each instance's space (inverse transform — an affine map takes
+  the sample rectangle to a parallelogram, which the origin+two-sides parameterization
+  represents exactly) and draws the segments. Cell-edge crossings are interpolated from
+  the same two samples on both sides, so shared endpoints are bit-identical (loops chain
+  by exact equality — the same construct-shared-geometry-exactly discipline as
+  tessellation welds, at display scale); saddle cells resolve by the cell-center
+  average. Used by the viewer's section-plane isolines (d = 0 exact cross-section,
+  ±k·spacing field visualization).
 
 ## 6b. Unified modeling layer (`EngrCAD.Modeling`)
 
@@ -464,12 +475,16 @@ for `in`-parameters being illegal in expression trees.
   Möller–Trumbore on candidates; nearest hit is highlighted. Note for automation:
   Avalonia's pointer stack ignores legacy synthetic `mouse_event` clicks — exercise
   picking with real input.
-- **Viewer section planes**: a horizontal clip at an adjustable world-z height,
+- **Viewer section planes**: an axis-aligned clip (X, Y, or Z in v1; the shader takes
+  a general axis vector + offset, `dot(world, uSectionAxis) > uSectionOffset`, so
+  arbitrary `Frame3d` planes are a state-plumbing change, not a shader change),
   implemented as fragment-shader `discard` with `gl_FrontFacing` backface detection
-  shading exposed interiors as a flat cut material. The clipping-consistency rule:
-  anything that *is* the model (fills **and** feature edges) clips identically —
-  the discard lives in both programs — while scene furniture (grid, axes) never
-  clips. Picking deliberately ignores the section plane in v1.
+  shading exposed interiors as a flat cut material (axis-agnostic by construction).
+  The clipping-consistency rule: anything that *is* the model (fills, feature edges,
+  wireframes, **and** point sprites) clips identically — the discard lives in all
+  three model programs — while scene furniture (grid, axes) never clips. Changing the
+  axis re-centers the plane (an offset along one axis is meaningless on another).
+  Picking deliberately ignores the section plane in v1.
 - **Per-part display modes** (`Part.DisplayMode`) live on the document model, not
   viewer-only state, so design code can set them and they survive tab switches and hot
   reloads (a reload rebuilds parts, so model-code modes win again — consistent with the
@@ -478,16 +493,25 @@ for `in`-parameters being illegal in expression trees.
   center with depth-writes off and opaque silhouette edges on top — a per-part (not
   per-triangle) sort, so interpenetrating translucent parts can show blend-order
   artifacts (section mode stays the tool for exact interior inspection).
+- **Global view style vs per-part modes**: the viewport-wide style (points / wireframe
+  / shaded / shaded+edges) is *viewer* state (`ViewportControl.ViewStyle`), not
+  document state — it is how you are looking, not what the model is. The precedence
+  rule lives in exactly one place (`RenderModes.Resolve`, RenderCore.cs, used by both
+  render passes): an explicitly non-default `Part.DisplayMode` overrides the global
+  style; parts at the default (Shaded) follow it. `DisplayMode.Shaded` being the
+  default means it cannot override — accepted as the honest reading of "default".
 - **Headless offscreen rendering** (`EngrCad.RenderToImage` / `--render`) renders a
   scene to PNG with no window, so tests and agents verify viewer changes by inspecting
   pixels instead of screenshotting the live app. It creates a **direct EGL pbuffer
   context** over Avalonia's bundled ANGLE natives by P/Invoke (preferring D3D11
   hardware → WARP software so it survives CI and locked sessions), with no Avalonia UI.
-  A `PngWriter` (dependency-free deflate + CRC-32) encodes the framebuffer. Two lessons
+  A `PngWriter` (dependency-free deflate + CRC-32) encodes the framebuffer. A lesson
   worth keeping: Avalonia's `av_libglesv2.dll` exports EGL entry points under an `EGL_`
-  prefix (not the standard `egl*`), so the binding tries both spellings; and the
-  renderer duplicates the small shader strings rather than sharing `ViewportControl`'s,
-  a deliberate choice to keep that file untouched during concurrent viewer work.
+  prefix (not the standard `egl*`), so the binding tries both spellings. Both passes
+  share `RenderCore.cs` (shaders, camera math, mode resolution, furniture) — the early
+  duplicated-shader phase drifted and was retired; the offscreen pass has full window
+  parity (display modes, global view style, section planes), neutralizing only the
+  selection highlight.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level

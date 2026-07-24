@@ -67,9 +67,46 @@ internal sealed class SceneHost
         var projection = new ToggleButton { Content = "Ortho", Padding = new Thickness(10, 4), FontSize = 12 };
         projection.IsCheckedChanged += (_, _) => Viewport.Orthographic = projection.IsChecked ?? false;
         toolbar.Children.Add(projection);
+
+        // Global view style: the classic CAD display-style dropdown. Order matches the
+        // ViewStyle enum so the index maps directly; default is shaded with edges.
+        var viewStyle = new ComboBox
+        {
+            ItemsSource = new[] { "Points", "Wireframe", "Shaded", "Shaded + Edges" },
+            SelectedIndex = (int)ViewStyle.ShadedWithEdges,
+            FontSize = 12,
+            MinWidth = 118,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(viewStyle,
+            "Global view style. Parts with an explicit display mode (wire/glass in the tree) keep it.");
+        viewStyle.SelectionChanged += (_, _) =>
+        {
+            if (viewStyle.SelectedIndex >= 0)
+                Viewport.ViewStyle = (ViewStyle)viewStyle.SelectedIndex;
+        };
+        toolbar.Children.Add(viewStyle);
+
         var section = new ToggleButton { Content = "Section", Padding = new Thickness(10, 4), FontSize = 12 };
         section.IsCheckedChanged += (_, _) => Viewport.SectionEnabled = section.IsChecked ?? false;
         toolbar.Children.Add(section);
+
+        // Section axis cycler (X/Y/Z): which world axis the section plane cuts along.
+        // Changing it re-centers the plane in the parts' bounds along the new axis.
+        var sectionAxis = new Button { Content = "Z", Padding = new Thickness(8, 4), FontSize = 12 };
+        ToolTip.SetTip(sectionAxis, "Section plane axis - click to cycle X / Y / Z ([ and ] move the plane)");
+        sectionAxis.Click += (_, _) =>
+        {
+            var next = Viewport.SectionAxis switch
+            {
+                SectionAxis.X => SectionAxis.Y,
+                SectionAxis.Y => SectionAxis.Z,
+                _ => SectionAxis.X,
+            };
+            Viewport.SectionAxis = next;
+            sectionAxis.Content = next.ToString();
+        };
+        toolbar.Children.Add(sectionAxis);
         toolbar.Children.Add(new Border { Width = 8 });
         var capture = ToolButton("Capture", () => Viewport.SaveScreenshot());
         ToolTip.SetTip(capture, "Save the current view as a PNG (path appears in the status bar)");
