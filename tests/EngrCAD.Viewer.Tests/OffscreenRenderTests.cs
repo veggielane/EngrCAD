@@ -9,7 +9,10 @@ namespace EngrCAD.Viewer.Tests;
 /// <see cref="OffscreenRenderer"/>). Each test skips gracefully (via
 /// <see cref="Skip.If"/>) when no GL/EGL context can be created — CI machines without a
 /// GPU or ANGLE natives should not fail. The pixel buffer is RGBA8, top row first.
+/// GL-touching test classes share the "offscreen-gl" collection so EGL contexts are
+/// never created concurrently.
 /// </summary>
+[Collection("offscreen-gl")]
 public class OffscreenRenderTests
 {
     private static string? SkipReason =>
@@ -115,7 +118,7 @@ public class OffscreenRenderTests
         Skip.If(SkipReason is not null, SkipReason);
 
         // No parts: a bare gradient with grid furniture, still a valid buffer.
-        var pixels = OffscreenRenderer.Render([], 64, 64);
+        var pixels = OffscreenRenderer.Render((IReadOnlyList<PartInstance>)[], 64, 64);
         Assert.Equal(64 * 64 * 4, pixels.Length);
         Assert.Contains(pixels, b => b != 0);
     }
