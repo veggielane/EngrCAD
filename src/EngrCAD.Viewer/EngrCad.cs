@@ -42,6 +42,27 @@ public static class EngrCad
     }
 
     /// <summary>
+    /// Renders <paramref name="scene"/> to a PNG file with no window opened — the
+    /// headless screenshot path for tests and AI agents inspecting a design. Uses an
+    /// offscreen ANGLE pbuffer; the look matches the viewer (background gradient, grid,
+    /// directional light, part colors, feature edges). A null <paramref name="camera"/>
+    /// auto-frames an iso view like the viewer's first visit. Throws
+    /// <see cref="InvalidOperationException"/> when no GL context can be created; query
+    /// <see cref="CanRenderToImage"/> first to skip gracefully on headless CI.
+    /// </summary>
+    public static void RenderToImage(
+        Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null)
+    {
+        scene.PreMesh(); // tessellate before touching GL
+        OffscreenRenderer.RenderToImage([.. scene.AllParts], path, width, height, camera);
+    }
+
+    /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
+    /// context is obtainable). False on machines with no GPU/ANGLE, with the reason in
+    /// <see cref="OffscreenRenderer.UnavailableReason"/>.</summary>
+    public static bool CanRenderToImage => OffscreenRenderer.IsAvailable;
+
+    /// <summary>
     /// The live-modeling loop: shows the scene built by <paramref name="sceneFactory"/>
     /// and re-invokes it whenever <c>dotnet watch</c> hot-reloads the process, swapping
     /// the result in with the camera preserved. If the factory throws, the last good
@@ -85,7 +106,8 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|path.obj</c> → headless export, no window (CI-friendly).
+    /// <c>--export path.step|path.obj</c> → headless export, no window (CI-friendly);
+    /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// Returns a process exit code.
     /// </summary>
     public static int Run(string[] args, Func<Scene> sceneFactory, string title = "EngrCAD")
@@ -99,6 +121,17 @@ public static class EngrCad
                 return 2;
             }
             return Export(sceneFactory(), args[exportIndex + 1]);
+        }
+
+        int renderIndex = Array.IndexOf(args, "--render");
+        if (renderIndex >= 0)
+        {
+            if (renderIndex + 1 >= args.Length)
+            {
+                Console.Error.WriteLine("--render requires a file path (.png)");
+                return 2;
+            }
+            return RenderHeadless(sceneFactory(), args[renderIndex + 1]);
         }
 
         if (args.Contains("--view"))
@@ -193,6 +226,30 @@ public static class EngrCad
         }
         catch (IOException) { return null; }
         catch (FormatException) { return null; }
+    }
+
+    // ---- headless render ----
+
+    private static int RenderHeadless(Scene scene, string path)
+    {
+        if (!scene.AllParts.Any())
+        {
+            Console.Error.WriteLine("The scene has no parts to render.");
+            return 1;
+        }
+        if (!Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.Error.WriteLine($"Unsupported render format '{Path.GetExtension(path)}' — use .png.");
+            return 2;
+        }
+        if (!OffscreenRenderer.IsAvailable)
+        {
+            Console.Error.WriteLine($"Offscreen rendering is not available: {OffscreenRenderer.UnavailableReason}");
+            return 1;
+        }
+        RenderToImage(scene, path);
+        Console.WriteLine($"wrote {path} ({scene.AllParts.Count()} part(s))");
+        return 0;
     }
 
     // ---- headless export ----

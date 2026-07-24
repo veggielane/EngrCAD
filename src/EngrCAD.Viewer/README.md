@@ -80,6 +80,37 @@ survives those too. `EngrCad.Run` also gives every model program standard switch
 B-Rep-representable parts, binary STL or OBJ merged with transforms applied —
 CI/slicer-friendly, no window).
 
+## Headless offscreen rendering (screenshots without a window)
+
+For tests and AI agents that need to *see* a scene without opening a window,
+`EngrCad.RenderToImage` renders straight to a PNG:
+
+```csharp
+EngrCad.RenderToImage(scene, "out.png", width: 1280, height: 800);   // auto-framed iso
+EngrCad.RenderToImage(scene, "front.png", camera: someCameraState);  // explicit pose
+```
+
+`EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
+window (alongside `--view` and `--export`). Check `EngrCad.CanRenderToImage` first to
+skip gracefully on machines with no GPU/ANGLE.
+
+- **No window, no Avalonia lifetime.** `OffscreenRenderer` renders into an offscreen
+  **EGL pbuffer** created directly over the ANGLE runtime Avalonia already ships on
+  Windows (`av_libglesv2.dll` from Avalonia.Angle.Windows.Natives exports both the GLES
+  and the EGL entry points — the latter with an `EGL_` prefix). `EglContext` P/Invokes
+  `eglGetPlatformDisplayEXT`/`ChooseConfig`/`CreatePbufferSurface`/`CreateContext`/
+  `MakeCurrent`, preferring the D3D11 hardware backend, then D3D11-on-WARP (software —
+  works on CI and locked sessions), then the default display. The same Silk.NET `GL`
+  surface then draws the scene and `glReadPixels` reads it back.
+- **The look matches the viewport**: background gradient, ground grid + RGB axes,
+  directional light with specular, part colors, and the feature-edge overlay. (Pixel
+  parity with `ViewportControl` is not a goal; being able to see the parts is.) The
+  shader sources and camera math are deliberately duplicated from `ViewportControl` —
+  see the cross-reference comment in `OffscreenRenderer` — to keep that file, which is
+  under concurrent change, untouched. Keep the two copies in sync when the look evolves.
+- **`PngWriter`** is a tiny dependency-free 8-bit RGBA PNG encoder (one zlib IDAT via
+  `System.IO.Compression`); no image library is pulled in.
+
 ## How it works
 
 - **`ViewportControl`** extends Avalonia's `OpenGlControlBase` and adapts its
