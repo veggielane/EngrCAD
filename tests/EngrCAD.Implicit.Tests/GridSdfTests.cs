@@ -16,20 +16,26 @@ public class GridSdfTests
     /// </summary>
     private sealed class BatchSpySdf(Sdf inner) : Sdf
     {
-        public int ScalarCalls;
-        public int BatchCalls;
-        public int BatchPoints;
+        // The dense bake runs batch rows on ParallelFor threads — counters must be
+        // interlocked or increments race and undercount (seen: 1254 of 1331).
+        private int _scalarCalls;
+        private int _batchCalls;
+        private int _batchPoints;
+
+        public int ScalarCalls => Volatile.Read(ref _scalarCalls);
+        public int BatchCalls => Volatile.Read(ref _batchCalls);
+        public int BatchPoints => Volatile.Read(ref _batchPoints);
 
         public override double Evaluate(in Vector3d point)
         {
-            ScalarCalls++;
+            Interlocked.Increment(ref _scalarCalls);
             return inner.Evaluate(point);
         }
 
         public override void Evaluate(ReadOnlySpan<Vector3d> points, Span<double> distances)
         {
-            BatchCalls++;
-            BatchPoints += points.Length;
+            Interlocked.Increment(ref _batchCalls);
+            Interlocked.Add(ref _batchPoints, points.Length);
             inner.Evaluate(points, distances);
         }
 
