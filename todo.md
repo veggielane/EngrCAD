@@ -69,7 +69,10 @@ implementing. Ordered roughly by value-for-effort within each section.
 - [ ] **Trimmed-face tessellation remaining gaps** — pole bands with holes and
   |winding| > 1 fall back to grid (renders, ignores holes); refinement quality
   upgrade: Rivara-with-boundary-constraints instead of the monotone-decrease rule's
-  worst-sliver tradeoff; no Delaunay flips.
+  worst-sliver tradeoff; no Delaunay flips. Also (Frame3d work finding): bores drilled
+  into extruded *side* faces miss the inscribed-ngon volume by ~5e-5 — the trimmed
+  side-face triangulation differs from a planar cap's (documented in
+  `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
 
 ## Core (EngrCAD.Core)
 
@@ -100,9 +103,6 @@ implementing. Ordered roughly by value-for-effort within each section.
   `MemoryPool<T>`, `ProgressCancel` (cooperative cancellation threaded through every
   long op — we have nothing; needed before ops run in a real UI), `gParallel` (block
   parallel-for; our Surface Nets/SDF sampling is single-threaded).
-- [ ] **`Frame3f`-style coordinate frame type** — origin+rotation pose with
-  world↔local point/vector/ray transforms. We improvise (origin, x, y) triples in sweep
-  frames, cap planes, RMF — a proper `Frame3d` in Core would clean all of it up.
 - [ ] **Min-bounding fits** — `ContMinBox2` (min-area OBB), `ContMinCircle2`,
   `ContBox3` (PCA OBB), `OrthogonalPlaneFit3` (best-fit plane). Useful for stock
   computation, drawing views, and feature recognition.
@@ -316,7 +316,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   insertion.
 - [ ] **Assemblies** — tabs currently hold leaf `Part`s by design; assembly occurrences
   (instances of parts/subassemblies with transforms, mates later) are the planned next
-  document-model layer.
+  document-model layer. `Frame3d` is the pose type to build on (composition closed
+  under rigidity, exact inverse; mates as frame-coincidence constraints).
+- [ ] **Frame3d enabled next steps** — `FeatureContext.TopPlane` could become
+  `SketchPlane.On(topFace)` (behavior decision: drill origins would move from world
+  (0,0,z) to the face centroid); arbitrary section planes from a frame; `StepWriter`
+  emitting AXIS2 placements via `Frame3d`; Part poses as frames (assemblies above).
 - [ ] **Parametric model layer / scripting** — fluent C# builder over the retained
   document model; `.csx` scripting via Roslyn (C# *is* our SCAD language); reusable
   parametric components as plain C# methods — document the pattern.
