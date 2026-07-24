@@ -55,14 +55,16 @@ internal static class ShapeCompiler
             case BoxShape or CylinderShape or ExtrudeShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native));
                 break;
+            // Spheres, tori, and cones are symmetric under reflection: any similarity,
+            // proper or mirrored, re-places them exactly.
             case SphereShape or TorusShape:
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear would need an ellipsoid surface"));
                 break;
             case ConeShape:
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear would need an elliptic cone surface"));
@@ -135,7 +137,9 @@ internal static class ShapeCompiler
 
     private static void ClassifyImplicit(Shape shape, in Matrix4d m, List<ConversionEntry> entries)
     {
-        bool rigid = m.TryDecomposeRigidUniformScale(out _, out _, out _);
+        // Mirrored similarities count as rigid here: implicit lowering reflects the
+        // query point (exact), so a mirror never forces a bridge.
+        bool rigid = TryDecomposeSimilarity(m, out _, out _, out _, out _);
         switch (shape)
         {
             case BoxShape or SphereShape or CylinderShape or TorusShape or ConeShape:
@@ -275,7 +279,7 @@ internal static class ShapeCompiler
 
             case SphereShape sphere:
             {
-                Decompose(m, shape, out _, out var translation, out double scale);
+                DecomposeSimilarity(m, shape, out _, out var translation, out double scale);
                 return SolidFactory.MakeSphere(sphere.Radius * scale, translation);
             }
 
@@ -283,9 +287,11 @@ internal static class ShapeCompiler
             {
                 // Extruded circle/ellipse rather than MakeCylinder so any affine
                 // placement bakes in exactly (circles promote back to cylinders).
+                // Mirrored similarities keep the exact circle: the reflected cylinder is
+                // still a true cylinder (FlipZ fixes the rim plane's x/y directions).
                 var baseCenter = new Vector3d(0, 0, -cyl.Height / 2);
                 Curve3d rim;
-                if (m.TryDecomposeRigidUniformScale(out var rotation, out _, out double s))
+                if (TryDecomposeSimilarity(m, out var rotation, out _, out double s, out _))
                 {
                     rim = new Circle3d(
                         m.TransformPoint(baseCenter),
@@ -304,16 +310,17 @@ internal static class ShapeCompiler
 
             case TorusShape torus:
             {
-                Decompose(m, shape, out var rotation, out var translation, out double scale);
+                DecomposeSimilarity(m, shape, out _, out var translation, out double scale);
                 return SolidFactory.MakeTorus(
                     torus.MajorRadius * scale, torus.MinorRadius * scale,
-                    translation, rotation.Rotate(Vector3d.UnitZ));
+                    translation, m.TransformVector(Vector3d.UnitZ).Normalized());
             }
 
             case ConeShape cone:
             {
                 // Base and top centers transform exactly; radii scale uniformly.
-                Decompose(m, shape, out _, out _, out double coneScale);
+                // Works under mirrored similarities too (a reflected cone is a cone).
+                DecomposeSimilarity(m, shape, out _, out _, out double coneScale);
                 var coneBase = m.TransformPoint(new Vector3d(0, 0, -cone.Height / 2));
                 var coneTop = m.TransformPoint(new Vector3d(0, 0, cone.Height / 2));
                 return SolidFactory.MakeCone(
@@ -434,7 +441,15 @@ internal static class ShapeCompiler
         // A transform the SDF operators can't express: produce a mesh of the whole
         // (transformed) subtree and wrap it.
         if (!m.TryDecomposeRigidUniformScale(out var rotation, out var translation, out double scale))
+        {
+            // Mirrored similarity m = (m·FlipZ)·FlipZ: reflect the query point (exact,
+            // an isometry) and place the proper remainder rigidly — never a bridge.
+            if ((m * FlipZ).TryDecomposeRigidUniformScale(out var mq, out var mt, out double ms))
+                return Place(
+                    LowerImplicit(shape, Matrix4d.Identity, quality).Mirror(Vector3d.Zero, Vector3d.UnitZ),
+                    mq, mt, ms);
             return BridgeToSdf(shape, m, quality);
+        }
 
         switch (shape)
         {
@@ -655,17 +670,8 @@ internal static class ShapeCompiler
     private static HalfEdgeMesh Tessellate(BrepSolid solid, MeshQuality quality) =>
         BRepTessellator.Tessellate(solid, quality.SegmentsPerCircle, quality.CurveSamples);
 
-    internal static HalfEdgeMesh TransformMesh(HalfEdgeMesh mesh, in Matrix4d m)
-    {
-        var (positions, faces) = mesh.ToIndexed();
-        var transformed = new Vector3d[positions.Length];
-        for (int i = 0; i < positions.Length; i++)
-            transformed[i] = m.TransformPoint(positions[i]);
-        IEnumerable<IReadOnlyList<int>> orderedFaces = m.Determinant < 0
-            ? faces.Select(f => (IReadOnlyList<int>)[.. f.Reverse()])
-            : faces;
-        return HalfEdgeMesh.Build(transformed, orderedFaces);
-    }
+    internal static HalfEdgeMesh TransformMesh(HalfEdgeMesh mesh, in Matrix4d m) =>
+        mesh.Transformed(m);
 
     private static Profile TransformProfile(Profile profile, in Matrix4d m)
     {
@@ -688,6 +694,35 @@ internal static class ShapeCompiler
         out Quaterniond rotation, out Vector3d translation, out double scale)
     {
         if (!m.TryDecomposeRigidUniformScale(out rotation, out translation, out scale))
+            throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
+    }
+
+    private static readonly Matrix4d FlipZ = Matrix4d.CreateScale(new Vector3d(1, 1, -1));
+
+    /// <summary>
+    /// Like <see cref="Matrix4d.TryDecomposeRigidUniformScale"/> but also accepts
+    /// improper (mirrored) similarities: m = T·R·S, or m = T·R·S·FlipZ when
+    /// <paramref name="reflected"/>. Translation and scale are m's own; for reflected
+    /// maps the rotation is the proper part of m·FlipZ (whose linear action matches m
+    /// on the XY plane and negates Z).
+    /// </summary>
+    private static bool TryDecomposeSimilarity(
+        in Matrix4d m, out Quaterniond rotation, out Vector3d translation, out double scale, out bool reflected)
+    {
+        if (m.TryDecomposeRigidUniformScale(out rotation, out translation, out scale))
+        {
+            reflected = false;
+            return true;
+        }
+        reflected = true;
+        return (m * FlipZ).TryDecomposeRigidUniformScale(out rotation, out translation, out scale);
+    }
+
+    private static void DecomposeSimilarity(
+        in Matrix4d m, Shape shape,
+        out Quaterniond rotation, out Vector3d translation, out double scale)
+    {
+        if (!TryDecomposeSimilarity(m, out rotation, out translation, out scale, out _))
             throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
     }
 

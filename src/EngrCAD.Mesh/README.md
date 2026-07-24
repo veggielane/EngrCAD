@@ -13,6 +13,9 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   Metrics: surface area, signed volume (`Volume` requires closed topology,
   `SignedVolume` doesn't), Euler characteristic, boundary loops, bounds.
   Topology is immutable after `Build`; algorithms produce new meshes.
+  `Transformed(matrix)` maps every position through an affine matrix in one call;
+  negative-determinant maps (mirrors) reverse face winding so closed solids stay
+  outward-oriented with positive volume.
 - **Handles** (`Vertex`, `HalfEdge`, `Face`) — cheap struct wrappers designed for fluent
   LINQ traversal (`vertex.OutgoingHalfEdges()`, `face.AdjacentFaces()`, `face.Bounds`).
 - **`MeshPrimitives`** — box, UV sphere, cylinder, cone frustum (`Cone(r1, r2, h)`;

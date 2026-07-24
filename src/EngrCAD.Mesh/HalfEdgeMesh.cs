@@ -354,6 +354,22 @@ public sealed class HalfEdgeMesh
         return ([.. _positions], faces);
     }
 
+    /// <summary>
+    /// New mesh with every position mapped through <paramref name="transform"/>.
+    /// Negative-determinant maps (mirrors) reverse face winding so the result stays
+    /// outward-oriented (closed solids keep positive volume).
+    /// </summary>
+    public HalfEdgeMesh Transformed(in Matrix4d transform)
+    {
+        var (positions, faces) = ToIndexed();
+        for (int i = 0; i < positions.Length; i++)
+            positions[i] = transform.TransformPoint(positions[i]);
+        IEnumerable<IReadOnlyList<int>> orderedFaces = transform.Determinant < 0
+            ? faces.Select(f => (IReadOnlyList<int>)[.. f.Reverse()])
+            : faces;
+        return Build(positions, orderedFaces);
+    }
+
     /// <summary>New mesh with every face fan-triangulated from its first vertex.</summary>
     public HalfEdgeMesh Triangulated()
     {

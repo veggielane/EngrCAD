@@ -292,6 +292,31 @@ public abstract class Shape
     public Shape Rotate(in Vector3d axis, double radians) => Transform(Matrix4d.CreateFromAxisAngle(axis, radians));
     public Shape Scale(double factor) => Transform(Matrix4d.CreateScale(factor));
 
+    /// <summary>
+    /// Mirror across the plane through <paramref name="point"/> with
+    /// <paramref name="normal"/> (OpenSCAD's <c>mirror()</c>). Correct in every
+    /// representation: meshes transform positions and reverse winding (staying
+    /// outward-oriented), implicit lowering reflects the query point (exact), and
+    /// B-Rep support follows the node: box/cylinder/sketch-extrude handle any affine
+    /// map, sphere/torus/cone re-place natively under mirrored similarities, while
+    /// mirrored revolve/sweep/rim/drill nodes have no B-Rep lowering yet (their mirror
+    /// is exact via mesh or SDF — see <see cref="Explain"/>).
+    /// </summary>
+    public Shape Mirror(in Vector3d point, in Vector3d normal)
+    {
+        var n = normal.Normalized();
+        double t = 2 * point.Dot(n);
+        // Householder reflection I − 2nnᵀ, translated so the plane passes through point.
+        return Transform(new Matrix4d(
+            1 - 2 * n.X * n.X, -2 * n.X * n.Y, -2 * n.X * n.Z, t * n.X,
+            -2 * n.Y * n.X, 1 - 2 * n.Y * n.Y, -2 * n.Y * n.Z, t * n.Y,
+            -2 * n.Z * n.X, -2 * n.Z * n.Y, 1 - 2 * n.Z * n.Z, t * n.Z,
+            0, 0, 0, 1));
+    }
+
+    /// <summary>Mirror across the plane through the origin with <paramref name="normal"/>.</summary>
+    public Shape Mirror(in Vector3d normal) => Mirror(Vector3d.Zero, normal);
+
     // ---- Lowering ----
 
     /// <summary>Lowers to an exact B-Rep solid. Throws <see cref="ShapeConversionException"/>

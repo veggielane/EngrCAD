@@ -126,6 +126,12 @@ public abstract class Sdf
     public Sdf Translate(in Vector3d translation) => new TranslateSdf(this, translation);
     public Sdf Rotate(in Quaterniond rotation) => new RotateSdf(this, rotation);
 
+    /// <summary>Mirror across the plane through <paramref name="point"/> with
+    /// <paramref name="normal"/>: the query point is reflected, so distances stay
+    /// exact (reflection is an isometry).</summary>
+    public Sdf Mirror(in Vector3d point, in Vector3d normal) =>
+        new MirrorSdf(this, point, normal.Normalized());
+
     /// <summary>Uniform scale about the origin (distances stay exact).</summary>
     public Sdf Scale(double factor) => new ScaleSdf(this, factor);
 

@@ -14,7 +14,8 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   intersect with a finite solid).
 - **Operators**: union / intersection / difference (also as `a | b`, `a & b`, `a - b`),
   polynomial smooth blends (`SmoothUnion` etc. — lower-bound distances near the blend),
-  `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`.
+  `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`, and `Mirror(point, normal)`
+  (reflects the query point — an isometry, so distances stay exact).
 - **Sampled grids** (`Sampled(cellSize)` / `Sampled(region, cellSize)`, g3's
   `DenseGridTrilinearImplicit` + `ImplicitFieldSampler3d`): bake any `Sdf` onto a dense
   uniform grid (rows fed through the batch `Evaluate` seam) and evaluate by trilinear

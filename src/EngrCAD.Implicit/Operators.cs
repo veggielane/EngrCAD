@@ -127,6 +127,35 @@ internal sealed class RotateSdf : Sdf
     }
 }
 
+/// <summary>Reflection across a plane: evaluates the source at the mirrored query
+/// point. Reflection is an isometry, so distances stay exact.</summary>
+internal sealed class MirrorSdf(Sdf source, Vector3d point, Vector3d unitNormal) : Sdf
+{
+    public override double Evaluate(in Vector3d p) => source.Evaluate(Reflect(p));
+
+    private Vector3d Reflect(in Vector3d p) => p - unitNormal * (2 * unitNormal.Dot(p - point));
+
+    public override Aabb Bounds
+    {
+        get
+        {
+            var b = source.Bounds;
+            if (!IsFinite(b))
+                return InfiniteBounds;
+            var result = Aabb.Empty;
+            for (int i = 0; i < 8; i++)
+            {
+                var corner = new Vector3d(
+                    (i & 1) == 0 ? b.Min.X : b.Max.X,
+                    (i & 2) == 0 ? b.Min.Y : b.Max.Y,
+                    (i & 4) == 0 ? b.Min.Z : b.Max.Z);
+                result = result.Union(Reflect(corner));
+            }
+            return result;
+        }
+    }
+}
+
 internal sealed class ScaleSdf : Sdf
 {
     private readonly Sdf _source;
