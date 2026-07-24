@@ -59,6 +59,8 @@ internal sealed class StepValue
     {
         double value = AsNumber();
         int rounded = (int)Math.Round(value);
+        // Integer-detection slack for file data: STEP writers may emit "3." or "3.0000001"
+        // for integer slots; dimensionless, so the model-unit tolerance does not apply.
         if (Math.Abs(value - rounded) > 1e-9)
             throw new FormatException($"Expected an integer, found {value}.");
         return rounded;

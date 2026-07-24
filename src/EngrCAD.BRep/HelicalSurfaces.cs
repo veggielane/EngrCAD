@@ -204,6 +204,8 @@ public sealed class HelicalSurface : Surface
             }
         }
 
+        // Deliberate exact-zero test: dz divides v below; only bit-zero dz (helicoid
+        // ramp) is invalid there, and that case takes the radius-based else branch.
         if (dz != 0)
         {
             double theta = Math.Atan2(y, x);

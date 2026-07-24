@@ -141,6 +141,8 @@ public static class Filleting
         var v = p2 - p0;
         var plane = u.Cross(v);
         double planeLengthSq = plane.LengthSquared;
+        // (1e-12)² floor on the squared cross product — collinear-sample degeneracy
+        // guard in area² units, not the model-unit tolerance.
         if (planeLengthSq < 1e-24)
             throw new NotSupportedException("Degenerate circular edge.");
         // Circumcenter: p0 + (|v|²(plane×u) + |u|²(v×plane)) / (2|plane|²).
@@ -162,7 +164,7 @@ public static class Filleting
         {
             case ExtrudedSurface extruded:
             {
-                if (!extruded.TryProjectPoint(loweredRimPoint, out var uv, 1e-6))
+                if (!extruded.TryProjectPoint(loweredRimPoint, out var uv, FaceGeometry.InverseEvaluationTolerance))
                     throw new NotSupportedException("Could not locate the lowered rim on a neighbor band.");
                 double vLow = uv.Y;
                 Surface trimmed = vLow > 0.5
@@ -174,7 +176,7 @@ public static class Filleting
             }
             case RevolvedSurface revolved when revolved.Generator.Underlying is Line3d:
             {
-                if (!revolved.TryProjectPoint(loweredRimPoint, out var uv, 1e-6))
+                if (!revolved.TryProjectPoint(loweredRimPoint, out var uv, FaceGeometry.InverseEvaluationTolerance))
                     throw new NotSupportedException("Could not locate the lowered rim on a neighbor band.");
                 var domain = revolved.Generator.Domain;
                 bool rimAtEnd = Math.Abs(uv.Y - domain.End) < Math.Abs(uv.Y - domain.Start);
@@ -595,6 +597,8 @@ public static class Filleting
             double a = d1.Dot(d1), b = d1.Dot(d2), c = d2.Dot(d2);
             double d = d1.Dot(w), e = d2.Dot(w);
             double denominator = a * c - b * b;
+            // Gram-determinant parallelism guard (unit-tangent scale, so ~angle²):
+            // round-off cutoff, not the model-unit tolerance.
             if (Math.Abs(denominator) < 1e-15)
                 throw new NotSupportedException("Degenerate rim corner (parallel edges).");
             return p1 + d1 * ((d * c - b * e) / denominator);

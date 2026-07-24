@@ -693,6 +693,8 @@ public static class StepReader
                 {
                     double parameter = domain.ParameterAt((double)i / samples);
                     double value = residual(parameter);
+                    // Exact-zero fast path: a bitwise-zero residual is a root the
+                    // sign-change product below would miss — deliberate ==.
                     if (previousValue == 0)
                     {
                         candidates.Add(previousParameter);

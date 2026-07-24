@@ -210,6 +210,8 @@ public static class StepWriter
             var multiplicities = new List<int>();
             foreach (double k in knots)
             {
+                // Knot-multiplicity grouping in parameter space: exact-repeat detection
+                // with round-off slack; knots are dimensionless, not model units.
                 if (distinct.Count > 0 && Math.Abs(distinct[^1] - k) < 1e-12)
                     multiplicities[^1]++;
                 else

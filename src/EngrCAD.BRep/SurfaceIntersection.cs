@@ -118,6 +118,8 @@ public static class SurfaceIntersection
         double r0 = helical.ProfileStart.X;
         double dr = helical.ProfileEnd.X - r0, dz = z1 - z0;
 
+        // Deliberate exact-zero test: dz divides the general branch below, and only a
+        // bit-zero dz (horizontal generator) makes that division invalid.
         if (dz == 0)
         {
             double u = (zCap - z0) / rate;
@@ -163,6 +165,8 @@ public static class SurfaceIntersection
         {
             double t = domain.ParameterAt((double)i / samples);
             double f = Axial(t) - planeHeight;
+            // Exact-zero fast path: a sample landing bitwise on the plane is a root the
+            // sign-change product would miss (0 * f is not < 0) — deliberate ==.
             if (previousF == 0 || previousF * f < 0)
             {
                 double lo = previousT, hi = t, fLo = previousF;
