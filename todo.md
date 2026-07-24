@@ -395,6 +395,15 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   shaded / shaded with edges** — a global viewport display mode, the classic CAD
   view-style dropdown. (Distinct from the per-part display modes; the per-part
   setting should override the global one where set.)
+- [ ] **SDF isolines on the section plane** — when the section plane cuts through a
+  part whose geometry is an `Sdf` (or a `Shape` whose implicit lowering is available),
+  overlay iso-distance contour lines of the field on the exposed cut: the d = 0
+  contour is the exact surface cross-section, and a family of d = ±k·spacing lines
+  visualizes the distance field itself (great for debugging blends/offsets and for
+  seeing wall thickness at a glance). Implementation sketch: sample the SDF on a 2D
+  grid over the cut plane's visible rect (batch `Evaluate` seam; `Sdf.Sampled` makes
+  it cheap), marching-squares the contours, draw via the line program clipped like
+  model geometry. Color by sign (inside/outside) or a diverging ramp by distance.
 
 ## Other ideas
 - [x] unify scripting language, the type of modelling is set at the end. ✅ done —
