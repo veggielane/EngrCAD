@@ -79,8 +79,10 @@ Dark-themed layout around one shared GL viewport:
   to coincident lines). The plumbing is plane-general (`SectionContours.PlaneFrame`
   takes the clip rule `dot(p, axis) > offset`) and follows the active
   `SectionAxis`. Raw B-Rep/mesh parts show no isolines (wrap them in
-  `Shape.From(...)` if the implicit bridge is wanted). Not yet in offscreen renders
-  (the one remaining offscreen-parity gap).
+  `Shape.From(...)` if the implicit bridge is wanted). Offscreen section renders
+  draw the same isolines through the same `SectionContourRenderer` (one-shot — the
+  staleness caching only matters in the window), so headless cutaways match the
+  viewport exactly.
 - **View cube** (top-right of the viewport): the standard CAD orientation widget — a
   small labeled cube (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM) that always mirrors the
   orbit camera's rotation, so it doubles as a live orientation indicator. Clicking a
@@ -279,8 +281,11 @@ Headless renders honor everything the window draws — **per-part display modes*
 (wireframe, translucent with the same shared back-to-front ordering and opaque
 silhouette edges), the **global `ViewStyle`** with the same precedence rule, and
 **axis-aligned section planes** (`sectionAxis` + `sectionOffset`; enabled when the
-offset is non-null) — so a headless PNG matches what the viewer shows, and docs
-cutaways can use real section planes instead of boolean-cut workarounds.
+offset is non-null) **including their SDF isoline overlays** — so a headless PNG
+matches what the viewer shows (only interactive selection highlights are absent),
+and docs cutaways use real section planes instead of boolean-cut workarounds
+(DocsGen `render:` fences take `section:<x|y|z>,<offset>` and `style:<name>`
+options for exactly this).
 
 `EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
 window (alongside `--view` and `--export`), with `--render-style

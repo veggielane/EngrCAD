@@ -8,6 +8,10 @@
 //                                       markdown file must reference.
 //   ```csharp run:<example-id>        — executed for correctness only (no screenshot).
 //   ```csharp                         — display-only; ignored by this tool.
+// render: fences accept per-snippet render options after the id:
+//   style:<points|wireframe|shaded|shaded-edges>   — the global view style
+//   section:<x|y|z>,<offset>                       — a real section plane, e.g. section:z,6
+// so docs cutaways use the viewer's actual section planes instead of boolean-cut fakes.
 //
 // Exit code: nonzero when any snippet fails to compile/run, defines no scene where one
 // is required, reuses an id, or fails to reference its image. When offscreen rendering
@@ -58,7 +62,7 @@ if (!canRender)
 }
 
 // ---- collect snippets ------------------------------------------------------------
-var fenceOpen = new Regex(@"^```csharp[ \t]+(render|run):([A-Za-z0-9][A-Za-z0-9-]*)[ \t]*$");
+var fenceOpen = new Regex(@"^```csharp[ \t]+(render|run):([A-Za-z0-9][A-Za-z0-9-]*)((?:[ \t]+\S+)*)[ \t]*$");
 var snippets = new List<Snippet>();
 var errors = new List<string>();
 var seenIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -88,6 +92,38 @@ foreach (var file in mdFiles)
 
         var kind = open.Groups[1].Value;
         var id = open.Groups[2].Value;
+
+        // Optional per-snippet render options after the id (style:<name>, section:<axis>,<offset>).
+        var style = ViewStyle.ShadedWithEdges;
+        var sectionAxis = SectionAxis.Z;
+        double? sectionOffset = null;
+        var optionsValid = true;
+        foreach (var token in open.Groups[3].Value.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (kind != "render")
+            {
+                errors.Add($"{file}: snippet '{kind}:{id}' — render options ('{token}') only apply to render: fences.");
+                optionsValid = false;
+                break;
+            }
+            var parts = token.Split(':', 2);
+            switch (parts[0])
+            {
+                case "style" when parts.Length == 2 && TryParseStyle(parts[1], out var s):
+                    style = s;
+                    break;
+                case "section" when parts.Length == 2 && TryParseSection(parts[1], out var axis, out var offset):
+                    sectionAxis = axis;
+                    sectionOffset = offset;
+                    break;
+                default:
+                    errors.Add($"{file}: snippet '{kind}:{id}' — unrecognized render option '{token}' "
+                             + "(expected style:<points|wireframe|shaded|shaded-edges> or section:<x|y|z>,<offset>).");
+                    optionsValid = false;
+                    break;
+            }
+        }
+
         var body = new List<string>();
         var closed = false;
         for (var j = i + 1; j < lines.Length; j++)
@@ -108,8 +144,12 @@ foreach (var file in mdFiles)
             continue;
         }
 
+        if (!optionsValid)
+            continue;
+
         seenIds[id] = file;
-        snippets.Add(new Snippet(id, kind == "render", file, string.Join('\n', body)));
+        snippets.Add(new Snippet(id, kind == "render", file, string.Join('\n', body),
+            style, sectionAxis, sectionOffset));
     }
 }
 
@@ -180,7 +220,8 @@ foreach (var s in snippets)
         {
             // 2x supersampled relative to the display size in the docs pages — the
             // offscreen renderer has no MSAA, so browser downscaling anti-aliases.
-            EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120);
+            EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120, camera: null,
+                s.Style, s.SectionAxis, s.SectionOffset);
             rendered++;
         }
         catch (Exception ex)
@@ -203,7 +244,40 @@ foreach (var e in errors)
 
 return errors.Count == 0 ? 0 : 1;
 
-internal sealed record Snippet(string Id, bool Render, string File, string Code);
+// ---- render-option parsing (the CLI spellings of EngrCad.Run's --render-style/--section) ----
+static bool TryParseStyle(string value, out ViewStyle style)
+{
+    switch (value.ToLowerInvariant())
+    {
+        case "points": style = ViewStyle.Points; return true;
+        case "wireframe": style = ViewStyle.Wireframe; return true;
+        case "shaded": style = ViewStyle.Shaded; return true;
+        case "shaded-edges": style = ViewStyle.ShadedWithEdges; return true;
+        default: style = default; return false;
+    }
+}
+
+static bool TryParseSection(string value, out SectionAxis axis, out double offset)
+{
+    axis = default;
+    offset = 0;
+    var parts = value.Split(',', 2);
+    if (parts.Length != 2
+        || !double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out offset))
+        return false;
+    switch (parts[0].ToLowerInvariant())
+    {
+        case "x": axis = SectionAxis.X; return true;
+        case "y": axis = SectionAxis.Y; return true;
+        case "z": axis = SectionAxis.Z; return true;
+        default: return false;
+    }
+}
+
+internal sealed record Snippet(
+    string Id, bool Render, string File, string Code,
+    ViewStyle Style, SectionAxis SectionAxis, double? SectionOffset);
 
 namespace EngrCAD.DocsGen
 {

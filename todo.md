@@ -274,22 +274,14 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## Viewer
 
-- [ ] **Sub-wave-A review flags** (code-quality, all low) — `EngrCadBuilder.RenderToImage`
-  should mirror the `style`/`sectionAxis`/`sectionOffset` params; axis-staleness
-  regression test once offscreen isolines land (or extract the staleness key into a
-  testable helper); `ViewCubeAnimation(0)` zero-duration fact; `SdfContours` saddle-cell
+- [ ] **Sub-wave-A review flags** (code-quality, all low; the builder-params,
+  axis-staleness-test, offscreen-isolines, and docs-cutaway items ✅ landed) —
+  `ViewCubeAnimation(0)` zero-duration fact; `SdfContours` saddle-cell
   disambiguation test (hyperbolic field section); route one `SdfRoute` lowering-failure
   diagnostic through the report sink; annotate `HandleReleased`'s 16 DIP² click threshold.
-- [ ] **Offscreen isolines** — the last offscreen-parity gap: `OffscreenRenderer` now
-  honors display modes, view styles, and sections, but not the section-plane SDF
-  isolines (`SectionContourRenderer` — CPU geometry is already GL-free in
-  `SectionContours.Build`, so the offscreen pass only needs the draw calls); once
-  that lands, add an isoline screenshot example to the viewer docs page.
-- [ ] **Docs cutaway examples via real section planes** — `EngrCad.RenderToImage` now
-  takes `style`/`sectionAxis`/`sectionOffset`, so docs pages that fake cutaways with
-  boolean cuts could show the real section-plane look instead. Needs DocsGen support
-  for per-snippet render options (today it calls `RenderToImage` with defaults);
-  fold the new render options into `EngrCadOptions` too.
+- [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
+  boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
+  options — convert where the page reads better with a real section).
 - [ ] Section-plane follow-ups: arbitrary plane orientation from a `Frame3d` (the
   shader already takes a general axis vector + offset; v1 restricts it to X/Y/Z),
   per-part section opt-out, and picking that respects the cut.

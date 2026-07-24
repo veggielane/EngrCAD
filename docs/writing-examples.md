@@ -24,6 +24,22 @@ scene.Add(new Part("demo", Shape.Sphere(10)));
 
 Ids are lowercase `[a-z0-9-]`, globally unique across the docs.
 
+`render:` fences accept optional **render options** after the id, mirroring
+`EngrCad.Run`'s `--render-style`/`--section` switches — use them for real section
+planes instead of boolean-cut fakes:
+
+````
+```csharp render:my-cutaway section:z,6 style:shaded
+```
+````
+
+| Option | Meaning |
+| --- | --- |
+| `style:<points\|wireframe\|shaded\|shaded-edges>` | Global view style for the screenshot (default `shaded-edges`). |
+| `section:<x\|y\|z>,<offset>` | Renders with a real axis-aligned section plane at the offset (SDF-routed parts get their isoline overlay on the cut). |
+
+Unknown options fail the build.
+
 ## The harness contract
 
 Each tagged snippet runs as an isolated C# *script* (Roslyn scripting) with:

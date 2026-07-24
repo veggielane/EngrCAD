@@ -13,8 +13,11 @@ namespace EngrCAD.Viewer;
 /// PNG. The look matches <see cref="ViewportControl"/> — background gradient, ground
 /// grid + axes, directional light with specular, part colors, feature-edge overlay,
 /// per-part display modes (wireframe, translucent with the shared back-to-front
-/// ordering), the global <see cref="ViewStyle"/>, and axis-aligned section planes —
-/// because both passes draw with the same shaders, camera math, mode resolution, and
+/// ordering), the global <see cref="ViewStyle"/>, and axis-aligned section planes
+/// including their SDF isoline overlays (parts with an implicit route get
+/// iso-distance contours on the cut, via the same <see cref="SectionContourRenderer"/>
+/// as the window) — because both passes draw with the same shaders, camera math, mode
+/// resolution, and
 /// furniture geometry from <c>RenderCore.cs</c> (<see cref="ViewerShaders"/>/
 /// <see cref="CameraMath"/>/<see cref="RenderModes"/>/<see cref="RenderGeometry"/>).
 /// The only shader feature disabled here is the selection highlight (uHighlight 0 —
@@ -437,6 +440,22 @@ public static class OffscreenRenderer
                 gl.BindVertexArray(d.EdgeVao);
                 gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.EdgeVertexCount);
             }
+        }
+        // Section-plane SDF isolines, drawn last so they read as an overlay on the
+        // cut — the same pass order as the window (after the translucent pass, before
+        // readback). Offscreen is one-shot: a fresh SectionContourRenderer builds the
+        // geometry once, the window path's axis/offset staleness caching never comes
+        // into play, and its GL buffers die with the pbuffer context (nothing here is
+        // individually deleted, see the note at the end of this method).
+        if (section)
+        {
+            var allVisible = new bool[instances.Count];
+            Array.Fill(allVisible, true);
+            gl.UseProgram(lineProgram);
+            gl.Uniform1(uLineSectionEnabled, sectionEnabledF);
+            new SectionContourRenderer().Draw(
+                gl, instances, allVisible, axis, sectionOffset!.Value,
+                lineProgram, uLineModel, uLineColor, matrix, report: static _ => { });
         }
         gl.BindVertexArray(0);
         gl.Finish();
