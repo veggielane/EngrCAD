@@ -136,13 +136,15 @@ public static class FaceSplitter
         var seam = new BrepVertex(probe);
         var edge = new BrepEdge(closedCurve, closedCurve.Domain, seam, seam);
 
-        // Hole loops wind opposite the (CCW) outer loop; the disk's outer loop winds CCW.
-        var holeCoedge = new BrepCoedge(edge, sameSense: !curveCcw);
-        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, new BrepLoop([holeCoedge])]);
+        // Hole loops wind opposite the outer loop; the disk's outer loop winds like it.
+        // Non-reversed faces have CCW outer loops, reversed faces (boolean output) CW.
+        bool holeSense = face.IsReversed ? curveCcw : !curveCcw;
+        var holeCoedge = new BrepCoedge(edge, holeSense);
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, new BrepLoop([holeCoedge])], face.IsReversed);
 
         BrepFace? disk = null;
         if (createDisk)
-            disk = new BrepFace(face.Surface, [new BrepLoop([new BrepCoedge(edge, sameSense: curveCcw)])]);
+            disk = new BrepFace(face.Surface, [new BrepLoop([new BrepCoedge(edge, !holeSense)])], face.IsReversed);
 
         return new ClosedSplitResult(faceWithHole, disk, edge);
     }
@@ -159,16 +161,11 @@ public static class FaceSplitter
     /// </summary>
     public static IReadOnlyList<double> CrossingParameters(BrepFace face, Curve3d curve)
     {
-        try
-        {
-            double period = FaceGeometry.PeriodU(face.Surface);
-            var pulled = PullCurveWithParams(curve, face.Surface);
-            return FindCrossings(face, curve, pulled, period).Select(c => c.CurveParam).ToList();
-        }
-        catch (ArgumentException)
-        {
+        double period = FaceGeometry.PeriodU(face.Surface);
+        var runs = PullCurveRuns(curve, face.Surface, out bool fullyOnSurface);
+        if (runs.Count == 0)
             return [];
-        }
+        return FindCrossings(face, curve, runs, fullyOnSurface, period).Select(c => c.CurveParam).ToList();
     }
 
     /// <summary>
@@ -184,22 +181,18 @@ public static class FaceSplitter
     {
         var surface = face.Surface;
         double period = FaceGeometry.PeriodU(surface);
-        List<(double S, Vector2d Uv)> pulledCurve;
-        try
-        {
-            pulledCurve = PullCurveWithParams(curve, surface);
-        }
-        catch (ArgumentException)
-        {
+        var runs = PullCurveRuns(curve, surface, out bool fullyOnSurface);
+        if (runs.Count == 0)
             return [face]; // the curve does not lie on this face's surface
-        }
         var rawLoops = FaceGeometry.PullLoops(face);
 
-        var crossings = FindCrossings(face, curve, pulledCurve, period);
+        var crossings = FindCrossings(face, curve, runs, fullyOnSurface, period);
         if (crossings.Count == 0)
         {
-            if (curve.IsClosed)
+            if (curve.IsClosed && fullyOnSurface)
             {
+                var pulledCurve = runs[0];
+
                 // A closed pulled curve that drifts a full period wraps the face's
                 // periodic direction (e.g. a bore circle on a cylinder band): it is not
                 // contractible and splits the band into two bands.
@@ -220,8 +213,9 @@ public static class FaceSplitter
         {
             foreach (double endParam in (ReadOnlySpan<double>)[curve.Domain.Start, curve.Domain.End])
             {
-                var uv = ProjectNear(surface, curve.PointAt(endParam), null, period);
-                if (ParityContains(rawLoops, uv, period))
+                // Endpoints off the surface are trivially outside the face.
+                if (surface.TryProjectPoint(curve.PointAt(endParam), out var uv, 1e-6) &&
+                    ParityContains(rawLoops, uv, period))
                     throw new NotSupportedException("Open splitting curves must start and end outside the face.");
             }
         }
@@ -233,7 +227,8 @@ public static class FaceSplitter
             double s = WrapParam(curve, curve.Domain.Clamp(breakParam));
             if (crossings.Any(c => Math.Abs(c.CurveParam - s) < 1e-8))
                 continue;
-            var uv = ProjectNear(surface, curve.PointAt(s), null, period);
+            if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, 1e-6))
+                continue; // off this face's surface — the break belongs elsewhere
             if (!ParityContains(rawLoops, uv, period))
                 continue;
             crossings.Add(new Crossing(null, 0, s) { Vertex = new BrepVertex(curve.PointAt(s)) });
@@ -288,7 +283,8 @@ public static class FaceSplitter
             if (s1 <= s0) // closed-curve wrap segment
                 s1 += curve.Domain.Length;
             double mid = (s0 + s1) / 2;
-            var midUv = ProjectNear(surface, curve.PointAt(WrapParam(curve, mid)), null, period);
+            if (!surface.TryProjectPoint(curve.PointAt(WrapParam(curve, mid)), out var midUv, 1e-6))
+                continue; // this stretch of the curve leaves the surface entirely
             if (!ParityContains(rawLoops, midUv, period))
                 continue; // this stretch of the curve lies outside the face
 
@@ -417,42 +413,103 @@ public static class FaceSplitter
         }
 
         // Band conventions: the bottom loop follows the generator's +u direction, the top
-        // loop opposes it. The cut is the lower band's top and the upper band's bottom.
-        // A missing ring (pole end of an axis-touching revolve) contributes no loop.
+        // loop opposes it — mirrored on reversed faces (boolean output re-winds loops).
+        // The cut is the lower band's top and the upper band's bottom. A missing ring
+        // (pole end of an axis-touching revolve) contributes no loop.
+        bool lowerCutSense = face.IsReversed ? traversesPlusU : !traversesPlusU;
         var lowerLoops = new List<BrepLoop>(2);
         if (bottomLoop is not null)
             lowerLoops.Add(bottomLoop);
-        lowerLoops.Add(new BrepLoop([new BrepCoedge(edge, sameSense: !traversesPlusU)]));
-        var upperLoops = new List<BrepLoop>(2) { new([new BrepCoedge(edge, sameSense: traversesPlusU)]) };
+        lowerLoops.Add(new BrepLoop([new BrepCoedge(edge, lowerCutSense)]));
+        var upperLoops = new List<BrepLoop>(2) { new([new BrepCoedge(edge, !lowerCutSense)]) };
         if (topLoop is not null)
             upperLoops.Add(topLoop);
-        return [new BrepFace(lowerSurface, lowerLoops), new BrepFace(upperSurface, upperLoops)];
+        return
+        [
+            new BrepFace(lowerSurface, lowerLoops, face.IsReversed),
+            new BrepFace(upperSurface, upperLoops, face.IsReversed),
+        ];
     }
 
     private static double WrapParam(Curve3d curve, double s)
     {
         var d = curve.Domain;
-        if (s <= d.End)
+        if (!curve.IsClosed || (s >= d.Start && s <= d.End))
             return s;
-        return d.Start + (s - d.Start) % d.Length;
+        return d.Start + (((s - d.Start) % d.Length) + d.Length) % d.Length;
     }
 
     // ---- crossings ----
 
-    private static List<(double S, Vector2d Uv)> PullCurveWithParams(Curve3d curve, Surface surface, int samples = 96)
+    /// <summary>
+    /// Samples the curve and pulls the portions lying on the surface into parameter space
+    /// (periodic u unwrapped within each run). Curves may leave a bounded surface — a
+    /// region-clipped intersection line runs past a band's rings — so off-surface
+    /// stretches separate contiguous runs. Each cut end of a partial run gains one
+    /// linearly extrapolated pseudo-sample so crossings sitting exactly on the surface's
+    /// domain edge (a cut line meeting a boundary ring) still produce a seed segment;
+    /// the pseudo-samples are seeds only, refined in 3D afterwards.
+    /// </summary>
+    private static List<List<(double S, Vector2d Uv)>> PullCurveRuns(
+        Curve3d curve, Surface surface, out bool fullyOnSurface, int samples = 96)
     {
-        var result = new List<(double, Vector2d)>(samples + 1);
         double period = FaceGeometry.PeriodU(surface);
-        Vector2d? previous = null;
         int count = curve.IsClosed ? samples : samples + 1;
+        var runs = new List<List<(double, Vector2d)>>();
+        List<(double, Vector2d)>? current = null;
         for (int i = 0; i < count; i++)
         {
             double s = curve.Domain.ParameterAt((double)i / samples);
-            var uv = ProjectNear(surface, curve.PointAt(s), previous, period);
-            result.Add((s, uv));
-            previous = uv;
+            if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, 1e-6))
+            {
+                current = null;
+                continue;
+            }
+            if (current is null)
+            {
+                current = [];
+                runs.Add(current);
+            }
+            else if (period > 0)
+            {
+                uv = new Vector2d(uv.X + period * Math.Round((current[^1].Item2.X - uv.X) / period), uv.Y);
+            }
+            current.Add((s, uv));
         }
-        return result;
+        fullyOnSurface = runs.Count == 1 && runs[0].Count == count;
+
+        // A closed curve whose off-surface stretch straddles the parameter seam leaves
+        // two runs that are really one: stitch them (later run first, s shifted a turn).
+        if (!fullyOnSurface && curve.IsClosed && runs.Count >= 2 &&
+            runs[0][0].Item1 <= curve.Domain.Start + 1e-12 &&
+            runs[^1][^1].Item1 >= curve.Domain.ParameterAt((double)(samples - 1) / samples) - 1e-12)
+        {
+            var tail = runs[^1];
+            var head = runs[0];
+            foreach (var (s, uv) in head)
+            {
+                var shifted = period > 0
+                    ? new Vector2d(uv.X + period * Math.Round((tail[^1].Item2.X - uv.X) / period), uv.Y)
+                    : uv;
+                tail.Add((s + curve.Domain.Length, shifted));
+            }
+            runs.RemoveAt(0);
+        }
+
+        if (!fullyOnSurface)
+        {
+            double sStep = curve.Domain.Length / samples;
+            foreach (var run in runs)
+            {
+                if (run.Count < 2)
+                    continue;
+                var frontDelta = run[1].Item2 - run[0].Item2;
+                run.Insert(0, (run[0].Item1 - sStep, run[0].Item2 - frontDelta));
+                var backDelta = run[^1].Item2 - run[^2].Item2;
+                run.Add((run[^1].Item1 + sStep, run[^1].Item2 + backDelta));
+            }
+        }
+        return runs;
     }
 
     private static Vector2d ProjectNear(Surface surface, in Vector3d point, Vector2d? near, double period)
@@ -465,7 +522,7 @@ public static class FaceSplitter
     }
 
     private static List<Crossing> FindCrossings(
-        BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, double period)
+        BrepFace face, Curve3d curve, List<List<(double S, Vector2d Uv)>> runs, bool fullyOnSurface, double period)
     {
         var crossings = new List<Crossing>();
         foreach (var loop in face.Loops)
@@ -477,36 +534,40 @@ public static class FaceSplitter
                 {
                     var (t0, a0) = boundary[i];
                     var (t1, a1) = boundary[i + 1];
-                    for (int j = 0; j < pulledCurve.Count - 1 + (curve.IsClosed ? 1 : 0); j++)
+                    foreach (var pulledCurve in runs)
                     {
-                        var (s0, b0) = pulledCurve[j];
-                        var (s1, b1) = pulledCurve[(j + 1) % pulledCurve.Count];
-                        if (curve.IsClosed && j == pulledCurve.Count - 1)
+                        bool wrapSegment = curve.IsClosed && fullyOnSurface;
+                        for (int j = 0; j < pulledCurve.Count - 1 + (wrapSegment ? 1 : 0); j++)
                         {
-                            s1 = curve.Domain.End;
-                            b1 = pulledCurve[0].Uv;
+                            var (s0, b0) = pulledCurve[j];
+                            var (s1, b1) = pulledCurve[(j + 1) % pulledCurve.Count];
+                            if (wrapSegment && j == pulledCurve.Count - 1)
+                            {
+                                s1 = curve.Domain.End;
+                                b1 = pulledCurve[0].Uv;
+                                if (period > 0)
+                                    b1 = new Vector2d(b1.X + period * Math.Round((b0.X - b1.X) / period), b1.Y);
+                            }
+                            var (c0, c1) = (b0, b1);
                             if (period > 0)
-                                b1 = new Vector2d(b1.X + period * Math.Round((b0.X - b1.X) / period), b1.Y);
-                        }
-                        var (c0, c1) = (b0, b1);
-                        if (period > 0)
-                        {
-                            // Bring the curve segment into the boundary segment's period.
-                            c1 = new Vector2d(c1.X + period * Math.Round((c0.X - c1.X) / period), c1.Y);
-                            double shift = period * Math.Round(((a0.X + a1.X) / 2 - (c0.X + c1.X) / 2) / period);
-                            c0 = new Vector2d(c0.X + shift, c0.Y);
-                            c1 = new Vector2d(c1.X + shift, c1.Y);
-                        }
-                        if (!SegmentsCross(a0, a1, c0, c1, out double tf, out double sf))
-                            continue;
+                            {
+                                // Bring the curve segment into the boundary segment's period.
+                                c1 = new Vector2d(c1.X + period * Math.Round((c0.X - c1.X) / period), c1.Y);
+                                double shift = period * Math.Round(((a0.X + a1.X) / 2 - (c0.X + c1.X) / 2) / period);
+                                c0 = new Vector2d(c0.X + shift, c0.Y);
+                                c1 = new Vector2d(c1.X + shift, c1.Y);
+                            }
+                            if (!SegmentsCross(a0, a1, c0, c1, out double tf, out double sf))
+                                continue;
 
-                        double tSeed = t0 + tf * (t1 - t0);
-                        double sSeed = s0 + sf * (s1 - s0);
-                        if (RefineCrossing(coedge.Edge, curve, face.Surface, period, ref tSeed, ref sSeed))
-                        {
-                            sSeed = WrapParam(curve, sSeed);
-                            if (!crossings.Any(c => ReferenceEquals(c.Edge, coedge.Edge) && Math.Abs(c.EdgeParam - tSeed) < 1e-9))
-                                crossings.Add(new Crossing(coedge.Edge, tSeed, sSeed));
+                            double tSeed = t0 + tf * (t1 - t0);
+                            double sSeed = s0 + sf * (s1 - s0);
+                            if (RefineCrossing(coedge.Edge, curve, ref tSeed, ref sSeed))
+                            {
+                                sSeed = WrapParam(curve, sSeed);
+                                if (!crossings.Any(c => ReferenceEquals(c.Edge, coedge.Edge) && Math.Abs(c.EdgeParam - tSeed) < 1e-9))
+                                    crossings.Add(new Crossing(coedge.Edge, tSeed, sSeed));
+                            }
                         }
                     }
                 }
@@ -544,42 +605,53 @@ public static class FaceSplitter
         var d = q1 - p1;
         tp = d.Cross(s) / denominator;
         tq = d.Cross(r) / denominator;
-        return tp is >= 0 and <= 1 && tq is >= 0 and <= 1;
+        // Slightly inclusive: a cut passing exactly through a sampled vertex (a vertex
+        // created by an earlier split) lands at tp = 0 or 1 up to rounding, and both
+        // adjacent segments would otherwise miss it. These are only Newton seeds —
+        // refinement rejects false positives and duplicate finds collapse downstream.
+        const double slack = 1e-6;
+        return tp is >= -slack and <= 1 + slack && tq is >= -slack and <= 1 + slack;
     }
 
-    /// <summary>2×2 Newton in parameter space: edge curve and splitting curve meet exactly.</summary>
-    private static bool RefineCrossing(
-        BrepEdge edge, Curve3d curve, Surface surface, double period, ref double tEdge, ref double sCurve)
+    /// <summary>
+    /// 2×2 Gauss–Newton in 3D: the boundary edge curve and the splitting curve both lie
+    /// on the face's surface, so their uv crossing is an exact 3D intersection. Working
+    /// on the curves directly (instead of projected uv) stays robust where inverse
+    /// evaluation fails — a cut line meeting a bounded band exactly at its end ring —
+    /// and converges to the same exact point from both solids' sides, which seam welding
+    /// depends on.
+    /// </summary>
+    private static bool RefineCrossing(BrepEdge edge, Curve3d curve, ref double tEdge, ref double sCurve)
     {
         double t = tEdge, s = sCurve;
-        var reference = ProjectNear(surface, edge.Curve.PointAt(t), null, period);
+        var edgeDomain = edge.Domain;
 
-        for (int iteration = 0; iteration < 12; iteration++)
+        for (int iteration = 0; iteration < 20; iteration++)
         {
-            var a = ProjectNear(surface, edge.Curve.PointAt(t), reference, period);
-            var b = ProjectNear(surface, curve.PointAt(WrapParam(curve, s)), reference, period);
-            var f = a - b;
+            var f = edge.Curve.PointAt(edgeDomain.Clamp(t)) - curve.PointAt(WrapParam(curve, s));
             if (f.Length < 1e-11)
             {
-                tEdge = edge.Domain.Clamp(t);
+                tEdge = edgeDomain.Clamp(t);
                 sCurve = s;
                 return true;
             }
 
-            double ht = Math.Max(1e-8, edge.Domain.Length * 1e-7);
+            double ht = Math.Max(1e-8, edgeDomain.Length * 1e-7);
             double hs = Math.Max(1e-8, curve.Domain.Length * 1e-7);
-            var dt = (ProjectNear(surface, edge.Curve.PointAt(edge.Domain.Clamp(t + ht)), reference, period)
-                    - ProjectNear(surface, edge.Curve.PointAt(edge.Domain.Clamp(t - ht)), reference, period)) / (2 * ht);
-            var ds = (ProjectNear(surface, curve.PointAt(WrapParam(curve, s + hs)), reference, period)
-                    - ProjectNear(surface, curve.PointAt(WrapParam(curve, s - hs)), reference, period)) / (2 * hs);
-
-            double det = dt.X * -ds.Y - -ds.X * dt.Y;
-            if (Math.Abs(det) < 1e-18)
+            double t0 = edgeDomain.Clamp(t - ht), t1 = edgeDomain.Clamp(t + ht);
+            if (t1 <= t0)
                 return false;
-            double deltaT = (-f.X * -ds.Y - -ds.X * -f.Y) / det;
-            double deltaS = (dt.X * -f.Y - -f.X * dt.Y) / det;
-            t = edge.Domain.Clamp(t + deltaT);
-            s += deltaS;
+            var de = (edge.Curve.PointAt(t1) - edge.Curve.PointAt(t0)) / (t1 - t0);
+            var dc = (curve.PointAt(WrapParam(curve, s + hs)) - curve.PointAt(WrapParam(curve, s - hs))) / (2 * hs);
+
+            // Least squares for f(t, s) = E(t) − C(s): J = [de, −dc].
+            double a11 = de.Dot(de), a12 = -de.Dot(dc), a22 = dc.Dot(dc);
+            double b1 = -de.Dot(f), b2 = dc.Dot(f);
+            double det = a11 * a22 - a12 * a12;
+            if (det < 1e-12 * a11 * a22 || det <= 0)
+                return false; // near-parallel (tangential) — not a transversal crossing
+            t = edgeDomain.Clamp(t + (b1 * a22 - b2 * a12) / det);
+            s += (b2 * a11 - b1 * a12) / det;
         }
         return false;
     }
@@ -682,8 +754,12 @@ public static class FaceSplitter
                     bool isPartner = ReferenceEquals(h.Edge, current.Edge) && h.SameSense != current.SameSense;
                     if (isPartner && candidates.Count > 1)
                         continue;
-                    double delta = reverse - angle;
-                    delta -= 2 * Math.PI * Math.Floor(delta / (2 * Math.PI)); // clockwise turn in (0, 2π]
+                    // Sub-face loops are traced by the tightest turn toward the face
+                    // interior: clockwise for CCW-wound (normal) faces, counter-clockwise
+                    // for CW-wound (reversed) ones — with the wrong handedness the walk
+                    // wanders into cycles that never return to the start edge.
+                    double delta = face.IsReversed ? angle - reverse : reverse - angle;
+                    delta -= 2 * Math.PI * Math.Floor(delta / (2 * Math.PI)); // turn in (0, 2π]
                     if (delta < 1e-12)
                         delta += 2 * Math.PI;
                     if (delta < bestDelta)
@@ -701,20 +777,22 @@ public static class FaceSplitter
             tracedLoops.Add(loop);
         }
 
-        // Classify traced loops by pulled signed area; CCW loops bound sub-faces, CW
-        // loops are holes assigned to the smallest containing CCW loop.
+        // Classify traced loops by pulled signed area; outer-wound loops (CCW on normal
+        // faces, CW on reversed ones) bound sub-faces, the rest are holes assigned to
+        // the smallest containing outer loop.
+        double orientation = face.IsReversed ? -1 : 1;
         var loopData = tracedLoops
             .Select(l =>
             {
                 var polyline = LoopPolyline(l, surface, period);
-                return (Coedges: l, Polyline: polyline, Area: FaceGeometry.LoopSignedArea(polyline));
+                return (Coedges: l, Polyline: polyline, Area: orientation * FaceGeometry.LoopSignedArea(polyline));
             })
             .ToList();
 
         var outers = loopData.Where(d => d.Area > 0).ToList();
         var holes = loopData.Where(d => d.Area <= 0).ToList();
         if (outers.Count == 0)
-            throw new InvalidOperationException("Arrangement tracing produced no counter-clockwise loops.");
+            throw new InvalidOperationException("Arrangement tracing produced no outer-wound loops.");
 
         var faces = new List<BrepFace>();
         var assignedHoles = outers.ToDictionary(o => o.Coedges, _ => new List<List<BrepCoedge>>());
@@ -737,7 +815,7 @@ public static class FaceSplitter
         {
             var loops = new List<BrepLoop> { new(outer.Coedges) };
             loops.AddRange(assignedHoles[outer.Coedges].Select(h => new BrepLoop(h)));
-            faces.Add(new BrepFace(surface, loops));
+            faces.Add(new BrepFace(surface, loops, face.IsReversed));
         }
         return faces;
     }

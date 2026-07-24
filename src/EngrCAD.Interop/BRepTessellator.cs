@@ -7,9 +7,12 @@ namespace EngrCAD.Interop;
 /// <summary>
 /// B-Rep → mesh conversion: each edge is sampled once into a shared polyline, faces are
 /// triangulated against those polylines (so neighboring faces meet exactly), and the
-/// resulting soup is welded into a half-edge mesh. Supported faces so far: planar faces
-/// with a single boundary loop (ear clipping in plane coordinates) and full-revolution
-/// cylindrical bands. Trimmed NURBS faces are future work.
+/// resulting soup is welded into a half-edge mesh. Planar faces (any number of loops)
+/// ear-clip in plane coordinates; cylinder bands and full-domain generated faces
+/// (extruded/revolved/swept) tessellate as parameter grids; trimmed faces on those
+/// surfaces — loops not covering the natural grid domain, e.g. fragments from
+/// <see cref="FaceSplitter.SplitByCurve"/> — go through
+/// <see cref="TrimmedFaceTessellator"/>. Trimmed NURBS faces are future work.
 /// </summary>
 public static class BRepTessellator
 {
@@ -31,34 +34,27 @@ public static class BRepTessellator
                 case PlaneSurface plane:
                     TessellatePlanarFace(face, plane, edgePolylines, polygons);
                     break;
-                case CylinderSurface:
+                case CylinderSurface when IsCylinderBand(face):
                     TessellateCylinderBand(face, edgePolylines, polygons);
                     break;
-                case ExtrudedSurface extruded:
-                    TessellateGrid(extruded,
-                        CurveParams(extruded.Generator, segmentsPerCircle, curveSamples),
-                        [0.0, 1.0],
-                        closedU: extruded.Generator.IsClosed, closedV: false, polygons);
+                case CylinderSurface:
+                    if (!TrimmedFaceTessellator.TryTessellate(face, edgePolylines, segmentsPerCircle, curveSamples, polygons))
+                        throw new NotSupportedException(
+                            "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops.");
                     break;
-                case RevolvedSurface revolved:
-                    // Full turns are periodic in u; partial turns must sample u the same
-                    // way their arc rail edges do (curveSamples), so the boundaries weld.
-                    // A closed generator (e.g. a revolved circle = pipe elbow) is periodic
-                    // in v.
-                    TessellateGrid(revolved,
-                        revolved.IsFullTurn
-                            ? EvenParams(revolved.DomainU, segmentsPerCircle, includeEnd: false)
-                            : EvenParams(revolved.DomainU, curveSamples, includeEnd: true),
-                        CurveParams(revolved.Generator, segmentsPerCircle, curveSamples),
-                        closedU: revolved.IsFullTurn,
-                        closedV: revolved.Generator.IsClosed, polygons);
+                case ExtrudedSurface or RevolvedSurface or SweptSurface:
+                {
+                    var (uParams, vParams, closedU, closedV) = GridParams(face.Surface, segmentsPerCircle, curveSamples);
+                    // Full-domain faces (the factories' and wrap-splitter's output) keep
+                    // the grid path — its samples coincide with the shared edge polylines.
+                    // Faces whose loops don't cover the domain go through the trimmed
+                    // path; if that cannot handle them (wrapping loops, failed inverse
+                    // evaluation), fall back to the grid as before.
+                    if (IsFullDomainFace(face, edgePolylines, uParams, vParams, closedU, closedV) ||
+                        !TrimmedFaceTessellator.TryTessellate(face, edgePolylines, segmentsPerCircle, curveSamples, polygons))
+                        TessellateGrid(face.Surface, uParams, vParams, closedU, closedV, polygons);
                     break;
-                case SweptSurface swept:
-                    TessellateGrid(swept,
-                        CurveParams(swept.Generator, segmentsPerCircle, curveSamples),
-                        EvenParams(swept.Path.Domain, curveSamples, includeEnd: true),
-                        closedU: swept.Generator.IsClosed, closedV: false, polygons);
-                    break;
+                }
                 default:
                     throw new NotSupportedException(
                         $"Tessellation of {face.Surface.GetType().Name} faces is not implemented yet.");
@@ -125,6 +121,82 @@ public static class BRepTessellator
     }
 
     /// <summary>
+    /// The natural grid sampling for a generated surface. Full turns are periodic in u;
+    /// partial revolutions must sample u the same way their arc rail edges do
+    /// (curveSamples), so the boundaries weld. A closed generator (e.g. a revolved
+    /// circle = pipe elbow) is periodic in v.
+    /// </summary>
+    private static (double[] U, double[] V, bool ClosedU, bool ClosedV) GridParams(
+        Surface surface, int segmentsPerCircle, int curveSamples) => surface switch
+    {
+        ExtrudedSurface extruded => (
+            CurveParams(extruded.Generator, segmentsPerCircle, curveSamples),
+            [0.0, 1.0],
+            extruded.Generator.IsClosed, false),
+        RevolvedSurface revolved => (
+            revolved.IsFullTurn
+                ? EvenParams(revolved.DomainU, segmentsPerCircle, includeEnd: false)
+                : EvenParams(revolved.DomainU, curveSamples, includeEnd: true),
+            CurveParams(revolved.Generator, segmentsPerCircle, curveSamples),
+            revolved.IsFullTurn, revolved.Generator.IsClosed),
+        SweptSurface swept => (
+            CurveParams(swept.Generator, segmentsPerCircle, curveSamples),
+            EvenParams(swept.Path.Domain, curveSamples, includeEnd: true),
+            swept.Generator.IsClosed, false),
+        _ => throw new NotSupportedException($"No grid sampling for {surface.GetType().Name}."),
+    };
+
+    private static bool IsCylinderBand(BrepFace face) =>
+        face.Loops.Count == 2 &&
+        face.Loops.All(l => l.Coedges.Count == 1 && l.Coedges[0].Edge.IsClosedEdge);
+
+    /// <summary>
+    /// Whether the face's loops sample exactly the surface's natural grid boundary — the
+    /// invariant grid tessellation relies on to weld against neighboring faces. Compared
+    /// two-sided in 3D: full-domain faces (factory output, wrap-split sub-bands) match to
+    /// weld tolerance by construction, while trimmed fragments differ by whole samples.
+    /// Degenerate boundary runs (pole rings of axis-touching revolves) need no matching
+    /// loop.
+    /// </summary>
+    private static bool IsFullDomainFace(
+        BrepFace face,
+        Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
+        double[] uParams, double[] vParams, bool closedU, bool closedV)
+    {
+        const double tolerance = 1e-7;
+        var surface = face.Surface;
+        var boundary = new List<Vector3d>();
+
+        void AddRun(IEnumerable<Vector3d> samples)
+        {
+            var run = samples.ToList();
+            if (run.All(p => p.DistanceSquaredTo(run[0]) <= 1e-18))
+                return; // a pole: the whole run is one point, no loop bounds it
+            boundary.AddRange(run);
+        }
+
+        if (!closedV)
+        {
+            AddRun(uParams.Select(u => surface.PointAt(u, vParams[0])));
+            AddRun(uParams.Select(u => surface.PointAt(u, vParams[^1])));
+        }
+        if (!closedU)
+        {
+            AddRun(vParams.Select(v => surface.PointAt(uParams[0], v)));
+            AddRun(vParams.Select(v => surface.PointAt(uParams[^1], v)));
+        }
+        if (boundary.Count == 0)
+            return false;
+
+        var loopPoints = face.Loops.SelectMany(l => LoopPolyline(l, edgePolylines)).ToList();
+        return Covers(loopPoints, boundary, tolerance) && Covers(boundary, loopPoints, tolerance);
+    }
+
+    /// <summary>Every point of <paramref name="subset"/> lies within tolerance of some point of <paramref name="of"/>.</summary>
+    private static bool Covers(List<Vector3d> subset, List<Vector3d> of, double tolerance) =>
+        subset.All(p => of.Any(q => q.DistanceSquaredTo(p) <= tolerance * tolerance));
+
+    /// <summary>
     /// Full-domain grid tessellation for generated surfaces (extrusions, revolutions,
     /// sweeps). Quads are emitted in (+u, +v) order, i.e. counter-clockwise around
     /// ∂u × ∂v, which the modeling operations arrange to point outward.
@@ -175,7 +247,7 @@ public static class BRepTessellator
             polygons.Add(distinct);
     }
 
-    private static List<Vector3d> LoopPolyline(BrepLoop loop, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)
+    internal static List<Vector3d> LoopPolyline(BrepLoop loop, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)
     {
         var points = new List<Vector3d>();
         foreach (var coedge in loop.Coedges)
@@ -233,9 +305,6 @@ public static class BRepTessellator
         List<IReadOnlyList<Vector3d>> polygons)
     {
         var cylinder = (CylinderSurface)face.Surface;
-        if (face.Loops.Count != 2 || face.Loops.Any(l => l.Coedges.Count != 1 || !l.Coedges[0].Edge.IsClosedEdge))
-            throw new NotSupportedException(
-                "Cylindrical faces are currently limited to full bands bounded by two closed edges.");
 
         // Use the raw circle polylines (u increasing = CCW around the axis) and order the
         // rings bottom-to-top along the axis; the quad winding below is outward for that

@@ -58,9 +58,9 @@ public static class BrepBoolean
                     // plane) produce the same curve once per pair; splitting a face
                     // twice along the same curve breaks the arrangement tracer.
                     if (!curvesA[fa].Any(existing => SameCurve(existing.Curve, curve)))
-                        curvesA[fa].Add((curve, FaceSplitter.CrossingParameters(fb, curve)));
+                        curvesA[fa].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fb, curve))));
                     if (!curvesB[fb].Any(existing => SameCurve(existing.Curve, curve)))
-                        curvesB[fb].Add((curve, FaceSplitter.CrossingParameters(fa, curve)));
+                        curvesB[fb].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fa, curve))));
                 }
             }
         }
@@ -150,6 +150,15 @@ public static class BrepBoolean
         return new BrepShell(faces);
     }
 
+    /// <summary>
+    /// Closed intersection curves get a mandatory break at their domain start on both
+    /// sides: a side that wrap-splits a band along the curve anchors its closed seam
+    /// edge's vertex there, so the side that instead cuts the curve into arc segments
+    /// must subdivide at the same point or the seam edges cannot pair up.
+    /// </summary>
+    private static IReadOnlyList<double> SeamBreaks(Curve3d curve, IReadOnlyList<double> crossings) =>
+        curve.IsClosed ? [.. crossings, curve.Domain.Start] : crossings;
+
     private static bool SameCurve(Curve3d a, Curve3d b)
     {
         const double tolerance = 1e-9;
@@ -177,7 +186,11 @@ public static class BrepBoolean
         bool wrapsU = periodU > 0 && outer.Max(p => p.X) - outer.Min(p => p.X) > 0.75 * periodU;
         if (!wrapsU && Math.Abs(FaceGeometry.LoopSignedArea(outer)) > 1e-12)
         {
-            foreach (var (i0, i1, i2) in PolygonTriangulator.Triangulate(outer))
+            // Largest triangles first: a sliver's centroid hugs the fragment boundary,
+            // and near a boundary lying on the other solid's curved surface the
+            // classification SDF is only sagitta-accurate — probing there flips signs.
+            foreach (var (i0, i1, i2) in PolygonTriangulator.Triangulate(outer)
+                .OrderByDescending(t => Math.Abs((outer[t.B] - outer[t.A]).Cross(outer[t.C] - outer[t.A]))))
             {
                 var uv = (outer[i0] + outer[i1] + outer[i2]) / 3;
                 var p = face.Surface.PointAt(uv.X, uv.Y);
