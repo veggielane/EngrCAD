@@ -111,25 +111,14 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **Threads** — real modeled thread geometry, internal and external:
-  - **Threaded holes**: `Shape.ThreadedHole(spec, points, depth, plane)` — drill the
-    ISO 262 tap-drill pilot (the `StandardHoles.Tapped` table already has them), then
-    cut the internal thread. **External threads**: thread a cylindrical boss/stud
-    (`Shape.ExternalThread(diameter, pitch, length, ...)`), with proper lead-in/runout
-    chamfers at both ends so printed/machined parts start cleanly.
-  - **Standard ISO sizes**: a `StandardThreads` catalog like `StandardHoles` — ISO 68-1
-    60° profile, ISO 261/262 coarse (and later fine) pitch series, M2–M12+ reusing the
-    existing metric table infrastructure.
-  - **Printing clearance**: an additional radial gap parameter for 3D printing —
-    internal threads grow by the clearance, external shrink (typical FDM ≈ 0.1–0.25 mm)
-    so printed pairs actually mate. Default 0 (exact nominal); the parameter documents
-    that clearance is applied normal to the thread flanks.
-  - Implementation routes (both worth having, rep-appropriate): **implicit** — a helical
-    thread SDF (distance to helix ramp ± profile) is cheap, exact-enough, and
-    print-oriented (composes with `Sdf.Sampled` for meshing); **B-Rep** — helix path +
-    the ISO profile swept via the existing RMF `Sweep` (a helix `Curve3d` is needed;
-    watch tessellation density along the turns). Cosmetic-only threads (annotation, no
-    geometry) are the cheap CAD-standard fallback.
+- [ ] **Threads follow-ups** (core feature landed: `StandardThreads` ISO catalog,
+  `Helix3d`, `Sdf.Thread`, `Shape.ExternalThread`/`ThreadedHole` with printing
+  clearance — implicit-Native/mesh-Bridged/B-Rep-Impossible) — **true helical B-Rep
+  sweep**: the profile must co-rotate with the axial plane (NOT rotation-minimizing
+  frames), and the coaxial tangent seam to the core cylinder needs the coplanar/
+  tangent boolean case; `Helix3d` is the ready-made rail. Also: fine-pitch series,
+  left-hand threads (`Helix3d` already takes negative pitch), thread runout (grooves
+  fading via union-cone), cosmetic-thread annotation for drawings.
 - [ ] **2D sketch engine** — combine g3-style `Polygon2d`/`GeneralPolygon2d`
   (polygon-with-holes containment), `PlanarComplex` (nested loop hierarchy),
   `Arrangement2d` + `GraphCells2d` (regions from crossing sketch curves), and
@@ -208,24 +197,27 @@ What remains from mapping OpenSCAD's feature set against EngrCAD (the covered gr
 primitives, 3D booleans, transforms, linear/rotate extrude + RMF sweep, STEP/STL/OBJ/PNG
 export — is recorded in CLAUDE.md):
 
-- [ ] cone primitive (`cylinder(r1, r2)`) — `ConeSurface` + `Sdf.Cone` +
-  `MeshPrimitives.Cone`, tessellator support (also the OCCT wedge)
+- [ ] wedge primitive (the OCCT gap; cone ✅ landed — revolved-line side surface +
+  `Sdf.Cone` + `MeshPrimitives.Cone` + `Shape.Cone`, Native in all three reps)
 - [ ] `text()` — font outlines → `Profile`s (extrudable text). Parse font glyphs
   (TrueType via a .NET lib) → polygon outlines with holes; g3's `PolygonFont2d` shows a
   poor-man's variant
 - [ ] `surface()` — heightmap (image/data grid) → mesh terrain
 - [ ] 2D booleans — union/difference/intersection of profiles/regions (needed by the
   sketch engine; `Arrangement2d`+`GraphCells2d` is the mechanism)
-- [ ] `hull()` — convex hull, 3D (quickhull over mesh/solid vertices → `HalfEdgeMesh`)
-  and 2D (`ConvexHull2` exists in g3). High value for quick bracket/enclosure modeling
+- [ ] 2D convex hull (`ConvexHull2` in g3; 3D quickhull ✅ landed — `ConvexHull` in
+  Mesh + `Shape.Hull`, exact for polyhedral operands)
 - [ ] `minkowski()` — general Minkowski sum is hard; the important special case is
   rounding, which we already have cheaply (SDF `Offset` ≡ sphere-Minkowski, and
   `Filleting`). Document the equivalence; general polyhedron⊕polyhedron is low priority
-- [ ] one-call transforms on meshes/solids — `HalfEdgeMesh.Transformed(m)` and a
-  `BrepSolid` transform story (`TransformedCurve` exists; add `TransformedSurface` or
-  per-type transform methods)
-- [ ] `mirror()` — reflection incl. winding flip (mesh: reverse faces; B-Rep: the
-  `ReverseFace` machinery already exists)
+- [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
+  `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
+  with winding flip)
+- [ ] mirror B-Rep completion — mirrored revolve/sweep/rim/drill nodes are Impossible
+  in v1 (exact via mesh/SDF); native route: `F∘R(d,θ)∘F = R(−F·d, θ)` axis negation
+  for revolves/sweeps (`Shape.Mirror` ✅ landed otherwise: implicit exact via
+  improper-similarity decomposition, mesh exact, B-Rep native for
+  box/cylinder/extrude/sphere/torus/cone)
 - [ ] `resize()` — non-uniform scale to target bounds (mesh: easy; SDF: breaks the
   distance metric — document lower-bound semantics; B-Rep: needs affine surfaces)
 - [ ] `offset(r|delta, chamfer)` (2D) — polygon offsetting with round/miter/chamfer
@@ -351,10 +343,15 @@ UI dependencies, which makes this unusually feasible.
   topological IDs (selectors are the naming story today), property-panel UI editing of
   `[Param]`s, feature list in the viewer model tree, a feature registry for UI
   insertion.
-- [ ] **Assemblies** — tabs currently hold leaf `Part`s by design; assembly occurrences
-  (instances of parts/subassemblies with transforms, mates later) are the planned next
-  document-model layer. `Frame3d` is the pose type to build on (composition closed
-  under rigidity, exact inverse; mates as frame-coincidence constraints).
+- [ ] **Assemblies follow-ups** (v1 landed: `Assembly`/`Occurrence` DAG with `Frame3d`
+  poses, `PartInstance` flattening, viewer hierarchy/visibility/selection, shared-part
+  GPU buffers) — **mates/constraints** (solve for the occurrence frames `Flatten`
+  composes — the frames are already mutable), exploded views, BOM (count occurrences
+  per distinct part — trivial over `Flatten()`), STEP assembly export
+  (`NEXT_ASSEMBLY_USAGE_OCCURRENCE` from the same flattening), true GPU instanced
+  drawing (matrix buffer, one draw per part), tree expand/collapse, per-instance
+  color/display-mode overrides, retro-assign palette colors when parts are added to an
+  assembly after `Tab.Add`.
 - [ ] **Standard component library ("smart" components)** — a catalog of real
   hardware — screws/bolts (ISO 4762 SHCS, 7380 button, 10642 csk…), nuts, washers,
   thread inserts (Tappex Trisert already has pilot data in `StandardHoles`), dowel
