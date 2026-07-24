@@ -140,7 +140,7 @@ public static class BrepQueries
     /// <summary>Outward normal at a point on the face (reversal applied).</summary>
     public static Vector3d NormalAt(this BrepFace face, in Vector3d point)
     {
-        if (!face.Surface.TryProjectPoint(point, out var uv, 1e-6))
+        if (!face.Surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance))
             throw new ArgumentException("The point does not lie on the face's surface.", nameof(point));
         var normal = face.Surface.NormalAt(uv.X, uv.Y).Normalized();
         return face.IsReversed ? -normal : normal;

@@ -125,7 +125,9 @@ operations. Depends only on `EngrCAD.Core`.
   sealing). **All coedge/curve sampling goes through
   `FaceGeometry.ExactSampleParameters`**: marching-tracer polylines are exact only at
   their VERTICES — a mid-chord sample sits a sagitta (~1e-4) off the carrier surface,
-  far past the 1e-6 inverse-evaluation tolerance, and uniform sampling once made
+  far past the 1e-6 inverse-evaluation tolerance (now the named constant
+  `FaceGeometry.InverseEvaluationTolerance`, used by all pullback call sites in BRep
+  and Interop), and uniform sampling once made
   `PullCurveRuns` silently produce zero runs so cross-drill splits never happened —
   hence polyline-backed curves (raw or reparameterized via `CurveSegment`, whose
   `BaseStart`/`BaseEnd` expose the mapping) sample at vertex parameters and everything

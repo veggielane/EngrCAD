@@ -21,6 +21,8 @@ public static class TopologyEditor
     public static (BrepEdge First, BrepEdge Second, BrepVertex Vertex) SplitEdge(BrepEdge edge, double t)
     {
         var domain = edge.Domain;
+        // Parameter-space interiority guard (1e-12, near round-off): a split at the very
+        // end would create a zero-length edge; not a model-unit tolerance.
         if (t <= domain.Start + 1e-12 || t >= domain.End - 1e-12)
             throw new ArgumentOutOfRangeException(nameof(t), "Split parameter must be interior to the edge domain.");
 
@@ -47,6 +49,9 @@ public static class TopologyEditor
     /// </summary>
     public static void SealSeams(IReadOnlyList<BrepFace> keptFaces)
     {
+        // Boolean-critical absolute value: seam vertices built independently on the two
+        // sides coincide only to tracer/projection error (~1e-7) — looser than the 1e-9
+        // weld tolerance, tighter than the 1e-6 inverse-evaluation tolerance.
         const double tolerance = 1e-7;
         var keptSet = keptFaces.ToHashSet();
         var edges = keptFaces.SelectMany(f => f.Loops).SelectMany(l => l.Coedges)
@@ -91,6 +96,9 @@ public static class TopologyEditor
                 bool endpointsMatch =
                     (ReferenceEquals(keep.StartVertex, duplicate.StartVertex) && ReferenceEquals(keep.EndVertex, duplicate.EndVertex)) ||
                     (ReferenceEquals(keep.StartVertex, duplicate.EndVertex) && ReferenceEquals(keep.EndVertex, duplicate.StartVertex));
+                // Midpoint identity at the inverse-evaluation scale (1e-6): the two sides
+                // sample the shared intersection curve independently, so midpoints agree
+                // only to chordal/tracer error, not to weld precision.
                 if (!endpointsMatch || !Mid(keep).AreEqual(Mid(duplicate), new Tolerance(1e-6, 1e-6)))
                     continue;
 
@@ -327,7 +335,7 @@ public static class FaceSplitter
                 if (crossings.Any(c => Math.Abs(c.CurveParam - endParam) < endEpsilon))
                     continue;
                 // Endpoints off the surface are trivially outside the face.
-                if (surface.TryProjectPoint(curve.PointAt(endParam), out var uv, 1e-6) &&
+                if (surface.TryProjectPoint(curve.PointAt(endParam), out var uv, FaceGeometry.InverseEvaluationTolerance) &&
                     ParityContains(rawLoops, uv, period))
                     throw new NotSupportedException("Open splitting curves must start and end outside the face.");
             }
@@ -340,7 +348,7 @@ public static class FaceSplitter
             double s = WrapParam(curve, curve.Domain.Clamp(breakParam));
             if (crossings.Any(c => Math.Abs(c.CurveParam - s) < 1e-8))
                 continue;
-            if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, 1e-6))
+            if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, FaceGeometry.InverseEvaluationTolerance))
                 continue; // off this face's surface — the break belongs elsewhere
             if (!ParityContains(rawLoops, uv, period))
                 continue;
@@ -396,7 +404,7 @@ public static class FaceSplitter
             if (s1 <= s0) // closed-curve wrap segment
                 s1 += curve.Domain.Length;
             double mid = (s0 + s1) / 2;
-            if (!surface.TryProjectPoint(curve.PointAt(WrapParam(curve, mid)), out var midUv, 1e-6))
+            if (!surface.TryProjectPoint(curve.PointAt(WrapParam(curve, mid)), out var midUv, FaceGeometry.InverseEvaluationTolerance))
                 continue; // this stretch of the curve leaves the surface entirely
             if (!ParityContains(rawLoops, midUv, period))
                 continue; // this stretch of the curve lies outside the face
@@ -675,7 +683,7 @@ public static class FaceSplitter
         List<(double, Vector2d)>? current = null;
         foreach (double s in parameters)
         {
-            if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, 1e-6))
+            if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, FaceGeometry.InverseEvaluationTolerance))
             {
                 current = null;
                 continue;
@@ -730,7 +738,7 @@ public static class FaceSplitter
 
     private static Vector2d ProjectNear(Surface surface, in Vector3d point, Vector2d? near, double period)
     {
-        if (!surface.TryProjectPoint(point, out var uv, 1e-6))
+        if (!surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance))
             throw new ArgumentException($"Point {point} does not lie on the surface.");
         if (period > 0 && near is { } reference)
             uv = new Vector2d(uv.X + period * Math.Round((reference.X - uv.X) / period), uv.Y);
@@ -816,6 +824,8 @@ public static class FaceSplitter
         var r = p2 - p1;
         var s = q2 - q1;
         double denominator = r.Cross(s);
+        // Near-parallel uv segments: these are only Newton seeds, so an absolute
+        // round-off-scale cutoff suffices (refinement rejects false positives).
         if (Math.Abs(denominator) < 1e-15)
             return false;
         var d = q1 - p1;
@@ -845,6 +855,8 @@ public static class FaceSplitter
         for (int iteration = 0; iteration < 20; iteration++)
         {
             var f = edge.Curve.PointAt(edgeDomain.Clamp(t)) - curve.PointAt(WrapParam(curve, s));
+            // Gauss-Newton convergence: two decades below the 1e-9 weld tolerance so the
+            // refined crossing cannot itself introduce a weld-scale error.
             if (f.Length < 1e-11)
             {
                 tEdge = edgeDomain.Clamp(t);
@@ -976,6 +988,8 @@ public static class FaceSplitter
                     // wanders into cycles that never return to the start edge.
                     double delta = face.IsReversed ? angle - reverse : reverse - angle;
                     delta -= 2 * Math.PI * Math.Floor(delta / (2 * Math.PI)); // turn in (0, 2π]
+                    // Round-off-scale angular guard: an exactly-zero turn is the back-along
+                    // -the-same-edge case, which must count as a full 2π turn.
                     if (delta < 1e-12)
                         delta += 2 * Math.PI;
                     if (delta < bestDelta)

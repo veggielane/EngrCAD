@@ -799,6 +799,8 @@ public sealed class ViewportControl : OpenGlControlBase
         var e2 = c - a;
         var p = ray.Direction.Cross(e2);
         double determinant = e1.Dot(p);
+        // Round-off-scale parallel-ray guard (picking robustness, not model geometry:
+        // a missed edge-on triangle costs a click, never a weld).
         if (Math.Abs(determinant) < 1e-15)
             return false;
         double inverse = 1.0 / determinant;
@@ -811,6 +813,8 @@ public sealed class ViewportControl : OpenGlControlBase
         if (v < 0 || u + v > 1)
             return false;
         t = e2.Dot(q) * inverse;
+        // Minimum hit distance (direction-length units): rejects self-hits at the ray
+        // origin; a UI-picking threshold, not a kernel tolerance.
         return t > 1e-9;
     }
 

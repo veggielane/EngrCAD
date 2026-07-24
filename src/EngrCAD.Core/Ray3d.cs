@@ -36,6 +36,9 @@ public readonly struct Ray3d
             double min = box.Min[axis];
             double max = box.Max[axis];
 
+            // Deliberate exact-zero test (not a tolerance decision): only an exactly-zero
+            // component makes (min - origin) * (1 / direction) produce 0 * inf = NaN;
+            // any nonzero direction, however tiny, yields correct IEEE-infinite slabs.
             if (direction == 0)
             {
                 // Parallel to the slab: miss unless origin lies within it.

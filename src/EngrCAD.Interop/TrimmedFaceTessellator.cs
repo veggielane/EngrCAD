@@ -59,7 +59,7 @@ internal static class TrimmedFaceTessellator
             var uv = new List<Vector2d>(points.Count);
             foreach (var p in points)
             {
-                if (!surface.TryProjectPoint(p, out var q, 1e-6))
+                if (!surface.TryProjectPoint(p, out var q, FaceGeometry.InverseEvaluationTolerance))
                     return false;
                 if (period > 0 && uv.Count > 0)
                     q = new Vector2d(q.X + period * Math.Round((uv[^1].X - q.X) / period), q.Y);
@@ -131,6 +131,8 @@ internal static class TrimmedFaceTessellator
             for (int i = 1; i < loopUv.Count; i++)
             {
                 double shift = period * Math.Round((outerMid - loopUv[i].Average(p => p.X)) / period);
+                // Deliberate exact test: Math.Round yields whole periods, so shift is
+                // bit-zero for the already-aligned case; skipping is a pure no-op guard.
                 if (shift != 0)
                 {
                     for (int j = 0; j < loopUv[i].Count; j++)
@@ -155,6 +157,8 @@ internal static class TrimmedFaceTessellator
             uvAll.Max(p => p.Y) - uvAll.Min(p => p.Y));
         if (extent <= 0)
             return null;
+        // Relative degenerate-loop test in uv-area units (extent-scaled, so it works for
+        // any parameterization); not a model-unit tolerance.
         if (Math.Abs(FaceGeometry.LoopSignedArea(loopUv[0])) < 1e-12 * extent * extent)
             return null;
 
@@ -255,6 +259,7 @@ internal static class TrimmedFaceTessellator
             var pole = surface.PointAt(surface.DomainU.Start, vFar);
             for (int k = 1; k <= 2; k++)
             {
+                // (1e-9)²: squared weld tolerance — a true pole ring is exactly one point.
                 if (surface.PointAt(surface.DomainU.Start + period * k / 3.0, vFar)
                     .DistanceSquaredTo(pole) > 1e-18)
                     return null;

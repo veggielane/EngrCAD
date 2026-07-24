@@ -11,6 +11,9 @@ namespace EngrCAD.BRep;
 /// </summary>
 public sealed class Profile
 {
+    // Chain endpoints often come from independent constructions (arc ends, projected
+    // sketch points) carrying ~1e-7 error — looser than the 1e-9 weld tolerance on
+    // purpose; the solid factories rebuild junction vertices exactly.
     private const double JoinTolerance = 1e-7;
 
     public IReadOnlyList<Curve3d> Segments { get; }
@@ -67,6 +70,8 @@ public sealed class Profile
 
         foreach (var p in loop)
         {
+            // Planarity validation at the 1e-6 inverse-evaluation scale (sampled curve
+            // points carry projection-level noise; weld-exactness is not required here).
             if (Math.Abs((p - Origin).Dot(Normal)) > 1e-6)
                 throw new ArgumentException("Profile is not planar.");
         }

@@ -30,6 +30,8 @@ public sealed class Arrangement2d
     /// <summary>Vertices closer than this are merged; rounded intersection points may perturb edges by up to this distance.</summary>
     public double VertexSnapTolerance { get; }
 
+    // Default matches Tolerance.Default.Linear (a default parameter must be a constant,
+    // so it cannot reference the policy directly).
     public Arrangement2d(double vertexSnapTolerance = 1e-9)
     {
         if (!(vertexSnapTolerance > 0))

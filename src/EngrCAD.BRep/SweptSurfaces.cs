@@ -35,6 +35,8 @@ public sealed class RevolvedSurface : Surface
     /// <summary>Total swept angle; 2π for a full surface of revolution.</summary>
     public double Angle { get; }
 
+    // Angular guard at the Tolerance.Default.Angular scale (kept literal: full-turn
+    // detection is topology-critical and must not drift with a caller's tolerance).
     public bool IsFullTurn => Math.Abs(Angle - 2 * Math.PI) < 1e-9;
 
     public RevolvedSurface(Curve3d generator, in Vector3d axisOrigin, in Vector3d axisDirection, double angle = 2 * Math.PI)
@@ -114,6 +116,8 @@ public sealed class SweptSurface : Surface
             var tL = tangents[i] - v1 * (2 / c1 * v1.Dot(tangents[i]));
             var v2 = tangents[i + 1] - tL;
             double c2 = v2.LengthSquared;
+            // Near-underflow guard: the second reflection is the identity when the
+            // reflected tangent already matches (straight path); not a model tolerance.
             var x = c2 <= 1e-30 ? rL : rL - v2 * (2 / c2 * v2.Dot(rL));
             _frameX[i + 1] = (x - tangents[i + 1] * x.Dot(tangents[i + 1])).Normalized();
         }

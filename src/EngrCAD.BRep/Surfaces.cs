@@ -26,6 +26,8 @@ public abstract class Surface
     /// implementation seeds from a coarse grid and runs damped Gauss–Newton (finite
     /// domains only); plane/cylinder/sphere override with exact formulas. Returns false
     /// when the point cannot be brought within <paramref name="tolerance"/> of the surface.
+    /// The 1e-8 default suits exact overrides; pullback of traced/sampled geometry passes
+    /// the looser <see cref="FaceGeometry.InverseEvaluationTolerance"/> explicitly.
     /// </summary>
     public virtual bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
     {
@@ -79,6 +81,7 @@ public abstract class Surface
             double a11 = du.Dot(du) + 1e-12, a12 = du.Dot(dv), a22 = dv.Dot(dv) + 1e-12;
             double b1 = -du.Dot(residual), b2 = -dv.Dot(residual);
             double det = a11 * a22 - a12 * a12;
+            // Near-underflow degenerate-Jacobian guard, not a geometric tolerance.
             if (Math.Abs(det) < 1e-30)
                 return false;
             u = WrapU(u + (b1 * a22 - b2 * a12) / det);

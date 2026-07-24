@@ -9,6 +9,15 @@ namespace EngrCAD.BRep;
 /// </summary>
 public static class FaceGeometry
 {
+    /// <summary>
+    /// Distance tolerance for inverse evaluation (<see cref="Surface.TryProjectPoint"/>)
+    /// when pulling on-surface points back to parameters. Deliberately three decades
+    /// looser than the 1e-9 weld tolerance: Gauss-Newton projection on curved surfaces
+    /// carries ~1e-7 residual, and tracer polylines are on-surface only at their vertices
+    /// (see the numerical notes in CLAUDE.md). Do not tighten toward the weld tolerance.
+    /// </summary>
+    public const double InverseEvaluationTolerance = 1e-6;
+
     /// <summary>The u-period of surfaces that close on themselves in u; 0 when aperiodic.</summary>
     public static double PeriodU(Surface surface) => surface switch
     {
@@ -47,7 +56,7 @@ public static class FaceGeometry
         double period = PeriodU(surface);
         foreach (var p in samplePoints)
         {
-            if (!surface.TryProjectPoint(p, out var uv, 1e-6))
+            if (!surface.TryProjectPoint(p, out var uv, InverseEvaluationTolerance))
                 throw new ArgumentException($"Curve point {p} does not lie on the surface.");
             if (period > 0 && result.Count > 0)
             {
@@ -149,7 +158,7 @@ public static class FaceGeometry
                 {
                     double t = coedge.SameSense ? parameters[i] : parameters[parameters.Count - 1 - i];
                     var p = coedge.Edge.Curve.PointAt(t);
-                    if (!face.Surface.TryProjectPoint(p, out var uv, 1e-6))
+                    if (!face.Surface.TryProjectPoint(p, out var uv, InverseEvaluationTolerance))
                         throw new InvalidOperationException($"Loop point {p} does not lie on the face surface.");
                     if (period > 0 && points.Count > 0)
                     {
@@ -171,7 +180,7 @@ public static class FaceGeometry
     /// </summary>
     public static bool Contains(BrepFace face, in Vector3d point, int samplesPerCurve = 32)
     {
-        if (!face.Surface.TryProjectPoint(point, out var uv, 1e-6))
+        if (!face.Surface.TryProjectPoint(point, out var uv, InverseEvaluationTolerance))
             return false;
 
         double period = PeriodU(face.Surface);

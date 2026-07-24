@@ -207,6 +207,9 @@ public sealed class NurbsCurve : Curve3d
         double radius, double startAngle, double endAngle)
     {
         double sweep = endAngle - startAngle;
+        // 1e-12 angular round-off slack: admits sweeps that are 2π up to rounding, and
+        // keeps exact multiples of 90° from ceiling into an extra segment (the
+        // epsilon-guard-the-Ceiling lesson; ulp-different equal spans must agree).
         if (sweep <= 0 || sweep >= 2 * Math.PI + 1e-12)
             throw new ArgumentOutOfRangeException(nameof(endAngle),
                 "Arc sweep must be positive and less than a full turn; use Circle3d for full circles.");

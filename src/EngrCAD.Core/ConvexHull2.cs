@@ -32,7 +32,9 @@ public static class ConvexHull2
             return byX != 0 ? byX : points[i].Y.CompareTo(points[j].Y);
         });
 
-        // All points coincident: a single-vertex hull.
+        // All points coincident: a single-vertex hull. Deliberate exact (bitwise)
+        // equality — after the lexicographic sort, first == last means every point is
+        // identical; near-coincident clouds still degrade gracefully via the chain pops.
         if (points[order[0]] == points[order[^1]])
             return [order[0]];
 

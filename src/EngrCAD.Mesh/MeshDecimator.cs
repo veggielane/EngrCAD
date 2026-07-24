@@ -196,6 +196,9 @@ public static class MeshDecimator
                 var q1 = fb == a || fb == b ? optimal : p1;
                 var q2 = fc == a || fc == b ? optimal : p2;
                 var after = (q1 - q0).Cross(q2 - q0);
+                // 1e-24 = (1e-12)² floor on the squared doubled-area: rejects collapses
+                // producing sub-degenerate triangles whose normal direction is noise.
+                // A quality guard on area² units, not the model-unit Tolerance.Linear.
                 if (after.LengthSquared < 1e-24 || before.Dot(after) <= 0)
                     return;
             }

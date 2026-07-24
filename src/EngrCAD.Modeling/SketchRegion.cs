@@ -34,6 +34,9 @@ public sealed class SketchRegion : IPlanarRegion
     {
         foreach (var segment in sketch.Segments)
         {
+            // Weld-scale (1e-9 = Tolerance.Default.Linear) on-axis classification —
+            // must agree with RevolveFullTurn's pole detection so all representations
+            // drop the same on-axis stretches.
             bool onAxis = forRevolution
                 && Math.Abs(segment.Start.X) <= 1e-9
                 && Math.Abs(segment.End.X) <= 1e-9

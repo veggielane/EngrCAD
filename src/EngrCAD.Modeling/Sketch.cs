@@ -73,12 +73,15 @@ public sealed class Sketch
         for (int i = 0; i < segments.Count; i++)
         {
             var next = segments[(i + 1) % segments.Count];
+            // Weld-scale (1e-9) closure validation: sketch joints become exact shared
+            // vertices downstream, so gaps beyond weld tolerance must be rejected here.
             if (segments[i].End.DistanceTo(next.Start) > 1e-9)
                 throw new ArgumentException(
                     $"Sketch is not a closed chain: segment {i} ends at {segments[i].End} but the next starts at {next.Start}.");
         }
 
         double signed = segments.Sum(s => s.SignedAreaContribution());
+        // Absolute degenerate-area guard in sketch-area units (round-off scale).
         if (Math.Abs(signed) < 1e-12)
             throw new ArgumentException("Sketch encloses no area.");
         Segments = signed < 0 ? [.. segments.Reverse().Select(s => s.Reversed())] : segments;

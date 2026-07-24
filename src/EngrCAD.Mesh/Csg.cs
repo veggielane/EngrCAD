@@ -9,7 +9,11 @@ namespace EngrCAD.Mesh;
 
 internal readonly struct CsgPlane
 {
-    /// <summary>Absolute classification epsilon; geometry is expected at roughly unit-to-thousands scale.</summary>
+    /// <summary>
+    /// Absolute classification epsilon; geometry is expected at roughly unit-to-thousands
+    /// scale. Matches <see cref="Tolerance.Default"/>.Linear (a const cannot reference the
+    /// policy) and is boolean-critical: seam zipping depends on this exact value.
+    /// </summary>
     public const double Epsilon = 1e-9;
 
     public Vector3d Normal { get; }
