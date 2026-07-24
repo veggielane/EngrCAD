@@ -29,6 +29,11 @@ operations. Depends only on `EngrCAD.Core`.
   self-intersection from too-large offsets are the caller's responsibility (as in
   OCCT's `Geom_OffsetCurve`). `Underlying` forwards to the base curve for sampling
   rules only.
+  `Helix3d` is the exact circular helix about a `Frame3d`'s Z axis
+  (P(t) = O + X·r·cos t + Y·r·sin t + Z·p·t/2π, t = turning angle over [0, 2π·turns]):
+  analytic derivative overrides (constant speed √(r² + (p/2π)²)), closed-form arc
+  length turns·√((2πr)² + p²), lead angle, negative pitch descends; the origin+axis
+  constructor delegates to `Frame3d.FromNormal` (the shared perpendicular convention).
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation

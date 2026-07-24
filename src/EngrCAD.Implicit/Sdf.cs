@@ -81,6 +81,27 @@ public abstract class Sdf
     /// about Z; exact wherever the region's distance is exact.</summary>
     public static Sdf RevolvedRegion(IPlanarRegion region) => new RevolvedRegionSdf(region);
 
+    /// <summary>
+    /// Helical thread solid (right-hand) about +Z, z ∈ [0, <paramref name="length"/>]:
+    /// a straight-flanked thread form — crest flat of width <paramref name="crestWidth"/>
+    /// at <paramref name="majorRadius"/>, root flat of width <paramref name="rootWidth"/>
+    /// at <paramref name="minorRadius"/>, linear flanks between — repeated along the
+    /// helical coordinate w = z − pitch·θ/2π; everything below the profile is core
+    /// material. For the ISO 68-1 basic profile pass crestWidth = P/8, rootWidth = P/4,
+    /// majorRadius − minorRadius = (5/8)·(√3/2)·P.
+    /// <para>Approximate distance, exact sign (see <see cref="ThreadSdf"/> for the
+    /// fidelity contract). <paramref name="profileOffset"/> dilates (+) / erodes (−) the
+    /// profile normal to its boundary — the printing-clearance mechanism.
+    /// <paramref name="startChamfer"/>/<paramref name="endChamfer"/> cut 45° cones at
+    /// z = 0 / z = length ending at radius majorRadius + profileOffset − chamfer.</para>
+    /// </summary>
+    public static Sdf Thread(
+        double majorRadius, double minorRadius, double pitch,
+        double crestWidth, double rootWidth, double length,
+        double profileOffset = 0, double startChamfer = 0, double endChamfer = 0) =>
+        new ThreadSdf(majorRadius, minorRadius, pitch, crestWidth, rootWidth, length,
+            profileOffset, startChamfer, endChamfer);
+
     // ---- combinators ----
 
     public Sdf Union(Sdf other) => new UnionSdf(this, other);

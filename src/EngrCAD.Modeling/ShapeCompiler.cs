@@ -101,6 +101,10 @@ internal static class ShapeCompiler
                 // far-face validation happens at lowering.
                 ClassifyBrep(drill.Expanded, m, entries);
                 break;
+            case ThreadShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                    "helical thread surfaces have no B-Rep lowering yet (a true helical sweep is future work); use ToMesh or ToImplicit"));
+                break;
             case TransformShape t:
                 ClassifyBrep(t.Child, m * t.Matrix, entries);
                 break;
@@ -191,6 +195,13 @@ internal static class ShapeCompiler
             case DrillShape drill:
                 ClassifyImplicit(drill.Expanded, m, entries);
                 break;
+            case ThreadShape:
+                entries.Add(rigid
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "exact-sign helical thread field")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                        "sheared thread goes through a polygonized, transformed mesh SDF"));
+                break;
             case TransformShape t:
                 ClassifyImplicit(t.Child, m * t.Matrix, entries);
                 break;
@@ -222,7 +233,7 @@ internal static class ShapeCompiler
 
     private static bool UsesImplicitOnlyOps(Shape shape) => shape switch
     {
-        SmoothShape or OffsetShape or ShellShape or LatticeShape => true,
+        SmoothShape or OffsetShape or ShellShape or LatticeShape or ThreadShape => true,
         SourceShape { Geometry: Sdf } => true,
         BooleanShape b => UsesImplicitOnlyOps(b.A) || UsesImplicitOnlyOps(b.B),
         DrillShape d => UsesImplicitOnlyOps(d.Expanded),
@@ -476,6 +487,9 @@ internal static class ShapeCompiler
             case DrillShape drill:
                 // Exact SDF subtraction has no coplanar-face degeneracy: no validation.
                 return LowerImplicit(drill.Expanded, m, quality);
+
+            case ThreadShape thread:
+                return Place(thread.ToSdf(), rotation, translation, scale);
 
             case TransformShape t:
                 return LowerImplicit(t.Child, m * t.Matrix, quality);

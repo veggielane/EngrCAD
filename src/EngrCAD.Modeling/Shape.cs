@@ -142,6 +142,107 @@ public abstract class Shape
         return new DrillShape(this, result, points, depth, placementPlane.ToMatrix());
     }
 
+    // ---- Threads (modeled helical geometry) ----
+
+    /// <summary>
+    /// An externally threaded stud along +Z, z ∈ [0, <paramref name="length"/>], with
+    /// the ISO 68-1 basic profile of <paramref name="spec"/> (see <see cref="ThreadSpec"/>).
+    /// <paramref name="clearance"/> is the 3D-printing fit allowance, applied normal to
+    /// the flanks (the profile is eroded perpendicular to its boundary, so crests and
+    /// roots also drop radially by the same amount) — the external thread <em>shrinks</em>;
+    /// pair with the same clearance on <see cref="ThreadedHole"/>, whose void grows.
+    /// Typical FDM values: 0.1–0.25 mm. <paramref name="chamferEnds"/> cuts 45° lead-in
+    /// cones on both ends down to the minor diameter.
+    /// <para>Representation support: implicit-Native (<see cref="Sdf.Thread"/>, exact
+    /// sign); meshes bridge through Surface Nets — the printing route; B-Rep is not
+    /// representable yet (a true helical sweep is future work), so <see cref="ToBrep"/>
+    /// throws and <see cref="Explain"/> reports it.</para>
+    /// </summary>
+    public static Shape ExternalThread(ThreadSpec spec, double length, double clearance = 0, bool chamferEnds = true)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        if (length <= 0)
+            throw new ArgumentOutOfRangeException(nameof(length));
+        ValidateThreadClearance(clearance, spec);
+        return new ThreadShape(spec, length, -clearance, chamferEnds ? spec.ThreadDepth : 0);
+    }
+
+    /// <summary>Coarse-metric convenience overload:
+    /// <c>ExternalThread(8, …)</c> is an M8×1.25 stud (see <see cref="StandardThreads.Metric"/>).</summary>
+    public static Shape ExternalThread(double size, double length, double clearance = 0, bool chamferEnds = true) =>
+        ExternalThread(StandardThreads.Metric(size), length, clearance, chamferEnds);
+
+    /// <summary>
+    /// Cuts internally threaded holes: at each 2D point on <paramref name="plane"/>
+    /// (default world XY) a tap-drill pilot (<see cref="ThreadSpec.TapDrillDiameter"/>,
+    /// via <see cref="Drill"/>) plus a modeled thread void, both along −normal to
+    /// <paramref name="depth"/> below the plane. The internal and external basic
+    /// profiles coincide (ISO 68-1), so the void is the external form dilated by
+    /// <paramref name="clearance"/> normal to the flanks — the hole <em>grows</em> with
+    /// clearance (typical FDM: 0.1–0.25 mm; default 0). The pilot truncates the
+    /// internal thread's crests to the tap-drill diameter, as tapping does.
+    /// <para>The thread void has no B-Rep form, so the result is implicit-Native /
+    /// mesh-Bridged only (see <see cref="ExternalThread(ThreadSpec, double, double, bool)"/>).</para>
+    /// </summary>
+    public Shape ThreadedHole(
+        ThreadSpec spec, IReadOnlyList<Vector2d> points, double depth,
+        SketchPlane? plane = null, double clearance = 0)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        if (depth <= 0)
+            throw new ArgumentOutOfRangeException(nameof(depth));
+        ValidateThreadClearance(clearance, spec);
+
+        // Overlapping thread voids are well-defined SDF unions, but two fasteners
+        // cannot share material — reject like Drill does, against the thread's
+        // (clearance-grown) major diameter rather than the pilot's.
+        double surfaceDiameter = spec.MajorDiameter + 2 * clearance;
+        for (int i = 0; i < points.Count; i++)
+        {
+            for (int j = i + 1; j < points.Count; j++)
+            {
+                if (points[i].DistanceTo(points[j]) <= surfaceDiameter + 1e-9)
+                    throw new ArgumentException(
+                        $"Threaded holes at {points[i]} and {points[j]} (thread major diameter " +
+                        $"{surfaceDiameter:g6} each) overlap or are tangent.", nameof(points));
+            }
+        }
+
+        var placementPlane = plane ?? SketchPlane.XY;
+        var result = Drill(HoleSpec.Simple(spec.TapDrillDiameter), points, depth, placementPlane);
+
+        // The cutting tool is the external thread form, flipped to advance along
+        // −normal and raised so it overshoots the drilled surface (mirroring the drill
+        // tools' overshoot; SDF subtraction has no coplanarity concerns, but the tool
+        // must not stop exactly at the surface). The flip diag(1, −1, −1) is an exact
+        // rotation by π about X — Math.Cos(π) style matrices carry ~1e-16 skew.
+        double overshoot = 0.05 * Math.Max(depth, spec.MajorDiameter);
+        var flipDown = new Matrix4d(
+            1, 0, 0, 0,
+            0, -1, 0, 0,
+            0, 0, -1, overshoot,
+            0, 0, 0, 1);
+        foreach (var point in points)
+        {
+            var tool = new ThreadShape(spec, depth + overshoot, +clearance, chamferLength: 0)
+                .Transform(flipDown)
+                .Transform(placementPlane.ToMatrixAt(point));
+            result -= tool;
+        }
+        return result;
+    }
+
+    private static void ValidateThreadClearance(double clearance, ThreadSpec spec)
+    {
+        if (clearance < 0)
+            throw new ArgumentOutOfRangeException(nameof(clearance),
+                "Thread clearance must be non-negative (it always grows the internal void and shrinks the external thread).");
+        if (clearance >= spec.ThreadDepth / 2)
+            throw new ArgumentOutOfRangeException(nameof(clearance),
+                $"Thread clearance {clearance:g4} would degenerate the {spec.Designation} profile " +
+                $"(limit: half the thread depth, {spec.ThreadDepth / 2:g4}).");
+    }
+
     // ---- Rim features (chamfer / fillet) ----
 
     /// <summary>

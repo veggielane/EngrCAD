@@ -11,6 +11,15 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 - **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, torus, capsule,
   half-space, and a gyroid lattice (approximate distance, unbounded — intersect with a
   finite solid).
+- **`Sdf.Thread`** (`ThreadSdf.cs`) — helical thread solid about +Z (straight-flanked
+  trapezoidal form; the ISO 60° V-profile is the intended special case): the 2D profile
+  repeated along the helical coordinate w = z − pitch·θ/2π. **Sign is exact** (wrapped
+  2D membership test), magnitude is the exact 2D profile distance scaled by cos(lead
+  angle at the root radius) — a lower-bound-style distance near the threaded surface,
+  approximate deep inside. `profileOffset` dilates/erodes the profile normal to its
+  boundary (the 3D-printing clearance mechanism, exact as a distance shift); optional
+  45° start/end chamfer cones. Finite: z ∈ [0, length], conservative cylinder-box
+  bounds.
 - **Operators**: union / intersection / difference (also as `a | b`, `a & b`, `a - b`),
   polynomial smooth blends (`SmoothUnion` etc. — lower-bound distances near the blend),
   `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`.

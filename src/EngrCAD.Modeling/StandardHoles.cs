@@ -13,8 +13,8 @@ public enum ClearanceFit
 /// <see cref="Shape.Drill"/>: ISO 273 clearance holes, DIN 974-style counterbores for
 /// socket head cap screws, 90° countersinks for ISO 10642 flat-head screws, coarse-
 /// pitch tap pilot holes, and Tappex Trisert® insert pilot holes.
-/// Sizes are the metric nominal (3 = M3). Threads are not modeled geometrically —
-/// <see cref="Tapped"/> produces the tap-drill pilot.
+/// Sizes are the metric nominal (3 = M3). <see cref="Tapped"/> produces only the
+/// tap-drill pilot; <see cref="Shape.ThreadedHole"/> models the thread itself.
 /// </summary>
 public static class StandardHoles
 {

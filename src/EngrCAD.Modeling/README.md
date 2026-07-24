@@ -45,6 +45,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `PatternLinear` / `PatternCircular` | ✅ native (multi-shell when disjoint) | ✅ native | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
+| `ExternalThread` / `ThreadedHole` | ❌ no helical B-Rep yet | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
 | `From(HalfEdgeMesh)` | ❌ no mesh→B-Rep import | ✅ exact mesh SDF (closed meshes) | ✅ as-is |
 | `From(Sdf)` | ❌ no SDF→B-Rep | ✅ native | 🔶 polygonized |
@@ -200,10 +201,40 @@ var plate = Shape.Box(30, 20, 12)
 `HoleSpec.Simple/Counterbore/Countersink` take explicit dimensions;
 **`StandardHoles`** (metric, mm) supplies ISO 273 clearance fits (close/normal/loose),
 DIN 974-style counterbores for socket cap screws, 90° countersinks for ISO 10642
-flat-heads, coarse tap pilot holes (`Tapped` — threads are not modeled), and Tappex
+flat-heads, coarse tap pilot holes (`Tapped` — pilot only; `ThreadedHole` below models
+the thread itself), and Tappex
 Trisert® insert pilots (`Trisert`/`TrisertMinimumDepth` — ⚠ verify the insert table
 against the current Tappex datasheet before production use). Blind holes get flat
 bottoms; drill-tip angles are future work.
+
+## Threads
+
+Real modeled thread geometry (not cosmetic), built for 3D printing:
+
+```csharp
+var stud = Shape.ExternalThread(8, length: 16, clearance: 0.15);        // M8×1.25 stud
+var boss = Shape.Cylinder(8, 6).Translate(0, 0, -3) | stud;             // welded onto a boss
+
+var block = Shape.Box(30, 20, 12)
+    .ThreadedHole(StandardThreads.Metric(6), [new(-8, 0), new(8, 0)], depth: 14,
+                  SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY), clearance: 0.15);
+```
+
+**`StandardThreads.Metric(size)`** supplies the ISO 261/262 coarse series M2–M12 with
+the ISO 68-1 basic profile (`ThreadSpec` documents the formulas: H = (√3/2)P, crest
+flat P/8 at d, root flat P/4 at d1 = d − (5/4)H, depth 5H/8); custom `ThreadSpec`s are
+allowed. `ExternalThread` is a threaded rod along +Z (45° lead-in chamfers to the minor
+diameter on both ends by default); `ThreadedHole` cuts a tap-drill pilot (via `Drill`,
+truncating the internal crests as tapping does) plus a modeled thread void per point.
+
+**Clearance** is the printing fit allowance, applied normal to the flanks (the profile
+offsets perpendicular to its own boundary): the external thread *shrinks*, the internal
+void *grows*; default 0, typical FDM 0.1–0.25 mm, capped at half the thread depth.
+
+Threads are **implicit-native** (`Sdf.Thread`: exact sign, documented approximate
+distance) and mesh through Surface Nets — the printing route. There is **no B-Rep
+lowering yet** (a true helical profile sweep is future work); `Explain` reports it and
+`ToBrep` throws, so thread features keep the rest of a design honest.
 
 ## The document model: Part, Assembly, Tab, Scene
 
