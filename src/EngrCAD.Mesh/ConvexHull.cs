@@ -150,6 +150,8 @@ public static class ConvexHull
     {
         var normal = (points[b] - points[a]).Cross(points[c] - points[a]);
         double length = normal.Length;
+        // Underflow guard against dividing by an (effectively) exactly-zero cross product;
+        // real degeneracy is decided by the extent-scaled epsilon in the visibility tests.
         if (length <= 1e-300)
             return null;
         normal /= length;

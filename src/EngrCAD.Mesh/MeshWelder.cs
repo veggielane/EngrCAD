@@ -10,6 +10,8 @@ namespace EngrCAD.Mesh;
 /// </summary>
 public static class MeshWelder
 {
+    // The default weld radius is one decade looser than Tolerance.Default.Linear to absorb
+    // generic tessellation noise; weld-critical callers (BRepTessellator) pass 1e-9 explicitly.
     public static HalfEdgeMesh WeldPolygons(
         IEnumerable<IReadOnlyList<Vector3d>> polygons,
         double tolerance = 1e-8,
@@ -85,6 +87,9 @@ public static class MeshWelder
     /// </summary>
     internal static void ZipSeams(List<Vector3d> positions, List<List<int>> faces)
     {
+        // Seam-critical absolute values: T-junction vertices sit on the coarse edge only to
+        // within the two sides' tessellation error (~1e-7), so these are deliberately looser
+        // than the 1e-9 weld tolerance. Do not tighten without re-testing boolean seams.
         const double seamEps = 1e-7;      // distance from a candidate vertex to the edge line
         const double endMargin = 1e-7;    // keep clear of the edge endpoints
 
