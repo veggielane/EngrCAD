@@ -277,15 +277,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **View-type selector** (toolbar): **points / mesh (wireframe) / shaded / shaded
   with edges** — a global viewport display mode, the classic CAD view-style dropdown.
   (Distinct from the per-part display modes; per-part overrides global where set.)
-- [ ] **SDF isolines on the section plane** — when the section plane cuts a part whose
-  geometry is an `Sdf` (or a `Shape` with implicit lowering), overlay iso-distance
-  contours on the cut: d = 0 is the exact surface cross-section; d = ±k·spacing
-  visualizes the field (debugging blends/offsets, wall thickness at a glance).
-  Sketch: sample the SDF on a 2D grid over the cut plane (batch `Evaluate`;
-  `Sdf.Sampled` makes it cheap), marching-squares, draw via the line program clipped
-  like model geometry, color by sign or a diverging ramp.
 - [ ] **Offscreen parity** — `Part.DisplayMode` and section planes are ignored by
-  `OffscreenRenderer`; honor them so headless renders match the window.
+  `OffscreenRenderer`; honor them so headless renders match the window. Include the
+  **section-plane SDF isolines** (`SectionContourRenderer` — CPU geometry is already
+  GL-free in `SectionContours.Build`, so the offscreen pass only needs the draw
+  calls); once that lands, add an isoline screenshot example to the viewer docs page
+  (a `render:` fence needs the offscreen path).
 - [ ] **3D annotations (PMI)** — dimensions, notes, and markers attached to model
   geometry in 3D space (the model-based-definition idea: the model carries its own
   manufacturing information instead of 2D drawings). Building blocks:

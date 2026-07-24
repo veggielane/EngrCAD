@@ -69,6 +69,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private int[] _translucentOrder = [];
     private double[] _translucentDepth = [];
 
+    // Section-plane SDF isolines (self-contained in SectionContours.cs; this class
+    // only invalidates, draws, and releases it).
+    private readonly SectionContourRenderer _sectionContours = new();
+
     /// <summary>
     /// Replaces the displayed parts (one tab's worth of loose parts, each posed by its
     /// own <see cref="Part.Transform"/>). Convenience wrapper over
@@ -194,6 +198,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
             RebuildGrid(gl, bounds);
             _sceneBounds = bounds;
+            _sectionContours.Invalidate();   // new scene: cached SDF routes are stale
 
             if (frame && !bounds.IsEmpty)
             {
@@ -274,6 +279,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (_gl is null)
             return;
         DeleteMeshBuffers(_gl);
+        _sectionContours.Release(_gl);
         _meshes.Clear();
         if (_gridVbo != 0)
         {
@@ -468,6 +474,11 @@ public sealed class ViewportControl : OpenGlControlBase
                     DrawFeatureEdges(gl, _translucentOrder[k], matrix);
             }
         }
+        // Section-plane SDF isolines, after everything else so they read as an
+        // overlay on the cut (depth test still applies; the polygon-offset fills
+        // lose to coincident lines, same as feature edges).
+        if (_sectionEnabled)
+            DrawSectionContours(gl, matrix);
         gl.BindVertexArray(0);
 
         // A requested screenshot reads back the finished frame while the context is
@@ -477,6 +488,20 @@ public sealed class ViewportControl : OpenGlControlBase
     }
 
     private DisplayMode Mode(int index) => _instances[index].Part.DisplayMode;
+
+    /// <summary>
+    /// Draws SDF iso-distance contours on the section plane for parts with an implicit
+    /// route (SDF geometry, or a Shape convertible to implicit — lowered once and
+    /// cached). Geometry recomputes only when the plane, scene, or visibility changes.
+    /// The plane is passed as its clip rule (axis, offset); today the section state is
+    /// z-only, so this is the single line to update when a SectionAxis property lands.
+    /// </summary>
+    private void DrawSectionContours(GL gl, Span<float> matrix) =>
+        _sectionContours.Draw(gl, _instances, _visible, Vector3d.UnitZ, _sectionHeight,
+            _lineProgram, _uLineModel, _uLineColor, matrix, _sectionReport ??= Report);
+
+    // Cached delegate so the per-frame contour draw does not allocate.
+    private Action<string>? _sectionReport;
 
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
