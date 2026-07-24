@@ -214,15 +214,18 @@ return EngrCad.Configure()
     .WithTitle("bracket")
     .WithQuality(new MeshQuality { SegmentsPerCircle = 48 })   // display/export default
     .WithRenderSize(1920, 1080)                                // --render image size
+    .WithViewStyle(ViewStyle.Shaded)                           // --render view style
+    .WithSection(SectionAxis.Z, 6)                             // --render section plane
     .WithLog(msg => logger.LogInformation("{Message}", msg))   // status/error seam
     .Run(args, BuildScene);
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
-`RenderWidth`/`RenderHeight`, `Log`, `OnViewportReady`) and its terminal methods
-(`Run`, `Show`, `ShowLive`, `RenderToImage`) mirror the static `EngrCad` entry
-points with those options applied. The plain `EngrCad.Run/Show/ShowLive` overloads
-are unchanged and remain the simple path.
+`RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`, `Log`,
+`OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
+`RenderToImage`) mirror the static `EngrCad` entry points with those options
+applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain
+the simple path.
 
 - **Mesh-quality precedence** (`Scene.ResolveQuality` implements it): a `Scene`
   constructed with explicit options always wins > the `EngrCadOptions.Quality`
@@ -280,8 +283,14 @@ offset is non-null) — so a headless PNG matches what the viewer shows, and doc
 cutaways can use real section planes instead of boolean-cut workarounds.
 
 `EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
-window (alongside `--view` and `--export`). Check `EngrCad.CanRenderToImage` first to
-skip gracefully on machines with no GPU/ANGLE.
+window (alongside `--view` and `--export`), with `--render-style
+points|wireframe|shaded|shaded-edges` and `--section x|y|z <offset>` (e.g.
+`--section z 6`) selecting the view style and section plane — CLI switches win over
+the builder's `WithViewStyle`/`WithSection` defaults, and invalid values are usage
+errors (exit 2). `EngrCadBuilder.RenderToImage` mirrors the static overload's
+optional `style`/`sectionAxis`/`sectionOffset` parameters, falling back to the
+accumulated options when omitted. Check `EngrCad.CanRenderToImage` first to skip
+gracefully on machines with no GPU/ANGLE.
 
 - **No window, no Avalonia lifetime.** `OffscreenRenderer` renders into an offscreen
   **EGL pbuffer** created directly over the ANGLE runtime Avalonia already ships on

@@ -78,6 +78,22 @@ public sealed class EngrCadOptions
     /// <summary>Callback invoked once the GL viewport exists — custom hosts capture
     /// the <see cref="ViewportControl"/> here.</summary>
     public Action<ViewportControl>? OnViewportReady { get; set; }
+
+    /// <summary>Global view style for headless renders (<c>--render</c> /
+    /// <see cref="EngrCadBuilder.RenderToImage"/>); default
+    /// <see cref="ViewStyle.ShadedWithEdges"/>. Parts with an explicitly non-default
+    /// <c>Part.DisplayMode</c> still override it, exactly as in the window.</summary>
+    public ViewStyle RenderStyle { get; set; } = ViewStyle.ShadedWithEdges;
+
+    /// <summary>Which world axis the headless-render section plane is perpendicular
+    /// to (default Z). Only meaningful when <see cref="SectionOffset"/> is set.</summary>
+    public SectionAxis SectionAxis { get; set; } = SectionAxis.Z;
+
+    /// <summary>Non-null enables an axis-aligned section plane in headless renders:
+    /// geometry beyond this offset along <see cref="SectionAxis"/> is clipped and
+    /// exposed interiors shade as cut material (the viewport's Section toggle,
+    /// headless). Null (the default) renders unsectioned.</summary>
+    public double? SectionOffset { get; set; }
 }
 
 /// <summary>
@@ -150,6 +166,26 @@ public sealed class EngrCadBuilder
         return this;
     }
 
+    /// <summary>Sets the global view style for headless renders (<c>--render</c> also
+    /// accepts <c>--render-style points|wireframe|shaded|shaded-edges</c>, which wins
+    /// over this default).</summary>
+    public EngrCadBuilder WithViewStyle(ViewStyle style)
+    {
+        Options.RenderStyle = style;
+        return this;
+    }
+
+    /// <summary>Enables the axis-aligned section plane for headless renders: clip
+    /// beyond <paramref name="offset"/> along <paramref name="axis"/> (<c>--render</c>
+    /// also accepts <c>--section x|y|z &lt;offset&gt;</c>, which wins over this
+    /// default).</summary>
+    public EngrCadBuilder WithSection(SectionAxis axis, double offset)
+    {
+        Options.SectionAxis = axis;
+        Options.SectionOffset = offset;
+        return this;
+    }
+
     /// <summary>Standard main-method wrapper — <see cref="EngrCad.Run"/> with these
     /// options (no args → live, <c>--view</c>, <c>--export</c>, <c>--render</c>).</summary>
     public int Run(string[] args, Func<Scene> sceneFactory) =>
@@ -164,10 +200,18 @@ public sealed class EngrCadBuilder
     public void ShowLive(Func<Scene> sceneFactory) => EngrCad.ShowLiveCore(sceneFactory, Options);
 
     /// <summary>Headless PNG render — <see cref="EngrCad.RenderToImage"/> at the
-    /// configured size and quality.</summary>
-    public void RenderToImage(Scene scene, string path, CameraState? camera = null)
+    /// configured size and quality. The optional <paramref name="style"/>/
+    /// <paramref name="sectionAxis"/>/<paramref name="sectionOffset"/> mirror the
+    /// static overload's parameters; when omitted the accumulated options
+    /// (<see cref="WithViewStyle"/>/<see cref="WithSection"/>) apply.</summary>
+    public void RenderToImage(
+        Scene scene, string path, CameraState? camera = null,
+        ViewStyle? style = null, SectionAxis? sectionAxis = null, double? sectionOffset = null)
     {
         scene.PreMesh(Options.Quality); // meshes cache, so the inner PreMesh is a no-op
-        EngrCad.RenderToImage(scene, path, Options.RenderWidth, Options.RenderHeight, camera);
+        EngrCad.RenderToImage(scene, path, Options.RenderWidth, Options.RenderHeight, camera,
+            style ?? Options.RenderStyle,
+            sectionAxis ?? Options.SectionAxis,
+            sectionOffset ?? Options.SectionOffset);
     }
 }
