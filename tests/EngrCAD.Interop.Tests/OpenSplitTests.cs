@@ -99,8 +99,7 @@ public class OpenSplitTests
 
         // A line beside the hole: the hole loop is uncrossed, traces as a CW loop, and
         // must be assigned to the sub-face containing it. (Cutting *through* the hole
-        // splits the bore wall's circular edges, which the grid tessellator cannot
-        // handle yet — trimmed-face tessellation is future work.)
+        // is exercised by TrimmedFaceTests.Difference_SlotThroughBore_*.)
         var cutter = new PlaneSurface((0.3, 0, 0), Vector3d.UnitY, Vector3d.UnitZ); // x = 0.3
         var line = Assert.Single(SurfaceIntersection.Intersect(top.Surface, cutter, Region));
         var parts = FaceSplitter.SplitByCurve(top, line);

@@ -38,14 +38,26 @@ operations. Depends only on `EngrCAD.Core`.
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm.
 
-- **`FaceGeometry` / `FaceSplitter`** — trimming groundwork: inverse surface evaluation
-  (`Surface.TryProjectPoint`), curve pullback into parameter space (periodic-aware),
-  point-in-face classification, and splitting faces by closed interior curves (hole +
-  disk sharing one manifold edge).
+- **`FaceGeometry` / `FaceSplitter` / `TopologyEditor`** — trimming machinery: inverse
+  surface evaluation (`Surface.TryProjectPoint`), curve pullback into parameter space
+  (periodic-aware; `PullCurveRuns` tolerates curves that only partially lie on a bounded
+  surface — off-surface stretches separate contiguous runs, and cut ends gain one
+  extrapolated seed sample so crossings at a band's end rings are still found),
+  point-in-face classification, splitting faces by closed interior curves (hole + disk
+  sharing one manifold edge), open/crossing curves (full parameter-space arrangement:
+  boundary edges split at crossings — refined by 3D curve–curve Gauss–Newton, exact from
+  both solids' sides; crossing seeds slightly inclusive so cuts through split-created
+  vertices are not missed — interior segments as shared two-use edges, sub-faces traced
+  by tightest-turn walking: clockwise for CCW-wound faces, counter-clockwise for
+  reversed ones, `IsReversed` preserved throughout), and period-wrapping curves
+  (`SplitBandByWrapCurve`: band → two exactly re-surfaced sub-bands). `TopologyEditor`
+  supplies `SplitEdge` (patches every using loop) and `SealSeams` (boolean output
+  sealing).
 
-Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator`).
+Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator` +
+`TrimmedFaceTessellator` for faces whose loops don't cover the surface's grid domain).
 
 ## Not yet implemented
 
-Open-curve face splitting (boundary-crossing arrangements), automatic B-Rep booleans,
-filleting.
+Coplanar/tangent boolean cases, general fillet chains with corner patches, STEP import,
+NURBS surface export.

@@ -13,15 +13,45 @@ engines.
   crossing the sampling region come out open there.
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
-  ear-clip via `PolygonTriangulator`; cylinder bands and the generated surfaces
+  ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
   edge polylines exactly; everything is welded (with seam zipping to repair T-junctions
   from earcut's collinear filtering).
+  - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
+    fragments such as a bore wall cut through by a slot) go through
+    `TrimmedFaceTessellator`: loops pulled into (u, v), non-wrapping regions ear-clipped
+    by an exact-coordinate clipper (shortest-diagonal ears, on-edge points block, holes
+    bridged), band-like regions (loops winding the period — rings subdivided into arcs)
+    strip-zipped chain-to-chain or fanned to a pole, then oversized interior edges
+    midpoint-split to the natural grid density with new vertices on the exact surface.
+    Boundary vertices are always the exact shared edge samples, so seams weld at 1e-9.
+    Routing between grid and trimmed paths is a two-sided 3D match of loop samples
+    against the natural grid boundary — precisely the invariant grid welding needs.
+    Numerical lessons baked in: earcut's exact-collinear filtering would drop
+    iso-parameter run vertices (uv-collinear is *not* 3D-collinear — an unzippable
+    crack), jittering breeds zero-area folds that refine into non-manifold welds, and
+    ~1e-9 inverse-evaluation jitter demands an epsilon blocking band plus midpoint→vertex
+    snapping during refinement. Remaining gap: band-like trimmed faces with extra hole
+    loops fall back to the grid path.
 - **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
   (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See
   design.md §5. v1 handles transversal cases; inputs are consumed; output passes
   `Validate()` with correct genus and exact volumes.
+  - **Cut-through-hole differences work**: a tool passing through an existing bore
+    (e.g. a slot narrower than the bore) splits the bore wall into trimmed fragments,
+    which tessellate via `TrimmedFaceTessellator`. Kernel work that enabled it:
+    tolerant curve pullback (`FaceSplitter.PullCurveRuns` — cut curves may leave a
+    bounded band's surface; on-surface runs get extrapolated seed samples at their cut
+    ends), 3D curve–curve Gauss–Newton crossing refinement (projected-uv iteration
+    failed near domain-edge rings; both solids now converge to the same exact point),
+    slightly-inclusive crossing seeds (a cut through a split-created vertex lands at
+    tp = 0/1 up to rounding), reversed-face splitting (CCW↔CW-aware sub-face tracing,
+    `IsReversed` preserved through all split paths), a mandatory break at every closed
+    intersection curve's domain start on both sides (the wrap-splitting side anchors
+    its seam vertex there), and `ProbePoint` preferring the largest triangle's centroid
+    (sliver centroids sit within the classification SDF's sagitta of the other solid's
+    curved surface).
   - Drilling works into **cylinders** exactly as into boxes (the cap bounds a closed
     circular edge, so a different split/re-weld path runs): for well-posed inputs the
     result is `Validate`-clean with the right genus and exact volume in all three
