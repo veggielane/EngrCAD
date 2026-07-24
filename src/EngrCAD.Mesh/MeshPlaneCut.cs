@@ -153,10 +153,13 @@ public static class MeshPlaneCut
             else
             {
                 // A (necessarily non-convex) polygon crossing the plane more than twice:
-                // single-polygon clipping would bridge the pieces. Clip per fan triangle
-                // instead; diagonal crossings share MapCrossing keys, so pieces still weld.
-                for (int i = 1; i < n - 1; i++)
-                    ClipLoop([loop[0], loop[i], loop[i + 1]]);
+                // single-polygon Sutherland–Hodgman would bridge the separate kept pieces,
+                // and a vertex-0 fan is only valid for polygons star-shaped from that
+                // vertex. Triangulate the face properly in its own plane and clip each
+                // piece (each is convex, so it crosses at most twice); diagonal crossings
+                // share MapCrossing keys, so the pieces still weld exactly.
+                foreach (var piece in TriangulateFacePolygon(loop, inputPositions))
+                    ClipLoop(piece);
             }
         }
 
@@ -201,21 +204,55 @@ public static class MeshPlaneCut
                     "loops needs hole-aware planar filling, which is not supported yet; cut with " +
                     "cap: false and fill the returned loops yourself.");
 
-            AppendCap(loop, projected, outFaces);
+            outFaces.AddRange(TriangulateWithChordZip(loop, projected));
         }
 
         return new MeshPlaneCutResult(HalfEdgeMesh.Build(outPositions, outFaces), cutLoops);
     }
 
     /// <summary>
-    /// Appends cap faces for one loop. Earcut filters exactly-collinear boundary vertices,
-    /// but the cut walls still reference them — so any chord spanning a run of dropped
-    /// vertices is expanded back into the face loop (the seam-zip lesson from design.md §3),
-    /// keeping cap and wall subdivisions identical for exact welding.
+    /// Triangulates one (possibly non-convex) face loop in its own plane, returning each
+    /// piece as indices into <paramref name="positions"/>. The projection basis is derived
+    /// from the Newell normal, so the projected loop is CCW and the pieces keep the face's
+    /// orientation.
     /// </summary>
-    private static void AppendCap(int[] loop, Vector2d[] projected, List<int[]> outFaces)
+    private static List<int[]> TriangulateFacePolygon(int[] loop, IReadOnlyList<Vector3d> positions)
+    {
+        // Newell normal: robust for non-convex (and slightly non-planar) polygons.
+        double nx = 0, ny = 0, nz = 0;
+        for (int i = 0; i < loop.Length; i++)
+        {
+            var p = positions[loop[i]];
+            var q = positions[loop[(i + 1) % loop.Length]];
+            nx += (p.Y - q.Y) * (p.Z + q.Z);
+            ny += (p.Z - q.Z) * (p.X + q.X);
+            nz += (p.X - q.X) * (p.Y + q.Y);
+        }
+        var normal = new Vector3d(nx, ny, nz).Normalized(Tolerance.Default); // zero area throws
+        var u = normal.ArbitraryPerpendicular(Tolerance.Default);
+        var v = normal.Cross(u); // u × v = normal → the loop projects CCW
+
+        var projected = new Vector2d[loop.Length];
+        for (int i = 0; i < loop.Length; i++)
+        {
+            var p = positions[loop[i]];
+            projected[i] = (p.Dot(u), p.Dot(v));
+        }
+        return TriangulateWithChordZip(loop, projected);
+    }
+
+    /// <summary>
+    /// Ear-clips a CCW projected loop into triangles over the loop's vertex indices.
+    /// Earcut filters exactly-collinear boundary vertices, but neighboring geometry (cut
+    /// walls, adjacent faces) still references them — so any triangle edge that is a chord
+    /// spanning a run of dropped vertices is expanded back into the loop's full vertex run
+    /// (the seam-zip lesson from design.md §3), keeping subdivisions identical for exact
+    /// welding.
+    /// </summary>
+    private static List<int[]> TriangulateWithChordZip(int[] loop, Vector2d[] projected)
     {
         var triangles = PolygonTriangulator.Triangulate(projected);
+        var pieces = new List<int[]>(triangles.Count);
 
         var used = new bool[loop.Length];
         foreach (var (a, b, c) in triangles)
@@ -226,7 +263,7 @@ public static class MeshPlaneCut
         {
             if (!anyDropped)
             {
-                outFaces.Add([loop[a], loop[b], loop[c]]);
+                pieces.Add([loop[a], loop[b], loop[c]]);
                 continue;
             }
 
@@ -234,7 +271,7 @@ public static class MeshPlaneCut
             AppendEdge(a, b);
             AppendEdge(b, c);
             AppendEdge(c, a);
-            outFaces.Add([.. polygon]);
+            pieces.Add([.. polygon]);
 
             void AppendEdge(int from, int to)
             {
@@ -252,5 +289,6 @@ public static class MeshPlaneCut
                     polygon.Add(loop[(from + k) % n]);
             }
         }
+        return pieces;
     }
 }

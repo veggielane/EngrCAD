@@ -213,6 +213,78 @@ public class MeshPlaneCutTests
                 Assert.Equal(0.0, p.Z, 12);
     }
 
+    [Fact]
+    public void NonConvexFace_CrossingPlaneManyTimes_ClipsExactly()
+    {
+        // A comb-shaped prism whose top and bottom faces are single non-convex 12-gons.
+        // The plane y = 2 crosses each 12-gon SIX times (through all three teeth), hitting
+        // the crossings > 2 branch. A vertex-0 fan is invalid here (the polygon is not
+        // star-shaped from (0,0): fan triangles bridge the gaps between teeth), so this
+        // exercises the proper-triangulation path.
+        var comb = CombPrism();
+        var result = MeshPlaneCut.Cut(comb, (0, 2, 0), Vector3d.UnitY);
+
+        result.Mesh.Validate();
+        Assert.True(result.Mesh.IsClosed);
+
+        // Kept region: base strip 5×1 plus three 1×1 tooth stubs, extruded height 1 → 8.
+        Assert.Equal(8.0, result.Mesh.Volume(), 12);
+
+        // One rectangular cut loop per tooth, each exactly 1 (x) × 1 (z): perimeter 4,
+        // area 1. (Loops may carry extra collinear vertices where triangulation diagonals
+        // of the n-gon faces cross the plane — they change neither metric.)
+        Assert.Equal(3, result.CutLoops.Count);
+        foreach (var loop in result.CutLoops)
+        {
+            double perimeter = 0, doubleArea = 0; // shoelace in the cut plane's (x, z)
+            for (int i = 0; i < loop.Count; i++)
+            {
+                var p = loop[i];
+                var q = loop[(i + 1) % loop.Count];
+                perimeter += p.DistanceTo(q);
+                doubleArea += p.X * q.Z - q.X * p.Z;
+            }
+            Assert.Equal(4.0, perimeter, 12);
+            Assert.Equal(2.0, Math.Abs(doubleArea), 12); // 2 × unit-square area
+            foreach (var p in loop)
+                Assert.Equal(2.0, p.Y, 12);
+        }
+    }
+
+    /// <summary>
+    /// Prism (z ∈ [0, 1]) over a comb-shaped 12-gon in the xy-plane: a 5×1 base strip
+    /// (y ∈ [0, 1]) with three 1-wide teeth rising to y = 3 at x ∈ [0,1], [2,3], [4,5].
+    /// Top and bottom are single non-convex 12-gon faces; all faces wound outward.
+    /// </summary>
+    private static HalfEdgeMesh CombPrism()
+    {
+        // CCW outline viewed from +z.
+        Vector2d[] outline =
+        [
+            (0, 0), (5, 0), (5, 3), (4, 3), (4, 1), (3, 1),
+            (3, 3), (2, 3), (2, 1), (1, 1), (1, 3), (0, 3),
+        ];
+        int n = outline.Length;
+        var positions = new Vector3d[2 * n];
+        for (int i = 0; i < n; i++)
+        {
+            positions[i] = (outline[i].X, outline[i].Y, 0);     // bottom ring
+            positions[i + n] = (outline[i].X, outline[i].Y, 1); // top ring
+        }
+
+        List<int[]> faces =
+        [
+            [.. Enumerable.Range(0, n).Select(i => i + n)],   // top: CCW from +z, outward +z
+            [.. Enumerable.Range(0, n).Reverse()],            // bottom: reversed, outward -z
+        ];
+        for (int i = 0; i < n; i++)
+        {
+            int next = (i + 1) % n;
+            faces.Add([i, next, next + n, i + n]); // side wall, outward
+        }
+        return HalfEdgeMesh.Build(positions, faces);
+    }
+
     /// <summary>
     /// Closed square tube: outer 4×4 square, inner 2×2 square hole, z ∈ [-1, 1];
     /// annulus caps split into four trapezoids per end. All faces wound outward.
