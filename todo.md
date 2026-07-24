@@ -85,11 +85,9 @@ studying before implementing. Ordered roughly by value-for-effort within each se
 - [ ] **Mesh IO: STL + OBJ read/write** — g3's `STLReader/Writer` (binary+ASCII),
   `OBJReader/Writer`, `StandardMeshReader/Writer` dispatch facade. We only write OBJ;
   reading STL + repair pipeline = import path for real-world meshes.
-- [ ] **`MeshSdf` winding-mode construction cleanup** (code-quality review) — the
-  `MeshSignSource.WindingNumber` ctor triangulates the mesh once, then
-  `MeshWindingNumber`'s ctor triangulates it again, and the triangle-corner extraction
-  loop is duplicated between the two classes. Add a `MeshWindingNumber` overload
-  accepting a pre-triangulated mesh (construction-time cost only; queries unaffected).
+- [x] **`MeshSdf` winding-mode construction cleanup** ✅ done —
+  `MeshWindingNumber.FromTriangulated` (precondition validated by a cheap scan);
+  `MeshSdf` passes its already-triangulated mesh through; extraction loops merged.
 - [x] **Trimmed-face tessellation** ✅ done — `TrimmedFaceTessellator`: exact-coordinate
   ear clipper (NOT earcut — its collinear filtering drops iso-parameter uv-collinear
   samples, an unzippable crack) + strip-zip/pole-fan bands + surface-exact midpoint
@@ -146,19 +144,28 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   gives a Validate-clean, correct-genus, exact-volume solid — same as a box. Guarded by
   `HoleTests.CylinderDrilling_SimpleThrough_ExactVolume` /
   `CylinderDrilling_CounterboreMultiHole_ExactVolume`.
-- [ ] **Bug: sphere-through-box boolean misclassification** (found by docs-example
-  authoring) — `BrepBoolean` on `Sphere(13)` centered in `Box(20³)` (sphere pierces
-  all six faces, intersection curves are closed circles interior to each face)
-  silently produces WRONG geometry: union = the box, intersection = the sphere,
-  difference has negative volume — no exception. Face-with-interior-closed-circle
-  fragments are being classified wholesale to one side. Needs a regression test +
-  fix (or at minimum loud rejection).
-- [ ] **Hole-config validation** — degenerate hole inputs (overlapping/tangent recesses,
-  tool depth ≤ plate thickness → coplanar far cap) currently surface as a cryptic
-  `BRepBoolean` "Directed edge appears twice" from deep in tessellation. `Shape.Drill`
-  should validate up front and throw a clear, actionable error (which holes overlap, or
-  that the tool doesn't clear the far face) the way the rim features already guard hole
-  clearance.
+- [x] **Bug: sphere-through-box boolean misclassification** ✅ fixed — four compounding
+  causes: `BrepQueries.Bounds` sampled edges only (a hemisphere's equator hid the dome
+  → face pairs prefiltered away; bounds now include surface-domain samples,
+  conservative for trimmed fragments), tracer-clipped arcs could never refine against
+  boundaries (`TrySphereCarrier` promotes full-turn revolved spheres to exact analytic
+  plane∩sphere circles), closed-interior splitting ignored mandatory seam breaks
+  (`SplitByInteriorClosedCurve` builds matching arc pairs), and wrapping traced loops
+  were area-classified as holes (they are band boundaries — paired bottom-to-top by v).
+  Regression-tested in `SphereBooleanTests` (all three ops, six-face pierce +
+  single-face protrusion, analytic cap volumes, genus checks incl. difference χ=−8).
+- [x] **Hole-config validation** ✅ done — `Shape.Drill` rejects overlapping/tangent
+  holes up front (per pair, against the surface-level circle, naming both points), and
+  B-Rep lowering of the new `DrillShape` node rejects a tool bottom exactly coplanar
+  with a planar body face with actionable guidance. Remaining gap: two *separate*
+  `Drill` calls aren't cross-validated; a future optimization can avoid the read-only
+  validation lowering (`DrillShape` lowers the body twice on the B-Rep path).
+- [ ] **Bug: cross-drill through a bore fails in `BrepBoolean`** (found by
+  TessStepFix) — `Difference(drilled box, perpendicular cylinder tool)` fails
+  `Validate` ("Edge is used by 1 coedges") inside the boolean, before tessellation:
+  the tool-side band wrap-split by NON-PLANAR tracer curves doesn't seal. The
+  tessellation side (band-with-holes) is ready; this is the remaining blocker for
+  true cross-drilled-bore booleans.
 - [ ] **Threads** — real modeled thread geometry, internal and external:
   - **Threaded holes**: `Shape.ThreadedHole(spec, points, depth, plane)` — drill the
     ISO 262 tap-drill pilot (the `StandardHoles.Tapped` table already has them), then
@@ -389,13 +396,17 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   absolute 1e-6 — on large geometry an off-axis rim silently leaves the generator
   untrimmed (scale by axial extent or emit a diagnostic on near-miss); bisections run
   a fixed 100 iterations (exact but wasteful, import-time only).
-- [ ] **Trimmed-face tessellation follow-ups** (code-quality review) — direct
-  pathological ear-clipper tests (comb/spiral polygons, hole bridge crossing another
-  hole, vertex exactly on a candidate diagonal, multi-level collinear iso-parameter
-  runs, non-monotone u chains in band zip; needs `InternalsVisibleTo` for
-  Interop.Tests); `SegmentsTouch` uses exact-zero cross products so nearly-collinear
-  bridge/edge contact is missed (failure is loud — grid fallback / NotSupported —
-  never a silent crack, but worth a tolerance).
+- [x] **Trimmed-face tessellation follow-ups** ✅ done — direct pathological
+  ear-clipper tests landed (comb, spiral, hole-near-hole bridging, vertex-on-diagonal,
+  multi-level collinear runs; `InternalsVisibleTo` added); `SegmentsTouch` now takes
+  the file's jitter-band tolerance; band faces with extra hole loops tessellate
+  properly for **two-ring bands** (seam placed in the largest u-gap, unrolled +
+  ear-clipped with hole bridging; polyline edges sampled at exact vertex parameters —
+  `PolylineCurve3d.VertexParameters`); `Refine` terminates via a monotone-decrease
+  enqueue rule with a fail-safe fallback (no partial output). Still open: pole bands
+  with holes and |winding| > 1 fall back to grid; refinement quality upgrade
+  (Rivara-with-boundary-constraints instead of the monotone rule's worst-sliver
+  tradeoff); no Delaunay flips.
 - [ ] Data exchange: IGES, glTF, native BREP serialization format — STL export ✅ done
   (`StlWriter`, binary, `--export .stl`)
 - [ ] Hidden-line removal (HLR) projections for 2D drawings
@@ -442,13 +453,12 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   are unreliable under ANGLE/WARP); frustum near/far now scale from camera + scene
   so the 110-unit distance clamp is gone (large scenes no longer crop). Remaining:
   `Part.DisplayMode` and section planes are ignored offscreen.
-- [ ] **Extract a shared viewer render-core** (from a code-quality review) —
-  `OffscreenRenderer` deliberately duplicates ~150 lines from `ViewportControl`
-  (shader source strings, `LookAt`/`Perspective`/`WriteColumnMajor`, grid/axes build)
-  so the window and headless passes can drift apart silently. Hoist a shared
-  `ViewerShaders`/`CameraMath` static so both render identically. (Also minor viewer
-  hygiene the review noted: the translucent pass allocates a `List<int>` + sort
-  comparer every frame — hoist a reusable buffer.)
+- [x] **Extract a shared viewer render-core** ✅ done — `RenderCore.cs`:
+  `ViewerShaders` (one shader set; offscreen uses neutral uniforms), `CameraMath`
+  (incl. scene-scaled `FrustumPlanes` — the window path dropped its fixed 0.1/200
+  planes and 110/120-unit clamps, so large scenes frame and render fully everywhere),
+  `RenderGeometry` (grid/axes/upload). Translucent pass is allocation-free per frame;
+  display-mode cycler enumerates the enum properly.
 - Add a builder for EngrCad.Run and Show, so we can set defaults like render quality, and so it can consume IOptions, ILogger etc
 - [ ] **View-type selector** in the viewer (toolbar): **points / mesh (wireframe) /
   shaded / shaded with edges** — a global viewport display mode, the classic CAD
