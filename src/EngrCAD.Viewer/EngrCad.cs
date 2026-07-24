@@ -30,7 +30,7 @@ public static class EngrCad
     /// Opens the viewer showing <paramref name="scene"/> and blocks until it is closed.
     /// Avalonia allows one application lifetime per process, so call this at most once;
     /// hosts that need live updates use the <paramref name="onViewportReady"/> callback
-    /// to capture the viewport and later call <see cref="ViewportControl.SetScene"/>.
+    /// to capture the viewport and later call <see cref="ViewportControl.SetParts"/>.
     /// </summary>
     public static void Show(Scene scene, string title = "EngrCAD", Action<ViewportControl>? onViewportReady = null)
     {

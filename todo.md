@@ -146,6 +146,13 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   gives a Validate-clean, correct-genus, exact-volume solid — same as a box. Guarded by
   `HoleTests.CylinderDrilling_SimpleThrough_ExactVolume` /
   `CylinderDrilling_CounterboreMultiHole_ExactVolume`.
+- [ ] **Bug: sphere-through-box boolean misclassification** (found by docs-example
+  authoring) — `BrepBoolean` on `Sphere(13)` centered in `Box(20³)` (sphere pierces
+  all six faces, intersection curves are closed circles interior to each face)
+  silently produces WRONG geometry: union = the box, intersection = the sphere,
+  difference has negative volume — no exception. Face-with-interior-closed-circle
+  fragments are being classified wholesale to one side. Needs a regression test +
+  fix (or at minimum loud rejection).
 - [ ] **Hole-config validation** — degenerate hole inputs (overlapping/tangent recesses,
   tool depth ≤ plate thickness → coplanar far cap) currently surface as a cryptic
   `BRepBoolean` "Directed edge appears twice" from deep in tessellation. `Shape.Drill`
@@ -409,7 +416,12 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   renders a scene to PNG with no window via a direct EGL-pbuffer context over Avalonia's
   ANGLE natives (`OffscreenRenderer` + `EglContext`, `PngWriter`). This is the viewer
   self-verification loop — tests and agents render + inspect pixels instead of
-  screenshotting the demo app.
+  screenshotting the demo app. Follow-ups (docs-site findings): `EglContext` requests
+  16-bit depth while the renderer uses `PolygonOffset(1,1)` → sawtooth silhouette
+  notching on far parts (request depth 24 with 16 fallback and/or reduce the slope
+  factor; regenerate docs PNGs after — `dotnet run --project tools/EngrCAD.DocsGen --
+  docs`); `DefaultCamera` clamps distance at 110 world units so scenes wider than
+  ~100 crop; `Part.DisplayMode` and section planes are ignored offscreen.
 - [ ] **Extract a shared viewer render-core** (from a code-quality review) —
   `OffscreenRenderer` deliberately duplicates ~150 lines from `ViewportControl`
   (shader source strings, `LookAt`/`Perspective`/`WriteColumnMajor`, grid/axes build)
