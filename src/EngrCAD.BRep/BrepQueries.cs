@@ -43,6 +43,60 @@ public static class BrepQueries
     }
 
     /// <summary>
+    /// The rigid frame of a planar face, or null when the face is not planar
+    /// (same recognition as <see cref="IsPlanar"/>). X/Y are the surface's own
+    /// directions — no re-derivation, so geometry built from the frame welds with
+    /// geometry built from the surface — swapped when the face is reversed so that
+    /// Z = X × Y is always the <b>outward</b> normal. The origin is the centroid of the
+    /// outer loop's vertices projected exactly onto the plane: a stable in-face anchor
+    /// for sketching on the face (<c>SketchPlane.On(face)</c> in Modeling). For a face
+    /// whose outer loop is a single closed edge (e.g. a full-circle cap) the centroid
+    /// degenerates to that loop's seam vertex — still on the plane.
+    /// </summary>
+    public static Frame3d? Frame(this BrepFace face)
+    {
+        if (!face.IsPlanar(out var planePoint, out var normal))
+            return null;
+
+        Vector3d x, y;
+        switch (face.Surface)
+        {
+            case PlaneSurface plane:
+                // Reversal keeps the surface's own axes, swapped: Z = Y × X = -surface normal.
+                (x, y) = face.IsReversed
+                    ? (plane.YDirection, plane.XDirection)
+                    : (plane.XDirection, plane.YDirection);
+                break;
+
+            case ExtrudedSurface extruded:
+            {
+                // Side of an extrusion: X along the straight generator, Y completing the
+                // outward frame (the extrude direction itself may shear — Y must be n × x).
+                var start = extruded.Generator.PointAt(extruded.Generator.Domain.Start);
+                var end = extruded.Generator.PointAt(extruded.Generator.Domain.End);
+                x = (end - start).Normalized();
+                y = normal.Cross(x); // normal is outward (IsPlanar applies reversal)
+                break;
+            }
+
+            default:
+                return null; // unreachable while IsPlanar and this switch agree
+        }
+
+        var centroid = Vector3d.Zero;
+        int count = 0;
+        foreach (var vertex in face.OuterLoop.Coedges.Select(c => c.StartVertex).Distinct())
+        {
+            centroid += vertex.Position;
+            count++;
+        }
+        centroid /= count;
+        var origin = centroid - normal * (centroid - planePoint).Dot(normal);
+
+        return Frame3d.FromOrthonormal(origin, x, y);
+    }
+
+    /// <summary>
     /// Cylindrical face test — recognizes <see cref="CylinderSurface"/>, extruded
     /// circles, and axis-parallel revolved lines (the forms booleans produce).
     /// </summary>

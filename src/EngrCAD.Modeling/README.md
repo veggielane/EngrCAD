@@ -107,9 +107,12 @@ var vase = Shape.Revolve(vaseSketch);           // implicit: exact 2D signed dis
 
 Primitives: `Rectangle`, `RoundedRectangle`, `Circle`, `Polygon`, `Slot`. Sketches are
 pure 2D; `Shape.Extrude/Revolve/Sweep` place them with a `SketchPlane` (`XY`/`XZ`/`YZ`
-presets or `At(origin, x, y)`; revolve defaults to `XZ` so the axis is world Z, sketch
-x = radius). `Area()` is exact (arc terms analytic, béziers by exact-degree Gauss
-quadrature).
+presets, `At(origin, x, y)`, or **`On(face)`** — sketch directly on any planar face of
+a lowered body: X/Y are the face surface's own directions, the normal is outward, the
+origin the face's outer-loop vertex centroid, via `BrepQueries.Frame(face)`; revolve
+defaults to `XZ` so the axis is world Z, sketch x = radius). `SketchPlane` is a veneer
+over Core's `Frame3d` (`plane.Frame`, `new SketchPlane(frame)`). `Area()` is exact
+(arc terms analytic, béziers by exact-degree Gauss quadrature).
 
 The payoff: a sketch knows its **exact 2D signed distance** (`ToRegion()`, composable
 with `Sdf.ExtrudedRegion`/`RevolvedRegion`), so sketch-based extrusions and full

@@ -24,6 +24,18 @@ public readonly struct SketchPlane
     public static SketchPlane At(in Vector3d origin, in Vector3d xAxis, in Vector3d yAxis) =>
         new(Frame3d.FromXY(origin, xAxis, yAxis)); // same Gram-Schmidt order as before (locked by Core test)
 
+    /// <summary>
+    /// Sketch placement on a planar face of a lowered body (find one with
+    /// <c>BrepQueries</c>, e.g. <c>solid.PlanarFacesWithNormal(Vector3d.UnitZ)</c>).
+    /// The plane's X/Y are the face surface's own directions, its normal the face's
+    /// outward normal (so <c>Shape.Extrude</c> grows out of the material and
+    /// <c>Shape.Drill</c> cuts into it), and its origin the face's outer-loop vertex
+    /// centroid on the plane. Throws when the face is not planar.
+    /// </summary>
+    public static SketchPlane On(BrepFace face) =>
+        new(face.Frame() ?? throw new ArgumentException(
+            "Sketches need a planar face; this face is not planar.", nameof(face)));
+
     public Vector3d ToWorld(in Vector2d point) => Origin + XAxis * point.X + YAxis * point.Y;
 
     /// <summary>Rigid map from sketch-local (x, y, 0) coordinates to world.</summary>
