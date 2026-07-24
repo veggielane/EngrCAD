@@ -5,14 +5,34 @@ using EngrCAD.Mesh;
 
 namespace EngrCAD.Interop;
 
+/// <summary>How <see cref="MeshSdf"/> decides which side of the surface a point is on.</summary>
+public enum MeshSignSource
+{
+    /// <summary>
+    /// Angle-weighted pseudonormal of the closest feature (Bærentzen &amp; Aanæs) — exact
+    /// for watertight meshes, requires a closed mesh. The default.
+    /// </summary>
+    Pseudonormal,
+
+    /// <summary>
+    /// Fast generalized winding number (<see cref="MeshWindingNumber"/>, Barill et al.
+    /// 2018): inside where the winding number exceeds ½. Also works for open
+    /// (non-watertight) meshes, where the distance is to the existing surface and the
+    /// sign degrades gracefully near holes.
+    /// </summary>
+    WindingNumber,
+}
+
 /// <summary>
-/// Signed distance field of a closed manifold mesh, completing the mesh → implicit
-/// direction of the interop triangle: mesh geometry becomes a first-class <see cref="Sdf"/>
-/// node composable with analytic primitives and blends.
+/// Signed distance field of a triangle mesh, completing the mesh → implicit direction of
+/// the interop triangle: mesh geometry becomes a first-class <see cref="Sdf"/> node
+/// composable with analytic primitives and blends.
 /// Distance queries walk a BVH over the triangles (branch and bound); the sign comes from
 /// the angle-weighted pseudonormal of the closest feature (face, edge, or vertex) —
 /// Bærentzen &amp; Aanæs' criterion, which is exact for watertight meshes even when the
-/// closest feature is an edge or vertex.
+/// closest feature is an edge or vertex — or, opt-in via
+/// <see cref="MeshSignSource.WindingNumber"/>, from the fast generalized winding number,
+/// which additionally tolerates open meshes.
 /// </summary>
 public sealed class MeshSdf : Sdf
 {
@@ -20,19 +40,45 @@ public sealed class MeshSdf : Sdf
     private readonly Vector3d[] _cornerA;
     private readonly Vector3d[] _cornerB;
     private readonly Vector3d[] _cornerC;
-    private readonly int[] _vertexIds;          // 3 per triangle
-    private readonly Vector3d[] _faceNormals;
-    private readonly Vector3d[] _edgeNormals;   // 3 per triangle: edges (a,b), (b,c), (c,a)
-    private readonly Vector3d[] _vertexNormals; // per mesh vertex, angle-weighted
+    private readonly int[]? _vertexIds;          // 3 per triangle (pseudonormal mode)
+    private readonly Vector3d[]? _faceNormals;
+    private readonly Vector3d[]? _edgeNormals;   // 3 per triangle: edges (a,b), (b,c), (c,a)
+    private readonly Vector3d[]? _vertexNormals; // per mesh vertex, angle-weighted
+    private readonly MeshWindingNumber? _winding; // winding-number mode
     private readonly Bvh _bvh;
     private readonly Aabb _bounds;
 
-    public MeshSdf(HalfEdgeMesh mesh)
+    public MeshSdf(HalfEdgeMesh mesh) : this(mesh, MeshSignSource.Pseudonormal)
     {
-        if (!mesh.IsClosed)
+    }
+
+    public MeshSdf(HalfEdgeMesh mesh, MeshSignSource signSource)
+    {
+        if (signSource == MeshSignSource.Pseudonormal && !mesh.IsClosed)
             throw new ArgumentException("A signed distance field requires a closed mesh.", nameof(mesh));
 
         var triangulated = mesh.Triangulated();
+        if (signSource == MeshSignSource.WindingNumber)
+        {
+            _winding = new MeshWindingNumber(triangulated);
+            int count = triangulated.FaceCount;
+            _cornerA = new Vector3d[count];
+            _cornerB = new Vector3d[count];
+            _cornerC = new Vector3d[count];
+            var triangleBoxes = new Aabb[count];
+            foreach (var face in triangulated.Faces)
+            {
+                int i = face.Index;
+                var h0 = face.AnyHalfEdge;
+                _cornerA[i] = h0.Origin.Position;
+                _cornerB[i] = h0.Next.Origin.Position;
+                _cornerC[i] = h0.Next.Next.Origin.Position;
+                triangleBoxes[i] = Aabb.FromPoints([_cornerA[i], _cornerB[i], _cornerC[i]]);
+            }
+            _bvh = Bvh.Build(triangleBoxes);
+            _bounds = triangulated.ComputeBounds();
+            return;
+        }
         int faceCount = triangulated.FaceCount;
         _cornerA = new Vector3d[faceCount];
         _cornerB = new Vector3d[faceCount];
@@ -97,16 +143,19 @@ public sealed class MeshSdf : Sdf
         _bvh.Nearest(point, i => Math.Sqrt(ClosestPoint(i, p).Point.DistanceSquaredTo(p)),
             out int triangle, out double distance);
 
+        if (_winding is not null)
+            return _winding.FastWindingNumber(p) > 0.5 ? -distance : distance;
+
         var (closest, region) = ClosestPoint(triangle, p);
         var pseudonormal = region switch
         {
-            Region.Face => _faceNormals[triangle],
-            Region.EdgeAb => _edgeNormals[triangle * 3],
-            Region.EdgeBc => _edgeNormals[triangle * 3 + 1],
-            Region.EdgeCa => _edgeNormals[triangle * 3 + 2],
-            Region.VertexA => _vertexNormals[_vertexIds[triangle * 3]],
-            Region.VertexB => _vertexNormals[_vertexIds[triangle * 3 + 1]],
-            _ => _vertexNormals[_vertexIds[triangle * 3 + 2]],
+            Region.Face => _faceNormals![triangle],
+            Region.EdgeAb => _edgeNormals![triangle * 3],
+            Region.EdgeBc => _edgeNormals![triangle * 3 + 1],
+            Region.EdgeCa => _edgeNormals![triangle * 3 + 2],
+            Region.VertexA => _vertexNormals![_vertexIds![triangle * 3]],
+            Region.VertexB => _vertexNormals![_vertexIds![triangle * 3 + 1]],
+            _ => _vertexNormals![_vertexIds![triangle * 3 + 2]],
         };
         return (p - closest).Dot(pseudonormal) >= 0 ? distance : -distance;
     }

@@ -30,3 +30,9 @@ this project's conversions.)
   sign from the angle-weighted pseudonormal of the closest feature (Bærentzen–Aanæs),
   exact for watertight meshes even at edges and vertices. The result is a first-class
   `Sdf` node composable with the whole implicit engine.
+  The sign source is opt-in via `new MeshSdf(mesh, MeshSignSource.WindingNumber)`, which
+  drives the fast generalized winding number (`MeshWindingNumber` in EngrCAD.Mesh) instead
+  of the pseudonormal — same partition on watertight meshes, but also accepts **open**
+  (non-watertight) meshes, where the distance is still to the existing surface and the sign
+  degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
+  and still requires a closed mesh.

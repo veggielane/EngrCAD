@@ -30,6 +30,19 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   re-inserting exactly-collinear loop vertices earcut filters. Nothing-removed cuts
   return the input mesh; remove-everything cuts throw; nested (annular) loops can't be
   capped per-loop and throw `NotSupportedException` — use `cap: false` and fill yourself.
+  Faces crossing the plane 3+ times (non-convex n-gons) are triangulated in their own
+  plane via `PolygonTriangulator` before clipping — each piece is convex, so
+  Sutherland–Hodgman never bridges separate kept regions (a vertex-0 fan only works for
+  star-shaped polygons).
+- **`MeshWindingNumber`** — generalized winding number (Jacobson et al. 2013) for robust
+  inside/outside classification, including on **non-watertight** meshes (holes,
+  self-intersections, duplicated patches) where normal/ray-parity tests fail.
+  `WindingNumber` is the exact per-triangle signed-solid-angle sum (Van Oosterom–Strackee);
+  `FastWindingNumber` is the Barill et al. 2018 fast approximation — triangles clustered
+  in a median-split hierarchy, distant clusters evaluated by a second-order (dipole +
+  quadrupole) multipole expansion of their winding field (β radius test, default 2),
+  giving O(log n) queries with error far below the ½ decision threshold. `IsInside`
+  thresholds at ½. Construction triangulates and indexes once; the mesh may be open.
 - **`PolygonTriangulator`** — 2D triangulation with holes; a faithful port of mapbox
   earcut (minus z-order hashing).
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional

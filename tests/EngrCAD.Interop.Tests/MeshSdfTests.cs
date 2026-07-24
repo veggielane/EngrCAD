@@ -94,4 +94,76 @@ public class MeshSdfTests
             [new[] { 0, 1, 2 }]);
         Assert.Throws<ArgumentException>(() => new MeshSdf(open));
     }
+
+    [Fact]
+    public void WindingSignSource_MatchesPseudonormalSign_OnClosedMesh()
+    {
+        // Opt-in winding sign source must produce the same inside/outside partition (same
+        // distance magnitude, same sign) as the default pseudonormal source on a watertight
+        // mesh — it only changes *how* the sign is decided.
+        var mesh = MeshPrimitives.UvSphere(1.0, segments: 40, rings: 20);
+        var pseudonormal = new MeshSdf(mesh);
+        var winding = new MeshSdf(mesh, MeshSignSource.WindingNumber);
+
+        var rng = new Random(19);
+        for (int i = 0; i < 400; i++)
+        {
+            var p = new Vector3d(rng.NextDouble() * 4 - 2, rng.NextDouble() * 4 - 2, rng.NextDouble() * 4 - 2);
+            double a = pseudonormal.Evaluate(p);
+            double b = winding.Evaluate(p);
+            Assert.Equal(Math.Abs(a), Math.Abs(b), 9);      // same distance
+            if (Math.Abs(a) > 1e-6)
+                Assert.Equal(Math.Sign(a), Math.Sign(b));   // same sign off the surface
+        }
+    }
+
+    [Fact]
+    public void WindingSignSource_AcceptsOpenMesh_AndSignsInteriorNegative()
+    {
+        // A sphere with a cap removed is not watertight, so the default source rejects it;
+        // the winding source accepts it and still signs the interior negative.
+        var open = SphereWithHole();
+        Assert.False(open.IsClosed);
+        Assert.Throws<ArgumentException>(() => new MeshSdf(open));
+
+        var sdf = new MeshSdf(open, MeshSignSource.WindingNumber);
+        Assert.True(sdf.Evaluate((0, 0, -0.5)) < 0);  // interior, away from the hole
+        Assert.True(sdf.Evaluate((2.0, 0, 0)) > 0);   // clearly outside
+        Assert.True(sdf.Evaluate((0, 0, -1.6)) > 0);  // below, outside
+    }
+
+    private static HalfEdgeMesh SphereWithHole()
+    {
+        var sphere = MeshPrimitives.UvSphere(1.0, segments: 48, rings: 24);
+        var dir = Vector3d.UnitZ;
+        var (positions, faces) = sphere.ToIndexed();
+        var kept = new List<int[]>();
+        foreach (var face in faces)
+        {
+            var centroid = Vector3d.Zero;
+            foreach (int v in face)
+                centroid += positions[v];
+            if ((centroid / face.Length).Normalized().Dot(dir) < 0.9)
+                kept.Add(face);
+        }
+        var remap = new Dictionary<int, int>();
+        var newPositions = new List<Vector3d>();
+        var newFaces = new List<int[]>(kept.Count);
+        foreach (var face in kept)
+        {
+            var nf = new int[face.Length];
+            for (int i = 0; i < face.Length; i++)
+            {
+                if (!remap.TryGetValue(face[i], out int idx))
+                {
+                    idx = newPositions.Count;
+                    remap[face[i]] = idx;
+                    newPositions.Add(positions[face[i]]);
+                }
+                nf[i] = idx;
+            }
+            newFaces.Add(nf);
+        }
+        return HalfEdgeMesh.Build(newPositions, newFaces);
+    }
 }
