@@ -28,10 +28,9 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   zip but edge-based). A repair entry point would let us ingest dirty STL files.
 - [x] **Plane cut** ✅ done — `MeshPlaneCut.Cut` (slice, keep the side the normal points
   away from, return boundary loops, optional earcut caps with collinear-chord zip).
-  Known gap (code-quality review): the `crossings > 2` branch fan-triangulates from
-  vertex 0, which is only valid for polygons star-shaped from that vertex — a
-  non-convex n-gon face crossing the plane 3+ times can clip incorrectly; triangulate
-  via `PolygonTriangulator` first. Untested branch.
+  Non-convex faces crossing the plane 3+ times are Newell-plane triangulated via
+  `PolygonTriangulator` before clipping (the earlier fan-from-vertex-0 gap is fixed and
+  covered by a comb-prism regression test).
 - [ ] **Extrude/shell mesh ops** — `MeshExtrudeFaces` (face-set extrude),
   `MeshExtrudeMesh` (offset + stitch = thicken/shell). Complements our SDF
   `Shell`/`Offset` with a direct mesh route.
