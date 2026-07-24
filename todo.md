@@ -368,8 +368,8 @@ UI dependencies, which makes this unusually feasible.
   (parametric, regenerates, participates in `FeatureHistory` caching + suppression —
   suppressing the insert removes its bore too); component sizes come from
   datasheet-driven tables like `StandardHoles`/`StandardThreads` (flag
-  verify-against-datasheet like the Trisert precedent); depends on assemblies
-  (occurrences, in flight) and pairs naturally with threads. Stretch: a screw placed
+  verify-against-datasheet like the Trisert precedent); assemblies (occurrences ✅
+  landed) and threads (✅ landed) are the prerequisites, both in place. Stretch: a screw placed
   through two bodies prepares BOTH (clearance in the near body, tapped/insert bore in
   the far one) — the full fastener stack.
 - [ ] **Frame3d enabled next steps** — `FeatureContext.TopPlane` could become

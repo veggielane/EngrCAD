@@ -213,12 +213,13 @@ public abstract class Shape
         // Overlapping thread voids are well-defined SDF unions, but two fasteners
         // cannot share material — reject like Drill does, against the thread's
         // (clearance-grown) major diameter rather than the pilot's.
+        const double tolerance = 1e-9; // same absolute weld-scale guard Drill uses
         double surfaceDiameter = spec.MajorDiameter + 2 * clearance;
         for (int i = 0; i < points.Count; i++)
         {
             for (int j = i + 1; j < points.Count; j++)
             {
-                if (points[i].DistanceTo(points[j]) <= surfaceDiameter + 1e-9)
+                if (points[i].DistanceTo(points[j]) <= surfaceDiameter + tolerance)
                     throw new ArgumentException(
                         $"Threaded holes at {points[i]} and {points[j]} (thread major diameter " +
                         $"{surfaceDiameter:g6} each) overlap or are tangent.", nameof(points));

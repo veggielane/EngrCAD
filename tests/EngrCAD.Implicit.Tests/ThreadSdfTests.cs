@@ -157,6 +157,29 @@ public class ThreadSdfTests
     }
 
     [Fact]
+    public void Thread_UnequalChamfers_EachEndCutsExactlyItsOwnDepth()
+    {
+        // Regression (code-quality review): a shared max-based cone anchor cut the
+        // smaller-chamfer end to the LARGER chamfer's depth. Each end-face radius must
+        // be majorRadius − itsOwnChamfer: probe just inside/outside each face circle.
+        double length = 10;
+        double small = 0.3, large = 1.0;
+        var thread = M8(length, startChamfer: small, endChamfer: large);
+
+        double startFaceR = MajorR - small; // allowed radius at z = 0
+        double endFaceR = MajorR - large;   // allowed radius at z = length
+
+        // Start end: material survives between (MajorR − large) and (MajorR − small)
+        // — exactly the band the old shared anchor wrongly removed.
+        Assert.True(thread.Evaluate((startFaceR - 0.05, 0, 0.02)) < 0);
+        Assert.True(thread.Evaluate((startFaceR + 0.05, 0, 0.02)) > 0);
+
+        // End face honors its own (larger) chamfer.
+        Assert.True(thread.Evaluate((endFaceR - 0.05, 0, length - 0.02)) < 0);
+        Assert.True(thread.Evaluate((endFaceR + 0.05, 0, length - 0.02)) > 0);
+    }
+
+    [Fact]
     public void Thread_BoundsAreConservative()
     {
         var thread = M8(10, profileOffset: 0.1);

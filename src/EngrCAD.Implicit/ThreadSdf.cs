@@ -51,7 +51,10 @@ internal sealed class ThreadSdf : Sdf
     private readonly double _startChamfer;
     private readonly double _endChamfer;
     private readonly double _cosLead;
-    private readonly double _chamferBaseRadius; // end-face radius anchor for the 45° cones
+    // End-face radius anchors for the 45° cones — per end, so unequal chamfers each
+    // cut exactly their own depth (a shared max-based anchor over-cut the smaller end).
+    private readonly double _startChamferBase;
+    private readonly double _endChamferBase;
 
     private static readonly double InvSqrt2 = 1 / Math.Sqrt(2);
 
@@ -89,7 +92,8 @@ internal sealed class ThreadSdf : Sdf
         _profileOffset = profileOffset;
         _startChamfer = startChamfer;
         _endChamfer = endChamfer;
-        _chamferBaseRadius = effectiveMajor - maxChamfer;
+        _startChamferBase = effectiveMajor - startChamfer;
+        _endChamferBase = effectiveMajor - endChamfer;
 
         // Lead angle at the smallest surface radius (most conservative — λ shrinks
         // with r, so cos λ(rRef) · sec λ(r ≥ rRef) ≤ 1 on the threaded surface).
@@ -110,9 +114,9 @@ internal sealed class ThreadSdf : Sdf
         double side = (SignedProfileDistance(u, r) - _profileOffset) * _cosLead;
 
         if (_endChamfer > 0)
-            side = Math.Max(side, (r - (_chamferBaseRadius + (_length - p.Z))) * InvSqrt2);
+            side = Math.Max(side, (r - (_endChamferBase + (_length - p.Z))) * InvSqrt2);
         if (_startChamfer > 0)
-            side = Math.Max(side, (r - (_chamferBaseRadius + p.Z)) * InvSqrt2);
+            side = Math.Max(side, (r - (_startChamferBase + p.Z)) * InvSqrt2);
 
         double axial = Math.Max(-p.Z, p.Z - _length);
         double outside = Math.Sqrt(
