@@ -54,8 +54,9 @@ scene.Add(new Part("standard holes", plate, Palette.Brass,
 ![A plate drilled with the five standard hole recipes](images/holes-standard.png)
 
 `Clearance` takes a `ClearanceFit` (`Close`/`Normal`/`Loose`); `Tapped` models the
-pilot hole only (threads are not modeled). ⚠ The Trisert table should be verified
-against the current Tappex datasheet before production use.
+pilot hole only — for real modeled thread geometry see [threads](threads.md).
+⚠ The Trisert table should be verified against the current Tappex datasheet before
+production use.
 
 ## Seeing inside
 

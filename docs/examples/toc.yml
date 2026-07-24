@@ -12,6 +12,8 @@
   href: transforms-patterns.md
 - name: Holes & standard sizes
   href: holes.md
+- name: Threads
+  href: threads.md
 - name: Chamfer & fillet
   href: chamfer-fillet.md
 - name: Parametric features
@@ -20,6 +22,8 @@
   href: representations.md
 - name: Exports
   href: exports.md
+- name: Assemblies
+  href: assemblies.md
 - name: Viewer
   href: viewer.md
 - name: LINQ spatial queries
