@@ -1,8 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Description>EngrCAD B-Rep engine: parametric curves and surfaces, manifold topology, extrude/revolve/sweep, surface intersection, face splitting, filleting, STEP export.</Description>
+    <Description>EngrCAD B-Rep engine: parametric curves and surfaces, manifold topology, extrude/revolve/sweep, surface intersection, face splitting, filleting, STEP export/import.</Description>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- The internal Part 21 parser (StepParser) gets direct tokenizer-level tests. -->
+    <InternalsVisibleTo Include="EngrCAD.BRep.Tests" />
   </ItemGroup>
 </Project>
