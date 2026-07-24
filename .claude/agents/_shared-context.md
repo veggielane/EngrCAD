@@ -32,6 +32,18 @@ read `CLAUDE.md`, `design.md`, and the `README.md` of the project you own.
   task explicitly says otherwise. Do NOT edit `CLAUDE.md`, `design.md`, `todo.md`,
   or other projects' files — instead, end your report with the exact doc/backlog
   updates the integrator should make.
+- **Documentation is part of the feature — not optional.** When your change alters
+  behavior or adds API:
+  1. Update the owning project's `README.md` in the same commit (this is in your
+     domain and REQUIRED, not optional).
+  2. If the feature is user-facing (new `Shape` ops, viewer features, exports,
+     standards catalogs): check `docs/` — the DocFX site with executable examples.
+     If you may edit `docs/`, add/extend the example page (code fence tagged
+     ` ```csharp render:<id> ` per `docs/writing-examples.md`, verified by running
+     `dotnet run --project tools/EngrCAD.DocsGen -- docs`). If docs/ is outside
+     your assignment, your final report MUST name the exact docs pages/examples
+     the integrator needs to add — a feature without docs is not done.
+  3. XML doc comments on all new public API (they feed the generated API reference).
 - Before finishing: build the WHOLE solution and run the WHOLE test suite; all
   existing tests must stay green. New features need new tests.
 - If you are in a git worktree, commit your finished work there (`git add -A` +

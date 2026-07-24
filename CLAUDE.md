@@ -3,9 +3,21 @@
 **Detailed design rationale lives in [design.md](design.md)** (architecture, conventions,
 algorithm choices, numerical lessons, roadmap); each `src/*` project also has a
 `README.md` describing its contents. **[todo.md](todo.md)** is the idea backlog
-(largely harvested from a survey of geometry3Sharp at
-`C:\Users\chris\projects\git\geometry3Sharp` — study the referenced g3 classes before
-implementing an item). Keep all of these in sync when landing features.
+(open work only — completed items are removed as they land; largely harvested from a
+survey of geometry3Sharp at `C:\Users\chris\projects\git\geometry3Sharp` — study the
+referenced g3 classes before implementing an item).
+
+**Documentation upkeep is part of every change, not an afterthought.** When a feature
+lands, the SAME integration pass must update: (1) the owning project's `README.md`;
+(2) this file's current-status paragraph and roadmap (including any numerical lessons
+learned — they are this project's institutional memory); (3) `design.md` when a design
+decision or algorithm rationale was made; (4) `todo.md` (remove the done item, file
+residual follow-ups as new open items); and (5) **the docs site** (`docs/`) for
+user-facing features — an example page with a ` ```csharp render:<id> ` fence per
+`docs/writing-examples.md`, verified with `dotnet run --project tools/EngrCAD.DocsGen
+-- docs` (snippets are compiled/executed/rendered, so stale examples fail the build).
+XML doc comments on new public API feed the generated API reference. A feature
+without docs is not done.
 
 A CAD application in modern .NET built around a **hybrid geometry kernel** that natively supports three representations:
 
