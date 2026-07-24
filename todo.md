@@ -159,6 +159,26 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   should validate up front and throw a clear, actionable error (which holes overlap, or
   that the tool doesn't clear the far face) the way the rim features already guard hole
   clearance.
+- [ ] **Threads** — real modeled thread geometry, internal and external:
+  - **Threaded holes**: `Shape.ThreadedHole(spec, points, depth, plane)` — drill the
+    ISO 262 tap-drill pilot (the `StandardHoles.Tapped` table already has them), then
+    cut the internal thread. **External threads**: thread a cylindrical boss/stud
+    (`Shape.ExternalThread(diameter, pitch, length, ...)`), with proper lead-in/runout
+    chamfers at both ends so printed/machined parts start cleanly.
+  - **Standard ISO sizes**: a `StandardThreads` catalog like `StandardHoles` — ISO 68-1
+    60° profile, ISO 261/262 coarse (and later fine) pitch series, M2–M12+ reusing the
+    existing metric table infrastructure.
+  - **Printing clearance**: an additional radial gap parameter for 3D printing —
+    internal threads grow by the clearance, external shrink (typical FDM ≈ 0.1–0.25 mm)
+    so printed pairs actually mate. Default 0 (exact nominal); the parameter documents
+    that clearance is applied normal to the thread flanks.
+  - Implementation routes (both worth having, rep-appropriate): **implicit** — a helical
+    thread SDF (distance to helix ramp ± profile) is cheap, exact-enough, and
+    print-oriented (composes with `Sdf.Sampled` for meshing); **B-Rep** — helix path +
+    the ISO profile swept via the existing RMF `Sweep` (a helix `Curve3d` is needed;
+    watch tessellation density along the turns). Cosmetic-only threads (annotation, no
+    geometry) are the cheap CAD-standard fallback and pair with the existing "thread
+    cosmetics" note in the OCCT feature-ops item.
 - [ ] **2D sketch engine** — combine g3-style `Polygon2d`/`GeneralPolygon2d`
   (polygon-with-holes containment), `PlanarComplex` (nested loop hierarchy),
   `Arrangement2d` + `GraphCells2d` (regions from crossing sketch curves), and
