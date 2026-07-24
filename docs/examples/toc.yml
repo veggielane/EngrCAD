@@ -1,0 +1,26 @@
+- name: Primitives
+  href: primitives.md
+- name: Sketching
+  href: sketching.md
+- name: Extrude, revolve, sweep
+  href: extrude-revolve-sweep.md
+- name: Booleans
+  href: booleans.md
+- name: Blends, offset, shell, lattice
+  href: implicit.md
+- name: Transforms & patterns
+  href: transforms-patterns.md
+- name: Holes & standard sizes
+  href: holes.md
+- name: Chamfer & fillet
+  href: chamfer-fillet.md
+- name: Parametric features
+  href: features.md
+- name: Three representations
+  href: representations.md
+- name: Exports
+  href: exports.md
+- name: Viewer
+  href: viewer.md
+- name: LINQ spatial queries
+  href: queries.md
