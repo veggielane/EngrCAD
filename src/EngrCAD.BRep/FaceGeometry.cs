@@ -22,16 +22,31 @@ public static class FaceGeometry
     /// <summary>
     /// Samples a 3D curve lying on a surface and pulls it into parameter space, unwrapping
     /// the periodic u direction so the polyline is continuous (u may leave the primary
-    /// period). Throws when a sample does not lie on the surface.
+    /// period). Throws when a sample does not lie on the surface. Marching-tracer
+    /// polylines (<see cref="PolylineCurve3d"/>) lie on the surface only at their
+    /// vertices (chordal between), so they are sampled at exactly those.
     /// </summary>
     public static List<Vector2d> PullCurve(Curve3d curve, Surface surface, int samples = 64)
     {
-        var result = new List<Vector2d>(samples + 1);
-        double period = PeriodU(surface);
-        int count = curve.IsClosed ? samples : samples + 1;
-        for (int i = 0; i < count; i++)
+        List<Vector3d> samplePoints;
+        if (curve is PolylineCurve3d polyline)
         {
-            var p = curve.PointAt(curve.Domain.ParameterAt((double)i / samples));
+            var vertices = polyline.Points;
+            int vertexCount = polyline.IsClosed ? vertices.Count - 1 : vertices.Count;
+            samplePoints = [.. vertices.Take(vertexCount)];
+        }
+        else
+        {
+            int count = curve.IsClosed ? samples : samples + 1;
+            samplePoints = new List<Vector3d>(count);
+            for (int i = 0; i < count; i++)
+                samplePoints.Add(curve.PointAt(curve.Domain.ParameterAt((double)i / samples)));
+        }
+
+        var result = new List<Vector2d>(samplePoints.Count);
+        double period = PeriodU(surface);
+        foreach (var p in samplePoints)
+        {
             if (!surface.TryProjectPoint(p, out var uv, 1e-6))
                 throw new ArgumentException($"Curve point {p} does not lie on the surface.");
             if (period > 0 && result.Count > 0)

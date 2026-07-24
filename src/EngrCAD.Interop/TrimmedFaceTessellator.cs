@@ -31,8 +31,10 @@ internal static class TrimmedFaceTessellator
     /// <paramref name="polygons"/> (counter-clockwise in uv, i.e. along the surface
     /// normal — the caller flips reversed faces). Returns false without touching
     /// <paramref name="polygons"/> when the face cannot be handled: a loop point fails
-    /// inverse evaluation, the winding structure is unsupported (a band with extra hole
-    /// loops), or clipping gets stuck on degenerate input.
+    /// inverse evaluation, the winding structure is unsupported (a pole-bounded band
+    /// with extra hole loops, |winding| &gt; 1), or clipping gets stuck on degenerate
+    /// input. Two-ring bands with interior hole loops (e.g. a cross-drilled bore wall)
+    /// are unrolled at a seam clear of the holes and ear-clipped with hole bridging.
     /// </summary>
     public static bool TryTessellate(
         BrepFace face,
@@ -79,11 +81,15 @@ internal static class TrimmedFaceTessellator
         {
             triangles = TriangulateRegion(loopUv, loopPoints, period, uvAll, pointsAll, boundaryEdges);
         }
+        else if (windings.Any(w => w == 0))
+        {
+            // Band with extra hole loops: cut the band open at a seam clear of every
+            // hole and ear-clip the unrolled rectangle-with-holes.
+            triangles = TriangulateBandWithHoles(period, loopUv, loopPoints, windings, uvAll, pointsAll, boundaryEdges);
+        }
         else
         {
-            // Band-like: winding loops zip as strips; extra hole loops are unsupported.
-            if (windings.Any(w => w == 0))
-                return false;
+            // Band-like: winding loops zip as strips (or fan to the pole).
             triangles = TriangulateBand(surface, period, loopUv, loopPoints, windings, uvAll, pointsAll, boundaryEdges);
         }
         if (triangles is null || triangles.Count == 0)
@@ -153,14 +159,23 @@ internal static class TrimmedFaceTessellator
         if (triangles is null)
             return null;
 
-        var used = new bool[uvAll.Count];
+        return AllVerticesUsed(triangles, uvAll.Count) ? triangles : null;
+    }
+
+    /// <summary>
+    /// Every boundary sample must survive into the triangulation — a dropped vertex
+    /// would leave a chord across the curved boundary that welding cannot close.
+    /// </summary>
+    private static bool AllVerticesUsed(List<(int A, int B, int C)> triangles, int vertexCount)
+    {
+        var used = new bool[vertexCount];
         foreach (var (a, b, c) in triangles)
         {
             used[a] = true;
             used[b] = true;
             used[c] = true;
         }
-        return Array.IndexOf(used, false) >= 0 ? null : triangles;
+        return Array.IndexOf(used, false) < 0;
     }
 
     // ---- band-like regions: strip zipping ----
@@ -188,61 +203,14 @@ internal static class TrimmedFaceTessellator
         if (loopUv.Count is not (1 or 2))
             return null;
 
-        // Build each chain oriented by increasing u, with a closing duplicate vertex.
-        List<int> BuildChain(int loopIndex, double alignToU)
-        {
-            var uv = loopUv[loopIndex];
-            var pts = loopPoints[loopIndex];
-            int n = uv.Count;
-            var order = new int[n];
-            for (int i = 0; i < n; i++)
-                order[i] = windings[loopIndex] > 0 ? i : n - 1 - i;
-
-            // Rotate the chain to start at the vertex closest above the alignment phase.
-            int startAt = 0;
-            double bestOffset = double.PositiveInfinity;
-            for (int i = 0; i < n; i++)
-            {
-                double offset = uv[order[i]].X - alignToU;
-                offset -= period * Math.Floor(offset / period); // into [0, period)
-                if (offset < bestOffset)
-                {
-                    bestOffset = offset;
-                    startAt = i;
-                }
-            }
-
-            var chain = new List<int>(n + 1);
-            double previousU = alignToU + bestOffset;
-            for (int i = 0; i < n; i++)
-            {
-                int src = order[(startAt + i) % n];
-                double u = uv[src].X;
-                u += period * Math.Round((previousU - u) / period);
-                chain.Add(uvAll.Count);
-                uvAll.Add(new Vector2d(u, uv[src].Y));
-                pointsAll.Add(pts[src]);
-                previousU = u;
-            }
-            // Closure duplicate: same exact 3D point, one period on.
-            int first = chain[0];
-            chain.Add(uvAll.Count);
-            uvAll.Add(new Vector2d(uvAll[first].X + period, uvAll[first].Y));
-            pointsAll.Add(pointsAll[first]);
-
-            for (int i = 0; i + 1 < chain.Count; i++)
-                boundaryEdges.Add(EdgeKey(chain[i], chain[i + 1]));
-            return chain;
-        }
-
         var triangles = new List<(int, int, int)>();
         if (loopUv.Count == 2)
         {
             if (windings[0] != -windings[1])
                 return null;
             double anchor = loopUv[0][0].X;
-            var first = BuildChain(0, anchor);
-            var second = BuildChain(1, anchor);
+            var first = BuildChain(loopUv[0], loopPoints[0], windings[0], period, anchor, uvAll, pointsAll, boundaryEdges);
+            var second = BuildChain(loopUv[1], loopPoints[1], windings[1], period, anchor, uvAll, pointsAll, boundaryEdges);
 
             // Bottom chain = lower mean v; triangles CCW in (u, v).
             bool firstIsBottom =
@@ -289,7 +257,7 @@ internal static class TrimmedFaceTessellator
                     return null;
             }
 
-            var chain = BuildChain(0, loopUv[0][0].X);
+            var chain = BuildChain(loopUv[0], loopPoints[0], windings[0], period, loopUv[0][0].X, uvAll, pointsAll, boundaryEdges);
             int poleIndex = uvAll.Count;
             uvAll.Add(new Vector2d(uvAll[chain[0]].X + period / 2, vFar));
             pointsAll.Add(pole);
@@ -307,6 +275,194 @@ internal static class TrimmedFaceTessellator
         return triangles;
     }
 
+    /// <summary>
+    /// Builds one ring chain oriented by increasing u, rotated to start at the vertex
+    /// closest above <paramref name="alignToU"/>, with a closing duplicate vertex (same
+    /// exact 3D point, uv one period on). Chain edges are marked as boundary.
+    /// </summary>
+    private static List<int> BuildChain(
+        List<Vector2d> uv,
+        List<Vector3d> pts,
+        int winding,
+        double period,
+        double alignToU,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges)
+    {
+        int n = uv.Count;
+        var order = new int[n];
+        for (int i = 0; i < n; i++)
+            order[i] = winding > 0 ? i : n - 1 - i;
+
+        // Rotate the chain to start at the vertex closest above the alignment phase.
+        int startAt = 0;
+        double bestOffset = double.PositiveInfinity;
+        for (int i = 0; i < n; i++)
+        {
+            double offset = uv[order[i]].X - alignToU;
+            offset -= period * Math.Floor(offset / period); // into [0, period)
+            if (offset < bestOffset)
+            {
+                bestOffset = offset;
+                startAt = i;
+            }
+        }
+
+        var chain = new List<int>(n + 1);
+        double previousU = alignToU + bestOffset;
+        for (int i = 0; i < n; i++)
+        {
+            int src = order[(startAt + i) % n];
+            double u = uv[src].X;
+            u += period * Math.Round((previousU - u) / period);
+            chain.Add(uvAll.Count);
+            uvAll.Add(new Vector2d(u, uv[src].Y));
+            pointsAll.Add(pts[src]);
+            previousU = u;
+        }
+        // Closure duplicate: same exact 3D point, one period on.
+        int first = chain[0];
+        chain.Add(uvAll.Count);
+        uvAll.Add(new Vector2d(uvAll[first].X + period, uvAll[first].Y));
+        pointsAll.Add(pointsAll[first]);
+
+        for (int i = 0; i + 1 < chain.Count; i++)
+            boundaryEdges.Add(EdgeKey(chain[i], chain[i + 1]));
+        return chain;
+    }
+
+    // ---- band regions with interior hole loops: seam cut + ear clipping ----
+
+    /// <summary>
+    /// Triangulates a two-ring band that carries extra zero-winding hole loops (e.g. a
+    /// bore wall crossed by a smaller drill): the band is cut open along a seam placed
+    /// in the largest u-gap left free by the holes, unrolling it into a simple
+    /// rectangle-like outer polygon (bottom chain + reversed top chain, each with its
+    /// closure duplicate), which is then ear-clipped with the holes bridged in. The two
+    /// seam chords are exact uv-translates by one period with identical 3D endpoints, so
+    /// they weld to each other; both are marked as boundary so refinement never splits
+    /// the welded pair inconsistently. Pole-bounded single-chain bands with holes are
+    /// not supported (returns null — the caller falls back).
+    /// </summary>
+    private static List<(int A, int B, int C)>? TriangulateBandWithHoles(
+        double period,
+        List<List<Vector2d>> loopUv,
+        List<List<Vector3d>> loopPoints,
+        List<int> windings,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges)
+    {
+        var bandLoops = new List<int>();
+        var holeLoops = new List<int>();
+        for (int i = 0; i < windings.Count; i++)
+            (windings[i] != 0 ? bandLoops : holeLoops).Add(i);
+        if (bandLoops.Count != 2 || windings[bandLoops[0]] != -windings[bandLoops[1]])
+            return null;
+
+        if (!SeamAnchor(loopUv, holeLoops, period, out double anchor))
+            return null;
+
+        var chainA = BuildChain(
+            loopUv[bandLoops[0]], loopPoints[bandLoops[0]], windings[bandLoops[0]],
+            period, anchor, uvAll, pointsAll, boundaryEdges);
+        var chainB = BuildChain(
+            loopUv[bandLoops[1]], loopPoints[bandLoops[1]], windings[bandLoops[1]],
+            period, anchor, uvAll, pointsAll, boundaryEdges);
+
+        bool aIsBottom =
+            loopUv[bandLoops[0]].Average(p => p.Y) <= loopUv[bandLoops[1]].Average(p => p.Y);
+        var bottom = aIsBottom ? chainA : chainB;
+        var top = aIsBottom ? chainB : chainA;
+
+        // The two seam chords (left: closing ring edge top[0]→bottom[0]; right:
+        // bottom[^1]→top[^1], its exact one-period translate) are boundary.
+        boundaryEdges.Add(EdgeKey(bottom[0], top[0]));
+        boundaryEdges.Add(EdgeKey(bottom[^1], top[^1]));
+
+        // Outer ring, CCW in uv: bottom left→right along low v, then top right→left.
+        var outer = new List<int>(bottom.Count + top.Count);
+        outer.AddRange(bottom);
+        for (int i = top.Count - 1; i >= 0; i--)
+            outer.Add(top[i]);
+
+        // Every hole must sit strictly between the seam chords' u-extents.
+        double seamLow = Math.Max(uvAll[bottom[0]].X, uvAll[top[0]].X);
+        double seamHigh = Math.Min(uvAll[bottom[0]].X, uvAll[top[0]].X) + period;
+
+        var rings = new List<List<int>> { outer };
+        foreach (int h in holeLoops)
+        {
+            var uv = loopUv[h];
+            double mid = uv.Average(p => p.X);
+            double shift = period * Math.Round((anchor + period / 2 - mid) / period);
+            if (uv.Min(p => p.X) + shift <= seamLow || uv.Max(p => p.X) + shift >= seamHigh)
+                return null; // hole straddles the seam — no clear cut exists
+
+            int start = uvAll.Count;
+            for (int j = 0; j < uv.Count; j++)
+            {
+                uvAll.Add(new Vector2d(uv[j].X + shift, uv[j].Y));
+                pointsAll.Add(loopPoints[h][j]);
+            }
+            var ring = new List<int>(uv.Count);
+            for (int j = 0; j < uv.Count; j++)
+            {
+                ring.Add(start + j);
+                boundaryEdges.Add(EdgeKey(start + j, start + (j + 1) % uv.Count));
+            }
+            rings.Add(ring);
+        }
+
+        var triangles = EarClip(uvAll, rings);
+        if (triangles is null)
+            return null;
+        return AllVerticesUsed(triangles, uvAll.Count) ? triangles : null;
+    }
+
+    /// <summary>
+    /// Picks a seam u-phase for cutting a band open: the midpoint of the largest u-gap
+    /// (mod the period) not covered by any hole loop, so the seam chords cannot cross a
+    /// hole. False when a hole covers a full period (no clear seam exists).
+    /// </summary>
+    private static bool SeamAnchor(
+        List<List<Vector2d>> loopUv, List<int> holeLoops, double period, out double anchor)
+    {
+        anchor = 0;
+        var intervals = new List<(double Start, double End)>(holeLoops.Count);
+        foreach (int h in holeLoops)
+        {
+            double min = loopUv[h].Min(p => p.X);
+            double max = loopUv[h].Max(p => p.X);
+            if (max - min >= period)
+                return false;
+            double start = min - period * Math.Floor(min / period); // into [0, period)
+            intervals.Add((start, start + (max - min)));
+        }
+        if (intervals.Count == 0)
+            return true;
+
+        // Duplicate each interval one period on so every cyclic gap appears in full on
+        // the doubled line [0, 2·period), then take the largest gap between merged runs.
+        var doubled = intervals
+            .SelectMany(i => (IEnumerable<(double Start, double End)>)[i, (i.Start + period, i.End + period)])
+            .OrderBy(i => i.Start)
+            .ToList();
+        double coveredTo = doubled[0].End;
+        double bestGap = 0;
+        foreach (var (start, end) in doubled.Skip(1))
+        {
+            if (start > coveredTo && start - coveredTo > bestGap)
+            {
+                bestGap = start - coveredTo;
+                anchor = (coveredTo + start) / 2 % period;
+            }
+            coveredTo = Math.Max(coveredTo, end);
+        }
+        return bestGap > 0;
+    }
+
     // ---- exact ear clipping ----
 
     /// <summary>
@@ -314,9 +470,9 @@ internal static class TrimmedFaceTessellator
     /// Holes are bridged into the outer ring via mutually visible vertices (earcut's
     /// approach, with a conservative visibility test). Triangles come out CCW in uv
     /// regardless of the input winding. Returns null when no ear can be clipped
-    /// (degenerate input) so the caller can fall back.
+    /// (degenerate input) so the caller can fall back. Internal for direct unit testing.
     /// </summary>
-    private static List<(int A, int B, int C)>? EarClip(List<Vector2d> uv, List<List<int>> rings)
+    internal static List<(int A, int B, int C)>? EarClip(List<Vector2d> uv, List<List<int>> rings)
     {
         double RingArea(List<int> ring)
         {
@@ -340,15 +496,11 @@ internal static class TrimmedFaceTessellator
             .OrderBy(h => h.Min(i => uv[i].X))
             .ToList();
 
-        foreach (var hole in holes)
-        {
-            if (!SpliceHole(uv, outer, hole, holes))
-                return null;
-        }
-
         // Inverse evaluation carries ~1e-9 jitter, so "on the boundary" needs a band:
         // a vertex a hair outside a candidate ear must still block it — otherwise the
         // ear's diagonal cuts that vertex off and the remaining polygon self-intersects.
+        // The same band makes bridge visibility treat nearly-collinear contact as
+        // touching (exact-zero cross products would miss it by one ulp).
         double minX = double.PositiveInfinity, maxX = double.NegativeInfinity;
         double minY = double.PositiveInfinity, maxY = double.NegativeInfinity;
         foreach (var ring in rings)
@@ -362,6 +514,12 @@ internal static class TrimmedFaceTessellator
             }
         }
         double blockBand = 1e-8 * Math.Max(maxX - minX, maxY - minY);
+
+        foreach (var hole in holes)
+        {
+            if (!SpliceHole(uv, outer, hole, holes, blockBand))
+                return null;
+        }
 
         var polygon = outer;
         var triangles = new List<(int, int, int)>(polygon.Count);
@@ -436,10 +594,11 @@ internal static class TrimmedFaceTessellator
     /// <summary>
     /// Connects a hole into the outer polygon through a mutually visible vertex pair,
     /// duplicating both bridge endpoints (the polygon becomes weakly simple). Pairs are
-    /// tried closest-first; a pair is visible when its segment touches no ring edge and
-    /// its midpoint lies inside the region.
+    /// tried closest-first; a pair is visible when its segment touches no ring edge
+    /// (within <paramref name="tolerance"/>) and its midpoint lies inside the region.
     /// </summary>
-    private static bool SpliceHole(List<Vector2d> uv, List<int> outer, List<int> hole, List<List<int>> allHoles)
+    private static bool SpliceHole(
+        List<Vector2d> uv, List<int> outer, List<int> hole, List<List<int>> allHoles, double tolerance)
     {
         var pairs = new List<(double DistanceSquared, int OuterAt, int HoleAt)>();
         for (int i = 0; i < outer.Count; i++)
@@ -467,7 +626,7 @@ internal static class TrimmedFaceTessellator
                     var b = uv[ring[(e + 1) % ring.Count]];
                     if (Coincident(a, p) || Coincident(b, p) || Coincident(a, q) || Coincident(b, q))
                         continue; // incident at an endpoint
-                    if (SegmentsTouch(p, q, a, b))
+                    if (SegmentsTouch(p, q, a, b, tolerance))
                         blocked = true;
                 }
                 if (blocked)
@@ -490,28 +649,38 @@ internal static class TrimmedFaceTessellator
         return false;
     }
 
-    /// <summary>Conservative segment test: any contact (crossing, touching, collinear overlap) counts.</summary>
-    private static bool SegmentsTouch(in Vector2d p, in Vector2d q, in Vector2d a, in Vector2d b)
+    /// <summary>
+    /// Conservative segment test: any contact (crossing, touching, collinear overlap)
+    /// counts. An endpoint within <paramref name="tolerance"/> of the other segment's
+    /// line counts as on it — exact-zero cross products would miss nearly-collinear
+    /// contact by one ulp, letting a bridge overlap an edge and leaving the spliced
+    /// polygon self-intersecting. The tolerance is an absolute uv distance, consistent
+    /// with the ear clipper's jitter blocking band. Internal for direct unit testing.
+    /// </summary>
+    internal static bool SegmentsTouch(
+        in Vector2d p, in Vector2d q, in Vector2d a, in Vector2d b, double tolerance)
     {
         var pq = q - p;
         var ab = b - a;
-        double d1 = pq.Cross(a - p);
+        double d1 = pq.Cross(a - p); // |pq| · signed distance of a from line pq
         double d2 = pq.Cross(b - p);
         double d3 = ab.Cross(p - a);
         double d4 = ab.Cross(q - a);
-        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
-            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0)))
+        double bandPq = tolerance * pq.Length;
+        double bandAb = tolerance * ab.Length;
+        if (((d1 > bandPq && d2 < -bandPq) || (d1 < -bandPq && d2 > bandPq)) &&
+            ((d3 > bandAb && d4 < -bandAb) || (d3 < -bandAb && d4 > bandAb)))
             return true;
         bool OnSegment(in Vector2d s0, in Vector2d s1, in Vector2d x) =>
-            Math.Min(s0.X, s1.X) <= x.X && x.X <= Math.Max(s0.X, s1.X) &&
-            Math.Min(s0.Y, s1.Y) <= x.Y && x.Y <= Math.Max(s0.Y, s1.Y);
-        if (d1 == 0 && OnSegment(p, q, a))
+            Math.Min(s0.X, s1.X) - tolerance <= x.X && x.X <= Math.Max(s0.X, s1.X) + tolerance &&
+            Math.Min(s0.Y, s1.Y) - tolerance <= x.Y && x.Y <= Math.Max(s0.Y, s1.Y) + tolerance;
+        if (Math.Abs(d1) <= bandPq && OnSegment(p, q, a))
             return true;
-        if (d2 == 0 && OnSegment(p, q, b))
+        if (Math.Abs(d2) <= bandPq && OnSegment(p, q, b))
             return true;
-        if (d3 == 0 && OnSegment(a, b, p))
+        if (Math.Abs(d3) <= bandAb && OnSegment(a, b, p))
             return true;
-        if (d4 == 0 && OnSegment(a, b, q))
+        if (Math.Abs(d4) <= bandAb && OnSegment(a, b, q))
             return true;
         return false;
     }

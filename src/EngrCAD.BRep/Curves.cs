@@ -609,6 +609,14 @@ public sealed class PolylineCurve3d : Curve3d
 
     public IReadOnlyList<Vector3d> Points => _points;
 
+    /// <summary>
+    /// The curve parameter of each vertex (cumulative chord length, one per
+    /// <see cref="Points"/> entry). The polyline is exact at these parameters and
+    /// chordal between them — consumers that need on-curve-and-on-surface samples
+    /// (pullback, tessellation) must sample here, not at uniform parameters.
+    /// </summary>
+    public IReadOnlyList<double> VertexParameters => _cumulative;
+
     public PolylineCurve3d(IReadOnlyList<Vector3d> points, bool isClosed = false)
     {
         if (points.Count < 2)

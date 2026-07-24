@@ -577,9 +577,30 @@ public static class StepReader
                 if (edge.Curve is not Circle3d circle)
                     continue;
                 var (centerRadius, centerAxial) = ProfileOf(circle.Center);
-                if (centerRadius > Math.Max(1e-6, 1e-9 * circle.Radius) ||
-                    Math.Abs(circle.Axis.Normalized().Dot(axis)) < 1 - 1e-6)
-                    continue; // not centered on / perpendicular to the revolve axis
+
+                // Rim/rail circles must be centered on the revolve axis. The rejection
+                // floor scales with the coordinate magnitude: foreign files carry
+                // absolute rounding noise proportional to their coordinate values, so an
+                // absolute 1e-6 floor silently rejected slightly-off-axis rims on large
+                // geometry, leaving generators untrimmed. Genuinely off-axis circles
+                // (e.g. cross-drill rims) sit at a centerRadius comparable to the
+                // feature size, far above both the tolerance and the near-miss window.
+                double coordinateScale = Math.Max(
+                    Math.Max(circle.Radius, circle.Center.Length),
+                    Math.Max(origin.Length, Math.Abs(centerAxial)));
+                double rimTolerance = Math.Max(1e-6, 1e-6 * coordinateScale);
+                if (centerRadius > rimTolerance)
+                {
+                    if (centerRadius <= 1e-3 * Math.Max(1, coordinateScale))
+                    {
+                        Note(
+                            $"Rejected a rim circle on a surface of revolution as off-axis by {centerRadius:G3} " +
+                            $"(tolerance {rimTolerance:G3}) — near miss; the generator may be left untrimmed.");
+                    }
+                    continue; // not centered on the revolve axis
+                }
+                if (Math.Abs(circle.Axis.Normalized().Dot(axis)) < 1 - 1e-6)
+                    continue; // not perpendicular to the revolve axis
 
                 if (edge.IsClosedEdge)
                 {
