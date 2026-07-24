@@ -25,19 +25,43 @@ Dark-themed layout around one shared GL viewport:
 
 - **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views, a
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
-  apparent size, so toggling doesn't jump), and a **Section** toggle (see below).
-- **Section plane**: the classic CAD section view — a horizontal clip plane at an
-  adjustable world-z height hides everything above it so you can see inside (bores,
-  cavities, fillets in cross-section). Implemented as a fragment-shader `discard` in
-  the mesh shader; face culling stays off, and the interior surfaces the cut exposes
-  are backfaces, which the shader detects via `gl_FrontFacing` and renders as a flat
-  darker warm tint — the standard "cut material" cue. When first enabled the plane
-  defaults to the middle of the parts' bounds; `[` / `]` move it down/up by 2% of the
-  scene height per press (current height shown in the status bar). Feature edges are
-  clipped consistently with the fills (they belong to the model); the ground grid and
-  world axes are scene furniture and stay unclipped. Custom hosts drive it via
-  `ViewportControl.SectionEnabled` / `SectionHeight`. Picking ignores the section
-  plane in v1 — a click can select a part through the cut-away half.
+  apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
+  a **Section** toggle with an **X/Y/Z axis cycler** button beside it (see below).
+- **Global view style** (`ViewportControl.ViewStyle`, the toolbar dropdown): the
+  classic CAD display-style selector — **Points / Wireframe / Shaded / Shaded +
+  Edges** — applied to the whole viewport. Precedence rule (one place:
+  `RenderModes.Resolve` in `RenderCore.cs`, shared verbatim with the offscreen
+  pass): the global style decides how parts render *by default*; a part whose
+  `Part.DisplayMode` is explicitly **non-default** (Wireframe or Translucent)
+  overrides the global style for that part. `DisplayMode.Shaded` IS the default, so
+  it cannot override — parts left at the default follow the global style.
+  - *Shaded + Edges* (default) — the current lit-fill + feature-edge look.
+  - *Shaded* — the same fills with the feature-edge overlay suppressed (explicit
+    Translucent parts keep their silhouette edges — the override wins wholly).
+  - *Wireframe* — every part as mesh-edge lines in its color ("mesh" view).
+  - *Points* — vertex point sprites (round dots via `gl_PointCoord`, section-clipped
+    like everything else; a dedicated point program in `ViewerShaders` — desktop GL
+    needs `GL_PROGRAM_POINT_SIZE` enabled, GLES has it always on). Dots are the
+    mesh's *actual vertices*: dense on tessellated curved surfaces, sparse on large
+    flat faces.
+- **Section plane**: the classic CAD section view — an **axis-aligned clip plane**
+  (X, Y, or Z — `ViewportControl.SectionAxis`, default Z) at an adjustable offset
+  (`SectionOffset`) hides everything beyond it so you can see inside (bores,
+  cavities, fillets in cross-section). Implemented as a fragment-shader `discard`
+  (`dot(worldPos, uSectionAxis) > uSectionOffset`) in the mesh, line, and point
+  shaders; face culling stays off, and the interior surfaces the cut exposes are
+  backfaces, which the shader detects via `gl_FrontFacing` and renders as a flat
+  darker warm tint — the standard "cut material" cue (axis-agnostic by
+  construction). When first enabled the plane defaults to the middle of the parts'
+  bounds along the active axis; **changing the axis re-centers it** (an offset on
+  one axis is meaningless on another); `[` / `]` move it by 2% of the scene extent
+  along the active axis per press (current axis+offset shown in the status bar).
+  Feature edges and wireframes are clipped consistently with the fills (they belong
+  to the model); the ground grid and world axes are scene furniture and stay
+  unclipped. Custom hosts drive `SectionEnabled` / `SectionAxis` / `SectionOffset`
+  (`SectionHeight` remains as a delegating legacy alias from the Z-only days).
+  Picking ignores the section plane in v1 — a click can select a part through the
+  cut-away half.
 - **Model tree** (left): the current tab's loose parts and **assembly hierarchies** —
   assembly/sub-assembly header rows with their occurrences indented one level per
   depth (always expanded in v1; the tree walks the tab exactly like
@@ -132,7 +156,17 @@ For tests and AI agents that need to *see* a scene without opening a window,
 ```csharp
 EngrCad.RenderToImage(scene, "out.png", width: 1280, height: 800);   // auto-framed iso
 EngrCad.RenderToImage(scene, "front.png", camera: someCameraState);  // explicit pose
+EngrCad.RenderToImage(scene, "wire.png", style: ViewStyle.Wireframe);       // global view style
+EngrCad.RenderToImage(scene, "cut.png",                                     // real section plane
+    sectionAxis: SectionAxis.X, sectionOffset: 0.0);
 ```
+
+Headless renders honor everything the window draws — **per-part display modes**
+(wireframe, translucent with the same shared back-to-front ordering and opaque
+silhouette edges), the **global `ViewStyle`** with the same precedence rule, and
+**axis-aligned section planes** (`sectionAxis` + `sectionOffset`; enabled when the
+offset is non-null) — so a headless PNG matches what the viewer shows, and docs
+cutaways can use real section planes instead of boolean-cut workarounds.
 
 `EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
 window (alongside `--view` and `--export`). Check `EngrCad.CanRenderToImage` first to
@@ -147,14 +181,15 @@ skip gracefully on machines with no GPU/ANGLE.
   works on CI and locked sessions), then the default display. The same Silk.NET `GL`
   surface then draws the scene and `glReadPixels` reads it back.
 - **The look matches the viewport by construction**: both passes draw with the shared
-  render core in `RenderCore.cs` — `ViewerShaders` (ONE shader set; the offscreen pass
-  disables the viewport-only features by setting the neutral uniforms uHighlight 0,
-  uSectionEnabled 0, uAlpha 1), `CameraMath` (LookAt/projection/column-major writer,
-  the scene-scaled near/far frustum, and the auto-framing distance), and
-  `RenderGeometry` (grid/axes builder, line/mesh upload). Evolve the look there and it
-  lands in the window and in headless renders at once; do not re-fork per-pass copies.
-  Shader sources must stay pure ASCII (ANGLE rejects the whole shader on any
-  non-ASCII byte — this once black-screened the viewport).
+  render core in `RenderCore.cs` — `ViewerShaders` (ONE shader set; the only feature
+  the offscreen pass neutralizes is the selection highlight, uHighlight 0 — there is
+  no interactive selection offscreen), `RenderModes` (the global-style x per-part-mode
+  precedence and the translucent back-to-front sort), `CameraMath`
+  (LookAt/projection/column-major writer, the scene-scaled near/far frustum, and the
+  auto-framing distance), and `RenderGeometry` (grid/axes builder, line/mesh upload).
+  Evolve the look there and it lands in the window and in headless renders at once; do
+  not re-fork per-pass copies. Shader sources must stay pure ASCII (ANGLE rejects the
+  whole shader on any non-ASCII byte — this once black-screened the viewport).
 - **`PngWriter`** is a tiny dependency-free 8-bit RGBA PNG encoder (one zlib IDAT via
   `System.IO.Compression`); no image library is pulled in.
 
