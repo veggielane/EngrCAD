@@ -256,7 +256,11 @@ internal static class StepParser
         private int _index;
 
         public bool AtEnd => _index >= text.Length;
-        public char Peek => text[_index];
+
+        /// <summary>Current character, or '\0' at end of input — the sentinel matches no
+        /// expected character, so truncated files fail through the normal error paths
+        /// (FormatException) instead of indexing past the buffer.</summary>
+        public char Peek => _index < text.Length ? text[_index] : '\0';
 
         public char? PeekAhead(int offset) =>
             _index + offset < text.Length ? text[_index + offset] : null;

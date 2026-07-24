@@ -91,6 +91,8 @@ public class StepParserTests
     [InlineData("#1=FOO('unterminated);")]     // unterminated string
     [InlineData("#1=FOO(1.,.BAD);")]           // unterminated enumeration
     [InlineData("#1=FOO(1.E-);")]              // malformed exponent
+    [InlineData("#1=")]                        // EOF where an entity body starts
+    [InlineData("#1=FOO(BAR")]                 // EOF after a bare identifier argument
     public void Malformed_ThrowsFormatException(string text)
     {
         Assert.Throws<FormatException>(() => StepParser.Parse(text));
