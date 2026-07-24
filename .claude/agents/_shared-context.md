@@ -10,6 +10,9 @@ read `CLAUDE.md`, `design.md`, and the `README.md` of the project you own.
 - PowerShell 5.1: no `&&`; here-strings for multi-line args; no double quotes inside
   single-quoted here-strings passed to git.
 - If builds fail with locked DLLs, a demo is running: `Get-Process -Name "EngrCAD.Demo","EngrCAD.LiveDemo" | Stop-Process -Force`.
+- NEVER round-trip source files through PowerShell `Get-Content`/`Set-Content` —
+  PS 5.1 reads BOM-less UTF-8 as ANSI and mangles non-ASCII (en dashes → mojibake).
+  Use the Edit/Write tools for file content, always.
 
 ## Non-negotiable conventions
 - Kernel projects (Core, Mesh, Implicit, BRep, Interop, Query, Modeling) must stay

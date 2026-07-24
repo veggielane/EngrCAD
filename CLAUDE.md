@@ -101,6 +101,7 @@ Kernel projects (`Core`, `Mesh`, `Implicit`, `BRep`, `Interop`, `Query`) must st
 - Use `System.Runtime.Intrinsics` (SIMD) for SDF evaluation, ray/primitive intersection, and other batch kernels
 - Bulk mesh data uses structs-of-arrays, not arrays-of-objects
 - Never compare floats with `==`; all comparisons go through the central tolerance policy in `EngrCAD.Core`
+- **The epsilon ladder** (audited repo-wide; every site is documented in place): new epsilons must pick a tier — **1e-9 absolute weld** (= `Tolerance.Default.Linear`: exactly-constructed shared geometry — tessellation welds, seam breaks, clone dedupe) / **1e-7 seam** (geometry built independently on two sides of one curve — `SealSeams`, boundary-vs-grid matching, MeshWelder zip) / **1e-6 inverse-evaluation** (named: `FaceGeometry.InverseEvaluationTolerance` — Gauss–Newton pullback; three decades looser than weld, do not tighten) / **scale-free algorithmic guards** (relative machine-epsilon degeneracy tests, exact-zero division guards, exact-zero *semantic* tests — these deliberately bypass `Tolerance` and say so in a comment). Never invent a fresh literal. Shewchuk `Predicates2d` error-bound constants are the algorithm — off limits.
 
 ## Roadmap (bottom-up — do not skip ahead)
 

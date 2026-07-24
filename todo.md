@@ -76,12 +76,18 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 ## Core (EngrCAD.Core)
 
-- [ ] **Tolerance-policy audit** (in flight) — sweep every project for float
-  comparisons that bypass the central `Tolerance` API: raw `==`/`!=` on doubles,
-  hardcoded epsilons that should reference the policy, and ad-hoc
-  `Math.Abs(a - b) < eps` patterns. Fix or explicitly justify each; deliberate
-  exceptions get a comment naming why the policy doesn't apply. (Shewchuk
-  `Predicates2d` error-bound constants are the algorithm — off limits.)
+- [ ] **Tolerance follow-ups from the audit** (audit ✅ complete — ~200 sites reviewed,
+  13 call sites routed through the new `FaceGeometry.InverseEvaluationTolerance`
+  const, ~60 justified in place, epsilon ladder documented in CLAUDE.md; these
+  flagged items were report-only because changing them alters behavior):
+  named seam-scale constants (`SealSeams` 1e-7, boundary-match 1e-7, the 1e-8
+  curve-parameter dedupe cluster — mechanical bit-identical consts); `ConvexHull2`'s
+  raw cross-product turn test → `Predicates2d.Orient2dSign` (with new degenerate
+  tests); a `TracerSettings` struct collecting `SurfaceIntersection`'s marching
+  constants (1e-10/1e-8/1e-7/1e-14 family — boolean-critical, tune together);
+  BSP `Csg.Epsilon` 1e-9 and `MeshWelder` 1e-7 absolutes → extent-scaled (boolean
+  seam re-testing required); `Sketch` 1e-12 area/length guards → extent-relative;
+  `ShapeCompiler` coplanarity dot 1−1e-6 → explicit angular tolerance.
 - [ ] **Core follow-ups from the parity/utils wave** — intersection-segment queries on
   top of `Bvh.QueryOverlap` candidate pairs (the triangle–triangle segment layer
   belongs to EngrCAD.Mesh — part of the imprint-boolean item); arrangement insertion
