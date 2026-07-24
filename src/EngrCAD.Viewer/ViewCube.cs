@@ -460,65 +460,22 @@ internal sealed class ViewCube
         vertices.Add((float)p.Z);
     }
 
-    // ---- stroke font ----
-
-    private const double LetterWidth = 0.6;   // letter box: x in [0, 0.6], y in [0, 1]
-    private const double LetterSpacing = 0.3;
+    // ---- face labels (lettering lives in the shared StrokeFont) ----
 
     /// <summary>Lays a word out centered on a face: letters scaled to fit a 1.5-unit
     /// line (face spans 2 units) capped at 0.5-unit height, mapped into the face
-    /// plane at <paramref name="center"/> via the face's right/up frame.</summary>
+    /// plane at <paramref name="center"/> via the face's right/up frame. The strokes
+    /// come from the viewer-wide <see cref="StrokeFont"/> (this widget's original
+    /// lettering, now shared with annotation text).</summary>
     private static void AddWord(
         List<(Vector3d A, Vector3d B)> segments, in Vector3d center, in Vector3d right, in Vector3d up,
         string word)
     {
-        double rawWidth = word.Length * LetterWidth + (word.Length - 1) * LetterSpacing;
+        double rawWidth = StrokeFont.TextWidth(word);
         double scale = Math.Min(0.5, 1.5 / rawWidth);
-        double startX = -rawWidth * scale / 2;
-        double startY = -scale / 2;
-        for (int i = 0; i < word.Length; i++)
-        {
-            double x0 = startX + i * (LetterWidth + LetterSpacing) * scale;
-            foreach (double[] polyline in Strokes[word[i]])
-            {
-                for (int k = 0; k + 3 < polyline.Length; k += 2)
-                {
-                    var a = center + right * (x0 + polyline[k] * scale) + up * (startY + polyline[k + 1] * scale);
-                    var b = center + right * (x0 + polyline[k + 2] * scale) + up * (startY + polyline[k + 3] * scale);
-                    segments.Add((a, b));
-                }
-            }
-        }
+        var origin = center + right * (-rawWidth * scale / 2) + up * (-scale / 2);
+        StrokeFont.AppendText(segments, word, origin, right, up, scale);
     }
-
-    /// <summary>Tiny stroke font (polylines of x,y pairs in a 0.6 x 1 letter box) for
-    /// the letters used by the six face words — CAD-legible, no text renderer.</summary>
-    private static readonly Dictionary<char, double[][]> Strokes = new()
-    {
-        ['A'] = [[0, 0, 0.3, 1, 0.6, 0], [0.14, 0.45, 0.46, 0.45]],
-        ['B'] =
-        [
-            [0, 0, 0, 1, 0.45, 1, 0.6, 0.85, 0.6, 0.65, 0.45, 0.5, 0, 0.5],
-            [0.45, 0.5, 0.6, 0.35, 0.6, 0.15, 0.45, 0, 0, 0],
-        ],
-        ['C'] = [[0.6, 0.82, 0.42, 1, 0.18, 1, 0, 0.82, 0, 0.18, 0.18, 0, 0.42, 0, 0.6, 0.18]],
-        ['E'] = [[0.6, 1, 0, 1, 0, 0, 0.6, 0], [0, 0.5, 0.42, 0.5]],
-        ['F'] = [[0.6, 1, 0, 1, 0, 0], [0, 0.5, 0.42, 0.5]],
-        ['G'] =
-        [
-            [0.6, 0.82, 0.42, 1, 0.18, 1, 0, 0.82, 0, 0.18, 0.18, 0, 0.42, 0, 0.6, 0.18, 0.6, 0.42, 0.32, 0.42],
-        ],
-        ['H'] = [[0, 0, 0, 1], [0.6, 0, 0.6, 1], [0, 0.5, 0.6, 0.5]],
-        ['I'] = [[0.3, 0, 0.3, 1], [0.12, 1, 0.48, 1], [0.12, 0, 0.48, 0]],
-        ['K'] = [[0, 0, 0, 1], [0.6, 1, 0, 0.45], [0.22, 0.62, 0.6, 0]],
-        ['L'] = [[0, 1, 0, 0, 0.6, 0]],
-        ['M'] = [[0, 0, 0, 1, 0.3, 0.5, 0.6, 1, 0.6, 0]],
-        ['N'] = [[0, 0, 0, 1, 0.6, 0, 0.6, 1]],
-        ['O'] = [[0.18, 0, 0.42, 0, 0.6, 0.18, 0.6, 0.82, 0.42, 1, 0.18, 1, 0, 0.82, 0, 0.18, 0.18, 0]],
-        ['P'] = [[0, 0, 0, 1, 0.45, 1, 0.6, 0.85, 0.6, 0.6, 0.45, 0.45, 0, 0.45]],
-        ['R'] = [[0, 0, 0, 1, 0.45, 1, 0.6, 0.85, 0.6, 0.6, 0.45, 0.45, 0, 0.45], [0.3, 0.45, 0.6, 0]],
-        ['T'] = [[0, 1, 0.6, 1], [0.3, 1, 0.3, 0]],
-    };
 }
 
 /// <summary>
