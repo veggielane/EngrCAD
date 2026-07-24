@@ -41,9 +41,11 @@ public static class SurfaceNets
 
         var size = region.Size;
         double cell = size[region.LongestAxis] / resolution;
-        int nx = Math.Max(1, (int)Math.Ceiling(size.X / cell - 1e-9));
-        int ny = Math.Max(1, (int)Math.Ceiling(size.Y / cell - 1e-9));
-        int nz = Math.Max(1, (int)Math.Ceiling(size.Z / cell - 1e-9));
+        var cells = new Vector3i(
+            Math.Max(1, (int)Math.Ceiling(size.X / cell - 1e-9)),
+            Math.Max(1, (int)Math.Ceiling(size.Y / cell - 1e-9)),
+            Math.Max(1, (int)Math.Ceiling(size.Z / cell - 1e-9)));
+        int nx = cells.X, ny = cells.Y, nz = cells.Z; // scalar copies for the hot loops
         var origin = region.Min;
 
         // Sample the grid corners: i-slabs are contiguous slices of the flat arrays, so

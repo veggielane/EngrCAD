@@ -27,7 +27,11 @@ internal readonly struct GridFrame
     public readonly Vector3d Origin;
     public readonly double CellSize;
     public readonly double InverseCellSize;
-    public readonly int Nx, Ny, Nz; // samples per axis
+    public readonly Vector3i Samples; // samples per axis
+
+    public int Nx => Samples.X;
+    public int Ny => Samples.Y;
+    public int Nz => Samples.Z;
 
     public GridFrame(in Aabb region, double cellSize)
     {
@@ -40,11 +44,12 @@ internal readonly struct GridFrame
         CellSize = cellSize;
         InverseCellSize = 1.0 / cellSize;
         var size = region.Size;
-        Nx = SampleCount(size.X, cellSize);
-        Ny = SampleCount(size.Y, cellSize);
-        Nz = SampleCount(size.Z, cellSize);
+        Samples = new Vector3i(
+            SampleCount(size.X, cellSize),
+            SampleCount(size.Y, cellSize),
+            SampleCount(size.Z, cellSize));
 
-        long total = (long)Nx * Ny * Nz;
+        long total = Samples.ComponentProduct;
         if (total > int.MaxValue)
             throw new ArgumentException(
                 $"Grid would need {total} samples; increase the cell size or shrink the region.");

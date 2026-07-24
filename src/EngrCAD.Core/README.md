@@ -35,6 +35,15 @@ concerns.
   overhead when absent). Cancellation surfaces as `OperationCanceledException`; kernel
   algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize` and
   `MeshDecimator.Decimate`.
+- **Integer grid types** (g3: Vector2i/Vector3i/Interval1i/AxisAlignedBox3i):
+  `Vector2i`/`Vector3i` (tuple conversion, operators, `ComponentProduct` as a `long`
+  for overflow-safe grid sample counts, `ToVector2d/3d`), `Interval1i` (**inclusive**
+  [Start, End] index interval, allocation-free `foreach`), and `AxisAlignedBox3i`
+  (**inclusive** Min/Max index box: `Counts`, `Count`, per-axis `Interval1i` ranges,
+  contains/overlap/intersect/expand). Adopted where they name a concept — grid
+  dimension bookkeeping in `SurfaceNets` and `GridSdf`'s `GridFrame.Samples` — while
+  hot flat-index arithmetic deliberately stays scalar (bit-for-bit outputs locked by
+  the polygonizer determinism test).
 - **`ConvexHull2`** — 2D convex hull (Andrew's monotone chain, O(n log n)); returns CCW
   strictly-convex hull vertices or indices, degrading gracefully on coincident/collinear
   input. The planar counterpart of the mesh engine's 3D quickhull.
