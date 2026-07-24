@@ -119,4 +119,23 @@ shapes.Add(new Part("shape → implicit", model.ToImplicit(), Palette.Teal));
 shapes.Add(new Part("shape → mesh", model, Palette.Coral,
     Matrix4d.CreateTranslation((3.1, 0, 0))));                    // Part picks the best route
 
+// ---- tab 7: assemblies — shared parts instanced by Frame3d poses, nested trees ----
+// ONE bolt Part is placed eight times (meshed once, drawn with per-instance world
+// matrices); the clamp sub-assembly is itself placed twice inside "stack", the second
+// time rotated 90° about Z and lifted — occurrence frames compose down the tree.
+var assemblies = scene.AddTab("assembly");
+var boltPart = new Part("bolt",
+    Shape.Cylinder(0.16, 0.9) | Shape.Cylinder(0.34, 0.26).Translate(0, 0, 0.58), Palette.Brass);
+var platePart = new Part("plate", Shape.Extrude(Sketch.RoundedRectangle(4.4, 3.2, 0.5), 0.5), Palette.Steel);
+
+var clamp = new Assembly("clamp");
+clamp.Add(platePart);
+foreach (var (x, y) in new[] { (1.5, 1.0), (-1.5, 1.0), (-1.5, -1.0), (1.5, -1.0) })
+    clamp.Add(boltPart, Frame3d.FromXY((x, y, 0.8), Vector3d.UnitX, Vector3d.UnitY));
+
+var stack = new Assembly("stack");
+stack.Add(clamp);
+stack.Add(clamp, Frame3d.FromXY((0, 0, 2.2), Vector3d.UnitY, -Vector3d.UnitX)); // rotated + lifted
+assemblies.Add(stack);
+
 EngrCad.Show(scene, "EngrCAD demo");
