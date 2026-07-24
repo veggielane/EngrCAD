@@ -297,9 +297,29 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   `OffscreenRenderer`; honor them so headless renders match the window.
 - [ ] Builder for `EngrCad.Run`/`Show` — defaults like render quality; consume
   `IOptions`, `ILogger` etc.
-- [ ] Ideas: view cube widget, measure tool, ambient occlusion or matcap shading, edge
-  silhouettes from B-Rep edges instead of mesh dihedrals (exact circles stay smooth at
-  coarse tessellation).
+- [ ] **3D annotations (PMI)** — dimensions, notes, and markers attached to model
+  geometry in 3D space (the model-based-definition idea: the model carries its own
+  manufacturing information instead of 2D drawings). Building blocks:
+  - **Annotation objects in the document model** — `Annotation` types (linear/radial/
+    angular dimension, leader note, datum label, hole callout) attached to a `Part` (or
+    assembly occurrence) via geometry references: a `Frame3d` anchor, or better a
+    semantic B-Rep selector (`BrepQueries` — face/edge queries survive regeneration,
+    same topological-naming story as features). Dimensions auto-measure from the
+    geometry (`Length`, radius of `IsCircular` edges, face-to-face distance) so they
+    stay correct when parameters change.
+  - **Viewer rendering** — billboarded text (a small SDF/atlas text renderer in the GL
+    layer — no Avalonia dependency in the render pass), leader/extension/dimension
+    lines through the line program, screen-constant sizing (annotations don't scale
+    with zoom), optional occlusion behavior (always-on-top vs depth-tested), pickable
+    for selection. Offscreen renderer support so docs renders can carry dimensions.
+  - **Natural tie-ins**: the measure-tool idea below becomes "create dimension
+    interactively"; hole/thread callouts can generate from `HoleSpec`/`ThreadSpec`
+    (the cosmetic-thread-annotation follow-up: "M6×1.0 - 6H ⌀5.0 ↧14"); a hole-table
+    annotation from a `Drill` feature's point list; export view: annotations included
+    in `--render` output for documentation.
+- [ ] Ideas: view cube widget, measure tool (→ interactive dimension creation, see 3D
+  annotations), ambient occlusion or matcap shading, edge silhouettes from B-Rep edges
+  instead of mesh dihedrals (exact circles stay smooth at coarse tessellation).
 
 ## Blazor web viewer
 
