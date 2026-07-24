@@ -232,6 +232,23 @@ public abstract class Shape
         return shapes[0];
     }
 
+    // ---- Convex hull ----
+
+    /// <summary>
+    /// Convex hull of the operands (OpenSCAD's <c>hull()</c>), computed by quickhull
+    /// over the operands' MESH vertices. Honest support story: exact for polyhedral
+    /// operands (boxes, polygonal extrusions); curved operands contribute their
+    /// tessellated vertices, so the result is the hull of the tessellation (inscribed
+    /// in the true hull) — Bridged for every target in <see cref="Explain"/> terms,
+    /// and never convertible to B-Rep (no mesh→B-Rep import).
+    /// </summary>
+    public static Shape Hull(params Shape[] operands)
+    {
+        if (operands is null || operands.Length == 0)
+            throw new ArgumentException("Hull needs at least one operand.", nameof(operands));
+        return new HullShape([.. operands]);
+    }
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);

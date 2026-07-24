@@ -198,6 +198,13 @@ internal sealed class DrillShape(
     internal override string Describe() => $"Drill({points.Count} holes)";
 }
 
+/// <summary>Convex hull of the operands' mesh vertices (quickhull; mesh-native only).</summary>
+internal sealed class HullShape(IReadOnlyList<Shape> operands) : Shape
+{
+    public IReadOnlyList<Shape> Operands => operands;
+    internal override string Describe() => $"Hull({operands.Count} operands)";
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;

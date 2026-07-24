@@ -37,7 +37,10 @@ internal static class ShapeCompiler
                         entries[i] = entries[i] with
                         {
                             Support = NodeSupport.Bridged,
-                            Detail = "polygonized from the signed distance field (Surface Nets)",
+                            // Hull nodes bridge as a mesh construction, not through the SDF.
+                            Detail = entries[i].Node.StartsWith("Hull(", StringComparison.Ordinal)
+                                ? "quickhull over the operands' tessellated mesh vertices"
+                                : "polygonized from the signed distance field (Surface Nets)",
                         };
                 }
                 break;
@@ -100,6 +103,11 @@ internal static class ShapeCompiler
                         "planar-face rim feature; rim shape constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with rim features"));
+                break;
+
+            case HullShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                    "a convex hull is a mesh construction (quickhull over tessellated vertices), and meshes cannot be imported into B-Rep"));
                 break;
 
             case DrillShape drill:
@@ -194,6 +202,11 @@ internal static class ShapeCompiler
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "sheared subtree goes through a tessellated mesh SDF"));
                 break;
+            case HullShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                    "convex hull mesh (quickhull over tessellated vertices) wrapped in a mesh SDF"));
+                break;
+
             case DrillShape drill:
                 ClassifyImplicit(drill.Expanded, m, entries);
                 break;
@@ -492,6 +505,11 @@ internal static class ShapeCompiler
                 return LowerImplicit(l.Child, m, quality)
                     .Intersect(Place(l.Pattern, rotation, translation, scale));
 
+            case HullShape:
+                // No SDF form: build the hull once in mesh land (with the transform
+                // already applied — hulls commute with affine maps) and wrap it.
+                return new MeshSdf(LowerMesh(shape, m, quality));
+
             case DrillShape drill:
                 // Exact SDF subtraction has no coplanar-face degeneracy: no validation.
                 return LowerImplicit(drill.Expanded, m, quality);
@@ -569,6 +587,14 @@ internal static class ShapeCompiler
                     BooleanOp.Intersection => MeshBoolean.Intersection(left, right),
                     _ => MeshBoolean.Difference(left, right),
                 };
+            }
+
+            case HullShape hull:
+            {
+                var hullPoints = new List<Vector3d>();
+                foreach (var operand in hull.Operands)
+                    hullPoints.AddRange(LowerMesh(operand, m, quality).ToIndexed().Positions);
+                return ConvexHull.Compute(hullPoints);
             }
 
             case TransformShape t:

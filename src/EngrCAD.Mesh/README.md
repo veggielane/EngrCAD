@@ -15,7 +15,14 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   Topology is immutable after `Build`; algorithms produce new meshes.
 - **Handles** (`Vertex`, `HalfEdge`, `Face`) — cheap struct wrappers designed for fluent
   LINQ traversal (`vertex.OutgoingHalfEdges()`, `face.AdjacentFaces()`, `face.Bounds`).
-- **`MeshPrimitives`** — box, UV sphere, cylinder (true n-gon caps). Outward CCW winding.
+- **`MeshPrimitives`** — box, UV sphere, cylinder, cone frustum (`Cone(r1, r2, h)`;
+  zero radius = apex fan; true n-gon caps). Outward CCW winding.
+- **`ConvexHull`** — 3D quickhull over point sets → closed triangle mesh. One
+  extent-scaled epsilon for all visibility tests; points within it of a face plane are
+  absorbed (coplanar regions come out as consistent triangulations of true hull
+  vertices, not sliver fans); degenerate inputs (&lt; 4 points, coincident, collinear,
+  coplanar) throw with the reason. Output goes through the manifold-validating `Build`
+  as a safety net.
 - **`MeshBoolean`** — union/difference/intersection via BSP clipping (csg.js) plus a
   seam-zipping pass so results come out topologically closed.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
