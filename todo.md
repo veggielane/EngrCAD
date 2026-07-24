@@ -172,6 +172,39 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   `DijkstraGraphDistance` (approximate geodesics). Enables engraving/wrapping features.
 - [ ] **ICP registration** — `MeshICP` for aligning imported scans to models.
 
+## Simulation
+
+FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
+feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
+engine's half-edge structure and the implicit engine's SDFs are both real assets here
+(SDF-guided sizing fields, inside/outside tests via winding numbers).
+
+- [ ] **Meshing for FEA** — volumetric (tet) meshing from any representation:
+  surface mesh → tetrahedra (Delaunay refinement or advancing front; study TetGen/
+  NETGEN-class algorithms), with quality controls (aspect-ratio/dihedral bounds,
+  sizing fields — an `Sdf` makes a natural sizing/gradation field), boundary-layer
+  preservation, and second-order (10-node) tets for accuracy. Hex-dominant or
+  voxel/SDF-based meshing (cut cells from `Sdf.Sampled` grids) as an alternative
+  route. Also: surface-mesh quality prep (the isotropic-remeshing item above is a
+  prerequisite for good tet input) and region/attribute tagging (material per body,
+  face groups for boundary conditions — B-Rep face identity → mesh facet tags).
+- [ ] **FEA: structural (linear static)** — small-strain linear elasticity on tet
+  meshes: element stiffness (linear + quadratic tets), assembly into sparse symmetric
+  systems, boundary conditions from tagged B-Rep faces (fixed supports, loads:
+  force/pressure/gravity), solve (start with the `SparseSymmetricCG`/Cholesky solvers
+  from the deformation item — shared solver mini-library), derive stress/strain (von
+  Mises), display as color fields + deformed-shape overlay in the viewer. Modal
+  analysis as a follow-on (eigen-solver).
+- [ ] **FEA: thermal (steady-state + transient)** — heat conduction on the same tet
+  meshes: conductivity matrix, boundary conditions (fixed temperature, heat flux,
+  convection h·(T−T∞)), steady solve first, transient with implicit time stepping
+  after; temperature fields in the viewer. Thermal→structural coupling (thermal
+  expansion loads) once both exist.
+- [ ] **Results/fields infrastructure** — scalar/vector fields on mesh vertices/cells,
+  color-map rendering in the viewer (legend, min/max probes), export (VTK/VTU for
+  ParaView interop), and a `Part`-level results attachment so simulation results live
+  in the document model alongside geometry.
+
 ## OpenSCAD feature parity
 
 OpenSCAD's feature set as a checklist of user expectations for a CSG modeler, mapped
