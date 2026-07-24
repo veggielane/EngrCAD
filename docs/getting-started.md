@@ -58,6 +58,26 @@ static Scene BuildScene()
 | `--export part.stl` / `part.obj` | Headless mesh export, parts merged with transforms. |
 | `--render out.png` | Headless offscreen render to a PNG — no window, CI-friendly. |
 
+### Configuring defaults
+
+`EngrCad.Run` needs no configuration, but when a program wants host-level defaults —
+window title, display mesh quality, `--render` image size, or a log sink — the
+fluent builder sets them once (a `Scene` that chooses its own `MeshQuality` still
+wins over the builder's default):
+
+```csharp
+return EngrCad.Configure()
+    .WithTitle("my bracket")
+    .WithQuality(new MeshQuality { SegmentsPerCircle = 48 })
+    .WithRenderSize(1920, 1080)
+    .Run(args, BuildScene);
+```
+
+The builder wraps a plain `EngrCadOptions` POCO, so generic-host apps can bind it as
+`IOptions<EngrCadOptions>` and pass it via `EngrCad.Configure(options.Value)`;
+`.WithLog(...)` routes status and error reporting to any delegate or `ILogger`
+without the viewer depending on `Microsoft.Extensions.*`.
+
 ## The live-modeling loop
 
 The core experience is `dotnet watch` + hot reload — edit the model, save, and watch

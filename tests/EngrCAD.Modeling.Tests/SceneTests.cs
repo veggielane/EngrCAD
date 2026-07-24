@@ -39,6 +39,47 @@ public class SceneTests
     }
 
     [Fact]
+    public void Scene_ResolveQuality_ExplicitOptionsWinOverFallback()
+    {
+        var explicitQuality = new MeshQuality { SegmentsPerCircle = 12 };
+        var fallback = new MeshQuality { SegmentsPerCircle = 64 };
+
+        var withExplicit = new Scene(explicitQuality);
+        Assert.True(withExplicit.HasExplicitOptions);
+        Assert.Same(explicitQuality, withExplicit.ResolveQuality(fallback));
+        Assert.Same(explicitQuality, withExplicit.ResolveQuality());
+
+        var withDefaults = new Scene();
+        Assert.False(withDefaults.HasExplicitOptions);
+        Assert.Same(fallback, withDefaults.ResolveQuality(fallback));
+        Assert.Same(withDefaults.Options, withDefaults.ResolveQuality());
+    }
+
+    [Fact]
+    public void PreMesh_FallbackQuality_UsedOnlyWhenSceneHasNoExplicitOptions()
+    {
+        var coarse = new MeshQuality { SegmentsPerCircle = 8 };
+
+        // Scene without explicit options: the fallback drives tessellation density.
+        var scene = new Scene();
+        var part = scene.Add(new Part("cyl", Shape.Cylinder(1, 2)));
+        scene.PreMesh(coarse);
+        int coarseFaces = part.GetMesh().FaceCount; // cached from PreMesh
+
+        var defaultScene = new Scene();
+        var defaultPart = defaultScene.Add(new Part("cyl", Shape.Cylinder(1, 2)));
+        defaultScene.PreMesh();
+        Assert.True(coarseFaces < defaultPart.GetMesh().FaceCount,
+            $"coarse fallback should give fewer faces ({coarseFaces} vs {defaultPart.GetMesh().FaceCount})");
+
+        // Scene WITH explicit options: the fallback is ignored.
+        var explicitScene = new Scene(new MeshQuality { SegmentsPerCircle = 8 });
+        var explicitPart = explicitScene.Add(new Part("cyl", Shape.Cylinder(1, 2)));
+        explicitScene.PreMesh(new MeshQuality { SegmentsPerCircle = 64 });
+        Assert.Equal(coarseFaces, explicitPart.GetMesh().FaceCount);
+    }
+
+    [Fact]
     public void SceneAdd_UsesDefaultTabAndCyclesPalette()
     {
         var scene = new Scene();
