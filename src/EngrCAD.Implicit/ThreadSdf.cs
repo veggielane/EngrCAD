@@ -97,6 +97,8 @@ internal sealed class ThreadSdf : Sdf
 
         // Lead angle at the smallest surface radius (most conservative — λ shrinks
         // with r, so cos λ(rRef) · sec λ(r ≥ rRef) ≤ 1 on the threaded surface).
+        // The 1e-9 floor only keeps cos λ defined if the offset swallows the minor
+        // radius entirely — a degenerate-input guard, not a tolerance comparison.
         double rRef = Math.Max(1e-9, minorRadius - Math.Abs(profileOffset));
         double circumference = 2 * Math.PI * rRef;
         _cosLead = circumference / Math.Sqrt(circumference * circumference + pitch * pitch);
