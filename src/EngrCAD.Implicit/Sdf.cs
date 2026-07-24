@@ -87,10 +87,19 @@ public abstract class Sdf
     public Sdf Intersect(Sdf other) => new IntersectionSdf(this, other);
     public Sdf Subtract(Sdf other) => new DifferenceSdf(this, other);
 
-    /// <summary>Union with a fillet-like blend of radius ~<paramref name="blend"/>.</summary>
+    /// <summary>Union with a fillet-like blend of radius ~<paramref name="blend"/>.
+    /// A blend ≤ 0 degrades to the exact hard union — field and bounds alike (same
+    /// policy as <see cref="Blend"/>); it never shrinks the result.</summary>
     public Sdf SmoothUnion(Sdf other, double blend) => new SmoothUnionSdf(this, other, blend);
 
+    /// <summary>Intersection with a fillet-like blend of radius ~<paramref name="blend"/>.
+    /// A blend ≤ 0 degrades to the exact hard intersection (see
+    /// <see cref="SmoothUnion(Sdf, double)"/> for the policy).</summary>
     public Sdf SmoothIntersect(Sdf other, double blend) => new SmoothIntersectionSdf(this, other, blend);
+
+    /// <summary>Difference with a fillet-like blend of radius ~<paramref name="blend"/>.
+    /// A blend ≤ 0 degrades to the exact hard difference (see
+    /// <see cref="SmoothUnion(Sdf, double)"/> for the policy).</summary>
     public Sdf SmoothSubtract(Sdf other, double blend) => new SmoothDifferenceSdf(this, other, blend);
 
     /// <summary>Positive distance grows (and rounds) the solid; negative shrinks it.</summary>
@@ -104,6 +113,46 @@ public abstract class Sdf
 
     /// <summary>Uniform scale about the origin (distances stay exact).</summary>
     public Sdf Scale(double factor) => new ScaleSdf(this, factor);
+
+    // ---- sampled-grid acceleration ----
+
+    /// <summary>
+    /// Bakes this field onto a dense uniform grid over its own <see cref="Bounds"/>
+    /// (expanded by one cell so the surface stays interior — which guarantees the
+    /// correct-sign-outside contract) and returns a node that evaluates the grid by
+    /// trilinear interpolation. See <see cref="Sampled(in Aabb, double, bool)"/> for
+    /// the distance-fidelity contract. Requires finite bounds.
+    /// </summary>
+    public Sdf Sampled(double cellSize, bool lazy = false)
+    {
+        var bounds = Bounds;
+        if (!IsFinite(bounds))
+            throw new InvalidOperationException(
+                "Sampled() over the node's own bounds requires finite Bounds; pass an explicit region for unbounded fields.");
+        return Sampled(bounds.Expanded(cellSize), cellSize, lazy);
+    }
+
+    /// <summary>
+    /// Bakes this field onto a uniform grid of cubic cells covering
+    /// <paramref name="region"/> (rounded up to whole cells) and returns a node that
+    /// evaluates it by trilinear interpolation — the standard acceleration for expensive
+    /// ASTs (mesh SDFs, deep CSG trees) queried many times over the same region. With
+    /// <paramref name="lazy"/> the grid is materialized in 16³-sample blocks on first
+    /// touch instead of up front (thread-safe; pays only for regions actually probed).
+    /// <para>
+    /// Distance fidelity: values are <em>approximate</em> — exact at grid sample points,
+    /// trilinear between (error O(cellSize²) where the field is smooth, O(cellSize)
+    /// across edges/medial axis), so the sign is reliable only where the cell size
+    /// resolves the geometry: features thinner than a cell can vanish or fuse. Outside
+    /// the baked region the value is the boundary-clamped interpolant plus the distance
+    /// to the region — continuous, and correct in sign whenever the solid is contained
+    /// in the region (the <see cref="Sampled(double, bool)"/> overload guarantees this;
+    /// baking a sub-region that clips the solid makes outside values meaningless for the
+    /// clipped part). <see cref="Bounds"/> is the baked region.
+    /// </para>
+    /// </summary>
+    public Sdf Sampled(in Aabb region, double cellSize, bool lazy = false) =>
+        lazy ? new LazyGridSdf(this, region, cellSize) : GridSdf.Bake(this, region, cellSize);
 
     public static Sdf operator |(Sdf a, Sdf b) => a.Union(b);
     public static Sdf operator &(Sdf a, Sdf b) => a.Intersect(b);

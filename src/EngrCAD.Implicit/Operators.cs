@@ -37,26 +37,30 @@ internal static class BlendMath
     }
 }
 
+// Negative-blend policy (binary and n-ary alike): SmoothMin already degrades to the
+// exact hard min for k <= 0, so the bounds expansion clamps at 0 — a negative "blend"
+// must never shrink conservative bounds. Same degrade-gracefully policy as Sdf.Blend.
+
 internal sealed class SmoothUnionSdf(Sdf a, Sdf b, double k) : Sdf
 {
     public override double Evaluate(in Vector3d p) => BlendMath.SmoothMin(a.Evaluate(p), b.Evaluate(p), k);
 
     // The blend bulges outward by at most k/4 in the seam region.
-    public override Aabb Bounds => a.Bounds.Union(b.Bounds).Expanded(k);
+    public override Aabb Bounds => a.Bounds.Union(b.Bounds).Expanded(Math.Max(k, 0));
 }
 
 internal sealed class SmoothIntersectionSdf(Sdf a, Sdf b, double k) : Sdf
 {
     public override double Evaluate(in Vector3d p) => -BlendMath.SmoothMin(-a.Evaluate(p), -b.Evaluate(p), k);
 
-    public override Aabb Bounds => a.Bounds.Intersection(b.Bounds).Expanded(k);
+    public override Aabb Bounds => a.Bounds.Intersection(b.Bounds).Expanded(Math.Max(k, 0));
 }
 
 internal sealed class SmoothDifferenceSdf(Sdf a, Sdf b, double k) : Sdf
 {
     public override double Evaluate(in Vector3d p) => -BlendMath.SmoothMin(-a.Evaluate(p), b.Evaluate(p), k);
 
-    public override Aabb Bounds => a.Bounds.Expanded(k);
+    public override Aabb Bounds => a.Bounds.Expanded(Math.Max(k, 0));
 }
 
 internal sealed class OffsetSdf(Sdf source, double distance) : Sdf

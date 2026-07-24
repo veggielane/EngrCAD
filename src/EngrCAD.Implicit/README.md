@@ -14,6 +14,12 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 - **Operators**: union / intersection / difference (also as `a | b`, `a & b`, `a - b`),
   polynomial smooth blends (`SmoothUnion` etc. — lower-bound distances near the blend),
   `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`.
+- **Sampled grids** (`Sampled(cellSize)` / `Sampled(region, cellSize)`, g3's
+  `DenseGridTrilinearImplicit` + `ImplicitFieldSampler3d`): bake any `Sdf` onto a dense
+  uniform grid (rows fed through the batch `Evaluate` seam) and evaluate by trilinear
+  interpolation — the standard acceleration for expensive ASTs like `MeshSdf`. Pass
+  `lazy: true` (g3's `CachingGridImplicit3d`) to materialize 16³-sample blocks on first
+  touch instead of up front (thread-safe, deterministic first-publish-wins).
 - **N-ary operators** (`NaryOperators.cs`, g3 `ImplicitNaryUnion3d`/`ImplicitBlend3d`
   spirit): static `Sdf.Union(...)` / `Sdf.Intersection(...)` evaluate min/max over any
   number of children in one flat loop (each child evaluated once per query — no nested
@@ -32,5 +38,14 @@ to a mesh via `SurfaceNets.Polygonize`.
 
 - Distances from smooth/blend operators are correct in sign everywhere but exact in
   magnitude only away from blend regions — fine for Surface Nets meshing.
+- Smooth blends with `blend <= 0` degrade to the exact hard operator — field *and*
+  bounds (the expansion clamps at 0; a negative blend never shrinks conservative
+  bounds). Same policy binary, n-ary, and `Sdf.Blend`.
+- Sampled-grid values are approximate: exact at grid nodes, trilinear between (error
+  O(h²) where the field is smooth, O(h) across creases), so the sign is reliable only
+  where the cell size resolves the features — thin walls/gaps under a cell can vanish
+  or fuse. Outside the baked region the node returns boundary value + distance to the
+  region: continuous, and correct in sign whenever the solid lies inside the baked
+  region (the bounds-based `Sampled(cellSize)` overload guarantees this).
 - Future: SIMD batch evaluation; C# expression-tree → SDF compilation for the query
   layer.

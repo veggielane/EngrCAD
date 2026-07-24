@@ -133,7 +133,9 @@ internal sealed class NaryIntersectionSdf(Sdf[] children) : Sdf
 /// everywhere relative to the blended solid, which contains the exact union and
 /// coincides with it away from blend regions; magnitude is a lower bound near blends.
 /// Each fold can deepen the field by at most k/4, so the cumulative dip is bounded by
-/// (n - 1) * k/4 and <see cref="Bounds"/> expands by max(k, (n - 1) * k/4).
+/// (n - 1) * k/4 and <see cref="Bounds"/> expands by max(k, (n - 1) * k/4). For k &lt;= 0
+/// the fold degrades to the exact hard min and the expansion clamps at 0 (a negative
+/// blend never shrinks conservative bounds — same policy as the binary operators).
 /// </para>
 /// </summary>
 internal sealed class NarySmoothUnionSdf(Sdf[] children, double k) : Sdf
@@ -153,7 +155,7 @@ internal sealed class NarySmoothUnionSdf(Sdf[] children, double k) : Sdf
             var b = children[0].Bounds;
             for (int i = 1; i < children.Length; i++)
                 b = b.Union(children[i].Bounds);
-            return b.Expanded(Math.Max(k, 0.25 * (children.Length - 1) * k));
+            return b.Expanded(Math.Max(k, 0) * Math.Max(1, 0.25 * (children.Length - 1)));
         }
     }
 }

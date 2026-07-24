@@ -144,6 +144,35 @@ public class SdfTests
     }
 
     [Fact]
+    public void SmoothOperators_NegativeBlend_DegradesToHardOperator_WithoutShrinkingBounds()
+    {
+        var a = Sdf.Sphere(1);
+        var b = Sdf.Sphere(1).Translate((1.5, 0, 0));
+        const double k = -0.5;
+
+        // Policy (binary + n-ary): blend <= 0 degrades to the exact hard operator — the
+        // field already did, and the bounds expansion clamps at 0. Before the fix a
+        // negative blend silently *shrank* the conservative bounds by |k|.
+        Assert.Equal((a | b).Bounds, a.SmoothUnion(b, k).Bounds);
+        Assert.Equal((a & b).Bounds, a.SmoothIntersect(b, k).Bounds);
+        Assert.Equal((a - b).Bounds, a.SmoothSubtract(b, k).Bounds);
+        Assert.Equal(Sdf.Union(a, b).Bounds, Sdf.SmoothUnion([a, b], k).Bounds);
+
+        // Bounds stay conservative: every inside point of the degraded field is contained.
+        Sdf[] degraded = [a.SmoothUnion(b, k), a.SmoothIntersect(b, k), a.SmoothSubtract(b, k)];
+        Sdf[] hard = [a | b, a & b, a - b];
+        for (int i = 0; i < degraded.Length; i++)
+            for (int x = -4; x <= 6; x++)
+                for (int y = -4; y <= 4; y++)
+                {
+                    var p = new Vector3d(0.4 * x, 0.4 * y, 0.1);
+                    Assert.Equal(hard[i].Evaluate(p), degraded[i].Evaluate(p), Precision);
+                    if (degraded[i].Evaluate(p) < 0)
+                        Assert.True(degraded[i].Bounds.Contains(p));
+                }
+    }
+
+    [Fact]
     public void UnboundedFields_ReportInfiniteBounds()
     {
         Assert.False(Sdf.IsFinite(Sdf.HalfSpace(Vector3d.UnitZ, 0).Bounds));

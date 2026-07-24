@@ -1,0 +1,231 @@
+using EngrCAD.Core;
+using EngrCAD.Interop;
+using EngrCAD.Mesh;
+using Xunit;
+
+namespace EngrCAD.Implicit.Tests;
+
+public class GridSdfTests
+{
+    private const double Precision = 1e-12;
+
+    /// <summary>
+    /// Counting test double distinguishing scalar from batch evaluations, to verify the
+    /// bakers go through the batch Evaluate seam (and, for the lazy grid, how many
+    /// source samples were actually paid for).
+    /// </summary>
+    private sealed class BatchSpySdf(Sdf inner) : Sdf
+    {
+        public int ScalarCalls;
+        public int BatchCalls;
+        public int BatchPoints;
+
+        public override double Evaluate(in Vector3d point)
+        {
+            ScalarCalls++;
+            return inner.Evaluate(point);
+        }
+
+        public override void Evaluate(ReadOnlySpan<Vector3d> points, Span<double> distances)
+        {
+            BatchCalls++;
+            BatchPoints += points.Length;
+            inner.Evaluate(points, distances);
+        }
+
+        public override Aabb Bounds => inner.Bounds;
+    }
+
+    private static IEnumerable<Vector3d> ProbeGrid(Aabb box, int n)
+    {
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                for (int k = 0; k < n; k++)
+                    yield return new Vector3d(
+                        box.Min.X + box.Size.X * i / (n - 1),
+                        box.Min.Y + box.Size.Y * j / (n - 1),
+                        box.Min.Z + box.Size.Z * k / (n - 1));
+    }
+
+    // ---- fidelity on analytic primitives ----
+
+    [Fact]
+    public void Sampled_ReproducesTheSource_AtGridNodes()
+    {
+        var exact = Sdf.Sphere(1);
+        var region = new Aabb((-1.25, -1.25, -1.25), (1.25, 1.25, 1.25));
+        const double h = 0.25;
+        var baked = exact.Sampled(region, h);
+
+        for (int i = 0; i <= 10; i++)
+            for (int j = 0; j <= 10; j++)
+                for (int k = 0; k <= 10; k++)
+                {
+                    var node = region.Min + new Vector3d(i * h, j * h, k * h);
+                    Assert.Equal(exact.Evaluate(node), baked.Evaluate(node), Precision);
+                }
+    }
+
+    [Fact]
+    public void Sampled_Sphere_ErrorBoundedByCellSize_AndConvergesQuadratically()
+    {
+        var exact = Sdf.Sphere(1);
+        var region = new Aabb((-1.2, -1.2, -1.2), (1.2, 1.2, 1.2));
+
+        // Trilinear error is bounded by (1/8) h² Σ max|∂²f/∂xi²| over the cell. For the
+        // sphere SDF each second derivative is at most 1/|p|, and within the cell |p| can
+        // be h√3 closer than the probe, so with probes kept at |p| ≥ rMin the bound is
+        //   (3/8) h² / (rMin − h√3).
+        double MaxError(double h)
+        {
+            var baked = exact.Sampled(region, h);
+            const double rMin = 0.4;
+            double bound = 3.0 / 8.0 * h * h / (rMin - h * Math.Sqrt(3));
+            double worst = 0;
+            int probes = 0;
+            foreach (var p in ProbeGrid(new Aabb((-1.15, -1.15, -1.15), (1.15, 1.15, 1.15)), 17))
+            {
+                if (p.Length < rMin)
+                    continue;
+                double error = Math.Abs(baked.Evaluate(p) - exact.Evaluate(p));
+                Assert.True(error <= bound, $"error {error} exceeds trilinear bound {bound} at {p} (h = {h})");
+                worst = Math.Max(worst, error);
+                probes++;
+            }
+            Assert.True(probes > 4000); // the sweep actually exercised the field
+            return worst;
+        }
+
+        double coarse = MaxError(0.1);
+        double fine = MaxError(0.05);
+        Assert.True(fine <= 0.5 * coarse, // O(h²): halving h should roughly quarter the error
+            $"halving the cell size only reduced max error from {coarse} to {fine}");
+    }
+
+    [Fact]
+    public void Sampled_Box_IsExactWhereTheFieldIsPiecewiseLinear()
+    {
+        // The box SDF is linear throughout any cell that stays inside a single face
+        // region, so trilinear interpolation reproduces it exactly there.
+        var exact = Sdf.Box(2, 2, 2);
+        var baked = exact.Sampled(new Aabb((-1.5, -1.5, -1.5), (1.5, 1.5, 1.5)), 0.25);
+
+        foreach (var p in ProbeGrid(new Aabb((1.05, -0.6, -0.6), (1.45, 0.6, 0.6)), 6))
+            Assert.Equal(exact.Evaluate(p), baked.Evaluate(p), Precision);
+    }
+
+    // ---- outside-region contract ----
+
+    [Fact]
+    public void Sampled_OutsideBakedRegion_StaysPositiveAndAtLeastDistanceToRegion()
+    {
+        var baked = Sdf.Sphere(1).Sampled(0.1); // bounds + one-cell margin: solid contained
+        var region = baked.Bounds;
+
+        foreach (var p in new Vector3d[] { (2, 0, 0), (0, 3, 1), (-5, -5, -5), (0, 0, -1.5) })
+        {
+            Assert.False(region.Contains(p));
+            double d = baked.Evaluate(p);
+            Assert.True(d > 0, $"outside point {p} must read positive, got {d}");
+            // Boundary samples are ≥ 0 (solid inside the region), so the clamp+distance
+            // formula can never under-report the distance to the region itself.
+            Assert.True(d >= region.DistanceTo(p) - Precision,
+                $"outside value {d} at {p} under-reports region distance {region.DistanceTo(p)}");
+        }
+    }
+
+    [Fact]
+    public void Sampled_IsContinuousAcrossTheRegionBoundary()
+    {
+        var baked = Sdf.Sphere(1).Sampled(0.1);
+        var region = baked.Bounds;
+        const double eps = 1e-7;
+
+        var inside = new Vector3d(region.Max.X - eps, 0.3, -0.2);
+        var outside = new Vector3d(region.Max.X + eps, 0.3, -0.2);
+        Assert.True(Math.Abs(baked.Evaluate(inside) - baked.Evaluate(outside)) < 10 * eps);
+    }
+
+    // ---- baking an expensive AST (MeshSdf) ----
+
+    [Fact]
+    public void Sampled_MeshSdf_PolygonizedVolume_MatchesTheUnbakedOriginal()
+    {
+        var mesh = MeshPrimitives.UvSphere(1.0, segments: 32, rings: 16);
+        var meshSdf = new MeshSdf(mesh);
+        var baked = meshSdf.Sampled(0.05);
+
+        double unbakedVolume = SurfaceNets.Polygonize(meshSdf, resolution: 64).Volume();
+        double bakedVolume = SurfaceNets.Polygonize(baked, resolution: 64).Volume();
+
+        Assert.True(Math.Abs(bakedVolume - unbakedVolume) / unbakedVolume < 0.02,
+            $"baked volume {bakedVolume} vs unbaked {unbakedVolume}");
+        Assert.True(Math.Abs(bakedVolume - mesh.Volume()) / mesh.Volume() < 0.05,
+            $"baked volume {bakedVolume} vs source mesh {mesh.Volume()}");
+    }
+
+    // ---- baker mechanics ----
+
+    [Fact]
+    public void Sampled_BakesThroughTheBatchEvaluateSeam()
+    {
+        var spy = new BatchSpySdf(Sdf.Sphere(1));
+        var region = new Aabb((-1.25, -1.25, -1.25), (1.25, 1.25, 1.25));
+        spy.Sampled(region, 0.25); // 10 cells → 11 samples per axis
+
+        Assert.Equal(0, spy.ScalarCalls);
+        Assert.True(spy.BatchCalls > 0);
+        Assert.Equal(11 * 11 * 11, spy.BatchPoints);
+    }
+
+    [Fact]
+    public void Sampled_Validation()
+    {
+        var sphere = Sdf.Sphere(1);
+        var region = new Aabb((-2, -2, -2), (2, 2, 2));
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => sphere.Sampled(0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => sphere.Sampled(region, -0.1));
+        Assert.Throws<ArgumentException>(() => sphere.Sampled(Aabb.Empty, 0.1));
+        // Unbounded fields need an explicit region.
+        Assert.Throws<InvalidOperationException>(() => Sdf.HalfSpace(Vector3d.UnitZ, 0).Sampled(0.1));
+        _ = Sdf.Gyroid(1, 0.2).Sampled(region, 0.1); // explicit region works for them
+    }
+
+    // ---- lazy variant ----
+
+    [Fact]
+    public void SampledLazy_MatchesTheDenseBake_Everywhere()
+    {
+        var exact = Sdf.Sphere(1).SmoothUnion(Sdf.Box(1.2, 1.2, 1.2).Translate((0.9, 0, 0)), 0.3);
+        var region = new Aabb((-2, -2, -2), (2.6, 2, 2));
+        const double h = 0.11;
+        var dense = exact.Sampled(region, h);
+        var lazy = exact.Sampled(region, h, lazy: true);
+
+        Assert.Equal(dense.Bounds, lazy.Bounds);
+        foreach (var p in ProbeGrid(region.Expanded(0.5), 9)) // includes outside-region probes
+            Assert.Equal(dense.Evaluate(p), lazy.Evaluate(p), Precision);
+    }
+
+    [Fact]
+    public void SampledLazy_OnlyBakesTouchedBlocks_AndCachesThem()
+    {
+        var spy = new BatchSpySdf(Sdf.Sphere(1.8));
+        var region = new Aabb((-2, -2, -2), (2, 2, 2));
+        var lazy = spy.Sampled(region, 0.1, lazy: true); // 41 samples per axis, 3³ blocks
+
+        Assert.Equal(0, spy.ScalarCalls + spy.BatchPoints); // nothing paid up front
+
+        lazy.Evaluate((-1.9, -1.9, -1.9)); // one corner cell → one 16³ block
+        int denseTotal = 41 * 41 * 41;
+        Assert.True(spy.BatchPoints > 0);
+        Assert.True(spy.BatchPoints < denseTotal,
+            $"lazy bake evaluated {spy.BatchPoints} samples, no better than dense {denseTotal}");
+        Assert.Equal(0, spy.ScalarCalls); // blocks fill through the batch seam
+
+        int afterFirst = spy.BatchPoints;
+        lazy.Evaluate((-1.85, -1.95, -1.88)); // same block: fully cached
+        Assert.Equal(afterFirst, spy.BatchPoints);
+    }
+}
