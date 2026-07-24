@@ -59,6 +59,10 @@ internal sealed class SceneHost
         var section = new ToggleButton { Content = "Section", Padding = new Thickness(10, 4), FontSize = 12 };
         section.IsCheckedChanged += (_, _) => Viewport.SectionEnabled = section.IsChecked ?? false;
         toolbar.Children.Add(section);
+        toolbar.Children.Add(new Border { Width = 8 });
+        var capture = ToolButton("Capture", () => Viewport.SaveScreenshot());
+        ToolTip.SetTip(capture, "Save the current view as a PNG (path appears in the status bar)");
+        toolbar.Children.Add(capture);
 
         _tabStrip = new StackPanel
         {
@@ -189,6 +193,30 @@ internal sealed class SceneHost
                 VerticalAlignment = VerticalAlignment.Center,
             };
             check.IsCheckedChanged += (_, _) => Viewport.SetVisible(index, check.IsChecked ?? true);
+
+            // Display-mode cycler: a tiny per-row button, CAD-tree style. It writes
+            // through Part.DisplayMode, so the mode sticks across tab switches.
+            var mode = new Button
+            {
+                Content = ModeLabel(part.DisplayMode),
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(4, 2),
+                FontSize = 10,
+                Foreground = DimText,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTip.SetTip(mode, "Display mode - click to cycle: shaded / wireframe / translucent");
+            mode.Click += (_, _) =>
+            {
+                var next = (DisplayMode)(((int)part.DisplayMode + 1) % 3);
+                Viewport.SetDisplayMode(index, next);
+                mode.Content = ModeLabel(next);
+                if (Viewport.Selected == index)
+                    ShowProperties(part); // keep the Display row current
+            };
+            DockPanel.SetDock(mode, Dock.Right);
+
             var label = new Button
             {
                 Content = part.Name,
@@ -204,15 +232,22 @@ internal sealed class SceneHost
                 Viewport.Select(index == Viewport.Selected ? -1 : index);
                 OnViewportSelection(Viewport.Selected);
             };
-            _tree.Children.Add(new DockPanel { Children = { check, label } });
+            _tree.Children.Add(new DockPanel { Children = { check, mode, label } });
         }
     }
+
+    private static string ModeLabel(DisplayMode mode) => mode switch
+    {
+        DisplayMode.Wireframe => "wire",
+        DisplayMode.Translucent => "glass",
+        _ => "shade",
+    };
 
     private void OnViewportSelection(int index)
     {
         for (int i = 0; i < _tree.Children.Count; i++)
         {
-            if (_tree.Children[i] is DockPanel row && row.Children[1] is Button label)
+            if (_tree.Children[i] is DockPanel row && row.Children[2] is Button label)
                 label.FontWeight = i == index ? FontWeight.Bold : FontWeight.Normal;
         }
         var tab = _scene?.Tabs.FirstOrDefault(t => t.Name == _currentTab);
@@ -245,6 +280,7 @@ internal sealed class SceneHost
             Sdf => "implicit (SDF)",
             _ => part.Geometry.GetType().Name,
         });
+        AddProperty("Display", part.DisplayMode.ToString().ToLowerInvariant());
         AddProperty("Faces", mesh.FaceCount.ToString("N0"));
         AddProperty("Closed", mesh.IsClosed ? "yes" : "no");
         AddProperty("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)");

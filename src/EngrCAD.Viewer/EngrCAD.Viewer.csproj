@@ -11,6 +11,9 @@
     <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
   </ItemGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Viewer.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
     <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
     <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />

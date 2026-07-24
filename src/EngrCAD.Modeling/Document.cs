@@ -9,6 +9,19 @@ namespace EngrCAD.Modeling;
 /// <summary>RGB color in [0, 1] for display purposes (UI-framework free).</summary>
 public readonly record struct PartColor(float R, float G, float B);
 
+/// <summary>How a part is drawn in a viewer (display metadata, UI-framework free).</summary>
+public enum DisplayMode
+{
+    /// <summary>Lit solid fill with feature-edge overlay (the default).</summary>
+    Shaded,
+
+    /// <summary>Triangle edges only, no fill — see through to what is behind.</summary>
+    Wireframe,
+
+    /// <summary>See-through fill (alpha-blended) with feature edges, for revealing interiors.</summary>
+    Translucent,
+}
+
 /// <summary>A pleasant default palette; parts added without a color cycle through it.</summary>
 public static class Palette
 {
@@ -42,6 +55,10 @@ public sealed class Part
 
     /// <summary>Display color; when null, the tab assigns the next palette color on add.</summary>
     public PartColor? Color { get; set; }
+
+    /// <summary>How viewers draw this part (shaded, wireframe, or translucent).
+    /// Viewers may also change it interactively (per-part cycler in the model tree).</summary>
+    public DisplayMode DisplayMode { get; set; } = DisplayMode.Shaded;
 
     public Matrix4d Transform { get; set; } = Matrix4d.Identity;
 
