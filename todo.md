@@ -358,6 +358,17 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   for foreign files (separate item above); `StepWriter` should export
   `TransformedCurve(NurbsCurve)` exactly by transforming control points (currently
   sampled to degree-1 polylines — blocks exact round-trip of NURBS-profile extrusions).
+  Code-quality flags: `RecoverRevolvedSurface`'s rim-circle rejection floor is an
+  absolute 1e-6 — on large geometry an off-axis rim silently leaves the generator
+  untrimmed (scale by axial extent or emit a diagnostic on near-miss); bisections run
+  a fixed 100 iterations (exact but wasteful, import-time only).
+- [ ] **Trimmed-face tessellation follow-ups** (code-quality review) — direct
+  pathological ear-clipper tests (comb/spiral polygons, hole bridge crossing another
+  hole, vertex exactly on a candidate diagonal, multi-level collinear iso-parameter
+  runs, non-monotone u chains in band zip; needs `InternalsVisibleTo` for
+  Interop.Tests); `SegmentsTouch` uses exact-zero cross products so nearly-collinear
+  bridge/edge contact is missed (failure is loud — grid fallback / NotSupported —
+  never a silent crack, but worth a tolerance).
 - [ ] Data exchange: IGES, glTF, native BREP serialization format — STL export ✅ done
   (`StlWriter`, binary, `--export .stl`)
 - [ ] Hidden-line removal (HLR) projections for 2D drawings
