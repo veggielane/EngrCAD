@@ -38,6 +38,29 @@ Dark-themed layout around one shared GL viewport:
   world axes are scene furniture and stay unclipped. Custom hosts drive it via
   `ViewportControl.SectionEnabled` / `SectionHeight`. Picking ignores the section
   plane in v1 — a click can select a part through the cut-away half.
+- **View cube** (top-right of the viewport): the standard CAD orientation widget — a
+  small labeled cube (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM) that always mirrors the
+  orbit camera's rotation, so it doubles as a live orientation indicator. Clicking a
+  **face** animates the camera to that orthogonal view, an **edge** to the 45° view
+  between its two faces, and a **corner** to the iso view of its three faces (the
+  front-right-top corner is exactly the toolbar's Iso); the transition is a ~250 ms
+  smoothstep-eased move along the shortest yaw path with distance and target kept.
+  Dragging that starts on the cube orbits the main camera like anywhere else, and
+  clicks inside the cube's square region never pick parts through the widget.
+  Implementation (all in `ViewCube.cs`): drawn after the scene into its own
+  ~104-DIP sub-viewport with the depth buffer cleared (always on top), reusing the
+  existing flat-color line program — face fills are 6 flat-shaded tones (top
+  lightest), edges and labels are lines, and the labels are a tiny hardcoded
+  **stroke font** (polyline letters — no text renderer, no new shaders). The
+  mini-projection is **always orthographic** regardless of the main
+  perspective/ortho toggle (standard for orientation widgets), which also makes the
+  screen-space hit test an exact ortho ray-vs-unit-cube slab test with band
+  classification (|face coordinate| > 0.55 joins the adjacent face → edge/corner).
+  The animation is driven from the render loop (`RequestNextFrameRendering` while
+  in flight — no timers). Custom hosts and tests can invoke the pick path directly
+  via `ViewportControl.ViewCubeClick(point)` (synthetic mouse input does not reach
+  Avalonia). The cube is interactive window chrome: **headless offscreen renders
+  exclude it by design** (docs images and pixel tests see only the model).
 - **Model tree** (left): the current tab's loose parts and **assembly hierarchies** —
   assembly/sub-assembly header rows with their occurrences indented one level per
   depth (always expanded in v1; the tree walks the tab exactly like

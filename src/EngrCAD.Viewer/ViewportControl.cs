@@ -46,6 +46,11 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly object _sceneLock = new();
     private (IReadOnlyList<PartInstance> Instances, bool Frame)? _pending;
 
+    // The view-cube orientation widget (top-right overlay); all cube logic lives in
+    // ViewCube.cs — this control only steps its animation, draws it after the scene,
+    // and routes clicks inside its region to it (see the ViewCube hooks below).
+    private readonly ViewCube _viewCube = new();
+
     private double _yaw = 0.7;
     private double _pitch = 0.45;
     private double _distance = 15.0;
@@ -283,6 +288,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _gl.DeleteVertexArray(_axesVao);
             _gridVbo = 0;
         }
+        _viewCube.DeleteResources(_gl);
         _gl.DeleteVertexArray(_bgVao);
         _gl.DeleteProgram(_program);
         _gl.DeleteProgram(_lineProgram);
@@ -308,6 +314,16 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (update is { } u)
             ApplyInstances(gl, u.Instances, u.Frame);
+
+        // View-cube hook 1: a click on the cube armed a pose animation — advance the
+        // orbit camera toward it and keep frames coming until it lands.
+        if (_viewCube.Step(out double animatedYaw, out double animatedPitch))
+        {
+            _yaw = animatedYaw;
+            _pitch = animatedPitch;
+            if (_viewCube.Animating)
+                RequestNextFrameRendering();
+        }
 
         double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
         uint width = (uint)Math.Max(1, Bounds.Width * scaling);
@@ -470,6 +486,12 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         gl.BindVertexArray(0);
 
+        // View-cube hook 2: the orientation widget draws last, over everything, into
+        // its own top-right sub-viewport (depth cleared, ortho mini-projection); it
+        // reuses the line program, so it precedes the screenshot readback and appears
+        // in saved captures like the rest of the window content.
+        DrawViewCube(gl, width, height, scaling);
+
         // A requested screenshot reads back the finished frame while the context is
         // current (GL calls are only legal here), then encodes off-thread.
         if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } screenshotPath)
@@ -477,6 +499,35 @@ public sealed class ViewportControl : OpenGlControlBase
     }
 
     private DisplayMode Mode(int index) => _instances[index].Part.DisplayMode;
+
+    // ---- view cube hooks (all cube logic lives in ViewCube.cs) ----
+
+    /// <summary>Draws the orientation widget at the end of the render pass.</summary>
+    private void DrawViewCube(GL gl, uint width, uint height, double scaling) =>
+        _viewCube.Draw(gl, width, height, scaling, _yaw, _pitch, new LineProgramHandles(
+            _lineProgram, _uLineModel, _uLineView, _uLineProj, _uLineColor, _uLineSectionEnabled));
+
+    /// <summary>
+    /// Routes a click at a control-space position to the view cube. Returns true when
+    /// the position lies inside the cube's top-right region (the region claims the
+    /// click, so parts behind the widget are never picked through it); a hit on a cube
+    /// face, edge, or corner animates the camera to that standard view (~250 ms eased,
+    /// shortest yaw path, distance and target kept). Called by the window input
+    /// handler before scene picking; public so tests and custom hosts can invoke the
+    /// pick path directly (synthetic mouse input does not reach Avalonia).
+    /// </summary>
+    public bool ViewCubeClick(Point position)
+    {
+        if (!_viewCube.HandleClick(position.X, position.Y, Bounds.Width, Bounds.Height,
+                _yaw, _pitch, out string? view))
+            return false;
+        if (view is not null)
+        {
+            Report($"view: {view}");
+            RequestNextFrameRendering();
+        }
+        return true;
+    }
 
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
@@ -881,7 +932,13 @@ public sealed class ViewportControl : OpenGlControlBase
         var pos = e.GetPosition(this);
         var moved = pos - _pressPointer;
         if (moved.X * moved.X + moved.Y * moved.Y < 16)
-            Pick(pos);
+        {
+            // View-cube pre-check: clicks inside the cube region go to the widget
+            // (view change), never through it to scene picking. Drags are untouched —
+            // dragging on the cube orbits via the normal orbit handling above.
+            if (!ViewCubeClick(pos))
+                Pick(pos);
+        }
         else
             Report("release (drag end)");
     }
