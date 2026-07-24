@@ -241,7 +241,10 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         var mesh = part.GetMesh();
         var render = RenderMesh.CreateFlat(mesh);
-        var featureEdges = MeshFeatureEdges.Extract(mesh);
+        // B-Rep-backed parts get their edge overlay from the ACTUAL B-Rep edges
+        // (exact circles stay smooth at coarse tessellation); others fall back to
+        // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
+        var featureEdges = part.GetFeatureEdges();
         var wireEdges = WireframeEdges.Extract(mesh);
         var (vao, vbo, ebo) = RenderGeometry.UploadMesh(gl, render);
         var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));

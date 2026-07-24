@@ -283,6 +283,16 @@ via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 tessellate on the render thread. Part names are unique per tab. `Part` is
 deliberately a leaf — tabs and assemblies are the containers.
 
+`Part.GetFeatureEdges(quality)` is the display **edge overlay**, cached the same
+way (and primed by `PreMesh`): parts with B-Rep geometry — a `BrepSolid`, or a
+`Shape` with a B-Rep lowering — sample their ACTUAL B-Rep edges at display
+resolution (`BrepFeatureEdges` in Interop, at least 96 segments per circle
+regardless of mesh quality), so exact circles stay smooth at any tessellation;
+everything else (SDF/mesh parts, failed lowerings) falls back to mesh-dihedral
+extraction. Note the cost: a Shape part's B-Rep is lowered a second time for the
+edges (the mesh route does not retain its intermediate solid) — that is why
+`PreMesh` primes the cache off the render thread.
+
 ### Assemblies (v1: occurrences)
 
 An `Assembly` is a named list of `Occurrence`s — a shared `Part` **or** a nested

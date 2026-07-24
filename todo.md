@@ -304,9 +304,15 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   click-to-pose with eased animation, hover highlight, drag-orbits) — rotate-snap
   dragging like commercial cubes; SceneHost toolbar buttons could delegate to
   `ViewCubeMath.PoseFor` for one pose source.
+- [ ] B-Rep edge-silhouette follow-ups (`Part.GetFeatureEdges`/`BrepFeatureEdges` ✅
+  landed — B-Rep-backed parts overlay their exact edges at display resolution) —
+  a Shape-level B-Rep lowering cache: `PreMesh` currently lowers a Shape part's
+  B-Rep twice (once inside `ToMesh`, once for the edge overlay) because the mesh
+  route does not retain its intermediate solid; a `Part`-cached solid (or Shape
+  lowering memoization) would also serve STEP export. Also: silhouette-adaptive
+  edge sampling (a fixed 96/circle undersamples very large rims).
 - [ ] Ideas: measure tool (→ interactive dimension creation, see 3D annotations),
-  ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
-  mesh dihedrals (exact circles stay smooth at coarse tessellation).
+  ambient occlusion or matcap shading.
 
 ## Blazor web viewer
 

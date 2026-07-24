@@ -84,10 +84,17 @@ public class OffscreenIsolineTests
         var shape = ShapeParts();
         var mesh = MeshParts();
 
-        // Unsectioned, the two scenes are pixel-identical (same mesh, same color) —
-        // the isoline machinery must not touch an unsectioned render.
-        Assert.Equal(Render(mesh), Render(shape));
+        // Unsectioned, the two scenes render the same box with the same 12 edge
+        // segments — the isoline machinery must not touch an unsectioned render.
+        // Not byte-identical: the shape part's overlay comes from the B-Rep edges,
+        // the mesh part's from mesh dihedrals, and although the segments coincide
+        // geometrically their direction/order differs, which GL line rasterization
+        // (diamond-exit endpoints) can shift by a pixel. So: no gold anywhere, and
+        // only a rasterization-noise level of differing pixels.
         Assert.Equal(0, GoldPixels(Render(shape)));
+        Assert.Equal(0, GoldPixels(Render(mesh)));
+        Assert.True(Different(Render(shape), Render(mesh)) < 50,
+            "unsectioned twins should differ only by line-endpoint rasterization noise");
 
         // Sectioned, only the SDF-routed part gains the overlay: gold zero-contour
         // pixels appear, and the images now differ exactly by the isolines.

@@ -269,7 +269,10 @@ public static class OffscreenRenderer
                 int edgeVertexCount = 0;
                 if (mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent)
                 {
-                    var featureEdges = MeshFeatureEdges.Extract(mesh);
+                    // B-Rep-backed parts overlay their ACTUAL B-Rep edges (smooth
+                    // circles at any tessellation); others fall back to mesh
+                    // dihedrals — same rule as the window (Part.GetFeatureEdges).
+                    var featureEdges = part.GetFeatureEdges();
                     if (featureEdges.Count > 0)
                     {
                         (edgeVao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));

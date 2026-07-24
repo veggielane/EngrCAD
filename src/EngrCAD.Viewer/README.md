@@ -165,8 +165,13 @@ Dark-themed layout around one shared GL viewport:
   and world position of the selected instance.
 - **Viewport dressing**: vertical-gradient background, adaptive ground grid on z = 0
   (1-2-5 spacing from the scene size) with RGB world axes, and a **feature-edge
-  overlay** (`MeshFeatureEdges`: boundary + sharp-dihedral edges, drawn over
-  polygon-offset fills) — the classic shaded-with-edges CAD look.
+  overlay** drawn over polygon-offset fills — the classic shaded-with-edges CAD
+  look. Edge geometry comes from `Part.GetFeatureEdges()` (cached, primed by
+  `Scene.PreMesh` off the render thread): B-Rep-backed parts use their **actual
+  B-Rep edges** sampled at display resolution (`BrepFeatureEdges` in Interop — a
+  bore rim stays a smooth circle however coarse the mesh; smooth seams like
+  wrap-split junctions are classified by exact surface normals and omitted), other
+  parts fall back to mesh dihedrals (`MeshFeatureEdges`).
 - **Status bar** (bottom): last input on the left, control hints on the right.
 
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
