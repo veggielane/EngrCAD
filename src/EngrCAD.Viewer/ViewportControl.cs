@@ -45,6 +45,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private double _pitch = 0.45;
     private double _distance = 15.0;
     private Vector3d _target = (0, 1.6, 0.2);
+    private Aabb _sceneBounds = Aabb.Empty;   // all parts' world bounds, for frustum/zoom scaling
     private Point _lastPointer;
     private Point _pressPointer;
     private int _selected = -1;
@@ -58,6 +59,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private sealed record PickData(RenderMesh Mesh, EngrCAD.Core.Spatial.Bvh Bvh);
 
     private readonly List<PickData> _pickData = [];
+
+    // Reusable scratch for the translucent back-to-front sort (no per-frame allocation).
+    private int[] _translucentOrder = [];
+    private double[] _translucentDepth = [];
 
     /// <summary>
     /// Replaces the displayed parts (one tab's worth). Thread-safe: geometry is
@@ -88,7 +93,7 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             _yaw = value.Yaw;
             _pitch = Math.Clamp(value.Pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-            _distance = Math.Clamp(value.Distance, 0.5, 120.0);
+            _distance = Math.Clamp(value.Distance, 0.5, CameraMath.MaxOrbitDistance(_sceneBounds));
             _target = value.Target;
             lock (_sceneLock)
             {
@@ -178,12 +183,12 @@ public sealed class ViewportControl : OpenGlControlBase
             }
 
             RebuildGrid(gl, bounds);
+            _sceneBounds = bounds;
 
             if (frame && !bounds.IsEmpty)
             {
                 _target = bounds.Center;
-                double diagonal = bounds.Size.Length;
-                _distance = Math.Clamp(diagonal * 1.25 + 1, 2, 110);
+                _distance = CameraMath.FrameDistance(bounds);
             }
         }
     }
@@ -199,47 +204,10 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.DeleteVertexArray(_axesVao);
         }
 
-        double diagonal = bounds.IsEmpty ? 10 : bounds.Size.Length;
-        double spacing = NiceStep(diagonal / 10);
-        float extent = (float)(spacing * 12);
-
-        var lines = new List<float>();
-        for (int i = -12; i <= 12; i++)
-        {
-            float p = (float)(i * spacing);
-            lines.AddRange([p, -extent, 0, p, extent, 0]);   // parallel to Y
-            lines.AddRange([-extent, p, 0, extent, p, 0]);   // parallel to X
-        }
-        _gridCount = lines.Count / 3;
-        (_gridVao, _gridVbo) = UploadLines(gl, [.. lines]);
-
-        float a = extent * 0.6f;
-        (_axesVao, _axesVbo) = UploadLines(gl,
-        [
-            0, 0, 0, a, 0, 0,   // +X
-            0, 0, 0, 0, a, 0,   // +Y
-            0, 0, 0, 0, 0, a,   // +Z
-        ]);
-    }
-
-    private static double NiceStep(double raw)
-    {
-        double magnitude = Math.Pow(10, Math.Floor(Math.Log10(Math.Max(raw, 1e-6))));
-        double residual = raw / magnitude;
-        return magnitude * (residual < 1.5 ? 1 : residual < 3.5 ? 2 : residual < 7.5 ? 5 : 10);
-    }
-
-    private static unsafe (uint Vao, uint Vbo) UploadLines(GL gl, float[] vertices)
-    {
-        uint vao = gl.GenVertexArray();
-        gl.BindVertexArray(vao);
-        uint vbo = gl.GenBuffer();
-        gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
-        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, vertices, BufferUsageARB.StaticDraw);
-        gl.EnableVertexAttribArray(0);
-        gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
-        gl.BindVertexArray(0);
-        return (vao, vbo);
+        var (gridVertices, axesVertices) = RenderGeometry.BuildGridAndAxes(bounds);
+        _gridCount = gridVertices.Length / 3;
+        (_gridVao, _gridVbo) = RenderGeometry.UploadLines(gl, gridVertices);
+        (_axesVao, _axesVbo) = RenderGeometry.UploadLines(gl, axesVertices);
     }
 
     private static Vector3d PickVertex(RenderMesh mesh, uint index) => new(
@@ -311,22 +279,19 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.DrawArrays(PrimitiveType.Triangles, 0, 3);
         gl.Enable(EnableCap.DepthTest);
 
-        var eye = _target + new Vector3d(
-            _distance * Math.Cos(_pitch) * Math.Cos(_yaw),
-            _distance * Math.Cos(_pitch) * Math.Sin(_yaw),
-            _distance * Math.Sin(_pitch));
-        var view = LookAt(eye, _target, Vector3d.UnitZ);
+        var eye = CameraMath.Eye(_yaw, _pitch, _distance, _target);
+        var view = CameraMath.LookAt(eye, _target, Vector3d.UnitZ);
         var proj = ProjectionMatrix((double)width / height);
 
         Span<float> matrix = stackalloc float[16];
 
         // Ground grid + world axes.
         gl.UseProgram(_lineProgram);
-        WriteColumnMajor(view, matrix);
+        CameraMath.WriteColumnMajor(view, matrix);
         gl.UniformMatrix4(_uLineView, 1, false, matrix);
-        WriteColumnMajor(proj, matrix);
+        CameraMath.WriteColumnMajor(proj, matrix);
         gl.UniformMatrix4(_uLineProj, 1, false, matrix);
-        WriteColumnMajor(Matrix4d.Identity, matrix);
+        CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(_uLineModel, 1, false, matrix);
         gl.Uniform1(_uLineSectionEnabled, 0f);   // grid/axes are scene furniture — never clipped
         if (_gridVbo != 0)
@@ -346,9 +311,9 @@ public sealed class ViewportControl : OpenGlControlBase
 
         // Shaded fills, pushed back slightly so the edge overlay wins the depth test.
         gl.UseProgram(_program);
-        WriteColumnMajor(view, matrix);
+        CameraMath.WriteColumnMajor(view, matrix);
         gl.UniformMatrix4(_uView, 1, false, matrix);
-        WriteColumnMajor(proj, matrix);
+        CameraMath.WriteColumnMajor(proj, matrix);
         gl.UniformMatrix4(_uProj, 1, false, matrix);
         var lightDir = new Vector3d(-0.5, -0.7, -0.9).Normalized();
         gl.Uniform3(_uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
@@ -385,7 +350,7 @@ public sealed class ViewportControl : OpenGlControlBase
             switch (Mode(i))
             {
                 case DisplayMode.Wireframe when m.WireVertexCount > 0:
-                    WriteColumnMajor(m.Model, matrix);
+                    CameraMath.WriteColumnMajor(m.Model, matrix);
                     gl.UniformMatrix4(_uLineModel, 1, false, matrix);
                     if (i == _selected)
                         gl.Uniform3(_uLineColor, 1.0f, 0.85f, 0.35f);
@@ -403,35 +368,59 @@ public sealed class ViewportControl : OpenGlControlBase
         // Translucent pass, after everything opaque: blended fills back-to-front by
         // part center, with depth writes off so translucent parts do not occlude each
         // other; depth *testing* stays on so opaque geometry in front still wins.
-        var translucent = new List<int>();
+        // Order/depth scratch buffers are reused frame to frame (render paths must not
+        // allocate per frame); the sort is an insertion sort over the depth keys, so no
+        // comparer delegate is created either.
+        if (_translucentOrder.Length < _meshes.Count)
+        {
+            _translucentOrder = new int[_meshes.Count];
+            _translucentDepth = new double[_meshes.Count];
+        }
+        int translucentCount = 0;
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (_visible[i] && Mode(i) == DisplayMode.Translucent)
-                translucent.Add(i);
+            {
+                _translucentOrder[translucentCount] = i;
+                _translucentDepth[translucentCount] = (_meshes[i].WorldCenter - eye).LengthSquared;
+                translucentCount++;
+            }
         }
-        if (translucent.Count > 0)
+        if (translucentCount > 0)
         {
-            translucent.Sort((a, b) =>
-                (_meshes[b].WorldCenter - eye).LengthSquared.CompareTo(
-                    (_meshes[a].WorldCenter - eye).LengthSquared));
+            // Farthest first (descending depth): back-to-front blending.
+            for (int k = 1; k < translucentCount; k++)
+            {
+                int index = _translucentOrder[k];
+                double depth = _translucentDepth[k];
+                int j = k - 1;
+                while (j >= 0 && _translucentDepth[j] < depth)
+                {
+                    _translucentOrder[j + 1] = _translucentOrder[j];
+                    _translucentDepth[j + 1] = _translucentDepth[j];
+                    j--;
+                }
+                _translucentOrder[j + 1] = index;
+                _translucentDepth[j + 1] = depth;
+            }
 
             gl.UseProgram(_program);
             gl.Uniform1(_uAlpha, 0.4f);
             gl.Enable(EnableCap.Blend);
             gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             gl.DepthMask(false);
-            foreach (int i in translucent)
-                DrawFill(gl, i, matrix);
+            for (int k = 0; k < translucentCount; k++)
+                DrawFill(gl, _translucentOrder[k], matrix);
             gl.DepthMask(true);
             gl.Disable(EnableCap.Blend);
 
             // Their feature edges draw opaque on top (the fills wrote no depth), which
             // keeps the part's silhouette readable through the glass.
             gl.UseProgram(_lineProgram);
-            foreach (int i in translucent)
+            for (int k = 0; k < translucentCount; k++)
             {
-                if (_meshes[i].EdgeVertexCount > 0)
-                    DrawFeatureEdges(gl, i, matrix);
+                if (_meshes[_translucentOrder[k]].EdgeVertexCount > 0)
+                    DrawFeatureEdges(gl, _translucentOrder[k], matrix);
             }
         }
         gl.BindVertexArray(0);
@@ -447,7 +436,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
         var m = _meshes[index];
-        WriteColumnMajor(m.Model, matrix);
+        CameraMath.WriteColumnMajor(m.Model, matrix);
         gl.UniformMatrix4(_uModel, 1, false, matrix);
         gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
         gl.Uniform1(_uHighlight, index == _selected ? 1f : 0f);
@@ -458,7 +447,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private void DrawFeatureEdges(GL gl, int index, Span<float> matrix)
     {
         var m = _meshes[index];
-        WriteColumnMajor(m.Model, matrix);
+        CameraMath.WriteColumnMajor(m.Model, matrix);
         gl.UniformMatrix4(_uLineModel, 1, false, matrix);
         if (index == _selected)
             gl.Uniform3(_uLineColor, 1.0f, 0.85f, 0.35f);
@@ -499,12 +488,9 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         double width = Math.Max(1, Bounds.Width);
         double height = Math.Max(1, Bounds.Height);
-        var eye = _target + new Vector3d(
-            _distance * Math.Cos(_pitch) * Math.Cos(_yaw),
-            _distance * Math.Cos(_pitch) * Math.Sin(_yaw),
-            _distance * Math.Sin(_pitch));
+        var eye = CameraMath.Eye(_yaw, _pitch, _distance, _target);
         var viewProjection = ProjectionMatrix(width / height)
-                           * LookAt(eye, _target, Vector3d.UnitZ);
+                           * CameraMath.LookAt(eye, _target, Vector3d.UnitZ);
         if (!viewProjection.TryInvert(out var unproject))
             return;
 
@@ -662,7 +648,7 @@ public sealed class ViewportControl : OpenGlControlBase
         if (!bounds.IsEmpty)
         {
             _target = bounds.Center;
-            _distance = Math.Clamp(bounds.Size.Length * 1.25 + 1, 2, 110);
+            _distance = CameraMath.FrameDistance(bounds);
         }
         RequestNextFrameRendering();
     }
@@ -748,9 +734,15 @@ public sealed class ViewportControl : OpenGlControlBase
         return bounds;
     }
 
-    private Matrix4d ProjectionMatrix(double aspect) => _orthographic
-        ? OrthographicMatrix(_distance * Math.Tan(Math.PI / 8), aspect, 0.1, 200.0)
-        : Perspective(Math.PI / 4, aspect, 0.1, 200.0);
+    private Matrix4d ProjectionMatrix(double aspect)
+    {
+        // Near/far scale with the camera and scene (shared with the offscreen pass),
+        // so large scenes neither clip at a fixed far plane nor need a distance clamp.
+        var (near, far) = CameraMath.FrustumPlanes(_distance, _sceneBounds);
+        return _orthographic
+            ? CameraMath.Orthographic(_distance * Math.Tan(Math.PI / 8), aspect, near, far)
+            : CameraMath.Perspective(Math.PI / 4, aspect, near, far);
+    }
 
     /// <summary>Möller–Trumbore; t is in units of the (unnormalized) ray direction.</summary>
     private static bool RayTriangle(in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
@@ -775,236 +767,36 @@ public sealed class ViewportControl : OpenGlControlBase
         return t > 1e-9;
     }
 
-    private static float[] SegmentVertices(List<(Vector3d A, Vector3d B)> segments)
-    {
-        var vertices = new float[segments.Count * 6];
-        for (int i = 0; i < segments.Count; i++)
-        {
-            var (a, b) = segments[i];
-            vertices[i * 6 + 0] = (float)a.X;
-            vertices[i * 6 + 1] = (float)a.Y;
-            vertices[i * 6 + 2] = (float)a.Z;
-            vertices[i * 6 + 3] = (float)b.X;
-            vertices[i * 6 + 4] = (float)b.Y;
-            vertices[i * 6 + 5] = (float)b.Z;
-        }
-        return vertices;
-    }
-
-    private unsafe GpuMesh Upload(
+    private GpuMesh Upload(
         GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color,
         List<(Vector3d A, Vector3d B)> featureEdges,
         List<(Vector3d A, Vector3d B)> wireEdges,
         in Vector3d worldCenter)
     {
-        var (edgeVao, edgeVbo) = UploadLines(gl, SegmentVertices(featureEdges));
-        var (wireVao, wireVbo) = UploadLines(gl, SegmentVertices(wireEdges));
-        // Interleave position + normal.
-        var interleaved = new float[mesh.VertexCount * 6];
-        for (int v = 0; v < mesh.VertexCount; v++)
-        {
-            interleaved[v * 6 + 0] = mesh.Positions[v * 3 + 0];
-            interleaved[v * 6 + 1] = mesh.Positions[v * 3 + 1];
-            interleaved[v * 6 + 2] = mesh.Positions[v * 3 + 2];
-            interleaved[v * 6 + 3] = mesh.Normals[v * 3 + 0];
-            interleaved[v * 6 + 4] = mesh.Normals[v * 3 + 1];
-            interleaved[v * 6 + 5] = mesh.Normals[v * 3 + 2];
-        }
-
-        uint vao = gl.GenVertexArray();
-        gl.BindVertexArray(vao);
-
-        uint vbo = gl.GenBuffer();
-        gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
-        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, interleaved, BufferUsageARB.StaticDraw);
-
-        uint ebo = gl.GenBuffer();
-        gl.BindBuffer(BufferTargetARB.ElementArrayBuffer, ebo);
-        gl.BufferData<uint>(BufferTargetARB.ElementArrayBuffer, mesh.Indices, BufferUsageARB.StaticDraw);
-
-        gl.EnableVertexAttribArray(0);
-        gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
-        gl.EnableVertexAttribArray(1);
-        gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
-
-        gl.BindVertexArray(0);
+        var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
+        var (wireVao, wireVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
+        var (vao, vbo, ebo) = RenderGeometry.UploadMesh(gl, mesh);
         return new GpuMesh(vao, vbo, ebo, mesh.Indices.Length, model, color, edgeVao, edgeVbo, featureEdges.Count * 2,
             wireVao, wireVbo, wireEdges.Count * 2, worldCenter);
     }
 
-    private uint CompileProgram(GL gl)
-    {
-        bool es = GlVersion.Type == GlProfileType.OpenGLES;
-        string header = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
+    // Shader sources live in ViewerShaders (RenderCore.cs), shared verbatim with the
+    // headless OffscreenRenderer so the two passes cannot drift; only the version
+    // header differs (desktop GL 3.3 vs GLES3 via ANGLE, chosen at runtime here).
 
-        string vertexSource = header + """
-            in vec3 aPos;
-            in vec3 aNormal;
-            uniform mat4 uModel;
-            uniform mat4 uView;
-            uniform mat4 uProj;
-            out vec3 vNormal;
-            out vec3 vWorldPos;
-            void main()
-            {
-                vec4 world = uModel * vec4(aPos, 1.0);
-                vWorldPos = world.xyz;
-                vNormal = mat3(uModel) * aNormal;
-                gl_Position = uProj * uView * world;
-            }
-            """;
+    private string ShaderHeader => ViewerShaders.Header(GlVersion.Type == GlProfileType.OpenGLES);
 
-        string fragmentSource = header + """
-            in vec3 vNormal;
-            in vec3 vWorldPos;
-            uniform vec3 uColor;
-            uniform vec3 uLightDir;
-            uniform vec3 uEyePos;
-            uniform float uHighlight;
-            uniform float uSectionEnabled;
-            uniform float uSectionZ;
-            uniform float uAlpha;
-            out vec4 fragColor;
-            void main()
-            {
-                if (uSectionEnabled > 0.5)
-                {
-                    if (vWorldPos.z > uSectionZ)
-                        discard;
-                    if (!gl_FrontFacing)
-                    {
-                        // Cut cue: interiors exposed by the section plane show their
-                        // backfaces as a flat, darker warm tint (no lighting), the
-                        // standard CAD hint that you are looking at cut material.
-                        // NOTE: shader comments must stay pure ASCII - ANGLE's GLES
-                        // translator rejects the whole shader on non-ASCII bytes.
-                        vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
-                        fragColor = vec4(mix(cut, vec3(1.0, 0.85, 0.35), uHighlight * 0.4), uAlpha);
-                        return;
-                    }
-                }
-                vec3 n = normalize(vNormal);
-                float diffuse = max(dot(n, -uLightDir), 0.0);
-                vec3 v = normalize(uEyePos - vWorldPos);
-                vec3 h = normalize(v - uLightDir);
-                float specular = pow(max(dot(n, h), 0.0), 48.0) * 0.35;
-                vec3 base = mix(uColor, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
-                vec3 c = base * (0.22 + 0.78 * diffuse) + vec3(specular);
-                fragColor = vec4(c, uAlpha);
-            }
-            """;
+    private uint CompileProgram(GL gl) => ViewerShaders.LinkProgram(
+        gl, ShaderHeader + ViewerShaders.MeshVertex, ShaderHeader + ViewerShaders.MeshFragment,
+        bindAttributes: true);
 
-        uint vs = CompileShader(gl, ShaderType.VertexShader, vertexSource);
-        uint fs = CompileShader(gl, ShaderType.FragmentShader, fragmentSource);
-        uint program = gl.CreateProgram();
-        gl.AttachShader(program, vs);
-        gl.AttachShader(program, fs);
-        gl.BindAttribLocation(program, 0, "aPos");
-        gl.BindAttribLocation(program, 1, "aNormal");
-        gl.LinkProgram(program);
-        gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int linked);
-        if (linked == 0)
-            throw new InvalidOperationException($"Shader link failed: {gl.GetProgramInfoLog(program)}");
-        gl.DetachShader(program, vs);
-        gl.DetachShader(program, fs);
-        gl.DeleteShader(vs);
-        gl.DeleteShader(fs);
-        return program;
-    }
+    private uint CompileLineProgram(GL gl) => ViewerShaders.LinkProgram(
+        gl, ShaderHeader + ViewerShaders.LineVertex, ShaderHeader + ViewerShaders.LineFragment,
+        bindAttributes: true);
 
-    private uint CompileLineProgram(GL gl)
-    {
-        bool es = GlVersion.Type == GlProfileType.OpenGLES;
-        string header = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
-
-        string vertexSource = header + """
-            in vec3 aPos;
-            uniform mat4 uModel;
-            uniform mat4 uView;
-            uniform mat4 uProj;
-            out vec3 vWorldPos;
-            void main()
-            {
-                vec4 world = uModel * vec4(aPos, 1.0);
-                vWorldPos = world.xyz;
-                gl_Position = uProj * uView * world;
-            }
-            """;
-        string fragmentSource = header + """
-            in vec3 vWorldPos;
-            uniform vec3 uColor;
-            uniform float uSectionEnabled;
-            uniform float uSectionZ;
-            out vec4 fragColor;
-            void main()
-            {
-                if (uSectionEnabled > 0.5 && vWorldPos.z > uSectionZ)
-                    discard;
-                fragColor = vec4(uColor, 1.0);
-            }
-            """;
-        return LinkProgram(gl, vertexSource, fragmentSource, bindAttributes: true);
-    }
-
-    private uint CompileBackgroundProgram(GL gl)
-    {
-        bool es = GlVersion.Type == GlProfileType.OpenGLES;
-        string header = es ? "#version 300 es\nprecision highp float;\n" : "#version 330 core\n";
-
-        // Vertexless fullscreen triangle; vertical gradient like every CAD package.
-        string vertexSource = header + """
-            out vec2 vUv;
-            void main()
-            {
-                vec2 corners[3] = vec2[3](vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0));
-                vec2 p = corners[gl_VertexID];
-                vUv = p * 0.5 + 0.5;
-                gl_Position = vec4(p, 0.0, 1.0);
-            }
-            """;
-        string fragmentSource = header + """
-            in vec2 vUv;
-            out vec4 fragColor;
-            void main()
-            {
-                vec3 bottom = vec3(0.09, 0.10, 0.12);
-                vec3 top = vec3(0.18, 0.20, 0.24);
-                fragColor = vec4(mix(bottom, top, vUv.y), 1.0);
-            }
-            """;
-        return LinkProgram(gl, vertexSource, fragmentSource, bindAttributes: false);
-    }
-
-    private static uint LinkProgram(GL gl, string vertexSource, string fragmentSource, bool bindAttributes)
-    {
-        uint vs = CompileShader(gl, ShaderType.VertexShader, vertexSource);
-        uint fs = CompileShader(gl, ShaderType.FragmentShader, fragmentSource);
-        uint program = gl.CreateProgram();
-        gl.AttachShader(program, vs);
-        gl.AttachShader(program, fs);
-        if (bindAttributes)
-            gl.BindAttribLocation(program, 0, "aPos");
-        gl.LinkProgram(program);
-        gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int linked);
-        if (linked == 0)
-            throw new InvalidOperationException($"Shader link failed: {gl.GetProgramInfoLog(program)}");
-        gl.DetachShader(program, vs);
-        gl.DetachShader(program, fs);
-        gl.DeleteShader(vs);
-        gl.DeleteShader(fs);
-        return program;
-    }
-
-    private static uint CompileShader(GL gl, ShaderType type, string source)
-    {
-        uint shader = gl.CreateShader(type);
-        gl.ShaderSource(shader, source);
-        gl.CompileShader(shader);
-        gl.GetShader(shader, ShaderParameterName.CompileStatus, out int ok);
-        if (ok == 0)
-            throw new InvalidOperationException($"{type} compile failed: {gl.GetShaderInfoLog(shader)}");
-        return shader;
-    }
+    private uint CompileBackgroundProgram(GL gl) => ViewerShaders.LinkProgram(
+        gl, ShaderHeader + ViewerShaders.BackgroundVertex, ShaderHeader + ViewerShaders.BackgroundFragment,
+        bindAttributes: false);
 
     // ---- camera ----
 
@@ -1095,7 +887,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private void Zoom(double factor)
     {
-        _distance = Math.Clamp(_distance * factor, 0.5, 120.0);
+        _distance = Math.Clamp(_distance * factor, 0.5, CameraMath.MaxOrbitDistance(_sceneBounds));
         RequestNextFrameRendering();
     }
 
@@ -1109,41 +901,4 @@ public sealed class ViewportControl : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
-    // ---- math helpers (rendering-only; kernel math stays in EngrCAD.Core) ----
-
-    private static Matrix4d LookAt(in Vector3d eye, in Vector3d target, in Vector3d up)
-    {
-        var f = (target - eye).Normalized();
-        var r = f.Cross(up).Normalized();
-        var u = r.Cross(f);
-        return new Matrix4d(
-            r.X, r.Y, r.Z, -r.Dot(eye),
-            u.X, u.Y, u.Z, -u.Dot(eye),
-            -f.X, -f.Y, -f.Z, f.Dot(eye),
-            0, 0, 0, 1);
-    }
-
-    private static Matrix4d Perspective(double fovY, double aspect, double near, double far)
-    {
-        double t = 1.0 / Math.Tan(fovY / 2);
-        return new Matrix4d(
-            t / aspect, 0, 0, 0,
-            0, t, 0, 0,
-            0, 0, (far + near) / (near - far), 2 * far * near / (near - far),
-            0, 0, -1, 0);
-    }
-
-    private static Matrix4d OrthographicMatrix(double halfHeight, double aspect, double near, double far) => new(
-        1 / (halfHeight * aspect), 0, 0, 0,
-        0, 1 / halfHeight, 0, 0,
-        0, 0, -2 / (far - near), -(far + near) / (far - near),
-        0, 0, 0, 1);
-
-    private static void WriteColumnMajor(in Matrix4d m, Span<float> dst)
-    {
-        dst[0] = (float)m.M11; dst[1] = (float)m.M21; dst[2] = (float)m.M31; dst[3] = (float)m.M41;
-        dst[4] = (float)m.M12; dst[5] = (float)m.M22; dst[6] = (float)m.M32; dst[7] = (float)m.M42;
-        dst[8] = (float)m.M13; dst[9] = (float)m.M23; dst[10] = (float)m.M33; dst[11] = (float)m.M43;
-        dst[12] = (float)m.M14; dst[13] = (float)m.M24; dst[14] = (float)m.M34; dst[15] = (float)m.M44;
-    }
 }

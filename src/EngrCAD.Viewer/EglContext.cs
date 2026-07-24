@@ -159,19 +159,21 @@ internal sealed unsafe class EglContext : IDisposable
         // notches. Fall back to 16 for drivers without a 24-bit pbuffer config.
         nint config = 0;
         int configCount = 0;
+        int* configAttribs = stackalloc int[]
+        {
+            EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+            EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
+            EGL_RED_SIZE, 8,
+            EGL_GREEN_SIZE, 8,
+            EGL_BLUE_SIZE, 8,
+            EGL_ALPHA_SIZE, 8,
+            EGL_DEPTH_SIZE, 24,   // patched to 16 for the fallback attempt below
+            EGL_NONE,
+        };
+        const int depthSizeValueSlot = 13; // index of the EGL_DEPTH_SIZE value
         foreach (int depthBits in stackalloc int[] { 24, 16 })
         {
-            int* configAttribs = stackalloc int[]
-            {
-                EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
-                EGL_RENDERABLE_TYPE, EGL_OPENGL_ES3_BIT,
-                EGL_RED_SIZE, 8,
-                EGL_GREEN_SIZE, 8,
-                EGL_BLUE_SIZE, 8,
-                EGL_ALPHA_SIZE, 8,
-                EGL_DEPTH_SIZE, depthBits,
-                EGL_NONE,
-            };
+            configAttribs[depthSizeValueSlot] = depthBits;
             if (_eglChooseConfig(display, configAttribs, &config, 1, &configCount) != 0 && configCount >= 1)
                 break;
         }

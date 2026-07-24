@@ -56,12 +56,38 @@ public sealed class MeshWindingNumber
     public double Beta { get; }
 
     public MeshWindingNumber(HalfEdgeMesh mesh, double beta = 2.0)
+        : this(beta, mesh.Triangulated())
+    {
+    }
+
+    /// <summary>
+    /// Builds directly over a mesh that is already fully triangulated, skipping the
+    /// triangulating copy the public constructor makes. PRECONDITION: every face of
+    /// <paramref name="triangulated"/> is a triangle (validated with a cheap scan;
+    /// throws <see cref="ArgumentException"/> otherwise). Use this when the caller has
+    /// already paid for <see cref="HalfEdgeMesh.Triangulated"/> — e.g.
+    /// <c>MeshSdf</c>'s winding-number mode — so the mesh is not rebuilt twice.
+    /// </summary>
+    public static MeshWindingNumber FromTriangulated(HalfEdgeMesh triangulated, double beta = 2.0)
+    {
+        foreach (var face in triangulated.Faces)
+        {
+            var h0 = face.AnyHalfEdge;
+            if (h0.Next.Next.Next != h0)
+                throw new ArgumentException(
+                    $"Face {face.Index} is not a triangle; FromTriangulated requires a fully triangulated mesh.",
+                    nameof(triangulated));
+        }
+        return new MeshWindingNumber(beta, triangulated);
+    }
+
+    /// <summary>Core constructor; <paramref name="triangulated"/> must contain only triangles.</summary>
+    private MeshWindingNumber(double beta, HalfEdgeMesh triangulated)
     {
         if (beta <= 0)
             throw new ArgumentOutOfRangeException(nameof(beta), "Beta must be positive.");
         Beta = beta;
 
-        var triangulated = mesh.Triangulated();
         int n = triangulated.FaceCount;
         var a = new Vector3d[n];
         var b = new Vector3d[n];

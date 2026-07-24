@@ -58,36 +58,26 @@ public sealed class MeshSdf : Sdf
             throw new ArgumentException("A signed distance field requires a closed mesh.", nameof(mesh));
 
         var triangulated = mesh.Triangulated();
-        if (signSource == MeshSignSource.WindingNumber)
-        {
-            _winding = new MeshWindingNumber(triangulated);
-            int count = triangulated.FaceCount;
-            _cornerA = new Vector3d[count];
-            _cornerB = new Vector3d[count];
-            _cornerC = new Vector3d[count];
-            var triangleBoxes = new Aabb[count];
-            foreach (var face in triangulated.Faces)
-            {
-                int i = face.Index;
-                var h0 = face.AnyHalfEdge;
-                _cornerA[i] = h0.Origin.Position;
-                _cornerB[i] = h0.Next.Origin.Position;
-                _cornerC[i] = h0.Next.Next.Origin.Position;
-                triangleBoxes[i] = Aabb.FromPoints([_cornerA[i], _cornerB[i], _cornerC[i]]);
-            }
-            _bvh = Bvh.Build(triangleBoxes);
-            _bounds = triangulated.ComputeBounds();
-            return;
-        }
         int faceCount = triangulated.FaceCount;
         _cornerA = new Vector3d[faceCount];
         _cornerB = new Vector3d[faceCount];
         _cornerC = new Vector3d[faceCount];
-        _vertexIds = new int[faceCount * 3];
-        _faceNormals = new Vector3d[faceCount];
-        _edgeNormals = new Vector3d[faceCount * 3];
-        _vertexNormals = new Vector3d[triangulated.VertexCount];
         var boxes = new Aabb[faceCount];
+
+        bool pseudonormal = signSource == MeshSignSource.Pseudonormal;
+        if (pseudonormal)
+        {
+            _vertexIds = new int[faceCount * 3];
+            _faceNormals = new Vector3d[faceCount];
+            _edgeNormals = new Vector3d[faceCount * 3];
+            _vertexNormals = new Vector3d[triangulated.VertexCount];
+        }
+        else
+        {
+            // Hand over the already-triangulated mesh so MeshWindingNumber does not
+            // triangulate a second time.
+            _winding = MeshWindingNumber.FromTriangulated(triangulated);
+        }
 
         foreach (var face in triangulated.Faces)
         {
@@ -101,34 +91,40 @@ public sealed class MeshSdf : Sdf
             _cornerA[i] = a;
             _cornerB[i] = b;
             _cornerC[i] = c;
-            _vertexIds[i * 3] = h0.Origin.Index;
-            _vertexIds[i * 3 + 1] = h1.Origin.Index;
-            _vertexIds[i * 3 + 2] = h2.Origin.Index;
-            _faceNormals[i] = face.Normal();
             boxes[i] = Aabb.FromPoints([a, b, c]);
 
+            if (!pseudonormal)
+                continue;
+            _vertexIds![i * 3] = h0.Origin.Index;
+            _vertexIds[i * 3 + 1] = h1.Origin.Index;
+            _vertexIds[i * 3 + 2] = h2.Origin.Index;
+            _faceNormals![i] = face.Normal();
+
             // Angle-weighted accumulation for vertex pseudonormals.
-            _vertexNormals[h0.Origin.Index] += _faceNormals[i] * (b - a).AngleTo(c - a);
+            _vertexNormals![h0.Origin.Index] += _faceNormals[i] * (b - a).AngleTo(c - a);
             _vertexNormals[h1.Origin.Index] += _faceNormals[i] * (c - b).AngleTo(a - b);
             _vertexNormals[h2.Origin.Index] += _faceNormals[i] * (a - c).AngleTo(b - c);
         }
 
-        // Edge pseudonormals: mean of the two adjacent face normals.
-        foreach (var face in triangulated.Faces)
+        if (pseudonormal)
         {
-            int i = face.Index;
-            var he = face.AnyHalfEdge;
-            for (int k = 0; k < 3; k++)
+            // Edge pseudonormals: mean of the two adjacent face normals.
+            foreach (var face in triangulated.Faces)
             {
-                var sum = _faceNormals[i] + _faceNormals[he.Twin.Face.Index];
-                _edgeNormals[i * 3 + k] = sum.TryNormalize(Tolerance.Default, out var n) ? n : _faceNormals[i];
-                he = he.Next;
+                int i = face.Index;
+                var he = face.AnyHalfEdge;
+                for (int k = 0; k < 3; k++)
+                {
+                    var sum = _faceNormals![i] + _faceNormals[he.Twin.Face.Index];
+                    _edgeNormals![i * 3 + k] = sum.TryNormalize(Tolerance.Default, out var n) ? n : _faceNormals[i];
+                    he = he.Next;
+                }
             }
-        }
-        for (int v = 0; v < _vertexNormals.Length; v++)
-        {
-            if (_vertexNormals[v].TryNormalize(Tolerance.Default, out var n))
-                _vertexNormals[v] = n;
+            for (int v = 0; v < _vertexNormals!.Length; v++)
+            {
+                if (_vertexNormals[v].TryNormalize(Tolerance.Default, out var n))
+                    _vertexNormals[v] = n;
+            }
         }
 
         _bvh = Bvh.Build(boxes);

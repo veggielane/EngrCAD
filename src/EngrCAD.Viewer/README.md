@@ -128,12 +128,15 @@ skip gracefully on machines with no GPU/ANGLE.
   `MakeCurrent`, preferring the D3D11 hardware backend, then D3D11-on-WARP (software —
   works on CI and locked sessions), then the default display. The same Silk.NET `GL`
   surface then draws the scene and `glReadPixels` reads it back.
-- **The look matches the viewport**: background gradient, ground grid + RGB axes,
-  directional light with specular, part colors, and the feature-edge overlay. (Pixel
-  parity with `ViewportControl` is not a goal; being able to see the parts is.) The
-  shader sources and camera math are deliberately duplicated from `ViewportControl` —
-  see the cross-reference comment in `OffscreenRenderer` — to keep that file, which is
-  under concurrent change, untouched. Keep the two copies in sync when the look evolves.
+- **The look matches the viewport by construction**: both passes draw with the shared
+  render core in `RenderCore.cs` — `ViewerShaders` (ONE shader set; the offscreen pass
+  disables the viewport-only features by setting the neutral uniforms uHighlight 0,
+  uSectionEnabled 0, uAlpha 1), `CameraMath` (LookAt/projection/column-major writer,
+  the scene-scaled near/far frustum, and the auto-framing distance), and
+  `RenderGeometry` (grid/axes builder, line/mesh upload). Evolve the look there and it
+  lands in the window and in headless renders at once; do not re-fork per-pass copies.
+  Shader sources must stay pure ASCII (ANGLE rejects the whole shader on any
+  non-ASCII byte — this once black-screened the viewport).
 - **`PngWriter`** is a tiny dependency-free 8-bit RGBA PNG encoder (one zlib IDAT via
   `System.IO.Compression`); no image library is pulled in.
 

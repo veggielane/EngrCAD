@@ -209,7 +209,7 @@ internal sealed class SceneHost
             ToolTip.SetTip(mode, "Display mode - click to cycle: shaded / wireframe / translucent");
             mode.Click += (_, _) =>
             {
-                var next = (DisplayMode)(((int)part.DisplayMode + 1) % 3);
+                var next = NextDisplayMode(part.DisplayMode);
                 Viewport.SetDisplayMode(index, next);
                 mode.Content = ModeLabel(next);
                 if (Viewport.Selected == index)
@@ -235,6 +235,12 @@ internal sealed class SceneHost
             _tree.Children.Add(new DockPanel { Children = { check, mode, label } });
         }
     }
+
+    private static readonly DisplayMode[] DisplayModes = Enum.GetValues<DisplayMode>();
+
+    /// <summary>The next mode in declaration order, wrapping — no hardcoded cardinality.</summary>
+    private static DisplayMode NextDisplayMode(DisplayMode mode) =>
+        DisplayModes[(Array.IndexOf(DisplayModes, mode) + 1) % DisplayModes.Length];
 
     private static string ModeLabel(DisplayMode mode) => mode switch
     {
