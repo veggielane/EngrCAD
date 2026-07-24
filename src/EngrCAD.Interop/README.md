@@ -22,6 +22,17 @@ engines.
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See
   design.md §5. v1 handles transversal cases; inputs are consumed; output passes
   `Validate()` with correct genus and exact volumes.
+  - Drilling works into **cylinders** exactly as into boxes (the cap bounds a closed
+    circular edge, so a different split/re-weld path runs): for well-posed inputs the
+    result is `Validate`-clean with the right genus and exact volume in all three
+    representations (`HoleTests.CylinderDrilling_*`). The transversal-only contract still
+    bites on *degenerate input*, and identically on boxes: a through-hole whose `depth`
+    equals the plate thickness leaves the tool's flat bottom **coplanar** with the far
+    cap (pass a depth past the far face), and hole features that are **tangent or
+    overlapping** on the drilled face (e.g. Ø10 counterbores at 10 mm pitch) pinch the
+    shared face into a non-manifold result. A feature that breaks out through the curved
+    wall is likewise unsupported. These surface as `ProbePoint`/tessellation errors, not
+    as silently-wrong geometry.
 
 (The `Scene`/`Part` document model lives in `EngrCAD.Modeling`, which layers on top of
 this project's conversions.)
