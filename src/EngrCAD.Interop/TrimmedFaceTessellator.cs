@@ -90,9 +90,12 @@ internal static class TrimmedFaceTessellator
             return false;
 
         // 2. Refine oversized interior edges to the natural grid density so the surface
-        //    keeps its curvature between distant boundary samples.
+        //    keeps its curvature between distant boundary samples. A refinement that
+        //    cannot converge must fail the whole face — emitting a partially refined
+        //    set would break the no-touch-on-failure contract above.
         var (stepU, stepV) = NaturalSteps(surface, segmentsPerCircle, curveSamples);
-        Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV);
+        if (!Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV))
+            return false;
 
         foreach (var (a, b, c) in triangles)
             polygons.Add([pointsAll[a], pointsAll[b], pointsAll[c]]);
@@ -570,11 +573,20 @@ internal static class TrimmedFaceTessellator
 
     /// <summary>
     /// Splits interior edges longer than one natural grid step (measured per-axis in
-    /// step units) at their uv midpoints, lifting new vertices onto the exact surface,
-    /// until every interior edge fits. Boundary edges are never split — their chords
-    /// are the shared seam geometry.
+    /// step units) at their uv midpoints, lifting new vertices onto the exact surface.
+    /// Boundary edges are never split — their chords are the shared seam geometry.
+    /// Termination is enforced by a monotone-decrease rule: a newly created edge is
+    /// only queued when it is strictly shorter than the edge whose split created it.
+    /// Plain midpoint bisection lacks this property — the median to the opposite
+    /// vertex can be as long as the split edge, and on the skinny triangles a band
+    /// zip makes from a v-excursioned chain against a sparse ring that becomes a
+    /// self-sustaining cascade (each split enqueues more same-length edges) whose
+    /// ever-closer midpoints eventually weld non-manifold. Some interior edges may
+    /// stay oversized where the rule stops a cascade — a fidelity trade, never a
+    /// correctness one. Returns false if the safety guard still trips, so the caller
+    /// abandons the face instead of emitting a partially refined set.
     /// </summary>
-    private static void Refine(
+    private static bool Refine(
         Surface surface,
         double period,
         List<Vector2d> uv,
@@ -585,14 +597,15 @@ internal static class TrimmedFaceTessellator
         double stepV)
     {
         if (double.IsInfinity(stepU) && double.IsInfinity(stepV))
-            return;
+            return true;
 
-        bool Oversized((int, int) e)
+        double MetricSquared((int, int) e)
         {
             double du = double.IsInfinity(stepU) ? 0 : (uv[e.Item2].X - uv[e.Item1].X) / stepU;
             double dv = double.IsInfinity(stepV) ? 0 : (uv[e.Item2].Y - uv[e.Item1].Y) / stepV;
-            return du * du + dv * dv > 1 + 1e-9;
+            return du * du + dv * dv;
         }
+        bool Oversized((int, int) e) => MetricSquared(e) > 1 + 1e-9;
 
         var edgeOwners = new Dictionary<(int, int), List<int>>();
         void Register(int triangle, (int, int) key)
@@ -624,11 +637,14 @@ internal static class TrimmedFaceTessellator
         var queue = new Queue<(int, int)>(
             edgeOwners.Keys.Where(k => !boundaryEdges.Contains(k) && Oversized(k)));
         int guard = 200000;
-        while (queue.Count > 0 && guard-- > 0)
+        while (queue.Count > 0)
         {
+            if (guard-- <= 0)
+                return false; // refinement did not converge — abandon the face
             var key = queue.Dequeue();
             if (!edgeOwners.TryGetValue(key, out var owners) || !Oversized(key))
                 continue;
+            double parentMetric = MetricSquared(key);
 
             var mid = new Vector2d(
                 (uv[key.Item1].X + uv[key.Item2].X) / 2,
@@ -692,12 +708,16 @@ internal static class TrimmedFaceTessellator
                 foreach (var candidate in (ReadOnlySpan<(int, int)>)
                     [EdgeKey(a, midIndex), EdgeKey(midIndex, b), EdgeKey(midIndex, c)])
                 {
-                    if (!boundaryEdges.Contains(candidate) && Oversized(candidate))
+                    // Monotone decrease: only strictly shorter children may continue
+                    // the refinement (see the method remarks on termination).
+                    if (!boundaryEdges.Contains(candidate) && Oversized(candidate) &&
+                        MetricSquared(candidate) <= 0.99 * parentMetric)
                         queue.Enqueue(candidate);
                 }
             }
         }
         triangles.RemoveAll(t => t.A < 0);
+        return true;
     }
 
     /// <summary>Evaluates the surface at an unwrapped uv (periodic u brought back into the domain).</summary>
