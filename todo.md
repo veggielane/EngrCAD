@@ -253,7 +253,9 @@ against EngrCAD. ✅ = have (sometimes better: exact B-Rep vs OpenSCAD's mesh-on
 - [ ] import STL/OBJ/OFF (+ repair pipeline from the g3 section) — turns EngrCAD into a
   tool that can work on existing models
 - [ ] import/export DXF + SVG (2D profiles in/out; SVG out also useful for drawings)
-- [ ] export PNG snapshot from the viewer (offscreen render to file)
+- [x] export PNG snapshot from the viewer (offscreen render to file) ✅ done — both the
+  in-viewer `Capture` button (`ViewportControl.SaveScreenshot`) and headless
+  `EngrCad.RenderToImage` / `--render out.png` (`OffscreenRenderer` + EGL pbuffer)
 
 ## OpenCASCADE (OCCT) feature parity
 
