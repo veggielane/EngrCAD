@@ -118,4 +118,81 @@ public static class MeshPrimitives
 
         return HalfEdgeMesh.Build(positions, faces);
     }
+
+    /// <summary>
+    /// Cone frustum along Z from z = 0 (radius <paramref name="bottomRadius"/>) to
+    /// z = <paramref name="height"/> (radius <paramref name="topRadius"/>): planar
+    /// trapezoid quad sides and n-gon caps like <see cref="Cylinder"/>. A zero radius
+    /// collapses that end to a single apex vertex (triangle fan, no cap); equal radii
+    /// give a cylinder.
+    /// </summary>
+    public static HalfEdgeMesh Cone(double bottomRadius, double topRadius, double height, int segments = 32)
+    {
+        if (bottomRadius < 0) throw new ArgumentOutOfRangeException(nameof(bottomRadius));
+        if (topRadius < 0) throw new ArgumentOutOfRangeException(nameof(topRadius));
+        if (bottomRadius <= 0 && topRadius <= 0)
+            throw new ArgumentException("At least one of the two radii must be positive.", nameof(bottomRadius));
+        if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
+        if (segments < 3) throw new ArgumentOutOfRangeException(nameof(segments));
+
+        var positions = new List<Vector3d>();
+        var faces = new List<int[]>();
+
+        void AddRing(double radius, double z)
+        {
+            for (int j = 0; j < segments; j++)
+            {
+                double theta = 2 * Math.PI * j / segments;
+                positions.Add((radius * Math.Cos(theta), radius * Math.Sin(theta), z));
+            }
+        }
+
+        if (bottomRadius <= 0)
+        {
+            // Apex at the bottom: triangle fan up to the top ring (UvSphere's bottom-pole
+            // winding), plus the top cap.
+            positions.Add((0, 0, 0));
+            AddRing(topRadius, height);
+            for (int j = 0; j < segments; j++)
+                faces.Add([0, 1 + (j + 1) % segments, 1 + j]);
+            var topCap = new int[segments];
+            for (int j = 0; j < segments; j++)
+                topCap[j] = 1 + j;
+            faces.Add(topCap);
+        }
+        else if (topRadius <= 0)
+        {
+            // Apex at the top: triangle fan from the bottom ring, plus the bottom cap.
+            AddRing(bottomRadius, 0);
+            positions.Add((0, 0, height));
+            int apex = segments;
+            for (int j = 0; j < segments; j++)
+                faces.Add([apex, j, (j + 1) % segments]);
+            var bottomCap = new int[segments];
+            for (int j = 0; j < segments; j++)
+                bottomCap[j] = segments - 1 - j;
+            faces.Add(bottomCap);
+        }
+        else
+        {
+            AddRing(bottomRadius, 0);
+            AddRing(topRadius, height);
+            for (int j = 0; j < segments; j++)
+            {
+                int j1 = (j + 1) % segments;
+                faces.Add([j, j1, segments + j1, segments + j]);
+            }
+            var topCap = new int[segments];
+            var bottomCap = new int[segments];
+            for (int j = 0; j < segments; j++)
+            {
+                topCap[j] = segments + j;
+                bottomCap[j] = segments - 1 - j;
+            }
+            faces.Add(topCap);
+            faces.Add(bottomCap);
+        }
+
+        return HalfEdgeMesh.Build(positions, faces);
+    }
 }

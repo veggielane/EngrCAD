@@ -78,4 +78,53 @@ public class PrimitiveTests
         var top = cylinder.Faces.Single(f => f.Degree == 10 && f.Normal().Z > 0.5);
         Assert.Equal(1.0, top.Normal().Dot(Vector3d.UnitZ), 12);
     }
+
+    /// <summary>Exact volume of the n-gonal frustum between similar polygon rings.</summary>
+    private static double FrustumVolume(int n, double r1, double r2, double h) =>
+        0.5 * n * Math.Sin(2 * Math.PI / n) * h * (r1 * r1 + r1 * r2 + r2 * r2) / 3;
+
+    [Fact]
+    public void ConeFrustum_IsExactlyAPolygonalFrustum()
+    {
+        const int n = 32;
+        double r1 = 2, r2 = 1, h = 3;
+        var cone = MeshPrimitives.Cone(r1, r2, h, n);
+        cone.Validate();
+        Assert.True(cone.IsClosed);
+        Assert.Equal(2, cone.EulerCharacteristic);
+        Assert.Equal(2 * n, cone.VertexCount);
+        Assert.Equal(n + 2, cone.FaceCount); // n side quads + 2 n-gon caps
+        Assert.Equal(FrustumVolume(n, r1, r2, h), cone.Volume(), 12);
+
+        double exact = Math.PI * h * (r1 * r1 + r1 * r2 + r2 * r2) / 3;
+        Assert.True(Math.Abs(cone.Volume() - exact) / exact < 0.01);
+    }
+
+    [Fact]
+    public void ApexCones_FanClosedWithExactPyramidVolume()
+    {
+        const int n = 24;
+        var pointedUp = MeshPrimitives.Cone(1.5, 0, 2, n);
+        pointedUp.Validate();
+        Assert.True(pointedUp.IsClosed);
+        Assert.Equal(2, pointedUp.EulerCharacteristic);
+        Assert.Equal(n + 1, pointedUp.VertexCount);
+        Assert.Equal(n + 1, pointedUp.FaceCount); // n triangles + 1 cap
+        Assert.Equal(FrustumVolume(n, 1.5, 0, 2), pointedUp.Volume(), 12);
+        Assert.True(pointedUp.Volume() > 0);
+
+        var pointedDown = MeshPrimitives.Cone(0, 1.5, 2, n);
+        pointedDown.Validate();
+        Assert.True(pointedDown.IsClosed);
+        Assert.Equal(pointedUp.Volume(), pointedDown.Volume(), 12);
+    }
+
+    [Fact]
+    public void Cone_DegenerateInputsThrow()
+    {
+        Assert.Throws<ArgumentException>(() => MeshPrimitives.Cone(0, 0, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => MeshPrimitives.Cone(-1, 1, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(() => MeshPrimitives.Cone(1, 1, 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() => MeshPrimitives.Cone(1, 1, 1, 2));
+    }
 }

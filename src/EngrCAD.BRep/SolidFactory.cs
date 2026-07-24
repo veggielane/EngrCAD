@@ -168,4 +168,81 @@ public static partial class SolidFactory
         var innerArc = NurbsCurve.Arc(tubeCenter, radial, a, minorRadius, Math.PI / 2, 3 * Math.PI / 2);
         return Revolve(new Profile([outerArc, innerArc]), center, a);
     }
+
+    /// <summary>
+    /// Cone frustum: radius <paramref name="bottomRadius"/> at the base growing linearly
+    /// to <paramref name="topRadius"/> at <paramref name="height"/> along the axis
+    /// (default +Z from the origin). The side is an exact <see cref="RevolvedSurface"/>
+    /// of the slanted line generator — reusing the proven revolved-band machinery
+    /// (domain-driven tessellation with pole fans, analytic plane⊥revolve intersection
+    /// circles, wrap splitting, STEP SURFACE_OF_REVOLUTION export) rather than adding a
+    /// dedicated cone surface type every consumer would need to learn. Rim circles are
+    /// phase-aligned with the surface's u = 0 (both built on the same radial frame), so
+    /// tessellation samples coincide exactly. A zero radius makes that end an apex pole
+    /// (like sphere poles): no rim edge, no cap, and the side face keeps its single
+    /// remaining rim loop. Frustum: V=2, E=2, F=3; apex cone: V=1, E=1, F=2.
+    /// </summary>
+    public static BrepSolid MakeCone(
+        double bottomRadius, double topRadius, double height,
+        in Vector3d baseCenter = default, Vector3d? axis = null)
+    {
+        if (height <= 0) throw new ArgumentOutOfRangeException(nameof(height));
+        if (bottomRadius < 0) throw new ArgumentOutOfRangeException(nameof(bottomRadius));
+        if (topRadius < 0) throw new ArgumentOutOfRangeException(nameof(topRadius));
+        double poleTolerance = Tolerance.Default.Linear;
+        bool bottomIsApex = bottomRadius <= poleTolerance;
+        bool topIsApex = topRadius <= poleTolerance;
+        if (bottomIsApex && topIsApex)
+            throw new ArgumentException("At least one of the two radii must be positive.", nameof(bottomRadius));
+
+        var a = (axis ?? Vector3d.UnitZ).Normalized();
+        var x = a.ArbitraryPerpendicular(Tolerance.Default);
+        var y = a.Cross(x); // rim circles share this frame so they stay phase-aligned with u = 0
+        var topCenter = baseCenter + a * height;
+        var full = new Interval(0, 2 * Math.PI);
+
+        // Generator runs bottom→top — counter-clockwise in (radius, height) — so
+        // ∂u × ∂v points outward; a zero-radius end sits exactly on the axis (a pole).
+        var generator = new Line3d(baseCenter + x * bottomRadius, topCenter + x * topRadius);
+
+        // Side loops follow the cylinder convention: the bottom rim follows +u, the top
+        // rim opposes it; an apex end contributes no loop (the pole ring is degenerate).
+        var sideLoops = new List<BrepLoop>(2);
+        BrepEdge? bottomEdge = null, topEdge = null;
+        if (!bottomIsApex)
+        {
+            var circle = new Circle3d(baseCenter, x, y, bottomRadius);
+            var seam = new BrepVertex(circle.PointAt(0));
+            bottomEdge = new BrepEdge(circle, full, seam, seam);
+            sideLoops.Add(new BrepLoop([new BrepCoedge(bottomEdge, sameSense: true)]));
+        }
+        if (!topIsApex)
+        {
+            var circle = new Circle3d(topCenter, x, y, topRadius);
+            var seam = new BrepVertex(circle.PointAt(0));
+            topEdge = new BrepEdge(circle, full, seam, seam);
+            sideLoops.Add(new BrepLoop([new BrepCoedge(topEdge, sameSense: false)]));
+        }
+
+        var faces = new List<BrepFace>(3)
+        {
+            new(new RevolvedSurface(generator, baseCenter, a), sideLoops),
+        };
+        if (topEdge is not null)
+        {
+            // Top cap: normal +axis (basis x, y), loop follows the circle.
+            faces.Add(new BrepFace(
+                new PlaneSurface(topCenter, x, y),
+                [new BrepLoop([new BrepCoedge(topEdge, sameSense: true)])]));
+        }
+        if (bottomEdge is not null)
+        {
+            // Bottom cap: normal −axis (basis y, x), loop opposes the circle.
+            faces.Add(new BrepFace(
+                new PlaneSurface(baseCenter, y, x),
+                [new BrepLoop([new BrepCoedge(bottomEdge, sameSense: false)])]));
+        }
+
+        return new BrepSolid([new BrepShell(faces)]);
+    }
 }

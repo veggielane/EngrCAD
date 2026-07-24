@@ -8,9 +8,10 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 - **`Sdf`** (abstract base) — `Evaluate(point)`, batch `Evaluate(span, span)`,
   finite-difference `Normal`, and conservative `Bounds` propagated through every node
   (infinite for unbounded fields).
-- **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, torus, capsule,
-  half-space, and a gyroid lattice (approximate distance, unbounded — intersect with a
-  finite solid).
+- **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, cone
+  (`Sdf.Cone(r1, r2, height)` capped frustum; a zero radius gives a pointed apex),
+  torus, capsule, half-space, and a gyroid lattice (approximate distance, unbounded —
+  intersect with a finite solid).
 - **`Sdf.Thread`** (`ThreadSdf.cs`) — helical thread solid about +Z (straight-flanked
   trapezoidal form; the ISO 60° V-profile is the intended special case): the 2D profile
   repeated along the helical coordinate w = z − pitch·θ/2π. **Sign is exact** (wrapped
@@ -22,7 +23,8 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   bounds.
 - **Operators**: union / intersection / difference (also as `a | b`, `a & b`, `a - b`),
   polynomial smooth blends (`SmoothUnion` etc. — lower-bound distances near the blend),
-  `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`.
+  `Offset`, `Shell`, `Translate`, `Rotate`, uniform `Scale`, and `Mirror(point, normal)`
+  (reflects the query point — an isometry, so distances stay exact).
 - **Sampled grids** (`Sampled(cellSize)` / `Sampled(region, cellSize)`, g3's
   `DenseGridTrilinearImplicit` + `ImplicitFieldSampler3d`): bake any `Sdf` onto a dense
   uniform grid (rows fed through the batch `Evaluate` seam) and evaluate by trilinear

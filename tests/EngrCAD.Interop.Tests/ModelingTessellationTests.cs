@@ -247,4 +247,49 @@ public class ModelingTessellationTests
         Assert.Equal(2, mesh.EulerCharacteristic);
         Assert.True(mesh.Volume() > 0);
     }
+
+    /// <summary>Tessellated cone volume is EXACTLY the inscribed polygonal frustum's:
+    /// (n/2)·sin(2π/n)·h·(r1² + r1·r2 + r2²)/3, independent of the v sampling.</summary>
+    private static double PolygonalFrustumVolume(int segments, double r1, double r2, double height) =>
+        segments / 2.0 * Math.Sin(2 * Math.PI / segments) * height * (r1 * r1 + r1 * r2 + r2 * r2) / 3;
+
+    [Fact]
+    public void ConeFrustum_TessellatesToExactPolygonalVolume()
+    {
+        const int n = 64;
+        var mesh = BRepTessellator.Tessellate(SolidFactory.MakeCone(2, 1, 3), segmentsPerCircle: n);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+        Assert.Equal(PolygonalFrustumVolume(n, 2, 1, 3), mesh.Volume(), 9);
+
+        // And the analytic volume πh(r1² + r1r2 + r2²)/3 is approached at high n.
+        double exact = Math.PI * 3 * (4 + 2 + 1) / 3;
+        var fine = BRepTessellator.Tessellate(SolidFactory.MakeCone(2, 1, 3), segmentsPerCircle: 256);
+        Assert.True(Math.Abs(fine.Volume() - exact) / exact < 0.001,
+            $"volume {fine.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void ApexCone_PoleFanTessellatesClosedWithExactPolygonalVolume()
+    {
+        const int n = 48;
+        var mesh = BRepTessellator.Tessellate(SolidFactory.MakeCone(1.5, 0, 2), segmentsPerCircle: n);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+        Assert.Equal(PolygonalFrustumVolume(n, 1.5, 0, 2), mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void ApexAtBottomCone_OffAxisPlacement_TessellatesClosed()
+    {
+        const int n = 48;
+        var mesh = BRepTessellator.Tessellate(
+            SolidFactory.MakeCone(0, 1.2, 2.5, (3, -1, 2), (1, 1, 1)), segmentsPerCircle: n);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+        Assert.Equal(PolygonalFrustumVolume(n, 0, 1.2, 2.5), mesh.Volume(), 9);
+    }
 }

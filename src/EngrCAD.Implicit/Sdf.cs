@@ -58,6 +58,21 @@ public abstract class Sdf
     /// <summary>Capped cylinder along Z, centered at the origin.</summary>
     public static Sdf Cylinder(double radius, double height) => new CylinderSdf(radius, height / 2);
 
+    /// <summary>
+    /// Capped cone (frustum) along Z, centered at the origin: radius
+    /// <paramref name="bottomRadius"/> at z = −height/2 growing linearly to
+    /// <paramref name="topRadius"/> at z = +height/2. Exact distance (Quilez's capped
+    /// cone); a zero radius gives a pointed apex.
+    /// </summary>
+    public static Sdf Cone(double bottomRadius, double topRadius, double height)
+    {
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        if (bottomRadius < 0 || topRadius < 0)
+            throw new ArgumentOutOfRangeException(nameof(bottomRadius), "Radii must be non-negative.");
+        return new ConeSdf(bottomRadius, topRadius, height / 2);
+    }
+
     /// <summary>Torus about the Z axis: ring of radius <paramref name="majorRadius"/> in the XY plane.</summary>
     public static Sdf Torus(double majorRadius, double minorRadius) => new TorusSdf(majorRadius, minorRadius);
 
@@ -131,6 +146,12 @@ public abstract class Sdf
 
     public Sdf Translate(in Vector3d translation) => new TranslateSdf(this, translation);
     public Sdf Rotate(in Quaterniond rotation) => new RotateSdf(this, rotation);
+
+    /// <summary>Mirror across the plane through <paramref name="point"/> with
+    /// <paramref name="normal"/>: the query point is reflected, so distances stay
+    /// exact (reflection is an isometry).</summary>
+    public Sdf Mirror(in Vector3d point, in Vector3d normal) =>
+        new MirrorSdf(this, point, normal.Normalized());
 
     /// <summary>Uniform scale about the origin (distances stay exact).</summary>
     public Sdf Scale(double factor) => new ScaleSdf(this, factor);

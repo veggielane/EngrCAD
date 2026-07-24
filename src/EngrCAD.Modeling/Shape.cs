@@ -54,6 +54,23 @@ public abstract class Shape
     /// <summary>Torus about +Z, centered at the origin.</summary>
     public static Shape Torus(double majorRadius, double minorRadius) => new TorusShape(majorRadius, minorRadius);
 
+    /// <summary>
+    /// Cone frustum along +Z, centered at the origin (OpenSCAD's <c>cylinder(r1, r2)</c>):
+    /// radius <paramref name="bottomRadius"/> at z = −height/2 growing linearly to
+    /// <paramref name="topRadius"/> at z = +height/2. A zero radius makes that end a
+    /// pointed apex. Native in all three representations.
+    /// </summary>
+    public static Shape Cone(double bottomRadius, double topRadius, double height)
+    {
+        if (bottomRadius < 0 || topRadius < 0)
+            throw new ArgumentOutOfRangeException(nameof(bottomRadius), "Radii must be non-negative.");
+        if (bottomRadius <= 0 && topRadius <= 0)
+            throw new ArgumentException("At least one of the two radii must be positive.", nameof(bottomRadius));
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        return new ConeShape(bottomRadius, topRadius, height);
+    }
+
     // ---- Modeling operations ----
 
     public static Shape Extrude(Profile profile, in Vector3d direction, IReadOnlyList<Profile>? holes = null) =>
@@ -316,6 +333,23 @@ public abstract class Shape
         return shapes[0];
     }
 
+    // ---- Convex hull ----
+
+    /// <summary>
+    /// Convex hull of the operands (OpenSCAD's <c>hull()</c>), computed by quickhull
+    /// over the operands' MESH vertices. Honest support story: exact for polyhedral
+    /// operands (boxes, polygonal extrusions); curved operands contribute their
+    /// tessellated vertices, so the result is the hull of the tessellation (inscribed
+    /// in the true hull) — Bridged for every target in <see cref="Explain"/> terms,
+    /// and never convertible to B-Rep (no mesh→B-Rep import).
+    /// </summary>
+    public static Shape Hull(params Shape[] operands)
+    {
+        if (operands is null || operands.Length == 0)
+            throw new ArgumentException("Hull needs at least one operand.", nameof(operands));
+        return new HullShape([.. operands]);
+    }
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);
@@ -358,6 +392,31 @@ public abstract class Shape
     public Shape RotateZ(double radians) => Transform(Matrix4d.CreateRotationZ(radians));
     public Shape Rotate(in Vector3d axis, double radians) => Transform(Matrix4d.CreateFromAxisAngle(axis, radians));
     public Shape Scale(double factor) => Transform(Matrix4d.CreateScale(factor));
+
+    /// <summary>
+    /// Mirror across the plane through <paramref name="point"/> with
+    /// <paramref name="normal"/> (OpenSCAD's <c>mirror()</c>). Correct in every
+    /// representation: meshes transform positions and reverse winding (staying
+    /// outward-oriented), implicit lowering reflects the query point (exact), and
+    /// B-Rep support follows the node: box/cylinder/sketch-extrude handle any affine
+    /// map, sphere/torus/cone re-place natively under mirrored similarities, while
+    /// mirrored revolve/sweep/rim/drill nodes have no B-Rep lowering yet (their mirror
+    /// is exact via mesh or SDF — see <see cref="Explain"/>).
+    /// </summary>
+    public Shape Mirror(in Vector3d point, in Vector3d normal)
+    {
+        var n = normal.Normalized();
+        double t = 2 * point.Dot(n);
+        // Householder reflection I − 2nnᵀ, translated so the plane passes through point.
+        return Transform(new Matrix4d(
+            1 - 2 * n.X * n.X, -2 * n.X * n.Y, -2 * n.X * n.Z, t * n.X,
+            -2 * n.Y * n.X, 1 - 2 * n.Y * n.Y, -2 * n.Y * n.Z, t * n.Y,
+            -2 * n.Z * n.X, -2 * n.Z * n.Y, 1 - 2 * n.Z * n.Z, t * n.Z,
+            0, 0, 0, 1));
+    }
+
+    /// <summary>Mirror across the plane through the origin with <paramref name="normal"/>.</summary>
+    public Shape Mirror(in Vector3d normal) => Mirror(Vector3d.Zero, normal);
 
     // ---- Lowering ----
 
