@@ -247,7 +247,10 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         var mesh = part.GetMesh();
         var render = RenderMesh.CreateFlat(mesh);
-        var featureEdges = MeshFeatureEdges.Extract(mesh);
+        // B-Rep-backed parts get their edge overlay from the ACTUAL B-Rep edges
+        // (exact circles stay smooth at coarse tessellation); others fall back to
+        // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
+        var featureEdges = part.GetFeatureEdges();
         var wireEdges = WireframeEdges.Extract(mesh);
         var (vao, vbo, ebo) = RenderGeometry.UploadMesh(gl, render);
         var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
@@ -1295,6 +1298,11 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         var pos = e.GetPosition(this);
         var moved = pos - _pressPointer;
+        // Click-vs-drag discrimination: a release within 4 DIPs of the press (16 =
+        // 4 DIP squared, compared against the squared travel to skip the sqrt) is a
+        // click that picks; anything farther was an orbit/pan/zoom drag. A UI feel
+        // threshold matching HoverThrottle's 4-DIP re-pick distance — not a Tolerance
+        // decision, and DIP-based so it is monitor-scale independent.
         if (moved.X * moved.X + moved.Y * moved.Y < 16)
         {
             // View-cube pre-check: clicks inside the cube region go to the widget

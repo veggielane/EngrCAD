@@ -57,6 +57,8 @@ static Scene BuildScene()
 | `--export part.step` | Headless STEP export (per B-Rep-representable part). |
 | `--export part.stl` / `part.obj` | Headless mesh export, parts merged with transforms. |
 | `--render out.png` | Headless offscreen render to a PNG — no window, CI-friendly. |
+| `--render-style <style>` | View style for `--render`: `points`, `wireframe`, `shaded`, or `shaded-edges` (default). |
+| `--section <x\|y\|z> <offset>` | Section plane for `--render`: clip beyond the offset along the axis, cut interiors shaded as cut material — e.g. `--section z 6`. |
 
 ### Configuring defaults
 
@@ -70,6 +72,8 @@ return EngrCad.Configure()
     .WithTitle("my bracket")
     .WithQuality(new MeshQuality { SegmentsPerCircle = 48 })
     .WithRenderSize(1920, 1080)
+    .WithViewStyle(ViewStyle.Shaded)          // --render default; CLI switches override
+    .WithSection(SectionAxis.Z, 6)            // sectioned headless renders by default
     .Run(args, BuildScene);
 ```
 

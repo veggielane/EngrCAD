@@ -274,22 +274,9 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## Viewer
 
-- [ ] **Sub-wave-A review flags** (code-quality, all low) — `EngrCadBuilder.RenderToImage`
-  should mirror the `style`/`sectionAxis`/`sectionOffset` params; axis-staleness
-  regression test once offscreen isolines land (or extract the staleness key into a
-  testable helper); `ViewCubeAnimation(0)` zero-duration fact; `SdfContours` saddle-cell
-  disambiguation test (hyperbolic field section); route one `SdfRoute` lowering-failure
-  diagnostic through the report sink; annotate `HandleReleased`'s 16 DIP² click threshold.
-- [ ] **Offscreen isolines** — the last offscreen-parity gap: `OffscreenRenderer` now
-  honors display modes, view styles, and sections, but not the section-plane SDF
-  isolines (`SectionContourRenderer` — CPU geometry is already GL-free in
-  `SectionContours.Build`, so the offscreen pass only needs the draw calls); once
-  that lands, add an isoline screenshot example to the viewer docs page.
-- [ ] **Docs cutaway examples via real section planes** — `EngrCad.RenderToImage` now
-  takes `style`/`sectionAxis`/`sectionOffset`, so docs pages that fake cutaways with
-  boolean cuts could show the real section-plane look instead. Needs DocsGen support
-  for per-snippet render options (today it calls `RenderToImage` with defaults);
-  fold the new render options into `EngrCadOptions` too.
+- [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
+  boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
+  options — convert where the page reads better with a real section).
 - [ ] Section-plane follow-ups: arbitrary plane orientation from a `Frame3d` (the
   shader already takes a general axis vector + offset; v1 restricts it to X/Y/Z),
   per-part section opt-out, and picking that respects the cut.
@@ -316,8 +303,15 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   click-to-pose with eased animation, hover highlight, drag-orbits) — rotate-snap
   dragging like commercial cubes; SceneHost toolbar buttons could delegate to
   `ViewCubeMath.PoseFor` for one pose source.
-- [ ] Ideas: ambient occlusion or matcap shading, edge silhouettes from B-Rep edges
-  instead of mesh dihedrals (exact circles stay smooth at coarse tessellation).
+- [ ] B-Rep edge-silhouette follow-ups (`Part.GetFeatureEdges`/`BrepFeatureEdges` ✅
+  landed — B-Rep-backed parts overlay their exact edges at display resolution) —
+  a Shape-level B-Rep lowering cache: `PreMesh` currently lowers a Shape part's
+  B-Rep twice (once inside `ToMesh`, once for the edge overlay) because the mesh
+  route does not retain its intermediate solid; a `Part`-cached solid (or Shape
+  lowering memoization) would also serve STEP export and annotation resolution
+  (which lowers a third time). Also: silhouette-adaptive edge sampling (a fixed
+  96/circle undersamples very large rims).
+- [ ] Ideas: ambient occlusion or matcap shading.
 
 ## Blazor web viewer
 

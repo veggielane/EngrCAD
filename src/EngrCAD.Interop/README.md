@@ -111,9 +111,28 @@ visualizes the field). Properties the consumers rely on, locked by `SdfContoursT
   above two there).
 - **Accuracy**: linear interpolation places crossings within O(h² · field curvature)
   of the true iso point for grid step h (a radius-r circle section errs by ~h²/8r).
-- Ambiguous saddle cells resolve by the cell-center average; the plane is fully
-  general (pass the section plane mapped through an inverse instance transform —
-  affine maps take the sample rectangle to a parallelogram, which the
+- Ambiguous saddle cells resolve by the cell-center average — the average of the
+  four corner *samples*, locked by a hyperbolic two-sphere section test (diagonal
+  inside corners connect exactly when the corner average goes negative); the plane
+  is fully general (pass the section plane mapped through an inverse instance
+  transform — affine maps take the sample rectangle to a parallelogram, which the
   parameterization represents exactly).
 - Sample/value scratch comes from `ArrayPool`; levels that never cross return empty
   segment lists.
+
+## B-Rep feature edges (`BrepFeatureEdges`)
+
+`BrepFeatureEdges.Extract(solid, segmentsPerCircle = 96, curveSamples = 48,
+sharpAngle = 30°)` produces display-overlay line segments from the solid's ACTUAL
+B-Rep edges — the exact-geometry alternative to mesh-dihedral extraction
+(`MeshFeatureEdges`): a rim circle sampled here stays a smooth circle at any mesh
+tessellation, because segments come from the edge curves via the tessellator's own
+`SampleEdge` rules (circles at `segmentsPerCircle`, helices angularly, tracer
+polylines at their exact vertices, lines as 2 points). Sharpness is decided on the
+exact surfaces: adjacent faces' outward normals (`BrepQueries.NormalAt`, reversal
+applied) are compared at three interior probe points — smooth seams (a periodic
+face's own seam edge, wrap-split sub-band junctions on one carrier, sphere
+generator seams) are omitted, boundary/non-manifold edges and unprobeable edges
+(tracer polylines are on-surface only at vertices) are kept: draw rather than
+hide. Consumed by `Part.GetFeatureEdges` in EngrCAD.Modeling, which both viewer
+render paths use.

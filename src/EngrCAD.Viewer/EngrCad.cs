@@ -157,6 +157,12 @@ public static class EngrCad
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
     /// <c>--export path.step|path.obj</c> → headless export, no window (CI-friendly);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
+    /// <c>--render</c> additionally honors
+    /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
+    /// <see cref="ViewStyle"/> — per-part <c>Part.DisplayMode</c> still overrides where
+    /// explicitly non-default) and <c>--section x|y|z &lt;offset&gt;</c> (an
+    /// axis-aligned section plane, e.g. <c>--section z 6</c>); both default to the
+    /// configured <see cref="EngrCadOptions.RenderStyle"/>/<see cref="EngrCadOptions.SectionOffset"/>.
     /// Returns a process exit code.
     /// </summary>
     public static int Run(string[] args, Func<Scene> sceneFactory, string title = "EngrCAD") =>
@@ -165,6 +171,34 @@ public static class EngrCad
     internal static int RunCore(string[] args, Func<Scene> sceneFactory, EngrCadOptions options)
     {
         var log = options.Log ?? EngrCadLog.Console;
+
+        // Render options are parsed up front so a typo fails fast with a usage error
+        // (exit 2) regardless of which mode was requested; they only affect --render.
+        int styleIndex = Array.IndexOf(args, "--render-style");
+        if (styleIndex >= 0)
+        {
+            if (styleIndex + 1 >= args.Length || !TryParseStyle(args[styleIndex + 1], out var style))
+            {
+                log.Error("--render-style requires a style: points, wireframe, shaded, or shaded-edges");
+                return 2;
+            }
+            options.RenderStyle = style;
+        }
+
+        int sectionIndex = Array.IndexOf(args, "--section");
+        if (sectionIndex >= 0)
+        {
+            if (sectionIndex + 2 >= args.Length
+                || !TryParseAxis(args[sectionIndex + 1], out var sectionAxis)
+                || !double.TryParse(args[sectionIndex + 2], NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out double sectionOffset))
+            {
+                log.Error("--section requires an axis (x, y, or z) and a numeric offset, e.g. --section z 6");
+                return 2;
+            }
+            options.SectionAxis = sectionAxis;
+            options.SectionOffset = sectionOffset;
+        }
 
         int exportIndex = Array.IndexOf(args, "--export");
         if (exportIndex >= 0)
@@ -307,9 +341,35 @@ public static class EngrCad
             return 1;
         }
         scene.PreMesh(options.Quality); // meshes cache, so RenderToImage's PreMesh is a no-op
-        RenderToImage(scene, path, options.RenderWidth, options.RenderHeight);
+        RenderToImage(scene, path, options.RenderWidth, options.RenderHeight, camera: null,
+            options.RenderStyle, options.SectionAxis, options.SectionOffset);
         log.Info($"wrote {path} ({scene.AllParts.Count()} part(s))");
         return 0;
+    }
+
+    /// <summary>Parses a <c>--render-style</c> value (the kebab-case CLI spellings).</summary>
+    private static bool TryParseStyle(string value, out ViewStyle style)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "points": style = ViewStyle.Points; return true;
+            case "wireframe": style = ViewStyle.Wireframe; return true;
+            case "shaded": style = ViewStyle.Shaded; return true;
+            case "shaded-edges": style = ViewStyle.ShadedWithEdges; return true;
+            default: style = default; return false;
+        }
+    }
+
+    /// <summary>Parses a <c>--section</c> axis letter.</summary>
+    private static bool TryParseAxis(string value, out SectionAxis axis)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "x": axis = SectionAxis.X; return true;
+            case "y": axis = SectionAxis.Y; return true;
+            case "z": axis = SectionAxis.Z; return true;
+            default: axis = default; return false;
+        }
     }
 
     // ---- headless export ----

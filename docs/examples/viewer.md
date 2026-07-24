@@ -44,50 +44,72 @@ housing.Add(new Part("cover", coverShape, Palette.Sky)
     { DisplayMode = DisplayMode.Translucent });
 ```
 
-> [!NOTE]
-> Display modes are honored by the interactive viewport (`ViewportControl`). The
-> offscreen renderer used for these docs draws everything shaded, so wireframe and
-> translucent parts are shown here only as described — run the demo
-> (`dotnet run --project samples/EngrCAD.Demo`) to see them live.
+Display modes are honored by both render paths — the interactive viewport and the
+offscreen renderer these docs use draw with the same shaders and mode-precedence
+rule, alongside a global view style (`ViewportControl.ViewStyle`, or
+`--render-style points|wireframe|shaded|shaded-edges` for headless renders): parts
+left at the default follow the global style, explicitly non-default parts keep
+their own mode.
 
 ## Section planes
 
-The toolbar's **Section** toggle clips everything above an adjustable world-z height
-(`[` / `]` keys move it), exposing interiors with a flat darker "cut material" on the
-revealed surfaces — the standard way to inspect bores, cavities, and fillets in
-cross-section. Custom hosts drive it via `ViewportControl.SectionEnabled` /
-`SectionHeight`.
+The toolbar's **Section** toggle clips everything beyond an axis-aligned plane —
+X, Y, or Z (a toolbar cycler picks the axis, `[` / `]` keys nudge the offset) —
+exposing interiors with a flat darker "cut material" on the revealed surfaces: the
+standard way to inspect bores, cavities, and fillets in cross-section. Custom hosts
+drive it via `ViewportControl.SectionEnabled` / `SectionAxis` / `SectionOffset`.
 
-The offscreen renderer has no section support yet, so the render below **simulates**
-the effect by boolean-subtracting the upper half — in the viewer the section plane is
-live and never modifies the geometry:
+The render below uses the **real section plane** (the geometry is untouched — the
+clipping happens in the shader), exactly what `--section z 6` produces headlessly:
 
-```csharp render:section-cutaway
+```csharp render:section-cutaway section:z,18
 var block = Shape.Box(40, 40, 24)
     .SmoothUnion(Shape.Sphere(10).Translate(0, 0, 14), 5)
     - Shape.Cylinder(6, 60)                       // vertical bore
     - Shape.Cylinder(5, 60).RotateX(Math.PI / 2); // horizontal bore
 
-var sectioned = block - Shape.Box(60, 60, 40).Translate(0, 0, 26);  // clip above z = 6
-
 var scene = new Scene(new MeshQuality { SdfResolution = 140 });
-scene.Add(new Part("sectioned block", sectioned, Palette.Steel,
+scene.Add(new Part("block", block, Palette.Steel,
     Matrix4d.CreateTranslation((0, 0, 12))));
 ```
 
-![A cross-sectioned block exposing two intersecting bores](images/section-cutaway.png)
+![A section plane cutting a block, exposing two intersecting bores with SDF isolines on the cut](images/section-cutaway.png)
+
+### SDF isolines on the cut
+
+Parts whose geometry is an `Sdf` — or a `Shape` with an implicit lowering, which is
+most of them — automatically get **iso-distance contours** overlaid on the section
+plane: the gold contour is the exact d = 0 surface cross-section, cool rings march
+outward at +k·spacing, warm rings inward at −k·spacing. Wall thickness is readable
+at a glance, and smooth blends and offsets show their actual field, which makes the
+overlay a debugging tool as much as a display nicety:
+
+```csharp render:section-isolines section:z,24 style:shaded
+var body = Shape.Cylinder(16, 26)
+    .SmoothUnion(Shape.Sphere(13).Translate(0, 0, 28), 9)   // blend-heavy top
+    - Shape.Cylinder(8, 90);                                // through-bore
+
+var scene = new Scene(new MeshQuality { SdfResolution = 200 });
+scene.Add(new Part("blend", body, Palette.Steel));
+```
+
+![Section-plane SDF isolines: gold surface cross-section with warm and cool field rings](images/section-isolines.png)
 
 ## Headless rendering
 
-`EngrCad.RenderToImage(scene, path, width, height, camera?)` renders with no window
-and no Avalonia lifetime — an offscreen EGL pbuffer over the ANGLE runtime, with a
-software (WARP) fallback for CI. Check `EngrCad.CanRenderToImage` to skip gracefully
-on machines with no GL at all. This is the self-verification loop: tests and agents
-render a scene and inspect pixels instead of screenshotting a window.
+`EngrCad.RenderToImage(scene, path, width, height, camera?, style?, sectionAxis?,
+sectionOffset?)` renders with no window and no Avalonia lifetime — an offscreen EGL
+pbuffer over the ANGLE runtime, with a software (WARP) fallback for CI. Check
+`EngrCad.CanRenderToImage` to skip gracefully on machines with no GL at all. This is
+the self-verification loop: tests and agents render a scene and inspect pixels
+instead of screenshotting a window. Headless renders match the window — display
+modes, view styles, section planes, and the SDF isolines above all render
+identically (only interactive selection highlights are absent).
 
 ```csharp
 if (EngrCad.CanRenderToImage)
-    EngrCad.RenderToImage(scene, "out.png", width: 1280, height: 800);
+    EngrCad.RenderToImage(scene, "out.png", width: 1280, height: 800,
+        sectionAxis: SectionAxis.Z, sectionOffset: 6);   // optional real section plane
 ```
 
 The interactive window's `Capture` toolbar button (or

@@ -206,6 +206,63 @@ public sealed class Part
             $"(this part holds {Geometry.GetType().Name})."),
     };
 
+    private IReadOnlyList<(Vector3d A, Vector3d B)>? _featureEdges;
+
+    /// <summary>
+    /// Feature-edge segments for display overlays, produced on first call and cached
+    /// (like <see cref="GetMesh"/>, the first caller's quality wins; scenes prime it
+    /// in <see cref="Scene.PreMesh"/> so no B-Rep lowering happens on a render
+    /// thread). Parts with B-Rep geometry — a <see cref="BrepSolid"/>, or a
+    /// <see cref="Shape"/> with a B-Rep lowering — take their edges from the ACTUAL
+    /// B-Rep edges (<c>BrepFeatureEdges</c> in EngrCAD.Interop), sampled at display
+    /// resolution (at least 96 segments per circle regardless of the mesh quality):
+    /// exact circles stay smooth however coarse the tessellation. Everything else
+    /// (SDF and mesh parts, or a failed lowering) falls back to mesh-dihedral
+    /// extraction over the display mesh, the previous behavior.
+    /// </summary>
+    public IReadOnlyList<(Vector3d A, Vector3d B)> GetFeatureEdges(MeshQuality? quality = null)
+    {
+        lock (_meshLock)
+        {
+            if (_featureEdges is not null)
+                return _featureEdges;
+            var q = quality ?? MeshQuality.Default;
+            var solid = Geometry switch
+            {
+                BrepSolid direct => direct,
+                Shape shape => TryLowerBrep(shape),
+                _ => null,
+            };
+            if (solid is not null)
+            {
+                try
+                {
+                    return _featureEdges = BrepFeatureEdges.Extract(
+                        solid,
+                        Math.Max(96, q.SegmentsPerCircle),
+                        Math.Max(48, q.CurveSamples));
+                }
+                catch
+                {
+                    // Any extraction hiccup falls back to the mesh route below.
+                }
+            }
+            return _featureEdges = MeshFeatureEdges.Extract(GetMesh(quality));
+        }
+
+        static BrepSolid? TryLowerBrep(Shape shape)
+        {
+            try
+            {
+                return shape.CanConvertTo(TargetRep.Brep) ? shape.ToBrep() : null;
+            }
+            catch
+            {
+                return null;   // failed lowering: mesh-dihedral fallback
+            }
+        }
+    }
+
     /// <summary>World-space bounds of the display mesh with <see cref="Transform"/> applied.</summary>
     public Aabb Bounds(MeshQuality? quality = null) => Bounds(Transform, quality);
 
@@ -396,6 +453,10 @@ public sealed class Scene
         foreach (var part in AllParts)
         {
             part.GetMesh(quality);
+            // Prime the feature-edge cache too: for Shape parts the B-Rep edge route
+            // lowers the shape again, which must happen here (off the render thread),
+            // not lazily inside a GL upload.
+            part.GetFeatureEdges(quality);
             // Pre-resolve annotations too: selector dimensions lower to B-Rep, which
             // must not happen on the render thread. Failures are cached diagnostics
             // (viewers surface them via TryResolveAnnotations), not exceptions here.

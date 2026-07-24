@@ -81,8 +81,13 @@ Dark-themed layout around one shared GL viewport:
   to coincident lines). The plumbing is plane-general (`SectionContours.PlaneFrame`
   takes the clip rule `dot(p, axis) > offset`) and follows the active
   `SectionAxis`. Raw B-Rep/mesh parts show no isolines (wrap them in
-  `Shape.From(...)` if the implicit bridge is wanted). Not yet in offscreen renders
-  (the one remaining offscreen-parity gap).
+  `Shape.From(...)` if the implicit bridge is wanted); a part whose implicit
+  lowering *fails* (e.g. an open mesh behind `Shape.From`) reports the failure once
+  through the status overlay instead of being silently isoline-less. Offscreen
+  section renders
+  draw the same isolines through the same `SectionContourRenderer` (one-shot — the
+  staleness caching only matters in the window), so headless cutaways match the
+  viewport exactly.
 - **View cube** (top-right of the viewport): the standard CAD orientation widget — a
   small labeled cube (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM) that always mirrors the
   orbit camera's rotation, so it doubles as a live orientation indicator. Clicking a
@@ -192,8 +197,13 @@ Dark-themed layout around one shared GL viewport:
   and world position of the selected instance.
 - **Viewport dressing**: vertical-gradient background, adaptive ground grid on z = 0
   (1-2-5 spacing from the scene size) with RGB world axes, and a **feature-edge
-  overlay** (`MeshFeatureEdges`: boundary + sharp-dihedral edges, drawn over
-  polygon-offset fills) — the classic shaded-with-edges CAD look.
+  overlay** drawn over polygon-offset fills — the classic shaded-with-edges CAD
+  look. Edge geometry comes from `Part.GetFeatureEdges()` (cached, primed by
+  `Scene.PreMesh` off the render thread): B-Rep-backed parts use their **actual
+  B-Rep edges** sampled at display resolution (`BrepFeatureEdges` in Interop — a
+  bore rim stays a smooth circle however coarse the mesh; smooth seams like
+  wrap-split junctions are classified by exact surface normals and omitted), other
+  parts fall back to mesh dihedrals (`MeshFeatureEdges`).
 - **Status bar** (bottom): last input on the left, control hints on the right.
 
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
@@ -246,15 +256,18 @@ return EngrCad.Configure()
     .WithTitle("bracket")
     .WithQuality(new MeshQuality { SegmentsPerCircle = 48 })   // display/export default
     .WithRenderSize(1920, 1080)                                // --render image size
+    .WithViewStyle(ViewStyle.Shaded)                           // --render view style
+    .WithSection(SectionAxis.Z, 6)                             // --render section plane
     .WithLog(msg => logger.LogInformation("{Message}", msg))   // status/error seam
     .Run(args, BuildScene);
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
-`RenderWidth`/`RenderHeight`, `Log`, `OnViewportReady`) and its terminal methods
-(`Run`, `Show`, `ShowLive`, `RenderToImage`) mirror the static `EngrCad` entry
-points with those options applied. The plain `EngrCad.Run/Show/ShowLive` overloads
-are unchanged and remain the simple path.
+`RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`, `Log`,
+`OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
+`RenderToImage`) mirror the static `EngrCad` entry points with those options
+applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain
+the simple path.
 
 - **Mesh-quality precedence** (`Scene.ResolveQuality` implements it): a `Scene`
   constructed with explicit options always wins > the `EngrCadOptions.Quality`
@@ -308,16 +321,24 @@ Headless renders honor everything the window draws — **per-part display modes*
 (wireframe, translucent with the same shared back-to-front ordering and opaque
 silhouette edges), the **global `ViewStyle`** with the same precedence rule,
 **axis-aligned section planes** (`sectionAxis` + `sectionOffset`; enabled when the
-offset is non-null), and **3D annotations** (parts' dimensions/notes/callouts draw
-through the same `AnnotationGeometry` the window uses, always on when present —
-annotations are documentation, so docs renders carry them; the interactive view
-cube is the one deliberate exclusion) — so a headless PNG matches what the viewer
-shows, and docs cutaways can use real section planes instead of boolean-cut
-workarounds.
+offset is non-null) **including their SDF isoline overlays**, and **3D
+annotations** (parts' dimensions/notes/callouts draw through the same
+`AnnotationGeometry` the window uses, always on when present — annotations are
+documentation, so docs renders carry them) — so a headless PNG matches what the
+viewer shows (interactive selection/hover highlights and the view cube are the
+deliberate exclusions), and docs cutaways use real section planes instead of
+boolean-cut workarounds (DocsGen `render:` fences take `section:<x|y|z>,<offset>`
+and `style:<name>` options for exactly this).
 
 `EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
-window (alongside `--view` and `--export`). Check `EngrCad.CanRenderToImage` first to
-skip gracefully on machines with no GPU/ANGLE.
+window (alongside `--view` and `--export`), with `--render-style
+points|wireframe|shaded|shaded-edges` and `--section x|y|z <offset>` (e.g.
+`--section z 6`) selecting the view style and section plane — CLI switches win over
+the builder's `WithViewStyle`/`WithSection` defaults, and invalid values are usage
+errors (exit 2). `EngrCadBuilder.RenderToImage` mirrors the static overload's
+optional `style`/`sectionAxis`/`sectionOffset` parameters, falling back to the
+accumulated options when omitted. Check `EngrCad.CanRenderToImage` first to skip
+gracefully on machines with no GPU/ANGLE.
 
 - **No window, no Avalonia lifetime.** `OffscreenRenderer` renders into an offscreen
   **EGL pbuffer** created directly over the ANGLE runtime Avalonia already ships on

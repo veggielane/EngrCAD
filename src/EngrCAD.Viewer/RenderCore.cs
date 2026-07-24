@@ -460,7 +460,7 @@ internal static class RenderGeometry
     }
 
     /// <summary>Flattens line segments into the xyz-per-vertex array the line program draws.</summary>
-    public static float[] SegmentVertices(List<(Vector3d A, Vector3d B)> segments)
+    public static float[] SegmentVertices(IReadOnlyList<(Vector3d A, Vector3d B)> segments)
     {
         var vertices = new float[segments.Count * 6];
         for (int i = 0; i < segments.Count; i++)

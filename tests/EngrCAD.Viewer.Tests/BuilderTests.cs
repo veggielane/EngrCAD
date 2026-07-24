@@ -56,6 +56,82 @@ public class BuilderTests
     }
 
     [Fact]
+    public void Configure_AccumulatesRenderStyleAndSection()
+    {
+        var options = EngrCad.Configure()
+            .WithViewStyle(ViewStyle.Wireframe)
+            .WithSection(SectionAxis.X, 2.5)
+            .Options;
+
+        Assert.Equal(ViewStyle.Wireframe, options.RenderStyle);
+        Assert.Equal(SectionAxis.X, options.SectionAxis);
+        Assert.Equal(2.5, options.SectionOffset);
+
+        // Defaults: shaded-with-edges, no section.
+        var defaults = EngrCad.Configure().Options;
+        Assert.Equal(ViewStyle.ShadedWithEdges, defaults.RenderStyle);
+        Assert.Equal(SectionAxis.Z, defaults.SectionAxis);
+        Assert.Null(defaults.SectionOffset);
+    }
+
+    [Fact]
+    public void Run_ParsesRenderStyleSwitch()
+    {
+        // Valid values land in the options; the render itself is never reached (the
+        // arg after --render is not a .png, rejected after parsing succeeds — no GL).
+        foreach (var (spelling, expected) in new (string, ViewStyle)[]
+        {
+            ("points", ViewStyle.Points),
+            ("wireframe", ViewStyle.Wireframe),
+            ("shaded", ViewStyle.Shaded),
+            ("shaded-edges", ViewStyle.ShadedWithEdges),
+            ("SHADED-EDGES", ViewStyle.ShadedWithEdges),   // case-insensitive
+        })
+        {
+            var options = new EngrCadOptions { Log = new ListLog() };
+            Assert.Equal(2, EngrCad.Configure(options).Run(
+                ["--render", "--render-style", spelling], CylinderScene));
+            Assert.Equal(expected, options.RenderStyle);
+        }
+
+        // Invalid or missing values are usage errors (exit 2) with a hint.
+        var log = new ListLog();
+        Assert.Equal(2, EngrCad.Configure().WithLog(log)
+            .Run(["--render", "out.png", "--render-style", "bogus"], CylinderScene));
+        Assert.Contains(log.Errors, m => m.Contains("--render-style"));
+
+        log = new ListLog();
+        Assert.Equal(2, EngrCad.Configure().WithLog(log)
+            .Run(["--render", "out.png", "--render-style"], CylinderScene));
+        Assert.Contains(log.Errors, m => m.Contains("--render-style"));
+    }
+
+    [Fact]
+    public void Run_ParsesSectionSwitch()
+    {
+        // Valid switch parses into the options before the (deliberately bad, non-.png)
+        // render path is rejected — no GL is touched.
+        var options = new EngrCadOptions { Log = new ListLog() };
+        Assert.Equal(2, EngrCad.Configure(options).Run(
+            ["--render", "--section", "y", "-3.5"], CylinderScene));
+        Assert.Equal(SectionAxis.Y, options.SectionAxis);
+        Assert.Equal(-3.5, options.SectionOffset);
+
+        // Bad axis, non-numeric offset, and missing offset are all usage errors.
+        foreach (var args in new string[][]
+        {
+            ["--render", "out.png", "--section", "q", "5"],
+            ["--render", "out.png", "--section", "z", "tall"],
+            ["--render", "out.png", "--section", "z"],
+        })
+        {
+            var log = new ListLog();
+            Assert.Equal(2, EngrCad.Configure().WithLog(log).Run(args, CylinderScene));
+            Assert.Contains(log.Errors, m => m.Contains("--section"));
+        }
+    }
+
+    [Fact]
     public void Configure_WrapsAnExistingOptionsInstance()
     {
         // The IOptions<EngrCadOptions> pattern: DI provides the POCO, Configure uses it.

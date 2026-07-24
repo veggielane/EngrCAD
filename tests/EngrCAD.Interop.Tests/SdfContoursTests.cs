@@ -122,6 +122,57 @@ public class SdfContoursTests
     }
 
     [Fact]
+    public void SaddleCell_CenterAverageDecidesTheDiagonalConnection()
+    {
+        // A hyperbolic section: two spheres centered on diagonally opposite corners of
+        // a single sample cell (c0 at (0,0), c2 at (1,1) — the union field's saddle
+        // sits at the cell center). With a 2x2 grid the corners alternate
+        // inside/outside (mask 5), the ambiguous marching-squares case; the rule under
+        // test is the CENTER-AVERAGE disambiguation, avg = (sum of corner values)/4 =
+        // 0.5 - r here, so radius decides the topology exactly at r = 0.5.
+        static IReadOnlyList<(Vector3d A, Vector3d B)> SaddleSegments(double radius)
+        {
+            var union = Sdf.Sphere(radius) | Sdf.Sphere(radius).Translate((1, 1, 0));
+            var contours = SdfContours.OnPlane(
+                union, origin: (0, 0, 0), uSide: (1, 0, 0), vSide: (0, 1, 0), 2, 2, [0.0]);
+            return Assert.Single(contours).Segments;
+        }
+
+        // Separated spheres (r = 0.4, avg = +0.1): two arcs, each hugging its own
+        // inside corner. Crossings are exact from the linear interpolation of the
+        // corner values (-r and 1 - r): t = r along each crossing edge.
+        var separated = SaddleSegments(0.4);
+        Assert.Equal(2, separated.Count);
+        Assert.Contains(separated, s => NearCorner(s, 0, 0, 0.4));   // around c0
+        Assert.Contains(separated, s => NearCorner(s, 1, 1, 0.4));   // around c2
+
+        // Near-merging spheres (r = 0.65, avg = -0.15): the inside corners connect
+        // diagonally — the two segments now isolate the OUTSIDE corners instead, so
+        // one segment joins the left edge (x = 0) to the top edge (y = 1) around c3.
+        var merged = SaddleSegments(0.65);
+        Assert.Equal(2, merged.Count);
+        Assert.Contains(merged, s => Touches(s, p => p.X == 0) && Touches(s, p => p.Y == 1));
+        Assert.Contains(merged, s => Touches(s, p => p.Y == 0) && Touches(s, p => p.X == 1));
+
+        // Both endpoints of a segment lie within `reach` (Chebyshev) of the corner —
+        // the "arc around one inside corner" shape of the disconnected resolution.
+        static bool NearCorner((Vector3d A, Vector3d B) s, double cx, double cy, double reach)
+        {
+            const double slack = 1e-12;   // exact-arithmetic crossings, roundoff only
+            return Chebyshev(s.A, cx, cy) <= reach + slack && Chebyshev(s.B, cx, cy) <= reach + slack;
+        }
+
+        static double Chebyshev(in Vector3d p, double cx, double cy) =>
+            Math.Max(Math.Abs(p.X - cx), Math.Abs(p.Y - cy));
+
+        // Cell-boundary membership is exact: crossings on the x = 0 edge are built as
+        // points[a] + (points[b] - points[a]) * t with identical x coordinates, so the
+        // in-plane coordinate is bit-exactly the grid line's.
+        static bool Touches((Vector3d A, Vector3d B) s, Func<Vector3d, bool> onEdge) =>
+            onEdge(s.A) || onEdge(s.B);
+    }
+
+    [Fact]
     public void DegenerateGrid_Throws()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => SdfContours.OnPlane(

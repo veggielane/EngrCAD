@@ -13,8 +13,11 @@ namespace EngrCAD.Viewer;
 /// PNG. The look matches <see cref="ViewportControl"/> — background gradient, ground
 /// grid + axes, directional light with specular, part colors, feature-edge overlay,
 /// per-part display modes (wireframe, translucent with the shared back-to-front
-/// ordering), the global <see cref="ViewStyle"/>, and axis-aligned section planes —
-/// because both passes draw with the same shaders, camera math, mode resolution, and
+/// ordering), the global <see cref="ViewStyle"/>, and axis-aligned section planes
+/// including their SDF isoline overlays (parts with an implicit route get
+/// iso-distance contours on the cut, via the same <see cref="SectionContourRenderer"/>
+/// as the window) — because both passes draw with the same shaders, camera math, mode
+/// resolution, and
 /// furniture geometry from <c>RenderCore.cs</c> (<see cref="ViewerShaders"/>/
 /// <see cref="CameraMath"/>/<see cref="RenderModes"/>/<see cref="RenderGeometry"/>).
 /// The only shader feature disabled here is the selection highlight (uHighlight 0 —
@@ -266,7 +269,10 @@ public static class OffscreenRenderer
                 int edgeVertexCount = 0;
                 if (mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent)
                 {
-                    var featureEdges = MeshFeatureEdges.Extract(mesh);
+                    // B-Rep-backed parts overlay their ACTUAL B-Rep edges (smooth
+                    // circles at any tessellation); others fall back to mesh
+                    // dihedrals — same rule as the window (Part.GetFeatureEdges).
+                    var featureEdges = part.GetFeatureEdges();
                     if (featureEdges.Count > 0)
                     {
                         (edgeVao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
@@ -438,12 +444,30 @@ public static class OffscreenRenderer
                 gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.EdgeVertexCount);
             }
         }
-        // Annotations (PMI): unlike the interactive view cube, dimensions/notes ARE
-        // documentation content, so the headless pass draws them (docs renders of
-        // dimensioned parts carry their dimensions). Geometry building is shared with
-        // the window via AnnotationLayer/AnnotationGeometry; the offscreen projection
-        // is always perspective and the supersample factor is the pixel scale so text
-        // keeps its on-image size.
+        // Section-plane SDF isolines, drawn after the translucent pass so they read
+        // as an overlay on the cut — the same pass order as the window. Offscreen is
+        // one-shot: a fresh SectionContourRenderer builds the geometry once, the
+        // window path's axis/offset staleness caching never comes into play, and its
+        // GL buffers die with the pbuffer context (nothing here is individually
+        // deleted, see the note at the end of this method).
+        if (section)
+        {
+            var allVisible = new bool[instances.Count];
+            Array.Fill(allVisible, true);
+            gl.UseProgram(lineProgram);
+            gl.Uniform1(uLineSectionEnabled, sectionEnabledF);
+            new SectionContourRenderer().Draw(
+                gl, instances, allVisible, axis, sectionOffset!.Value,
+                lineProgram, uLineModel, uLineColor, matrix, report: static _ => { });
+        }
+
+        // Annotations (PMI) draw after the isolines (annotations are chrome-like
+        // documentation content over the model overlay): unlike the interactive view
+        // cube, dimensions/notes ARE documentation, so the headless pass draws them
+        // (docs renders of dimensioned parts carry their dimensions). Geometry
+        // building is shared with the window via AnnotationLayer/AnnotationGeometry;
+        // the offscreen projection is always perspective and the supersample factor
+        // is the pixel scale so text keeps its on-image size.
         AnnotationLayer.DrawOffscreen(gl, instances,
             AnnotationCamera.From(cam, orthographic: false, height, supersample),
             lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix);

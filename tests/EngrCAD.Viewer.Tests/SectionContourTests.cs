@@ -126,6 +126,39 @@ public class SectionContourTests
     }
 
     [Fact]
+    public void SdfRoute_LoweringFailure_IsReportedOnce()
+    {
+        // A Shape wrapping an OPEN mesh claims an implicit route (mesh -> implicit is
+        // Bridged through MeshSdf) but the lowering throws (MeshSdf requires a closed
+        // mesh). The failure must surface through the report sink — otherwise the
+        // part is silently isoline-less — and the cached null keeps it to one report.
+        var open = EngrCAD.Mesh.HalfEdgeMesh.Build(
+            [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
+            [new[] { 0, 1, 2 }]);
+        var part = new Part("open", Shape.From(open));
+        var cache = new Dictionary<Part, Sdf?>();
+        var reports = new List<string>();
+
+        Assert.Null(SectionContours.SdfRoute(part, cache, reports.Add));
+        var message = Assert.Single(reports);
+        Assert.Contains("'open'", message);
+        Assert.Contains("lowering failed", message);
+
+        // Cached: the second query neither re-lowers nor re-reports.
+        Assert.Null(SectionContours.SdfRoute(part, cache, reports.Add));
+        Assert.Single(reports);
+
+        // And a whole Build over the part reports through the same sink without
+        // producing geometry (primed via a fresh cache to exercise the Build path).
+        reports.Clear();
+        var geometry = SectionContours.Build(
+            [new PartInstance(part, Matrix4d.Identity, part.Name)],
+            [true], SectionContours.PlaneFrame(Vector3d.UnitZ, 0), [], reports.Add);
+        Assert.Equal(0, geometry.PartCount);
+        Assert.Single(reports);
+    }
+
+    [Fact]
     public void Build_XAxisSection_ProducesContoursOnTheYzPlane()
     {
         // The extraction is plane-general: an X-axis section of a sphere yields the
