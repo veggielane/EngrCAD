@@ -90,10 +90,13 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   `MeshWindingNumber`'s ctor triangulates it again, and the triangle-corner extraction
   loop is duplicated between the two classes. Add a `MeshWindingNumber` overload
   accepting a pre-triangulated mesh (construction-time cost only; queries unaffected).
-- [ ] **Trimmed-face tessellation** (our own roadmap item) — g3's
-  `TriangulatedPolygonGenerator` (constrained triangulation by edge insertion into a
-  meshed rectangle) is a template for tessellating split generated faces (cut-through
-  bores) in parameter space.
+- [x] **Trimmed-face tessellation** ✅ done — `TrimmedFaceTessellator`: exact-coordinate
+  ear clipper (NOT earcut — its collinear filtering drops iso-parameter uv-collinear
+  samples, an unzippable crack) + strip-zip/pole-fan bands + surface-exact midpoint
+  refinement, routed by a two-sided 3D boundary match with grid fallback. Closed the
+  cut-through-hole boolean limitation end-to-end (slot-through-bore → genus 3, exact-ish
+  volume). Remaining gaps: band faces with extra hole loops fall back to grid (renders,
+  ignores the hole), |winding| > 1 unsupported, no Delaunay quality flips.
 
 ## Core (EngrCAD.Core)
 
@@ -313,9 +316,10 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 - [x] Fillets/chamfers on planar-face rims ✅ done via `Shape.Chamfer/Fillet` with
   LINQ face selectors — chamfer: straight rims (mitered corners) + circular rims
   (cone bands); fillet: tangent-continuous line+arc rims + circular rims (cylinder/
-  torus bands). Remaining: sharp-corner fillet corners (ball/miter patches need
-  trimmed-band tessellation), arbitrary edge sets (not just face rims), variable
-  radius, chamfer angles other than the two-setback form
+  torus bands). Remaining: sharp-corner fillet corners (ball/miter patches — the
+  trimmed-band tessellation blocker is now GONE, this is unblocked), arbitrary edge
+  sets (not just face rims), variable radius, chamfer angles other than the
+  two-setback form
 - [ ] Draft angles (`BRepOffsetAPI_DraftAngle`)
 - [ ] Offset surfaces / thick solid / shelling (B-Rep shell — we only shell as SDF)
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
@@ -326,8 +330,13 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
 - [ ] Local operations: split shape by shape, glue faces
 
 **Geometry**
-- [x] Conics (circle, ellipse), B-splines/NURBS with rationals ✅; parabola/hyperbola missing
-- [ ] Offset curves and offset surfaces as first-class geometry
+- [x] Conics ✅ complete — circle, ellipse, B-splines/NURBS with rationals, and now
+  `Parabola3d` (focal parameterization, closed-form arc length) + `Hyperbola3d`
+  (cosh/sinh branch); `Curve3d` exposes virtual exact `DerivativeAt`/`SecondDerivativeAt`.
+  Follow-ups: `Parabola3d.ToNurbs()` (trivially exact quadratic Bézier), STEP export
+  mapping (PARABOLA/HYPERBOLA/OFFSET_CURVE_3D — sign conventions verified compatible).
+- [x] Offset *curves* ✅ (`OffsetCurve3d`, exact O′ = (1 − dκ)C′); offset *surfaces*
+  still missing
 - [x] Curve interpolation ✅ (`NurbsCurve.InterpolatePoints`: open natural / closed
   periodic cubic, chord-length parameterization); surface interpolation and
   least-squares *approximation* (`GeomAPI_PointsToBSpline` proper) still missing
@@ -342,8 +351,15 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   `BRepMesh` is chord-error-based — worth adopting a deflection criterion)
 - [ ] Topological naming / modification history (which output face came from which
   input face) — the foundation of parametric rebuilds surviving edits
-- [ ] Data exchange: STEP import (we export only), IGES, glTF, native BREP
-  serialization format — STL export ✅ done (`StlWriter`, binary, `--export .stl`)
+- [x] STEP import ✅ done (`StepReader`: Part 21 parser + AP214 mapping, round-trips
+  everything `StepWriter` emits; exact edge-domain reconstruction, revolve angle/trim
+  recovery by profile-space bisection; mm assumed, diagnostics for skips). Follow-ups:
+  unit scaling; CONICAL/TOROIDAL_SURFACE synthesis as `RevolvedSurface`; shape healing
+  for foreign files (separate item above); `StepWriter` should export
+  `TransformedCurve(NurbsCurve)` exactly by transforming control points (currently
+  sampled to degree-1 polylines — blocks exact round-trip of NURBS-profile extrusions).
+- [ ] Data exchange: IGES, glTF, native BREP serialization format — STL export ✅ done
+  (`StlWriter`, binary, `--export .stl`)
 - [ ] Hidden-line removal (HLR) projections for 2D drawings
 - [ ] OCAF-style document framework: undo/redo, attributes, persistence
 

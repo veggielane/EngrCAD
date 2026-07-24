@@ -169,6 +169,43 @@ Each engine uses the data structure its mathematics wants:
   uses. A hard-won numerical note: the default finite-difference `TangentAt` must be
   second-order at domain endpoints — a first-order one-sided difference puts ~1e-8 error
   into the start frame, which is larger than the weld tolerance and opens cracks.
+- **The derivative API is virtual and exact-by-default**: `Curve3d` exposes virtual
+  `DerivativeAt`/`SecondDerivativeAt` (documented finite-difference fallbacks), and
+  every analytic curve — now including `Parabola3d`/`Hyperbola3d`, completing the conic
+  family — plus both wrappers override them exactly. This formalizes the repo's
+  "no finite-difference tangents in weld-critical constructions" lesson at the API
+  level: a consumer asking a curve for derivatives gets exact values unless the curve
+  genuinely has none (`PolylineCurve3d`). `OffsetCurve3d` (planar offset as first-class
+  geometry) derives its exact derivative analytically — O′ = (1 − dκ)·C′ with the
+  signed curvature from the base curve's exact C′/C″ — rather than differencing, and
+  deliberately does NOT validate |d| against the minimum radius of curvature
+  (cusps/self-intersection are the caller's responsibility, matching OCCT).
+- **STEP import reconstructs what the format doesn't store.** `StepReader` maps AP214
+  back to `BrepSolid` with topology shared by entity identity (one edge per
+  `EDGE_CURVE` — manifold sharing survives by construction). STEP stores no edge
+  domains and no revolve angle/generator trims, so the reader rebuilds them exactly:
+  closed-form phase angles for conic arcs, Newton with exact NURBS derivatives for
+  B-spline trims, and revolve trims recovered by bisection on the exact (radius, axial)
+  profile residuals — root solving, never distance minimization, which stalls at
+  √ε ≈ 1e-8, past the 1e-9 weld tolerance.
+- **Trimmed-face tessellation ear-clips exact coordinates — earcut is banned for
+  pulled-back loops.** `PolygonTriangulator` filters exactly-collinear vertices, and
+  iso-parameter boundary runs are exactly collinear in uv while NOT collinear in 3D:
+  a dropped sample is a crack no zip pass can repair, and jittering the input breeds
+  zero-area folds that refine into non-manifold welds. The landed design: an exact
+  ear clipper (shortest-diagonal ear selection — first-found fans caused 60× triangle
+  blowup — with an epsilon blocking band for inverse-evaluation jitter), a monotone
+  strip-zip/pole-fan path for band-like regions, and Steiner points by *refinement*
+  (midpoint-split oversized interior edges, evaluated on the exact surface) instead of
+  upfront insertion — no point-in-region classification needed. Boundary vertices are
+  always the exact shared edge-polyline samples, so welding invariants hold by
+  construction; routing to the trimmed path requires a failed two-sided 3D match
+  against the natural grid boundary, and trimmed-path failure falls back to the grid.
+  Boolean-path lessons recorded from the same work: probe points must stay a
+  triangle-diameter away from fragment boundaries lying on the other solid's curved
+  surface (the SDF is only sagitta-accurate there), and both sides of a shared closed
+  intersection curve must agree on every subdivision point including the wrap-split
+  seam anchor at `Domain.Start`.
 - **NURBS curves have exact analytic derivatives** (`DerivativeAt`/`SecondDerivativeAt`:
   The NURBS Book A2.3 basis derivatives + the generalized rational quotient rule, so
   non-unit weights are handled; `TangentAt` is overridden, leaving finite differences
