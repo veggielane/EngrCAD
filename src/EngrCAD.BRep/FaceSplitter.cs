@@ -199,13 +199,20 @@ public static class FaceSplitter
                 var endUv = ProjectNear(surface, curve.PointAt(curve.Domain.End), pulledCurve[^1].Uv, period);
                 double drift = endUv.X - pulledCurve[0].Uv.X;
                 if (period > 0 && Math.Abs(drift) > period / 2)
+                {
+                    // A wrapping cut can only split a face whose region itself wraps
+                    // the band: every loop must span the full period. A contractible
+                    // fragment (a bite split off the band earlier) shares the same
+                    // carrier surface, so the wrapping curve pulls back onto it — but
+                    // with no boundary crossings it lies outside the fragment's region
+                    // and must not split it (splitting would fabricate a phantom band).
+                    if (rawLoops.Any(l => l.Max(p => p.X) - l.Min(p => p.X) < 0.75 * period))
+                        return [face];
                     return SplitBandByWrapCurve(face, curve, pulledCurve, drift > 0);
+                }
 
                 if (ParityContains(rawLoops, pulledCurve[0].Uv, period))
-                {
-                    var split = SplitByClosedCurve(face, curve);
-                    return [split.FaceWithHole, split.Disk!];
-                }
+                    return SplitByInteriorClosedCurve(face, curve, pulledCurve, mandatoryBreaks);
             }
             return [face];
         }
@@ -298,6 +305,56 @@ public static class FaceSplitter
 
         // 3. Trace sub-faces from the planar graph.
         return TraceFaces(face, segmentCoedges, period);
+    }
+
+    /// <summary>
+    /// Splits a face along a closed curve interior to it, honoring mandatory seam
+    /// breaks: with two or more distinct break parameters the hole and disk loops are
+    /// built from matching curve segments (a boolean's other solid crosses the curve
+    /// with its own face boundaries there, so its seam edges are arcs — a single closed
+    /// edge on this side could never pair with them in seam sealing). Without breaks it
+    /// falls back to the single-edge <see cref="SplitByClosedCurve"/>.
+    /// </summary>
+    private static IReadOnlyList<BrepFace> SplitByInteriorClosedCurve(
+        BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, IReadOnlyList<double>? mandatoryBreaks)
+    {
+        var breaks = new List<double>();
+        foreach (double raw in mandatoryBreaks ?? [])
+        {
+            double s = WrapParam(curve, curve.Domain.Clamp(raw));
+            if (!breaks.Any(existing => Math.Abs(existing - s) < 1e-8))
+                breaks.Add(s);
+        }
+        if (breaks.Count < 2)
+        {
+            var split = SplitByClosedCurve(face, curve);
+            return [split.FaceWithHole, split.Disk!];
+        }
+        breaks.Sort();
+
+        bool curveCcw = FaceGeometry.LoopSignedArea(pulledCurve.Select(p => p.Uv).ToList()) > 0;
+        bool holeSense = face.IsReversed ? curveCcw : !curveCcw;
+
+        var vertices = breaks.Select(s => new BrepVertex(curve.PointAt(s))).ToList();
+        var edges = new List<BrepEdge>(breaks.Count);
+        for (int i = 0; i < breaks.Count; i++)
+        {
+            double s0 = breaks[i];
+            double s1 = breaks[(i + 1) % breaks.Count];
+            if (s1 <= s0) // wrap segment past the domain end
+                s1 += curve.Domain.Length;
+            edges.Add(new BrepEdge(
+                new CurveSegment(curve, s0, s1), Interval.Unit,
+                vertices[i], vertices[(i + 1) % breaks.Count]));
+        }
+
+        BrepLoop Chain(bool alongCurve) => new(alongCurve
+            ? [.. edges.Select(e => new BrepCoedge(e, true))]
+            : [.. edges.AsEnumerable().Reverse().Select(e => new BrepCoedge(e, false))]);
+
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, Chain(holeSense)], face.IsReversed);
+        var disk = new BrepFace(face.Surface, [Chain(!holeSense)], face.IsReversed);
+        return [faceWithHole, disk];
     }
 
     /// <summary>
@@ -777,25 +834,71 @@ public static class FaceSplitter
             tracedLoops.Add(loop);
         }
 
-        // Classify traced loops by pulled signed area; outer-wound loops (CCW on normal
-        // faces, CW on reversed ones) bound sub-faces, the rest are holes assigned to
-        // the smallest containing outer loop.
+        // Classify traced loops. Contractible loops go by pulled signed area:
+        // outer-wound (CCW on normal faces, CW on reversed ones) bound disk-like
+        // sub-faces, the rest are holes. Loops that WRAP the periodic direction have
+        // meaningless pulled area — they are band boundaries: traversal along +u puts
+        // the material above (a band's bottom ring), along −u below (its top ring),
+        // mirrored on reversed faces. Bands pair a bottom with the next top above it;
+        // an unpaired boundary bounds a pole-capped band (region runs to the domain
+        // edge, like a hemisphere above its equator).
         double orientation = face.IsReversed ? -1 : 1;
         var loopData = tracedLoops
             .Select(l =>
             {
                 var polyline = LoopPolyline(l, surface, period);
-                return (Coedges: l, Polyline: polyline, Area: orientation * FaceGeometry.LoopSignedArea(polyline));
+                bool wraps = period > 0 &&
+                    polyline.Max(p => p.X) - polyline.Min(p => p.X) > 0.75 * period;
+                return (Coedges: l, Polyline: polyline,
+                    Area: orientation * FaceGeometry.LoopSignedArea(polyline), Wraps: wraps);
             })
             .ToList();
 
-        var outers = loopData.Where(d => d.Area > 0).ToList();
-        var holes = loopData.Where(d => d.Area <= 0).ToList();
-        if (outers.Count == 0)
+        var outers = loopData.Where(d => !d.Wraps && d.Area > 0).ToList();
+        var holes = loopData.Where(d => !d.Wraps && d.Area <= 0).ToList();
+
+        // Pair wrapping loops into band regions by v: walking upward, a bottom
+        // (material-above) boundary opens a band that the next top boundary closes.
+        var wrapping = loopData.Where(d => d.Wraps)
+            .Select(d =>
+            {
+                double drift = d.Polyline[^1].X - d.Polyline[0].X;
+                return (d.Coedges, d.Polyline, IsBottom: orientation * drift > 0,
+                    AverageV: d.Polyline.Average(p => p.Y));
+            })
+            .OrderBy(d => d.AverageV)
+            .ToList();
+        var bandRegions = new List<(List<List<BrepCoedge>> Loops, List<List<Vector2d>> Polylines)>();
+        (List<BrepCoedge> Coedges, List<Vector2d> Polyline)? openBottom = null;
+        foreach (var boundary in wrapping)
+        {
+            if (boundary.IsBottom)
+            {
+                if (openBottom is not null)
+                    throw new InvalidOperationException(
+                        "Arrangement tracing found two band-bottom boundaries with no top between them.");
+                openBottom = (boundary.Coedges, boundary.Polyline);
+            }
+            else if (openBottom is { } bottom)
+            {
+                bandRegions.Add(([bottom.Coedges, boundary.Coedges], [bottom.Polyline, boundary.Polyline]));
+                openBottom = null;
+            }
+            else
+            {
+                // Top with nothing below: the region runs down to the domain edge.
+                bandRegions.Add(([boundary.Coedges], [boundary.Polyline]));
+            }
+        }
+        if (openBottom is { } last)
+            bandRegions.Add(([last.Coedges], [last.Polyline]));
+
+        if (outers.Count == 0 && bandRegions.Count == 0)
             throw new InvalidOperationException("Arrangement tracing produced no outer-wound loops.");
 
         var faces = new List<BrepFace>();
         var assignedHoles = outers.ToDictionary(o => o.Coedges, _ => new List<List<BrepCoedge>>());
+        var bandHoles = bandRegions.Select(_ => new List<List<BrepCoedge>>()).ToList();
         foreach (var hole in holes)
         {
             var probe = hole.Polyline[0];
@@ -806,15 +909,27 @@ public static class FaceSplitter
                     (bestOuter is null || outer.Area < bestOuter.Value.Area))
                     bestOuter = (outer.Coedges, outer.Area);
             }
-            if (bestOuter is null)
+            if (bestOuter is not null)
+            {
+                assignedHoles[bestOuter.Value.Coedges].Add(hole.Coedges);
+                continue;
+            }
+            int band = bandRegions.FindIndex(r => r.Polylines.Count == 2 && ParityContains(r.Polylines, probe, period));
+            if (band < 0)
                 throw new InvalidOperationException("Hole loop is not contained in any sub-face.");
-            assignedHoles[bestOuter.Value.Coedges].Add(hole.Coedges);
+            bandHoles[band].Add(hole.Coedges);
         }
 
         foreach (var outer in outers)
         {
             var loops = new List<BrepLoop> { new(outer.Coedges) };
             loops.AddRange(assignedHoles[outer.Coedges].Select(h => new BrepLoop(h)));
+            faces.Add(new BrepFace(surface, loops, face.IsReversed));
+        }
+        for (int i = 0; i < bandRegions.Count; i++)
+        {
+            var loops = bandRegions[i].Loops.Select(l => new BrepLoop(l)).ToList();
+            loops.AddRange(bandHoles[i].Select(h => new BrepLoop(h)));
             faces.Add(new BrepFace(surface, loops, face.IsReversed));
         }
         return faces;

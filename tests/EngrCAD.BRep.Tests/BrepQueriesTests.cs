@@ -41,6 +41,21 @@ public class BrepQueriesTests
     }
 
     [Fact]
+    public void Bounds_PoleBoundedHemisphereFace_IncludesTheDome()
+    {
+        // A hemisphere face's only edge is its equator: edge samples alone would give a
+        // flat disk and boolean face-pair prefiltering would skip real intersections
+        // with cap planes. Face bounds must include the surface's own (finite) domain.
+        var sphere = SolidFactory.MakeSphere(13);
+        var north = sphere.Faces.First(f =>
+            f.Loops[0].Coedges[0].SameSense); // the north generator starts at the equator
+
+        var bounds = north.Bounds();
+        Assert.True(bounds.Max.Z > 12.9, $"dome missing from bounds: {bounds}");
+        Assert.True(bounds.Min.Z > -0.1 && bounds.Min.Z < 0.1, $"unexpected lower bound: {bounds}");
+    }
+
+    [Fact]
     public void ConcaveEdge_IsNotConvex()
     {
         // An L-shaped extrusion has exactly one concave vertical edge at the inner corner.

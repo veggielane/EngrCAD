@@ -225,4 +225,47 @@ public class SurfaceIntersectionTests
         var b = new CylinderSurface((2, 2, 0), Vector3d.UnitX, Vector3d.UnitY, 0.3);
         Assert.Empty(SurfaceIntersection.Intersect(a, b, Region));
     }
+
+    [Fact]
+    public void PlaneParallelToAxis_SphereCarrierRevolved_ExactFullCircle()
+    {
+        // A hemisphere of MakeSphere is a full-turn RevolvedSurface whose generator arc
+        // lies on a sphere centered on the axis. A plane parallel to the axis must get
+        // the exact analytic circle of the CARRIER sphere (the marching tracer would
+        // clip an open polyline at the bounded generator, whose loose ends can never
+        // refine against face boundaries). The curve may run past the bounded surface —
+        // the face splitter clips per face.
+        var hemisphere = (RevolvedSurface)SolidFactory.MakeSphere(2).Faces.First().Surface;
+        var plane = new PlaneSurface((1.5, 0, 0), Vector3d.UnitY, Vector3d.UnitZ); // x = 1.5
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(plane, hemisphere, Region));
+        var circle = Assert.IsType<Circle3d>(curve);
+        Assert.True(circle.IsClosed);
+        Assert.Equal(Math.Sqrt(4 - 2.25), circle.Radius, 12);
+        Assert.Equal(0, circle.Center.DistanceTo((1.5, 0, 0)), 12);
+        foreach (var p in SamplePoints(circle))
+        {
+            Assert.Equal(2, p.DistanceTo(Vector3d.Zero), 12); // exactly on the sphere
+            AssertOnPlane(circle, plane, 1e-12);
+        }
+    }
+
+    [Fact]
+    public void PlanePerpendicularToAxis_SphereCarrierRevolved_StillPhaseAligned()
+    {
+        // Perpendicular planes must keep the pre-existing phase-aligned path (circles
+        // aligned with the band's u = 0) — the sphere-carrier case must not shadow it.
+        var hemisphere = (RevolvedSurface)SolidFactory.MakeSphere(2).Faces
+            .First(f => f.Loops[0].Coedges[0].SameSense).Surface; // northern half
+        var plane = new PlaneSurface((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY); // z = 1
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(plane, hemisphere, Region));
+        var circle = Assert.IsType<Circle3d>(curve);
+        Assert.Equal(Math.Sqrt(3), circle.Radius, 12);
+        // Phase alignment: the circle starts on the u = 0 generator half-plane — for
+        // MakeSphere that is the +X half of the XZ plane (never an arbitrary frame).
+        var start = circle.PointAt(circle.Domain.Start);
+        Assert.Equal(0, start.Y, 12);
+        Assert.True(start.X > 0, $"start {start} should sit on the +X generator half-plane");
+    }
 }

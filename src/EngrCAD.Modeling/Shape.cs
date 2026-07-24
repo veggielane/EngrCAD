@@ -112,6 +112,25 @@ public abstract class Shape
     {
         if (depth <= 0)
             throw new ArgumentOutOfRangeException(nameof(depth));
+
+        // Overlapping or tangent holes make the tools' surface circles intersect (or
+        // touch) on the drilled plane — degenerate boolean input that fails deep in
+        // tessellation. Reject up front, naming the offending pair.
+        double surfaceDiameter = hole.SurfaceDiameter;
+        const double tolerance = 1e-9;
+        for (int i = 0; i < points.Count; i++)
+        {
+            for (int j = i + 1; j < points.Count; j++)
+            {
+                double distance = points[i].DistanceTo(points[j]);
+                if (distance <= surfaceDiameter + tolerance)
+                    throw new ArgumentException(
+                        $"Holes at {points[i]} and {points[j]} (surface diameter {surfaceDiameter:g6} each) " +
+                        $"overlap or are tangent; centers must be more than {surfaceDiameter:g6} apart.",
+                        nameof(points));
+            }
+        }
+
         var placementPlane = plane ?? SketchPlane.XY;
         var toolProfile = hole.ToolProfile(depth);
         var result = this;
@@ -120,7 +139,7 @@ public abstract class Shape
             var tool = Revolve(toolProfile).Transform(placementPlane.ToMatrixAt(point));
             result -= tool;
         }
-        return result;
+        return new DrillShape(this, result, points, depth, placementPlane.ToMatrix());
     }
 
     // ---- Rim features (chamfer / fillet) ----

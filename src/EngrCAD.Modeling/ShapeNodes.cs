@@ -172,6 +172,24 @@ internal sealed class RimShape(
     internal override string Describe() => fillet ? $"Fillet(r={amount:g4})" : $"Chamfer({amount:g4})";
 }
 
+/// <summary>
+/// Drilled holes: the body minus one revolved hole tool per point. A dedicated node
+/// (rather than the bare difference chain in <see cref="Expanded"/>) so B-Rep lowering
+/// can validate the configuration against the lowered body — a tool whose flat bottom
+/// is coplanar with a planar body face is degenerate boolean input that would otherwise
+/// fail deep inside tessellation.
+/// </summary>
+internal sealed class DrillShape(
+    Shape child, Shape expanded, IReadOnlyList<Vector2d> points, double depth, Matrix4d planeMatrix) : Shape
+{
+    public Shape Child => child;
+    public Shape Expanded => expanded;
+    public IReadOnlyList<Vector2d> Points => points;
+    public double Depth => depth;
+    public Matrix4d PlaneMatrix => planeMatrix;
+    internal override string Describe() => $"Drill({points.Count} holes)";
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;

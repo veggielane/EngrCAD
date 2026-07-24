@@ -36,8 +36,58 @@ public static class SurfaceIntersection
                 => ParallelCylinders(ca, cb, region),
             (PlaneSurface p, RevolvedSurface r) when IsPerpendicularFullTurn(p, r) => PlaneRevolved(p, r),
             (RevolvedSurface r, PlaneSurface p) when IsPerpendicularFullTurn(p, r) => PlaneRevolved(p, r),
+            // Sphere-carrier revolved surfaces (hemispheres of MakeSphere): any plane
+            // cut is an exact circle. The perpendicular case above takes priority — its
+            // circles are phase-aligned with u = 0 for band-grid welding; a tilted
+            // circle is never a grid ring, so the sphere frame is free here. The full
+            // carrier circle may run past the bounded generator — the face splitter
+            // clips curves to a face's surface itself (partial pullback runs).
+            (PlaneSurface p, RevolvedSurface r) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
+            (RevolvedSurface r, PlaneSurface p) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
             _ => March(a, b, region),
         };
+    }
+
+    /// <summary>
+    /// Detects a full-turn revolved surface whose generator lies on a sphere centered on
+    /// the revolve axis — the carrier is that sphere. The generator is SAMPLED (never
+    /// trust <see cref="Curve3d.Underlying"/> for position): the center along the axis
+    /// comes from equating two sample distances, then every sample must agree.
+    /// </summary>
+    private static bool TrySphereCarrier(RevolvedSurface revolved, out SphereSurface sphere)
+    {
+        sphere = null!;
+        if (!revolved.IsFullTurn)
+            return false;
+
+        var axis = revolved.AxisDirection.Normalized();
+        var generator = revolved.Generator;
+        var domain = generator.Domain;
+        const int samples = 16;
+        Span<Vector3d> offsets = stackalloc Vector3d[samples + 1];
+        for (int i = 0; i <= samples; i++)
+            offsets[i] = generator.PointAt(domain.ParameterAt((double)i / samples)) - revolved.AxisOrigin;
+
+        // Center C = AxisOrigin + t·axis with |q0 − t·axis|² = |q1 − t·axis|²  ⇒
+        // t = (|q0|² − |q1|²) / (2·(q0 − q1)·axis). Use the endpoints (largest spread).
+        var q0 = offsets[0];
+        var q1 = offsets[^1];
+        double denominator = 2 * (q0 - q1).Dot(axis);
+        if (Math.Abs(denominator) < 1e-12)
+            return false;
+        double t = (q0.LengthSquared - q1.LengthSquared) / denominator;
+
+        double radius = (q0 - axis * t).Length;
+        if (radius < Tolerance.Default.Linear)
+            return false;
+        double tolerance = Math.Max(1e-9, radius * 1e-12);
+        for (int i = 1; i <= samples; i++)
+        {
+            if (Math.Abs((offsets[i] - axis * t).Length - radius) > tolerance)
+                return false;
+        }
+        sphere = new SphereSurface(revolved.AxisOrigin + axis * t, radius);
+        return true;
     }
 
     private static bool IsPerpendicularFullTurn(PlaneSurface plane, RevolvedSurface revolved) =>
