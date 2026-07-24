@@ -63,6 +63,14 @@ public sealed class HoleSpec
     }
 
     /// <summary>
+    /// The tool's diameter at the drilled surface — the recess diameter for
+    /// counterbores/countersinks, the bore diameter for simple holes. Two holes whose
+    /// surface circles overlap or touch produce degenerate boolean input, so
+    /// <see cref="Shape.Drill"/> validates spacing against this diameter.
+    /// </summary>
+    internal double SurfaceDiameter => _kind == Kind.Simple ? _diameter : _featureDiameter;
+
+    /// <summary>
     /// The cutting tool's revolve profile in (radius, height) coordinates: the drilled
     /// surface is at y = 0, material below. The tool overshoots the surface slightly so
     /// booleans never see coplanar faces (the countersink cone continues its slope, so

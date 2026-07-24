@@ -53,7 +53,12 @@ operations. Depends only on `EngrCAD.Core`.
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
   common quadric pairs (lines, circles, exact ellipses) and a general marching tracer
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
-  everything else. See design.md §5 for the algorithm.
+  everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
+  sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are
+  recognized as **sphere carriers**: any plane cut returns the exact analytic circle
+  (plane ⊥ axis keeps the phase-aligned path) — the tracer's region-clipped open
+  polylines stop short of a bounded generator's rings and could never refine against
+  face boundaries.
 
 - **`FaceGeometry` / `FaceSplitter` / `TopologyEditor`** — trimming machinery: inverse
   surface evaluation (`Surface.TryProjectPoint`), curve pullback into parameter space
@@ -69,7 +74,16 @@ operations. Depends only on `EngrCAD.Core`.
   reversed ones, `IsReversed` preserved throughout), and period-wrapping curves
   (`SplitBandByWrapCurve`: band → two exactly re-surfaced sub-bands). `TopologyEditor`
   supplies `SplitEdge` (patches every using loop) and `SealSeams` (boolean output
-  sealing).
+  sealing). Closed curves interior to a face honor **mandatory seam breaks**
+  (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`
+  arcs, so a boolean's other side — which cuts the same circle at its own boundary
+  crossings — pairs edge-for-edge in seam sealing). Wrap-splitting refuses faces with
+  non-wrapping loops (a contractible fragment can share the band's carrier surface; a
+  wrapping curve with no crossings lies outside it). Arrangement tracing is
+  **band-aware**: traced loops that wrap the period are band boundaries (traversal
+  along +u = material above, mirrored on reversed faces), paired bottom-to-top by v
+  into band sub-faces — pulled signed area is meaningless for them (the hemisphere
+  band between a bitten equator and an untouched cap ring is the canonical case).
 
 - **STEP export/import** — `StepWriter.Write/WriteFile` (ISO 10303-21 AP214
   `MANIFOLD_SOLID_BREP`; analytic surfaces/curves, rational NURBS via the

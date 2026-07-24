@@ -96,6 +96,11 @@ internal static class ShapeCompiler
                         "a non-uniform scale or shear does not commute with rim features"));
                 break;
 
+            case DrillShape drill:
+                // A drill is its expansion (body minus revolved tools); the extra
+                // far-face validation happens at lowering.
+                ClassifyBrep(drill.Expanded, m, entries);
+                break;
             case TransformShape t:
                 ClassifyBrep(t.Child, m * t.Matrix, entries);
                 break;
@@ -183,6 +188,9 @@ internal static class ShapeCompiler
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "sheared subtree goes through a tessellated mesh SDF"));
                 break;
+            case DrillShape drill:
+                ClassifyImplicit(drill.Expanded, m, entries);
+                break;
             case TransformShape t:
                 ClassifyImplicit(t.Child, m * t.Matrix, entries);
                 break;
@@ -217,6 +225,7 @@ internal static class ShapeCompiler
         SmoothShape or OffsetShape or ShellShape or LatticeShape => true,
         SourceShape { Geometry: Sdf } => true,
         BooleanShape b => UsesImplicitOnlyOps(b.A) || UsesImplicitOnlyOps(b.B),
+        DrillShape d => UsesImplicitOnlyOps(d.Expanded),
         TransformShape t => UsesImplicitOnlyOps(t.Child),
         _ => false,
     };
@@ -371,6 +380,12 @@ internal static class ShapeCompiler
                 return solid;
             }
 
+            case DrillShape drill:
+            {
+                ValidateDrillDepth(drill, m);
+                return LowerBrep(drill.Expanded, m);
+            }
+
             case TransformShape t:
                 return LowerBrep(t.Child, m * t.Matrix);
 
@@ -457,6 +472,10 @@ internal static class ShapeCompiler
             case LatticeShape l:
                 return LowerImplicit(l.Child, m, quality)
                     .Intersect(Place(l.Pattern, rotation, translation, scale));
+
+            case DrillShape drill:
+                // Exact SDF subtraction has no coplanar-face degeneracy: no validation.
+                return LowerImplicit(drill.Expanded, m, quality);
 
             case TransformShape t:
                 return LowerImplicit(t.Child, m * t.Matrix, quality);
@@ -548,6 +567,41 @@ internal static class ShapeCompiler
                     SurfaceNets.Polygonize(
                         LowerImplicit(shape, Matrix4d.Identity, quality), quality.SdfResolution),
                     m);
+        }
+    }
+
+    /// <summary>
+    /// Rejects a drill whose tool's flat bottom is coplanar with a planar face of the
+    /// body: coplanar face pairs are unsupported boolean input (the v1 transversality
+    /// contract), and without this guard the failure surfaces as a deep tessellation
+    /// error ("Directed edge appears twice"). Follows the rim features' precedent of
+    /// validating against the lowered solid. Only exact coplanarity (within tolerance)
+    /// throws — a bottom safely short of the far face is a legitimate blind hole.
+    /// </summary>
+    private static void ValidateDrillDepth(DrillShape drill, in Matrix4d m)
+    {
+        if (!CanBrep(drill.Child, m))
+            return; // the expansion will produce its own conversion report
+        var body = LowerBrep(drill.Child, m);
+        var effective = m * drill.PlaneMatrix;
+        var drillNormal = effective.TransformVector((0, 0, 1)).Normalized();
+        const double tolerance = 1e-6;
+
+        foreach (var point in drill.Points)
+        {
+            var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, -drill.Depth));
+            foreach (var face in body.Faces)
+            {
+                if (!face.IsPlanar(out var origin, out var normal))
+                    continue;
+                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < 1 - 1e-6)
+                    continue;
+                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= tolerance)
+                    throw new ArgumentException(
+                        $"Drill depth {drill.Depth:g6} puts the tool's flat bottom coplanar with a planar " +
+                        $"face of the body (hole at {point}); increase depth so the tool clears the far " +
+                        "face, or reduce it for a blind hole.");
+            }
         }
     }
 

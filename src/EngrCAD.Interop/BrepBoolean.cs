@@ -217,6 +217,36 @@ public static class BrepBoolean
         var mid = face.Surface.PointAt(u, v);
         if (FaceGeometry.Contains(face, mid))
             return mid;
+
+        // Last resort — band fragments with bites (a hemisphere band minus several
+        // bulges) have no useful uv centroid: search a coarse grid over the pulled
+        // loops' uv extents and keep the containing sample farthest from the loops,
+        // where the classification SDF is most trustworthy.
+        double uMin = loops.SelectMany(l => l).Min(p => p.X), uMax = loops.SelectMany(l => l).Max(p => p.X);
+        double vMin = loops.SelectMany(l => l).Min(p => p.Y), vMax = loops.SelectMany(l => l).Max(p => p.Y);
+        var loopPoints = loops.SelectMany(l => l).Select(p => face.Surface.PointAt(p.X, p.Y)).ToList();
+        Vector3d? best = null;
+        double bestClearance = 0;
+        const int grid = 12;
+        for (int i = 1; i < grid; i++)
+        {
+            for (int j = 1; j < grid; j++)
+            {
+                double gu = uMin + (uMax - uMin) * i / grid;
+                double gv = vMin + (vMax - vMin) * j / grid;
+                var candidate = face.Surface.PointAt(gu, gv);
+                if (!FaceGeometry.Contains(face, candidate))
+                    continue;
+                double clearance = loopPoints.Min(p => p.DistanceSquaredTo(candidate));
+                if (clearance > bestClearance)
+                {
+                    bestClearance = clearance;
+                    best = candidate;
+                }
+            }
+        }
+        if (best is { } found)
+            return found;
         throw new InvalidOperationException("Could not find a probe point on a face fragment.");
     }
 }

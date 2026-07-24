@@ -156,6 +156,27 @@ public static class BrepQueries
             foreach (var coedge in loop.Coedges)
                 bounds = bounds.Union(coedge.Edge.Bounds());
         }
+
+        // Edge samples alone miss the interior of curved faces: a pole-bounded
+        // hemisphere's only edge is its equator, whose bounds are a flat disk — the
+        // dome would be invisible (and boolean face-pair prefiltering would silently
+        // skip real intersections). Generated surfaces tessellate domain-driven, so a
+        // finite surface domain is the face's coverage; sample it too. Planar faces
+        // need no interior samples (the boundary's hull contains the face), and
+        // infinite carrier domains (planes, cylinders) cannot be sampled — their
+        // faces are bounded by their edges anyway.
+        var surface = face.Surface;
+        if (surface is not PlaneSurface &&
+            double.IsFinite(surface.DomainU.Length) && double.IsFinite(surface.DomainV.Length))
+        {
+            const int samples = 16;
+            for (int i = 0; i <= samples; i++)
+            {
+                double u = surface.DomainU.ParameterAt((double)i / samples);
+                for (int j = 0; j <= samples; j++)
+                    bounds = bounds.Union(surface.PointAt(u, surface.DomainV.ParameterAt((double)j / samples)));
+            }
+        }
         return bounds;
     }
 
