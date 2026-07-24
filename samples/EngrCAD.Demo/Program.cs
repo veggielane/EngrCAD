@@ -51,8 +51,9 @@ var holePlate = Shape.Box(30, 20, 12)
     .Drill(StandardHoles.Clearance(5), [new(10, 5)], depth: 14, plateTop)
     .Drill(StandardHoles.Tapped(6), [new(-5, -5)], depth: 10, plateTop)
     .Drill(StandardHoles.Trisert(4), [new(5, -5)], StandardHoles.TrisertMinimumDepth(4), plateTop);
+// Translucent display mode shows off the internal hole geometry (cbores, csk cones).
 sketches.Add(new Part("standard holes", holePlate, Palette.Brass,
-    Matrix4d.CreateTranslation((0, -4.4, 0)) * Matrix4d.CreateScale(0.14)));
+    Matrix4d.CreateTranslation((0, -4.4, 0)) * Matrix4d.CreateScale(0.14))).DisplayMode = DisplayMode.Translucent;
 
 // ---- tab 2: the mesh engine ----
 var meshes = scene.AddTab("mesh");

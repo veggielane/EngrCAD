@@ -25,7 +25,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uSectionEnabled, _uSectionZ;
+    private int _uSectionEnabled, _uSectionZ, _uAlpha;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
     private int _uLineSectionEnabled, _uLineSectionZ;
@@ -51,7 +51,8 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private readonly record struct GpuMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color,
-        uint EdgeVao, uint EdgeVbo, int EdgeVertexCount);
+        uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
+        uint WireVao, uint WireVbo, int WireVertexCount, Vector3d WorldCenter);
 
     /// <summary>CPU-side pick data per object: triangles plus a BVH over them, in object space.</summary>
     private sealed record PickData(RenderMesh Mesh, EngrCAD.Core.Spatial.Bvh Bvh);
@@ -112,6 +113,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
         _uSectionEnabled = _gl.GetUniformLocation(_program, "uSectionEnabled");
         _uSectionZ = _gl.GetUniformLocation(_program, "uSectionZ");
+        _uAlpha = _gl.GetUniformLocation(_program, "uAlpha");
 
         _lineProgram = CompileLineProgram(_gl);
         _uLineModel = _gl.GetUniformLocation(_lineProgram, "uModel");
@@ -135,6 +137,8 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.DeleteVertexArray(m.Vao);
             gl.DeleteBuffer(m.EdgeVbo);
             gl.DeleteVertexArray(m.EdgeVao);
+            gl.DeleteBuffer(m.WireVbo);
+            gl.DeleteVertexArray(m.WireVao);
         }
         lock (_sceneLock)
         {
@@ -150,12 +154,15 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 var color = part.Color ?? Palette.Steel;
                 var render = RenderMesh.CreateFlat(part.GetMesh());
+                var worldBounds = part.Bounds();
                 _meshes.Add(Upload(gl, render, part.Transform, (color.R, color.G, color.B),
-                    MeshFeatureEdges.Extract(part.GetMesh())));
+                    MeshFeatureEdges.Extract(part.GetMesh()),
+                    WireframeEdges.Extract(part.GetMesh()),
+                    worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
                 _partNames.Add(part.Name);
                 _visible.Add(true);
                 _parts.Add(part);
-                bounds = bounds.Union(part.Bounds());
+                bounds = bounds.Union(worldBounds);
 
                 var boxes = new Aabb[render.TriangleCount];
                 for (int t = 0; t < render.TriangleCount; t++)
@@ -251,6 +258,8 @@ public sealed class ViewportControl : OpenGlControlBase
             _gl.DeleteVertexArray(m.Vao);
             _gl.DeleteBuffer(m.EdgeVbo);
             _gl.DeleteVertexArray(m.EdgeVao);
+            _gl.DeleteBuffer(m.WireVbo);
+            _gl.DeleteVertexArray(m.WireVao);
         }
         _meshes.Clear();
         if (_gridVbo != 0)
@@ -350,42 +359,113 @@ public sealed class ViewportControl : OpenGlControlBase
         // Section mode relies on face culling staying OFF (the GL default; nothing here
         // enables CullFace): clipping a closed solid exposes its interior, and the
         // fragment shader shades those backfaces as cut material via gl_FrontFacing.
+        // Fills push back slightly (polygon offset) so the edge overlay wins depth.
+        gl.Uniform1(_uAlpha, 1f);
         gl.Enable(EnableCap.PolygonOffsetFill);
         gl.PolygonOffset(1f, 1f);
         for (int i = 0; i < _meshes.Count; i++)
         {
-            if (!_visible[i])
+            if (!_visible[i] || Mode(i) != DisplayMode.Shaded)
                 continue;
-            var m = _meshes[i];
-            WriteColumnMajor(m.Model, matrix);
-            gl.UniformMatrix4(_uModel, 1, false, matrix);
-            gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
-            gl.Uniform1(_uHighlight, i == _selected ? 1f : 0f);
-            gl.BindVertexArray(m.Vao);
-            gl.DrawElements(PrimitiveType.Triangles, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
+            DrawFill(gl, i, matrix);
         }
         gl.Disable(EnableCap.PolygonOffsetFill);
 
-        // Feature-edge overlay: the shaded-with-edges CAD look. Edges belong to the
-        // model, so the section plane clips them consistently with the fills.
+        // Line overlay: feature edges for shaded parts (the shaded-with-edges CAD
+        // look), full triangle wireframe for wireframe-mode parts. Lines belong to
+        // the model, so the section plane clips them consistently with the fills.
         gl.UseProgram(_lineProgram);
         gl.Uniform1(_uLineSectionEnabled, _sectionEnabled ? 1f : 0f);
         gl.Uniform1(_uLineSectionZ, (float)_sectionHeight);
         for (int i = 0; i < _meshes.Count; i++)
         {
-            if (!_visible[i] || _meshes[i].EdgeVertexCount == 0)
+            if (!_visible[i])
                 continue;
             var m = _meshes[i];
-            WriteColumnMajor(m.Model, matrix);
-            gl.UniformMatrix4(_uLineModel, 1, false, matrix);
-            if (i == _selected)
-                gl.Uniform3(_uLineColor, 1.0f, 0.85f, 0.35f);
-            else
-                gl.Uniform3(_uLineColor, 0.09f, 0.10f, 0.11f);
-            gl.BindVertexArray(m.EdgeVao);
-            gl.DrawArrays(PrimitiveType.Lines, 0, (uint)m.EdgeVertexCount);
+            switch (Mode(i))
+            {
+                case DisplayMode.Wireframe when m.WireVertexCount > 0:
+                    WriteColumnMajor(m.Model, matrix);
+                    gl.UniformMatrix4(_uLineModel, 1, false, matrix);
+                    if (i == _selected)
+                        gl.Uniform3(_uLineColor, 1.0f, 0.85f, 0.35f);
+                    else
+                        gl.Uniform3(_uLineColor, m.Color.R, m.Color.G, m.Color.B);
+                    gl.BindVertexArray(m.WireVao);
+                    gl.DrawArrays(PrimitiveType.Lines, 0, (uint)m.WireVertexCount);
+                    break;
+                case DisplayMode.Shaded when m.EdgeVertexCount > 0:
+                    DrawFeatureEdges(gl, i, matrix);
+                    break;
+            }
+        }
+
+        // Translucent pass, after everything opaque: blended fills back-to-front by
+        // part center, with depth writes off so translucent parts do not occlude each
+        // other; depth *testing* stays on so opaque geometry in front still wins.
+        var translucent = new List<int>();
+        for (int i = 0; i < _meshes.Count; i++)
+        {
+            if (_visible[i] && Mode(i) == DisplayMode.Translucent)
+                translucent.Add(i);
+        }
+        if (translucent.Count > 0)
+        {
+            translucent.Sort((a, b) =>
+                (_meshes[b].WorldCenter - eye).LengthSquared.CompareTo(
+                    (_meshes[a].WorldCenter - eye).LengthSquared));
+
+            gl.UseProgram(_program);
+            gl.Uniform1(_uAlpha, 0.4f);
+            gl.Enable(EnableCap.Blend);
+            gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            gl.DepthMask(false);
+            foreach (int i in translucent)
+                DrawFill(gl, i, matrix);
+            gl.DepthMask(true);
+            gl.Disable(EnableCap.Blend);
+
+            // Their feature edges draw opaque on top (the fills wrote no depth), which
+            // keeps the part's silhouette readable through the glass.
+            gl.UseProgram(_lineProgram);
+            foreach (int i in translucent)
+            {
+                if (_meshes[i].EdgeVertexCount > 0)
+                    DrawFeatureEdges(gl, i, matrix);
+            }
         }
         gl.BindVertexArray(0);
+
+        // A requested screenshot reads back the finished frame while the context is
+        // current (GL calls are only legal here), then encodes off-thread.
+        if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } screenshotPath)
+            CaptureFramebuffer(gl, (int)width, (int)height, screenshotPath);
+    }
+
+    private DisplayMode Mode(int index) => _parts[index].DisplayMode;
+
+    private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
+    {
+        var m = _meshes[index];
+        WriteColumnMajor(m.Model, matrix);
+        gl.UniformMatrix4(_uModel, 1, false, matrix);
+        gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
+        gl.Uniform1(_uHighlight, index == _selected ? 1f : 0f);
+        gl.BindVertexArray(m.Vao);
+        gl.DrawElements(PrimitiveType.Triangles, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
+    }
+
+    private void DrawFeatureEdges(GL gl, int index, Span<float> matrix)
+    {
+        var m = _meshes[index];
+        WriteColumnMajor(m.Model, matrix);
+        gl.UniformMatrix4(_uLineModel, 1, false, matrix);
+        if (index == _selected)
+            gl.Uniform3(_uLineColor, 1.0f, 0.85f, 0.35f);
+        else
+            gl.Uniform3(_uLineColor, 0.09f, 0.10f, 0.11f);
+        gl.BindVertexArray(m.EdgeVao);
+        gl.DrawArrays(PrimitiveType.Lines, 0, (uint)m.EdgeVertexCount);
     }
 
     // ---- picking ----
@@ -492,6 +572,79 @@ public sealed class ViewportControl : OpenGlControlBase
                 _visible[index] = visible;
         }
         RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Changes how a part is drawn (index into the current part list). Writes through
+    /// to <see cref="Part.DisplayMode"/>, so the mode survives tab switches; a live
+    /// reload rebuilds parts and the model code's modes win again.
+    /// </summary>
+    public void SetDisplayMode(int index, DisplayMode mode)
+    {
+        lock (_sceneLock)
+        {
+            if (index >= 0 && index < _parts.Count)
+                _parts[index].DisplayMode = mode;
+        }
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>The display mode of a part (index into the current part list).</summary>
+    public DisplayMode GetDisplayMode(int index)
+    {
+        lock (_sceneLock)
+            return index >= 0 && index < _parts.Count ? _parts[index].DisplayMode : DisplayMode.Shaded;
+    }
+
+    // ---- screenshot ----
+
+    private string? _pendingScreenshot;
+
+    /// <summary>
+    /// Saves the next rendered frame as a PNG. Thread-safe: the pixels are read inside
+    /// the render pass (the only place GL calls are legal) and encoded off-thread; the
+    /// resulting path (or failure) is reported through <see cref="Status"/>.
+    /// With no <paramref name="path"/>, writes a timestamped file under
+    /// Pictures/EngrCAD (falling back to the working directory).
+    /// </summary>
+    public void SaveScreenshot(string? path = null)
+    {
+        Interlocked.Exchange(ref _pendingScreenshot, path ?? DefaultScreenshotPath());
+        Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
+    }
+
+    private static string DefaultScreenshotPath()
+    {
+        string folder = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        folder = string.IsNullOrEmpty(folder)
+            ? Environment.CurrentDirectory
+            : Path.Combine(folder, "EngrCAD");
+        return Path.Combine(folder, $"engrcad-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+    }
+
+    /// <summary>Reads the finished frame (GL context current) and encodes/writes it off-thread.</summary>
+    private unsafe void CaptureFramebuffer(GL gl, int width, int height, string path)
+    {
+        var pixels = new byte[width * height * 4];
+        fixed (byte* p = pixels)
+            gl.ReadPixels(0, 0, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+
+        Task.Run(() =>
+        {
+            try
+            {
+                // GL rows are bottom-up; the framebuffer alpha is compositing residue.
+                var png = PngWriter.Encode(width, height, pixels, flipVertically: true, forceOpaque: true);
+                if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
+                    Directory.CreateDirectory(directory);
+                File.WriteAllBytes(path, png);
+                ShowStatus($"screenshot saved: {path}");
+            }
+            catch (Exception e)
+            {
+                ShowStatus($"screenshot failed: {e.Message}");
+            }
+        });
     }
 
     /// <summary>Zoom-to-fit: frames the camera on the visible parts' bounds.</summary>
@@ -622,22 +775,30 @@ public sealed class ViewportControl : OpenGlControlBase
         return t > 1e-9;
     }
 
+    private static float[] SegmentVertices(List<(Vector3d A, Vector3d B)> segments)
+    {
+        var vertices = new float[segments.Count * 6];
+        for (int i = 0; i < segments.Count; i++)
+        {
+            var (a, b) = segments[i];
+            vertices[i * 6 + 0] = (float)a.X;
+            vertices[i * 6 + 1] = (float)a.Y;
+            vertices[i * 6 + 2] = (float)a.Z;
+            vertices[i * 6 + 3] = (float)b.X;
+            vertices[i * 6 + 4] = (float)b.Y;
+            vertices[i * 6 + 5] = (float)b.Z;
+        }
+        return vertices;
+    }
+
     private unsafe GpuMesh Upload(
         GL gl, RenderMesh mesh, in Matrix4d model, (float, float, float) color,
-        List<(Vector3d A, Vector3d B)> featureEdges)
+        List<(Vector3d A, Vector3d B)> featureEdges,
+        List<(Vector3d A, Vector3d B)> wireEdges,
+        in Vector3d worldCenter)
     {
-        var edgeVertices = new float[featureEdges.Count * 6];
-        for (int i = 0; i < featureEdges.Count; i++)
-        {
-            var (a, b) = featureEdges[i];
-            edgeVertices[i * 6 + 0] = (float)a.X;
-            edgeVertices[i * 6 + 1] = (float)a.Y;
-            edgeVertices[i * 6 + 2] = (float)a.Z;
-            edgeVertices[i * 6 + 3] = (float)b.X;
-            edgeVertices[i * 6 + 4] = (float)b.Y;
-            edgeVertices[i * 6 + 5] = (float)b.Z;
-        }
-        var (edgeVao, edgeVbo) = UploadLines(gl, edgeVertices);
+        var (edgeVao, edgeVbo) = UploadLines(gl, SegmentVertices(featureEdges));
+        var (wireVao, wireVbo) = UploadLines(gl, SegmentVertices(wireEdges));
         // Interleave position + normal.
         var interleaved = new float[mesh.VertexCount * 6];
         for (int v = 0; v < mesh.VertexCount; v++)
@@ -667,7 +828,8 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
 
         gl.BindVertexArray(0);
-        return new GpuMesh(vao, vbo, ebo, mesh.Indices.Length, model, color, edgeVao, edgeVbo, featureEdges.Count * 2);
+        return new GpuMesh(vao, vbo, ebo, mesh.Indices.Length, model, color, edgeVao, edgeVbo, featureEdges.Count * 2,
+            wireVao, wireVbo, wireEdges.Count * 2, worldCenter);
     }
 
     private uint CompileProgram(GL gl)
@@ -701,6 +863,7 @@ public sealed class ViewportControl : OpenGlControlBase
             uniform float uHighlight;
             uniform float uSectionEnabled;
             uniform float uSectionZ;
+            uniform float uAlpha;
             out vec4 fragColor;
             void main()
             {
@@ -716,7 +879,7 @@ public sealed class ViewportControl : OpenGlControlBase
                         // NOTE: shader comments must stay pure ASCII - ANGLE's GLES
                         // translator rejects the whole shader on non-ASCII bytes.
                         vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
-                        fragColor = vec4(mix(cut, vec3(1.0, 0.85, 0.35), uHighlight * 0.4), 1.0);
+                        fragColor = vec4(mix(cut, vec3(1.0, 0.85, 0.35), uHighlight * 0.4), uAlpha);
                         return;
                     }
                 }
@@ -727,7 +890,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 float specular = pow(max(dot(n, h), 0.0), 48.0) * 0.35;
                 vec3 base = mix(uColor, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
                 vec3 c = base * (0.22 + 0.78 * diffuse) + vec3(specular);
-                fragColor = vec4(c, 1.0);
+                fragColor = vec4(c, uAlpha);
             }
             """;
 

@@ -40,7 +40,33 @@ Dark-themed layout around one shared GL viewport:
   plane in v1 — a click can select a part through the cut-away half.
 - **Model tree** (left): the current tab's parts with visibility checkboxes; clicking
   a name selects it (bold + gold in the viewport), and viewport picks highlight the
-  tree row — selection stays in sync both ways.
+  tree row — selection stays in sync both ways. Each row also has a small
+  **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part through
+  Shaded → Wireframe → Translucent (see below).
+- **Per-part display modes** (`Part.DisplayMode`, default `Shaded`): design code sets
+  it (`part.DisplayMode = DisplayMode.Translucent`) and the tree's per-row cycler
+  changes it live; custom hosts drive `ViewportControl.SetDisplayMode(index, mode)`.
+  - *Shaded* — lit fill with the feature-edge overlay (the normal CAD look).
+  - *Wireframe* — every mesh edge drawn as a line, no fill, in the part's color
+    (selection turns it gold). Reuses the line program over the half-edge mesh's
+    edges (`WireframeEdges`).
+  - *Translucent* — alpha-blended fill (α ≈ 0.4) so you can see through to interior
+    geometry, with the feature edges drawn opaque on top for a readable silhouette.
+    Draw ordering (v1, honest limitations): opaque and shaded parts draw first, then
+    translucent parts sorted **back-to-front by part center** with depth-writes off.
+    This is correct for separated parts and for a translucent shell over opaque
+    contents, but it is a *per-part* sort, not per-triangle — two interpenetrating or
+    mutually-overlapping translucent parts, or a single non-convex translucent part
+    seen through itself, can show blend-order artifacts. Section mode remains the tool
+    for exact interior inspection.
+- **Screenshot** (toolbar `Capture`, or `ViewportControl.SaveScreenshot(path?)`): saves
+  the current framebuffer as a PNG and reports the path in the status bar. The pixels
+  are read with `glReadPixels` *inside* the render pass (the only place GL calls are
+  legal), then row-flipped (GL is bottom-up), forced opaque (framebuffer alpha is
+  compositing residue), and encoded by a dependency-free `PngWriter` (8-bit RGBA,
+  filter None, `System.IO.Compression` deflate) off the render thread. With no path
+  the file lands in `Pictures/EngrCAD/engrcad-<timestamp>.png` (falling back to the
+  working directory).
 - **Properties** (right): kind (Shape/B-Rep/mesh/SDF), face count, closed, volume,
   surface area, and world size of the selected part.
 - **Viewport dressing**: vertical-gradient background, adaptive ground grid on z = 0
