@@ -190,6 +190,30 @@ internal sealed class DrillShape(
     internal override string Describe() => $"Drill({points.Count} holes)";
 }
 
+/// <summary>
+/// A helical thread solid (external form: threaded rod along +Z, z ∈ [0, length]) built
+/// from the ISO 68-1 basic profile of <see cref="ThreadSpec"/>. Used directly by
+/// <see cref="Shape.ExternalThread(ThreadSpec, double, double, bool)"/> (with a negative
+/// <paramref name="profileOffset"/> = printing clearance) and, flipped, as the cutting
+/// tool of <see cref="Shape.ThreadedHole"/> (positive offset grows the void). Implicit-
+/// native via <see cref="Sdf.Thread"/>; no B-Rep lowering yet (a true helical sweep is
+/// future work), so B-Rep is Impossible and meshes bridge through Surface Nets.
+/// </summary>
+internal sealed class ThreadShape(ThreadSpec spec, double length, double profileOffset, double chamferLength) : Shape
+{
+    public ThreadSpec Spec => spec;
+    public double Length => length;
+    public double ProfileOffset => profileOffset;
+    public double ChamferLength => chamferLength;
+
+    internal Sdf ToSdf() => Sdf.Thread(
+        spec.MajorDiameter / 2, spec.MinorDiameter / 2, spec.Pitch,
+        spec.CrestFlatWidth, spec.RootFlatWidth, length,
+        profileOffset, startChamfer: chamferLength, endChamfer: chamferLength);
+
+    internal override string Describe() => $"Thread({spec.Designation}, L={length:g4})";
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;
