@@ -97,6 +97,10 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   number from ONE structure. Ours does box/ray/nearest; add: all-hit rays with
   t-ordering, **tree–tree overlap and intersection-segment queries** (feeds the
   imprint boolean), and winding number.
+- [ ] **Non-allocating `Bvh.Nearest`** (perf-mandate, from a code-quality review) —
+  `MeshSdf.Evaluate` passes a lambda to `Bvh.Nearest`, heap-allocating a closure per
+  distance query in a kernel hot path. Add a struct/interface-delegate `Nearest`
+  overload so `MeshSdf` (and other callers) can query allocation-free.
 - [ ] **Tolerance-policy audit** — sweep every project for float comparisons that
   bypass the central `Tolerance` API: raw `==`/`!=` on doubles, hardcoded epsilons
   (`1e-9`, `1e-12`, …) that should reference the policy, and ad-hoc `Math.Abs(a - b) <
@@ -341,6 +345,13 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   ANGLE natives (`OffscreenRenderer` + `EglContext`, `PngWriter`). This is the viewer
   self-verification loop — tests and agents render + inspect pixels instead of
   screenshotting the demo app.
+- [ ] **Extract a shared viewer render-core** (from a code-quality review) —
+  `OffscreenRenderer` deliberately duplicates ~150 lines from `ViewportControl`
+  (shader source strings, `LookAt`/`Perspective`/`WriteColumnMajor`, grid/axes build)
+  so the window and headless passes can drift apart silently. Hoist a shared
+  `ViewerShaders`/`CameraMath` static so both render identically. (Also minor viewer
+  hygiene the review noted: the translucent pass allocates a `List<int>` + sort
+  comparer every frame — hoist a reusable buffer.)
 - Add a builder for EngrCad.Run and Show, so we can set defaults like render quality, and so it can consume IOptions, ILogger etc
 - [ ] **View-type selector** in the viewer (toolbar): **points / mesh (wireframe) /
   shaded / shaded with edges** — a global viewport display mode, the classic CAD
