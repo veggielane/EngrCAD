@@ -15,10 +15,11 @@ var brepModel = Shape.Box(30, 21, 12) - Shape.Cylinder(4.5, 40).Translate(8, 0, 
 
 var scene = new Scene();
 scene.Add(new Part("to B-Rep", Shape.From(brepModel.ToBrep()), Palette.Steel,
-    Matrix4d.CreateTranslation((-45, 0, 0))));
-scene.Add(new Part("to implicit", Shape.From(model.ToImplicit()), Palette.Teal));
+    Matrix4d.CreateTranslation((-38, 0, 6))));
+scene.Add(new Part("to implicit", Shape.From(model.ToImplicit()), Palette.Teal,
+    Matrix4d.CreateTranslation((0, 0, 6))));
 scene.Add(new Part("to mesh", Shape.From(model.ToMesh()), Palette.Coral,
-    Matrix4d.CreateTranslation((45, 0, 0))));
+    Matrix4d.CreateTranslation((38, 0, 6))));
 ```
 
 ![The same model lowered to B-Rep, implicit, and mesh](images/three-reps.png)
@@ -75,7 +76,8 @@ var body = Shape.From(ripple)
     .ToMesh();  // lower once at the end
 
 var scene = new Scene();
-scene.Add(new Part("hybrid", Shape.From(body), Palette.Plum));
+scene.Add(new Part("hybrid", Shape.From(body), Palette.Plum,
+    Matrix4d.CreateTranslation((0, 0, 13))));
 ```
 
 ![A hand-written SDF blended shape composed back into the Shape vocabulary](images/drop-down.png)

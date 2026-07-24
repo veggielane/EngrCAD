@@ -18,7 +18,8 @@ var plate = Shape.Box(60, 30, 12)
     .Drill(HoleSpec.Countersink(5, countersinkDiameter: 11), [new(20, 0)], depth: 14, top);
 
 var scene = new Scene();
-scene.Add(new Part("drilled plate", plate, Palette.Steel));
+scene.Add(new Part("drilled plate", plate, Palette.Steel,
+    Matrix4d.CreateTranslation((0, 0, 6))));    // rest the plate on the ground plane
 ```
 
 ![A plate with a plain, a counterbored, and a countersunk hole](images/holes-spec.png)
@@ -46,7 +47,8 @@ var plate = Shape.Box(30, 20, 12)
            StandardHoles.TrisertMinimumDepth(4), top);                    // M4 insert pilot
 
 var scene = new Scene();
-scene.Add(new Part("standard holes", plate, Palette.Brass));
+scene.Add(new Part("standard holes", plate, Palette.Brass,
+    Matrix4d.CreateTranslation((0, 0, 6))));
 ```
 
 ![A plate drilled with the five standard hole recipes](images/holes-standard.png)
@@ -65,11 +67,16 @@ var top = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
 
 var plate = Shape.Box(60, 30, 12)
     .Drill(HoleSpec.Counterbore(5, 10, 4), [new(-15, 0)], depth: 14, top)
-    .Drill(HoleSpec.Countersink(5, 11), [new(15, 0)], depth: 14, top)
-    - Shape.Box(62, 32, 14).Translate(0, -16, 0);    // cut the front half away
+    .Drill(HoleSpec.Countersink(5, 11), [new(15, 0)], depth: 14, top);
 
-var scene = new Scene();
-scene.Add(new Part("cross-section", plate, Palette.Sky));
+// Drilling is exact in the implicit engine too: lower to the signed distance
+// field and cut the near half away to expose the hole profiles.
+var sectioned = Shape.From(plate.ToImplicit())
+    - Shape.Box(62, 32, 16).Translate(0, 16, 0);
+
+var scene = new Scene(new MeshQuality { SdfResolution = 160 });
+scene.Add(new Part("cross-section", sectioned, Palette.Sky,
+    Matrix4d.CreateTranslation((0, 0, 6))));
 ```
 
 ![A half-sectioned plate exposing counterbore and countersink profiles](images/holes-section.png)

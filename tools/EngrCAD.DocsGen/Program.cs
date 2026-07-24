@@ -73,8 +73,16 @@ var mdFiles = Directory.EnumerateFiles(docsRoot, "*.md", SearchOption.AllDirecto
 foreach (var file in mdFiles)
 {
     var lines = File.ReadAllLines(file);
+    var inOuterFence = false; // ````-fenced blocks quote fences verbatim (writing-examples.md)
     for (var i = 0; i < lines.Length; i++)
     {
+        if (lines[i].StartsWith("````", StringComparison.Ordinal))
+        {
+            inOuterFence = !inOuterFence;
+            continue;
+        }
+        if (inOuterFence) continue;
+
         var open = fenceOpen.Match(lines[i]);
         if (!open.Success) continue;
 
@@ -170,7 +178,9 @@ foreach (var s in snippets)
     {
         try
         {
-            EngrCad.RenderToImage(scene, pngPath, width: 1000, height: 700);
+            // 2x supersampled relative to the display size in the docs pages — the
+            // offscreen renderer has no MSAA, so browser downscaling anti-aliases.
+            EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120);
             rendered++;
         }
         catch (Exception ex)

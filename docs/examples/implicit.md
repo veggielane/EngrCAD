@@ -16,9 +16,9 @@ var bulb = Shape.Sphere(11).Translate(0, 0, 18);
 
 var scene = new Scene();
 scene.Add(new Part("hard union", stem | bulb, Palette.Steel,
-    Matrix4d.CreateTranslation((-30, 0, 0))));
+    Matrix4d.CreateTranslation((-30, 0, 15))));
 scene.Add(new Part("smooth union", stem.SmoothUnion(bulb, blend: 6), Palette.Teal,
-    Matrix4d.CreateTranslation((30, 0, 0))));
+    Matrix4d.CreateTranslation((30, 0, 15))));
 ```
 
 ![A hard union next to a smooth union with a blended neck](images/smooth-blend.png)
@@ -31,9 +31,9 @@ offsetting a box rounds its edges and corners exactly:
 ```csharp render:offset
 var scene = new Scene();
 scene.Add(new Part("box", Shape.Box(24, 24, 24), Palette.Steel,
-    Matrix4d.CreateTranslation((-30, 0, 0))));
+    Matrix4d.CreateTranslation((-30, 0, 17))));
 scene.Add(new Part("offset +5", Shape.Box(24, 24, 24).Offset(5), Palette.Coral,
-    Matrix4d.CreateTranslation((30, 0, 0))));
+    Matrix4d.CreateTranslation((30, 0, 17))));
 ```
 
 ![A box next to its outward offset with rounded edges](images/offset.png)
@@ -48,7 +48,8 @@ var hollow = Shape.Sphere(16).Shell(2.5)
     - Shape.Box(40, 40, 40).Translate(0, -20, 20);   // cut a quarter away to look inside
 
 var scene = new Scene();
-scene.Add(new Part("shelled sphere", hollow, Palette.Brass));
+scene.Add(new Part("shelled sphere", hollow, Palette.Brass,
+    Matrix4d.CreateTranslation((0, 0, 16))));
 ```
 
 ![A shelled sphere cut open to show the constant wall thickness](images/shell.png)
@@ -59,10 +60,10 @@ scene.Add(new Part("shelled sphere", hollow, Palette.Brass));
 `Sdf.Gyroid(cellSize, thickness)` — the additive-manufacturing infill workhorse:
 
 ```csharp render:lattice
-var scene = new Scene();
+var scene = new Scene(new MeshQuality { SdfResolution = 110 });
 scene.Add(new Part("gyroid lattice",
-    Shape.Sphere(16).Lattice(Sdf.Gyroid(cellSize: 10, thickness: 2.2)),
-    Palette.Slate));
+    Shape.Sphere(16).Lattice(Sdf.Gyroid(cellSize: 12, thickness: 1.2)),
+    Palette.Slate, Matrix4d.CreateTranslation((0, 0, 16))));
 ```
 
 ![A sphere filled with a gyroid lattice](images/lattice.png)

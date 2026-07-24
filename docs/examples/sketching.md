@@ -34,19 +34,19 @@ profiles without builder ceremony:
 
 ```csharp render:sketch-primitives
 var scene = new Scene();
-double x = -70;
+double x = -48;
 foreach (var (name, sketch) in new (string, Sketch)[]
 {
-    ("rectangle", Sketch.Rectangle(24, 16)),
-    ("rounded",   Sketch.RoundedRectangle(24, 16, 4)),
-    ("circle",    Sketch.Circle(10)),
-    ("polygon",   Sketch.Polygon([new(-12, -9), new(12, -9), new(0, 12)])),
-    ("slot",      Sketch.Slot(length: 24, width: 10)),
+    ("rectangle", Sketch.Rectangle(18, 12)),
+    ("rounded",   Sketch.RoundedRectangle(18, 12, 3)),
+    ("circle",    Sketch.Circle(7.5)),
+    ("polygon",   Sketch.Polygon([new(-9, -7), new(9, -7), new(0, 9)])),
+    ("slot",      Sketch.Slot(length: 18, width: 8)),
 })
 {
     scene.Add(new Part(name, Shape.Extrude(sketch, 4), Palette.Sky,
         Matrix4d.CreateTranslation((x, 0, 0))));
-    x += 34;
+    x += 24;
 }
 ```
 

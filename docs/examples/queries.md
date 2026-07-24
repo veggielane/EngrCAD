@@ -23,12 +23,16 @@ if (!faces.LastQueryUsedIndex)
 if (hits.Count == 0 || hits.Count == faces.Count)
     throw new Exception("candidate set should be a proper subset");
 
-// Distance and ray predicates use the same index:
+// Distance and ray predicates use the same index. Build the arguments *outside*
+// the predicate — expression trees cannot contain tuple conversions, so the
+// tuple-to-vector shorthand is unavailable inside a Where lambda.
+var northPole = new Vector3d(0, 0, 10);
+var downRay = new Ray3d((0, 0, 30), (0, 0, -1));
 var nearOrigin = faces.AsQueryable()
-    .Where(f => f.Bounds.WithinDistance(new Vector3d(0, 0, 10), 2.0))
+    .Where(f => f.Bounds.WithinDistance(northPole, 2.0))
     .ToList();
 var underRay = faces.AsQueryable()
-    .Where(f => f.Bounds.HitBy(new Ray3d((0, 0, 30), (0, 0, -1))))
+    .Where(f => f.Bounds.HitBy(downRay))
     .ToList();
 Console.WriteLine($"{nearOrigin.Count} near the north pole, {underRay.Count} under the ray");
 if (nearOrigin.Count == 0 || underRay.Count == 0)

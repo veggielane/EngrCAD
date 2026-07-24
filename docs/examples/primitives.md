@@ -4,15 +4,17 @@
 axis along +Z; position them with [transforms](transforms-patterns.md).
 
 ```csharp render:primitives
+// Primitives are centered at the origin; the part transforms here sit each one
+// on the ground plane and spread them out for the camera.
 var scene = new Scene();
-scene.Add(new Part("box", Shape.Box(30, 22, 14), Palette.Steel,
-    Matrix4d.CreateTranslation((-55, 0, 0))));
-scene.Add(new Part("cylinder", Shape.Cylinder(radius: 11, height: 26), Palette.Brass,
-    Matrix4d.CreateTranslation((-18, 0, 0))));
-scene.Add(new Part("sphere", Shape.Sphere(radius: 13), Palette.Coral,
-    Matrix4d.CreateTranslation((18, 0, 0))));
-scene.Add(new Part("torus", Shape.Torus(majorRadius: 13, minorRadius: 5), Palette.Teal,
-    Matrix4d.CreateTranslation((56, 0, 0))));
+scene.Add(new Part("box", Shape.Box(24, 18, 12), Palette.Steel,
+    Matrix4d.CreateTranslation((-40, 0, 6))));
+scene.Add(new Part("cylinder", Shape.Cylinder(radius: 9, height: 20), Palette.Brass,
+    Matrix4d.CreateTranslation((-13, 0, 10))));
+scene.Add(new Part("sphere", Shape.Sphere(radius: 10.5), Palette.Coral,
+    Matrix4d.CreateTranslation((13, 0, 10.5))));
+scene.Add(new Part("torus", Shape.Torus(majorRadius: 10, minorRadius: 4), Palette.Teal,
+    Matrix4d.CreateTranslation((40, 0, 4))));
 ```
 
 ![Box, cylinder, sphere, and torus primitives](images/primitives.png)

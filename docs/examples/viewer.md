@@ -71,7 +71,8 @@ var block = Shape.Box(40, 40, 24)
 var sectioned = block - Shape.Box(60, 60, 40).Translate(0, 0, 26);  // clip above z = 6
 
 var scene = new Scene();
-scene.Add(new Part("sectioned block", sectioned, Palette.Steel));
+scene.Add(new Part("sectioned block", sectioned, Palette.Steel,
+    Matrix4d.CreateTranslation((0, 0, 12))));
 ```
 
 ![A cross-sectioned block exposing two intersecting bores](images/section-cutaway.png)

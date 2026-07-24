@@ -8,15 +8,15 @@ transforms into construction inputs** — a rotated-then-drilled B-Rep stays exa
 because the transform moves the profiles and axes, never finished geometry:
 
 ```csharp render:transforms
-var blank = Shape.Box(30, 14, 6);
+var blank = Shape.Box(26, 12, 6);
 
 var scene = new Scene();
 scene.Add(new Part("original", blank, Palette.Steel,
-    Matrix4d.CreateTranslation((-45, 0, 0))));
+    Matrix4d.CreateTranslation((-36, 0, 8))));
 scene.Add(new Part("rotated", blank.RotateZ(Math.PI / 6).RotateY(Math.PI / 8),
-    Palette.Brass));
-scene.Add(new Part("scaled ×1.4", blank.Scale(1.4), Palette.Coral,
-    Matrix4d.CreateTranslation((50, 0, 0))));
+    Palette.Brass, Matrix4d.CreateTranslation((0, 0, 8))));
+scene.Add(new Part("scaled x1.4", blank.Scale(1.4), Palette.Coral,
+    Matrix4d.CreateTranslation((38, 0, 8))));
 ```
 
 ![A blank, a rotated copy, and a uniformly scaled copy](images/transforms.png)
@@ -48,11 +48,12 @@ an axis — the classic bolt-circle / carousel layout:
 
 ```csharp render:pattern-circular
 var carousel = Shape.Cylinder(20, 4)
-    | Shape.Cylinder(3, 14).Translate(15, 0, 9)
-        .PatternCircular(8, Vector3d.Zero, Vector3d.UnitZ);
+    | Shape.Cylinder(3, 14).Translate(15, 0, 8)   // posts overlap the disc (tangent
+        .PatternCircular(8, Vector3d.Zero, Vector3d.UnitZ);  // contact is not supported)
 
 var scene = new Scene();
-scene.Add(new Part("carousel", carousel, Palette.Brass));
+scene.Add(new Part("carousel", carousel, Palette.Brass,
+    Matrix4d.CreateTranslation((0, 0, 2))));
 ```
 
 ![Eight posts patterned around a disc](images/pattern-circular.png)
