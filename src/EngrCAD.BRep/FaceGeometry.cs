@@ -61,6 +61,62 @@ public static class FaceGeometry
         return result;
     }
 
+    /// <summary>
+    /// Curve parameters (ascending, spanning [start, end] inclusive) at which the curve
+    /// evaluates exactly on its carrier surface. Marching-tracer polylines are exact only
+    /// at their VERTICES — between them the polyline is chordal, a sagitta off the
+    /// surface, so inverse evaluation rejects mid-chord samples — hence polyline-backed
+    /// curves (raw, or wrapped in a reparameterizing <see cref="CurveSegment"/>) sample
+    /// at vertex parameters; everything else samples uniformly.
+    /// </summary>
+    internal static List<double> ExactSampleParameters(Curve3d curve, double start, double end, int uniformSamples)
+    {
+        var result = new List<double> { start };
+        double interiorEpsilon = Math.Max(1e-12, (end - start) * 1e-9);
+        void AddInterior(double t)
+        {
+            if (t > start + interiorEpsilon && t < end - interiorEpsilon)
+                result.Add(t);
+        }
+        switch (curve)
+        {
+            case PolylineCurve3d polyline:
+                foreach (double t in polyline.VertexParameters)
+                    AddInterior(t);
+                break;
+            case CurveSegment { Base: PolylineCurve3d basePolyline } segment:
+            {
+                // Segment parameter t maps to base parameter s = s0 + (s1 − s0)·t, with
+                // s wrapping past a closed base's domain end (CurveSegment wraps too).
+                double s0 = segment.BaseStart;
+                double length = segment.BaseEnd - segment.BaseStart;
+                double baseLength = basePolyline.Domain.Length;
+                foreach (double s in basePolyline.VertexParameters)
+                {
+                    AddInterior((s - s0) / length);
+                    if (basePolyline.IsClosed)
+                        AddInterior((s + baseLength - s0) / length);
+                }
+                result.Sort();
+                break;
+            }
+            default:
+                for (int i = 1; i < uniformSamples; i++)
+                    result.Add(start + (end - start) * i / uniformSamples);
+                break;
+        }
+        result.Add(end);
+
+        // Near-duplicate parameters (a vertex within epsilon of an endpoint) would make
+        // degenerate sampling segments downstream.
+        for (int i = result.Count - 1; i > 0; i--)
+        {
+            if (result[i] - result[i - 1] < interiorEpsilon)
+                result.RemoveAt(i == result.Count - 1 ? i - 1 : i);
+        }
+        return result;
+    }
+
     /// <summary>Signed area of a pulled-back closed polyline; positive = counter-clockwise in (u, v).</summary>
     public static double LoopSignedArea(IReadOnlyList<Vector2d> loop)
     {
@@ -85,14 +141,14 @@ public static class FaceGeometry
             foreach (var coedge in loop.Coedges)
             {
                 var domain = coedge.Edge.Domain;
-                bool closedEdge = coedge.Edge.IsClosedEdge;
-                int count = closedEdge ? samplesPerCurve : samplesPerCurve + 1;
-                for (int i = 0; i < count; i++)
+                var parameters = ExactSampleParameters(coedge.Edge.Curve, domain.Start, domain.End, samplesPerCurve);
+                // The traversal-final sample is skipped: for open edges it is the
+                // junction shared with the next coedge, for closed edges the duplicate
+                // of the traversal start.
+                for (int i = 0; i < parameters.Count - 1; i++)
                 {
-                    double f = (double)i / samplesPerCurve;
-                    if (!coedge.SameSense)
-                        f = 1 - f;
-                    var p = coedge.Edge.Curve.PointAt(domain.ParameterAt(f));
+                    double t = coedge.SameSense ? parameters[i] : parameters[parameters.Count - 1 - i];
+                    var p = coedge.Edge.Curve.PointAt(t);
                     if (!face.Surface.TryProjectPoint(p, out var uv, 1e-6))
                         throw new InvalidOperationException($"Loop point {p} does not lie on the face surface.");
                     if (period > 0 && points.Count > 0)
@@ -102,8 +158,6 @@ public static class FaceGeometry
                     }
                     points.Add(uv);
                 }
-                if (!closedEdge && points.Count > 0)
-                    points.RemoveAt(points.Count - 1); // junction shared with the next coedge
             }
             loops.Add(points);
         }

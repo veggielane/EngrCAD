@@ -208,6 +208,15 @@ public static class FaceSplitter
                     // and must not split it (splitting would fabricate a phantom band).
                     if (rawLoops.Any(l => l.Max(p => p.X) - l.Min(p => p.X) < 0.75 * period))
                         return [face];
+                    // Several wrapping cuts can hit the same band (a tool crossing a
+                    // bore pierces its wall twice): each sub-band shares the full
+                    // carrier surface, so every cut pulls back onto every fragment —
+                    // parity against the fragment's own loops decides which one it
+                    // actually lies in. Single-loop pole-bounded bands skip the check:
+                    // the upward-v ray convention cannot see a rim below the point,
+                    // but everything between rim and pole belongs to the face.
+                    if (face.Loops.Count > 1 && !ParityContains(rawLoops, pulledCurve[0].Uv, period))
+                        return [face];
                     return SplitBandByWrapCurve(face, curve, pulledCurve, drift > 0);
                 }
 
@@ -374,7 +383,7 @@ public static class FaceSplitter
 
         double vCut = pulledCurve.Average(p => p.Uv.Y);
         if (pulledCurve.Any(p => Math.Abs(p.Uv.Y - vCut) > 1e-6))
-            throw new NotSupportedException("Wrap-splitting supports constant-parameter cuts only.");
+            return SplitBandByNonPlanarWrapCurve(face, curve, pulledCurve, traversesPlusU);
 
         // Projections carry ~1e-7 parameter error; on slanted generators (cones) that
         // shifts the cut ring radially past weld tolerance. Refine vCut so the
@@ -488,6 +497,56 @@ public static class FaceSplitter
         ];
     }
 
+    /// <summary>
+    /// Splits a band face along a closed wrapping curve whose v varies — e.g. the
+    /// cylinder∩cylinder curve where a cross-drill tool pierces a bore wall. Unlike the
+    /// constant-v case there is no parameter line to trim the surface at, so BOTH
+    /// sub-bands keep the ORIGINAL surface and their loops no longer cover its grid
+    /// domain — tessellation must route them through the trimmed-face path. Each
+    /// boundary loop goes to the side of the cut its v-range lies on; a loop whose
+    /// v-range overlaps the cut's is a tangent/intersecting configuration we reject.
+    /// </summary>
+    private static IReadOnlyList<BrepFace> SplitBandByNonPlanarWrapCurve(
+        BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, bool traversesPlusU)
+    {
+        double cutMin = pulledCurve.Min(p => p.Uv.Y);
+        double cutMax = pulledCurve.Max(p => p.Uv.Y);
+        var pulledLoops = FaceGeometry.PullLoops(face);
+        BrepLoop? bottomLoop = null, topLoop = null;
+        for (int i = 0; i < face.Loops.Count; i++)
+        {
+            if (pulledLoops[i].Max(p => p.Y) <= cutMin)
+                bottomLoop = face.Loops[i];
+            else if (pulledLoops[i].Min(p => p.Y) >= cutMax)
+                topLoop = face.Loops[i];
+            else
+                throw new NotSupportedException(
+                    "A non-planar wrapping cut overlaps a boundary loop's v-range " +
+                    "(tangent or mutually intersecting cuts are not supported).");
+        }
+
+        var seam = new BrepVertex(curve.PointAt(curve.Domain.Start));
+        var edge = new BrepEdge(curve, curve.Domain, seam, seam);
+
+        // Same band conventions as the constant-v path: the bottom loop follows the
+        // generator's +u direction, the top loop opposes it, mirrored on reversed faces;
+        // the cut is the lower band's top and the upper band's bottom. A missing ring
+        // (pole end of an axis-touching revolve) contributes no loop.
+        bool lowerCutSense = face.IsReversed ? traversesPlusU : !traversesPlusU;
+        var lowerLoops = new List<BrepLoop>(2);
+        if (bottomLoop is not null)
+            lowerLoops.Add(bottomLoop);
+        lowerLoops.Add(new BrepLoop([new BrepCoedge(edge, lowerCutSense)]));
+        var upperLoops = new List<BrepLoop>(2) { new([new BrepCoedge(edge, !lowerCutSense)]) };
+        if (topLoop is not null)
+            upperLoops.Add(topLoop);
+        return
+        [
+            new BrepFace(face.Surface, lowerLoops, face.IsReversed),
+            new BrepFace(face.Surface, upperLoops, face.IsReversed),
+        ];
+    }
+
     private static double WrapParam(Curve3d curve, double s)
     {
         var d = curve.Domain;
@@ -511,12 +570,14 @@ public static class FaceSplitter
         Curve3d curve, Surface surface, out bool fullyOnSurface, int samples = 96)
     {
         double period = FaceGeometry.PeriodU(surface);
-        int count = curve.IsClosed ? samples : samples + 1;
+        var parameters = FaceGeometry.ExactSampleParameters(
+            curve, curve.Domain.Start, curve.Domain.End, samples);
+        if (curve.IsClosed)
+            parameters.RemoveAt(parameters.Count - 1); // duplicate of the start point
         var runs = new List<List<(double, Vector2d)>>();
         List<(double, Vector2d)>? current = null;
-        for (int i = 0; i < count; i++)
+        foreach (double s in parameters)
         {
-            double s = curve.Domain.ParameterAt((double)i / samples);
             if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, 1e-6))
             {
                 current = null;
@@ -533,13 +594,13 @@ public static class FaceSplitter
             }
             current.Add((s, uv));
         }
-        fullyOnSurface = runs.Count == 1 && runs[0].Count == count;
+        fullyOnSurface = runs.Count == 1 && runs[0].Count == parameters.Count;
 
         // A closed curve whose off-surface stretch straddles the parameter seam leaves
         // two runs that are really one: stitch them (later run first, s shifted a turn).
         if (!fullyOnSurface && curve.IsClosed && runs.Count >= 2 &&
-            runs[0][0].Item1 <= curve.Domain.Start + 1e-12 &&
-            runs[^1][^1].Item1 >= curve.Domain.ParameterAt((double)(samples - 1) / samples) - 1e-12)
+            runs[0][0].Item1 <= parameters[0] + 1e-12 &&
+            runs[^1][^1].Item1 >= parameters[^1] - 1e-12)
         {
             var tail = runs[^1];
             var head = runs[0];
@@ -555,15 +616,16 @@ public static class FaceSplitter
 
         if (!fullyOnSurface)
         {
-            double sStep = curve.Domain.Length / samples;
             foreach (var run in runs)
             {
                 if (run.Count < 2)
                     continue;
+                // Extrapolate by the local sample spacing (uniform for analytic curves,
+                // the adjacent vertex gap for polylines).
                 var frontDelta = run[1].Item2 - run[0].Item2;
-                run.Insert(0, (run[0].Item1 - sStep, run[0].Item2 - frontDelta));
+                run.Insert(0, (run[0].Item1 - (run[1].Item1 - run[0].Item1), run[0].Item2 - frontDelta));
                 var backDelta = run[^1].Item2 - run[^2].Item2;
-                run.Add((run[^1].Item1 + sStep, run[^1].Item2 + backDelta));
+                run.Add((run[^1].Item1 + (run[^1].Item1 - run[^2].Item1), run[^1].Item2 + backDelta));
             }
         }
         return runs;
@@ -636,13 +698,13 @@ public static class FaceSplitter
     /// <summary>Samples a coedge in edge-curve parameters + unwrapped uv (in traversal order).</summary>
     private static List<(double T, Vector2d Uv)> SampleCoedge(BrepCoedge coedge, Surface surface, double period, int samples = 48)
     {
-        var result = new List<(double, Vector2d)>(samples + 1);
         var domain = coedge.Edge.Domain;
+        var parameters = FaceGeometry.ExactSampleParameters(coedge.Edge.Curve, domain.Start, domain.End, samples);
+        var result = new List<(double, Vector2d)>(parameters.Count);
         Vector2d? previous = null;
-        for (int i = 0; i <= samples; i++)
+        for (int i = 0; i < parameters.Count; i++)
         {
-            double f = coedge.SameSense ? (double)i / samples : 1 - (double)i / samples;
-            double t = domain.ParameterAt(f);
+            double t = coedge.SameSense ? parameters[i] : parameters[parameters.Count - 1 - i];
             var uv = ProjectNear(surface, coedge.Edge.Curve.PointAt(t), previous, period);
             result.Add((t, uv));
             previous = uv;
@@ -941,12 +1003,13 @@ public static class FaceSplitter
         Vector2d? previous = null;
         foreach (var coedge in loop)
         {
-            for (int i = 0; i < samplesPerCoedge; i++)
+            var domain = coedge.Edge.Domain;
+            var parameters = FaceGeometry.ExactSampleParameters(coedge.Edge.Curve, domain.Start, domain.End, samplesPerCoedge);
+            // Traversal-final sample skipped: it is the junction with the next coedge.
+            for (int i = 0; i < parameters.Count - 1; i++)
             {
-                double f = coedge.SameSense
-                    ? (double)i / samplesPerCoedge
-                    : 1 - (double)i / samplesPerCoedge;
-                var p = coedge.Edge.Curve.PointAt(coedge.Edge.Domain.ParameterAt(f));
+                double t = coedge.SameSense ? parameters[i] : parameters[parameters.Count - 1 - i];
+                var p = coedge.Edge.Curve.PointAt(t);
                 var uv = ProjectNear(surface, p, previous, period);
                 points.Add(uv);
                 previous = uv;
@@ -960,6 +1023,12 @@ public static class FaceSplitter
 public sealed class CurveSegment(Curve3d baseCurve, double start, double end) : Curve3d
 {
     public Curve3d Base => baseCurve;
+
+    /// <summary>Base-curve parameter at t = 0.</summary>
+    public double BaseStart => start;
+
+    /// <summary>Base-curve parameter at t = 1 (may run past a closed base's domain end).</summary>
+    public double BaseEnd => end;
 
     public override Interval Domain => Interval.Unit;
     public override bool IsClosed => false;
