@@ -111,14 +111,15 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **Threads follow-ups** (core feature landed: `StandardThreads` ISO catalog,
-  `Helix3d`, `Sdf.Thread`, `Shape.ExternalThread`/`ThreadedHole` with printing
-  clearance — implicit-Native/mesh-Bridged/B-Rep-Impossible) — **true helical B-Rep
-  sweep**: the profile must co-rotate with the axial plane (NOT rotation-minimizing
-  frames), and the coaxial tangent seam to the core cylinder needs the coplanar/
-  tangent boolean case; `Helix3d` is the ready-made rail. Also: fine-pitch series,
-  left-hand threads (`Helix3d` already takes negative pitch), thread runout (grooves
-  fading via union-cone), cosmetic-thread annotation for drawings.
+- [ ] **Threads follow-ups** (B-Rep-native external threads AND threaded holes ✅
+  landed — `HelicalSurface`/`SpiralArc3d`/`MakeThreadedRod`, boolean-free lateral
+  sweep, clipped-pilot hole tool) — remaining: (a) 45° end-chamfer cones in B-Rep
+  (cone∩helical via tracer + trimmed helical tessellation); (b) clearance profiles in
+  B-Rep (distance-field offsets round reflex corners — needs arc-generator helical
+  bands); (c) helical∩cylinder and helical∩tilted-plane intersections + general
+  trimmed helical faces (today only axis-perpendicular plane cuts of threads work,
+  others fail loudly); (d) left-hand threads (negative pitch / mirrored lowering);
+  (e) fine-pitch series, thread runout, cosmetic-thread annotation.
 - [ ] **2D sketch engine** — combine g3-style `Polygon2d`/`GeneralPolygon2d`
   (polygon-with-holes containment), `PlanarComplex` (nested loop hierarchy),
   `Arrangement2d` + `GraphCells2d` (regions from crossing sketch curves), and

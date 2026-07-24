@@ -138,4 +138,29 @@ stack.Add(clamp);
 stack.Add(clamp, Frame3d.FromXY((0, 0, 2.2), Vector3d.UnitY, -Vector3d.UnitX)); // rotated + lifted
 assemblies.Add(stack);
 
+// ---- tab 8: threads — ISO 68-1 profile, three routes through the kernel ----
+// Dimensions in mm (M8 = Ø8), scaled 0.18× for display next to the other tabs.
+var threads = scene.AddTab("threads");
+const double threadScale = 0.18;
+
+// Exact B-Rep: one boolean-free helical sweep (no chamfers/clearance — the Native form).
+threads.Add(new Part("M8 stud (exact B-Rep)",
+    Shape.ExternalThread(8, length: 16, chamferEnds: false).ToBrep(),
+    Palette.Steel,
+    Matrix4d.CreateTranslation((-2.6, 0, -1.4)) * Matrix4d.CreateScale(threadScale)));
+
+// The printing route: SDF thread with lead-in chamfers and 0.15 mm FDM clearance.
+threads.Add(new Part("printed stud (0.15 clearance)",
+    Shape.ExternalThread(8, length: 16, clearance: 0.15),
+    Palette.Coral,
+    Matrix4d.CreateTranslation((0, 0, -1.4)) * Matrix4d.CreateScale(threadScale)));
+
+// Tapped block, translucent so the internal thread shows through the glass.
+threads.Add(new Part("tapped block (M6)",
+    Shape.Box(14, 14, 12).ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], depth: 14,
+        SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY)),
+    Palette.Brass,
+    Matrix4d.CreateTranslation((2.6, 0, -1.1)) * Matrix4d.CreateScale(threadScale))
+{ DisplayMode = DisplayMode.Translucent });
+
 EngrCad.Show(scene, "EngrCAD demo");
