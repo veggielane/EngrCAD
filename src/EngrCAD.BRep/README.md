@@ -60,6 +60,22 @@ operations. Depends only on `EngrCAD.Core`.
   point-in-face classification, and splitting faces by closed interior curves (hole +
   disk sharing one manifold edge).
 
+- **STEP export/import** — `StepWriter.Write/WriteFile` (ISO 10303-21 AP214
+  `MANIFOLD_SOLID_BREP`; analytic surfaces/curves, rational NURBS via the
+  complex-instance form, wrapper-curve simplification; swept surfaces not exportable)
+  and `StepReader.Read/ReadFile` (its inverse: a full Part 21 parser — strings with
+  `''` escapes, `1.E-6`-style reals, enums, typed values, complex instances, forward
+  references — plus entity mapping back to `BrepSolid`, returning solids + a
+  diagnostics list; unknown entities are skipped with a report). Round-trips
+  everything the writer emits: topology is shared by entity identity (one edge per
+  `EDGE_CURVE`, one vertex per `VERTEX_POINT`), edge domains are reconstructed
+  exactly from vertex positions (closed-form phases for circles/ellipses, Newton with
+  exact derivatives for B-splines), and `SURFACE_OF_REVOLUTION` — which stores
+  neither our swept angle nor generator trims — recovers the angle from rail arcs and
+  re-trims generators from rim circles by bisection on the exact (radius, axial)
+  profile (root solves, never distance minimization, which stalls near √ε). Units:
+  millimetres assumed; other declared length units produce a diagnostic, not scaling.
+
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator`).
 
 ## Not yet implemented
