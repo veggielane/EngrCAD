@@ -27,7 +27,7 @@ HalfEdgeMesh mesh  = body.ToMesh();      // rendering, FEA, 3D printing
 - **[Examples](examples/toc.yml)** — one page per feature, each with runnable code and
   the render it produces. Every snippet is compiled, executed, and screenshotted by
   the documentation build itself, so the examples cannot drift from the code.
-- **[API reference](api/)** — generated from the source XML documentation.
+- **[API reference](api/index.md)** — generated from the source XML documentation.
 
 ## Highlights
 

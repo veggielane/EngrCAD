@@ -95,4 +95,4 @@ representation), or *Impossible* — see
 
 - Browse the [examples](examples/toc.yml) — every page's code is executed and rendered
   by the documentation build, so it is guaranteed current.
-- Skim the [API reference](api/) for the full surface.
+- Skim the [API reference](api/index.md) for the full surface.

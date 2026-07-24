@@ -1,0 +1,63 @@
+# Builds and deploys the documentation site (DocFX + generated example screenshots)
+# to GitHub Pages on every push to main.
+#
+# Pages must be enabled once in the repository settings with "Source: GitHub Actions"
+# (Settings -> Pages). No gh-pages branch is used — this is the modern Pages flow.
+#
+# The build runs on Windows because the offscreen screenshot renderer uses the ANGLE
+# runtime shipped by Avalonia for Windows (D3D11, falling back to D3D11-on-WARP
+# software rendering on GPU-less runners). If no GL context can be created at all,
+# EngrCAD.DocsGen keeps the committed PNGs and only warns — but any example snippet
+# that fails to compile or run still fails the build, so the docs stay correct.
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build solution
+        run: dotnet build EngrCAD.slnx -c Release
+
+      - name: Run example snippets and generate screenshots
+        run: dotnet run --project tools/EngrCAD.DocsGen -c Release --no-build -- docs
+
+      - name: Restore dotnet tools (docfx)
+        run: dotnet tool restore
+
+      - name: Build documentation site
+        run: dotnet docfx docs/docfx.json
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
