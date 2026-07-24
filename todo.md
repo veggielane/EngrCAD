@@ -355,6 +355,26 @@ UI dependencies, which makes this unusually feasible.
   (instances of parts/subassemblies with transforms, mates later) are the planned next
   document-model layer. `Frame3d` is the pose type to build on (composition closed
   under rigidity, exact inverse; mates as frame-coincidence constraints).
+- [ ] **Standard component library ("smart" components)** — a catalog of real
+  hardware — screws/bolts (ISO 4762 SHCS, 7380 button, 10642 csk…), nuts, washers,
+  thread inserts (Tappex Trisert already has pilot data in `StandardHoles`), dowel
+  pins, bearings — where each component is more than geometry: **placing it modifies
+  the host model and assembles itself**. A component carries (a) its own body (a
+  `Part`/`Shape`, ideally parametric per size), (b) a placement frame (`Frame3d` — a
+  point + direction on a face, or `SketchPlane.On(face)`), and (c) a **host
+  preparation operation**: the cut features it needs, applied to the target body when
+  placed — a thread insert drills its correct pilot bore, an SHCS drills clearance +
+  counterbore (`StandardHoles` already knows the dimensions), a dowel reams its hole.
+  Placement thus produces both a modified host and an assembly `Occurrence` of the
+  component at the frame — the SolidWorks "Smart Fastener" / Onshape derived-feature
+  idea, but in plain C#. Design notes: the preparation op is exactly a `Feature`
+  (parametric, regenerates, participates in `FeatureHistory` caching + suppression —
+  suppressing the insert removes its bore too); component sizes come from
+  datasheet-driven tables like `StandardHoles`/`StandardThreads` (flag
+  verify-against-datasheet like the Trisert precedent); depends on assemblies
+  (occurrences, in flight) and pairs naturally with threads. Stretch: a screw placed
+  through two bodies prepares BOTH (clearance in the near body, tapped/insert bore in
+  the far one) — the full fastener stack.
 - [ ] **Frame3d enabled next steps** — `FeatureContext.TopPlane` could become
   `SketchPlane.On(topFace)` (behavior decision: drill origins would move from world
   (0,0,z) to the face centroid); arbitrary section planes from a frame; `StepWriter`
