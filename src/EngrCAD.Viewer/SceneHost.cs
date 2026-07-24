@@ -108,6 +108,27 @@ internal sealed class SceneHost
         };
         toolbar.Children.Add(sectionAxis);
         toolbar.Children.Add(new Border { Width = 8 });
+
+        // Annotations (PMI): on by default — a scene that carries dimensions shows
+        // them; the toggle hides them for a clean geometry view.
+        var annotations = new ToggleButton
+        {
+            Content = "Annot",
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsChecked = true,
+        };
+        ToolTip.SetTip(annotations, "Show/hide 3D annotations (dimensions, notes, datums)");
+        annotations.IsCheckedChanged += (_, _) => Viewport.ShowAnnotations = annotations.IsChecked ?? true;
+        toolbar.Children.Add(annotations);
+
+        // Measure tool: while on, two clicks create a transient point-to-point
+        // dimension (Escape clears; toggling off clears and exits).
+        var measure = new ToggleButton { Content = "Measure", Padding = new Thickness(10, 4), FontSize = 12 };
+        ToolTip.SetTip(measure, "Measure: click two surface points to dimension the distance (Esc clears)");
+        measure.IsCheckedChanged += (_, _) => Viewport.MeasureMode = measure.IsChecked ?? false;
+        toolbar.Children.Add(measure);
+        toolbar.Children.Add(new Border { Width = 8 });
         var capture = ToolButton("Capture", () => Viewport.SaveScreenshot());
         ToolTip.SetTip(capture, "Save the current view as a PNG (path appears in the status bar)");
         toolbar.Children.Add(capture);

@@ -83,6 +83,10 @@ public sealed class ViewportControl : OpenGlControlBase
     // only invalidates, draws, and releases it).
     private readonly SectionContourRenderer _sectionContours = new();
 
+    // 3D annotations (PMI) overlay + measure tool (self-contained in
+    // AnnotationLayer.cs; this class feeds items, draws, and releases it).
+    private readonly AnnotationLayer _annotations = new();
+
     /// <summary>
     /// Replaces the displayed parts (one tab's worth of loose parts, each posed by its
     /// own <see cref="Part.Transform"/>). Convenience wrapper over
@@ -227,6 +231,8 @@ public sealed class ViewportControl : OpenGlControlBase
             RebuildGrid(gl, bounds);
             _sceneBounds = bounds;
             _sectionContours.Invalidate();   // new scene: cached SDF routes are stale
+            LoadAnnotations(instances);
+            ClearMeasurement();              // measure points reference the old scene
 
             if (frame && !bounds.IsEmpty)
             {
@@ -308,6 +314,7 @@ public sealed class ViewportControl : OpenGlControlBase
             return;
         DeleteMeshBuffers(_gl);
         _sectionContours.Release(_gl);
+        _annotations.Release(_gl);
         _meshes.Clear();
         if (_gridVbo != 0)
         {
@@ -539,6 +546,13 @@ public sealed class ViewportControl : OpenGlControlBase
         // lose to coincident lines, same as feature edges).
         if (_sectionEnabled)
             DrawSectionContours(gl, matrix);
+
+        // Annotation overlay (PMI): dimensions/notes/datums + the measure tool's
+        // transient dimension, always on top (depth-off pass inside the layer) and
+        // never section-clipped; before the view cube so the cube stays the topmost
+        // chrome. Billboard geometry rebuilds only when the camera pose, viewport,
+        // or annotation set changes (value-equality cache in the layer).
+        DrawAnnotations(gl, height, scaling, matrix);
         gl.BindVertexArray(0);
 
         // View-cube hook 2: the orientation widget draws last, over everything, into
@@ -571,6 +585,119 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // Cached delegate so the per-frame contour draw does not allocate.
     private Action<string>? _sectionReport;
+
+    // ---- annotations (PMI) + measure tool (all overlay logic lives in AnnotationLayer.cs) ----
+
+    private bool _showAnnotations = true;
+    private bool _measureMode;
+    private Vector3d? _measureStart;
+
+    /// <summary>Whether part-attached annotations (dimensions, notes, datums) are
+    /// drawn (default true; the measure tool's transient dimension always shows).</summary>
+    public bool ShowAnnotations
+    {
+        get => _showAnnotations;
+        set
+        {
+            _showAnnotations = value;
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>True when the loaded scene carries any annotations (hosts use it for
+    /// toolbar affordances).</summary>
+    public bool HasAnnotations => _annotations.HasItems;
+
+    /// <summary>
+    /// Measure mode: while on, clicks pick surface points instead of selecting parts —
+    /// two picks create a transient point-to-point dimension shown immediately.
+    /// Escape clears the measurement; turning the mode off clears and exits.
+    /// </summary>
+    public bool MeasureMode
+    {
+        get => _measureMode;
+        set
+        {
+            _measureMode = value;
+            if (!value)
+                ClearMeasurement();
+            else
+                Report("measure: click the first point");
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>
+    /// Runs one measure pick at a control-space position — the exact path measure-mode
+    /// clicks take. Public so tests and custom hosts can drive the tool directly
+    /// (synthetic mouse input does not reach Avalonia).
+    /// </summary>
+    public void MeasurePick(Point position)
+    {
+        int hit = HitTest(position, out var worldPoint);
+        if (hit < 0)
+        {
+            Report("measure: no surface under the cursor");
+            return;
+        }
+        if (_measureStart is not { } start)
+        {
+            _measureStart = worldPoint;
+            _annotations.SetTransient(null);
+            Report($"measure: first point ({worldPoint.X:G4}, {worldPoint.Y:G4}, {worldPoint.Z:G4}) - click the second");
+        }
+        else
+        {
+            var resolved = new LinearDimension(start, worldPoint).Resolve();
+            _annotations.SetTransient(resolved);
+            _measureStart = null;
+            Report($"measure: {resolved.Text}");
+        }
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Clears the in-progress measure point and the transient dimension.</summary>
+    private void ClearMeasurement()
+    {
+        _measureStart = null;
+        if (_annotations.HasTransient)
+        {
+            _annotations.SetTransient(null);
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>Collects the instances' resolved annotations for the overlay
+    /// (pre-resolved off-thread by <c>Scene.PreMesh</c>; per-part failures surface in
+    /// the status overlay instead of killing the scene).</summary>
+    private void LoadAnnotations(IReadOnlyList<PartInstance> instances)
+    {
+        var items = new List<AnnotationItem>();
+        foreach (var instance in instances)
+        {
+            if (instance.Part.Annotations.Count == 0)
+                continue;
+            if (instance.Part.TryResolveAnnotations(out var resolved, out string? error))
+            {
+                foreach (var annotation in resolved)
+                    items.Add(new AnnotationItem(annotation, instance.World));
+            }
+            else if (error is not null)
+                ShowStatus(error);
+        }
+        _annotations.SetItems(items);
+    }
+
+    /// <summary>Draws the annotation overlay (end of the render pass, before the view
+    /// cube). The layer caches by camera value-equality, so a static view costs one
+    /// struct comparison.</summary>
+    private void DrawAnnotations(GL gl, uint heightPx, double scaling, Span<float> matrix)
+    {
+        var camera = AnnotationCamera.From(
+            new CameraState(_yaw, _pitch, _distance, _target), _orthographic, heightPx, scaling);
+        _annotations.Draw(gl, camera, _showAnnotations,
+            _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
+    }
 
     // ---- view cube hooks (all cube logic lives in ViewCube.cs) ----
 
@@ -743,8 +870,13 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>The nearest visible part under a control-space position (−1 for none):
     /// unprojected ray + per-part BVH + Möller–Trumbore. Shared by click picking and
     /// the hover highlight. Ignores the section plane (documented v1 behavior).</summary>
-    private int HitTest(Point pixel)
+    private int HitTest(Point pixel) => HitTest(pixel, out _);
+
+    /// <summary><see cref="HitTest(Point)"/> that also reports the world-space hit
+    /// point (the measure tool's pick).</summary>
+    private int HitTest(Point pixel, out Vector3d worldPoint)
     {
+        worldPoint = default;
         double width = Math.Max(1, Bounds.Width);
         double height = Math.Max(1, Bounds.Height);
         var eye = CameraMath.Eye(_yaw, _pitch, _distance, _target);
@@ -783,6 +915,9 @@ public sealed class ViewportControl : OpenGlControlBase
                 {
                     bestT = t;
                     best = i;
+                    // World-space hit point for the measure tool (local ray back
+                    // through the instance's model matrix).
+                    worldPoint = _meshes[i].Model.TransformPoint(origin + direction * t);
                 }
             }
         }
@@ -1164,9 +1299,15 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             // View-cube pre-check: clicks inside the cube region go to the widget
             // (view change), never through it to scene picking. Drags are untouched —
-            // dragging on the cube orbits via the normal orbit handling above.
+            // dragging on the cube orbits via the normal orbit handling above. In
+            // measure mode, clicks pick surface points instead of selecting parts.
             if (!ViewCubeClick(pos))
-                Pick(pos);
+            {
+                if (_measureMode)
+                    MeasurePick(pos);
+                else
+                    Pick(pos);
+            }
         }
         else
             Report("release (drag end)");
@@ -1197,6 +1338,10 @@ public sealed class ViewportControl : OpenGlControlBase
             case Key.D: Pan(-12, 0); break;
             case Key.OemOpenBrackets when SectionEnabled: NudgeSection(-1); return;  // reports the height itself
             case Key.OemCloseBrackets when SectionEnabled: NudgeSection(+1); return;
+            case Key.Escape when _measureMode:
+                ClearMeasurement();
+                Report("measure: cleared");
+                return;
             default: return;
         }
         Report($"key {e.Key}");

@@ -438,6 +438,16 @@ public static class OffscreenRenderer
                 gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.EdgeVertexCount);
             }
         }
+        // Annotations (PMI): unlike the interactive view cube, dimensions/notes ARE
+        // documentation content, so the headless pass draws them (docs renders of
+        // dimensioned parts carry their dimensions). Geometry building is shared with
+        // the window via AnnotationLayer/AnnotationGeometry; the offscreen projection
+        // is always perspective and the supersample factor is the pixel scale so text
+        // keeps its on-image size.
+        AnnotationLayer.DrawOffscreen(gl, instances,
+            AnnotationCamera.From(cam, orthographic: false, height, supersample),
+            lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix);
+
         gl.BindVertexArray(0);
         gl.Finish();
 
