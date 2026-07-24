@@ -76,38 +76,22 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 ## Core (EngrCAD.Core)
 
-- [ ] **BVH query surface parity** — `DMeshAABBTree3` serves nearest / ray / all-hits /
-  tree-vs-tree intersection (`FindAllIntersections` returns segment soup!) / winding
-  number from ONE structure. Ours does box/ray/nearest; add: all-hit rays with
-  t-ordering, **tree–tree overlap and intersection-segment queries** (feeds the
-  imprint boolean), and winding number.
-- [ ] **Non-allocating `Bvh.Nearest`** (perf-mandate, from a code-quality review) —
-  `MeshSdf.Evaluate` passes a lambda to `Bvh.Nearest`, heap-allocating a closure per
-  distance query in a kernel hot path. Add a struct/interface-delegate `Nearest`
-  overload so `MeshSdf` (and other callers) can query allocation-free.
-- [ ] **Tolerance-policy audit** — sweep every project for float comparisons that
-  bypass the central `Tolerance` API: raw `==`/`!=` on doubles, hardcoded epsilons
-  (`1e-9`, `1e-12`, …) that should reference the policy, and ad-hoc `Math.Abs(a - b) <
-  eps` patterns. Fix or explicitly justify each (some deliberate ones exist, e.g.
-  `NurbsCurve.TangentAt`'s 1e-14 stationary-point fallback and `GridSdf`'s 1e-9
-  grid-sizing slack — those get a comment naming why the central policy doesn't apply).
-- [ ] **Exact 2D predicates** — `PrimalQuery2d` / `Query2Integer` (adaptive-exact
-  orientation & in-circle). Our earcut port and splitter use epsilon predicates; exact
-  predicates are the principled fix for arrangement robustness.
-- [ ] **2D arrangement** — `Arrangement2d` (segment insertion splitting a `DGraph2`) +
-  `GraphCells2d` (extract bounded cells as polygons). A standalone, reusable version of
-  what our `FaceSplitter` improvises in parameter space — and the basis of a sketch
-  engine (see below).
-- [ ] **Utility gems** — `IndexPriorityQueue` (array-backed heap with O(1) id→slot; our
-  decimator's lazy PQ would upgrade nicely), `DVector<T>` (chunked growable array),
-  `MemoryPool<T>`, `ProgressCancel` (cooperative cancellation threaded through every
-  long op — we have nothing; needed before ops run in a real UI), `gParallel` (block
-  parallel-for; our Surface Nets/SDF sampling is single-threaded).
-- [ ] **Min-bounding fits** — `ContMinBox2` (min-area OBB), `ContMinCircle2`,
-  `ContBox3` (PCA OBB), `OrthogonalPlaneFit3` (best-fit plane). Useful for stock
-  computation, drawing views, and feature recognition.
-- [ ] **Interval/integer types** — `Interval1i`, `Vector2i/3i`, `AxisAlignedBox3i` for
-  grid indexing (our Surface Nets does raw int math inline).
+- [ ] **Tolerance-policy audit** (in flight) — sweep every project for float
+  comparisons that bypass the central `Tolerance` API: raw `==`/`!=` on doubles,
+  hardcoded epsilons that should reference the policy, and ad-hoc
+  `Math.Abs(a - b) < eps` patterns. Fix or explicitly justify each; deliberate
+  exceptions get a comment naming why the policy doesn't apply. (Shewchuk
+  `Predicates2d` error-bound constants are the algorithm — off limits.)
+- [ ] **Core follow-ups from the parity/utils wave** — intersection-segment queries on
+  top of `Bvh.QueryOverlap` candidate pairs (the triangle–triangle segment layer
+  belongs to EngrCAD.Mesh — part of the imprint-boolean item); arrangement insertion
+  acceleration (segment BVH/grid instead of the O(E) scan); consider routing
+  `FaceSplitter`'s planar non-periodic tracing through `Arrangement2d` (deferred —
+  boolean-critical); minimum-volume 3D OBB (PCA `FitBox` is a heuristic); thread
+  `ProgressCancel` through more long ops (mesh booleans, BRepTessellator,
+  MeshSdf/winding builds); parallelize more batch kernels via `ParallelFor` (feeds
+  the SIMD big rock); optionally migrate `MeshWindingNumber` onto `Bvh`'s now-exposed
+  per-node ranges.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
@@ -206,8 +190,9 @@ export — is recorded in CLAUDE.md):
 - [ ] `surface()` — heightmap (image/data grid) → mesh terrain
 - [ ] 2D booleans — union/difference/intersection of profiles/regions (needed by the
   sketch engine; `Arrangement2d`+`GraphCells2d` is the mechanism)
-- [ ] 2D convex hull (`ConvexHull2` in g3; 3D quickhull ✅ landed — `ConvexHull` in
-  Mesh + `Shape.Hull`, exact for polyhedral operands)
+- [ ] 2D booleans on profiles still need a region model, but the primitives are in:
+  `ConvexHull2` ✅ (Core, monotone chain — closes the 2D-hull line; 3D quickhull ✅
+  `Shape.Hull`), `Arrangement2d` ✅ + exact predicates ✅ (the mechanism named above)
 - [ ] `minkowski()` — general Minkowski sum is hard; the important special case is
   rounding, which we already have cheaply (SDF `Offset` ≡ sphere-Minkowski, and
   `Filleting`). Document the equivalence; general polyhedron⊕polyhedron is low priority
