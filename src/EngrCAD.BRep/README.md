@@ -5,13 +5,30 @@ operations. Depends only on `EngrCAD.Core`.
 
 ## Contents
 
-- **Curves** (`Curve3d`): `Line3d`, `Circle3d`, `NurbsCurve` (Cox–de Boor; rational
-  quadratics represent conics exactly), plus `ReversedCurve` / `TransformedCurve`
-  wrappers. `Underlying` unwraps wrappers so consumers (tessellation) can pick sampling
-  rules. The default `TangentAt` uses second-order one-sided differences at domain ends —
-  sweep frames are sensitive to start-tangent error — but `NurbsCurve` overrides it with
-  the exact analytic derivative (algorithm A2.3 basis derivatives + the rational quotient
-  rule, eq. 4.8; also exposed as `DerivativeAt` / `SecondDerivativeAt`).
+- **Curves** (`Curve3d`): `Line3d`, `Circle3d`, `Ellipse3d`, `Parabola3d`, `Hyperbola3d`,
+  `NurbsCurve` (Cox–de Boor; rational quadratics represent conics exactly), plus
+  `ReversedCurve` / `TransformedCurve` wrappers. `Underlying` unwraps wrappers so
+  consumers (tessellation) can pick sampling rules — never trust it for POSITION.
+  `Curve3d` exposes virtual `DerivativeAt` / `SecondDerivativeAt` (finite-difference
+  defaults, documented approximate); every analytic curve and both wrappers override
+  them exactly, and `NurbsCurve` uses algorithm A2.3 basis derivatives + the rational
+  quotient rule (eq. 4.8). The default `TangentAt` uses second-order one-sided
+  differences at domain ends — sweep frames are sensitive to start-tangent error — and
+  applies only to curves without exact overrides (`PolylineCurve3d`).
+  `Parabola3d` uses the focal parameterization P(t) = Apex + (t²/(4f))·X + t·Y (local
+  y² = 4fx; closed-form arc length f·(s√(1+s²) + asinh s), s = t/(2f));
+  `Hyperbola3d` is one branch P(t) = C + A·cosh t + B·sinh t (arc length by adaptive
+  Simpson — no elementary closed form). Both require a finite domain at construction
+  (the underlying loci are unbounded; OCCT trims equivalently).
+  `OffsetCurve3d` is a planar offset as first-class geometry:
+  O(t) = C(t) + d·(n̂ × T̂(t)), positive d to the left of travel seen from +n̂ (CCW
+  circle with n̂ = axis: radius r − d, exactly concentric). Its exact derivative is
+  O′ = (1 − d·κ)·C′ with κ = C″·(n̂ × C′)/|C′|³ — never finite-differenced; exactness
+  inherits from the base curve's derivative overrides. The constructor validates
+  planarity but NOT |d| against the minimum radius of curvature — cusps and
+  self-intersection from too-large offsets are the caller's responsibility (as in
+  OCCT's `Geom_OffsetCurve`). `Underlying` forwards to the base curve for sampling
+  rules only.
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
