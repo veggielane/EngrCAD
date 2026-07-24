@@ -91,7 +91,10 @@ operations. Depends only on `EngrCAD.Core`.
     L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
 
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
-  common quadric pairs (lines, circles, exact ellipses) and a general marching tracer
+  common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
+  (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
+  `MakeThreadedRod`'s cap cuts use, so seams weld; a dz = 0 helicoid ramp cuts in an
+  exact radial line), and a general marching tracer
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
   sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are
@@ -129,7 +132,16 @@ operations. Depends only on `EngrCAD.Core`.
   else uniformly. Closed curves interior to a face honor **mandatory seam breaks**
   (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`
   arcs, so a boolean's other side — which cuts the same circle at its own boundary
-  crossings — pairs edge-for-edge in seam sealing). Wrap-splitting refuses faces with
+  crossings — pairs edge-for-edge in seam sealing). Open splitting curves may
+  TERMINATE exactly on the face boundary when a crossing was detected there (a
+  plane∩helical spiral arc ends on the band's rails; the endpoint's containment parity
+  is rounding noise and is not tested). `SplitByClosedCurveChain(face, curves)` splits
+  a face along a CLOSED CHAIN of open curves lying in its interior whose endpoints
+  pair end-to-start (the spiral-arc chain a threaded tool's bands cut into a drilled
+  plane): one vertex per junction, ONE edge per curve — so a boolean's other side,
+  splitting each band by its own arc, pairs edge-for-edge in seam sealing — with the
+  hole loop wound opposite the outer loop and the disk sharing the same edges.
+  Wrap-splitting refuses faces with
   non-wrapping loops (a contractible fragment can share the band's carrier surface; a
   wrapping curve with no crossings lies outside it), and a fragment with ≥ 2 loops
   additionally parity-tests the cut against its own loops (several wrapping cuts can
@@ -168,11 +180,15 @@ Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator` +
 Helical bands tessellate as sheared grids whose columns are iso-axial rungs — the
 first/last columns ARE the cap cuts — with every boundary point taken verbatim from
 the shared edge polylines (band↔band and band↔cap welds exact by construction); helix
-rails and spiral cuts sample proportionally to their turning angle.
+rails and spiral cuts sample proportionally to their turning angle. Boolean fragments
+of helical bands cut by cap-plane spirals are still band-shaped (two rail pieces +
+two spiral cuts) and take the same path.
 
 ## Not yet implemented
 
 Coplanar/tangent boolean cases, general fillet chains with corner patches,
 NURBS surface export. `HelicalSurface` faces cannot be exported to STEP (same bucket
-as swept surfaces) and trimmed helical faces (loops beyond the full band
-parallelogram) have no tessellation path yet.
+as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
+(e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have
+no tessellation path, and helical∩cylinder / helical∩helical intersections fall to
+the marching tracer.

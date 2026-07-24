@@ -205,13 +205,15 @@ public abstract class Shape
     /// <paramref name="clearance"/> normal to the flanks — the hole <em>grows</em> with
     /// clearance (typical FDM: 0.1–0.25 mm; default 0). The pilot truncates the
     /// internal thread's crests to the tap-drill diameter, as tapping does.
-    /// <para>The threaded hole stays implicit-Native / mesh-Bridged only: its B-Rep
-    /// would subtract the thread tool from the pilot-drilled body, but the tool's root
-    /// band sits coaxially inside the pilot bore, so the bore wall must be split by
-    /// multi-turn wrapping helix curves and the resulting trimmed helical fragments
-    /// tessellated — neither is implemented yet, and <see cref="Explain"/> reports the
-    /// blocker truthfully (external threads ARE B-Rep-Native, see
-    /// <see cref="ExternalThread(ThreadSpec, double, double, bool)"/>).</para>
+    /// <para>Representation support: implicit-Native (exact SDF subtraction) and
+    /// B-Rep-<b>Native</b> at zero <paramref name="clearance"/> — the pilot and thread
+    /// are subtracted as ONE combined tool per point (the thread form clipped at the
+    /// pilot radius, so no coaxial pilot-bore∩root-band tangency exists) whose helical
+    /// bands cross the drilled plane in exact spiral arcs. Nonzero clearance keeps
+    /// B-Rep Impossible (the profile offset is a distance field — see
+    /// <see cref="ExternalThread(ThreadSpec, double, double, bool)"/>) and meshes then
+    /// bridge through Surface Nets. Like <see cref="Drill"/>, a blind depth whose tool
+    /// bottom is exactly coplanar with a body face is rejected at B-Rep lowering.</para>
     /// </summary>
     public Shape ThreadedHole(
         ThreadSpec spec, IReadOnlyList<Vector2d> points, double depth,

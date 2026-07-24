@@ -44,6 +44,8 @@ public static class SurfaceIntersection
             // clips curves to a face's surface itself (partial pullback runs).
             (PlaneSurface p, RevolvedSurface r) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
             (RevolvedSurface r, PlaneSurface p) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
+            (PlaneSurface p, HelicalSurface h) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
+            (HelicalSurface h, PlaneSurface p) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
             _ => March(a, b, region),
         };
     }
@@ -92,6 +94,52 @@ public static class SurfaceIntersection
 
     private static bool IsPerpendicularFullTurn(PlaneSurface plane, RevolvedSurface revolved) =>
         revolved.IsFullTurn && plane.Normal.IsParallelTo(revolved.AxisDirection, Tolerance.Default);
+
+    private static bool IsPerpendicularToHelicalAxis(PlaneSurface plane, HelicalSurface helical) =>
+        plane.Normal.IsParallelTo(helical.Frame.Z, Tolerance.Default);
+
+    /// <summary>
+    /// Plane ⊥ helical axis: the exact spiral arc (<see cref="SpiralArc3d"/> — radius
+    /// linear in the angle, a circular arc on constant-radius bands), built on the
+    /// band's own axis frame translated to the cap height (phase alignment: the arc
+    /// parameter IS the surface u, the SAME arithmetic <c>MakeThreadedRod</c> uses for
+    /// its cap cuts, so tessellation samples coincide). With the generator
+    /// (r, z) = start + v·(dr, dz) and axial advance rate·u, the cap height fixes
+    /// v(u) = (z_cap − z0 − rate·u)/dz — linear — so the cut spans the u-interval where
+    /// v runs 0…1, clipped to the band's domain. A dz = 0 helicoid ramp meets the plane
+    /// at a single angle: an exact radial line segment.
+    /// </summary>
+    private static List<Curve3d> PlaneHelical(PlaneSurface plane, HelicalSurface helical)
+    {
+        var frame = helical.Frame;
+        double zCap = (plane.Origin - frame.Origin).Dot(frame.Z);
+        double rate = helical.AxialRate;
+        double z0 = helical.ProfileStart.Y, z1 = helical.ProfileEnd.Y;
+        double r0 = helical.ProfileStart.X;
+        double dr = helical.ProfileEnd.X - r0, dz = z1 - z0;
+
+        if (dz == 0)
+        {
+            double u = (zCap - z0) / rate;
+            if (u < helical.DomainU.Start - 1e-9 || u > helical.DomainU.End + 1e-9)
+                return [];
+            return [new Line3d(helical.PointAt(u, 0), helical.PointAt(u, 1))];
+        }
+
+        // u where the cut meets v = 0 and v = 1, ascending regardless of signs.
+        double uAt0 = (zCap - z0) / rate;
+        double uAt1 = (zCap - z1) / rate;
+        double uLo = Math.Max(Math.Min(uAt0, uAt1), helical.DomainU.Start);
+        double uHi = Math.Min(Math.Max(uAt0, uAt1), helical.DomainU.End);
+        if (!(uHi - uLo > 1e-12))
+            return [];
+
+        var capFrame = Frame3d.FromOrthonormal(frame.Origin + frame.Z * zCap, frame.X, frame.Y);
+        return
+        [
+            new SpiralArc3d(capFrame, r0 + dr * (zCap - z0) / dz, -dr * rate / dz, new Interval(uLo, uHi)),
+        ];
+    }
 
     /// <summary>
     /// Plane ⊥ revolution axis, full turn: exact circles, one per generator crossing of

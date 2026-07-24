@@ -47,10 +47,12 @@ interactively):
 
 ```csharp render:thread-hole
 var top = SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
-var block = Shape.Box(16, 12, 10)
-    .ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], depth: 12, top);
+var block = Shape.Box(16, 12, 10)   // printable: clearance keeps this on the SDF route
+    .ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], depth: 12, top, clearance: 0.15);
 
 // Expose the internal thread by cutting away the front half through the hole axis.
+// (A section cut slicing ALONG the thread axis is beyond the B-Rep boolean's
+// perpendicular-plane support — the SDF route handles it exactly.)
 var sectioned = block - Shape.Box(20, 14, 14).Translate(0, 7, 0);
 
 var scene = new Scene(new MeshQuality { SdfResolution = 220 });
@@ -120,11 +122,33 @@ scene.Add(new Part("M8 B-Rep stud", stud, Palette.Steel));
 
 ![A B-Rep-native M8 threaded stud with crisp helical facet edges](images/thread-brep.png)
 
+**Threaded holes are B-Rep-native too** (at zero clearance): the B-Rep path never
+drills the pilot separately — the pilot bore wall and the thread tool's root band
+would be coaxial (tangent, unsupported boolean input) — and instead subtracts ONE
+combined tool per point, the internal thread form clipped at the pilot radius, whose
+helical bands cross the drilled plane in exact spiral arcs chaining into a closed
+loop:
+
+```csharp run:thread-hole-brep
+var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+var tapped = Shape.Box(20, 20, 8)
+    .ThreadedHole(StandardThreads.Metric(8), [new(0, 0)], depth: 6, top);
+
+var brep = tapped.ToBrep();                       // B-Rep-native threaded hole
+if (!tapped.CanConvertTo(TargetRep.Brep))
+    throw new Exception("zero-clearance threaded holes are B-Rep-native");
+```
+
+One boundary to know: downstream B-Rep booleans can cut a modeled thread only with
+planes **perpendicular to its axis** (the exact spiral-arc case). A cut slicing
+*along* the threads — like the sectioned illustration above — fails loudly in the
+B-Rep kernel; give the design a clearance (printable parts want one anyway) or drop
+to `ToImplicit()` and the SDF route handles it exactly.
+
 `Explain` reports each case truthfully — Native for the basic profile, and a
 per-cause Impossible otherwise (45° chamfer cones cutting helical bands are future
 surface-intersection work; clearance offsets the profile as a distance field whose
-rounded reflex corners have no exact B-Rep counterpart; `ThreadedHole` needs the
-pilot bore wall split by multi-turn helix curves). Helical surfaces are not
+rounded reflex corners have no exact B-Rep counterpart). Helical surfaces are not
 STEP-exportable yet (same bucket as swept surfaces):
 
 ```csharp run:thread-explain

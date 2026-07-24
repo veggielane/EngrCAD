@@ -135,11 +135,12 @@ public class ThreadShapeTests
         var plate = Shape.Box(20, 20, 8);
         var tapped = plate.ThreadedHole(spec, [new(0, 0)], depth: 10, top);
 
-        // The hole's B-Rep blocker is reported precisely (coaxial tool-in-pilot-bore
-        // splitting), not attempted and failed deep in the boolean machinery.
-        var brepReport = tapped.Explain(TargetRep.Brep);
-        Assert.False(brepReport.IsConvertible);
-        Assert.Contains(brepReport.Entries, e => e.Detail?.Contains("pilot bore") == true);
+        // Zero-clearance threaded holes are B-Rep-Native (one clipped-profile tool per
+        // point); nonzero clearance reports the distance-field blocker truthfully.
+        Assert.True(tapped.Explain(TargetRep.Brep).IsConvertible);
+        var cleared = plate.ThreadedHole(spec, [new(0, 0)], 10, top, clearance: 0.2);
+        Assert.False(cleared.Explain(TargetRep.Brep).IsConvertible);
+        Assert.Contains(cleared.Explain(TargetRep.Brep).Entries, e => e.Detail?.Contains("clearance") == true);
         Assert.True(tapped.Explain(TargetRep.Implicit).IsConvertible);
 
         var mesh = tapped.ToMesh(new MeshQuality { SdfResolution = 128 });
@@ -158,6 +159,49 @@ public class ThreadShapeTests
         var sdf = tapped.ToImplicit();
         Assert.True(sdf.Evaluate((0, 0, 0)) > 0);
         Assert.True(sdf.Evaluate((spec.MajorDiameter / 2 + 0.3, 0, 0)) < 0);
+    }
+
+    [Fact]
+    public void ThreadedHole_LowersToExactBrep()
+    {
+        // 20×20×8 plate, top at z = 4; two blind M8 holes, depth 6 (bottom at −2,
+        // clear of the plate bottom at −4). Exercises: the clipped-profile combined
+        // tool (pilot 6.8 > minor 6.65 — no coaxial pairs), two spiral-arc chains on
+        // one plane face, and cascaded booleans (second hole cuts boolean output).
+        var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+        var plate = Shape.Box(20, 20, 8);
+        var tapped = plate.ThreadedHole(M8, [new(-4.5, 0), new(4.5, 0)], depth: 6, top);
+
+        var brep = tapped.ToBrep();
+        var mesh = EngrCAD.Interop.BRepTessellator.Tessellate(brep);
+        Assert.True(mesh.IsClosed, "tapped plate must tessellate closed");
+
+        // Exact void volume per hole: depth · (2π/P)·∫ ½R'² over the clipped profile
+        // R' = max(basic form, pilot radius) — crest flat P/8 at rMaj, pilot flat at
+        // rPil between the exact flank lines (crossing at flankDrop below the crest).
+        double p = M8.Pitch, rMaj = M8.MajorDiameter / 2, rMin = M8.MinorDiameter / 2;
+        double rPil = M8.TapDrillDiameter / 2;
+        double flankDrop = 5 * p / 16 * (rMaj - rPil) / (rMaj - rMin);
+        double za = p / 16 + flankDrop, zb = 15 * p / 16 - flankDrop;
+        double perPitch = 0.5 * rMaj * rMaj * (p / 8)
+            + 0.5 * rPil * rPil * (zb - za)
+            + 2 * (za - p / 16) * (rMaj * rMaj + rMaj * rPil + rPil * rPil) / 6;
+        double voidVolume = 6 * (2 * Math.PI / p) * perPitch;
+        double expected = 20.0 * 20 * 8 - 2 * voidVolume;
+        // The tessellated void is chordally inscribed: ~1.9% of the void volume at 32
+        // segments/circle, converging O(h²) to the analytic value (0.47% at 64, 0.12%
+        // at 128 — verified), so the default-quality bound is 2.5% of the void.
+        Assert.True(Math.Abs(mesh.Volume() - expected) < 0.025 * 2 * voidVolume,
+            $"volume {mesh.Volume():g8} vs analytic {expected:g8}");
+        var fine = EngrCAD.Interop.BRepTessellator.Tessellate(brep, segmentsPerCircle: 64, curveSamples: 24);
+        Assert.True(fine.IsClosed);
+        Assert.True(Math.Abs(fine.Volume() - expected) < 0.007 * 2 * voidVolume,
+            $"64-segment volume {fine.Volume():g8} vs analytic {expected:g8}");
+
+        // A depth landing the tool's flat bottom exactly on the plate's bottom face is
+        // the unsupported coplanar case — rejected at lowering, like Drill.
+        Assert.Throws<ArgumentException>(() =>
+            plate.ThreadedHole(M8, [new(0, 0)], depth: 8, top).ToBrep());
     }
 
     [Fact]

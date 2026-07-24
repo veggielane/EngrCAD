@@ -7,6 +7,10 @@ namespace EngrCAD.BRep;
 /// caller opted out to hand the edge's second use to another face, e.g. a drilled bore).</summary>
 public sealed record ClosedSplitResult(BrepFace FaceWithHole, BrepFace? Disk, BrepEdge Edge);
 
+/// <summary>Result of a closed-chain split: the hole-carrying face, the optional disk,
+/// and the chain edges in traversal order (one per input curve).</summary>
+public sealed record ChainSplitResult(BrepFace FaceWithHole, BrepFace? Disk, IReadOnlyList<BrepEdge> Edges);
+
 /// <summary>Topology surgery shared by splitting operations.</summary>
 public static class TopologyEditor
 {
@@ -149,6 +153,93 @@ public static class FaceSplitter
         return new ClosedSplitResult(faceWithHole, disk, edge);
     }
 
+    /// <summary>
+    /// Splits a face along a CLOSED CHAIN of open curves lying entirely in its interior,
+    /// whose endpoints pair end-to-start — e.g. the spiral-arc chain a threaded tool's
+    /// helical bands cut into a drilled plane, one arc per band, junctions on the shared
+    /// rails. Generalizes <see cref="SplitByClosedCurve"/>: the chain becomes an inner
+    /// (hole) loop wound opposite the outer loop, and the disk carries the same edges as
+    /// its outer loop (two-manifold). One vertex per junction and ONE edge per curve, so
+    /// a boolean's other side — which splits each band by its own arc — pairs
+    /// edge-for-edge in seam sealing.
+    /// </summary>
+    public static ChainSplitResult SplitByClosedCurveChain(
+        BrepFace face, IReadOnlyList<Curve3d> chain, bool createDisk = true)
+    {
+        if (chain.Count < 2)
+            throw new ArgumentException("A chain needs at least two curves (use SplitByClosedCurve for one).", nameof(chain));
+        const double junctionTolerance = 1e-6;
+
+        // Order and orient the curves end-to-start starting from chain[0] forward.
+        var remaining = chain.Skip(1).ToList();
+        var ordered = new List<(Curve3d Curve, bool Forward)> { (chain[0], true) };
+        var start = chain[0].PointAt(chain[0].Domain.Start);
+        var tail = chain[0].PointAt(chain[0].Domain.End);
+        while (remaining.Count > 0)
+        {
+            int found = -1;
+            bool forward = true;
+            for (int i = 0; i < remaining.Count && found < 0; i++)
+            {
+                var candidate = remaining[i];
+                if (candidate.PointAt(candidate.Domain.Start).DistanceTo(tail) < junctionTolerance)
+                    (found, forward) = (i, true);
+                else if (candidate.PointAt(candidate.Domain.End).DistanceTo(tail) < junctionTolerance)
+                    (found, forward) = (i, false);
+            }
+            if (found < 0)
+                throw new ArgumentException(
+                    "Chain curves do not connect end-to-start into a single closed loop.", nameof(chain));
+            var next = remaining[found];
+            remaining.RemoveAt(found);
+            ordered.Add((next, forward));
+            tail = next.PointAt(forward ? next.Domain.End : next.Domain.Start);
+        }
+        if (tail.DistanceTo(start) >= junctionTolerance)
+            throw new ArgumentException("The chain does not close.", nameof(chain));
+        if (!FaceGeometry.Contains(face, chain[0].PointAt(chain[0].Domain.Mid)))
+            throw new ArgumentException("The chain must lie inside the face.", nameof(chain));
+
+        // One vertex per junction (vertex k = traversal start of curve k), one edge per
+        // curve over its own domain; reversed traversal flips the coedge sense, not the
+        // edge direction.
+        var vertices = ordered
+            .Select(o => new BrepVertex(o.Curve.PointAt(o.Forward ? o.Curve.Domain.Start : o.Curve.Domain.End)))
+            .ToList();
+        var edges = new List<BrepEdge>(ordered.Count);
+        for (int k = 0; k < ordered.Count; k++)
+        {
+            var (curve, forward) = ordered[k];
+            var traversalStart = vertices[k];
+            var traversalEnd = vertices[(k + 1) % ordered.Count];
+            edges.Add(forward
+                ? new BrepEdge(curve, curve.Domain, traversalStart, traversalEnd)
+                : new BrepEdge(curve, curve.Domain, traversalEnd, traversalStart));
+        }
+
+        // Winding from the pulled-back traversal.
+        var pulled = new List<Vector2d>();
+        foreach (var (curve, forward) in ordered)
+        {
+            var run = FaceGeometry.PullCurve(curve, face.Surface);
+            if (!forward)
+                run.Reverse();
+            pulled.AddRange(run.Take(run.Count - 1)); // drop the duplicate junction sample
+        }
+        bool traversalCcw = FaceGeometry.LoopSignedArea(pulled) > 0;
+        bool holeAlongTraversal = face.IsReversed ? traversalCcw : !traversalCcw;
+
+        BrepLoop ChainLoop(bool alongTraversal) => new(alongTraversal
+            ? [.. Enumerable.Range(0, edges.Count).Select(k => new BrepCoedge(edges[k], ordered[k].Forward))]
+            : [.. Enumerable.Range(0, edges.Count).Reverse().Select(k => new BrepCoedge(edges[k], !ordered[k].Forward))]);
+
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, ChainLoop(holeAlongTraversal)], face.IsReversed);
+        var disk = createDisk
+            ? new BrepFace(face.Surface, [ChainLoop(!holeAlongTraversal)], face.IsReversed)
+            : null;
+        return new ChainSplitResult(faceWithHole, disk, edges);
+    }
+
     private sealed record Crossing(BrepEdge? Edge, double EdgeParam, double CurveParam)
     {
         public BrepVertex Vertex { get; set; } = null!;
@@ -227,8 +318,14 @@ public static class FaceSplitter
         }
         if (!curve.IsClosed)
         {
+            double endEpsilon = Math.Max(1e-9, curve.Domain.Length * 1e-7);
             foreach (double endParam in (ReadOnlySpan<double>)[curve.Domain.Start, curve.Domain.End])
             {
+                // An endpoint that IS a detected crossing terminates exactly on the
+                // boundary — legal (a plane∩helical-band spiral arc ends on the band's
+                // rails). Its parity is rounding noise, so it must not be tested.
+                if (crossings.Any(c => Math.Abs(c.CurveParam - endParam) < endEpsilon))
+                    continue;
                 // Endpoints off the surface are trivially outside the face.
                 if (surface.TryProjectPoint(curve.PointAt(endParam), out var uv, 1e-6) &&
                     ParityContains(rawLoops, uv, period))

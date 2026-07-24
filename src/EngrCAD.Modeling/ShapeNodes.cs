@@ -230,14 +230,14 @@ internal sealed class ThreadShape(ThreadSpec spec, double length, double profile
 /// An internally threaded hole feature: the body with, per point, a tap-drill pilot
 /// (via <see cref="Shape.Drill"/>) and the clearance-grown external thread form
 /// subtracted. Captured as a node — rather than a raw boolean chain — so each target
-/// takes its own route: implicit and mesh lower <see cref="Expanded"/> (exact SDF
-/// subtraction, no coplanarity concerns), while B-Rep reports Impossible in v1 with the
-/// precise blocker (subtracting the thread tool from the pilot-drilled body would put
-/// the tool's root band coaxially inside the pilot bore — splitting the bore wall by
-/// multi-turn wrapping helix curves and tessellating trimmed helical fragments are not
-/// implemented). Without this node the ThreadShape tool (chamferless, and clearance-less
-/// by default) would classify B-Rep-Native and the boolean would fail deep in the
-/// splitter instead of honestly up front.
+/// takes its own route. Implicit and mesh lower <see cref="Expanded"/> (exact SDF
+/// subtraction, no coplanarity concerns). B-Rep does NOT lower the expansion — the
+/// pilot bore wall and the tool's root band would be coaxial (tangent, unsupported
+/// boolean input) — and instead subtracts ONE combined tool per point: the thread form
+/// clipped at the pilot radius, so the pilot volume is part of the same boolean-free
+/// helical rod and the only intersections are exact spiral-arc chains on the drilled
+/// plane(s). Nonzero clearance keeps B-Rep Impossible (distance-field profile offset,
+/// as for <see cref="ThreadShape"/>).
 /// </summary>
 internal sealed class ThreadedHoleShape(
     Shape child, Shape expanded, ThreadSpec spec, IReadOnlyList<Vector2d> points,

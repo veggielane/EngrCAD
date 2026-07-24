@@ -137,9 +137,20 @@ internal static class ShapeCompiler
                         "boolean-free helical sweep (SolidFactory.MakeThreadedRod); not STEP-exportable"));
                 break;
             case ThreadedHoleShape hole:
+                // Native via ONE combined tool per point: the thread form clipped at the
+                // pilot radius (the pilot volume is part of the same helical rod, so no
+                // coaxial tool∩bore tangency ever reaches the boolean). Clearance stays
+                // Impossible for the same distance-field reason as ExternalThread.
                 ClassifyBrep(hole.Child, m, entries);
-                entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
-                    "subtracting the thread tool from the pilot-drilled body puts the tool's root band coaxially inside the pilot bore: splitting the bore wall by multi-turn wrapping helix curves and tessellating trimmed helical fragments are not implemented yet — use ToMesh/ToImplicit"));
+                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                    entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
+                        "a mirrored, sheared, or non-uniformly scaled placement cannot re-place a helical thread exactly (a mirrored thread is left-handed)"));
+                else if (hole.Clearance != 0)
+                    entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Impossible,
+                        "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
+                else
+                    entries.Add(new ConversionEntry(hole.Describe(), NodeSupport.Native,
+                        "pilot + thread subtracted as one clipped-profile helical tool; the drilled faces split along exact spiral-arc chains"));
                 break;
             case TransformShape t:
                 ClassifyBrep(t.Child, m * t.Matrix, entries);
@@ -483,6 +494,74 @@ internal static class ShapeCompiler
                 ], pitch, thread.Length * scale, frame);
             }
 
+            case ThreadedHoleShape hole when hole.Clearance == 0:
+            {
+                // ONE tool per point: the internal thread form CLIPPED at the pilot
+                // radius, so the tap-drill volume is part of the same helical rod and
+                // no coaxial pilot-bore∩root-band tangency (unsupported boolean input)
+                // ever exists. Face-pair inventory per point, body = planar faces:
+                // the tool's helical bands cross only the drilled plane(s), each in an
+                // exact spiral arc (plane ⊥ helical axis, SurfaceIntersection); the
+                // arcs chain into a closed loop the plane face splits along
+                // (SplitByClosedCurveChain), each band splits at its own arc, and the
+                // tool's flat caps sit strictly off every body face (overshoot above,
+                // blind-depth validation below) — no tangent or coplanar pairs.
+                Decompose(m, shape, out _, out _, out double scale);
+                var body = LowerBrep(hole.Child, m);
+                var spec = hole.Spec;
+                double pitch = spec.Pitch;
+                double rMajor = spec.MajorDiameter / 2;
+                double rMinor = spec.MinorDiameter / 2;
+                double rPilot = spec.TapDrillDiameter / 2;
+
+                // The void profile per pitch is max(basic form, pilot radius): where the
+                // tap drill exceeds the thread minor radius (the usual case) the root
+                // flat widens into a pilot flat, its corners on the exact flank lines.
+                Vector2d[] corners;
+                if (rPilot > rMinor + 1e-12)
+                {
+                    double flankDrop = 5 * pitch / 16 * (rMajor - rPilot) / (rMajor - rMinor);
+                    corners =
+                    [
+                        new Vector2d(rMajor, -pitch / 16),
+                        new Vector2d(rMajor, pitch / 16),
+                        new Vector2d(rPilot, pitch / 16 + flankDrop),
+                        new Vector2d(rPilot, 15 * pitch / 16 - flankDrop),
+                    ];
+                }
+                else
+                {
+                    corners =
+                    [
+                        new Vector2d(rMajor, -pitch / 16),
+                        new Vector2d(rMajor, pitch / 16),
+                        new Vector2d(rMinor, 3 * pitch / 8),
+                        new Vector2d(rMinor, 5 * pitch / 8),
+                    ];
+                }
+                var scaledCorners = corners.Select(c => new Vector2d(c.X * scale, c.Y * scale)).ToList();
+
+                var effective = m * hole.PlaneMatrix;
+                ValidateThreadedHoleDepth(hole, body, effective);
+
+                // Same overshoot rule as the implicit tool; the geometry below the
+                // surface — the actual hole — is identical either way.
+                double overshoot = 0.05 * Math.Max(hole.Depth, spec.MajorDiameter);
+                foreach (var point in hole.Points)
+                {
+                    // The tool advances DOWN the plane normal: frame (X, −Y, −Z), the
+                    // exact π-rotation about X the implicit route uses (flipDown).
+                    var origin = effective.TransformPoint(new Vector3d(point.X, point.Y, overshoot));
+                    var xAxis = effective.TransformVector(Vector3d.UnitX).Normalized();
+                    var yAxis = -effective.TransformVector(Vector3d.UnitY).Normalized();
+                    var frame = Frame3d.FromOrthonormal(origin, xAxis, yAxis);
+                    var tool = SolidFactory.MakeThreadedRod(
+                        scaledCorners, pitch * scale, (hole.Depth + overshoot) * scale, frame);
+                    body = BrepBoolean.Difference(body, tool);
+                }
+                return body;
+            }
+
             case TransformShape t:
                 return LowerBrep(t.Child, m * t.Matrix);
 
@@ -728,6 +807,35 @@ internal static class ShapeCompiler
                         $"Drill depth {drill.Depth:g6} puts the tool's flat bottom coplanar with a planar " +
                         $"face of the body (hole at {point}); increase depth so the tool clears the far " +
                         "face, or reduce it for a blind hole.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Rejects a threaded hole whose tool's flat bottom is coplanar with a planar face
+    /// of the body — the same v1 transversality contract as
+    /// <see cref="ValidateDrillDepth"/>: coplanar face pairs are unsupported boolean
+    /// input, so increase the depth past the far face for a through hole or reduce it
+    /// for a blind one.
+    /// </summary>
+    private static void ValidateThreadedHoleDepth(ThreadedHoleShape hole, BrepSolid body, in Matrix4d effective)
+    {
+        var drillNormal = effective.TransformVector((0, 0, 1)).Normalized();
+        const double tolerance = 1e-6;
+        foreach (var point in hole.Points)
+        {
+            var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, -hole.Depth));
+            foreach (var face in body.Faces)
+            {
+                if (!face.IsPlanar(out var origin, out var normal))
+                    continue;
+                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < 1 - 1e-6)
+                    continue;
+                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= tolerance)
+                    throw new ArgumentException(
+                        $"Threaded-hole depth {hole.Depth:g6} puts the tool's flat bottom coplanar with a " +
+                        $"planar face of the body (hole at {point}); increase depth so the tool clears the " +
+                        "far face, or reduce it for a blind hole.");
             }
         }
     }

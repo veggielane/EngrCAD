@@ -49,7 +49,8 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) · ❌ revolve/sweep/rim/drill (no mirrored lowering yet) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
 | `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
-| `ExternalThread` (chamfers or clearance) / `ThreadedHole` | ❌ chamfer cones / distance-field profile offsets / coaxial tool-in-pilot splitting not implemented — reported per cause | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
+| `ThreadedHole` (no clearance) | ✅ **native** (pilot + thread as ONE clipped-profile helical tool; spiral-arc chains split the drilled faces) | ✅ native | ✅ native (B-Rep tessellation) |
+| `ExternalThread` (chamfers) / either with clearance | ❌ chamfer cones / distance-field profile offsets — reported per cause | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
 | `From(HalfEdgeMesh)` | ❌ no mesh→B-Rep import | ✅ exact mesh SDF (closed meshes) | ✅ as-is |
 | `From(Sdf)` | ❌ no SDF→B-Rep | ✅ native | 🔶 polygonized |
@@ -247,10 +248,18 @@ STEP-exportable). Such threads mesh through exact B-Rep tessellation. With chamf
 chamfer cones cutting helical bands are future surface-intersection work, and
 clearance offsets the profile as a distance field (reflex corners round into arcs, no
 exact B-Rep counterpart) — and meshes come from Surface Nets, the printing route.
-`ThreadedHole` remains implicit-native/mesh-bridged only: its B-Rep would need the
-bore wall split by multi-turn wrapping helix curves plus trimmed-helical-face
-tessellation (the tool's root band sits coaxially inside the pilot bore); `Explain`
-names that blocker, so thread features keep the rest of a design honest.
+**`ThreadedHole` is B-Rep-native at zero clearance** via a subtlety worth knowing:
+the B-Rep path does NOT drill the pilot separately (the pilot bore wall and the
+thread tool's root band would be coaxial — tangent, unsupported boolean input);
+instead each hole subtracts ONE combined tool — the internal thread form clipped at
+the pilot radius, so the tap-drill volume is part of the same boolean-free helical
+rod. The only face pairs the boolean sees are helical-band ∩ drilled-plane: exact
+spiral arcs that chain into a closed loop the plane face splits along
+(`FaceSplitter.SplitByClosedCurveChain`). Nonzero clearance keeps B-Rep Impossible
+with the same distance-field report, so thread features stay honest about what they
+can and cannot represent. One boundary: downstream B-Rep booleans may cut modeled
+threads only with planes perpendicular to the thread axis (the exact spiral case) —
+cuts along the threads fail loudly; use clearance or the implicit route for those.
 
 ## The document model: Part, Assembly, Tab, Scene
 

@@ -106,12 +106,96 @@ public static class BrepBoolean
     {
         foreach (var (face, curves) in curvesPerFace)
         {
+            var rest = ExtractInteriorChains(face, curves, out var chains);
             var fragments = new List<BrepFace> { face };
-            foreach (var (curve, breaks) in curves)
+            foreach (var chain in chains)
+            {
+                fragments = fragments.SelectMany(f =>
+                {
+                    // With several chains (multiple threaded holes on one face), each
+                    // chain splits only the fragment that contains it.
+                    if (!FaceGeometry.Contains(f, chain[0].PointAt(chain[0].Domain.Mid)))
+                        return (IEnumerable<BrepFace>)[f];
+                    var split = FaceSplitter.SplitByClosedCurveChain(f, chain);
+                    return [split.FaceWithHole, split.Disk!];
+                }).ToList();
+            }
+            foreach (var (curve, breaks) in rest)
                 fragments = fragments.SelectMany(f => FaceSplitter.SplitByCurve(f, curve, breaks)).ToList();
             foreach (var fragment in fragments)
                 yield return fragment;
         }
+    }
+
+    /// <summary>
+    /// Pulls out open curves whose endpoints all lie strictly INSIDE the face and pair
+    /// end-to-end into closed cycles — a threaded tool's cap-cut chain on the drilled
+    /// plane (one spiral arc per helical band, junctions on the shared rails). Such
+    /// curves cannot go through <see cref="FaceSplitter.SplitByCurve"/> (open cuts must
+    /// cross the boundary); each complete cycle splits as one hole+disk chain instead.
+    /// Anything that fails to close stays in the returned list, where SplitByCurve
+    /// reports it loudly. Curves not on this face's surface never qualify (containment
+    /// projection fails), so all previously supported configurations are untouched.
+    /// </summary>
+    private static List<(Curve3d Curve, IReadOnlyList<double> Breaks)> ExtractInteriorChains(
+        BrepFace face,
+        List<(Curve3d Curve, IReadOnlyList<double> Breaks)> curves,
+        out List<List<Curve3d>> chains)
+    {
+        chains = [];
+        var rest = new List<(Curve3d Curve, IReadOnlyList<double> Breaks)>();
+        var candidates = new List<(Curve3d Curve, IReadOnlyList<double> Breaks)>();
+        foreach (var entry in curves)
+        {
+            var curve = entry.Curve;
+            if (!curve.IsClosed
+                && FaceGeometry.Contains(face, curve.PointAt(curve.Domain.Start))
+                && FaceGeometry.Contains(face, curve.PointAt(curve.Domain.End)))
+                candidates.Add(entry);
+            else
+                rest.Add(entry);
+        }
+
+        const double junctionTolerance = 1e-6;
+        while (candidates.Count > 0)
+        {
+            var seed = candidates[0];
+            candidates.RemoveAt(0);
+            var chain = new List<(Curve3d Curve, IReadOnlyList<double> Breaks)> { seed };
+            var start = seed.Curve.PointAt(seed.Curve.Domain.Start);
+            var tail = seed.Curve.PointAt(seed.Curve.Domain.End);
+            bool closed = false;
+            while (!closed)
+            {
+                if (tail.DistanceTo(start) < junctionTolerance && chain.Count >= 2)
+                {
+                    closed = true;
+                    break;
+                }
+                int next = candidates.FindIndex(c =>
+                    c.Curve.PointAt(c.Curve.Domain.Start).DistanceTo(tail) < junctionTolerance ||
+                    c.Curve.PointAt(c.Curve.Domain.End).DistanceTo(tail) < junctionTolerance);
+                if (next < 0)
+                    break; // dead end — hand the seed back for the loud path
+                var link = candidates[next];
+                candidates.RemoveAt(next);
+                chain.Add(link);
+                tail = link.Curve.PointAt(link.Curve.Domain.Start).DistanceTo(tail) < junctionTolerance
+                    ? link.Curve.PointAt(link.Curve.Domain.End)
+                    : link.Curve.PointAt(link.Curve.Domain.Start);
+            }
+            if (closed)
+            {
+                chains.Add([.. chain.Select(c => c.Curve)]);
+            }
+            else
+            {
+                rest.Add(seed);
+                // Links consumed by the failed walk go back too.
+                rest.AddRange(chain.Skip(1));
+            }
+        }
+        return rest;
     }
 
     /// <summary>
