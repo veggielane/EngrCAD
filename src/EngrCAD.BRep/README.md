@@ -72,14 +72,31 @@ operations. Depends only on `EngrCAD.Core`.
   vertices are not missed — interior segments as shared two-use edges, sub-faces traced
   by tightest-turn walking: clockwise for CCW-wound faces, counter-clockwise for
   reversed ones, `IsReversed` preserved throughout), and period-wrapping curves
-  (`SplitBandByWrapCurve`: band → two exactly re-surfaced sub-bands). `TopologyEditor`
+  (`SplitBandByWrapCurve`: constant-v cuts → two exactly re-surfaced sub-bands;
+  NON-planar wrapping cuts — the cylinder∩cylinder curves where a cross-drill pierces
+  a bore — → `SplitBandByNonPlanarWrapCurve`: both sub-bands KEEP the original surface,
+  since no parameter line exists to trim at, and rely on trimmed-face tessellation;
+  loops go to the side of the cut their v-range lies on, overlapping ranges — tangent
+  configurations — throw). `TopologyEditor`
   supplies `SplitEdge` (patches every using loop) and `SealSeams` (boolean output
-  sealing). Closed curves interior to a face honor **mandatory seam breaks**
+  sealing). **All coedge/curve sampling goes through
+  `FaceGeometry.ExactSampleParameters`**: marching-tracer polylines are exact only at
+  their VERTICES — a mid-chord sample sits a sagitta (~1e-4) off the carrier surface,
+  far past the 1e-6 inverse-evaluation tolerance, and uniform sampling once made
+  `PullCurveRuns` silently produce zero runs so cross-drill splits never happened —
+  hence polyline-backed curves (raw or reparameterized via `CurveSegment`, whose
+  `BaseStart`/`BaseEnd` expose the mapping) sample at vertex parameters and everything
+  else uniformly. Closed curves interior to a face honor **mandatory seam breaks**
   (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`
   arcs, so a boolean's other side — which cuts the same circle at its own boundary
   crossings — pairs edge-for-edge in seam sealing). Wrap-splitting refuses faces with
   non-wrapping loops (a contractible fragment can share the band's carrier surface; a
-  wrapping curve with no crossings lies outside it). Arrangement tracing is
+  wrapping curve with no crossings lies outside it), and a fragment with ≥ 2 loops
+  additionally parity-tests the cut against its own loops (several wrapping cuts can
+  hit one band — a tool crossing a bore pierces its wall twice — and every sub-band
+  shares the full carrier, so every cut pulls back onto every fragment; single-loop
+  pole-bounded bands skip the check because the upward-ray convention cannot see a rim
+  below the point). Arrangement tracing is
   **band-aware**: traced loops that wrap the period are band boundaries (traversal
   along +u = material above, mirrored on reversed faces), paired bottom-to-top by v
   into band sub-faces — pulled signed area is meaningless for them (the hemisphere
