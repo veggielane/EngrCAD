@@ -25,6 +25,30 @@ concerns.
   ray, and `Nearest` (branch-and-bound with a caller-supplied exact distance function).
 - **`Spatial.Octree`** — dynamic octree for incrementally changing content
   (insert/remove/query); prefer the BVH for static geometry.
+- **`IndexPriorityQueue`** — array-backed binary min-heap keyed by non-negative integer
+  ids with an O(1) id→slot index, so `Update` (decrease/increase-key), `Remove`, and
+  `Contains` work directly — no lazy stale-duplicate entries. Grows on demand; SoA
+  storage; modeled on geometry3Sharp's `IndexPriorityQueue`. Used by `MeshDecimator`.
+- **`ProgressCancel`** — cooperative cancellation (from a `CancellationToken` or any
+  `Func<bool>`, sticky once observed) + coarse progress reporting for long operations,
+  taken as an optional trailing `ProgressCancel? progress = null` parameter (zero
+  overhead when absent). Cancellation surfaces as `OperationCanceledException`; kernel
+  algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize` and
+  `MeshDecimator.Decimate`.
+- **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over
+  index ranges (g3's `gParallel.BlockStartEnd`): splits the range into a bounded number
+  of large contiguous blocks so each worker touches a contiguous slice of the underlying
+  SoA arrays. Supported pattern: every index writes only its own output slot, which
+  makes results bit-for-bit deterministic regardless of scheduling. Used by the
+  `SurfaceNets` sampling phase and the dense `GridSdf` bake.
+
+## Deliberately not adopted (from the geometry3Sharp survey)
+
+- **`DVector<T>`** (chunked growable array) and **`MemoryPool<T>`** — g3 needed them on
+  old runtimes to dodge LOH resize copies and GC pressure. On modern .NET,
+  `List<T>` with a capacity hint, exact-size arrays, and `ArrayPool<T>.Shared` (already
+  used in the bakes) cover every current call site; no measured need exists in this
+  codebase. Revisit only with a profile in hand.
 
 ## Conventions
 

@@ -11,7 +11,13 @@ namespace EngrCAD.Mesh;
 /// </summary>
 public static class MeshDecimator
 {
-    public static HalfEdgeMesh Decimate(HalfEdgeMesh mesh, int targetFaceCount)
+    /// <param name="mesh">The mesh to simplify (triangulated automatically).</param>
+    /// <param name="targetFaceCount">Face budget to collapse down to (≥ 4).</param>
+    /// <param name="progress">
+    /// Optional cooperative progress/cancellation; cancellation throws
+    /// <see cref="OperationCanceledException"/> and discards the partial result.
+    /// </param>
+    public static HalfEdgeMesh Decimate(HalfEdgeMesh mesh, int targetFaceCount, ProgressCancel? progress = null)
     {
         if (targetFaceCount < 4)
             throw new ArgumentOutOfRangeException(nameof(targetFaceCount));
@@ -22,7 +28,7 @@ public static class MeshDecimator
             return mesh;
 
         var state = new DecimationState(mesh);
-        state.CollapseUntil(targetFaceCount);
+        state.CollapseUntil(targetFaceCount, progress);
         return state.BuildResult();
     }
 
@@ -35,11 +41,17 @@ public static class MeshDecimator
         private readonly bool[] _vertexBoundary;
         private readonly HashSet<int>[] _vertexFaces;
         private readonly Quadric[] _quadrics;
-        private readonly int[] _stamps;
-        private readonly PriorityQueue<Candidate, double> _queue = new();
         private int _aliveFaceCount;
 
-        private readonly record struct Candidate(int A, int B, int StampA, int StampB, Vector3d Optimal);
+        // One live entry per undirected edge: the IndexPriorityQueue's Update/Remove
+        // replace the former lazy-PQ stamps (duplicate entries skipped on dequeue), so
+        // every queued entry is always current. The id map is keyed by the (min, max)
+        // vertex pair as a tuple — NOT a packed long, whose default hash (lo ^ hi) sends
+        // the structured keys of grid meshes (b = a + 1, a + row, ...) into a handful of
+        // buckets and turns every lookup into a linear chain scan.
+        private readonly IndexPriorityQueue _queue = new();
+        private readonly Dictionary<(int, int), int> _edgeIds = [];
+        private readonly List<(int A, int B, Vector3d Optimal)> _edgeData = [];
 
         public DecimationState(HalfEdgeMesh mesh)
         {
@@ -54,7 +66,6 @@ public static class MeshDecimator
             _vertexBoundary = new bool[_positions.Count];
             foreach (var vertex in mesh.Vertices)
                 _vertexBoundary[vertex.Index] = !vertex.IsIsolated && vertex.IsBoundary;
-            _stamps = new int[_positions.Count];
 
             _vertexFaces = new HashSet<int>[_positions.Count];
             for (int v = 0; v < _positions.Count; v++)
@@ -99,14 +110,23 @@ public static class MeshDecimator
                 Enqueue(key.Item1, key.Item2);
         }
 
+        private static (int, int) EdgeKey(int a, int b) => (Math.Min(a, b), Math.Max(a, b));
+
         private void Enqueue(int a, int b)
         {
             if (_vertexBoundary[a] || _vertexBoundary[b])
                 return;
             var q = _quadrics[a] + _quadrics[b];
             var optimal = OptimalPosition(q, a, b);
-            _queue.Enqueue(new Candidate(a, b, _stamps[a], _stamps[b], optimal),
-                Math.Max(0, q.Error(optimal)));
+            var key = EdgeKey(a, b);
+            if (!_edgeIds.TryGetValue(key, out int id))
+            {
+                id = _edgeData.Count;
+                _edgeIds.Add(key, id);
+                _edgeData.Add(default);
+            }
+            _edgeData[id] = (a, b, optimal);
+            _queue.EnqueueOrUpdate(id, Math.Max(0, q.Error(optimal)));
         }
 
         private Vector3d OptimalPosition(in Quadric q, int a, int b)
@@ -127,16 +147,25 @@ public static class MeshDecimator
             return best;
         }
 
-        public void CollapseUntil(int targetFaceCount)
+        public void CollapseUntil(int targetFaceCount, ProgressCancel? progress)
         {
-            while (_aliveFaceCount > targetFaceCount && _queue.TryDequeue(out var candidate, out _))
+            int initialAlive = _aliveFaceCount;
+            int sinceCheckpoint = 0;
+            while (_aliveFaceCount > targetFaceCount && _queue.TryDequeue(out int id, out _))
             {
-                var (a, b, stampA, stampB, optimal) = candidate;
-                if (!_vertexAlive[a] || !_vertexAlive[b] ||
-                    _stamps[a] != stampA || _stamps[b] != stampB)
-                    continue;
-                TryCollapse(a, b, optimal);
+                var (a, b, optimal) = _edgeData[id];
+                if (_vertexAlive[a] && _vertexAlive[b])
+                    TryCollapse(a, b, optimal);
+
+                if (progress is not null && ++sinceCheckpoint >= 256)
+                {
+                    sinceCheckpoint = 0;
+                    progress.ThrowIfCancelled();
+                    progress.Report((double)(initialAlive - _aliveFaceCount) / (initialAlive - targetFaceCount));
+                }
             }
+            progress?.ThrowIfCancelled();
+            progress?.Report(1);
         }
 
         private void TryCollapse(int a, int b, in Vector3d optimal)
@@ -172,6 +201,7 @@ public static class MeshDecimator
             }
 
             // Execute.
+            var bNeighbors = NeighborVertices(b);
             _positions[a] = optimal;
             _quadrics[a] += _quadrics[b];
             foreach (int f in sharedFaces)
@@ -190,8 +220,14 @@ public static class MeshDecimator
                 _vertexFaces[a].Add(f);
             }
             _vertexAlive[b] = false;
-            _stamps[a]++;
-            _stamps[b]++;
+
+            // Edges that referenced the dead vertex are gone; their surviving twins
+            // around a are re-enqueued below with fresh priorities.
+            foreach (int neighbor in bNeighbors)
+            {
+                if (_edgeIds.TryGetValue(EdgeKey(b, neighbor), out int id) && _queue.Contains(id))
+                    _queue.Remove(id);
+            }
 
             foreach (int neighbor in NeighborVertices(a))
                 Enqueue(Math.Min(a, neighbor), Math.Max(a, neighbor));

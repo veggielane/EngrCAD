@@ -6,11 +6,16 @@ engines.
 
 ## The conversion triangle
 
-- **Implicit → Mesh**: `SurfaceNets.Polygonize(sdf, region?, resolution)` — manifold
-  Surface Nets (dual contouring): one vertex per *connected component of inside corners*
-  per cell (plain one-vertex-per-cell produces non-manifold edges on thin sheets and
-  saddles), one quad per interior sign-changing grid edge, wound outward. Surfaces
-  crossing the sampling region come out open there.
+- **Implicit → Mesh**: `SurfaceNets.Polygonize(sdf, region?, resolution, progress?)` —
+  manifold Surface Nets (dual contouring): one vertex per *connected component of inside
+  corners* per cell (plain one-vertex-per-cell produces non-manifold edges on thin
+  sheets and saddles), one quad per interior sign-changing grid edge, wound outward.
+  Surfaces crossing the sampling region come out open there. Grid sampling runs in
+  parallel over i-slabs via `ParallelFor.Blocks` (each block fills and evaluates a
+  disjoint slice, so the mesh is bit-for-bit identical to a sequential run); the
+  topology passes stay sequential so output ordering never depends on scheduling. The
+  optional `ProgressCancel` reports coarse progress and cancels cooperatively
+  (throws `OperationCanceledException`, partial results discarded).
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces

@@ -152,27 +152,31 @@ internal sealed class GridSdf : SampledGridSdf
 
     public static GridSdf Bake(Sdf source, in Aabb region, double cellSize)
     {
-        var frame = new GridFrame(region, cellSize);
-        var values = new double[frame.Nx * frame.Ny * frame.Nz];
-        var rented = ArrayPool<Vector3d>.Shared.Rent(frame.Nx);
-        try
+        var frameLocal = new GridFrame(region, cellSize);
+        var values = new double[frameLocal.Nx * frameLocal.Ny * frameLocal.Nz];
+        // Parallel over k-slabs: each block owns a contiguous slice of the value array
+        // and every sample is computed from its (i, j, k) alone, so the bake is
+        // bit-for-bit identical to a sequential fill regardless of scheduling.
+        ParallelFor.Blocks(0, frameLocal.Nz, (k0, k1) =>
         {
-            var points = rented.AsSpan(0, frame.Nx);
-            int index = 0;
-            for (int k = 0; k < frame.Nz; k++)
-                for (int j = 0; j < frame.Ny; j++)
-                {
-                    for (int i = 0; i < frame.Nx; i++)
-                        points[i] = frame.SamplePosition(i, j, k);
-                    source.Evaluate(points, values.AsSpan(index, frame.Nx));
-                    index += frame.Nx;
-                }
-        }
-        finally
-        {
-            ArrayPool<Vector3d>.Shared.Return(rented);
-        }
-        return new GridSdf(frame, values);
+            var rented = ArrayPool<Vector3d>.Shared.Rent(frameLocal.Nx);
+            try
+            {
+                var points = rented.AsSpan(0, frameLocal.Nx);
+                for (int k = k0; k < k1; k++)
+                    for (int j = 0; j < frameLocal.Ny; j++)
+                    {
+                        for (int i = 0; i < frameLocal.Nx; i++)
+                            points[i] = frameLocal.SamplePosition(i, j, k);
+                        source.Evaluate(points, values.AsSpan((k * frameLocal.Ny + j) * frameLocal.Nx, frameLocal.Nx));
+                    }
+            }
+            finally
+            {
+                ArrayPool<Vector3d>.Shared.Return(rented);
+            }
+        });
+        return new GridSdf(frameLocal, values);
     }
 
     private protected override double Sample(int i, int j, int k) =>
