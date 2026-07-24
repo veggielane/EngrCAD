@@ -8,7 +8,7 @@ using EngrCAD.Mesh;
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
 
-var scene = new Scene(new MeshQuality { SegmentsPerCircle = 48, SdfResolution = 64 });
+var scene = new Scene(new MeshQuality { SegmentsPerCircle = 48, SdfResolution = 96 });
 
 // ---- tab 1: feature modeling — queries, fillet/chamfer, patterns ----
 var features = scene.AddTab("features");
@@ -150,8 +150,11 @@ threads.Add(new Part("M8 stud (exact B-Rep)",
     Matrix4d.CreateTranslation((-2.6, 0, -1.4)) * Matrix4d.CreateScale(threadScale)));
 
 // The printing route: SDF thread with lead-in chamfers and 0.15 mm FDM clearance.
+// Thread ridges alias away at the scene's default SDF resolution, so this part is
+// baked to a mesh up front at ~0.1 mm cells (the docs pages use the same setting).
 threads.Add(new Part("printed stud (0.15 clearance)",
-    Shape.ExternalThread(8, length: 16, clearance: 0.15),
+    Shape.ExternalThread(8, length: 16, clearance: 0.15)
+        .ToMesh(new MeshQuality { SdfResolution = 220 }),
     Palette.Coral,
     Matrix4d.CreateTranslation((0, 0, -1.4)) * Matrix4d.CreateScale(threadScale)));
 
