@@ -274,6 +274,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## Viewer
 
+- [ ] **Sub-wave-A review flags** (code-quality, all low) — `EngrCadBuilder.RenderToImage`
+  should mirror the `style`/`sectionAxis`/`sectionOffset` params; axis-staleness
+  regression test once offscreen isolines land (or extract the staleness key into a
+  testable helper); `ViewCubeAnimation(0)` zero-duration fact; `SdfContours` saddle-cell
+  disambiguation test (hyperbolic field section); route one `SdfRoute` lowering-failure
+  diagnostic through the report sink; annotate `HandleReleased`'s 16 DIP² click threshold.
 - [ ] **Offscreen isolines** — the last offscreen-parity gap: `OffscreenRenderer` now
   honors display modes, view styles, and sections, but not the section-plane SDF
   isolines (`SectionContourRenderer` — CPU geometry is already GL-free in
