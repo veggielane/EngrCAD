@@ -327,7 +327,12 @@ Semantics worth knowing:
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for
 tessellation, `SdfResolution` for polygonization); `Scene.Options` carries the same
-knobs for everything shown through a scene.
+knobs for everything shown through a scene. Hosts (e.g. the viewer's
+`EngrCad.Configure()` builder) can supply a *default* quality without overriding a
+scene that chose its own: `Scene.HasExplicitOptions` records whether options were
+passed at construction, and `Scene.ResolveQuality(fallback)` /
+`Scene.PreMesh(fallback)` implement the precedence **explicit scene options >
+host fallback > `MeshQuality` defaults**.
 
 ## Future work (todo.md)
 

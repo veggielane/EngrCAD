@@ -286,8 +286,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   like model geometry, color by sign or a diverging ramp.
 - [ ] **Offscreen parity** — `Part.DisplayMode` and section planes are ignored by
   `OffscreenRenderer`; honor them so headless renders match the window.
-- [ ] Builder for `EngrCad.Run`/`Show` — defaults like render quality; consume
-  `IOptions`, `ILogger` etc.
 - [ ] **3D annotations (PMI)** — dimensions, notes, and markers attached to model
   geometry in 3D space (the model-based-definition idea: the model carries its own
   manufacturing information instead of 2D drawings). Building blocks:
@@ -391,7 +389,8 @@ UI dependencies, which makes this unusually feasible.
 - [ ] **Parametric model layer / scripting** — fluent C# builder over the retained
   document model; `.csx` scripting via Roslyn (C# *is* our SCAD language); reusable
   parametric components as plain C# methods — document the pattern.
-- [ ] `ILogger` throughout.
+- [ ] `ILogger` throughout — viewer entry points now route through the `IEngrCadLog`
+  seam (adaptable to `ILogger`); kernel-side diagnostics/progress logging remain.
 - [ ] Sheet metal (bend allowances, flanges, unfold) — big, separate domain.
 - [ ] nuget.org publish — `Directory.Build.props` URLs are placeholders; a real remote
   exists (github.com/veggielane/EngrCAD). GitHub Pages needs Settings → Pages →

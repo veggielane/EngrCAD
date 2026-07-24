@@ -245,7 +245,16 @@ public sealed class Scene
 
     public MeshQuality Options { get; }
 
-    public Scene(MeshQuality? options = null) => Options = options ?? new MeshQuality();
+    /// <summary>Whether <see cref="Options"/> was passed explicitly at construction.
+    /// Hosts use this to decide quality precedence: a scene that chose its own quality
+    /// always wins over host-level defaults (see <see cref="ResolveQuality"/>).</summary>
+    public bool HasExplicitOptions { get; }
+
+    public Scene(MeshQuality? options = null)
+    {
+        HasExplicitOptions = options is not null;
+        Options = options ?? new MeshQuality();
+    }
 
     public IReadOnlyList<Tab> Tabs => _tabs;
 
@@ -272,12 +281,25 @@ public sealed class Scene
         return tab.Add(part);
     }
 
+    /// <summary>
+    /// Resolves the mesh quality this scene should be displayed/exported at, given an
+    /// optional host-level <paramref name="fallback"/> (e.g. an <c>EngrCadOptions</c>
+    /// quality). Precedence: options passed explicitly to the <see cref="Scene"/>
+    /// constructor win; otherwise the host's fallback; otherwise this scene's default
+    /// <see cref="MeshQuality"/>.
+    /// </summary>
+    public MeshQuality ResolveQuality(MeshQuality? fallback = null) =>
+        HasExplicitOptions || fallback is null ? Options : fallback;
+
     /// <summary>Produces every distinct part's display mesh at this scene's quality
     /// (idempotent; a part instanced many times through assemblies is meshed once).
-    /// Hosts call this off the UI thread before handing tabs to the viewport.</summary>
-    public void PreMesh()
+    /// Hosts call this off the UI thread before handing tabs to the viewport, and may
+    /// pass their own default quality as <paramref name="fallback"/> — used only when
+    /// the scene did not choose an explicit quality (see <see cref="ResolveQuality"/>).</summary>
+    public void PreMesh(MeshQuality? fallback = null)
     {
+        var quality = ResolveQuality(fallback);
         foreach (var part in AllParts)
-            part.GetMesh(Options);
+            part.GetMesh(quality);
     }
 }

@@ -124,6 +124,61 @@ survives those too. `EngrCad.Run` also gives every model program standard switch
 B-Rep-representable parts, binary STL or OBJ merged with transforms applied —
 CI/slicer-friendly, no window).
 
+## Configuring: `EngrCad.Configure()`
+
+`EngrCad.Run(args, factory)` works with zero configuration; when a program wants
+host-level defaults, the fluent builder sets them once:
+
+```csharp
+return EngrCad.Configure()
+    .WithTitle("bracket")
+    .WithQuality(new MeshQuality { SegmentsPerCircle = 48 })   // display/export default
+    .WithRenderSize(1920, 1080)                                // --render image size
+    .WithLog(msg => logger.LogInformation("{Message}", msg))   // status/error seam
+    .Run(args, BuildScene);
+```
+
+The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
+`RenderWidth`/`RenderHeight`, `Log`, `OnViewportReady`) and its terminal methods
+(`Run`, `Show`, `ShowLive`, `RenderToImage`) mirror the static `EngrCad` entry
+points with those options applied. The plain `EngrCad.Run/Show/ShowLive` overloads
+are unchanged and remain the simple path.
+
+- **Mesh-quality precedence** (`Scene.ResolveQuality` implements it): a `Scene`
+  constructed with explicit options always wins > the `EngrCadOptions.Quality`
+  default > `MeshQuality`'s built-in defaults. So a scene that deliberately chose
+  its own quality is never silently overridden, while scenes that didn't care
+  inherit the host's setting everywhere — display, `--export .stl/.obj`, `--render`,
+  and hot reloads.
+- **Logging seam** (`IEngrCadLog`: `Info`/`Error`): everything the entry points
+  report — export confirmations, usage errors, headless-render results, and the
+  live-reload status/error messages that appear in the overlay — goes through the
+  configured log. The default is `EngrCadLog.Console` (Info → stdout, Error →
+  stderr, the historical behavior). `WithLog(Action<string>)` adapts a plain
+  delegate; `EngrCadLog.From(info, error)` keeps the two streams separate.
+
+### `Microsoft.Extensions` friendliness (without the dependency)
+
+The viewer deliberately does **not** reference `Microsoft.Extensions.*`.
+`EngrCadOptions` is a plain mutable POCO, so it binds as
+`IOptions<EngrCadOptions>` out of the box, and `EngrCad.Configure(EngrCadOptions)`
+accepts the DI-provided instance directly:
+
+```csharp
+// In a generic-host app:
+builder.Services.Configure<EngrCadOptions>(builder.Configuration.GetSection("EngrCad"));
+
+// In the model program, with IOptions<EngrCadOptions> options and ILogger logger:
+return EngrCad.Configure(options.Value)
+    .WithLog(EngrCadLog.From(
+        msg => logger.LogInformation("{Message}", msg),
+        msg => logger.LogError("{Message}", msg)))
+    .Run(args, BuildScene);
+```
+
+(Delegate/interface-typed properties are simply left unbound by configuration
+binding — set `Log`/`OnViewportReady` in code.)
+
 ## Headless offscreen rendering (screenshots without a window)
 
 For tests and AI agents that need to *see* a scene without opening a window,

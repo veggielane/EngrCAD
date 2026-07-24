@@ -9,7 +9,13 @@ using EngrCAD.Core;
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
 
-return EngrCad.Run(args, BuildScene, "EngrCAD parametric bracket");
+// The builder sets host-level defaults once: display quality (any scene that does not
+// choose its own MeshQuality inherits it) and the --render image size.
+return EngrCad.Configure()
+    .WithTitle("EngrCAD parametric bracket")
+    .WithQuality(new MeshQuality { SegmentsPerCircle = 48 })
+    .WithRenderSize(1920, 1080)
+    .Run(args, BuildScene);
 
 static Scene BuildScene()
 {
@@ -27,7 +33,7 @@ static Scene BuildScene()
 
     Console.WriteLine(history.Regenerate().ToString());
 
-    var scene = new Scene(new MeshQuality { SegmentsPerCircle = 48 });
+    var scene = new Scene(); // no explicit quality: inherits the builder's 48-segment default
     scene.Add(history.ToPart("bracket", Palette.Steel));
     return scene;
 }
