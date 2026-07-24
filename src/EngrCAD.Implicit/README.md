@@ -27,10 +27,12 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   (reflects the query point — an isometry, so distances stay exact).
 - **Sampled grids** (`Sampled(cellSize)` / `Sampled(region, cellSize)`, g3's
   `DenseGridTrilinearImplicit` + `ImplicitFieldSampler3d`): bake any `Sdf` onto a dense
-  uniform grid (rows fed through the batch `Evaluate` seam) and evaluate by trilinear
-  interpolation — the standard acceleration for expensive ASTs like `MeshSdf`. Pass
-  `lazy: true` (g3's `CachingGridImplicit3d`) to materialize 16³-sample blocks on first
-  touch instead of up front (thread-safe, deterministic first-publish-wins).
+  uniform grid (rows fed through the batch `Evaluate` seam; dense bakes parallelize
+  over k-slabs via `ParallelFor.Blocks` — every sample computed from its own (i, j, k),
+  so the bake is bit-for-bit deterministic) and evaluate by trilinear interpolation —
+  the standard acceleration for expensive ASTs like `MeshSdf`. Pass `lazy: true` (g3's
+  `CachingGridImplicit3d`) to materialize 16³-sample blocks on first touch instead of
+  up front (thread-safe, deterministic first-publish-wins).
 - **N-ary operators** (`NaryOperators.cs`, g3 `ImplicitNaryUnion3d`/`ImplicitBlend3d`
   spirit): static `Sdf.Union(...)` / `Sdf.Intersection(...)` evaluate min/max over any
   number of children in one flat loop (each child evaluated once per query — no nested

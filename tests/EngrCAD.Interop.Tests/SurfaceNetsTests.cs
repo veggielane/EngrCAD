@@ -22,6 +22,41 @@ public class SurfaceNetsTests
     }
 
     [Fact]
+    public void Polygonize_IsDeterministicAcrossRuns()
+    {
+        // Sampling runs in parallel; the mesh must still come out bit-for-bit identical.
+        var sdf = Sdf.Sphere(1) - Sdf.Box(0.7, 0.7, 3);
+        var (p1, f1) = SurfaceNets.Polygonize(sdf, resolution: 64).ToIndexed();
+        var (p2, f2) = SurfaceNets.Polygonize(sdf, resolution: 64).ToIndexed();
+
+        Assert.Equal(p1, p2); // Vector3d equality is bitwise
+        Assert.Equal(f1.Count, f2.Count);
+        for (int i = 0; i < f1.Count; i++)
+            Assert.Equal(f1[i], f2[i]);
+    }
+
+    [Fact]
+    public void Cancellation_ThrowsOperationCanceled()
+    {
+        var cancel = new ProgressCancel(() => true);
+        Assert.Throws<OperationCanceledException>(() =>
+            SurfaceNets.Polygonize(Sdf.Sphere(1), resolution: 32, progress: cancel));
+    }
+
+    [Fact]
+    public void Progress_ReportsUpToCompletion()
+    {
+        var fractions = new List<double>();
+        var mesh = SurfaceNets.Polygonize(Sdf.Sphere(1), resolution: 32,
+            progress: new ProgressCancel(f => { lock (fractions) fractions.Add(f); }));
+
+        Assert.True(mesh.IsClosed);
+        Assert.NotEmpty(fractions);
+        Assert.Equal(1.0, fractions[^1]);
+        Assert.All(fractions, f => Assert.InRange(f, 0.0, 1.0));
+    }
+
+    [Fact]
     public void Sphere_VerticesLieNearTheSurface()
     {
         var sdf = Sdf.Sphere(1);

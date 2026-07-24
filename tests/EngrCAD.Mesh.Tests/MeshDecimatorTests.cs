@@ -86,6 +86,28 @@ public class MeshDecimatorTests
     }
 
     [Fact]
+    public void Cancellation_ThrowsAndDiscards()
+    {
+        var sphere = MeshPrimitives.UvSphere(1.0, segments: 48, rings: 24).Triangulated();
+        var cancel = new ProgressCancel(() => true);
+        Assert.Throws<OperationCanceledException>(() =>
+            MeshDecimator.Decimate(sphere, targetFaceCount: 500, cancel));
+    }
+
+    [Fact]
+    public void Progress_ReportsUpToCompletion()
+    {
+        var sphere = MeshPrimitives.UvSphere(1.0, segments: 48, rings: 24).Triangulated();
+        var fractions = new List<double>();
+        var decimated = MeshDecimator.Decimate(sphere, targetFaceCount: 500, new ProgressCancel(fractions.Add));
+
+        Assert.True(decimated.FaceCount <= 500);
+        Assert.NotEmpty(fractions);
+        Assert.Equal(1.0, fractions[^1]);
+        Assert.All(fractions, f => Assert.InRange(f, 0.0, 1.0));
+    }
+
+    [Fact]
     public void DecimatedMeshes_RemainUsableDownstream()
     {
         var sphere = MeshPrimitives.UvSphere(1.0, segments: 32, rings: 16).Triangulated();

@@ -14,21 +14,25 @@ namespace EngrCAD.Interop;
 public static class SurfaceNets
 {
     /// <summary>Polygonizes over the field's own bounds plus a small margin. Requires finite bounds.</summary>
-    public static HalfEdgeMesh Polygonize(Sdf sdf, int resolution = 64)
+    public static HalfEdgeMesh Polygonize(Sdf sdf, int resolution = 64, ProgressCancel? progress = null)
     {
         var bounds = sdf.Bounds;
         if (!Sdf.IsFinite(bounds) || bounds.IsEmpty)
             throw new ArgumentException(
                 "The field has unbounded or empty bounds; pass an explicit sampling region.", nameof(sdf));
         double margin = bounds.Size[bounds.LongestAxis] / resolution * 2;
-        return Polygonize(sdf, bounds.Expanded(margin), resolution);
+        return Polygonize(sdf, bounds.Expanded(margin), resolution, progress);
     }
 
     /// <summary>
     /// Polygonizes the iso-surface d = 0 over <paramref name="region"/>.
     /// <paramref name="resolution"/> is the cell count along the region's longest axis.
+    /// Grid sampling is evaluated in parallel (bit-for-bit deterministic — every sample
+    /// lands in its own slot); the topology passes stay sequential so output ordering
+    /// never depends on scheduling. <paramref name="progress"/> adds cooperative
+    /// progress/cancellation (cancellation throws <see cref="OperationCanceledException"/>).
     /// </summary>
-    public static HalfEdgeMesh Polygonize(Sdf sdf, in Aabb region, int resolution)
+    public static HalfEdgeMesh Polygonize(Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress = null)
     {
         if (region.IsEmpty)
             throw new ArgumentException("Sampling region is empty.", nameof(region));
@@ -37,24 +41,36 @@ public static class SurfaceNets
 
         var size = region.Size;
         double cell = size[region.LongestAxis] / resolution;
-        int nx = Math.Max(1, (int)Math.Ceiling(size.X / cell - 1e-9));
-        int ny = Math.Max(1, (int)Math.Ceiling(size.Y / cell - 1e-9));
-        int nz = Math.Max(1, (int)Math.Ceiling(size.Z / cell - 1e-9));
+        var cells = new Vector3i(
+            Math.Max(1, (int)Math.Ceiling(size.X / cell - 1e-9)),
+            Math.Max(1, (int)Math.Ceiling(size.Y / cell - 1e-9)),
+            Math.Max(1, (int)Math.Ceiling(size.Z / cell - 1e-9)));
+        int nx = cells.X, ny = cells.Y, nz = cells.Z; // scalar copies for the hot loops
         var origin = region.Min;
 
-        // Sample the grid corners.
+        // Sample the grid corners: i-slabs are contiguous slices of the flat arrays, so
+        // each parallel block fills and evaluates a disjoint range (deterministic output).
         int sy = ny + 1, sz = nz + 1;
         var values = new double[(nx + 1) * sy * sz];
         var points = new Vector3d[values.Length];
-        for (int i = 0; i <= nx; i++)
+        ParallelFor.Blocks(0, nx + 1, (i0, i1) =>
         {
-            for (int j = 0; j <= ny; j++)
+            if (progress is not null && progress.CancelRequested)
+                return;
+            for (int i = i0; i < i1; i++)
             {
-                for (int k = 0; k <= nz; k++)
-                    points[(i * sy + j) * sz + k] = origin + (i * cell, j * cell, k * cell);
+                for (int j = 0; j <= ny; j++)
+                {
+                    for (int k = 0; k <= nz; k++)
+                        points[(i * sy + j) * sz + k] = origin + (i * cell, j * cell, k * cell);
+                }
             }
-        }
-        sdf.Evaluate(points, values);
+            int offset = i0 * sy * sz;
+            int length = (i1 - i0) * sy * sz;
+            sdf.Evaluate(points.AsSpan(offset, length), values.AsSpan(offset, length));
+        });
+        progress?.ThrowIfCancelled();
+        progress?.Report(0.6);
 
         int Corner(int i, int j, int k) => (i * sy + j) * sz + k;
         bool Inside(int index) => values[index] < 0;
@@ -78,6 +94,11 @@ public static class SurfaceNets
 
         for (int i = 0; i < nx; i++)
         {
+            if (progress is not null && (i & 15) == 0)
+            {
+                progress.ThrowIfCancelled();
+                progress.Report(0.6 + 0.3 * i / nx);
+            }
             for (int j = 0; j < ny; j++)
             {
                 for (int k = 0; k < nz; k++)
@@ -240,6 +261,9 @@ public static class SurfaceNets
             }
         }
 
-        return HalfEdgeMesh.Build(positions, faces);
+        progress?.ThrowIfCancelled();
+        var mesh = HalfEdgeMesh.Build(positions, faces);
+        progress?.Report(1);
+        return mesh;
     }
 }

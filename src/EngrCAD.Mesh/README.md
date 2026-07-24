@@ -30,7 +30,14 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   seam-zipping pass so results come out topologically closed.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
 - **`MeshDecimator`** — quadric error metric (Garland–Heckbert) edge collapse with link
-  condition and normal-flip guards; boundaries are preserved exactly.
+  condition and normal-flip guards; boundaries are preserved exactly. Candidates live in
+  Core's `IndexPriorityQueue` (one always-current entry per undirected edge, re-keyed in
+  place on neighborhood changes — replaced the lazy stamped-duplicates queue at equal
+  speed and equal-or-better quality). Optional `ProgressCancel` parameter reports
+  progress and cancels cooperatively (`OperationCanceledException`). Gotcha preserved in
+  a comment: never key edge maps by a packed `(min &lt;&lt; 32) | max` long — the default
+  long hash is `lo ^ hi`, which collapses structured mesh-edge keys into a handful of
+  hash buckets (measured 4× whole-algorithm slowdown); tuple keys hash properly.
 - **`MeshPlaneCut`** — slices a mesh by a plane, keeping the side the normal points away
   from (material below the plane, as when slicing for printing). Builds a new mesh:
   kept faces copied, crossing faces Sutherland–Hodgman-clipped with exact line-plane
