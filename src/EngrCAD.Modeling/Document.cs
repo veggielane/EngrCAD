@@ -65,6 +65,11 @@ public sealed class Part
     private readonly Lock _meshLock = new();
     private HalfEdgeMesh? _mesh;
 
+    // ---- annotations (PMI) ----
+    private readonly List<Annotation> _annotationList = [];
+    private (IReadOnlyList<ResolvedAnnotation>? Resolved, string? Error)? _resolvedAnnotations;
+    private BrepSolid? _annotationSolid;   // lazily lowered target for selector queries
+
     public Part(string name, Shape shape, PartColor? color = null, Matrix4d? transform = null)
         : this(name, (object)shape, color, transform) { }
 
@@ -111,6 +116,95 @@ public sealed class Part
             };
         }
     }
+
+    /// <summary>The 3D annotations (PMI) attached to this part — dimensions, notes,
+    /// datum labels — in part-local coordinates (posed with the part).</summary>
+    public IReadOnlyList<Annotation> Annotations
+    {
+        get
+        {
+            lock (_meshLock)
+                return [.. _annotationList];
+        }
+    }
+
+    /// <summary>Attaches an annotation (chainable). Selector-based dimensions
+    /// re-measure against this part's geometry when resolved.</summary>
+    public Part Annotate(Annotation annotation)
+    {
+        ArgumentNullException.ThrowIfNull(annotation);
+        lock (_meshLock)
+        {
+            _annotationList.Add(annotation);
+            _resolvedAnnotations = null;   // resolved cache is stale
+        }
+        return this;
+    }
+
+    /// <summary>
+    /// Resolves all attached annotations against this part's geometry (selector-based
+    /// dimensions lower the geometry to B-Rep once, cached) and returns the
+    /// render-ready list, in part-local coordinates. Cached until an annotation is
+    /// added. Throws when any annotation fails to resolve; viewers use
+    /// <see cref="TryResolveAnnotations"/> for a non-throwing path.
+    /// </summary>
+    public IReadOnlyList<ResolvedAnnotation> ResolveAnnotations() =>
+        TryResolveAnnotations(out var resolved, out string? error)
+            ? resolved
+            : throw new InvalidOperationException(error);
+
+    /// <summary>
+    /// Non-throwing <see cref="ResolveAnnotations"/>: true with the resolved list on
+    /// success (empty when the part has no annotations); false with a diagnostic when
+    /// any annotation fails (bad selector after an edit, non-B-Rep geometry under a
+    /// selector dimension). The result — success or failure — is cached, so viewers
+    /// can call this per frame; <c>Scene.PreMesh</c> pre-resolves off the render
+    /// thread the same way it pre-meshes.
+    /// </summary>
+    public bool TryResolveAnnotations(
+        out IReadOnlyList<ResolvedAnnotation> resolved, out string? error)
+    {
+        lock (_meshLock)
+        {
+            if (_resolvedAnnotations is { } cached)
+            {
+                resolved = cached.Resolved ?? [];
+                error = cached.Error;
+                return error is null;
+            }
+
+            var list = new List<ResolvedAnnotation>(_annotationList.Count);
+            foreach (var annotation in _annotationList)
+            {
+                try
+                {
+                    list.Add(annotation.Resolve(LowerForAnnotations));
+                }
+                catch (Exception e)
+                {
+                    error = $"Part '{Name}': {annotation.GetType().Name} failed to resolve: {e.Message}";
+                    _resolvedAnnotations = (null, error);
+                    resolved = [];
+                    return false;
+                }
+            }
+            _resolvedAnnotations = (list, null);
+            resolved = list;
+            error = null;
+            return true;
+        }
+    }
+
+    /// <summary>The selector target: this part's geometry as a B-Rep (lowered once,
+    /// cached — Part geometry is fixed at construction).</summary>
+    private BrepSolid LowerForAnnotations() => _annotationSolid ??= Geometry switch
+    {
+        BrepSolid solid => solid,
+        Shape shape => shape.ToBrep(),
+        _ => throw new InvalidOperationException(
+            $"selector-based annotations need B-Rep-representable geometry " +
+            $"(this part holds {Geometry.GetType().Name})."),
+    };
 
     /// <summary>World-space bounds of the display mesh with <see cref="Transform"/> applied.</summary>
     public Aabb Bounds(MeshQuality? quality = null) => Bounds(Transform, quality);
@@ -300,6 +394,13 @@ public sealed class Scene
     {
         var quality = ResolveQuality(fallback);
         foreach (var part in AllParts)
+        {
             part.GetMesh(quality);
+            // Pre-resolve annotations too: selector dimensions lower to B-Rep, which
+            // must not happen on the render thread. Failures are cached diagnostics
+            // (viewers surface them via TryResolveAnnotations), not exceptions here.
+            if (part.Annotations.Count > 0)
+                part.TryResolveAnnotations(out _, out _);
+        }
     }
 }

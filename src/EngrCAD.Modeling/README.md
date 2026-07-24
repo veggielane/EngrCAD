@@ -323,6 +323,47 @@ Semantics worth knowing:
 - v1 is placement only: **mates/constraints, exploded views, and BOM are future
   work** (mates would solve for the occurrence frames that `Flatten` composes).
 
+### Annotations (PMI)
+
+Parts carry their own manufacturing information — **3D annotations** attached in
+part-local space (`Annotations.cs`), rendered by the viewer with dimension lines and
+billboarded text (and included in offscreen/docs renders). Modeling owns the data +
+measurement only; no rendering here.
+
+```csharp
+var plate = new Part("plate", plateShape)
+    .Annotate(LinearDimension.BetweenFaces(              // auto-measures 40
+        s => s.PlanarFacesWithNormal(-Vector3d.UnitX).First(),
+        s => s.PlanarFacesWithNormal(Vector3d.UnitX).First()))
+    .Annotate(RadialDimension.OnEdge(                    // reads the actual bore: "⌀5.5"
+        s => s.Faces.SelectMany(f => f.Edges()).First(e => e.IsCircular(out _, out _, out _)),
+        diameter: true))
+    .Annotate(new LeaderNote((0, 0, 4), "DEBURR"))
+    .Annotate(new DatumLabel((-20, 0, 0), "A"));
+```
+
+- **Two kinds of geometry reference.** Plain part-local points (`LeaderNote`,
+  `DatumLabel`, point-to-point `LinearDimension` — what the viewer's measure tool
+  creates), and **semantic B-Rep selectors** (`Func<BrepSolid, BrepFace/BrepEdge>`,
+  the `BrepQueries` vocabulary the rim features use). Selector dimensions
+  **auto-measure**: `LinearDimension.BetweenFaces` measures the actual
+  plane-to-plane distance of two parallel planar faces, `RadialDimension.OnEdge`
+  reads the actual radius of an `IsCircular` edge. Selectors re-run per resolution,
+  so dimensions track parameter edits and `FeatureHistory` regeneration — the same
+  topological-naming story as features (no persisted indices to go stale).
+- **Resolution.** `Part.ResolveAnnotations()` lowers the geometry to B-Rep once
+  (cached) and returns render-ready `ResolvedAnnotation`s (kind, part-local anchors,
+  placement offset, formatted text, measured value); viewers pose them by the
+  instance transform, so assembly instances show their part's annotations in place.
+  `TryResolveAnnotations` is the non-throwing viewer path (a bad selector after an
+  edit becomes a status message, not a crash) and `Scene.PreMesh` pre-resolves off
+  the render thread. `Label` overrides the formatted text; `Offset` places the
+  dimension line/text (zero = renderer default).
+- **Callouts.** `HoleCallout.From(spec, anchor, depth)` and
+  `ThreadCallout.From(spec, anchor, depth)` generate standard-text `LeaderNote`s
+  from `HoleSpec`/`ThreadSpec` ("⌀5.5 ↧14", "M6×1 ↧12") so drilled/tapped parts can
+  label themselves from the same specs that cut them.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for

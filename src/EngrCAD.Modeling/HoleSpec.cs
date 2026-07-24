@@ -62,6 +62,15 @@ public sealed class HoleSpec
         return new HoleSpec(Kind.Countersink, diameter, countersinkDiameter, 0, angleDegrees * Math.PI / 180);
     }
 
+    // Read access for callout generation (HoleCallout in Annotations); the spec's
+    // public surface stays the three factories.
+    internal bool IsCounterbore => _kind == Kind.Counterbore;
+    internal bool IsCountersink => _kind == Kind.Countersink;
+    internal double Diameter => _diameter;
+    internal double FeatureDiameter => _featureDiameter;
+    internal double CounterboreDepth => _counterboreDepth;
+    internal double CountersinkAngleDegrees => _countersinkAngle * 180 / Math.PI;
+
     /// <summary>
     /// The tool's diameter at the drilled surface — the recess diameter for
     /// counterbores/countersinks, the bore diameter for simple holes. Two holes whose
