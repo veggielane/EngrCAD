@@ -41,6 +41,8 @@ public static class BrepBoolean
         // crossing parameters as mandatory seam breaks.
         var curvesA = a.Faces.ToDictionary(f => f, _ => new List<(Curve3d Curve, IReadOnlyList<double> Breaks)>());
         var curvesB = b.Faces.ToDictionary(f => f, _ => new List<(Curve3d Curve, IReadOnlyList<double> Breaks)>());
+        // Conservative prefilter expansion at the inverse-evaluation scale; a too-small
+        // value could only skip a genuinely-touching face pair, never corrupt geometry.
         var boundsA = curvesA.Keys.ToDictionary(f => f, f => f.Bounds().Expanded(1e-6));
         var boundsB = curvesB.Keys.ToDictionary(f => f, f => f.Bounds().Expanded(1e-6));
         foreach (var fa in curvesA.Keys)
@@ -156,6 +158,8 @@ public static class BrepBoolean
                 rest.Add(entry);
         }
 
+        // Chain junctions match at the inverse-evaluation scale (1e-6): endpoints come
+        // from independent tracer/analytic curves, not exactly-shared vertices.
         const double junctionTolerance = 1e-6;
         while (candidates.Count > 0)
         {
@@ -245,6 +249,8 @@ public static class BrepBoolean
 
     private static bool SameCurve(Curve3d a, Curve3d b)
     {
+        // Weld-scale (1e-9 = Tolerance.Default.Linear) identity: duplicate split curves
+        // from identical carriers are exact clones, so the tight tolerance is safe.
         const double tolerance = 1e-9;
         var a0 = a.PointAt(a.Domain.Start);
         var a1 = a.PointAt(a.Domain.End);

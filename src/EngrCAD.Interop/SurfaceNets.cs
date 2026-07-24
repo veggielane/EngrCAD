@@ -41,6 +41,8 @@ public static class SurfaceNets
 
         var size = region.Size;
         double cell = size[region.LongestAxis] / resolution;
+        // Epsilon-guard the Ceiling: an exact multiple of the cell size computed through
+        // different arithmetic can land an ulp high and must not gain a cell.
         var cells = new Vector3i(
             Math.Max(1, (int)Math.Ceiling(size.X / cell - 1e-9)),
             Math.Max(1, (int)Math.Ceiling(size.Y / cell - 1e-9)),

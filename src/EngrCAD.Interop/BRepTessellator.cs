@@ -74,6 +74,8 @@ public static class BRepTessellator
         // Zip seams: cap triangulation may merge exactly-collinear boundary runs (earcut
         // filters them), leaving T-junctions against the finer neighboring faces; zipping
         // reinserts the missing vertices so the mesh closes.
+        // 1e-9 = Tolerance.Default.Linear: the absolute weld tolerance — geometry that
+        // must weld is constructed exactly, so this must NOT be loosened to hide cracks.
         return MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
     }
 
@@ -89,6 +91,8 @@ public static class BRepTessellator
             var points = new List<Vector3d> { edge.Curve.PointAt(domain.Start) };
             foreach (double t in polyline.VertexParameters)
             {
+                // Parameter-space interiority guard (round-off scale): endpoint samples
+                // are added separately and must not duplicate.
                 if (t > domain.Start + 1e-12 && t < domain.End - 1e-12)
                     points.Add(edge.Curve.PointAt(t));
             }
@@ -197,6 +201,9 @@ public static class BRepTessellator
         Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
         double[] uParams, double[] vParams, bool closedU, bool closedV)
     {
+        // Seam-scale (~1e-7) boundary match: loop samples vs the natural grid boundary
+        // agree to tessellation error, not weld precision; 1e-18 = (1e-9)² is the
+        // squared weld tolerance for the all-points-coincident pole test.
         const double tolerance = 1e-7;
         var surface = face.Surface;
         var boundary = new List<Vector3d>();
@@ -365,7 +372,7 @@ public static class BRepTessellator
 
         Vector2d Project(Vector3d p)
         {
-            if (!surface.TryProjectPoint(p, out var uv, 1e-6))
+            if (!surface.TryProjectPoint(p, out var uv, FaceGeometry.InverseEvaluationTolerance))
                 throw new InvalidOperationException($"Helical band boundary point {p} does not lie on the band surface.");
             return uv;
         }
