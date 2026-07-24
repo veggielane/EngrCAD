@@ -13,6 +13,121 @@ namespace EngrCAD.Viewer;
 // in both passes at once.
 
 /// <summary>
+/// Global view style for a whole render pass — the classic CAD view-style dropdown
+/// (points / wireframe / shaded / shaded with edges). The global style decides how
+/// parts render *by default*; a part whose <see cref="EngrCAD.Modeling.Part.DisplayMode"/>
+/// is explicitly non-default (Wireframe or Translucent) overrides it for that part.
+/// <c>DisplayMode.Shaded</c> IS the default, so it cannot override — parts left at the
+/// default follow the global style. <see cref="ShadedWithEdges"/> is the traditional
+/// default look; <see cref="Shaded"/> is the same fill without the feature-edge
+/// overlay.
+/// </summary>
+public enum ViewStyle
+{
+    /// <summary>Vertex point sprites only (mesh density inspection).</summary>
+    Points,
+
+    /// <summary>Every mesh edge as a line, no fills ("mesh" view).</summary>
+    Wireframe,
+
+    /// <summary>Lit fills without the feature-edge overlay.</summary>
+    Shaded,
+
+    /// <summary>Lit fills with the feature-edge overlay (the default CAD look).</summary>
+    ShadedWithEdges,
+}
+
+/// <summary>
+/// Which world axis a section plane is perpendicular to (v1 restricts section planes
+/// to the three world axes). The plane keeps everything at
+/// <c>coordinate &lt;= offset</c> along the axis and clips what lies above.
+/// </summary>
+public enum SectionAxis
+{
+    /// <summary>Plane x = offset; clips world +X.</summary>
+    X,
+
+    /// <summary>Plane y = offset; clips world +Y.</summary>
+    Y,
+
+    /// <summary>Plane z = offset; clips world +Z (the classic horizontal section).</summary>
+    Z,
+}
+
+/// <summary>Extensions for <see cref="SectionAxis"/> shared by both render passes.</summary>
+internal static class SectionAxisExtensions
+{
+    /// <summary>The world-space unit vector of the axis (what uSectionAxis carries).</summary>
+    public static Vector3d Direction(this SectionAxis axis) => axis switch
+    {
+        SectionAxis.X => Vector3d.UnitX,
+        SectionAxis.Y => Vector3d.UnitY,
+        _ => Vector3d.UnitZ,
+    };
+}
+
+/// <summary>How one instance actually renders after combining the global
+/// <see cref="ViewStyle"/> with the part's own <c>DisplayMode</c>.</summary>
+internal enum EffectiveMode
+{
+    Points,
+    Wireframe,
+    Shaded,
+    ShadedWithEdges,
+    Translucent,
+}
+
+/// <summary>
+/// Per-instance render-mode resolution and draw-order helpers shared by BOTH render
+/// passes (window and offscreen), so precedence and translucency ordering cannot
+/// drift between them.
+/// </summary>
+internal static class RenderModes
+{
+    /// <summary>
+    /// The precedence rule, in one place: an explicit non-default part mode
+    /// (Wireframe/Translucent) wins; parts at the default (Shaded) follow the global
+    /// style.
+    /// </summary>
+    public static EffectiveMode Resolve(ViewStyle style, EngrCAD.Modeling.DisplayMode mode) => mode switch
+    {
+        EngrCAD.Modeling.DisplayMode.Wireframe => EffectiveMode.Wireframe,
+        EngrCAD.Modeling.DisplayMode.Translucent => EffectiveMode.Translucent,
+        _ => style switch
+        {
+            ViewStyle.Points => EffectiveMode.Points,
+            ViewStyle.Wireframe => EffectiveMode.Wireframe,
+            ViewStyle.Shaded => EffectiveMode.Shaded,
+            _ => EffectiveMode.ShadedWithEdges,
+        },
+    };
+
+    /// <summary>
+    /// Sorts the first <paramref name="count"/> entries of <paramref name="order"/>
+    /// descending by their <paramref name="depth"/> keys (farthest first — back-to-front
+    /// alpha blending). Insertion sort over parallel arrays: no comparer delegate, no
+    /// allocation, and the arrays can be reused frame to frame.
+    /// </summary>
+    public static void SortBackToFront(int[] order, double[] depth, int count)
+    {
+        for (int k = 1; k < count; k++)
+        {
+            int index = order[k];
+            double key = depth[k];
+            int j = k - 1;
+            while (j >= 0 && depth[j] < key)
+            {
+                order[j + 1] = order[j];
+                depth[j + 1] = depth[j];
+                j--;
+            }
+            order[j + 1] = index;
+            depth[j + 1] = key;
+        }
+    }
+}
+
+/// <summary>
 /// GLSL sources and program compilation shared by the window and offscreen passes.
 /// There is ONE shader set: the mesh shader carries every feature the viewport needs
 /// (selection highlight, section plane, translucency); a pass that wants none of them
@@ -52,8 +167,9 @@ internal static class ViewerShaders
 
     /// <summary>
     /// Lit mesh fragment shader: directional light + specular, selection highlight
-    /// (uHighlight), horizontal section plane (uSectionEnabled/uSectionZ, cut interiors
-    /// via gl_FrontFacing), translucency (uAlpha).
+    /// (uHighlight), axis-aligned section plane (uSectionEnabled/uSectionAxis/
+    /// uSectionOffset — clips where dot(world, axis) exceeds the offset; cut
+    /// interiors via gl_FrontFacing), translucency (uAlpha).
     /// </summary>
     public const string MeshFragment = """
         in vec3 vNormal;
@@ -63,14 +179,15 @@ internal static class ViewerShaders
         uniform vec3 uEyePos;
         uniform float uHighlight;
         uniform float uSectionEnabled;
-        uniform float uSectionZ;
+        uniform vec3 uSectionAxis;
+        uniform float uSectionOffset;
         uniform float uAlpha;
         out vec4 fragColor;
         void main()
         {
             if (uSectionEnabled > 0.5)
             {
-                if (vWorldPos.z > uSectionZ)
+                if (dot(vWorldPos, uSectionAxis) > uSectionOffset)
                     discard;
                 if (!gl_FrontFacing)
                 {
@@ -116,11 +233,50 @@ internal static class ViewerShaders
         in vec3 vWorldPos;
         uniform vec3 uColor;
         uniform float uSectionEnabled;
-        uniform float uSectionZ;
+        uniform vec3 uSectionAxis;
+        uniform float uSectionOffset;
         out vec4 fragColor;
         void main()
         {
-            if (uSectionEnabled > 0.5 && vWorldPos.z > uSectionZ)
+            if (uSectionEnabled > 0.5 && dot(vWorldPos, uSectionAxis) > uSectionOffset)
+                discard;
+            fragColor = vec4(uColor, 1.0);
+        }
+        """;
+
+    /// <summary>Point-sprite vertex shader for the points view style. gl_PointSize
+    /// needs GL_PROGRAM_POINT_SIZE enabled on desktop GL (always on under GLES).</summary>
+    public const string PointVertex = """
+        in vec3 aPos;
+        uniform mat4 uModel;
+        uniform mat4 uView;
+        uniform mat4 uProj;
+        uniform float uPointSize;
+        out vec3 vWorldPos;
+        void main()
+        {
+            vec4 world = uModel * vec4(aPos, 1.0);
+            vWorldPos = world.xyz;
+            gl_Position = uProj * uView * world;
+            gl_PointSize = uPointSize;
+        }
+        """;
+
+    /// <summary>Point-sprite fragment shader: round dots (square sprites trimmed via
+    /// gl_PointCoord), section-clipped consistently with the model.</summary>
+    public const string PointFragment = """
+        in vec3 vWorldPos;
+        uniform vec3 uColor;
+        uniform float uSectionEnabled;
+        uniform vec3 uSectionAxis;
+        uniform float uSectionOffset;
+        out vec4 fragColor;
+        void main()
+        {
+            if (uSectionEnabled > 0.5 && dot(vWorldPos, uSectionAxis) > uSectionOffset)
+                discard;
+            vec2 d = gl_PointCoord - vec2(0.5);
+            if (dot(d, d) > 0.25)
                 discard;
             fragColor = vec4(uColor, 1.0);
         }

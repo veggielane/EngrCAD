@@ -46,15 +46,24 @@ public static class EngrCad
     /// headless screenshot path for tests and AI agents inspecting a design. Uses an
     /// offscreen ANGLE pbuffer; the look matches the viewer (background gradient, grid,
     /// directional light, part colors, feature edges). A null <paramref name="camera"/>
-    /// auto-frames an iso view like the viewer's first visit. Throws
-    /// <see cref="InvalidOperationException"/> when no GL context can be created; query
-    /// <see cref="CanRenderToImage"/> first to skip gracefully on headless CI.
+    /// auto-frames an iso view like the viewer's first visit.
+    /// <paramref name="style"/> is the global view style (per-part
+    /// <c>Part.DisplayMode</c> overrides it where explicitly non-default — same
+    /// precedence as the window; see <see cref="ViewStyle"/>); a non-null
+    /// <paramref name="sectionOffset"/> enables an axis-aligned section plane
+    /// perpendicular to <paramref name="sectionAxis"/>, matching the viewer's Section
+    /// toggle. Throws <see cref="InvalidOperationException"/> when no GL context can
+    /// be created; query <see cref="CanRenderToImage"/> first to skip gracefully on
+    /// headless CI.
     /// </summary>
     public static void RenderToImage(
-        Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null)
+        Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
+        ViewStyle style = ViewStyle.ShadedWithEdges,
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null)
     {
         scene.PreMesh(); // tessellate before touching GL
-        OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera);
+        OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera,
+            furniture: true, style, sectionAxis, sectionOffset);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL

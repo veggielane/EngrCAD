@@ -25,10 +25,13 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uSectionEnabled, _uSectionZ, _uAlpha;
+    private int _uSectionEnabled, _uSectionAxis, _uSectionOffset, _uAlpha;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
-    private int _uLineSectionEnabled, _uLineSectionZ;
+    private int _uLineSectionEnabled, _uLineSectionAxis, _uLineSectionOffset;
+    private uint _pointProgram;
+    private int _uPointModel, _uPointView, _uPointProj, _uPointColor, _uPointSize;
+    private int _uPointSectionEnabled, _uPointSectionAxis, _uPointSectionOffset;
     private uint _bgProgram, _bgVao;
     private uint _gridVao, _gridVbo;
     private int _gridCount;
@@ -132,7 +135,8 @@ public sealed class ViewportControl : OpenGlControlBase
         _uEyePos = _gl.GetUniformLocation(_program, "uEyePos");
         _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
         _uSectionEnabled = _gl.GetUniformLocation(_program, "uSectionEnabled");
-        _uSectionZ = _gl.GetUniformLocation(_program, "uSectionZ");
+        _uSectionAxis = _gl.GetUniformLocation(_program, "uSectionAxis");
+        _uSectionOffset = _gl.GetUniformLocation(_program, "uSectionOffset");
         _uAlpha = _gl.GetUniformLocation(_program, "uAlpha");
 
         _lineProgram = CompileLineProgram(_gl);
@@ -141,7 +145,22 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLineProj = _gl.GetUniformLocation(_lineProgram, "uProj");
         _uLineColor = _gl.GetUniformLocation(_lineProgram, "uColor");
         _uLineSectionEnabled = _gl.GetUniformLocation(_lineProgram, "uSectionEnabled");
-        _uLineSectionZ = _gl.GetUniformLocation(_lineProgram, "uSectionZ");
+        _uLineSectionAxis = _gl.GetUniformLocation(_lineProgram, "uSectionAxis");
+        _uLineSectionOffset = _gl.GetUniformLocation(_lineProgram, "uSectionOffset");
+
+        _pointProgram = CompilePointProgram(_gl);
+        _uPointModel = _gl.GetUniformLocation(_pointProgram, "uModel");
+        _uPointView = _gl.GetUniformLocation(_pointProgram, "uView");
+        _uPointProj = _gl.GetUniformLocation(_pointProgram, "uProj");
+        _uPointColor = _gl.GetUniformLocation(_pointProgram, "uColor");
+        _uPointSize = _gl.GetUniformLocation(_pointProgram, "uPointSize");
+        _uPointSectionEnabled = _gl.GetUniformLocation(_pointProgram, "uSectionEnabled");
+        _uPointSectionAxis = _gl.GetUniformLocation(_pointProgram, "uSectionAxis");
+        _uPointSectionOffset = _gl.GetUniformLocation(_pointProgram, "uSectionOffset");
+        // Desktop GL ignores gl_PointSize unless program point size is enabled; the
+        // cap does not exist under GLES (it is always on), where enabling it errors.
+        if (GlVersion.Type != GlProfileType.OpenGLES)
+            _gl.Enable(EnableCap.ProgramPointSize);
 
         _bgProgram = CompileBackgroundProgram(_gl);
         _bgVao = _gl.GenVertexArray(); // vertexless fullscreen triangle via gl_VertexID
@@ -286,6 +305,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _gl.DeleteVertexArray(_bgVao);
         _gl.DeleteProgram(_program);
         _gl.DeleteProgram(_lineProgram);
+        _gl.DeleteProgram(_pointProgram);
         _gl.DeleteProgram(_bgProgram);
         _gl.Dispose();
         _gl = null;
@@ -363,8 +383,10 @@ public sealed class ViewportControl : OpenGlControlBase
         var lightDir = new Vector3d(-0.5, -0.7, -0.9).Normalized();
         gl.Uniform3(_uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(_uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
+        var sectionAxis = _sectionAxis.Direction();
         gl.Uniform1(_uSectionEnabled, _sectionEnabled ? 1f : 0f);
-        gl.Uniform1(_uSectionZ, (float)_sectionHeight);
+        gl.Uniform3(_uSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
+        gl.Uniform1(_uSectionOffset, (float)_sectionOffset);
 
         // Section mode relies on face culling staying OFF (the GL default; nothing here
         // enables CullFace): clipping a closed solid exposes its interior, and the
@@ -375,26 +397,30 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.PolygonOffset(1f, 1f);
         for (int i = 0; i < _meshes.Count; i++)
         {
-            if (!_visible[i] || Mode(i) != DisplayMode.Shaded)
+            if (!_visible[i])
                 continue;
-            DrawFill(gl, i, matrix);
+            var em = EffectiveModeOf(i);
+            if (em is EffectiveMode.Shaded or EffectiveMode.ShadedWithEdges)
+                DrawFill(gl, i, matrix);
         }
         gl.Disable(EnableCap.PolygonOffsetFill);
 
-        // Line overlay: feature edges for shaded parts (the shaded-with-edges CAD
-        // look), full triangle wireframe for wireframe-mode parts. Lines belong to
-        // the model, so the section plane clips them consistently with the fills.
+        // Line overlay: feature edges for shaded-with-edges parts (the CAD look),
+        // full triangle wireframe for wireframe parts. Lines belong to the model, so
+        // the section plane clips them consistently with the fills.
         gl.UseProgram(_lineProgram);
         gl.Uniform1(_uLineSectionEnabled, _sectionEnabled ? 1f : 0f);
-        gl.Uniform1(_uLineSectionZ, (float)_sectionHeight);
+        gl.Uniform3(_uLineSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
+        gl.Uniform1(_uLineSectionOffset, (float)_sectionOffset);
+        bool anyPoints = false;
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (!_visible[i])
                 continue;
             var m = _meshes[i];
-            switch (Mode(i))
+            switch (EffectiveModeOf(i))
             {
-                case DisplayMode.Wireframe when m.WireVertexCount > 0:
+                case EffectiveMode.Wireframe when m.WireVertexCount > 0:
                     CameraMath.WriteColumnMajor(m.Model, matrix);
                     gl.UniformMatrix4(_uLineModel, 1, false, matrix);
                     if (i == _selected)
@@ -404,9 +430,41 @@ public sealed class ViewportControl : OpenGlControlBase
                     gl.BindVertexArray(m.WireVao);
                     gl.DrawArrays(PrimitiveType.Lines, 0, (uint)m.WireVertexCount);
                     break;
-                case DisplayMode.Shaded when m.EdgeVertexCount > 0:
+                case EffectiveMode.ShadedWithEdges when m.EdgeVertexCount > 0:
                     DrawFeatureEdges(gl, i, matrix);
                     break;
+                case EffectiveMode.Points:
+                    anyPoints = true;
+                    break;
+            }
+        }
+
+        // Points pass: vertex point sprites (drawn as indexed points over the same
+        // mesh buffers — a flat RenderMesh references each vertex exactly once).
+        if (anyPoints)
+        {
+            gl.UseProgram(_pointProgram);
+            CameraMath.WriteColumnMajor(view, matrix);
+            gl.UniformMatrix4(_uPointView, 1, false, matrix);
+            CameraMath.WriteColumnMajor(proj, matrix);
+            gl.UniformMatrix4(_uPointProj, 1, false, matrix);
+            gl.Uniform1(_uPointSize, 4f * (float)scaling);
+            gl.Uniform1(_uPointSectionEnabled, _sectionEnabled ? 1f : 0f);
+            gl.Uniform3(_uPointSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
+            gl.Uniform1(_uPointSectionOffset, (float)_sectionOffset);
+            for (int i = 0; i < _meshes.Count; i++)
+            {
+                if (!_visible[i] || EffectiveModeOf(i) != EffectiveMode.Points)
+                    continue;
+                var m = _meshes[i];
+                CameraMath.WriteColumnMajor(m.Model, matrix);
+                gl.UniformMatrix4(_uPointModel, 1, false, matrix);
+                if (i == _selected)
+                    gl.Uniform3(_uPointColor, 1.0f, 0.85f, 0.35f);
+                else
+                    gl.Uniform3(_uPointColor, m.Color.R, m.Color.G, m.Color.B);
+                gl.BindVertexArray(m.Vao);
+                gl.DrawElements(PrimitiveType.Points, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
             }
         }
 
@@ -414,8 +472,8 @@ public sealed class ViewportControl : OpenGlControlBase
         // part center, with depth writes off so translucent parts do not occlude each
         // other; depth *testing* stays on so opaque geometry in front still wins.
         // Order/depth scratch buffers are reused frame to frame (render paths must not
-        // allocate per frame); the sort is an insertion sort over the depth keys, so no
-        // comparer delegate is created either.
+        // allocate per frame); the sort (RenderModes.SortBackToFront, shared with the
+        // offscreen pass) creates no comparer delegate either.
         if (_translucentOrder.Length < _meshes.Count)
         {
             _translucentOrder = new int[_meshes.Count];
@@ -424,7 +482,7 @@ public sealed class ViewportControl : OpenGlControlBase
         int translucentCount = 0;
         for (int i = 0; i < _meshes.Count; i++)
         {
-            if (_visible[i] && Mode(i) == DisplayMode.Translucent)
+            if (_visible[i] && EffectiveModeOf(i) == EffectiveMode.Translucent)
             {
                 _translucentOrder[translucentCount] = i;
                 _translucentDepth[translucentCount] = (_meshes[i].WorldCenter - eye).LengthSquared;
@@ -433,21 +491,7 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (translucentCount > 0)
         {
-            // Farthest first (descending depth): back-to-front blending.
-            for (int k = 1; k < translucentCount; k++)
-            {
-                int index = _translucentOrder[k];
-                double depth = _translucentDepth[k];
-                int j = k - 1;
-                while (j >= 0 && _translucentDepth[j] < depth)
-                {
-                    _translucentOrder[j + 1] = _translucentOrder[j];
-                    _translucentDepth[j + 1] = _translucentDepth[j];
-                    j--;
-                }
-                _translucentOrder[j + 1] = index;
-                _translucentDepth[j + 1] = depth;
-            }
+            RenderModes.SortBackToFront(_translucentOrder, _translucentDepth, translucentCount);
 
             gl.UseProgram(_program);
             gl.Uniform1(_uAlpha, 0.4f);
@@ -476,7 +520,10 @@ public sealed class ViewportControl : OpenGlControlBase
             CaptureFramebuffer(gl, (int)width, (int)height, screenshotPath);
     }
 
-    private DisplayMode Mode(int index) => _instances[index].Part.DisplayMode;
+    /// <summary>The global-style x part-mode precedence, resolved by
+    /// <see cref="RenderModes.Resolve"/> (shared with the offscreen pass).</summary>
+    private EffectiveMode EffectiveModeOf(int index) =>
+        RenderModes.Resolve(_viewStyle, _instances[index].Part.DisplayMode);
 
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
@@ -703,6 +750,25 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Window title stem, restored when nothing is selected.</summary>
     public string BaseTitle { get; set; } = "EngrCAD";
 
+    private ViewStyle _viewStyle = ViewStyle.ShadedWithEdges;
+
+    /// <summary>
+    /// Global view style for the whole viewport (points / wireframe / shaded / shaded
+    /// with edges; default <see cref="ViewStyle.ShadedWithEdges"/>). Sets how parts
+    /// render by default; a part with an explicitly non-default
+    /// <see cref="Part.DisplayMode"/> (Wireframe or Translucent) keeps its own mode —
+    /// see <see cref="Viewer.ViewStyle"/> for the precedence rule.
+    /// </summary>
+    public ViewStyle ViewStyle
+    {
+        get => _viewStyle;
+        set
+        {
+            _viewStyle = value;
+            RequestNextFrameRendering();
+        }
+    }
+
     private bool _orthographic;
 
     /// <summary>Orthographic (true) vs perspective (false, default) projection. The
@@ -720,13 +786,15 @@ public sealed class ViewportControl : OpenGlControlBase
     // ---- section plane ----
 
     private bool _sectionEnabled;
-    private double _sectionHeight;
-    private bool _sectionHeightSet;
+    private SectionAxis _sectionAxis = SectionAxis.Z;
+    private double _sectionOffset;
+    private bool _sectionOffsetSet;
 
     /// <summary>
-    /// Section mode: clips the model at a horizontal plane (world z = <see cref="SectionHeight"/>)
-    /// to reveal interiors — exposed backfaces render as flat cut material. When first
-    /// enabled, the height defaults to the middle of the current parts' bounds.
+    /// Section mode: clips the model at an axis-aligned plane
+    /// (dot(world, <see cref="SectionAxis"/>) = <see cref="SectionOffset"/>) to reveal
+    /// interiors — exposed backfaces render as flat cut material. When first enabled,
+    /// the offset defaults to the middle of the current parts' bounds along the axis.
     /// Picking ignores the section plane (v1).
     /// </summary>
     public bool SectionEnabled
@@ -735,38 +803,78 @@ public sealed class ViewportControl : OpenGlControlBase
         set
         {
             _sectionEnabled = value;
-            if (value && !_sectionHeightSet)
+            if (value && !_sectionOffsetSet)
+                ResetSectionOffset();
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>
+    /// Which world axis the section plane is perpendicular to (default Z — the classic
+    /// horizontal section). Changing the axis re-centers the plane at the middle of the
+    /// parts' bounds along the new axis (one offset is meaningless on another axis).
+    /// </summary>
+    public SectionAxis SectionAxis
+    {
+        get => _sectionAxis;
+        set
+        {
+            if (_sectionAxis != value)
             {
-                var bounds = PartsBounds();
-                if (!bounds.IsEmpty)
-                {
-                    _sectionHeight = bounds.Center.Z;
-                    _sectionHeightSet = true;
-                }
+                _sectionAxis = value;
+                ResetSectionOffset();
             }
             RequestNextFrameRendering();
         }
     }
 
-    /// <summary>World-z height of the section plane; geometry above it is clipped.</summary>
-    public double SectionHeight
+    /// <summary>Plane offset along <see cref="SectionAxis"/>; geometry beyond it
+    /// (larger axis coordinate) is clipped.</summary>
+    public double SectionOffset
     {
-        get => _sectionHeight;
+        get => _sectionOffset;
         set
         {
-            _sectionHeight = value;
-            _sectionHeightSet = true;
+            _sectionOffset = value;
+            _sectionOffsetSet = true;
             RequestNextFrameRendering();
         }
     }
 
-    /// <summary>Moves the section plane by 2% of the parts' bounds height per step.</summary>
+    /// <summary>Legacy name for <see cref="SectionOffset"/> from when section planes
+    /// were Z-only (kept so existing hosts compile; identical semantics when
+    /// <see cref="SectionAxis"/> is Z, the default).</summary>
+    public double SectionHeight
+    {
+        get => SectionOffset;
+        set => SectionOffset = value;
+    }
+
+    /// <summary>Centers the section plane in the parts' bounds along the active axis.</summary>
+    private void ResetSectionOffset()
+    {
+        var bounds = PartsBounds();
+        if (bounds.IsEmpty)
+            return;
+        _sectionOffset = AxisComponent(bounds.Center, _sectionAxis);
+        _sectionOffsetSet = true;
+    }
+
+    private static double AxisComponent(in Vector3d v, SectionAxis axis) => axis switch
+    {
+        SectionAxis.X => v.X,
+        SectionAxis.Y => v.Y,
+        _ => v.Z,
+    };
+
+    /// <summary>Moves the section plane by 2% of the parts' extent along the active
+    /// axis per step.</summary>
     private void NudgeSection(int direction)
     {
         var bounds = PartsBounds();
-        double extent = bounds.IsEmpty ? 10 : bounds.Size.Z;
-        SectionHeight += direction * extent * 0.02;
-        Report($"section z = {_sectionHeight:G4}");
+        double extent = bounds.IsEmpty ? 10 : AxisComponent(bounds.Size, _sectionAxis);
+        SectionOffset += direction * extent * 0.02;
+        Report($"section {_sectionAxis.ToString().ToLowerInvariant()} = {_sectionOffset:G4}");
     }
 
     /// <summary>Union of all parts' world bounds (empty when no scene is loaded).</summary>
@@ -830,6 +938,10 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private uint CompileLineProgram(GL gl) => ViewerShaders.LinkProgram(
         gl, ShaderHeader + ViewerShaders.LineVertex, ShaderHeader + ViewerShaders.LineFragment,
+        bindAttributes: true);
+
+    private uint CompilePointProgram(GL gl) => ViewerShaders.LinkProgram(
+        gl, ShaderHeader + ViewerShaders.PointVertex, ShaderHeader + ViewerShaders.PointFragment,
         bindAttributes: true);
 
     private uint CompileBackgroundProgram(GL gl) => ViewerShaders.LinkProgram(
