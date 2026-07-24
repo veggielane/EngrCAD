@@ -85,6 +85,11 @@ studying before implementing. Ordered roughly by value-for-effort within each se
 - [ ] **Mesh IO: STL + OBJ read/write** — g3's `STLReader/Writer` (binary+ASCII),
   `OBJReader/Writer`, `StandardMeshReader/Writer` dispatch facade. We only write OBJ;
   reading STL + repair pipeline = import path for real-world meshes.
+- [ ] **`MeshSdf` winding-mode construction cleanup** (code-quality review) — the
+  `MeshSignSource.WindingNumber` ctor triangulates the mesh once, then
+  `MeshWindingNumber`'s ctor triangulates it again, and the triangle-corner extraction
+  loop is duplicated between the two classes. Add a `MeshWindingNumber` overload
+  accepting a pre-triangulated mesh (construction-time cost only; queries unaffected).
 - [ ] **Trimmed-face tessellation** (our own roadmap item) — g3's
   `TriangulatedPolygonGenerator` (constrained triangulation by edge insertion into a
   meshed rectangle) is a template for tessellating split generated faces (cut-through
