@@ -715,9 +715,11 @@ public static class StepReader
         }
 
         /// <summary>
-        /// Parameter of a point lying on the curve: dense seeding plus Newton with the
-        /// exact B-spline derivative (golden-section-free — comparison-based minimization
-        /// stalls near √ε, which is not weldable accuracy).
+        /// Parameter of a point lying on the curve: dense seeding, then Newton with the
+        /// exact B-spline derivative — comparison-based minimization stalls near √ε,
+        /// which is not weldable accuracy, so B-splines never take that route. Curve
+        /// types without exact derivatives fall back to a ternary search that does carry
+        /// the √ε parameter limit; the final-distance diagnostic is its backstop.
         /// </summary>
         private double SolvePointOnCurve(Curve3d curve, in Vector3d point)
         {
@@ -757,8 +759,10 @@ public static class StepReader
             }
             else
             {
-                // Derivative-free: bisect on the sign of d/dt|C−p|² estimated from the
-                // exact curve at interval endpoints (localizes the projection root).
+                // Derivative-free fallback: ternary search on |C−p|² over the seeded
+                // bracket. Near the minimum the compared values differ by less than
+                // round-off, so the parameter is only ~√ε accurate — tolerable here
+                // because weld-critical trims (B-splines) take the Newton path above.
                 double h = domain.Length / seedCount;
                 double lo = Math.Max(domain.Start, best - h);
                 double hi = Math.Min(domain.End, best + h);
