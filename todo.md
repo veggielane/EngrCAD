@@ -306,9 +306,20 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     (the cosmetic-thread-annotation follow-up: "M6×1.0 - 6H ⌀5.0 ↧14"); a hole-table
     annotation from a `Drill` feature's point list; export view: annotations included
     in `--render` output for documentation.
-- [ ] Ideas: view cube widget, measure tool (→ interactive dimension creation, see 3D
-  annotations), ambient occlusion or matcap shading, edge silhouettes from B-Rep edges
-  instead of mesh dihedrals (exact circles stay smooth at coarse tessellation).
+- [ ] **View cube, top-right corner** — the standard CAD orientation widget: a small
+  labeled cube (Front/Back/Left/Right/Top/Bottom faces, plus pickable edges and
+  corners for the 45°/iso views) rendered in the viewport's top-right, always facing
+  the camera's rotation (its own mini-projection, drawn after the scene with depth
+  cleared). Clicking a face/edge/corner animates the orbit camera to that view
+  (reuse the toolbar's Front/Top/Right/Iso math; a short slerp between poses beats
+  an instant snap); dragging the cube orbits. It also serves as a live orientation
+  indicator. Implementation notes: own VAO + tiny texture-less labels (the annotation
+  work's GL text renderer is the natural dependency — or bake label quads per face
+  as geometry until that lands); picking via a screen-space hit test against the
+  cube's projected faces (no BVH needed); honors the perspective/ortho toggle.
+- [ ] Ideas: measure tool (→ interactive dimension creation, see 3D annotations),
+  ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
+  mesh dihedrals (exact circles stay smooth at coarse tessellation).
 
 ## Blazor web viewer
 
