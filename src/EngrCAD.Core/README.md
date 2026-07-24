@@ -35,6 +35,25 @@ concerns.
   overhead when absent). Cancellation surfaces as `OperationCanceledException`; kernel
   algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize` and
   `MeshDecimator.Decimate`.
+- **`ConvexHull2`** — 2D convex hull (Andrew's monotone chain, O(n log n)); returns CCW
+  strictly-convex hull vertices or indices, degrading gracefully on coincident/collinear
+  input. The planar counterpart of the mesh engine's 3D quickhull.
+- **Min-bounding fits** (`Fitting2d`, `Fitting3d`; g3: ContMinBox2/ContMinCircle2/
+  ContOrientedBox3/OrthogonalPlaneFit3):
+  - `Fitting2d.MinAreaBox` → `OrientedBox2d` — minimum-area oriented box via the
+    calipers theorem (a side is collinear with a hull edge); evaluates every
+    hull-edge-aligned box over the hull, O(h²) in the (small) hull size.
+  - `Fitting2d.MinCircle` → `BoundingCircle2d` — Welzl minimum enclosing circle
+    (iterative move-to-boundary form, deterministic seeded shuffle, expected O(n)).
+  - `Fitting3d.FitPlane` → **`Frame3d`** — orthogonal-distance best-fit plane: origin
+    at the centroid, Z the normal (smallest covariance eigenvector), X the dominant
+    in-plane spread (largest) — a natural deterministic in-plane basis. Throws when
+    the points don't determine a plane.
+  - `Fitting3d.FitBox` → `OrientedBox3d` (a `Frame3d` + half extents) — PCA oriented
+    box, re-centered to the tightest box with the PCA axes (good-fit heuristic, not
+    the minimum-volume box).
+  - All built on an internal cyclic-Jacobi `SymmetricEigen3` (3×3 symmetric
+    eigen-decomposition, unconditionally convergent).
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over
   index ranges (g3's `gParallel.BlockStartEnd`): splits the range into a bounded number
   of large contiguous blocks so each worker touches a contiguous slice of the underlying
