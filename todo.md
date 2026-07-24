@@ -35,10 +35,12 @@ studying before implementing. Ordered roughly by value-for-effort within each se
 - [ ] **Extrude/shell mesh ops** — `MeshExtrudeFaces` (face-set extrude),
   `MeshExtrudeMesh` (offset + stitch = thicken/shell). Complements our SDF
   `Shell`/`Offset` with a direct mesh route.
-- [ ] **Winding-number classification** — `FastWindingMath` + `WindingNumber` /
-  `FastWindingNumber` on the BVH (Barill/Jacobson multipole). Robust inside/outside for
-  *non-watertight* meshes; would harden `MeshSdf`'s sign and `BrepBoolean`
-  classification, and enable an alternative boolean style (see below).
+- [x] **Winding-number classification** ✅ done — `MeshWindingNumber` (exact
+  Van Oosterom–Strackee solid-angle sum + Barill/Jacobson order-2 multipole
+  `FastWindingNumber` over its own contiguous-range hierarchy). Robust inside/outside for
+  *non-watertight* meshes; wired as an opt-in `MeshSdf` sign source
+  (`MeshSignSource.WindingNumber`, accepts open meshes; default pseudonormal unchanged).
+  Still open: using it to harden `BrepBoolean` classification and the imprint boolean below.
 - [ ] **Boolean alternative: intersection-imprint + winding classification** —
   `MeshMeshCut` + `MeshBoolean` (cut both meshes along exact intersection segments,
   classify by winding number, weld). This is the exact-intersection rewrite our BSP
@@ -59,14 +61,15 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   `FalloffFunctions` equivalents. Deliberately skipped: skeletal-*field* convolution ops
   (`SkeletalBlend3d`/`SkeletalRicciBlend3d`, `DistanceFieldToSkeletalField`) — they work
   on 0..1 skeletal fields, not signed distances, and would break sign-exactness.
-  Follow-up (code-quality review): negative blend radii silently *shrink* the
-  conservative bounds in `SmoothUnion`/`SmoothIntersect`/`SmoothSubtract` (binary and
-  n-ary) — clamp the expansion at 0 or validate `blend > 0` consistently, the way
-  `Sdf.Blend` already degrades for `blendDistance <= 0`.
-- [ ] **Sampled-grid implicits** — `DenseGridTrilinearImplicit` (grid → evaluable field
-  with trilinear interpolation), `ImplicitFieldSampler3d` (bake any Sdf to a grid),
-  `CachingGridImplicit3d` (lazy). Baking expensive ASTs (e.g. `MeshSdf`) to grids is the
-  standard acceleration; pairs with the sparse grids below.
+  Negative-blend bounds follow-up ✅ fixed — smooth-op bounds now clamp the expansion
+  at 0 (matching how the math degrades to hard min/max for blend ≤ 0), binary and n-ary.
+- [x] **Sampled-grid implicits** ✅ done — `Sdf.Sampled(cellSize[, region][, lazy])`:
+  bakes any `Sdf` to a dense (or lazy 16³-block) trilinear grid through the batch
+  `Evaluate` seam (g3 `DenseGridTrilinearImplicit`/`ImplicitFieldSampler3d`/
+  `CachingGridImplicit3d` equivalents). Exact at nodes, O(h²) between; outside the baked
+  box = boundary value + Euclidean distance-to-region (correct sign when the solid is
+  contained). The standard acceleration for expensive ASTs like `MeshSdf`; pairs with
+  the sparse grids below (`LazyGridSdf` is the seam for them and narrow-band SDF).
 - [ ] **Sparse/multiresolution grids** — `DSparseGrid3` (block-hashed), `BiGrid3`
   (two-level), `HBitArray` (hierarchical bit array for sparse iteration). Storage
   substrate for large SDF domains that our dense Surface Nets sampling can't handle.
@@ -95,6 +98,12 @@ studying before implementing. Ordered roughly by value-for-effort within each se
   number from ONE structure. Ours does box/ray/nearest; add: all-hit rays with
   t-ordering, **tree–tree overlap and intersection-segment queries** (feeds the
   imprint boolean), and winding number.
+- [ ] **Tolerance-policy audit** — sweep every project for float comparisons that
+  bypass the central `Tolerance` API: raw `==`/`!=` on doubles, hardcoded epsilons
+  (`1e-9`, `1e-12`, …) that should reference the policy, and ad-hoc `Math.Abs(a - b) <
+  eps` patterns. Fix or explicitly justify each (some deliberate ones exist, e.g.
+  `NurbsCurve.TangentAt`'s 1e-14 stationary-point fallback — those get a comment
+  naming why the central policy doesn't apply).
 - [ ] **Exact 2D predicates** — `PrimalQuery2d` / `Query2Integer` (adaptive-exact
   orientation & in-circle). Our earcut port and splitter use epsilon predicates; exact
   predicates are the principled fix for arrangement robustness.
@@ -118,11 +127,20 @@ studying before implementing. Ordered roughly by value-for-effort within each se
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
-- [ ] **Bug: drilling into a cylinder fails** — `Shape.Cylinder(20, 10).Drill(cbore
-  holes...)` throws "Directed edge appears twice" in `BRepTessellator` via
-  `BrepBoolean.Difference` (drilling into extruded *boxes* works; the demo/tests only
-  drill boxes). Likely the cylindrical outer band or the revolved cap interacting with
-  multiple hole splits. Repro was 5 counterbored M5 holes into a Ø40×10 cylinder cap.
+- [x] ~~**Bug: drilling into a cylinder fails**~~ ✅ NOT A BUG (verified) — the filed
+  repro conflated two *input* degeneracies that fail identically on a box: depth == the
+  plate thickness leaves the tool's flat bottom coplanar with the far cap, and Ø10
+  counterbores at 10 mm pitch are exactly tangent (non-manifold). With well-posed inputs
+  (depth > thickness, recesses clear of each other and the wall) drilling a cylinder
+  gives a Validate-clean, correct-genus, exact-volume solid — same as a box. Guarded by
+  `HoleTests.CylinderDrilling_SimpleThrough_ExactVolume` /
+  `CylinderDrilling_CounterboreMultiHole_ExactVolume`.
+- [ ] **Hole-config validation** — degenerate hole inputs (overlapping/tangent recesses,
+  tool depth ≤ plate thickness → coplanar far cap) currently surface as a cryptic
+  `BRepBoolean` "Directed edge appears twice" from deep in tessellation. `Shape.Drill`
+  should validate up front and throw a clear, actionable error (which holes overlap, or
+  that the tool doesn't clear the far face) the way the rim features already guard hole
+  clearance.
 - [ ] **2D sketch engine** — combine g3-style `Polygon2d`/`GeneralPolygon2d`
   (polygon-with-holes containment), `PlanarComplex` (nested loop hierarchy),
   `Arrangement2d` + `GraphCells2d` (regions from crossing sketch curves), and
@@ -308,11 +326,25 @@ The reference open-source B-Rep kernel. Checklist of its capabilities against ou
   perspective/orthographic toggle), ground grid + RGB world axes, feature-edge overlay
   (`MeshFeatureEdges`, sharp-dihedral + boundary edges), gradient background, status
   bar. Section planes ✅ done (horizontal clip via fragment discard, `gl_FrontFacing`
-  cut-material cue, `[`/`]` height keys). Ideas for later: view cube widget,
-  per-part display modes (wireframe/translucent), measure tool, screenshot/export-image button,
-  ambient occlusion or matcap shading, edge silhouettes from B-Rep edges instead of
-  mesh dihedrals (exact circles stay smooth at coarse tessellation).
+  cut-material cue, `[`/`]` height keys). Per-part display modes ✅ done
+  (`Part.DisplayMode`: Shaded/Wireframe/Translucent — wireframe via `WireframeEdges` over
+  the line program, translucent alpha-blended with per-part back-to-front ordering and
+  opaque silhouette edges; per-tree-row cycler). Screenshot/export-image button ✅ done
+  (`Capture` toolbar button → `ViewportControl.SaveScreenshot` → `glReadPixels` →
+  dependency-free `PngWriter`, path reported in the status bar). Ideas for later: view
+  cube widget, measure tool, ambient occlusion or matcap shading, edge silhouettes from
+  B-Rep edges instead of mesh dihedrals (exact circles stay smooth at coarse tessellation).
+- [x] **Headless offscreen rendering** ✅ done — `EngrCad.RenderToImage(scene, path,
+  w, h, camera?)` / `CanRenderToImage` and a `--render out.png` switch on `EngrCad.Run`:
+  renders a scene to PNG with no window via a direct EGL-pbuffer context over Avalonia's
+  ANGLE natives (`OffscreenRenderer` + `EglContext`, `PngWriter`). This is the viewer
+  self-verification loop — tests and agents render + inspect pixels instead of
+  screenshotting the demo app.
 - Add a builder for EngrCad.Run and Show, so we can set defaults like render quality, and so it can consume IOptions, ILogger etc
+- [ ] **View-type selector** in the viewer (toolbar): **points / mesh (wireframe) /
+  shaded / shaded with edges** — a global viewport display mode, the classic CAD
+  view-style dropdown. (Distinct from the per-part display modes; the per-part
+  setting should override the global one where set.)
 
 ## Other ideas
 - [x] unify scripting language, the type of modelling is set at the end. ✅ done —

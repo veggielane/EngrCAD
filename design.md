@@ -93,7 +93,21 @@ Each engine uses the data structure its mathematics wants:
   so both faces sharing the edge get bit-identical intersection coordinates — welding
   then closes the cut without tolerance games. Boundary loops are returned ordered;
   optional caps go through earcut, whose collinear filtering is repaired by the same
-  collinear-chord zip the booleans use.
+  collinear-chord zip the booleans use. Non-convex faces that cross the plane three or
+  more times are triangulated on their **Newell plane** (robust for near-degenerate
+  polygons) before clipping — fanning from vertex 0 is only valid for star-shaped
+  polygons and silently mis-clips otherwise.
+- **Winding-number classification** (`MeshWindingNumber`) gives robust inside/outside
+  for non-watertight meshes: `WindingNumber` sums signed solid angles
+  (Van Oosterom–Strackee) exactly, `FastWindingNumber` is the Barill/Jacobson order-2
+  (dipole+quadrupole) multipole approximation, thresholded at ½. It builds its **own**
+  median-split hierarchy whose nodes each own a contiguous triangle range, rather than
+  extending Core's `Bvh` — the shared `Bvh` permutes items into an internal array with
+  no per-node range access, and the multipole coefficients need range scans. Coefficients
+  are computed eagerly at construction (matching the immutable-after-build ethos, no g3
+  timestamp-guarded lazy dictionary). It is wired as an opt-in `MeshSdf` sign source
+  (`MeshSignSource.WindingNumber`) that, unlike the default pseudonormal, accepts open
+  meshes; the default path is byte-for-byte unchanged.
 
 ## 4. Implicit engine
 
@@ -113,7 +127,20 @@ Each engine uses the data structure its mathematics wants:
   inside the blend band, and bounds expand by max(k, (n−1)k/4). **Falloff blends**
   (`Sdf.Blend`, Wyvill/exponential kernels) bound their additive bump by the blend
   distance, so bounds expand by exactly that; Wyvill's compact support makes the
-  result *exactly* the plain union outside the band.
+  result *exactly* the plain union outside the band. (Negative blend radii degrade to
+  hard min/max; the smooth-op bounds clamp their expansion at 0 to stay conservative.)
+- **Sampled-grid acceleration** (`Sdf.Sampled`) bakes any `Sdf` to a uniform-cell grid
+  evaluated by trilinear interpolation — the standard way to make an expensive AST (e.g.
+  `MeshSdf`) cheap to query. Storage is `double` (nodes reproduce the source exactly,
+  unlike g3's float grid) and baking batches through the `Evaluate(ReadOnlySpan…)` SIMD
+  seam. The fidelity contract is documented honestly: exact at nodes, O(h²) between where
+  smooth, O(h) across creases, so the zero level set shifts by the same order and sign is
+  reliable only when the cell size resolves features. Outside the baked box the value is
+  the boundary interpolant plus Euclidean distance-to-region — continuous across the
+  boundary and correct-sign whenever the solid is contained (the parameterless overload
+  guarantees containment by baking `Bounds.Expanded(cellSize)`). A `LazyGridSdf` variant
+  bakes 16³ blocks on demand (lock-free, first-publish-wins) and is the seam for the
+  still-open sparse-grid and narrow-band work.
 - Batch `Evaluate(ReadOnlySpan<Vector3d>, Span<double>)` is the future SIMD seam; the
   scalar loop is the current default implementation.
 
@@ -406,6 +433,24 @@ for `in`-parameters being illegal in expression trees.
   anything that *is* the model (fills **and** feature edges) clips identically —
   the discard lives in both programs — while scene furniture (grid, axes) never
   clips. Picking deliberately ignores the section plane in v1.
+- **Per-part display modes** (`Part.DisplayMode`) live on the document model, not
+  viewer-only state, so design code can set them and they survive tab switches and hot
+  reloads (a reload rebuilds parts, so model-code modes win again — consistent with the
+  camera-persistence model). Wireframe reuses the line program over every unique mesh
+  edge (`WireframeEdges`); translucent parts draw after opaque, sorted back-to-front by
+  center with depth-writes off and opaque silhouette edges on top — a per-part (not
+  per-triangle) sort, so interpenetrating translucent parts can show blend-order
+  artifacts (section mode stays the tool for exact interior inspection).
+- **Headless offscreen rendering** (`EngrCad.RenderToImage` / `--render`) renders a
+  scene to PNG with no window, so tests and agents verify viewer changes by inspecting
+  pixels instead of screenshotting the live app. It creates a **direct EGL pbuffer
+  context** over Avalonia's bundled ANGLE natives by P/Invoke (preferring D3D11
+  hardware → WARP software so it survives CI and locked sessions), with no Avalonia UI.
+  A `PngWriter` (dependency-free deflate + CRC-32) encodes the framebuffer. Two lessons
+  worth keeping: Avalonia's `av_libglesv2.dll` exports EGL entry points under an `EGL_`
+  prefix (not the standard `egl*`), so the binding tries both spellings; and the
+  renderer duplicates the small shader strings rather than sharing `ViewportControl`'s,
+  a deliberate choice to keep that file untouched during concurrent viewer work.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level
