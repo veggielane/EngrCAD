@@ -308,6 +308,43 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   silhouettes from B-Rep edges instead of mesh dihedrals (exact circles stay smooth at
   coarse tessellation).
 
+## Blazor web viewer
+
+Reimplement the viewer for the web: a Blazor front end rendering EngrCAD scenes in the
+browser. Opens the door to sharing designs by URL, embedding live models in the docs
+site, and eventually a hosted modeling experience. The kernel is pure .NET with no
+UI dependencies, which makes this unusually feasible.
+
+- [ ] **Architecture decision first** — two viable shapes, prototype before committing:
+  - **Blazor WebAssembly, kernel in the browser**: the whole kernel (Core/Mesh/
+    Implicit/BRep/Interop/Modeling — all UI-free by mandate) compiles to WASM; models
+    tessellate client-side; rendering via WebGL2 from .NET (JS interop to a thin
+    canvas/WebGL wrapper, or a library like `Blazor.Extensions.Canvas`/three.js
+    interop). Zero server; static hosting (could live on the GitHub Pages site).
+    Risks to prototype: WASM perf of the kernel's hot paths (no SIMD intrinsics
+    guarantees in WASM today — measure booleans/tessellation on a real model), payload
+    size, `ArrayPool`/`stackalloc` behavior under WASM.
+  - **Blazor Server (or hybrid)**: kernel runs server-side, viewer streams meshes to
+    the browser (SignalR); thin WebGL client renders `RenderMesh` buffers. Better for
+    heavy models; needs hosting.
+- [ ] **Shared render model** — extract the viewer's scene-to-buffers layer so desktop
+  and web consume the same thing: `RenderMesh` + part color/transform/display-mode is
+  already the seam (`RenderCore.cs` proved the shared-core pattern for shaders/camera;
+  a `ViewerModel` abstraction over Scene→render-instances would serve Avalonia, the
+  offscreen renderer, AND the web client). GLSL ES shaders port near-verbatim to
+  WebGL2 (same ASCII-only rule).
+- [ ] **Feature parity ladder** (build in this order): orbit/pan/zoom camera + shaded
+  mesh rendering → part colors + feature edges → tab strip + model tree + visibility →
+  picking (ray-cast server/client-side against the existing per-part BVH) → display
+  modes + section planes (same fragment-discard technique in WebGL) → properties
+  panel. Reuse the camera math from `CameraMath` (it's already extracted).
+- [ ] **Docs-site embedding** — the payoff synergy: DocsGen examples could emit an
+  interactive WASM viewer block per example instead of (or alongside) static PNGs —
+  spin-the-model documentation, all statically hosted on the existing GitHub Pages
+  deployment.
+- [ ] **Out of scope until later**: editing/sketching in the browser, collaboration,
+  server-side model storage. This is a *viewer* first.
+
 ## App layer / infrastructure
 
 - [ ] **Parametric features follow-ups** (`FeatureHistory` landed) — persistent
