@@ -277,6 +277,18 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
+- [ ] **Multi-section views** — several section planes active at once: two
+  perpendicular planes give the classic **quarter cut** (corner cutaway), three give
+  an octant view. Shader side: the single `dot(worldPos, uSectionAxis) >
+  uSectionOffset` discard becomes a small uniform array of plane equations with a
+  combine mode — **intersection of half-spaces** (discard when ALL planes exclude →
+  quarter cut, the CAD-standard look) vs union (discard when ANY excludes — today's
+  single-plane behavior generalized); cut-material shading and isolines then need
+  per-plane treatment (isolines drawn on each active plane's cut, clipped by the
+  others). UI: the Section toggle grows to a small panel or repeated axis chips
+  (enable/disable per plane, each with its own axis + offset + `[`/`]` focus);
+  `RenderToImage`/DocsGen fence options take a list. Offscreen/window parity from
+  day one via the shared shaders.
 - [ ] Section-plane follow-ups: arbitrary plane orientation from a `Frame3d` (the
   shader already takes a general axis vector + offset; v1 restricts it to X/Y/Z),
   per-part section opt-out, and picking that respects the cut.
