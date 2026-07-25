@@ -58,6 +58,23 @@ operations. Depends only on `EngrCAD.Core`.
   closed-form `TryProjectPoint` (the point's angle fixes u up to whole turns, the axial
   coordinate solves v linearly; in-range v preferred so steep generators can't alias
   onto the neighboring turn; dz = 0 helicoid ramps solve v from the radius).
+  **Inverse evaluation on swept surfaces is a ONE-dimensional solve.** The base
+  `Surface.TryProjectPoint` scans a 17×17 (u, v) grid and Gauss–Newtons in 2D, but a
+  translational or rotational sweep has one free parameter too many: for
+  `ExtrudedSurface`, P = C(u) + v·direction, so v is whatever the direction component
+  demands and only the perpendicular residual Q(C(u) − p) constrains u (Q removes the
+  direction component); for `RevolvedSurface`, u is the point's azimuth in closed form
+  once v matches the generator's (radius, axial) profile. Both override with a scan of
+  the generator alone (the base class's own u resolution, ranked by the *exactly*
+  optimal other parameter rather than a quantized one) plus 1D Gauss–Newton using the
+  generator's exact `DerivativeAt` — no damping, no clamped 2D wandering. The grid the
+  base class walks re-evaluates the SAME generator point once per column: 289 curve
+  evaluations where 17 carry all the information. Inverse evaluation is the inner loop
+  of every face pullback, so this is the hot leaf of the whole boolean pipeline —
+  measured 8–10× on engraved-text and drilled-plate booleans, and it cut the Interop
+  test suite from 4m16s to 44s. Both fall back to the base implementation only where
+  the reduction genuinely does not apply (a collapsed extrusion direction, a point on a
+  revolve's axis where the azimuth is undefined).
 - **Topology**: `BrepSolid → BrepShell → BrepFace → BrepLoop → BrepCoedge → BrepEdge →
   BrepVertex`. Faces are built so surface normals point outward and loops run CCW around
   them (first loop outer, rest holes). `Validate()` checks loop chaining and two-manifold
