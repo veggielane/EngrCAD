@@ -538,22 +538,57 @@ public sealed class Scene
     /// the scene did not choose an explicit quality (see <see cref="ResolveQuality"/>).
     /// <para>The mesh, the feature edges, and selector annotations of a B-Rep-backed
     /// part all come from the ONE solid <see cref="Part.TryGetSolid"/> caches, so this
-    /// pass lowers each part at most once.</para></summary>
+    /// pass lowers each part at most once.</para>
+    /// <para><b>Parts are primed in parallel.</b> They are independent by construction —
+    /// every cache a part fills (<see cref="Part.TryGetSolid"/>, the display mesh, the
+    /// feature edges, resolved annotations) lives on that part behind its own lock, and
+    /// lowering a <see cref="Shape"/> graph builds fresh geometry rather than mutating
+    /// the graph — so the result is identical to the sequential pass whatever the
+    /// scheduling. A part that is instanced many times is still meshed exactly once
+    /// (<see cref="AllParts"/> dedupes by reference), and one slow part no longer blocks
+    /// every other part behind it.</para>
+    /// <para>Failures stay deterministic too: each part's exception is captured in its
+    /// own slot and the FIRST failure in scene order is rethrown with its original stack
+    /// — the same exception the sequential pass surfaced, not a scheduling-dependent
+    /// <see cref="AggregateException"/>.</para></summary>
     public void PreMesh(MeshQuality? fallback = null)
     {
         var quality = ResolveQuality(fallback);
-        foreach (var part in AllParts)
+        var parts = AllParts.ToArray();
+        var failures = new Exception?[parts.Length];
+
+        ParallelFor.Blocks(0, parts.Length, (start, end) =>
         {
-            part.GetMesh(quality);
-            // Prime the feature-edge cache too (extraction over the already-lowered
-            // solid): it must happen here, off the render thread, not lazily inside a
-            // GL upload.
-            part.GetFeatureEdges(quality);
-            // Pre-resolve annotations too: selector dimensions lower to B-Rep, which
-            // must not happen on the render thread. Failures are cached diagnostics
-            // (viewers surface them via TryResolveAnnotations), not exceptions here.
-            if (part.Annotations.Count > 0)
-                part.TryResolveAnnotations(out _, out _);
+            for (int i = start; i < end; i++)
+            {
+                var part = parts[i];
+                try
+                {
+                    part.GetMesh(quality);
+                    // Prime the feature-edge cache too (extraction over the already-lowered
+                    // solid): it must happen here, off the render thread, not lazily inside a
+                    // GL upload.
+                    part.GetFeatureEdges(quality);
+                    // Pre-resolve annotations too: selector dimensions lower to B-Rep, which
+                    // must not happen on the render thread. Failures are cached diagnostics
+                    // (viewers surface them via TryResolveAnnotations), not exceptions here.
+                    if (part.Annotations.Count > 0)
+                        part.TryResolveAnnotations(out _, out _);
+                }
+                catch (Exception exception)
+                {
+                    // Own slot only — the ParallelFor determinism contract. Priming the
+                    // remaining parts is harmless (each caches independently) and keeps
+                    // the choice of which failure to report a matter of scene order.
+                    failures[i] = exception;
+                }
+            }
+        });
+
+        foreach (var failure in failures)
+        {
+            if (failure is { } exception)
+                ExceptionDispatchInfo.Capture(exception).Throw();
         }
     }
 }
