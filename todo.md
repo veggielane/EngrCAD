@@ -73,13 +73,36 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 - [ ] **Continuation ("surface-following") meshing** — `MarchingCubesPro` only evaluates
   cells near the surface it discovers, instead of the full grid our Surface Nets
   samples. Big win for high resolutions; adapt the idea to Surface Nets.
-- [ ] **Trimmed-face tessellation remaining gaps** — pole bands with holes and
-  |winding| > 1 fall back to grid (renders, ignores holes); refinement quality
-  upgrade: Rivara-with-boundary-constraints instead of the monotone-decrease rule's
-  worst-sliver tradeoff; no Delaunay flips. Also (Frame3d work finding): bores drilled
-  into extruded *side* faces miss the inscribed-ngon volume by ~5e-5 — the trimmed
-  side-face triangulation differs from a planar cap's (documented in
-  `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
+- [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`). The zip
+  handles single-loop bands with single-sample rungs; three cases still ear-clip or
+  refuse, each cheap on its own:
+  - A **rung sampled at more than two points** (a curved cross edge) is refused rather
+    than fanned — fanning collinear rung samples would emit the very zero-area triangles
+    the strip path exists to avoid. The fix is to treat a multi-sample rung as a
+    degenerate chain end and fan from the opposite chain's first vertex, with the same uv
+    positive-area guard.
+  - A band whose two chains **meet at a point** (a rung of zero steps) falls back; the
+    merge walk needs a shared-apex start case.
+  - **Bands with interior hole loops** still ear-clip (`TriangulateBandWithHoles`). The
+    slivers there run along hole rims, whose geodesic curvature is generally nonzero, so
+    this is not currently visible — but it is the same defect waiting.
+- [ ] **Trimmed-face refusals are now loud — find out what they refuse.** Two documented
+  gaps used to fall back to the grid silently and now throw: pole-bounded single-chain
+  bands with holes, and |winding| > 1 loops. Nothing in the suite or the docs hits them,
+  so we do not know whether they are reachable from the `Shape` API at all. Build a repro
+  for each (a drilled sphere pole cap; a band cut so its loop wraps twice) and either
+  support them or refuse them at construction time in `Shape`.
+- [ ] **A per-face triangle-quality assertion for the whole tessellator.** The mitered
+  fillet fold was invisible to every existing test — closed, Euler-clean, volume within
+  tolerance — because orientation was never checked. `MiteredBandTessellationTests`'
+  `FoldReport` helper generalizes to any solid: run it over the whole B-Rep corpus
+  (drilled plates, cross-drills, threads, lofts, shells) as one parameterized test.
+- [ ] **Refinement quality upgrade** — Rivara-with-boundary-constraints instead of the
+  monotone-decrease rule's worst-sliver tradeoff; no Delaunay flips. Lower priority now
+  that the base triangulation carries the accuracy rather than the refinement. Also
+  (Frame3d work finding): bores drilled into extruded *side* faces miss the inscribed-ngon
+  volume by ~5e-5 — the trimmed side-face triangulation differs from a planar cap's
+  (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
 
 ## Core (EngrCAD.Core)
 
@@ -330,25 +353,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     `ShapeNodes.cs` plus four spots in `ShapeCompiler.cs` (`ClassifyBrep`, the implicit
     `or` list, `LowerBrep`, `LowerImplicit`). Today the Shape-level route is
     `Shape.From(Filleting.FilletAllEdges(shape.ToBrep(), r))`.
-- [ ] **Mitered fillet corners tessellate badly — and it is VISIBLE** (highest-value
-  fillet follow-up). Mitered rim bands are genuinely trimmed faces, so they go through
-  `TrimmedFaceTessellator`'s ear-clip + refinement instead of the natural grid. Three
-  symptoms, one cause:
-  - A **lens-shaped patch of folded triangles at every mitered corner**, dark-shaded
-    because the normals invert. Reproduce headlessly with
-    `Shape.Box(30, 20, 6).FilletEdges(2, topRim)` — see
-    `docs/examples/images/fillet-edge-selection.png`, near corner. The solid itself is
-    sound: the mesh is closed and its volume is 3516.6966 against the analytic
-    3517.2274 (−1.5e-4), so this is the tessellator, not the surgery. Fold-over
-    triangles are cosmetic in the viewer but NOT harmless to a slicer.
-  - **O(curveSamples²) triangles** where a strip of O(curveSamples) would do: 13 092
-    triangles for a filleted 30×20×6 box at default quality.
-  - At curveSamples ≈ 192 refinement gives up and the **silent** grid fallback produces
-    an OPEN mesh. Realistic quality (≤ 64) never reaches it, but the silence is the
-    real defect there.
-  The fix is a strip path for trimmed extruded/revolved bands (the two boundary
-  polylines are already paired — zip them) plus a loud failure instead of the silent
-  fallback.
 - [ ] **`StepReader`: trim a closed generator from meridian boundary arcs** —
   `FilletAllEdges` output EXPORTS correctly (a STEP `SURFACE_OF_REVOLUTION` is unbounded
   by definition and the face boundary trims it), but re-import cannot re-trim a closed

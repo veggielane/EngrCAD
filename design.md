@@ -589,6 +589,32 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **A sliver's normal is the boundary curve's binormal — which is why "harmless" zero-area
+  triangles are not.** For three points at arc spacing h on a curve,
+  (P₁−P₀) × (P₂−P₁) ≈ h³·T × K, and T × K = k_g·N + k_n·(T × N). A sliver clipped along a
+  trimmed face's boundary therefore agrees with the surface only in proportion to that
+  boundary's *geodesic* curvature. Wherever a trim curve is tangent to a neighbouring face
+  — every fillet's tangency line, every miter ellipse endpoint — k_g passes through zero
+  and the sliver's orientation is decided by rounding. That is the whole explanation for
+  the folded lens at mitered fillet corners, and it is why the fix is structural (zip the
+  paired chains) rather than a tolerance.
+- **When a trimmed region's loop is a band, its boundary polylines are already paired, so
+  the correct triangulation is a zip.** General polygon triangulation throws that pairing
+  away. On a flat region that only costs quality; on a curved one it detaches facet
+  normals from surface normals, per the bullet above. Two corollaries learned with it:
+  anisotropic uv is a trap for any Euclidean heuristic (a mitered band is ~1.57 × 1.0 in
+  parameter space while the surface is 3.14 × 30 in model units, so "shortest diagonal" in
+  raw uv is not shortest on the surface — precisely why the clipper chose to eat the dense
+  chains); and **refinement is not a convergence mechanism**, because the midpoint-split
+  pass terminates on a monotone-decrease rule and keeps a coarse patch wherever that rule
+  cuts a cascade. Get the base triangulation right.
+- **Loud refusal over silent fallback, restated for tessellation.** A fallback is
+  legitimate only when the fallback path computes *the same thing more coarsely*. The
+  natural parameter grid covers the surface's whole rectangle, so for a trimmed face it
+  computes something else entirely — falling back to it was not coarse geometry but wrong
+  geometry, welding into an open mesh without complaint. Failure messages must carry the
+  **sample counts**, because some failures exist only at high density and are invisible in
+  a default-quality repro.
 - **Remeshing constraints live on vertices, not edges — because of our topology.** g3
   keys its `MeshConstraints` by edge, and copying that would have been a latent
   correctness bug here: an undirected edge is named by the smaller of a twin pair, a
