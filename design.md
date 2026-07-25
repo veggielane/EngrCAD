@@ -611,8 +611,43 @@ for `in`-parameters being illegal in expression trees.
 
 - **Filleting** (`Filleting.FilletEdge`): closed circular rims where a planar cap meets a
   coaxial cylindrical band are replaced by an exact quarter-torus (`RevolvedSurface` over
-  a `CurveSegment` arc), patching the cap and band in place through their loops. General
-  fillet chains (open edges, corner patches where fillets meet) are future work.
+  a `CurveSegment` arc), patching the cap and band in place through their loops.
+- **A sharp rim corner mitres on an ellipse; it is not a ball.** The intuition that a
+  fillet corner is a sphere of the fillet radius is wrong *for a rim*, and wrong in an
+  instructive way: at a rim corner only **two** of the three incident edges are blended —
+  the two side faces keep their shared sharp edge. A sphere is tangent to all three planes
+  at single *points*, so at the tangency plane the cross-section would jump from rounded
+  to sharp and the surface would not close. What the union of the two removed slivers
+  actually gives is the face inset by δ(t) = r − √(r²−t²) with **sharp** corners: two
+  equal-radius cylinders whose axes intersect — a bicylinder, whose intersection is two
+  ellipses. The right branch is read off the two points the surgery has already computed
+  (centre = top − up·r, semi-axes up·r and bottom − centre, perpendicular by
+  construction), so no trigonometry gets a chance to round off; the circular junction arc
+  that tangent-continuous rims use is exactly the |bottom − centre| = r specialization.
+- **Rounding a whole solid is the morphological opening, not a cascade of booleans.**
+  `FilletAllEdges` builds (K ⊖ B_r) ⊕ B_r directly: each face keeps its plane with a
+  shrunk boundary, each edge becomes a cylindrical band about the **eroded** edge line,
+  each vertex a spherical patch on the eroded vertex bounded by great-circle arcs. Nothing
+  intersects anything, so there is no seam to seal and every face stays full-domain (the
+  natural tessellation grid, not the trimmed path). Steiner's formula is the check, and it
+  is a good one: the deficit falls by exactly 4.0 per halving of sample spacing, which is
+  the quadratic convergence a correct surface must show and an approximate one will not.
+  The restriction to corners where one incident face is perpendicular to the other two is
+  not arbitrary — it is precisely the condition under which the spherical triangle becomes
+  a lune closed by an equatorial great circle, i.e. an *exact* surface of revolution.
+- **Corner arcs must be angle-parameterized.** Every arc bounding a corner patch is a
+  `CurveSegment` over `Circle3d`, never a rational NURBS arc, because the patch is a
+  revolve sampled at even *angles*. A NURBS arc traces the same curve but samples to
+  different points, and the patch stops welding to its band. This is the same family of
+  bug as the phase-alignment lessons elsewhere: two sides of a shared curve must agree on
+  the *parameterization*, not merely on the point set.
+- **Variable-radius fillets are blocked by the corner, not the band.** The band would be
+  exact — a linear radius law between two equal-weight rational arcs is a degree-(2,1)
+  NURBS whose v-sections are true circles, G1 with both neighbours. But two such bands
+  meet in the intersection of two non-cylindrical surfaces, which is not a conic, so there
+  is no exact miter to weld them on. Variable-*setback* chamfers escape this (the corner
+  segment is a boundary ruling of both bilinear strips) and are therefore the cheaper next
+  step, not the harder one.
 - **STEP export** (`StepWriter`, AP214): topology maps one-to-one to
   `MANIFOLD_SOLID_BREP`; analytic surfaces and curves export exactly (including rational
   B-splines via the complex-instance form); wrapper curves simplify to analytic forms or

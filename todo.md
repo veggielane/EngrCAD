@@ -291,9 +291,54 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   generated `Profile`s to `Loft` and it lands on `LoftedSurface` unchanged.
 - [ ] Boolean extras: *section* (curve-only result), fuzzy tolerance, modification
   history
-- [ ] Fillet/chamfer completion — sharp-corner fillet patches (ball/miter; the
-  trimmed-band tessellation blocker is gone, this is unblocked), arbitrary edge sets
-  (not just face rims), variable radius, chamfer angles beyond the two-setback form
+- [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
+  whole-solid `FilletAllEdges` ✅ landed) — all of these are refused loudly today, so
+  they are additions, not bug fixes:
+  - [ ] **General trihedral corner patches** — `FilletAllEdges` requires one incident
+    face perpendicular to the other two, which is exactly when the spherical triangle
+    reduces to a lune closed by an equatorial great circle (an exact surface of
+    revolution). The general case needs a trimmed spherical-triangle path. A tetrahedron
+    is the smallest failing example.
+  - [ ] **Partial edge runs** — a band that stops mid-rim needs a termination surface
+    (cliff, setback or vertex blend) and each exact one is a different surface.
+  - [ ] **Variable-SETBACK chamfers first, then variable-radius fillets.** The setback
+    case is cheap (the corner segment is a boundary ruling of both bilinear strips); the
+    radius case is blocked on the *corner*, not the band, and needs the same
+    non-conic-corner-curve machinery as curved-face shelling.
+  - [ ] **Sharp corners at ARC rim edges** (torus ∩ cylinder is not a conic).
+  - [ ] **A `Shape.RoundEdges(radius)` node** wiring `FilletAllEdges` into the graph:
+    `ShapeNodes.cs` plus four spots in `ShapeCompiler.cs` (`ClassifyBrep`, the implicit
+    `or` list, `LowerBrep`, `LowerImplicit`). Today the Shape-level route is
+    `Shape.From(Filleting.FilletAllEdges(shape.ToBrep(), r))`.
+- [ ] **Mitered fillet corners tessellate badly — and it is VISIBLE** (highest-value
+  fillet follow-up). Mitered rim bands are genuinely trimmed faces, so they go through
+  `TrimmedFaceTessellator`'s ear-clip + refinement instead of the natural grid. Three
+  symptoms, one cause:
+  - A **lens-shaped patch of folded triangles at every mitered corner**, dark-shaded
+    because the normals invert. Reproduce headlessly with
+    `Shape.Box(30, 20, 6).FilletEdges(2, topRim)` — see
+    `docs/examples/images/fillet-edge-selection.png`, near corner. The solid itself is
+    sound: the mesh is closed and its volume is 3516.6966 against the analytic
+    3517.2274 (−1.5e-4), so this is the tessellator, not the surgery. Fold-over
+    triangles are cosmetic in the viewer but NOT harmless to a slicer.
+  - **O(curveSamples²) triangles** where a strip of O(curveSamples) would do: 13 092
+    triangles for a filleted 30×20×6 box at default quality.
+  - At curveSamples ≈ 192 refinement gives up and the **silent** grid fallback produces
+    an OPEN mesh. Realistic quality (≤ 64) never reaches it, but the silence is the
+    real defect there.
+  The fix is a strip path for trimmed extruded/revolved bands (the two boundary
+  polylines are already paired — zip them) plus a loud failure instead of the silent
+  fallback.
+- [ ] **`StepReader`: trim a closed generator from meridian boundary arcs** —
+  `FilletAllEdges` output EXPORTS correctly (a STEP `SURFACE_OF_REVOLUTION` is unbounded
+  by definition and the face boundary trims it), but re-import cannot re-trim a closed
+  generator when the swept angle came from rails: the corner patches' meridian boundaries
+  are circles *through* the axis, which no rim rule recognizes, so a re-imported rounded
+  solid meshes non-manifold. `RecoverRevolvedSurface` says so in a diagnostic rather than
+  failing silently. Mitered rim fillets round-trip fine.
+- [ ] **`BrepBoolean` on whole-solid fillets** — a fragment's re-surfaced sub-band loses
+  the corner arcs from its domain. The solid itself is sound (a locked test checks every
+  loop point projects inside its own face's domain), so this is a boolean limitation.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed — exact plane rotation about the
   neutral line, composable, planar/extruded faces): curved faces; caps with holes;
   per-face angles in one call; a non-planar neutral surface.
@@ -301,8 +346,8 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   sealed-void and genus-1-tube cases Euler-clean): curved faces (a cylinder's or
   revolve's offset surface is analytic — `OffsetCurve3d` gives the generator — but their
   **corners** need surface–surface re-intersection, which is the *same* blocker as
-  sharp-corner fillet patches, so the two should be solved together); >3-valent vertices
-  (over-determined corner, same machinery); adjacent openings; variable per-face
+  general trihedral fillet corner patches, so the two should be solved together);
+  >3-valent vertices (over-determined corner, same machinery); adjacent openings; variable per-face
   thickness; global self-intersection detection (deliberately unchecked today, as in
   OCCT and `OffsetCurve3d`).
 - [ ] **Wire loft / draft / shelling into the `Shape` API + docs** — they are kernel-only

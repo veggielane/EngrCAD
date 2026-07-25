@@ -34,6 +34,101 @@ scene.Add(new Part("chamfered washer", washer, Palette.Steel,
 
 ![A cylinder with a filleted top rim and a washer with a chamfered rim](images/chamfer-fillet-round.png)
 
+## Sharp corners
+
+A fillet does **not** need its rim rounded first. Where two straight edges meet at a
+sharp corner, the band mitres on an exact ellipse — for convex and reflex corners
+alike, so an L-bracket works as readily as a box:
+
+```csharp render:fillet-sharp-corners
+Func<BrepSolid, IEnumerable<BrepFace>> top = s => s.PlanarFacesWithNormal(Vector3d.UnitZ);
+
+var box = Shape.Box(24, 18, 8).Fillet(2.5, top);
+
+// Reflex corner: the inner corner of an L is filleted by the same construction.
+var el = Shape.Extrude(
+    Sketch.Start(0, 0).LineTo(24, 0).LineTo(24, 9).LineTo(9, 9).LineTo(9, 18)
+                      .LineTo(0, 18).Close(), 8)
+    .Fillet(2, top);
+
+var scene = new Scene();
+scene.Add(new Part("box", box, Palette.Steel, Matrix4d.CreateTranslation((-16, 0, 0))));
+scene.Add(new Part("L", el, Palette.Brass, Matrix4d.CreateTranslation((4, -9, 0))));
+```
+
+![A filleted box beside an L-shaped plate whose reflex corner is also filleted](images/fillet-sharp-corners.png)
+
+Why an ellipse and not a sphere: at a rim corner only **two** of the three edges are
+blended — the two side faces keep their shared sharp edge — so the two quarter
+cylinders meet in a crease. Two equal-radius cylinders whose axes intersect form a
+bicylinder, and a bicylinder's intersection is an ellipse.
+
+## Selecting edges instead of faces
+
+`FilletEdges` / `ChamferEdges` take an **edge** selector. Any LINQ over the solid's
+edges works — `RimEdges()`, `IsLinear`, `IsCircular`, `ConvexEdges()`:
+
+```csharp render:fillet-edge-selection
+var plate = Shape.Box(30, 20, 6)
+    .FilletEdges(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ).SelectMany(f => f.RimEdges()))
+    .ChamferEdges(1, s => s.PlanarFacesWithNormal(-Vector3d.UnitZ).SelectMany(f => f.RimEdges()));
+
+var scene = new Scene();
+scene.Add(new Part("plate", plate, Palette.Sage));
+```
+
+![A plate whose top edges are filleted and bottom edges chamfered, selected by edge](images/fillet-edge-selection.png)
+
+The selection is resolved back to the rim features that reproduce it exactly. A
+selection that stops **part-way along a rim** is refused *before* any surgery runs —
+terminating a band mid-rim needs a cliff, setback or vertex blend, and each exact one
+is a different surface. (Rim surgery rewrites loops in place, so validating up front is
+what keeps a refusal from leaving a half-edited solid.)
+
+## Chamfer by distance and angle
+
+`ChamferAtAngle(setback, degrees)` measures the setback **in** the selected face and
+the angle **from** it — the machinist's spelling. 45° reproduces the symmetric chamfer:
+
+```csharp render:chamfer-angle
+var scene = new Scene();
+double x = -30;
+foreach (int angle in new[] { 20, 45, 70 })
+{
+    var block = Shape.Box(18, 18, 8)
+        .ChamferAtAngle(2.5, angle, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+    scene.Add(new Part($"{angle} deg", block, Palette.Steel,
+        Matrix4d.CreateTranslation((x, 0, 0))));
+    x += 24;
+}
+```
+
+![Three blocks chamfered at 20, 45 and 70 degrees from the top face](images/chamfer-angle.png)
+
+## Rounding every edge at once
+
+`Filleting.FilletAllEdges` rounds **every** edge of a convex polyhedron in one call. It
+is not a cascade of booleans: it builds the exact morphological *opening*
+(K ⊖ B_r) ⊕ B_r, so each face keeps its plane with a shrunk boundary, each edge becomes
+a cylindrical band about the eroded edge line, and each vertex becomes a spherical
+patch. Nothing intersects anything, so there is no seam to seal:
+
+```csharp render:fillet-all-edges
+var rounded = Shape.From(Filleting.FilletAllEdges(Shape.Box(24, 18, 12).ToBrep(), 3));
+
+var scene = new Scene();
+scene.Add(new Part("rounded box", rounded, Palette.Brass));
+```
+
+![A box with every edge and corner rounded](images/fillet-all-edges.png)
+
+There is no `Shape.RoundEdges` yet, so this drops down to the B-Rep API and comes back
+through `Shape.From` — see [dropping down](representations.md#dropping-down-to-the-engine-apis).
+It requires a **convex** solid whose vertices are 3-valent and where one incident face
+is perpendicular to the other two (boxes, convex prisms, sheared boxes). That condition
+is what keeps each corner patch an exact surface of revolution; a tetrahedron is refused
+by name.
+
 ## Selectors, not IDs
 
 The selector is a function `BrepSolid -> IEnumerable<BrepFace>` — a *semantic* query
@@ -52,11 +147,14 @@ input with guidance rather than producing bad geometry:
 
 - **Chamfer** takes straight edges (sharp corners miter exactly with planar strips)
   and full circular rims (exact cone bands).
-- **Fillet** needs a tangent-continuous rim — lines + arcs like rounded rectangles,
-  slots, and circles. Round sharp sketch corners first
-  (`Sketch.RoundedRectangle` instead of `Rectangle`).
+- **Fillet** takes full circular rims, tangent-continuous line+arc chains, and sharp
+  corners **between two straight edges** (the ellipse miter above). A sharp corner where
+  an **arc** meets another edge is refused: torus ∩ cylinder is not a conic.
+- A radius or setback large enough that the mitered offsets cross is refused, naming
+  the edge it would have consumed.
 - Interior loops (holes) must stay clear of the shrunk boundary.
+- Partial edge runs are refused — see [selecting edges](#selecting-edges-instead-of-faces).
 
-Both are B-Rep-native; the implicit lowering bridges through tessellation. For fully
-general edge fillets, drop down to `Filleting.FilletEdge` on the B-Rep API — see
-[dropping down](representations.md#dropping-down-to-the-engine-apis).
+Both are B-Rep-native; the implicit lowering bridges through tessellation. Variable
+radius is not supported: the *band* would be exact, but two variable bands meet in a
+non-conic intersection with no exact miter to weld them on.

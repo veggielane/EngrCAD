@@ -298,9 +298,11 @@ public abstract class Shape
     }
 
     /// <summary>
-    /// Fillets the outer rims of selected planar faces. Rims must be full circles or
-    /// tangent-continuous line+arc chains (round sharp sketch corners first — chamfer
-    /// handles sharp corners).
+    /// Fillets the outer rims of selected planar faces. Rims may be full circles,
+    /// tangent-continuous line+arc chains, or chains with SHARP corners between straight
+    /// edges — those miter on the exact bicylinder ellipse (convex and reflex alike). A
+    /// sharp corner where an ARC meets another edge is still refused: torus ∩ cylinder is
+    /// not a conic, so there is no exact miter to build.
     /// </summary>
     public Shape Fillet(double radius, Func<BrepSolid, IEnumerable<BrepFace>> faces)
     {
