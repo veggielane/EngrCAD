@@ -94,7 +94,7 @@ operations. Depends only on `EngrCAD.Core`.
   common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
   `MakeThreadedRod`'s cap cuts use, so seams weld; a dz = 0 helicoid ramp cuts in an
-  exact radial line), and a general marching tracer
+  exact radial line), **bounded planar carriers** (below), and a general marching tracer
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
   sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are
@@ -102,6 +102,33 @@ operations. Depends only on `EngrCAD.Core`.
   (plane ⊥ axis keeps the phase-aligned path) — the tracer's region-clipped open
   polylines stop short of a bounded generator's rings and could never refine against
   face boundaries.
+
+  **Bounded planar carriers.** A sketch extrusion's walls are `ExtrudedSurface`s over the
+  profile's individual segments, so a pocket wall is `ExtrudedSurface(line, dir)` —
+  geometrically a plane, but a BOUNDED one (a parallelogram). Two paths handle them, both
+  clipped to the surfaces' real extents, never just to the query region:
+  - **Plane ∩ extrusion whose generator lies in a plane PARALLEL to the cutting plane** —
+    every generator point then meets the plane after the same travel along the direction,
+    so the section is EXACTLY the generator translated by `direction · v`. Exact for any
+    generator shape (straight pocket walls, slot arcs, cubic glyph outlines), bounded
+    exactly to the generator's own extent, and — the reason it is checked first — built
+    from the generator's own points, so adjacent profile segments hand over their shared
+    corner **bit-for-bit** and a pocket outline closes into the chain
+    `SplitByClosedCurveChain` consumes. A plane flush with either rim reports no section:
+    that is the coplanar/tangent case booleans reject, and splitting there would only
+    make zero-extent slivers.
+  - **Two planar carriers meeting at an angle** — the exact analytic line, clipped to the
+    query region AND to each bounded carrier's parallelogram (two slab clips in the
+    patch's own (s, t) coordinates). Straightness is decided by SAMPLING the actual
+    generator at the 1e-9 weld tier; `Underlying` is only a type hint.
+
+  These replaced the marching tracer for these pairs, which was the root cause of
+  "subtracting a straight-edged sketch extrusion silently produces an open mesh": the
+  tracer breaks the step *after* its parameters leave the domain, so its polyline stopped
+  up to one march step (≈ region extent / 150) short of each generator end. The four wall
+  cuts never met at the pocket corners, the outline never closed, and the boolean left
+  single-use edges — an open mesh with no error; on an extruded plate a through-cut
+  silently removed nothing at all while still passing `Validate()`.
 
 - **`FaceGeometry` / `FaceSplitter` / `TopologyEditor`** — trimming machinery: inverse
   surface evaluation (`Surface.TryProjectPoint`), curve pullback into parameter space

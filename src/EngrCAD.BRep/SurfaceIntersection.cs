@@ -24,9 +24,30 @@ public static class SurfaceIntersection
         a = Promote(a);
         b = Promote(b);
 
+        // A plane parallel to an extrusion's generator plane sections it in the generator
+        // translated along the extrude direction — exact for ANY generator (straight
+        // pocket walls, slot arcs, spline glyphs) and bounded EXACTLY to the generator's
+        // own extent. Checked before the planar-patch path below so that a straight
+        // generator keeps its own parameterization (adjacent profile segments then share
+        // corner points bit-for-bit, which is what lets the pocket outline close).
+        if (a is PlaneSurface planeA && b is ExtrudedSurface extrudedB &&
+            TryPlaneExtrudedSection(planeA, extrudedB, out var sectionB))
+            return sectionB;
+        if (b is PlaneSurface planeB && a is ExtrudedSurface extrudedA &&
+            TryPlaneExtrudedSection(planeB, extrudedA, out var sectionA))
+            return sectionA;
+
+        // Planar carriers meeting at an angle. An extrusion of a STRAIGHT generator is
+        // geometrically a plane, but a BOUNDED one: the analytic line must be clipped to
+        // the parallelogram it actually covers, not just to the query region — an
+        // unclipped carrier line slices clean across neighbouring pockets (the trap that
+        // breaks glyph-scale engraving). Two unbounded planes clip to the region only,
+        // exactly as before.
+        if (TryPlanarPatch(a, out var patchA) && TryPlanarPatch(b, out var patchB))
+            return PlanarPatches(patchA, patchB, region);
+
         return (a, b) switch
         {
-            (PlaneSurface pa, PlaneSurface pb) => PlanePlane(pa, pb, region),
             (PlaneSurface p, CylinderSurface c) => PlaneCylinder(p, c, region),
             (CylinderSurface c, PlaneSurface p) => PlaneCylinder(p, c, region),
             (PlaneSurface p, SphereSurface s) => PlaneSphere(p, s),
@@ -214,27 +235,196 @@ public static class SurfaceIntersection
         return s;
     }
 
-    // ---- analytic cases ----
+    // ---- bounded planar carriers ----
 
-    private static List<Curve3d> PlanePlane(PlaneSurface a, PlaneSurface b, in Aabb region)
+    /// <summary>
+    /// A planar carrier surface. Unbounded carriers (<see cref="PlaneSurface"/>) are only
+    /// clipped to the query region; bounded ones — an <see cref="ExtrudedSurface"/> whose
+    /// generator is straight, i.e. the parallelogram
+    /// {Corner + E1·s + E2·t : s, t ∈ [0, 1]} — additionally clip the intersection line to
+    /// their own extent.
+    /// </summary>
+    private readonly record struct PlanarPatch(
+        PlaneSurface Plane, bool Bounded, Vector3d Corner, Vector3d E1, Vector3d E2);
+
+    /// <summary>
+    /// Recognizes planar carriers: planes verbatim, and extrusions of a straight generator
+    /// as a bounded parallelogram. Straightness is decided by SAMPLING the actual generator
+    /// (<see cref="Curve3d.Underlying"/> is only a type hint — a transformed line's
+    /// underlying geometry sits somewhere else entirely), at the 1e-9 weld tier: a
+    /// generator that deviates further is genuinely curved and belongs to another path.
+    /// </summary>
+    private static bool TryPlanarPatch(Surface surface, out PlanarPatch patch)
     {
-        var na = a.Normal.Normalized();
-        var nb = b.Normal.Normalized();
+        switch (surface)
+        {
+            case PlaneSurface plane:
+                patch = new PlanarPatch(plane, false, default, default, default);
+                return true;
+
+            case ExtrudedSurface extruded when extruded.Generator.Underlying is Line3d:
+            {
+                var generator = extruded.Generator;
+                var domain = generator.Domain;
+                var corner = generator.PointAt(domain.Start);
+                var e1 = generator.PointAt(domain.End) - corner;
+                var e2 = extruded.Direction;
+                if (!e1.TryNormalize(Tolerance.Default, out var x) || !IsStraight(generator, corner, x))
+                    break;
+                var inPlane = e2 - x * e2.Dot(x);
+                if (!inPlane.TryNormalize(Tolerance.Default, out var y))
+                    break; // degenerate: the extrusion collapses onto its generator
+                // x × y is parallel to generator-tangent × direction, so the promoted
+                // plane's normal agrees in sign with the extruded surface's own.
+                patch = new PlanarPatch(new PlaneSurface(corner, x, y), true, corner, e1, e2);
+                return true;
+            }
+        }
+        patch = default;
+        return false;
+    }
+
+    /// <summary>Every sample of the ACTUAL curve lies on the ray (start, unit direction).</summary>
+    private static bool IsStraight(Curve3d curve, in Vector3d start, in Vector3d direction)
+    {
+        var domain = curve.Domain;
+        const int samples = 8;
+        for (int i = 1; i < samples; i++)
+        {
+            var offset = curve.PointAt(domain.ParameterAt((double)i / samples)) - start;
+            if ((offset - direction * offset.Dot(direction)).Length > Tolerance.Default.Linear)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Two planar carriers: the exact analytic line, clipped to the query region AND to
+    /// each bounded carrier's parallelogram. Clipping to the bounded extent is what makes
+    /// the result usable as a split curve — an extrusion's carrier plane extends far past
+    /// the wall it actually represents, and an unclipped line would cut faces the wall
+    /// never touches.
+    /// </summary>
+    private static List<Curve3d> PlanarPatches(in PlanarPatch a, in PlanarPatch b, in Aabb region)
+    {
+        var na = a.Plane.Normal.Normalized();
+        var nb = b.Plane.Normal.Normalized();
         var direction = na.Cross(nb);
         if (!direction.TryNormalize(Tolerance.Default, out var dir))
             return []; // parallel (coincident planes intersect everywhere; not a curve)
 
         // A point on both planes: solve n_a·p = d_a, n_b·p = d_b in the span of {n_a, n_b}.
-        double da = na.Dot(a.Origin);
-        double db = nb.Dot(b.Origin);
+        double da = na.Dot(a.Plane.Origin);
+        double db = nb.Dot(b.Plane.Origin);
         double dot = na.Dot(nb);
         double denominator = 1 - dot * dot;
         double ka = (da - db * dot) / denominator;
         double kb = (db - da * dot) / denominator;
         var point = na * ka + nb * kb;
 
-        return ClipLine(point, dir, region) is { } line ? [line] : [];
+        if (!TryClipToRegion(point, dir, region, out double tMin, out double tMax))
+            return [];
+        if (!ClipToPatch(a, point, dir, ref tMin, ref tMax) ||
+            !ClipToPatch(b, point, dir, ref tMin, ref tMax))
+            return [];
+        if (tMax - tMin <= Tolerance.Default.Linear)
+            return [];
+        return [new Line3d(point + dir * tMin, point + dir * tMax)];
     }
+
+    /// <summary>
+    /// Narrows the line's parameter interval to the patch's parallelogram. The line lies
+    /// in the patch's plane, so its (s, t) coordinates in the {E1, E2} basis are affine in
+    /// the line parameter — two slab clips. Unbounded patches never narrow anything.
+    /// </summary>
+    private static bool ClipToPatch(
+        in PlanarPatch patch, in Vector3d point, in Vector3d dir, ref double tMin, ref double tMax)
+    {
+        if (!patch.Bounded)
+            return true;
+
+        var normal = patch.E1.Cross(patch.E2);
+        double scale = normal.LengthSquared;
+        // Degenerate parallelograms are rejected at construction; the guard is a
+        // division-by-zero backstop, not a model tolerance.
+        if (scale <= 0)
+            return true;
+        var offset = point - patch.Corner;
+        double s0 = offset.Cross(patch.E2).Dot(normal) / scale;
+        double sd = dir.Cross(patch.E2).Dot(normal) / scale;
+        double t0 = patch.E1.Cross(offset).Dot(normal) / scale;
+        double td = patch.E1.Cross(dir).Dot(normal) / scale;
+        return ClipSlab(s0, sd, ref tMin, ref tMax) && ClipSlab(t0, td, ref tMin, ref tMax);
+    }
+
+    /// <summary>Clips [tMin, tMax] to where value0 + slope·t stays in [0, 1].</summary>
+    private static bool ClipSlab(double value0, double slope, ref double tMin, ref double tMax)
+    {
+        // Exact-zero test: a bit-zero slope means the coordinate never changes along the
+        // line, so the whole interval either survives or dies — no division is defined.
+        if (slope == 0)
+            return value0 >= 0 && value0 <= 1;
+        double lo = (0 - value0) / slope;
+        double hi = (1 - value0) / slope;
+        if (lo > hi)
+            (lo, hi) = (hi, lo);
+        tMin = Math.Max(tMin, lo);
+        tMax = Math.Min(tMax, hi);
+        return tMin < tMax;
+    }
+
+    /// <summary>
+    /// Plane ∩ extrusion when the generator lies in a plane PARALLEL to the cutting plane:
+    /// every generator point then meets the plane after the same travel along the extrude
+    /// direction, so the section is exactly the generator translated by direction·v. Exact
+    /// for any generator shape (lines, rational arcs, splines), bounded exactly to the
+    /// generator's extent, and — crucially — built from the generator's own points, so
+    /// adjacent profile segments hand over corner points bit-for-bit and a sketch pocket's
+    /// outline closes into a chain. Returns false when the configuration is something
+    /// else (tilted plane, plane parallel to the direction); true with no curves when the
+    /// plane misses the extrusion's v-range.
+    /// </summary>
+    private static bool TryPlaneExtrudedSection(
+        PlaneSurface plane, ExtrudedSurface extruded, out List<Curve3d> curves)
+    {
+        curves = [];
+        var n = plane.Normal.Normalized();
+        var d = extruded.Direction;
+        double advance = n.Dot(d);
+        // Well-conditioned crossing: below this the plane is parallel to the extrude
+        // direction (the surface is then coplanar with it or misses entirely).
+        if (Math.Abs(advance) <= Tolerance.Default.Linear * d.Length)
+            return false;
+
+        // The generator must lie in a plane parallel to the cutting plane, sampled on the
+        // ACTUAL curve. This is the exact condition for the section to be a pure
+        // translate: the residual at generator parameter u is n·(G(u) − G(u0)).
+        var generator = extruded.Generator;
+        var domain = generator.Domain;
+        double height = n.Dot(generator.PointAt(domain.Start) - plane.Origin);
+        const int samples = 16;
+        for (int i = 1; i <= samples; i++)
+        {
+            double h = n.Dot(generator.PointAt(domain.ParameterAt((double)i / samples)) - plane.Origin);
+            if (Math.Abs(h - height) > Tolerance.Default.Linear)
+                return false;
+        }
+
+        double v = -height / advance;
+        // Strictly interior, measured in LENGTH units: v·advance is the plane's signed
+        // distance above the start rim, (1 − v)·advance its distance below the end rim.
+        // A plane flush with either rim is the coplanar/tangent case booleans do not
+        // support, and splitting there would only fabricate zero-extent slivers.
+        if (v < 0 || v > 1 ||
+            Math.Abs(v * advance) <= Tolerance.Default.Linear ||
+            Math.Abs((1 - v) * advance) <= Tolerance.Default.Linear)
+            return true; // recognized configuration, but no transversal section
+
+        curves.Add(generator.Transformed(Matrix4d.CreateTranslation(d * v)));
+        return true;
+    }
+
+    // ---- analytic cases ----
 
     private static List<Curve3d> PlaneSphere(PlaneSurface plane, SphereSurface sphere)
     {
@@ -341,34 +531,41 @@ public static class SurfaceIntersection
     /// <summary>Clips an infinite line to the region box; null when it misses.</summary>
     private static Line3d? ClipLine(in Vector3d point, in Vector3d direction, in Aabb region)
     {
+        if (!TryClipToRegion(point, direction, region, out double tMin, out double tMax) ||
+            tMax - tMin <= Tolerance.Default.Linear)
+            return null;
+        return new Line3d(point + direction * tMin, point + direction * tMax);
+    }
+
+    /// <summary>The infinite line's parameter interval inside the region box.</summary>
+    private static bool TryClipToRegion(
+        in Vector3d point, in Vector3d direction, in Aabb region, out double tMin, out double tMax)
+    {
         // Two opposing rays give the full line's parameter interval inside the box.
         var forward = new Ray3d(point, direction);
         var backward = new Ray3d(point, -direction);
         bool hitF = forward.Intersects(region, out double f0, out double f1);
         bool hitB = backward.Intersects(region, out double b0, out double b1);
-        double tMin, tMax;
         if (hitF && hitB)
         {
             tMin = -b1;
             tMax = f1;
+            return true;
         }
-        else if (hitF)
+        if (hitF)
         {
             tMin = f0;
             tMax = f1;
+            return true;
         }
-        else if (hitB)
+        if (hitB)
         {
             tMin = -b1;
             tMax = -b0;
+            return true;
         }
-        else
-        {
-            return null;
-        }
-        if (tMax - tMin <= Tolerance.Default.Linear)
-            return null;
-        return new Line3d(point + direction * tMin, point + direction * tMax);
+        tMin = tMax = 0;
+        return false;
     }
 
     // ---- general numerical marching ----
