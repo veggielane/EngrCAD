@@ -44,6 +44,18 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 - **Narrow-band grids** (`NarrowBand(cellSize[, region][, bandWidth])`, `NarrowBandSdf.cs`,
   g3's `MeshSignedDistanceGrid`): evaluate the source **only near its surface** and fill
   the rest by a distance transform — see [Narrow-band grids](#narrow-band-grids).
+- **2D-profile solids** (`PlanarRegions.cs`): `Sdf.ExtrudedRegion(region, height)` and
+  `Sdf.RevolvedRegion(region)` build exact solids from any `IPlanarRegion` — a 2D signed
+  distance supplied by a higher layer (`SketchRegion` in EngrCAD.Modeling). `IPlanarRegion`
+  carries a **batch seam** alongside the scalar one, `SignedDistance(x, y, distances)`,
+  defaulted to a scalar loop so implementers need not provide it; an override must return
+  the same double per point, bit for bit. Both nodes drive it from `EvaluateBatch`, and the
+  extruded node asks the region **once per distinct (x, y)** rather than once per sample —
+  a prism's field does not vary along z and bulk consumers sample z fastest, so a batch is
+  normally a few long constant-xy runs. That is an exact memoization (same input, same
+  double), not an approximation; the run test is an identity comparison, so a coordinate an
+  ulp away simply misses the cache. Measured 10.5× on polygonizing a 108-segment engraved
+  profile.
 - **N-ary operators** (`NaryOperators.cs`, g3 `ImplicitNaryUnion3d`/`ImplicitBlend3d`
   spirit): static `Sdf.Union(...)` / `Sdf.Intersection(...)` evaluate min/max over any
   number of children in one flat loop (each child evaluated once per query — no nested
