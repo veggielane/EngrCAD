@@ -11,30 +11,46 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-identical
 undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
-`MeshExtrude` (faces/thicken), selections + connected components. Remaining:
+`MeshExtrude` (faces/thicken/selections), selections + connected components. Wave-B ✅:
+`Remesher` (isotropic, vertex-keyed constraints), `HoleFiller.FillMinimal`/`FillSmoothed`,
+`MeshDecimator` on `EditableMesh`, iterative BSP walks. Remaining:
 
-- [ ] **BSP stack-overflows on deep trees** (`CsgNode.Invert` recurses) — it overflows
-  outright on a 32k-triangle sphere pair. Now that `BooleanMethod.Exact` is the default
-  and faster everywhere measured, decide: make the recursion iterative, or document BSP
-  as legacy-only and keep it for the coplanar cases it historically handled.
+- [ ] **Retire the BSP boolean.** The stack overflow is fixed (every `CsgNode` walk is
+  explicit-stack), but fixing it produced the measurement that settles the question: a
+  32k+32k sphere union takes **74.9 s** and returns an **open** 347k-face shell, against
+  **0.71 s** closed for the exact path. Once coplanar overlaps are classified, delete
+  `Csg.cs` and `BooleanMethod` outright rather than maintaining two algorithms.
 - [ ] **Region refinement across a seam** — `MeshRegionOperator` deliberately refuses a
   replacement whose seam was re-split (splitting a seam edge leaves the neighbour face
   holding the un-split edge — a T-junction), so `MeshDecimator` round-trips but
   `LoopSubdivision` does not. Refining across a seam means refining the neighbours too:
   a different, larger operation.
-- [ ] **Isotropic remeshing with constraints** — `Remesher`/`RemesherPro` +
-  `MeshConstraints` (fixed edges, no-flip, project-to-target) +
-  `SharpEdgeReprojectionRemesh` for feature recovery; now buildable on
-  `EditableMesh`'s split/collapse/flip. Quality control after booleans/decimation,
-  pairs with `MeshSdf` as projection target, and a prerequisite for good FEA tet
-  input (see Simulation).
-- [ ] Hole-filling upper tiers — `MinimalHoleFill` (sharp-edge reconstruction) and
-  `SmoothedHoleFill` (fill+remesh+Laplacian; needs remeshing above) on top of the
-  landed `FillAll` dispatch.
-- [ ] Port `MeshDecimator` onto `EditableMesh.CollapseEdge` (measured
-  bit-identical-or-better comparison, like the PQ upgrade precedent).
-- [ ] `MeshExtrude.Faces` overload taking `MeshFaceSelection`; mutable in-place
-  variants of fill/extrude once callers want them.
+- [ ] **SDF projection target for remeshing** — implement `IProjectionTarget` over
+  `MeshSdf`/`Sdf` in EngrCAD.Interop (p − d(p)·∇d(p)); the interface lives in
+  EngrCAD.Mesh precisely so the mesh kernel needn't depend on the implicit engine. Pairs
+  with quality control after Surface Nets output.
+- [ ] **`RemesherPro`'s scheduling** — the modified-edge queue and the fast-split
+  prepass. The basic pass converges in tens of ms at current sizes, so this is throughput
+  for large meshes only; note that queued edge ids are recycled, so every consumer must
+  re-validate (the same hazard that put constraints on vertices).
+- [ ] **Face-aligned (RZN-flow) sharp-edge reprojection remesh** — g3's
+  `RemesherPro.SharpEdgeReprojectionRemesh`: per-triangle rigid repositioning onto an
+  ORIENTED projection target with area × (n·n′)³ blending. Needs `IProjectionTarget` to
+  grow an oriented overload.
+- [ ] **Region-restricted remeshing** — remesh a face selection in place instead of the
+  whole mesh (g3's `RegionRemesher`). `FillSmoothed` works around this by remeshing a
+  standalone patch and stitching; overlaps with the region-refinement item above.
+- [ ] **Move `ClosestPointOnTriangle` into EngrCAD.Core** — Ericson's exact
+  Voronoi-region form is private in `MeshProjectionTarget`, and Interop's `MeshSdf`
+  almost certainly has a second copy. It belongs beside `Fitting3d`.
+- [ ] **Decide `HoleFillOptions.Fallback`'s default** — it ships as `None` to keep
+  `FillAll`'s landed "report what you cannot fill well" contract; `Minimal` is arguably
+  the better product default for `MeshRepair.AutoRepair`, at the cost of three tests that
+  currently pin `Skipped` outcomes.
+- [ ] **Expose remeshing through `Shape`/`Part`** (display quality, FEA prep) — and when
+  it lands it owes a `docs/examples` page, since today it is kernel API reachable through
+  no `Shape` operation.
+- [ ] Mutable in-place variants of fill/extrude once callers want them.
 
 ## Implicit engine (EngrCAD.Implicit)
 

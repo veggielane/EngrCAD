@@ -589,6 +589,26 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **Remeshing constraints live on vertices, not edges — because of our topology.** g3
+  keys its `MeshConstraints` by edge, and copying that would have been a latent
+  correctness bug here: an undirected edge is named by the smaller of a twin pair, a
+  collapse *merges* edge pairs so the survivor gets a different canonical index, and freed
+  indices are recycled. An edge-keyed table therefore goes stale after the first collapse
+  — or worse, silently aliases a different edge. Vertex indices never do, because a
+  collapse always removes the *unpinned* end. Everything the edge flags expressed falls
+  out of that: two pinned ends means neither collapse nor flip (a flip destroys the edge),
+  while splitting stays legal and the midpoint inherits the pin, so a constrained chain
+  keeps its geometry while gaining resolution. Boundary and crease pins are re-derived
+  from geometry each pass and need no bookkeeping at all. A related tuning note worth
+  keeping: the split/collapse thresholds are 1.33 L / 0.66 L rather than Botsch's 4/3 and
+  4/5, which thrash — a fresh split lands *below* the collapse threshold.
+- **Prefer the standard algorithm to the reference library's heuristic.** g3's
+  `MinimalHoleFill` is four iterative edge-flip passes; its own comments describe strong
+  ordering effects, non-convergence, a hard pass cap to stop oscillation, and a forced
+  interior-vertex-removal stage with a debugger break left in. The Barequet–Sharir/Liepa
+  dynamic program answers the same question deterministically and globally optimally in
+  O(n³) time and O(n²) space, which is nothing at realistic rim lengths. Surveying a
+  library for *ideas* is not the same as adopting its implementation choices.
 - **2D offset is one algorithm, not two.** An outward offset is the region unioned with a
   slab per edge and a join per corner; the *inward* offset is that same dilation applied
   to the complement. Writing erosion as complement-dilation costs one bounding rectangle
