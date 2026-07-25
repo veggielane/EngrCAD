@@ -96,6 +96,25 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   closed slabs/shells, closed meshes become hollow two-shell solids.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping.
+- **Selections** (`MeshFaceSelection` / `MeshVertexSelection` / `MeshEdgeSelection`) —
+  read-only v1 of the selection/region model (g3 `MeshFaceSelection` et al.): immutable
+  index sets over one mesh with `Grow`/`Contract` (one-ring steps; face grow is
+  vertex-adjacency, face contract removes faces touching a border vertex — one that also
+  belongs to an unselected face, mirroring g3's `ContractBorderByOneRingNeighbours`),
+  conversions between the three kinds (`ToVertices`/`ToEdges`/`ToFaces(requireAll)`),
+  boundary extraction (`BoundaryHalfEdges` plus `BoundaryLoops` chained by rotating
+  around each destination vertex through selected faces — correct even at pinch
+  vertices), and patch extraction (`ToMesh()`: remapped construct-new submesh; a
+  selection touching itself only at a vertex fails `Build`'s bow-tie check with a
+  "pinch" message). Edges are stored canonically as the lower half-edge index of each
+  twin pair, matching `mesh.Edges`. The extract-modify-reinsert `RegionOperator` needs
+  the mutable topology editor and is the phase-B follow-up.
+- **`MeshConnectedComponents`** — edge-connected face components (g3
+  `MeshConnectedComponents`): deterministic ascending-seed flood fill returning
+  `MeshComponent`s (face selection + area + divergence signed volume + closed flag) with
+  per-component extraction (`ToMesh`, always manifold — the source mesh forbids
+  bow-ties, so components never share vertices) and `Separate(mesh)` splitting a
+  multi-body mesh into its bodies.
 - **`RenderMesh`** — flat (per-face) or smooth (per-vertex) triangle extraction for GPUs.
 - **`ObjWriter`** — minimal Wavefront OBJ export for debugging.
 - **Mesh import** — `StlReader` (binary + ASCII, autodetected: the exact
