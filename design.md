@@ -589,6 +589,42 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **2D offset is one algorithm, not two.** An outward offset is the region unioned with a
+  slab per edge and a join per corner; the *inward* offset is that same dilation applied
+  to the complement. Writing erosion as complement-dilation costs one bounding rectangle
+  and buys the property that matters: self-intersection is not a case to detect and clean
+  up, it simply does not arise. Shrink a plate through a narrow neck and the union returns
+  two regions, or none — which is why `Offset` returns a list rather than a region. Round
+  joins are *inscribed* polygonal arcs, matching `Sketch.ToRegions`' one-sided contract,
+  so a circle offset by d lands just inside π(r+d)² and error never accumulates in the
+  unsafe direction.
+- **Two ULP-scale lessons from the 2D work, both of which silently destroyed geometry.**
+  A miter apex must divide by `sum.LengthSquared`, never by `sum.Length` squared: at a
+  right angle the former is exactly 2 and the latter 2.0000000000000004, which tilts the
+  apex a few ULPs off both offset lines, stops the collinear T-junctions collapsing, and
+  returns a mitered square with eight corners. And `Arrangement2d`'s hole assignment must
+  be **structural, not metric** — a lone convex cell was adopting its own reversed
+  perimeter as a hole, because the two shoelace sums differ by one ULP and every vertex is
+  shared, so the containment probe sat exactly *on* the boundary and decided by luck. The
+  cell cancelled to ~1e-16 and was dropped, silently removing a whole operand from a
+  union. The fix is not a wider epsilon but the observation that loops of the same
+  connected component can never nest — a loop reachable from the cell's own loop would
+  have been traced as part of it.
+- **Bulk 2D unions of projected geometry need relative quantization.** Two mesh vertices
+  on the same feature line are only ULP-equal once projected, so edges that ought to be
+  collinear sit ~2e-16 apart: too small for the arrangement to see as a T-junction, too
+  large to ignore. The one-ULP sliver's interior sample rounds back onto its own boundary
+  and the answer starts depending on merge order (measured: 60.42 vs 59.33 on the same
+  torus silhouette; a finer one threw outright). Quantizing to 1e-12 of the outline extent
+  — the scale-free tier — makes every merge order agree. The companion decision is
+  performance: fold the unions through a balanced tree over *Morton-sorted* faces, 67 ms
+  against 2.4 s unsorted and 259 s accumulated linearly, because merging face 1 with face
+  900 produces two disjoint regions and cancels nothing.
+- **A wedge is an extrusion, so it does not get its own code path.** `Shape.Wedge` carries
+  a trapezoidal sketch-extrusion internally and every lowering delegates to it. The
+  primitive is therefore native in all three representations, exact under any affine
+  transform, and correct in the construction tree — for free, rather than through a fourth
+  implementation that would have had to be kept in step with the other three.
 - **Logging is `Microsoft.Extensions.Logging.Abstractions`, and that reversed an earlier
   decision.** The viewer originally defined a two-method `IEngrCadLog` seam *specifically*
   to avoid a `Microsoft.Extensions.*` reference, with adapter snippets in its README. The
