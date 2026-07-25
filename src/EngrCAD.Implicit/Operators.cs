@@ -3,12 +3,28 @@ using EngrCAD.Core;
 namespace EngrCAD.Implicit;
 
 // Set operations, blends, modifiers, and rigid/uniform transforms over SDF nodes.
+//
+// Batch path (see BatchEvaluation.cs): combinators evaluate their first operand straight
+// into the destination, the second into pooled scratch, and fold with a vectorized
+// elementwise combine; modifiers and transforms rewrite the coordinate spans (or the
+// result span) in place. The structure-of-arrays coordinates are forwarded unchanged
+// wherever the node does not move points, so the AoS→SoA transpose stays a once-per-batch
+// cost at the root.
 
 internal sealed class UnionSdf(Sdf a, Sdf b) : Sdf
 {
     public override double Evaluate(in Vector3d p) => Math.Min(a.Evaluate(p), b.Evaluate(p));
 
     public override Aabb Bounds => a.Bounds.Union(b.Bounds);
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        SdfBatch.Min(distances, other.Span);
+    }
 }
 
 internal sealed class IntersectionSdf(Sdf a, Sdf b) : Sdf
@@ -16,6 +32,15 @@ internal sealed class IntersectionSdf(Sdf a, Sdf b) : Sdf
     public override double Evaluate(in Vector3d p) => Math.Max(a.Evaluate(p), b.Evaluate(p));
 
     public override Aabb Bounds => a.Bounds.Intersection(b.Bounds);
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        SdfBatch.Max(distances, other.Span);
+    }
 }
 
 internal sealed class DifferenceSdf(Sdf a, Sdf b) : Sdf
@@ -23,6 +48,15 @@ internal sealed class DifferenceSdf(Sdf a, Sdf b) : Sdf
     public override double Evaluate(in Vector3d p) => Math.Max(a.Evaluate(p), -b.Evaluate(p));
 
     public override Aabb Bounds => a.Bounds;
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        SdfBatch.MaxNegated(distances, other.Span);
+    }
 }
 
 internal static class BlendMath
@@ -47,6 +81,15 @@ internal sealed class SmoothUnionSdf(Sdf a, Sdf b, double k) : Sdf
 
     // The blend bulges outward by at most k/4 in the seam region.
     public override Aabb Bounds => a.Bounds.Union(b.Bounds).Expanded(Math.Max(k, 0));
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        SdfBatch.SmoothMin(distances, other.Span, k);
+    }
 }
 
 internal sealed class SmoothIntersectionSdf(Sdf a, Sdf b, double k) : Sdf
@@ -54,6 +97,15 @@ internal sealed class SmoothIntersectionSdf(Sdf a, Sdf b, double k) : Sdf
     public override double Evaluate(in Vector3d p) => -BlendMath.SmoothMin(-a.Evaluate(p), -b.Evaluate(p), k);
 
     public override Aabb Bounds => a.Bounds.Intersection(b.Bounds).Expanded(Math.Max(k, 0));
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        SdfBatch.SmoothMax(distances, other.Span, k);
+    }
 }
 
 internal sealed class SmoothDifferenceSdf(Sdf a, Sdf b, double k) : Sdf
@@ -61,6 +113,15 @@ internal sealed class SmoothDifferenceSdf(Sdf a, Sdf b, double k) : Sdf
     public override double Evaluate(in Vector3d p) => -BlendMath.SmoothMin(-a.Evaluate(p), b.Evaluate(p), k);
 
     public override Aabb Bounds => a.Bounds.Expanded(Math.Max(k, 0));
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        SdfBatch.SmoothSubtract(distances, other.Span, k);
+    }
 }
 
 internal sealed class OffsetSdf(Sdf source, double distance) : Sdf
@@ -68,6 +129,13 @@ internal sealed class OffsetSdf(Sdf source, double distance) : Sdf
     public override double Evaluate(in Vector3d p) => source.Evaluate(p) - distance;
 
     public override Aabb Bounds => distance > 0 ? source.Bounds.Expanded(distance) : source.Bounds;
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        source.EvaluateBatch(x, y, z, distances);
+        SdfBatch.Subtract(distances, distance);
+    }
 }
 
 internal sealed class ShellSdf(Sdf source, double thickness) : Sdf
@@ -75,6 +143,13 @@ internal sealed class ShellSdf(Sdf source, double thickness) : Sdf
     public override double Evaluate(in Vector3d p) => Math.Abs(source.Evaluate(p)) - thickness / 2;
 
     public override Aabb Bounds => source.Bounds.Expanded(thickness / 2);
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        source.EvaluateBatch(x, y, z, distances);
+        SdfBatch.AbsSubtract(distances, thickness / 2);
+    }
 }
 
 internal sealed class TranslateSdf(Sdf source, Vector3d translation) : Sdf
@@ -88,6 +163,16 @@ internal sealed class TranslateSdf(Sdf source, Vector3d translation) : Sdf
             var b = source.Bounds;
             return new Aabb(b.Min + translation, b.Max + translation);
         }
+    }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        using var moved = new BatchScratch3(x.Length);
+        SdfBatch.Subtract(x, translation.X, moved.X);
+        SdfBatch.Subtract(y, translation.Y, moved.Y);
+        SdfBatch.Subtract(z, translation.Z, moved.Z);
+        source.EvaluateBatch(moved.X, moved.Y, moved.Z, distances);
     }
 }
 
@@ -125,6 +210,14 @@ internal sealed class RotateSdf : Sdf
             return result;
         }
     }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        using var rotated = new BatchScratch3(x.Length);
+        SdfBatch.Rotate(_inverse, x, y, z, rotated.X, rotated.Y, rotated.Z);
+        _source.EvaluateBatch(rotated.X, rotated.Y, rotated.Z, distances);
+    }
 }
 
 /// <summary>Reflection across a plane: evaluates the source at the mirrored query
@@ -154,6 +247,14 @@ internal sealed class MirrorSdf(Sdf source, Vector3d point, Vector3d unitNormal)
             return result;
         }
     }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        using var reflected = new BatchScratch3(x.Length);
+        SdfBatch.Reflect(point, unitNormal, x, y, z, reflected.X, reflected.Y, reflected.Z);
+        source.EvaluateBatch(reflected.X, reflected.Y, reflected.Z, distances);
+    }
 }
 
 internal sealed class ScaleSdf : Sdf
@@ -178,5 +279,17 @@ internal sealed class ScaleSdf : Sdf
             var b = _source.Bounds;
             return new Aabb(b.Min * _factor, b.Max * _factor);
         }
+    }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        using var scaled = new BatchScratch3(x.Length);
+        // Divide (not multiply by a reciprocal) to match the scalar path exactly.
+        SdfBatch.Divide(x, _factor, scaled.X);
+        SdfBatch.Divide(y, _factor, scaled.Y);
+        SdfBatch.Divide(z, _factor, scaled.Z);
+        _source.EvaluateBatch(scaled.X, scaled.Y, scaled.Z, distances);
+        SdfBatch.Multiply(distances, _factor);
     }
 }

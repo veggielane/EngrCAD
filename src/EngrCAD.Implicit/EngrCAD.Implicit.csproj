@@ -3,6 +3,11 @@
     <Description>EngrCAD implicit (SDF) engine: signed-distance primitives and operators composed as an AST, with batch evaluation and conservative bounds.</Description>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The SIMD batch seam (EvaluateBatch) is protected internal; the exactness tests
+         need to override and forward it, which requires the internal half. -->
+    <InternalsVisibleTo Include="EngrCAD.Implicit.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
   </ItemGroup>
 </Project>

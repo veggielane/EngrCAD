@@ -8,6 +8,8 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 - **`Sdf`** (abstract base) — `Evaluate(point)`, batch `Evaluate(span, span)`,
   finite-difference `Normal`, and conservative `Bounds` propagated through every node
   (infinite for unbounded fields).
+- **SIMD batch evaluation** (`BatchEvaluation.cs`) — the batch entry point is the
+  throughput path, and it is vectorized; see [Batch evaluation](#batch-evaluation-simd).
 - **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, cone
   (`Sdf.Cone(r1, r2, height)` capped frustum; a zero radius gives a pointed apex),
   torus, capsule, half-space, and a gyroid lattice (approximate distance, unbounded —
@@ -47,6 +49,79 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 Meshes can join the AST via `EngrCAD.Interop`'s `MeshSdf`, and any finite `Sdf` converts
 to a mesh via `SurfaceNets.Polygonize`.
 
+## Batch evaluation (SIMD)
+
+`Evaluate(ReadOnlySpan<Vector3d>, Span<double>)` is the throughput path every bulk
+consumer uses (Surface Nets sampling, `Sdf.Sampled` bakes, section contours). It is
+vectorized through `System.Numerics.Vector<double>` — width-agnostic, so one kernel
+serves 128-bit NEON, 256-bit AVX2 and 512-bit AVX-512 without per-ISA forks.
+
+**Layout: structure-of-arrays, transposed once at the root.** A lane-wise kernel wants
+all the x's contiguous, but the public signature hands over interleaved `Vector3d`s
+(which is right for callers — they all have AoS point arrays). So the base
+`Evaluate` deinterleaves into pooled x/y/z scratch **once, at the root of the AST**, in
+1024-point chunks (24 KB of coordinates — cache resident, and bounded no matter how many
+points the caller passes), then drives the internal SoA seam:
+
+```csharp
+protected internal virtual void EvaluateBatch(
+    ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+```
+
+Operators forward those same spans straight to their children, so the transpose is paid
+once per batch rather than once per node, and every kernel below the root reads and
+writes contiguous doubles. (Measured: the transpose is ~1 ns/point and must be written
+against raw references — four span bounds checks per point cost more than a cheap kernel
+saves; going through indexers halved whole-batch throughput on `Sdf.Box`.)
+
+**Exactness.** Every vector kernel mirrors its scalar `Evaluate` term for term, in the
+same association order, using only correctly rounded IEEE-754 operations, and the ragged
+tail past the last full register falls back to the scalar path. Results are therefore
+bit-for-bit identical to per-point scalar evaluation for all finite inputs, with one
+documented deviation: `Vector.Min`/`Vector.Max` break a tie between +0.0 and −0.0 by
+operand position while `Math.Min`/`Math.Max` break it by sign, so a result that is exactly
+zero may carry the opposite sign bit (±0 compare equal; no consumer can tell them apart).
+`BatchEvaluationTests` asserts this over the whole node catalogue at randomized points,
+at structured points that land exactly on surfaces/edges/corners, and at every batch
+length around the register and chunk boundaries.
+
+**What is vectorized**: every primitive except the gyroid (sphere, box, cylinder, cone,
+torus, capsule, half-space), every set operator and smooth blend, offset/shell, and the
+translate/rotate/mirror/scale transforms, plus the n-ary union/intersection/smooth-union
+and the Wyvill falloff blend. **Deliberately not vectorized**: the gyroid and the
+exponential falloff (they need `Math.Sin`/`Math.Exp`, and no vector transcendental
+reproduces those bit for bit — a silently divergent fast path is worse than none), and
+`ThreadSdf` / the sampled grids / planar-region extrusions (branchy or gather-bound).
+They still batch through the default `EvaluateBatch` loop and still benefit from
+vectorized operands around them.
+
+Measured on an 8-core win-arm64 box (`Vector<double>.Count == 2`, so the ceiling from
+lanes alone is 2×; the rest comes from batching away per-point virtual dispatch through
+the AST), best-of-9 after a 1 s warm-up:
+
+| case | before | after | |
+| --- | --- | --- | --- |
+| primitive union of 5, 2M points | 38.4 Mpts/s | 132.6 Mpts/s | **3.5×** |
+| bracket CSG tree, 2M points | 17.2 Mpts/s | 58.1 Mpts/s | **3.4×** |
+| capsule / cone, 2M points | 78 / 83 Mpts/s | 502 / 343 Mpts/s | **6.4× / 4.1×** |
+| box / cylinder / torus, 2M points | 426 / 444 / 518 Mpts/s | 626 / 594 / 724 Mpts/s | 1.3–1.5× |
+| sphere, 2M points | 1090 Mpts/s | 887 Mpts/s | 0.81× |
+| `Sampled` bake, primitive union | 12.2 ms | 3.9 ms | **3.1×** |
+| `Sampled` bake, bracket CSG | 28.7 ms | 10.0 ms | **2.9×** |
+| `SurfaceNets.Polygonize` @ 220 | 195 ms | 156 ms | 1.25× |
+
+Two honest caveats. A bare sphere at the *root* of the AST is slower: its kernel is five
+flops, so at two lanes the transpose costs more than SIMD saves (on 4- or 8-lane hardware
+this inverts). And `Polygonize` gains far less than its sampling does — the sampling pass
+is now a minority of its cost, the rest being the topology passes and the full-size
+`Vector3d[]` corner array; feeding Surface Nets deinterleaved coordinates directly is the
+obvious follow-up, on the Interop side.
+
+**Benchmark timing lesson**: tiered JIT promotes these inner batch methods only after
+tens of invocations plus a background compile. A single warm-up call measured tier-0 code
+and reported `Sdf.Box` at anywhere from 147 to 548 Mpts/s across runs — every number above
+comes from a fixed wall-clock warm-up budget, not a warm-up count.
+
 ## Notes
 
 - Distances from smooth/blend operators are correct in sign everywhere but exact in
@@ -60,5 +135,5 @@ to a mesh via `SurfaceNets.Polygonize`.
   or fuse. Outside the baked region the node returns boundary value + distance to the
   region: continuous, and correct in sign whenever the solid lies inside the baked
   region (the bounds-based `Sampled(cellSize)` overload guarantees this).
-- Future: SIMD batch evaluation; C# expression-tree → SDF compilation for the query
-  layer.
+- Future: C# expression-tree → SDF compilation for the query layer; narrow-band mesh
+  SDFs and sparse/multiresolution grids on top of the lazy-grid seam.

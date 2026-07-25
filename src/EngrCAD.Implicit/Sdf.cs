@@ -1,3 +1,4 @@
+using System.Buffers;
 using EngrCAD.Core;
 
 namespace EngrCAD.Implicit;
@@ -18,13 +19,75 @@ public abstract class Sdf
     /// <summary>Conservative bounds of the solid (the d &lt; 0 region).</summary>
     public abstract Aabb Bounds { get; }
 
-    /// <summary>Batch evaluation; the default loops, subclasses may vectorize.</summary>
+    /// <summary>
+    /// Batch evaluation — the throughput entry point, and the one every bulk consumer
+    /// (Surface Nets sampling, grid bakes, section contours) goes through.
+    /// <para>
+    /// The default implementation deinterleaves the points into pooled structure-of-arrays
+    /// scratch — <em>once</em>, at the root of the AST — and drives the SIMD
+    /// <see cref="EvaluateBatch"/> seam, which operators forward to their children
+    /// unchanged. Results are bit-for-bit identical to calling
+    /// <see cref="Evaluate(in Vector3d)"/> per point for all finite inputs (see
+    /// <see cref="EvaluateBatch"/> for the one signed-zero caveat). Override this only to
+    /// intercept whole batches (an instrumenting wrapper, a cache); to make a node fast,
+    /// override <see cref="EvaluateBatch"/> instead.
+    /// </para>
+    /// </summary>
     public virtual void Evaluate(ReadOnlySpan<Vector3d> points, Span<double> distances)
     {
         if (distances.Length < points.Length)
             throw new ArgumentException("Distance span is shorter than the point span.");
-        for (int i = 0; i < points.Length; i++)
-            distances[i] = Evaluate(points[i]);
+
+        int total = points.Length;
+        if (total == 0)
+            return;
+
+        int chunk = Math.Min(total, SdfBatch.ChunkLength);
+        var rented = ArrayPool<double>.Shared.Rent(chunk * 3);
+        try
+        {
+            for (int start = 0; start < total; start += chunk)
+            {
+                int length = Math.Min(chunk, total - start);
+                var xs = rented.AsSpan(0, length);
+                var ys = rented.AsSpan(chunk, length);
+                var zs = rented.AsSpan(chunk * 2, length);
+                SdfBatch.Deinterleave(points.Slice(start, length), xs, ys, zs);
+                EvaluateBatch(xs, ys, zs, distances.Slice(start, length));
+            }
+        }
+        finally
+        {
+            ArrayPool<double>.Shared.Return(rented);
+        }
+    }
+
+    /// <summary>
+    /// The SIMD seam: evaluate a batch given deinterleaved coordinates (all four spans
+    /// share a length). Structure-of-arrays is the layout a lane-wise kernel needs — the
+    /// interleaved <see cref="Vector3d"/> form the public API takes would cost a strided
+    /// gather per register — so the transpose happens once in
+    /// <see cref="Evaluate(ReadOnlySpan{Vector3d}, Span{double})"/> and every node below
+    /// the root reads contiguous doubles.
+    /// <para>
+    /// The default implementation loops the scalar <see cref="Evaluate(in Vector3d)"/>, so
+    /// a node that does not override it still composes correctly (and still benefits when
+    /// its <em>children</em> vectorize). Overrides must be bit-for-bit identical to the
+    /// scalar path for finite inputs: mirror the scalar expression term for term in the
+    /// same association order, using only correctly rounded IEEE-754 operations, and let
+    /// the ragged tail fall back to the scalar path. The one permitted deviation is the
+    /// sign of an exact zero (<c>Vector.Min</c>/<c>Vector.Max</c> break a ±0 tie by
+    /// operand position, <c>Math.Min</c>/<c>Math.Max</c> by sign); ±0 compare equal and no
+    /// consumer of the field can tell them apart. Kernels that would need a vector
+    /// transcendental (sin/cos/exp) are deliberately left scalar — no vector transcendental
+    /// reproduces <see cref="Math"/>'s results bit for bit.
+    /// </para>
+    /// </summary>
+    protected internal virtual void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        for (int i = 0; i < x.Length; i++)
+            distances[i] = Evaluate(new Vector3d(x[i], y[i], z[i]));
     }
 
     /// <summary>Outward surface normal by central differences.</summary>
