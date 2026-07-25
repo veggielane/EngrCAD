@@ -6,10 +6,17 @@ namespace EngrCAD.BRep;
 /// Rim chamfering and filleting: the closed boundary rim of a planar face is replaced
 /// by a bevel or blend band. Chamfer supports straight edges with sharp corners (they
 /// miter exactly — planar trapezoid strips share miter edges) and full circular rims
-/// (exact cone bands). Fillet supports full circular rims (exact quarter-torus) and
+/// (exact cone bands). Fillet supports full circular rims (exact quarter-torus),
 /// tangent-continuous line+arc rims (quarter-cylinder and quarter-torus-segment bands
-/// sharing junction arcs — e.g. rounded-rectangle plate tops). Sharp-corner fillets
-/// (ball/miter corner patches) are future work.
+/// sharing junction arcs — e.g. rounded-rectangle plate tops), and <b>sharp corners
+/// between straight rim edges</b>, which miter on an exact ellipse: two equal-radius
+/// quarter cylinders whose axes intersect are a bicylinder, and the branch through the
+/// corner's inset top point and its dropped bottom point is the conic
+/// <c>Ellipse3d(M, up·r, bottom − M)</c> with <c>M</c> the axis crossing. Only two of
+/// the three edges meeting at such a corner are blended (the side faces keep their
+/// sharp shared edge), and the miter is the only surface that closes that
+/// configuration: a spherical corner patch would leave the cross-section jumping from
+/// a rounded corner to a sharp one at the tangency plane.
 /// </summary>
 public static class Filleting
 {
@@ -29,14 +36,115 @@ public static class Filleting
 
     /// <summary>
     /// Fillets the outer rim of a planar face with the given radius. The rim must be a
-    /// full circle or a tangent-continuous chain of lines and arcs (round sharp sketch
-    /// corners first — chamfer handles sharp corners).
+    /// full circle, a tangent-continuous chain of lines and arcs, or a chain whose sharp
+    /// corners join two straight edges (those miter on an exact ellipse). A sharp corner
+    /// where an arc meets anything is rejected — that blend has no exact conic.
     /// </summary>
     public static BrepSolid FilletRim(BrepSolid solid, BrepFace face, double radius)
     {
         if (radius <= 0)
             throw new ArgumentOutOfRangeException(nameof(radius));
         return RimSurgeon.Apply(solid, face, radius, radius, fillet: true);
+    }
+
+    /// <summary>
+    /// Chamfers the outer rim of a planar face by a setback measured IN that face and an
+    /// angle measured FROM it — the "distance and angle" spelling every CAD system offers
+    /// beside two setbacks. 45° is the symmetric chamfer; a larger angle bites deeper into
+    /// the neighbours, a smaller one wider across the face.
+    /// </summary>
+    public static BrepSolid ChamferRimAtAngle(BrepSolid solid, BrepFace face, double setback, double angleDegrees)
+    {
+        if (setback <= 0)
+            throw new ArgumentOutOfRangeException(nameof(setback));
+        // Open interval: 0° would lie in the face and 90° would run parallel to the
+        // neighbours, and either produces a zero-width strip rather than a chamfer.
+        if (angleDegrees <= 0 || angleDegrees >= 90)
+            throw new ArgumentOutOfRangeException(nameof(angleDegrees),
+                "The chamfer angle is measured from the chamfered face and must lie strictly between 0° and 90°.");
+        return ChamferRim(solid, face, setback, setback * Math.Tan(angleDegrees * Math.PI / 180));
+    }
+
+    /// <summary>
+    /// Fillets a set of EDGES rather than a face: the selection is resolved to the rim
+    /// features that reproduce it (see <see cref="RimFacesFor"/>) and applied in turn.
+    /// </summary>
+    public static BrepSolid FilletEdges(BrepSolid solid, IEnumerable<BrepEdge> edges, double radius)
+    {
+        if (radius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        var solidUnderConstruction = solid;
+        foreach (var face in RimFacesFor(solid, edges))
+            solidUnderConstruction = FilletRim(solidUnderConstruction, face, radius);
+        return solidUnderConstruction;
+    }
+
+    /// <summary>Chamfers a set of EDGES; see <see cref="FilletEdges"/> and <see cref="RimFacesFor"/>.</summary>
+    public static BrepSolid ChamferEdges(BrepSolid solid, IEnumerable<BrepEdge> edges, double setback) =>
+        ChamferEdges(solid, edges, setback, setback);
+
+    /// <inheritdoc cref="ChamferEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>
+    public static BrepSolid ChamferEdges(
+        BrepSolid solid, IEnumerable<BrepEdge> edges, double topSetback, double sideSetback)
+    {
+        if (topSetback <= 0 || sideSetback <= 0)
+            throw new ArgumentOutOfRangeException(nameof(topSetback));
+        var solidUnderConstruction = solid;
+        foreach (var face in RimFacesFor(solid, edges))
+            solidUnderConstruction = ChamferRim(solidUnderConstruction, face, topSetback, sideSetback);
+        return solidUnderConstruction;
+    }
+
+    /// <summary>
+    /// Resolves an edge selection into the planar faces whose complete outer rims it
+    /// covers — the unit rim surgery operates on, and therefore the unit an edge-set
+    /// fillet or chamfer can honour exactly. A run of edges bounding one planar face
+    /// (including a lone closed circular rim) resolves; anything else throws, naming the
+    /// edges that could not be grouped.
+    /// <para>The whole selection is resolved BEFORE any surgery runs, so a rejected set
+    /// leaves the input solid untouched (rim surgery rewrites loops in place).</para>
+    /// <para>Why not arbitrary runs: a fillet that stops partway along a face's rim has to
+    /// terminate the band somewhere, and every exact termination (a cliff, a setback, a
+    /// vertex blend) is a different surface. A rim is the case whose corners all close on
+    /// exact conics — the miter ellipses — with nothing left dangling.</para>
+    /// <para>Filleting EVERY edge of a convex solid is the other classic case and is
+    /// deliberately NOT accepted here: three blended edges meeting at a vertex need a
+    /// spherical corner patch, which only closes when the vertex's third edge is blended
+    /// too — a different construction from rim surgery, and one this engine does not build
+    /// yet.</para>
+    /// </summary>
+    public static IReadOnlyList<BrepFace> RimFacesFor(BrepSolid solid, IEnumerable<BrepEdge> edges)
+    {
+        var remaining = new List<BrepEdge>();
+        foreach (var edge in edges)
+        {
+            if (!remaining.Any(e => ReferenceEquals(e, edge)))
+                remaining.Add(edge);
+        }
+        if (remaining.Count == 0)
+            throw new ArgumentException("No edges were selected.", nameof(edges));
+
+        var targets = new List<BrepFace>();
+        while (remaining.Count > 0)
+        {
+            var face = solid.Faces.FirstOrDefault(f =>
+                !f.IsReversed && f.IsPlanar(out _, out _) &&
+                !targets.Any(t => ReferenceEquals(t, f)) &&
+                f.OuterLoop.Coedges.All(c => remaining.Any(e => ReferenceEquals(e, c.Edge))));
+            if (face is null)
+            {
+                var stranded = remaining[0];
+                throw new NotSupportedException(
+                    $"The edge from {stranded.Curve.PointAt(stranded.Domain.Start)} to " +
+                    $"{stranded.Curve.PointAt(stranded.Domain.End)} is not part of a fully selected planar " +
+                    "face rim. Edge fillets and chamfers are exact for complete rims (every edge bounding " +
+                    "one planar face, or a lone closed circular rim); select the rest of that face's rim, " +
+                    "or use the face-based overload.");
+            }
+            targets.Add(face);
+            remaining.RemoveAll(e => face.OuterLoop.Coedges.Any(c => ReferenceEquals(c.Edge, e)));
+        }
+        return targets;
     }
 
     /// <summary>
@@ -395,8 +503,25 @@ public static class Filleting
                 }
             }
 
-            if (fillet)
-                ValidateTangentContinuity(edges);
+            // Corner classification. Tangent-continuous corners share one offset point
+            // and blend with a circular junction arc; sharp corners MITER — two
+            // equal-radius quarter cylinders whose axes intersect form a bicylinder,
+            // whose branch through the corner's inset top point and dropped bottom point
+            // is an exact ellipse. An arc rim edge meeting anything sharply would pair a
+            // torus with a cylinder, whose intersection is not a conic.
+            var mitered = new bool[n];
+            for (int i = 0; i < n; i++)
+            {
+                var previous = edges[(i + n - 1) % n];
+                mitered[i] = !IsSmoothCorner(previous, edges[i], up);
+                if (!fillet || !mitered[i])
+                    continue;
+                if (previous.Arc is not null || edges[i].Arc is not null)
+                    throw new NotSupportedException(
+                        "A fillet rim's sharp corners must join two straight edges (the exact blend is " +
+                        "the two bands' miter ellipse); a sharp corner at an arc has no exact conic — " +
+                        "make the rim tangent-continuous there, or chamfer.");
+            }
 
             var topPoints = new Vector3d[n];
             var bottomPoints = new Vector3d[n];
@@ -405,7 +530,7 @@ public static class Filleting
                 var previous = edges[(i + n - 1) % n];
                 var current = edges[i];
                 var corner = current.Start;
-                topPoints[i] = TopOffsetCorner(previous, current, corner, top, up, fillet);
+                topPoints[i] = TopOffsetCorner(previous, current, corner, top, up, mitered[i]);
 
                 var dropA = corner + previous.DownDir * side;
                 var dropB = corner + current.DownDir * side;
@@ -413,6 +538,22 @@ public static class Filleting
                     throw new NotSupportedException(
                         "Rim corners must descend consistently on both neighbors (uniform side geometry).");
                 bottomPoints[i] = dropB;
+            }
+
+            // A miter that runs past the far corner has consumed the edge: the shrunk top
+            // loop would fold back on itself and the band would invert. Reject that here,
+            // where the offending edge can still be named, rather than deep in
+            // tessellation.
+            for (int i = 0; i < n; i++)
+            {
+                int next = (i + 1) % n;
+                if (!mitered[i] && !mitered[next])
+                    continue;
+                var tangent = (edges[i].End - edges[i].Start).Normalized();
+                if ((topPoints[next] - topPoints[i]).Dot(tangent) <= Tolerance.Default.Linear)
+                    throw new ArgumentOutOfRangeException(nameof(top),
+                        $"The rim feature consumes the edge from {edges[i].Start} to {edges[i].End}: " +
+                        "its mitered corner offsets cross. Reduce the size.");
             }
 
             var topVertices = topPoints.Select(p => new BrepVertex(p)).ToArray();
@@ -432,7 +573,7 @@ public static class Filleting
             for (int i = 0; i < n; i++)
             {
                 cornerEdges[i] = fillet
-                    ? JunctionArc(topPoints[i], bottomPoints[i], top, up, topVertices[i], bottomVertices[i])
+                    ? JunctionCurve(topPoints[i], bottomPoints[i], top, up, topVertices[i], bottomVertices[i])
                     : new BrepEdge(new Line3d(topPoints[i], bottomPoints[i]), Interval.Unit,
                         topVertices[i], bottomVertices[i]);
             }
@@ -497,7 +638,8 @@ public static class Filleting
                     new BrepCoedge(cornerEdges[next], false),
                 ]);
                 bands.Add(new BrepFace(
-                    BandSurface(edges[i], topPoints[i], bottomPoints[i], top, up, fillet), [loop]));
+                    BandSurface(edges[i], topPoints[i], bottomPoints[i], topPoints[next], bottomPoints[next],
+                        top, up, fillet, mitered[i], mitered[next]), [loop]));
             }
 
             // Domain-driven neighbor surfaces must be trimmed to the lowered extent.
@@ -556,25 +698,20 @@ public static class Filleting
             return info.Use.SameSense ? t : -t;
         }
 
-        private static void ValidateTangentContinuity(List<RimEdgeInfo> edges)
-        {
-            for (int i = 0; i < edges.Count; i++)
-            {
-                var previous = edges[(i + edges.Count - 1) % edges.Count];
-                if (TangentAtEnd(previous).Cross(TangentAtStart(edges[i])).Length > 1e-6)
-                    throw new NotSupportedException(
-                        "Fillet rims must be tangent-continuous (round the sketch corners); chamfer handles sharp corners.");
-            }
-        }
+        /// <summary>Whether consecutive rim edges leave the corner tangent-continuous, so
+        /// one inward offset point serves both. The 1e-6 band is the angular-agreement
+        /// tier: exactly-tangent sketch corners agree far better, and anything a designer
+        /// meant as a corner is orders of magnitude coarser.</summary>
+        private static bool IsSmoothCorner(RimEdgeInfo previous, RimEdgeInfo current, in Vector3d up) =>
+            up.Cross(TangentAtEnd(previous)).Normalized()
+                .Cross(up.Cross(TangentAtStart(current)).Normalized()).Length < 1e-6;
 
         private static Vector3d TopOffsetCorner(
-            RimEdgeInfo previous, RimEdgeInfo current, in Vector3d corner, double amount, in Vector3d up, bool fillet)
+            RimEdgeInfo previous, RimEdgeInfo current, in Vector3d corner, double amount, in Vector3d up, bool miter)
         {
             var inPrev = up.Cross(TangentAtEnd(previous)).Normalized();   // interior is left of travel
             var inCurrent = up.Cross(TangentAtStart(current)).Normalized();
-            // Tangent-continuous corners (finite-difference tangents agree to ~1e-9)
-            // share the offset point; anything sharper miters.
-            if (fillet || inPrev.Cross(inCurrent).Length < 1e-6)
+            if (!miter)
             {
                 // Arc corners offset exactly along the radial — finite-difference
                 // tangents carry ~1e-9 angular error, which is enough to rotate band
@@ -623,22 +760,43 @@ public static class Filleting
             return new BrepEdge(new Line3d(from, to), Interval.Unit, fromVertex, toVertex);
         }
 
-        /// <summary>Fillet band cross-section at a corner: a quarter arc from the top
-        /// tangency down to the side tangency, stored top → bottom.</summary>
-        private static BrepEdge JunctionArc(
+        /// <summary>
+        /// Fillet junction curve at a corner, built top → bottom (matching the loop
+        /// convention and the extruded band generators' sampling).
+        /// <para>At a tangent-continuous corner the two bands share one cross-section: a
+        /// quarter circle of the fillet radius.</para>
+        /// <para>At a sharp corner between straight edges the two bands are equal-radius
+        /// quarter cylinders whose axes cross at <c>center</c> (both axes sit one radius
+        /// below the top plane, on the edges' inward offset lines, and those lines meet at
+        /// the mitered top point). Two equal-radius cylinders with intersecting axes meet
+        /// in two ellipses; the branch through this corner has semi-axes <c>up·r</c> and
+        /// <c>bottom − center</c> — perpendicular by construction, since the drop is
+        /// straight down and the miter offset is horizontal — so the exact conic is read
+        /// straight off the two points the surgery already computed, with no trigonometry
+        /// to round off. The circular case is literally the |bottom − center| = r
+        /// specialization; it keeps its own rational arc so existing rims stay
+        /// bit-identical.</para>
+        /// </summary>
+        private static BrepEdge JunctionCurve(
             in Vector3d topPoint, in Vector3d bottomPoint, double radius, in Vector3d up,
             BrepVertex topVertex, BrepVertex bottomVertex)
         {
-            // Built top → bottom directly (x = up), matching the loop convention and
-            // the extruded band generators' sampling.
             var center = topPoint - up * radius;
-            var yDir = (bottomPoint - center).Normalized();
-            var arc = NurbsCurve.Arc(center, up, yDir, radius, 0, Math.PI / 2);
-            return new BrepEdge(arc, arc.Domain, topVertex, bottomVertex);
+            var toBottom = bottomPoint - center;
+            if (Math.Abs(toBottom.Length - radius) <= Tolerance.Default.Linear)
+            {
+                var arc = NurbsCurve.Arc(center, up, toBottom.Normalized(), radius, 0, Math.PI / 2);
+                return new BrepEdge(arc, arc.Domain, topVertex, bottomVertex);
+            }
+
+            var ellipse = new Ellipse3d(center, up * radius, toBottom);
+            return new BrepEdge(ellipse, new Interval(0, Math.PI / 2), topVertex, bottomVertex);
         }
 
         private static Surface BandSurface(
-            RimEdgeInfo info, in Vector3d topPoint, in Vector3d bottomPoint, double amount, in Vector3d up, bool fillet)
+            RimEdgeInfo info, in Vector3d topPoint, in Vector3d bottomPoint,
+            in Vector3d topNext, in Vector3d bottomNext,
+            double amount, in Vector3d up, bool fillet, bool startMitered, bool endMitered)
         {
             // Orientation notes: the tessellator's outward convention is ∂u × ∂v.
             // Revolved bands (∂u tangential along traversal) need bottom → top
@@ -665,10 +823,46 @@ public static class Filleting
                 return strip.Normal.Dot(up) < 0 ? new PlaneSurface(topPoint, x, -y) : strip;
             }
 
-            var arcCenter = topPoint - up * amount;
+            // Quarter-cylinder band: the axis runs one radius inside the top face and one
+            // radius inside the (perpendicular) side face. A tangent-continuous start
+            // anchors the generator on the shared offset point, which for an arc neighbor
+            // was derived EXACTLY from that arc's radial — finite-difference tangents
+            // carry ~1e-9 of angular error, enough to rotate the generator past the weld
+            // tolerance. A mitered start has no such shared point, so the generator sits
+            // on this edge's own perpendicular inset instead.
+            var travel = info.End - info.Start;
+            var tangent = travel.Normalized();
+            var arcCenter = (startMitered ? info.Start + up.Cross(tangent).Normalized() * amount : topPoint)
+                - up * amount;
             var arcY = (bottomPoint - arcCenter).Normalized();
-            var crossSection = NurbsCurve.Arc(arcCenter, up, arcY, amount, 0, Math.PI / 2);
-            return new ExtrudedSurface(crossSection, info.End - info.Start);
+
+            if (!startMitered && !endMitered)
+            {
+                // Untouched path: the loop covers the whole parameter rectangle, so the
+                // face still tessellates on the natural grid. Keep the extent verbatim.
+                var full = NurbsCurve.Arc(arcCenter, up, arcY, amount, 0, Math.PI / 2);
+                return new ExtrudedSurface(full, travel);
+            }
+
+            // Mitered ends cut across the parallelogram, so the face is genuinely trimmed
+            // — but the surface's grid is domain-driven and must still SPAN every loop
+            // point. Convex miters stop exactly at the original corners (the drop is
+            // straight down), so both extensions are exactly zero and the direction stays
+            // bit-identical to the edge's own vector; a reflex corner pushes the mitered
+            // top point past the edge end and the band grows to reach it.
+            double sEnd = travel.Dot(tangent);
+            double sMin = 0, sMax = sEnd;
+            foreach (var point in new[] { topPoint, topNext, bottomPoint, bottomNext })
+            {
+                double s = (point - arcCenter).Dot(tangent);
+                sMin = Math.Min(sMin, s);
+                sMax = Math.Max(sMax, s);
+            }
+            double extendStart = Math.Max(0, -sMin);
+            double extendEnd = Math.Max(0, sMax - sEnd);
+            var crossSection = NurbsCurve.Arc(
+                arcCenter - tangent * extendStart, up, arcY, amount, 0, Math.PI / 2);
+            return new ExtrudedSurface(crossSection, travel + tangent * (extendStart + extendEnd));
         }
     }
 }

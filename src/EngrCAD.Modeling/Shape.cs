@@ -309,6 +309,51 @@ public abstract class Shape
         return new RimShape(this, fillet: true, radius, radius, faces);
     }
 
+    /// <summary>
+    /// Chamfer by a setback measured IN the selected face and an angle measured FROM it —
+    /// the "distance and angle" spelling; 45° equals <see cref="Chamfer(double, Func{BrepSolid, IEnumerable{BrepFace}})"/>.
+    /// </summary>
+    public Shape ChamferAtAngle(double setback, double angleDegrees, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        if (setback <= 0)
+            throw new ArgumentOutOfRangeException(nameof(setback));
+        if (angleDegrees <= 0 || angleDegrees >= 90)
+            throw new ArgumentOutOfRangeException(nameof(angleDegrees),
+                "The chamfer angle is measured from the chamfered face and must lie strictly between 0° and 90°.");
+        return new RimShape(
+            this, fillet: false, setback, setback * Math.Tan(angleDegrees * Math.PI / 180), faces);
+    }
+
+    /// <summary>
+    /// Fillets selected EDGES rather than faces (e.g.
+    /// <c>s => s.PlanarFacesWithNormal(Vector3d.UnitZ).SelectMany(f => f.RimEdges())</c>,
+    /// or any LINQ over <c>solid.Edges</c> with <c>IsLinear</c>/<c>IsCircular</c>/
+    /// <c>ConvexEdges</c>). The selection is resolved to the rim features that reproduce
+    /// it — see <see cref="Filleting.RimFacesFor"/> for exactly which sets are exact and
+    /// why the rest are refused.
+    /// </summary>
+    public Shape FilletEdges(double radius, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
+    {
+        if (radius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        return new RimShape(this, fillet: true, radius, radius,
+            solid => Filleting.RimFacesFor(solid, edges(solid)));
+    }
+
+    /// <summary>Chamfers selected EDGES; see <see cref="FilletEdges"/>.</summary>
+    public Shape ChamferEdges(double setback, Func<BrepSolid, IEnumerable<BrepEdge>> edges) =>
+        ChamferEdges(setback, setback, edges);
+
+    /// <inheritdoc cref="ChamferEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
+    public Shape ChamferEdges(
+        double topSetback, double sideSetback, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
+    {
+        if (topSetback <= 0 || sideSetback <= 0)
+            throw new ArgumentOutOfRangeException(nameof(topSetback));
+        return new RimShape(this, fillet: false, topSetback, sideSetback,
+            solid => Filleting.RimFacesFor(solid, edges(solid)));
+    }
+
     // ---- Patterns ----
 
     /// <summary>This shape unioned with <paramref name="count"/> − 1 copies stepped
