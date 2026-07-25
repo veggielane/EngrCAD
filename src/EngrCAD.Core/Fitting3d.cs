@@ -67,10 +67,28 @@ public static class Fitting3d
     /// <summary>
     /// PCA oriented bounding box: covariance eigenvectors give the axes, and the box is
     /// shrunk to contain the exact projections onto them (center re-fit, so it is the
-    /// tightest box WITH those axes). PCA axes are a good-fit heuristic, not the
-    /// minimum-volume box (that is an open follow-up; g3 ships the same compromise).
-    /// Degenerate clouds are fine — flat or collinear sets just get zero extents along
-    /// the empty directions. Throws on an empty input.
+    /// tightest box WITH those axes). Degenerate clouds are fine — flat or collinear sets
+    /// just get zero extents along the empty directions. Throws on an empty input.
+    ///
+    /// <para><b>This is a heuristic, not the minimum-volume box</b>, and the gap is not
+    /// small: PCA orients by how the points are DISTRIBUTED, so a dense face and a sparse
+    /// one pull the axes differently even when the shape is identical, and a box tilted
+    /// 45° with many samples along one diagonal comes out visibly wrong. Callers that need
+    /// a guaranteed-minimal box (packing, print-bed fitting, stock selection) must not
+    /// assume this one is it. g3's <c>ContOrientedBox3</c> ships the same compromise.</para>
+    ///
+    /// <para><b>Why the exact method is not here.</b> The minimum-volume enclosing box has
+    /// a face flush with a face of the convex hull (Freeman–Shapira), so the exact
+    /// algorithm is: build the 3D hull, and for each hull face project the hull onto that
+    /// face's plane, take the 2D minimum-area rectangle by rotating calipers
+    /// (<see cref="Fitting2d.MinAreaBox"/> is exactly that), and pair it with the extent
+    /// along the face normal — O(F · h log h), keeping the smallest volume. Every piece
+    /// exists EXCEPT the 3D hull: <c>ConvexHull</c> (quickhull) lives in EngrCAD.Mesh,
+    /// which references Core, so Core cannot call it, and duplicating a second quickhull
+    /// here would be worse than the heuristic. The two honest fixes are to move the hull
+    /// down into Core (it has no mesh dependency beyond its output type) or to expose an
+    /// overload taking a caller-supplied hull as (vertices, triangles); both are backlog
+    /// decisions rather than something to smuggle in under a fitting function.</para>
     /// </summary>
     public static OrientedBox3d FitBox(IReadOnlyList<Vector3d> points)
     {
