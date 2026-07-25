@@ -60,8 +60,10 @@ public static class EngrCad
     {
         CurrentOptions = options;
         scene.PreMesh(options.Quality); // tessellate here, not on the render thread
-        if (options.AmbientOcclusion)
-            AmbientOcclusion.Prime(scene.AllParts); // bake occlusion here too, same reason
+        // Ambient occlusion is deliberately NOT baked here: it was measured at ~12 s on
+        // the demo scene and is the single largest cost of opening a window. The viewport
+        // shows the scene flat-lit immediately and streams each part's occlusion in as its
+        // background bake finishes (see AmbientOcclusion.BakeInBackground).
         InitialScene = scene;
         WindowTitle = options.Title;
         var userReady = options.OnViewportReady;
@@ -292,8 +294,9 @@ public static class EngrCad
             {
                 var scene = factory();
                 scene.PreMesh(CurrentOptions.Quality); // heavy lifting stays on this worker thread
-                if (CurrentOptions.AmbientOcclusion)
-                    AmbientOcclusion.Prime(scene.AllParts);   // ... including the AO bake
+                // Occlusion is not baked here — the reloaded scene appears flat-lit at
+                // once and darkens as the viewport's background bake catches up, which is
+                // what keeps a hot-reload edit feeling instant.
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => Host?.SetScene(scene));
                 string status = $"reloaded at {DateTime.Now:HH:mm:ss} — {scene.AllParts.Count()} part(s)";
                 viewport.ShowStatus(status);

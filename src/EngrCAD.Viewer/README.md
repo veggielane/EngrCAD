@@ -49,16 +49,31 @@ Dark-themed layout around one shared GL viewport:
     with no FBO, no depth/normal prepass, and no blur that would resolve differently
     at the offscreen pass's 2x supersampled size. It also costs nothing per frame and
     survives section planes, translucency, edges and annotations untouched.
-  - *Cost*: a one-off CPU bake, cached per display mesh and run on the same worker
-    thread as `Scene.PreMesh` (so a scene load or hot reload never stalls the render
-    thread) — a few ms for a simple part, ~0.3 s for a busy multi-part tab at 48
-    segments/circle. Two deterministic guards bound it: a **ray budget** (2M rays per
-    bake) halves the per-vertex ray count on very high vertex counts, and meshes above
-    **80k triangles skip the bake entirely** — in lattice-like geometry every ray walks
-    a labyrinth instead of escaping and the per-ray cost climbs by an order of
-    magnitude (a 100k-triangle gyroid measured ~10 s), which is not worth a stall
-    before the window appears. Both rules are pure functions of the mesh, so they
-    cannot make the window and the headless render disagree.
+  - *Cost, and why it **streams***: the bake is honest ray casting and it is not cheap —
+    measured on the demo scene at **12.3 s total**, of which the M8 stud is 3.0 s and
+    the tapped block 5.5 s — and it already saturates every core, so more parallelism
+    has nothing left to give. Nothing therefore waits for it. The window shows the
+    scene **immediately, flat-lit**, and each part's occlusion arrives as its own bake
+    finishes (`AmbientOcclusion.BakeInBackground`, **cheapest part first** so most of a
+    scene lights up in the first moments, with the whole job reported once in the status
+    bar). This is not a placeholder state: a mesh VAO with no occlusion buffer reads the
+    context constant 1.0, which is *exactly* the AO-off shading, so an unbaked part is
+    the correct flat-lit render of that part and the only thing the bake changes is that
+    crevices darken. The bake queue follows the **visible tab**, so a tab you never open
+    is never baked. Measured on the demo (Debug): time-to-window **27.1 s → 14.2 s**,
+    with the first tab's occlusion landing 0.2 s later and the threads tab's 5.7 s after
+    you switch to it. `TryGet` (a pure cache read) is the only lookup on the render
+    thread — a bake can never land there. Two deterministic guards bound the work
+    itself: a **ray budget** (2M rays per bake) halves the per-vertex ray count on very
+    high vertex counts, and meshes above **80k triangles skip the bake entirely** — in
+    lattice-like geometry every ray walks a labyrinth instead of escaping and the
+    per-ray cost climbs by an order of magnitude (a 100k-triangle gyroid measured
+    ~10 s). Both rules are pure functions of the mesh, so they cannot make the window
+    and the headless render disagree.
+  - *Headless is still eager*: `RenderToImage` bakes inline, because it is one-shot and
+    must be deterministic. The streamed and the inline paths produce the **same floats**
+    (same cache, same `Bake`), so window/offscreen parity holds — the window simply
+    reaches it a second or two after it opens.
   - Two details keep vertex-resolution shading honest. Vertices are grouped by
     position **and smoothing group** (a 50-degree crease), so a hole rim's top-face
     copy stays bright while its bore-wall copy darkens — averaging the two used to drag
