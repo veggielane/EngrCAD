@@ -125,6 +125,24 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   (per-call validation landed); avoid `DrillShape`'s read-only validation lowering
   (the body lowers twice on the B-Rep path); drill-tip angles, thread
   cosmetics/annotation, hole tables.
+- [ ] **B-Rep boolean performance — superlinear in tool faces** (measured tracing the
+  demo's slow startup). Engraving into a plate, Arial, `Shape.Box - Shape.Text`:
+  1 glyph / 19 faces = 3.1 s, 2 glyphs / 30 = 5.0 s, 4 glyphs / 89 = 33.1 s,
+  7 glyphs / 151 = **62.1 s** — while tessellating the *result* is only 1.5 s and is
+  independent of `segmentsPerCircle`, so essentially all of it is `BrepBoolean`. The
+  same cost shows up in ordinary drilling: five csk/cbore/Trisert holes in one box take
+  **14.4 s**. Curved glyphs are worst because every Bézier becomes its own extruded
+  tool face. Profile before optimizing; two things worth checking first: whether the
+  face-pair prefilter is doing its job (`BrepQueries.Bounds` became deliberately
+  conservative-over for trimmed fragments in the sphere-boolean fix, which would pass
+  far more pairs than necessary), and whether the cost is really in face *splitting*
+  or `SealSeams` rather than in pair intersection.
+- [ ] **`Scene.PreMesh` is sequential** — 27 independent parts took 27.2 s wall-clock on
+  a multi-core machine, dominated by two parts. Meshing distinct parts in parallel
+  (`ParallelFor` exists; `Part.GetMesh` already locks per part, and `AllParts` dedupes
+  by reference so each part is meshed once) would cut demo/docs startup to roughly the
+  slowest single part. Verify thread-safety of `Part.TryGetSolid`'s cached lowering and
+  of any shared Shape-lowering memoization first.
 - [ ] **Boolean/splitting edge cases** (all now LOUD rather than silent — sketch-
   extrusion pockets/slots/engraving are exact as of the bounded-planar-carrier fix) —
   a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of

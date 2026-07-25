@@ -166,4 +166,39 @@ threads.Add(new Part("tapped block (M6)",
     Matrix4d.CreateTranslation((2.6, 0, -1.1)) * Matrix4d.CreateScale(threadScale))
 { DisplayMode = DisplayMode.Translucent });
 
+// ---- tab 9: modeled text — TrueType outlines cut and raised, exactly ----
+// Glyph contours are lines + quadratic Béziers, which is exactly the sketch
+// vocabulary, so nothing is flattened: both parts below are single-shell B-Reps.
+// Dimensions in mm (a 70 mm nameplate), scaled 0.06× to sit beside the other tabs.
+string fontsDir = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+string? fontPath = new[] { "arial.ttf", "segoeui.ttf", "verdana.ttf", "tahoma.ttf" }
+    .Select(name => Path.Combine(fontsDir, name))
+    .FirstOrDefault(File.Exists);
+
+if (fontPath is null)
+{
+    Console.WriteLine("text tab skipped: no TrueType font found in " + fontsDir);
+}
+else
+{
+    var font = TrueTypeFont.Load(fontPath);
+    var text = scene.AddTab("text");
+    var centered = new TextStyle { Align = TextAlign.Center };
+
+    // ENGRAVED, exact in B-Rep: a plain subtraction. The sketch plane sits at the
+    // pocket floor and the tool overshoots the top face, the same rule Drill follows
+    // so the boolean never meets coplanar faces.
+    //
+    // Deliberately a short, straight-glyph label: every Bézier in a glyph outline
+    // becomes its own extruded tool face, and BrepBoolean's cost grows superlinearly
+    // in tool faces — "INLET" (51 faces) lowers in ~9 s where "ENGRCAD" at this size
+    // (151 faces, curved glyphs) takes ~62 s. See the boolean-performance item in
+    // todo.md; a port label is the honest demo anyway.
+    var engravePocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+    var engraved = Shape.Box(40, 16, 4)
+                 - Shape.Text("INLET", font, 9, height: 1.5, engravePocket, centered);
+    text.Add(new Part("engraved label", engraved, Palette.Steel,
+        Matrix4d.CreateScale(0.1)));
+}
+
 EngrCad.Show(scene, "EngrCAD demo");
