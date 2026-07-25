@@ -1,5 +1,6 @@
 using EngrCAD.BRep;
 using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
 
 namespace EngrCAD.Modeling;
 
@@ -181,6 +182,89 @@ public sealed class Sketch
     /// <summary>The sketch as an exact 2D signed distance field — compose it with
     /// <c>Sdf.ExtrudedRegion</c>/<c>Sdf.RevolvedRegion</c> or your own fields.</summary>
     public Implicit.IPlanarRegion ToRegion() => new SketchRegion(this);
+
+    // ---- polygonal regions + 2D booleans ----
+
+    /// <summary>
+    /// Default flattening tolerance for <see cref="ToRegions(double)"/> and the boolean
+    /// sugar: no chord deviates more than 1 µm (model units are millimetres by convention)
+    /// from the true arc or bézier.
+    /// </summary>
+    public const double DefaultChordTolerance = 1e-3;
+
+    /// <summary>
+    /// The sketch as polygonal <see cref="Region2d"/>s — the currency of 2D booleans,
+    /// <c>Profile.FromRegion</c>, and any consumer that wants explicit loops.
+    ///
+    /// <para><b>Fidelity contract.</b> Arcs and béziers are FLATTENED to polylines within
+    /// <paramref name="chordTolerance"/>; lines are exact. A sketch passed straight to
+    /// <c>Shape.Extrude</c>/<c>Revolve</c>/<c>Sweep</c> keeps its exact curves (B-Rep gets
+    /// exact NURBS profiles, implicit gets the exact 2D signed distance of
+    /// <see cref="ToRegion"/>) — going through a region is a deliberate approximation, and
+    /// anything built from the result inherits it. Exact curved 2D booleans are future work.</para>
+    ///
+    /// <para>Nesting is re-derived by <see cref="Region2d.FromLoops"/>, so hole loops are
+    /// detected rather than declared.</para>
+    /// </summary>
+    public IReadOnlyList<Region2d> ToRegions(double chordTolerance = DefaultChordTolerance)
+    {
+        var loops = new List<IReadOnlyList<Vector2d>>();
+        CollectLoops(this, chordTolerance, loops);
+        return Region2d.FromLoops(loops);
+    }
+
+    /// <summary>
+    /// Several sketches read as ONE bag of loops, sorted into regions by containment —
+    /// automatic hole detection without <see cref="WithHole"/>: draw the plate outline and
+    /// its bolt holes as separate sketches, pass them all, and the nesting falls out. Same
+    /// flattening contract as <see cref="ToRegions(double)"/>.
+    /// </summary>
+    public static IReadOnlyList<Region2d> ToRegions(
+        IEnumerable<Sketch> loops, double chordTolerance = DefaultChordTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(loops);
+        var flattened = new List<IReadOnlyList<Vector2d>>();
+        foreach (var sketch in loops)
+            CollectLoops(sketch, chordTolerance, flattened);
+        return Region2d.FromLoops(flattened);
+    }
+
+    /// <summary>Everything covered by this sketch or <paramref name="other"/>, as regions
+    /// (flattened — see <see cref="ToRegions(double)"/>'s fidelity contract).</summary>
+    public IReadOnlyList<Region2d> Union(Sketch other, double chordTolerance = DefaultChordTolerance) =>
+        Region2dBoolean.Union(ToRegions(chordTolerance), Requires(other).ToRegions(chordTolerance));
+
+    /// <summary>Everything covered by both this sketch and <paramref name="other"/>, as regions.</summary>
+    public IReadOnlyList<Region2d> Intersect(Sketch other, double chordTolerance = DefaultChordTolerance) =>
+        Region2dBoolean.Intersection(ToRegions(chordTolerance), Requires(other).ToRegions(chordTolerance));
+
+    /// <summary>This sketch with <paramref name="other"/> cut away, as regions — the plate
+    /// with a pocket, the washer, the slotted bracket.</summary>
+    public IReadOnlyList<Region2d> Subtract(Sketch other, double chordTolerance = DefaultChordTolerance) =>
+        Region2dBoolean.Difference(ToRegions(chordTolerance), Requires(other).ToRegions(chordTolerance));
+
+    private static Sketch Requires(Sketch other) =>
+        other ?? throw new ArgumentNullException(nameof(other));
+
+    private static void CollectLoops(Sketch sketch, double chordTolerance, List<IReadOnlyList<Vector2d>> into)
+    {
+        if (!(chordTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(chordTolerance), "Chord tolerance must be positive.");
+        into.Add(FlattenLoop(sketch.Segments, chordTolerance));
+        foreach (var hole in sketch.Holes)
+            into.Add(FlattenLoop(hole.Segments, chordTolerance));
+    }
+
+    /// <summary>Each segment contributes its start point only, so the chain's joints appear
+    /// exactly once and the loop closes implicitly.</summary>
+    private static IReadOnlyList<Vector2d> FlattenLoop(
+        IReadOnlyList<SketchSegment> segments, double chordTolerance)
+    {
+        var points = new List<Vector2d>();
+        foreach (var segment in segments)
+            segment.Flatten(chordTolerance, points);
+        return points;
+    }
 
     /// <summary>B-Rep profiles in sketch-local coordinates (the XY plane, z = 0);
     /// consumers place them with a transform.</summary>

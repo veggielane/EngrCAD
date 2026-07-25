@@ -128,6 +128,41 @@ revolve axis (vases, domes) work everywhere on full turns: on-axis stretches rev
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
 
+### 2D regions and sketch booleans
+
+Sketches also lower to **polygonal `Region2d`s** (Core's `Geometry2` — outer loop +
+holes, exact containment, exact area) which support union/intersection/difference:
+
+```csharp
+var plate  = Sketch.Rectangle(20, 10);
+var pocket = Sketch.Rectangle(6, 4);
+
+var region = plate.Subtract(pocket)[0];              // a hole is CREATED by the cut
+var (outer, holes) = Profile.FromRegion(region, SketchPlane.XY.Frame);
+var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
+```
+
+- `sketch.ToRegions(chordTolerance)` → regions; `Sketch.ToRegions(sketches, tol)` takes
+  SEVERAL sketches as one bag of loops and **detects the nesting itself** — draw the
+  plate outline and its bolt holes as separate sketches and the holes fall out, no
+  `WithHole` needed. (`Region2d.FromLoops` is the classifier: even containment depth =
+  outer, odd = hole of its deepest container, so an island inside a hole is its own
+  region.)
+- `Union` / `Intersect` / `Subtract` on sketches (and on `Region2d`) run Core's
+  arrangement-based `Region2dBoolean`.
+- `Profile.FromRegion(region, frame)` (BRep) returns the `(outer, holes)` pair the
+  solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`.
+
+**Fidelity contract — read this before using regions for curved sketches.** Arcs and
+béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,
+sagitta-sized for arcs, adaptive de Casteljau for béziers); lines are exact. Anything
+built from a region inherits that approximation. A sketch handed straight to
+`Shape.Extrude/Revolve/Sweep` is untouched and keeps its **exact** curves — exact NURBS
+profiles for B-Rep and the exact 2D signed distance (`ToRegion()`, singular) for
+implicit, which is what makes sketch extrusions implicit-*Native*. Exact curved 2D
+booleans are a documented follow-up (todo.md); until then, prefer 3D booleans on
+exact solids when curved boundaries must stay exact.
+
 ## Parametric features (FeatureScript, but plain C#)
 
 A feature is a class with `[Param]` properties and an `Apply` body; a model is an
