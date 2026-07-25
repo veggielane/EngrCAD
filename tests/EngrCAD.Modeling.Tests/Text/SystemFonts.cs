@@ -1,4 +1,3 @@
-using EngrCAD.Modeling.Text;
 
 namespace EngrCAD.Modeling.Tests.Text;
 

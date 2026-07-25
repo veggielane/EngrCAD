@@ -2,7 +2,6 @@ using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Mesh;
-using EngrCAD.Modeling.Text;
 
 namespace EngrCAD.Modeling;
 
@@ -389,18 +388,24 @@ public abstract class Shape
     /// <para><b>Engraving and embossing</b> need no special operation: place the text
     /// on a face with <c>SketchPlane.On(face)</c> (or an explicit
     /// <c>SketchPlane.At(...)</c>) and union it to emboss, or sink the plane by the
-    /// depth and subtract it to engrave.</para>
+    /// depth and subtract a tool that overshoots the face to engrave. Note the honest
+    /// boundary documented in the Modeling README: the text itself is exact in every
+    /// representation, but <em>booleans between lettering and a body</em> are limited by
+    /// the B-Rep boolean engine's handling of sketch-extrusion tools (a limitation with
+    /// nothing to do with text). Route those through the implicit lowering —
+    /// <c>Shape.From(result.ToImplicit())</c> — where the boolean is exact.</para>
     /// </summary>
     /// <example>
     /// <code>
     /// var font = TrueTypeFont.Load(fontPath);
-    /// var plate = Shape.Box(60, 20, 4);
+    /// var plate = Shape.Box(70, 22, 4);                                  // top face at z = 2
     /// var top = SketchPlane.At((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+    /// var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+    /// var style = new TextStyle { Align = TextAlign.Center };
     ///
-    /// var label = Shape.Text("ENGRCAD", font, size: 9, height: 1,
-    ///                        top, new TextStyle { Align = TextAlign.Center });
-    /// var embossed = plate | label;                              // raised lettering
-    /// var engraved = plate - label.Translate(0, 0, -1);          // sunk 1 mm into the face
+    /// var badge = Shape.Text("ENGRCAD", font, size: 12, height: 1.2, top, style);
+    /// var embossed = plate | badge;
+    /// var engraved = plate - Shape.Text("ENGRCAD", font, 12, 1.5, pocket, style);
     /// </code>
     /// </example>
     /// <exception cref="ArgumentException">The text draws nothing (empty or all

@@ -1,4 +1,4 @@
-namespace EngrCAD.Modeling.Text;
+namespace EngrCAD.Modeling;
 
 /// <summary>Horizontal placement of each line relative to x = 0.</summary>
 public enum TextAlign

@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace EngrCAD.Modeling.Text;
+namespace EngrCAD.Modeling;
 
 /// <summary>
 /// Thrown when font bytes are not a font we can read: wrong container, an outline

@@ -310,28 +310,38 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
 - `TextOutlines` also measures: `AdvanceWidth` (exact typographic width, never touches
   an outline), `Bounds` (the actual ink) and `LineHeight`.
 
-**Embossing and engraving need no new operation** — place the text on a face and
-boolean it:
+### Embossing and engraving
+
+No new operation is needed — place the text on a face with `SketchPlane.On(face)` (or an
+explicit `SketchPlane.At`) and boolean it. The engraving tool deliberately **overshoots**
+the face (1.5 deep for a 1 mm pocket), the same rule `Shape.Drill` follows so booleans
+never see coplanar faces:
 
 ```csharp
-var plate = Shape.Box(60, 20, 4);                                   // top face at z = 2
+var plate = Shape.Box(70, 22, 4);                                   // top face at z = 2
 var top = SketchPlane.On(plate.ToBrep().PlanarFacesWithNormal(Vector3d.UnitZ).First());
+var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);   // 1 mm down
 var style = new TextStyle { Align = TextAlign.Center };
 
-var embossed = plate | Shape.Text("EC", font, 8, height: 1, top, style);        // raised
+var embossed = plate | Shape.Text("ENGRCAD", font, 12, height: 1.2, top, style);
+var engraved = plate - Shape.Text("ENGRCAD", font, 12, height: 1.5, pocket, style);
 
-var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);         // 1 mm down
-var engraved = plate - Shape.Text("EC", font, 8, height: 1.5, pocket, style);   // tool overshoots
+scene.Add(new Part("badge", Shape.From(engraved.ToImplicit())));    // see the caveat below
 ```
 
-The engraving tool deliberately **overshoots** the face (1.5 deep for a 1 mm pocket), the
-same rule `Shape.Drill` follows so booleans never see coplanar faces. One honest
-boundary: **engraving is exact through the implicit route but not yet through B-Rep** —
-subtracting a sketch-extrusion tool that pokes out of one face is a pre-existing gap in
-the boolean engine (it is not text-specific: `Shape.Box(...) - Shape.Extrude(Sketch.Rectangle(...), ...)`
-fails the same way, while a `Shape.Box` or `Sketch.Circle` tool is fine). Until that
-lands, engrave through the field: `Shape.From(engraved.ToImplicit()).ToMesh()`. Embossing
-by union is B-Rep-native today.
+**Caveat, and it is the one thing to know about this feature.** `Shape.Text` on its own
+is Native and robust in every representation — a seven-letter word lowers to a valid
+multi-shell B-Rep and a closed mesh. But **booleans between lettering and a body are
+limited by the existing B-Rep boolean engine**: glyph side walls are sketch extrusions,
+and the marching tracer that cuts them against a face only closes its loops in simple
+cases. In practice one or two embossed glyphs come out clean; longer words, and *every*
+engraving (a subtraction whose tool pokes out of one face), fail. This is **not
+text-specific** — `Shape.Box(60, 20, 4) - Shape.Extrude(Sketch.Rectangle(10, 5), 1.5, pocket)`
+fails identically with no text involved, while a `Shape.Box` or `Sketch.Circle` tool is
+fine. Until that gap closes, do body∩text booleans **through the implicit route**, where
+the subtraction is exact: `Shape.From(shape.ToImplicit()).ToMesh(quality)` (raise
+`SdfResolution` for crisp lettering). For a purely visual plate, adding the body and the
+lettering as two `Part`s keeps both exact and skips the boolean entirely.
 
 ## The document model: Part, Assembly, Tab, Scene
 

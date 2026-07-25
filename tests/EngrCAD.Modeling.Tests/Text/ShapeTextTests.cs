@@ -1,6 +1,5 @@
 using EngrCAD.BRep;
 using EngrCAD.Core;
-using EngrCAD.Modeling.Text;
 using Xunit;
 
 namespace EngrCAD.Modeling.Tests.Text;
@@ -100,7 +99,10 @@ public class ShapeTextTests
     public void Text_EmbossesOntoAFaceSelectedWithSketchPlaneOn()
     {
         // The documented embossing pattern: sketch on the face, union. No new operation
-        // is needed - SketchPlane.On + the existing boolean do the whole job.
+        // is needed - SketchPlane.On + the existing boolean do the whole job. Kept to a
+        // single glyph on purpose: body-vs-lettering booleans are limited by the B-Rep
+        // engine's handling of sketch-extrusion tools (README caveat), so this locks in
+        // the simple case rather than pretending longer words work.
         var plate = Shape.Box(40, 20, 4);                             // top face at z = 2
         var top = plate.ToBrep().PlanarFacesWithNormal(Vector3d.UnitZ).First();
 
@@ -117,8 +119,8 @@ public class ShapeTextTests
     {
         // Engraving subtracts a text tool that overshoots the face (the same rule
         // Shape.Drill follows so booleans never see coplanar faces). The subtraction is
-        // exact as a signed distance field; the B-Rep route is limited by the boolean
-        // engine's handling of sketch-extrusion tools (see the Modeling README).
+        // exact as a signed distance field, which is the route the README documents;
+        // the B-Rep route cannot do it yet (sketch-extrusion tools, not a text problem).
         var plate = Shape.Box(40, 20, 4);                             // z in [-2, 2]
         var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
         var field = (plate - Shape.Text("I", Font, Size, height: 1.5, pocket)).ToImplicit();
@@ -126,6 +128,39 @@ public class ShapeTextTests
         Assert.True(field.Evaluate((10, 0, 0)) < 0, "solid plate away from the lettering");
         Assert.True(field.Evaluate((2, 3.5, 1.5)) > 0, "inside the engraved pocket");
         Assert.True(field.Evaluate((2, 3.5, 0.5)) < 0, "below the 1 mm pocket floor");
+    }
+
+    [Fact]
+    public void Text_EngravedBodyPolygonizesToAClosedSolid()
+    {
+        // The workaround the README documents for the boolean gap, locked down: lower
+        // the engraved body to its exact field and polygonize THAT.
+        var plate = Shape.Box(40, 20, 4);
+        var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+        var engraved = plate - Shape.Text("IO", Font, Size, height: 1.5, pocket);
+
+        var mesh = Shape.From(engraved.ToImplicit()).ToMesh(new MeshQuality { SdfResolution = 96 });
+
+        Assert.True(mesh.IsClosed);
+        // 1 mm deep over both glyph sections; Surface Nets rounds the corners, so a
+        // +/-20 % band on the removed volume is the honest expectation.
+        double removed = (BarArea + RingArea) * 1;
+        Assert.InRange(mesh.Volume(), 40 * 20 * 4 - removed * 1.2, 40 * 20 * 4 - removed * 0.8);
+    }
+
+    [Fact]
+    public void Text_LongerWordsStayValidOnTheirOwn()
+    {
+        // Whole words are fine as standalone geometry - it is only booleans BETWEEN
+        // lettering and a body that the B-Rep engine cannot take yet.
+        var shape = Shape.Text("IOCA IOC", Font, Size, height: 2);
+
+        var solid = shape.ToBrep();
+        solid.Validate();
+        Assert.Equal(8, solid.Shells.Count);          // 7 letters, and 'A' is two pieces
+        var mesh = shape.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.True(mesh.Volume() > 0);
     }
 
     [Fact]

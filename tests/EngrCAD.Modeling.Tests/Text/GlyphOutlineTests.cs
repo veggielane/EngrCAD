@@ -1,5 +1,4 @@
 using EngrCAD.Core;
-using EngrCAD.Modeling.Text;
 using Xunit;
 
 namespace EngrCAD.Modeling.Tests.Text;

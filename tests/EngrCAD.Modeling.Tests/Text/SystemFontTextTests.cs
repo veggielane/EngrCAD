@@ -1,4 +1,5 @@
-using EngrCAD.Modeling.Text;
+using EngrCAD.BRep;
+using EngrCAD.Core;
 using Xunit;
 
 namespace EngrCAD.Modeling.Tests.Text;
@@ -42,6 +43,63 @@ public class SystemFontTextTests
 
         // A colon really is two disjoint outlines.
         Assert.Equal(2, TextOutlines.GlyphSketches(font, ':', 10).Count);
+    }
+
+    [SkippableTheory]
+    [InlineData('I', 0)]        // a plain bar
+    [InlineData('O', 1)]        // one counter
+    [InlineData('8', 2)]        // two counters
+    public void RealFont_ExtrudedGlyphIsAClosedSolidOfTheRightGenus(char character, int counters)
+    {
+        Skip.If(SystemFonts.SkipReason is not null, SystemFonts.SkipReason);
+
+        var mesh = Shape.Text(character.ToString(), SystemFonts.Font, size: 10, height: 2).ToMesh();
+
+        Assert.True(mesh.IsClosed, $"the extrusion of '{character}' is not closed");
+        Assert.True(mesh.Volume() > 0, $"the extrusion of '{character}' has non-positive volume");
+
+        // A prism over a region with n holes is a genus-n surface, so V - E + F = 2 - 2n.
+        // This is the decisive "'O' has exactly one hole" assertion: a counter that had
+        // been classified as an outline (or dropped) would change the genus.
+        int euler = mesh.VertexCount - mesh.EdgeCount + mesh.FaceCount;
+        Assert.Equal(2 - 2 * counters, euler);
+    }
+
+    [SkippableFact]
+    public void RealFont_WordExtrudesToOneClosedSolidPerGlyph()
+    {
+        Skip.If(SystemFonts.SkipReason is not null, SystemFonts.SkipReason);
+
+        var shape = Shape.Text("Hi", SystemFonts.Font, size: 10, height: 2);
+        var solid = shape.ToBrep();
+        solid.Validate();
+
+        // 'H' is one piece, 'i' is a stem plus a tittle: three disjoint shells.
+        Assert.Equal(3, solid.Shells.Count);
+        var mesh = shape.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.True(mesh.Volume() > 0);
+    }
+
+    [SkippableFact]
+    public void RealFont_EmbossedPlateAddsExactlyTheLetteringVolume()
+    {
+        Skip.If(SystemFonts.SkipReason is not null, SystemFonts.SkipReason);
+        var font = SystemFonts.Font;
+
+        var plate = Shape.Box(60, 20, 4);                       // top face at z = 2, volume 4800
+        var top = SketchPlane.At((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+        var style = new TextStyle { Align = TextAlign.Center };
+        const double height = 1;
+
+        var embossed = plate | Shape.Text("EC", font, size: 8, height, top, style);
+        var mesh = embossed.ToMesh();
+        double lettering = TextOutlines.Sketches("EC", font, 8, style).Sum(s => s.Area());
+
+        Assert.True(mesh.IsClosed);
+        // The curved 'C' is tessellated, so the meshed volume sits just under the exact
+        // sum; a 0.5 % band is far tighter than any classification mistake.
+        Assert.Equal(4800 + lettering * height, mesh.Volume(), 0.005 * lettering * height);
     }
 
     [SkippableFact]

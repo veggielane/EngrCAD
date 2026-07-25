@@ -1,6 +1,6 @@
 using EngrCAD.Core;
 
-namespace EngrCAD.Modeling.Text;
+namespace EngrCAD.Modeling;
 
 /// <summary>
 /// Text as 2D geometry: glyph outlines converted to closed <see cref="Sketch"/>es —

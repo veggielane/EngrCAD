@@ -1,6 +1,6 @@
 using EngrCAD.Core;
 
-namespace EngrCAD.Modeling.Text;
+namespace EngrCAD.Modeling;
 
 /// <summary>
 /// One point of a TrueType glyph contour, in font units (the em square, y up).

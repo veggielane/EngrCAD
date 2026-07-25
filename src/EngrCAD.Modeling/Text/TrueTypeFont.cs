@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using System.Text;
 using EngrCAD.Core;
 
-namespace EngrCAD.Modeling.Text;
+namespace EngrCAD.Modeling;
 
 /// <summary>
 /// A TrueType font read straight from its bytes — no third-party dependency, in the
