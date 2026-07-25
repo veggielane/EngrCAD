@@ -64,9 +64,12 @@ public static class OffscreenRenderer
         IReadOnlyList<Part> parts, int width, int height, CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
-        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault) =>
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
-            width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion);
+            width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
+            sectionPlanes, sectionCombine);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
@@ -79,7 +82,9 @@ public static class OffscreenRenderer
         CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
-        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -92,7 +97,7 @@ public static class OffscreenRenderer
             ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var oversized = Draw(gl, instances, width * supersample, height * supersample, camera, furniture,
-            style, sectionAxis, sectionOffset, ambientOcclusion, supersample);
+            style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -138,10 +143,12 @@ public static class OffscreenRenderer
         CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
-        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection)
     {
         var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion);
+            ambientOcclusion, sectionPlanes, sectionCombine);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -152,10 +159,12 @@ public static class OffscreenRenderer
         CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
-        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion);
+            ambientOcclusion, sectionPlanes, sectionCombine);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -168,7 +177,8 @@ public static class OffscreenRenderer
 
     private static unsafe byte[] Draw(
         GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture,
-        ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion, int supersample)
+        ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
+        IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample)
     {
         // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
         string header = ViewerShaders.Header(es: true);
@@ -186,10 +196,12 @@ public static class OffscreenRenderer
             bounds = bounds.Union(instance.Bounds());
         var cam = camera ?? DefaultCamera(bounds);
 
-        bool section = sectionOffset.HasValue;
-        float sectionEnabledF = section ? 1f : 0f;
-        var axis = sectionAxis.Direction();
-        float sectionOffsetF = (float)(sectionOffset ?? 0);
+        // One plane set for the whole pass: an explicit list wins, otherwise the
+        // axis+offset pair builds the single-plane cut (null offset = no section).
+        IReadOnlyList<SectionPlane> planes = sectionPlanes is { Count: > 0 } explicitPlanes
+            ? [.. explicitPlanes.Take(ViewerShaders.MaxSectionPlanes)]
+            : sectionOffset.HasValue ? [SectionPlane.On(sectionAxis, sectionOffset.Value)] : [];
+        bool section = planes.Count > 0;
 
         gl.Viewport(0, 0, (uint)width, (uint)height);
         gl.ClearColor(0.11f, 0.12f, 0.14f, 1f);
@@ -219,17 +231,15 @@ public static class OffscreenRenderer
         int uLineProj = gl.GetUniformLocation(lineProgram, "uProj");
         int uLineColor = gl.GetUniformLocation(lineProgram, "uColor");
         int uLineSectionEnabled = gl.GetUniformLocation(lineProgram, "uSectionEnabled");
-        int uLineSectionAxis = gl.GetUniformLocation(lineProgram, "uSectionAxis");
-        int uLineSectionOffset = gl.GetUniformLocation(lineProgram, "uSectionOffset");
+        var lineSection = new SectionUniforms(gl, lineProgram);
         CameraMath.WriteColumnMajor(view, matrix);
         gl.UniformMatrix4(uLineView, 1, false, matrix);
         CameraMath.WriteColumnMajor(proj, matrix);
         gl.UniformMatrix4(uLineProj, 1, false, matrix);
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(uLineModel, 1, false, matrix);
-        gl.Uniform3(uLineSectionAxis, (float)axis.X, (float)axis.Y, (float)axis.Z);
-        gl.Uniform1(uLineSectionOffset, sectionOffsetF);
-        gl.Uniform1(uLineSectionEnabled, 0f);   // grid/axes are scene furniture — never clipped
+        lineSection.Write(gl, planes, sectionCombine);
+        lineSection.SetEnabled(gl, false);   // grid/axes are scene furniture — never clipped
 
         if (furniture)
         {
@@ -331,9 +341,7 @@ public static class OffscreenRenderer
         gl.Uniform3(uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uHighlight"), 0f);  // no selection offscreen
-        gl.Uniform1(gl.GetUniformLocation(meshProgram, "uSectionEnabled"), sectionEnabledF);
-        gl.Uniform3(gl.GetUniformLocation(meshProgram, "uSectionAxis"), (float)axis.X, (float)axis.Y, (float)axis.Z);
-        gl.Uniform1(gl.GetUniformLocation(meshProgram, "uSectionOffset"), sectionOffsetF);
+        new SectionUniforms(gl, meshProgram).Write(gl, planes, sectionCombine);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
             ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
         gl.Uniform1(uAlpha, 1f);
@@ -358,7 +366,7 @@ public static class OffscreenRenderer
         // Line overlay: feature edges for shaded-with-edges parts, full wireframe for
         // wireframe parts. Model lines are section-clipped consistently with fills.
         gl.UseProgram(lineProgram);
-        gl.Uniform1(uLineSectionEnabled, sectionEnabledF);
+        lineSection.SetEnabled(gl, section);   // model lines clip with the fills
         foreach (var d in draws)
         {
             switch (d.Mode)
@@ -393,10 +401,7 @@ public static class OffscreenRenderer
             CameraMath.WriteColumnMajor(proj, matrix);
             gl.UniformMatrix4(gl.GetUniformLocation(pointProgram, "uProj"), 1, false, matrix);
             gl.Uniform1(gl.GetUniformLocation(pointProgram, "uPointSize"), 4f * supersample);
-            gl.Uniform1(gl.GetUniformLocation(pointProgram, "uSectionEnabled"), sectionEnabledF);
-            gl.Uniform3(gl.GetUniformLocation(pointProgram, "uSectionAxis"),
-                (float)axis.X, (float)axis.Y, (float)axis.Z);
-            gl.Uniform1(gl.GetUniformLocation(pointProgram, "uSectionOffset"), sectionOffsetF);
+            new SectionUniforms(gl, pointProgram).Write(gl, planes, sectionCombine);
             foreach (var d in draws)
             {
                 if (d.Mode != EffectiveMode.Points)
@@ -470,10 +475,10 @@ public static class OffscreenRenderer
             var allVisible = new bool[instances.Count];
             Array.Fill(allVisible, true);
             gl.UseProgram(lineProgram);
-            gl.Uniform1(uLineSectionEnabled, sectionEnabledF);
+            lineSection.SetEnabled(gl, true);
             new SectionContourRenderer().Draw(
-                gl, instances, allVisible, axis, sectionOffset!.Value,
-                lineProgram, uLineModel, uLineColor, matrix, report: static _ => { });
+                gl, instances, allVisible, planes, sectionCombine,
+                lineProgram, uLineModel, uLineColor, lineSection, matrix, report: static _ => { });
         }
 
         // Annotations (PMI) draw after the isolines (annotations are chrome-like

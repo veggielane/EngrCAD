@@ -55,15 +55,54 @@ public enum SectionAxis
 }
 
 /// <summary>Extensions for <see cref="SectionAxis"/> shared by both render passes.</summary>
-internal static class SectionAxisExtensions
+public static class SectionAxisExtensions
 {
-    /// <summary>The world-space unit vector of the axis (what uSectionAxis carries).</summary>
+    /// <summary>The world-space unit vector of the axis (the plane's normal).</summary>
     public static Vector3d Direction(this SectionAxis axis) => axis switch
     {
         SectionAxis.X => Vector3d.UnitX,
         SectionAxis.Y => Vector3d.UnitY,
         _ => Vector3d.UnitZ,
     };
+}
+
+/// <summary>
+/// One section (clip) plane: geometry with <c>dot(world, Normal) &gt; Offset</c> is
+/// <em>excluded</em> by this plane. Several planes at once make the classic CAD
+/// cutaways — two perpendicular planes a quarter cut, three an octant — combined by
+/// <see cref="SectionCombine"/>. The normal is a general direction (the shaders have
+/// always taken one); <see cref="On(SectionAxis, double)"/> builds the axis-aligned
+/// planes the toolbar and CLI expose.
+/// </summary>
+/// <param name="Normal">Plane normal, pointing at the clipped side. Need not be unit
+/// length, but <paramref name="Offset"/> is measured in its units.</param>
+/// <param name="Offset">Plane position: the value of <c>dot(world, Normal)</c> on it.</param>
+public readonly record struct SectionPlane(Vector3d Normal, double Offset)
+{
+    /// <summary>An axis-aligned plane perpendicular to <paramref name="axis"/>.</summary>
+    public static SectionPlane On(SectionAxis axis, double offset) => new(axis.Direction(), offset);
+
+    /// <summary>The same plane with the kept and clipped sides swapped.</summary>
+    public SectionPlane Flipped() => new(-Normal, -Offset);
+}
+
+/// <summary>
+/// How several <see cref="SectionPlane"/>s combine into one cut.
+/// </summary>
+public enum SectionCombine
+{
+    /// <summary>
+    /// Clip only where EVERY plane excludes — the CAD-standard cutaway: two
+    /// perpendicular planes remove the quarter where both exclude, three remove an
+    /// octant. The default.
+    /// </summary>
+    Intersection,
+
+    /// <summary>
+    /// Clip where ANY plane excludes — the single-plane behavior generalized; each
+    /// plane cuts independently, so the model keeps only what every plane keeps.
+    /// </summary>
+    Union,
 }
 
 /// <summary>How one instance actually renders after combining the global
@@ -147,6 +186,45 @@ internal static class ViewerShaders
     /// <summary>Version header for the GL profile in use (ES3 via ANGLE, or desktop 3.3).</summary>
     public static string Header(bool es) => es ? EsHeader : DesktopHeader;
 
+    /// <summary>Maximum simultaneous section planes (a plane per world axis is the
+    /// deepest cut that means anything; the uniform array is sized to it).</summary>
+    public const int MaxSectionPlanes = 4;
+
+    /// <summary>
+    /// The section-plane uniforms and clip rule, prepended verbatim to every fragment
+    /// shader that clips (mesh, line, point) so all three cannot disagree.
+    /// uSectionEnabled is the master switch a pass flips per draw group (scene
+    /// furniture never clips); uSectionPlanes carries xyz = normal, w = offset for
+    /// uSectionCount planes; uSectionUnion picks the combine rule — 0 clips only where
+    /// EVERY plane excludes (the quarter/octant cutaway), 1 where ANY does. With one
+    /// plane the two rules coincide, which is why single-plane output is unchanged.
+    /// </summary>
+    public const string SectionClip = """
+        uniform float uSectionEnabled;
+        uniform int uSectionCount;
+        uniform vec4 uSectionPlanes[4];
+        uniform float uSectionUnion;
+        bool sectionClipped(vec3 worldPos)
+        {
+            if (uSectionEnabled < 0.5 || uSectionCount <= 0)
+                return false;
+            bool any = false;
+            bool all = true;
+            // Constant loop bound with an early break: the safe pattern for the GLES
+            // translator, which is happiest when the trip count is statically known.
+            for (int i = 0; i < 4; i++)
+            {
+                if (i >= uSectionCount)
+                    break;
+                bool excluded = dot(worldPos, uSectionPlanes[i].xyz) > uSectionPlanes[i].w;
+                any = any || excluded;
+                all = all && excluded;
+            }
+            return uSectionUnion > 0.5 ? any : all;
+        }
+
+        """;
+
     /// <summary>Lit mesh vertex shader (position + normal + baked occlusion, world-space
     /// lighting). aOcclusion is attribute 2; a mesh uploaded without an occlusion buffer
     /// leaves that array disabled and reads the constant 1.0 set at pass init.</summary>
@@ -172,13 +250,12 @@ internal static class ViewerShaders
 
     /// <summary>
     /// Lit mesh fragment shader: directional light + specular, selection highlight
-    /// (uHighlight), axis-aligned section plane (uSectionEnabled/uSectionAxis/
-    /// uSectionOffset — clips where dot(world, axis) exceeds the offset; cut
+    /// (uHighlight), section planes (the shared <see cref="SectionClip"/> rule; cut
     /// interiors via gl_FrontFacing), translucency (uAlpha), and baked ambient
     /// occlusion (uAmbientOcclusion scales the per-vertex vOcclusion in; 0 = off and
     /// reproduces the pre-AO look exactly, since the factor is then exactly 1.0).
     /// </summary>
-    public const string MeshFragment = """
+    public const string MeshFragment = SectionClip + """
         in vec3 vNormal;
         in vec3 vWorldPos;
         in float vOcclusion;
@@ -186,9 +263,6 @@ internal static class ViewerShaders
         uniform vec3 uLightDir;
         uniform vec3 uEyePos;
         uniform float uHighlight;
-        uniform float uSectionEnabled;
-        uniform vec3 uSectionAxis;
-        uniform float uSectionOffset;
         uniform float uAlpha;
         uniform float uAmbientOcclusion;
         out vec4 fragColor;
@@ -196,7 +270,7 @@ internal static class ViewerShaders
         {
             if (uSectionEnabled > 0.5)
             {
-                if (dot(vWorldPos, uSectionAxis) > uSectionOffset)
+                if (sectionClipped(vWorldPos))
                     discard;
                 if (!gl_FrontFacing)
                 {
@@ -242,17 +316,14 @@ internal static class ViewerShaders
         """;
 
     /// <summary>Flat-color line fragment shader; lines that belong to the model are
-    /// clipped by the section plane consistently with the fills.</summary>
-    public const string LineFragment = """
+    /// clipped by the section planes consistently with the fills.</summary>
+    public const string LineFragment = SectionClip + """
         in vec3 vWorldPos;
         uniform vec3 uColor;
-        uniform float uSectionEnabled;
-        uniform vec3 uSectionAxis;
-        uniform float uSectionOffset;
         out vec4 fragColor;
         void main()
         {
-            if (uSectionEnabled > 0.5 && dot(vWorldPos, uSectionAxis) > uSectionOffset)
+            if (sectionClipped(vWorldPos))
                 discard;
             fragColor = vec4(uColor, 1.0);
         }
@@ -278,16 +349,13 @@ internal static class ViewerShaders
 
     /// <summary>Point-sprite fragment shader: round dots (square sprites trimmed via
     /// gl_PointCoord), section-clipped consistently with the model.</summary>
-    public const string PointFragment = """
+    public const string PointFragment = SectionClip + """
         in vec3 vWorldPos;
         uniform vec3 uColor;
-        uniform float uSectionEnabled;
-        uniform vec3 uSectionAxis;
-        uniform float uSectionOffset;
         out vec4 fragColor;
         void main()
         {
-            if (uSectionEnabled > 0.5 && dot(vWorldPos, uSectionAxis) > uSectionOffset)
+            if (sectionClipped(vWorldPos))
                 discard;
             vec2 d = gl_PointCoord - vec2(0.5);
             if (dot(d, d) > 0.25)
@@ -359,6 +427,45 @@ internal static class ViewerShaders
             throw new InvalidOperationException($"{type} compile failed: {gl.GetShaderInfoLog(shader)}");
         return shader;
     }
+}
+
+/// <summary>
+/// The section-plane uniforms of one program, and the single place either render pass
+/// writes them — so the window and the headless pass cannot clip differently.
+/// </summary>
+internal readonly struct SectionUniforms(GL gl, uint program)
+{
+    private readonly int _enabled = gl.GetUniformLocation(program, "uSectionEnabled");
+    private readonly int _count = gl.GetUniformLocation(program, "uSectionCount");
+    private readonly int _planes = gl.GetUniformLocation(program, "uSectionPlanes");
+    private readonly int _union = gl.GetUniformLocation(program, "uSectionUnion");
+
+    /// <summary>Uploads the plane set and combine rule (program must be current).
+    /// Pass an empty list to disable clipping for the following draws — that is how
+    /// scene furniture (grid, axes) and the view cube stay uncut.</summary>
+    public void Write(GL gl, IReadOnlyList<SectionPlane> planes, SectionCombine combine)
+    {
+        int count = Math.Min(planes.Count, ViewerShaders.MaxSectionPlanes);
+        gl.Uniform1(_enabled, count > 0 ? 1f : 0f);
+        gl.Uniform1(_count, count);
+        gl.Uniform1(_union, combine == SectionCombine.Union ? 1f : 0f);
+        if (count == 0)
+            return;
+        Span<float> packed = stackalloc float[ViewerShaders.MaxSectionPlanes * 4];
+        for (int i = 0; i < count; i++)
+        {
+            var plane = planes[i];
+            packed[i * 4] = (float)plane.Normal.X;
+            packed[i * 4 + 1] = (float)plane.Normal.Y;
+            packed[i * 4 + 2] = (float)plane.Normal.Z;
+            packed[i * 4 + 3] = (float)plane.Offset;
+        }
+        gl.Uniform4(_planes, (uint)count, packed[..(count * 4)]);
+    }
+
+    /// <summary>Turns clipping off for the following draws without touching the plane
+    /// set (the per-draw-group switch: furniture off, model on).</summary>
+    public void SetEnabled(GL gl, bool enabled) => gl.Uniform1(_enabled, enabled ? 1f : 0f);
 }
 
 /// <summary>

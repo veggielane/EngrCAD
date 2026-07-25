@@ -25,13 +25,16 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uSectionEnabled, _uSectionAxis, _uSectionOffset, _uAlpha, _uAmbientOcclusion;
+    private int _uAlpha, _uAmbientOcclusion;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
-    private int _uLineSectionEnabled, _uLineSectionAxis, _uLineSectionOffset;
+    private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
     private uint _pointProgram;
     private int _uPointModel, _uPointView, _uPointProj, _uPointColor, _uPointSize;
-    private int _uPointSectionEnabled, _uPointSectionAxis, _uPointSectionOffset;
+
+    // The section-plane uniforms of each program, written through the shared
+    // SectionUniforms helper so the window and the headless pass clip identically.
+    private SectionUniforms _meshSection, _lineSection, _pointSection;
     private uint _bgProgram, _bgVao;
     private uint _gridVao, _gridVbo;
     private int _gridCount;
@@ -153,9 +156,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLightDir = _gl.GetUniformLocation(_program, "uLightDir");
         _uEyePos = _gl.GetUniformLocation(_program, "uEyePos");
         _uHighlight = _gl.GetUniformLocation(_program, "uHighlight");
-        _uSectionEnabled = _gl.GetUniformLocation(_program, "uSectionEnabled");
-        _uSectionAxis = _gl.GetUniformLocation(_program, "uSectionAxis");
-        _uSectionOffset = _gl.GetUniformLocation(_program, "uSectionOffset");
+        _meshSection = new SectionUniforms(_gl, _program);
         _uAlpha = _gl.GetUniformLocation(_program, "uAlpha");
         _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
         // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
@@ -168,8 +169,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uLineProj = _gl.GetUniformLocation(_lineProgram, "uProj");
         _uLineColor = _gl.GetUniformLocation(_lineProgram, "uColor");
         _uLineSectionEnabled = _gl.GetUniformLocation(_lineProgram, "uSectionEnabled");
-        _uLineSectionAxis = _gl.GetUniformLocation(_lineProgram, "uSectionAxis");
-        _uLineSectionOffset = _gl.GetUniformLocation(_lineProgram, "uSectionOffset");
+        _lineSection = new SectionUniforms(_gl, _lineProgram);
 
         _pointProgram = CompilePointProgram(_gl);
         _uPointModel = _gl.GetUniformLocation(_pointProgram, "uModel");
@@ -177,9 +177,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uPointProj = _gl.GetUniformLocation(_pointProgram, "uProj");
         _uPointColor = _gl.GetUniformLocation(_pointProgram, "uColor");
         _uPointSize = _gl.GetUniformLocation(_pointProgram, "uPointSize");
-        _uPointSectionEnabled = _gl.GetUniformLocation(_pointProgram, "uSectionEnabled");
-        _uPointSectionAxis = _gl.GetUniformLocation(_pointProgram, "uSectionAxis");
-        _uPointSectionOffset = _gl.GetUniformLocation(_pointProgram, "uSectionOffset");
+        _pointSection = new SectionUniforms(_gl, _pointProgram);
         // Desktop GL ignores gl_PointSize unless program point size is enabled; the
         // cap does not exist under GLES (it is always on), where enabling it errors.
         if (GlVersion.Type != GlProfileType.OpenGLES)
@@ -432,7 +430,9 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.UniformMatrix4(_uLineProj, 1, false, matrix);
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(_uLineModel, 1, false, matrix);
-        gl.Uniform1(_uLineSectionEnabled, 0f);   // grid/axes are scene furniture — never clipped
+        var activePlanes = ActiveSectionPlanes;
+        _lineSection.Write(gl, activePlanes, _sectionCombine);
+        _lineSection.SetEnabled(gl, false);      // grid/axes are scene furniture — never clipped
         if (_gridVbo != 0)
         {
             gl.Uniform3(_uLineColor, 0.24f, 0.26f, 0.29f);
@@ -457,10 +457,7 @@ public sealed class ViewportControl : OpenGlControlBase
         var lightDir = new Vector3d(-0.5, -0.7, -0.9).Normalized();
         gl.Uniform3(_uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(_uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
-        var sectionAxis = _sectionAxis.Direction();
-        gl.Uniform1(_uSectionEnabled, _sectionEnabled ? 1f : 0f);
-        gl.Uniform3(_uSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
-        gl.Uniform1(_uSectionOffset, (float)_sectionOffset);
+        _meshSection.Write(gl, activePlanes, _sectionCombine);
         gl.Uniform1(_uAmbientOcclusion, _ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
 
         // Section mode relies on face culling staying OFF (the GL default; nothing here
@@ -484,9 +481,7 @@ public sealed class ViewportControl : OpenGlControlBase
         // full triangle wireframe for wireframe parts. Lines belong to the model, so
         // the section plane clips them consistently with the fills.
         gl.UseProgram(_lineProgram);
-        gl.Uniform1(_uLineSectionEnabled, _sectionEnabled ? 1f : 0f);
-        gl.Uniform3(_uLineSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
-        gl.Uniform1(_uLineSectionOffset, (float)_sectionOffset);
+        _lineSection.SetEnabled(gl, true);   // model lines clip with the fills
         bool anyPoints = false;
         for (int i = 0; i < _meshes.Count; i++)
         {
@@ -522,9 +517,7 @@ public sealed class ViewportControl : OpenGlControlBase
             CameraMath.WriteColumnMajor(proj, matrix);
             gl.UniformMatrix4(_uPointProj, 1, false, matrix);
             gl.Uniform1(_uPointSize, 4f * (float)scaling);
-            gl.Uniform1(_uPointSectionEnabled, _sectionEnabled ? 1f : 0f);
-            gl.Uniform3(_uPointSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
-            gl.Uniform1(_uPointSectionOffset, (float)_sectionOffset);
+            _pointSection.Write(gl, activePlanes, _sectionCombine);
             for (int i = 0; i < _meshes.Count; i++)
             {
                 if (!_visible[i] || EffectiveModeOf(i) != EffectiveMode.Points)
@@ -622,8 +615,8 @@ public sealed class ViewportControl : OpenGlControlBase
     /// keeps the renderer plane-general.
     /// </summary>
     private void DrawSectionContours(GL gl, Span<float> matrix) =>
-        _sectionContours.Draw(gl, _instances, _visible, _sectionAxis.Direction(), _sectionOffset,
-            _lineProgram, _uLineModel, _uLineColor, matrix, _sectionReport ??= Report);
+        _sectionContours.Draw(gl, _instances, _visible, _sectionPlanes, _sectionCombine,
+            _lineProgram, _uLineModel, _uLineColor, _lineSection, matrix, _sectionReport ??= Report);
 
     // Cached delegate so the per-frame contour draw does not allocate.
     private Action<string>? _sectionReport;
@@ -1153,13 +1146,24 @@ public sealed class ViewportControl : OpenGlControlBase
     private SectionAxis _sectionAxis = SectionAxis.Z;
     private double _sectionOffset;
     private bool _sectionOffsetSet;
+    private int _sectionPlaneCount = 1;
+    private SectionCombine _sectionCombine = SectionCombine.Intersection;
+
+    // The plane set actually uploaded. It is rebuilt from the axis/offset/count model
+    // whenever those change, and replaced wholesale by the SectionPlanes setter (which
+    // is how a host places planes the X/Y/Z model cannot express).
+    private readonly List<SectionPlane> _sectionPlanes = [];
+
+    /// <summary>The planes the shader clips with this frame (none when section mode is
+    /// off, which makes the uniform write the whole switch).</summary>
+    private IReadOnlyList<SectionPlane> ActiveSectionPlanes =>
+        _sectionEnabled ? _sectionPlanes : [];
 
     /// <summary>
-    /// Section mode: clips the model at an axis-aligned plane
-    /// (dot(world, <see cref="SectionAxis"/>) = <see cref="SectionOffset"/>) to reveal
-    /// interiors — exposed backfaces render as flat cut material. When first enabled,
-    /// the offset defaults to the middle of the current parts' bounds along the axis.
-    /// Picking ignores the section plane (v1).
+    /// Section mode: clips the model at the current <see cref="SectionPlanes"/> to
+    /// reveal interiors — exposed backfaces render as flat cut material. When first
+    /// enabled, one plane is placed at the middle of the current parts' bounds along
+    /// <see cref="SectionAxis"/>. Picking ignores section planes (v1).
     /// </summary>
     public bool SectionEnabled
     {
@@ -1167,16 +1171,22 @@ public sealed class ViewportControl : OpenGlControlBase
         set
         {
             _sectionEnabled = value;
-            if (value && !_sectionOffsetSet)
-                ResetSectionOffset();
+            if (value && (_sectionPlanes.Count == 0 || !_sectionOffsetSet))
+            {
+                if (!_sectionOffsetSet)
+                    ResetSectionOffset();
+                RebuildSectionPlanes();
+            }
             RequestNextFrameRendering();
         }
     }
 
     /// <summary>
-    /// Which world axis the section plane is perpendicular to (default Z — the classic
-    /// horizontal section). Changing the axis re-centers the plane at the middle of the
-    /// parts' bounds along the new axis (one offset is meaningless on another axis).
+    /// Which world axis the primary section plane is perpendicular to (default Z — the
+    /// classic horizontal section). Changing the axis re-centers the plane at the middle
+    /// of the parts' bounds along the new axis (one offset is meaningless on another
+    /// axis) and rebuilds the axis-aligned plane set, so a quarter or octant cut follows
+    /// the new starting axis.
     /// </summary>
     public SectionAxis SectionAxis
     {
@@ -1187,13 +1197,14 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 _sectionAxis = value;
                 ResetSectionOffset();
+                RebuildSectionPlanes();
             }
             RequestNextFrameRendering();
         }
     }
 
-    /// <summary>Plane offset along <see cref="SectionAxis"/>; geometry beyond it
-    /// (larger axis coordinate) is clipped.</summary>
+    /// <summary>Offset of the primary (first) section plane along its normal; geometry
+    /// beyond it is clipped. Other planes keep their own offsets.</summary>
     public double SectionOffset
     {
         get => _sectionOffset;
@@ -1201,7 +1212,89 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             _sectionOffset = value;
             _sectionOffsetSet = true;
+            if (_sectionPlanes.Count == 0)
+                RebuildSectionPlanes();
+            else
+                _sectionPlanes[0] = _sectionPlanes[0] with { Offset = value };
             RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>
+    /// How many axis-aligned section planes are active: 1 is the classic single cut,
+    /// **2 the quarter cut**, 3 an octant. The planes start at <see cref="SectionAxis"/>
+    /// and take the following world axes in X-Y-Z cyclic order, each centered in the
+    /// parts' bounds (the primary plane keeps <see cref="SectionOffset"/>). Combined by
+    /// <see cref="SectionCombine"/>. Setting this replaces any custom
+    /// <see cref="SectionPlanes"/>.
+    /// </summary>
+    public int SectionPlaneCount
+    {
+        get => _sectionPlaneCount;
+        set
+        {
+            _sectionPlaneCount = Math.Clamp(value, 1, ViewerShaders.MaxSectionPlanes);
+            if (!_sectionOffsetSet)
+                ResetSectionOffset();
+            RebuildSectionPlanes();
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>
+    /// The active section planes. Read it to inspect what the shader clips with; set it
+    /// to place planes the axis model cannot express (arbitrary normals). Setting also
+    /// updates <see cref="SectionPlaneCount"/>; changing <see cref="SectionAxis"/> or
+    /// <see cref="SectionPlaneCount"/> afterwards rebuilds the axis-aligned set again.
+    /// At most <see cref="ViewerShaders.MaxSectionPlanes"/> planes are uploaded.
+    /// </summary>
+    public IReadOnlyList<SectionPlane> SectionPlanes
+    {
+        get => _sectionPlanes;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            _sectionPlanes.Clear();
+            _sectionPlanes.AddRange(value);
+            _sectionPlaneCount = Math.Max(1, _sectionPlanes.Count);
+            if (_sectionPlanes.Count > 0)
+            {
+                _sectionOffset = _sectionPlanes[0].Offset;
+                _sectionOffsetSet = true;
+            }
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>
+    /// How several planes combine (default <see cref="SectionCombine.Intersection"/> —
+    /// the CAD-standard quarter/octant cutaway). Irrelevant with a single plane, where
+    /// both rules coincide.
+    /// </summary>
+    public SectionCombine SectionCombine
+    {
+        get => _sectionCombine;
+        set
+        {
+            _sectionCombine = value;
+            RequestNextFrameRendering();
+        }
+    }
+
+    /// <summary>Rebuilds the axis-aligned plane set from axis + offset + count: the
+    /// primary plane keeps the current offset, the rest are centered in the parts'
+    /// bounds along the following world axes.</summary>
+    private void RebuildSectionPlanes()
+    {
+        var bounds = PartsBounds();
+        _sectionPlanes.Clear();
+        for (int i = 0; i < _sectionPlaneCount; i++)
+        {
+            var axis = (SectionAxis)(((int)_sectionAxis + i) % 3);
+            double offset = i == 0
+                ? _sectionOffset
+                : bounds.IsEmpty ? 0 : AxisComponent(bounds.Center, axis);
+            _sectionPlanes.Add(SectionPlane.On(axis, offset));
         }
     }
 
@@ -1214,7 +1307,8 @@ public sealed class ViewportControl : OpenGlControlBase
         set => SectionOffset = value;
     }
 
-    /// <summary>Centers the section plane in the parts' bounds along the active axis.</summary>
+    /// <summary>Centers the primary section plane in the parts' bounds along the active
+    /// axis.</summary>
     private void ResetSectionOffset()
     {
         var bounds = PartsBounds();

@@ -10,7 +10,9 @@
 //   ```csharp                         — display-only; ignored by this tool.
 // render: fences accept per-snippet render options after the id:
 //   style:<points|wireframe|shaded|shaded-edges>   — the global view style
-//   section:<x|y|z>,<offset>                       — a real section plane, e.g. section:z,6
+//   section:<x|y|z>,<offset>[;<x|y|z>,<offset>...] — real section planes, e.g.
+//                                                    section:z,6 (single cut) or
+//                                                    section:x,0;y,0 (quarter cut)
 // so docs cutaways use the viewer's actual section planes instead of boolean-cut fakes.
 //
 // Exit code: nonzero when any snippet fails to compile/run, defines no scene where one
@@ -97,6 +99,7 @@ foreach (var file in mdFiles)
         var style = ViewStyle.ShadedWithEdges;
         var sectionAxis = SectionAxis.Z;
         double? sectionOffset = null;
+        IReadOnlyList<SectionPlane>? sectionPlanes = null;
         var optionsValid = true;
         foreach (var token in open.Groups[3].Value.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
         {
@@ -112,13 +115,16 @@ foreach (var file in mdFiles)
                 case "style" when parts.Length == 2 && TryParseStyle(parts[1], out var s):
                     style = s;
                     break;
-                case "section" when parts.Length == 2 && TryParseSection(parts[1], out var axis, out var offset):
-                    sectionAxis = axis;
-                    sectionOffset = offset;
+                case "section" when parts.Length == 2 && TryParseSection(parts[1], out var planes):
+                    sectionAxis = AxisOf(planes[0]);
+                    sectionOffset = planes[0].Offset;
+                    sectionPlanes = planes.Count > 1 ? planes : null;
                     break;
                 default:
                     errors.Add($"{file}: snippet '{kind}:{id}' — unrecognized render option '{token}' "
-                             + "(expected style:<points|wireframe|shaded|shaded-edges> or section:<x|y|z>,<offset>).");
+                             + "(expected style:<points|wireframe|shaded|shaded-edges> or "
+                             + "section:<x|y|z>,<offset> — repeat with ';' for a quarter or octant cut, "
+                             + "e.g. section:x,0;y,0).");
                     optionsValid = false;
                     break;
             }
@@ -149,7 +155,7 @@ foreach (var file in mdFiles)
 
         seenIds[id] = file;
         snippets.Add(new Snippet(id, kind == "render", file, string.Join('\n', body),
-            style, sectionAxis, sectionOffset));
+            style, sectionAxis, sectionOffset, sectionPlanes));
     }
 }
 
@@ -221,7 +227,8 @@ foreach (var s in snippets)
             // 2x supersampled relative to the display size in the docs pages — the
             // offscreen renderer has no MSAA, so browser downscaling anti-aliases.
             EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120, camera: null,
-                s.Style, s.SectionAxis, s.SectionOffset);
+                s.Style, s.SectionAxis, s.SectionOffset,
+                sectionPlanes: s.SectionPlanes);
             rendered++;
         }
         catch (Exception ex)
@@ -257,27 +264,41 @@ static bool TryParseStyle(string value, out ViewStyle style)
     }
 }
 
-static bool TryParseSection(string value, out SectionAxis axis, out double offset)
+// "z,6" is one plane; "x,0;y,0" a quarter cut; "x,0;y,0;z,0" an octant.
+static bool TryParseSection(string value, out List<SectionPlane> planes)
 {
-    axis = default;
-    offset = 0;
-    var parts = value.Split(',', 2);
-    if (parts.Length != 2
-        || !double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
-                System.Globalization.CultureInfo.InvariantCulture, out offset))
-        return false;
-    switch (parts[0].ToLowerInvariant())
+    planes = [];
+    foreach (var clause in value.Split(';', StringSplitOptions.RemoveEmptyEntries))
     {
-        case "x": axis = SectionAxis.X; return true;
-        case "y": axis = SectionAxis.Y; return true;
-        case "z": axis = SectionAxis.Z; return true;
-        default: return false;
+        var parts = clause.Split(',', 2);
+        if (parts.Length != 2
+            || !double.TryParse(parts[1], System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture, out double offset))
+            return false;
+        SectionAxis axis;
+        switch (parts[0].ToLowerInvariant())
+        {
+            case "x": axis = SectionAxis.X; break;
+            case "y": axis = SectionAxis.Y; break;
+            case "z": axis = SectionAxis.Z; break;
+            default: return false;
+        }
+        planes.Add(SectionPlane.On(axis, offset));
     }
+    return planes.Count > 0;
 }
+
+/// <summary>Which world axis an axis-aligned section plane sits on (the fences only
+/// ever build those, so the mapping is total).</summary>
+static SectionAxis AxisOf(SectionPlane plane) =>
+    plane.Normal == EngrCAD.Core.Vector3d.UnitX ? SectionAxis.X
+    : plane.Normal == EngrCAD.Core.Vector3d.UnitY ? SectionAxis.Y
+    : SectionAxis.Z;
 
 internal sealed record Snippet(
     string Id, bool Render, string File, string Code,
-    ViewStyle Style, SectionAxis SectionAxis, double? SectionOffset);
+    ViewStyle Style, SectionAxis SectionAxis, double? SectionOffset,
+    IReadOnlyList<SectionPlane>? SectionPlanes);
 
 namespace EngrCAD.DocsGen
 {

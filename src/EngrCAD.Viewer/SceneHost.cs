@@ -120,6 +120,18 @@ internal sealed class SceneHost
             sectionAxis.Content = next.ToString();
         };
         toolbar.Children.Add(sectionAxis);
+
+        // Section plane count: 1 = the classic single cut, 2 = quarter, 3 = octant.
+        var sectionCount = new Button { Content = "1", Padding = new Thickness(8, 4), FontSize = 12 };
+        ToolTip.SetTip(sectionCount,
+            "Section planes - click to cycle 1 / 2 / 3 (single cut, quarter cut, octant)");
+        sectionCount.Click += (_, _) =>
+        {
+            int next = Viewport.SectionPlaneCount % 3 + 1;
+            Viewport.SectionPlaneCount = next;
+            sectionCount.Content = next.ToString();
+        };
+        toolbar.Children.Add(sectionCount);
         toolbar.Children.Add(new Border { Width = 8 });
 
         // Annotations (PMI): on by default — a scene that carries dimensions shows

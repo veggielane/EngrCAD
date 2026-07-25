@@ -94,11 +94,14 @@ public static class EngrCad
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
         ViewStyle style = ViewStyle.ShadedWithEdges,
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
-        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection)
     {
         scene.PreMesh(); // tessellate before touching GL
         OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera,
-            furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion);
+            furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
+            sectionPlanes, sectionCombine);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
@@ -191,16 +194,30 @@ public static class EngrCad
         int sectionIndex = Array.IndexOf(args, "--section");
         if (sectionIndex >= 0)
         {
-            if (sectionIndex + 2 >= args.Length
-                || !TryParseAxis(args[sectionIndex + 1], out var sectionAxis)
-                || !double.TryParse(args[sectionIndex + 2], NumberStyles.Float,
-                        CultureInfo.InvariantCulture, out double sectionOffset))
+            // One or more axis/offset pairs: "--section z 6" is the single cut,
+            // "--section x 0 y 0" the quarter cut, three pairs an octant.
+            var planes = new List<SectionPlane>();
+            int at = sectionIndex + 1;
+            while (at + 1 < args.Length
+                   && TryParseAxis(args[at], out var axis)
+                   && double.TryParse(args[at + 1], NumberStyles.Float,
+                           CultureInfo.InvariantCulture, out double offset))
             {
-                log.Error("--section requires an axis (x, y, or z) and a numeric offset, e.g. --section z 6");
+                planes.Add(SectionPlane.On(axis, offset));
+                if (planes.Count == 1)
+                {
+                    options.SectionAxis = axis;
+                    options.SectionOffset = offset;
+                }
+                at += 2;
+            }
+            if (planes.Count == 0)
+            {
+                log.Error("--section requires an axis (x, y, or z) and a numeric offset, e.g. --section z 6"
+                        + " (repeat the pair for a quarter or octant cut: --section x 0 y 0)");
                 return 2;
             }
-            options.SectionAxis = sectionAxis;
-            options.SectionOffset = sectionOffset;
+            options.SectionPlanes = planes.Count > 1 ? planes : null;
         }
 
         int aoIndex = Array.IndexOf(args, "--ao");
@@ -358,7 +375,8 @@ public static class EngrCad
         }
         scene.PreMesh(options.Quality); // meshes cache, so RenderToImage's PreMesh is a no-op
         RenderToImage(scene, path, options.RenderWidth, options.RenderHeight, camera: null,
-            options.RenderStyle, options.SectionAxis, options.SectionOffset, options.AmbientOcclusion);
+            options.RenderStyle, options.SectionAxis, options.SectionOffset, options.AmbientOcclusion,
+            options.SectionPlanes, options.SectionCombine);
         log.Info($"wrote {path} ({scene.AllParts.Count()} part(s))");
         return 0;
     }
