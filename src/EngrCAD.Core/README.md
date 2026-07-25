@@ -44,7 +44,26 @@ concerns.
   the unbounded face and zero-area spur loops are dropped, dangling edges appear as
   doubled-back slits. This is the same loop-tracing dance `FaceSplitter.SplitByCurve`
   performs in UV parameter space (which additionally handles periodic wrap and stays
-  independent for boolean-safety); a future sketch engine builds on this class.
+  independent for boolean-safety); the sketch engine's region booleans build on this class.
+  `BuildCcwEdgeFans()` exposes the combinatorial embedding (per-vertex incident edge ids in
+  exact CCW order) so cell tracing and boundary tracing walk ONE order, plus
+  `OtherVertex`/`FindEdge` for graph navigation.
+- **`Geometry2.Region2d`** — polygon-with-holes region (g3: `Polygon2d`/`GeneralPolygon2d`/
+  `PlanarComplex`): one outer loop + N hole loops, loops closed implicitly (never repeat the
+  first point). The canonical winding is CCW outer / CW holes — the constructor re-orients
+  whatever it is given and validates that every loop encloses area, that holes lie inside the
+  outer loop, and that no two loops properly cross; `Reversed()` returns the mirror winding
+  for consumers with the opposite convention (`IsCounterClockwise` reports which form a
+  region carries). `Area` is exact shoelace (holes subtracted, anchored at the first vertex).
+  **`Contains` treats regions as CLOSED sets** — a point exactly on a loop, including exactly
+  on a vertex, is inside — and is EXACT for all finite doubles: the half-open upward-crossing
+  parity rule with every sidedness decision made by `Predicates2d.Orient2dSign`, so no
+  crossing x is ever computed or rounded. **`Region2d.FromLoops(loops)` is the automatic
+  hole detector**: it sorts an unordered bag of closed loops into regions by containment
+  DEPTH — even depth = an outer boundary, odd depth = a hole of its deepest container, so an
+  island inside a hole becomes a region of its own — the "nested loop hierarchy" a sketch
+  front door needs. Regions are polygonal by construction; curved input is flattened to a
+  chord tolerance before it reaches this type.
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
   centroid axis, flat node array, allocation-free stack traversal). Queries (all
   zero-allocation per query, results appended to caller-provided lists):
