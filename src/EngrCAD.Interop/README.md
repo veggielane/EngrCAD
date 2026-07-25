@@ -126,6 +126,21 @@ this project's conversions.)
   distance metric, not a closure (0 B measured over 100 k calls; locked by
   `MeshSdfTests.Evaluate_SteadyState_DoesNotAllocate`). The result is a first-class
   `Sdf` node composable with the whole implicit engine.
+  **Batches stay the scalar loop, deliberately.** `MeshSdf` does not override the batch
+  seam, and `MeshSdfBatchTests` pins that (batch equals scalar bit for bit, including on
+  the surface, where any seeded search breaks). The measurement behind the decision: a
+  narrow-band bake of a mesh field spends **74–85% of its wall clock inside these queries**,
+  so there is real headroom — but *seeding* the branch and bound with the previous coherent
+  sample's answer, which is provably result-identical and looks free, measured only
+  **1.12–1.20×** on the most coherent run available and a small net **loss** on scattered
+  probes. The reason is worth remembering: **a nearest-first branch and bound is already its
+  own seed** — descending the nearer child first reaches a tight bound in O(log n) node
+  tests, so a seed can only save part of the first descent. (A standalone prototype claimed
+  1.88×; its baseline went through a `Func` delegate per triangle while the seeded path
+  called the kernel directly. The gap was the delegate. Never benchmark an optimization
+  against a baseline you wrote differently.) The untried lever is a *packet* query — one
+  traversal per coherent block, collecting candidates for all its points at once — which
+  attacks the node-test cost rather than the initial bound.
   The sign source is opt-in via `new MeshSdf(mesh, MeshSignSource.WindingNumber)`, which
   drives the fast generalized winding number (`MeshWindingNumber` in EngrCAD.Mesh) instead
   of the pseudonormal — same partition on watertight meshes, but also accepts **open**
