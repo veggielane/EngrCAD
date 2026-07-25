@@ -282,15 +282,34 @@ extrude/revolve/sweep, booleans, rim fillets/chamfers, drilled holes, conics + o
 curves, curve interpolation, projection/extrema, surface intersection, STEP
 export+import, volume/area, tessellation — see CLAUDE.md):
 
-- [ ] Loft / ThruSections (skin a solid through a list of profiles)
-- [ ] Pipe shell with evolution law (scaling/twisting profile along the spine)
+- [ ] **Loft follow-ups** (`SolidFactory.Loft` landed — cardinal-basis `LoftedSurface`,
+  smooth/ruled, exact prismatoid volumes): section compatibility by degree elevation +
+  knot merging (mismatched segment counts are rejected today); holes in sections; open
+  uncapped skins; periodic lofts closing back on the first section; guide curves/spine.
+- [ ] **Pipe shell with evolution law** — a loft whose sections are *generated* (scaled
+  or twisted along a spine) rather than given. Now only needs a law evaluator: feed the
+  generated `Profile`s to `Loft` and it lands on `LoftedSurface` unchanged.
 - [ ] Boolean extras: *section* (curve-only result), fuzzy tolerance, modification
   history
 - [ ] Fillet/chamfer completion — sharp-corner fillet patches (ball/miter; the
   trimmed-band tessellation blocker is gone, this is unblocked), arbitrary edge sets
   (not just face rims), variable radius, chamfer angles beyond the two-setback form
-- [ ] Draft angles (`BRepOffsetAPI_DraftAngle`)
-- [ ] Offset surfaces / thick solid / shelling (B-Rep shell — we only shell as SDF)
+- [ ] **Draft follow-ups** (`Draft.Apply` landed — exact plane rotation about the
+  neutral line, composable, planar/extruded faces): curved faces; caps with holes;
+  per-face angles in one call; a non-planar neutral surface.
+- [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed — exact for polyhedra,
+  sealed-void and genus-1-tube cases Euler-clean): curved faces (a cylinder's or
+  revolve's offset surface is analytic — `OffsetCurve3d` gives the generator — but their
+  **corners** need surface–surface re-intersection, which is the *same* blocker as
+  sharp-corner fillet patches, so the two should be solved together); >3-valent vertices
+  (over-determined corner, same machinery); adjacent openings; variable per-face
+  thickness; global self-intersection detection (deliberately unchecked today, as in
+  OCCT and `OffsetCurve3d`).
+- [ ] **Wire loft / draft / shelling into the `Shape` API + docs** — they are kernel-only
+  today, which by this project's own rule means they are not done. Each needs a
+  `ShapeNodes` node, a `ShapeCompiler` arm with honest `Explain` messages
+  (`Shape.Loft(sections, style)`, `Shape.Draft(angle, neutral, faces)`, a B-Rep-native
+  `Shape.Shell` beside the SDF one), and a `docs/examples` page with a render fence.
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
   with faces-to-remove semantics
 - [ ] Shape healing (`ShapeFix`): fix wires/faces/gaps/small edges — needed the moment

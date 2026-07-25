@@ -249,6 +249,31 @@ Each engine uses the data structure its mathematics wants:
   surface (the SDF is only sagitta-accurate there), and both sides of a shared closed
   intersection curve must agree on every subdivision point including the wrap-split
   seam anchor at `Domain.Start`.
+- **A loft's blend is solved once at construction, not per-u.** `LoftedSurface` is
+  P(u,v) = Σ αₖ(v)·Cₖ(uₖ) with α the cardinal basis of B-spline interpolation, inverted
+  once. The tempting alternative — chord-length reparameterizing per u — gives every
+  strip its *own* v mapping, so the rails two strips share no longer agree and the solid
+  cracks along every junction. Three weld invariants then hold by construction rather
+  than by tolerance: αₖ(v_j) = δⱼₖ is exact equality (so the end rows reproduce the
+  section curves bit-for-bit, and those same curves are the caps' and neighbours'
+  edges), the u-sampling rule lives on the surface because only it knows its sections,
+  and rails evaluate the strip surface rather than re-interpolating junction points.
+  A related lesson from its alignment search: **twist objectives must be
+  centroid-relative** — leaving the sections' separation in makes the objective a large
+  constant plus a tiny quadratic well, costing the minimizer ~8 digits and leaving
+  residual twist past the weld tolerance.
+- **Draft is a plane rotation about the neutral line, not a shear.** Each selected
+  face's plane rotates by exactly the draft angle toward the pull direction and its
+  anchor slides in-plane onto the neutral plane, so the neutral geometry provably does
+  not move and drafting twice by θ/2 equals once by θ. Because the result is still
+  `PlaneSurface` faces, a drafted solid stays selectable, further-draftable and
+  STEP-exportable — which a ruled-loft implementation would have given up.
+- **Polyhedral offset is exact; curved offset is blocked on corners.** An offset plane
+  is a plane and an offset vertex is a three-plane intersection, so shelling a polyhedron
+  is closed-form. A cylinder's or revolve's offset *surface* is equally analytic — but
+  where three offset curved faces meet, the corner needs genuine surface–surface
+  re-intersection. That is the same missing machinery as sharp-corner fillet patches, so
+  the two problems should be solved together rather than twice.
 - **NURBS curves have exact analytic derivatives** (`DerivativeAt`/`SecondDerivativeAt`:
   The NURBS Book A2.3 basis derivatives + the generalized rational quotient rule, so
   non-unit weights are handled; `TangentAt` is overridden, leaving finite differences
