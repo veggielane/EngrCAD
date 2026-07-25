@@ -13,19 +13,15 @@ Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-ident
 undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
 `MeshExtrude` (faces/thicken), selections + connected components. Remaining:
 
-- [ ] **Coplanar-overlap classification for the exact boolean** — THE single blocker to
-  making `BooleanMethod.Exact` the default (it is otherwise a measured drop-in for the
-  whole suite; flipping it is then one constant in `MeshBoolean.cs`). Today coplanar
-  overlapping faces are rejected loudly, while BSP handles flush-stacked parts
-  correctly — and real designs union flush parts. Approach: imprint the overlap
-  boundary, then classify coincident patches by normal agreement (same direction: keep
-  one; opposite: drop both).
-- [ ] **Exact-boolean performance** is unmeasured — profile it (note `EditableMesh`
-  runs a full `Validate()` after every operator in DEBUG, so Debug timings are
-  pessimistic, O(n) per op), and thread `ProgressCancel` through `MeshMeshCut`.
-- [ ] **`RegionOperator`** — extract-modify-reinsert a submesh as a change-set session
-  (`MeshFaceSelection.ToMesh()` + `BoundaryLoops()` are the extraction half). The one
-  piece of mesh Phase B not reached.
+- [ ] **BSP stack-overflows on deep trees** (`CsgNode.Invert` recurses) — it overflows
+  outright on a 32k-triangle sphere pair. Now that `BooleanMethod.Exact` is the default
+  and faster everywhere measured, decide: make the recursion iterative, or document BSP
+  as legacy-only and keep it for the coplanar cases it historically handled.
+- [ ] **Region refinement across a seam** — `MeshRegionOperator` deliberately refuses a
+  replacement whose seam was re-split (splitting a seam edge leaves the neighbour face
+  holding the un-split edge — a T-junction), so `MeshDecimator` round-trips but
+  `LoopSubdivision` does not. Refining across a seam means refining the neighbours too:
+  a different, larger operation.
 - [ ] **Isotropic remeshing with constraints** — `Remesher`/`RemesherPro` +
   `MeshConstraints` (fixed edges, no-flip, project-to-target) +
   `SharpEdgeReprojectionRemesh` for feature recovery; now buildable on
@@ -91,6 +87,10 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   second quickhull in Core would be worse than today's PCA heuristic. Decide: move
   `ConvexHull` into Core, or add `Fitting3d.MinVolumeBox(hullVertices, hullTriangles)`
   taking a caller-supplied hull. The algorithm is spelled out in `FitBox`'s doc comment.
+- [ ] **`Bvh.Build` + `QueryOverlap` is now the largest single line in the exact mesh
+  boolean** — ~22 ms of a 58 ms boolean on 32k-triangle operands, after the mesh-side
+  costs were fixed. Two builds plus the overlap query; worth attacking in Core (faster
+  build, or reusing a hierarchy across a boolean cascade).
 - [ ] **Core follow-ups** — thread `ProgressCancel` through `BRepTessellator` and
   `MeshSdf`/winding builds (unstarted); `Region2dBoolean`'s O(E²) interior-sample
   clearance scans still want the same index the arrangement broad phase now has
