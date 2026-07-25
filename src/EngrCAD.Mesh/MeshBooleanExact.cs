@@ -38,14 +38,18 @@ namespace EngrCAD.Mesh;
 /// </summary>
 internal static class MeshBooleanExact
 {
-    public static HalfEdgeMesh Combine(HalfEdgeMesh a, HalfEdgeMesh b, BooleanOperation operation)
+    public static HalfEdgeMesh Combine(
+        HalfEdgeMesh a, HalfEdgeMesh b, BooleanOperation operation, ProgressCancel? progress = null)
     {
         if (!a.IsClosed || !b.IsClosed)
             throw new ArgumentException("Boolean operations require closed meshes.");
 
-        var imprint = MeshMeshCut.Imprint(a, b);
+        // The imprint is the long phase; classification and welding are linear passes, so
+        // the progress slice reflects that.
+        var imprint = MeshMeshCut.Imprint(a, b, Slice(progress, 0, 0.85));
         var seamA = SeamEdges(imprint.MeshA, imprint);
         var seamB = SeamEdges(imprint.MeshB, imprint);
+        progress?.ThrowIfCancelled();
 
         // Union keeps what is outside the other solid, intersection what is inside;
         // difference keeps A's outside plus B's inside, flipped so the tool's surface
@@ -62,24 +66,37 @@ internal static class MeshBooleanExact
         var positions = new List<Vector3d>();
         var index = new Dictionary<Vector3d, int>();
         var faces = new List<int[]>();
-        Emit(imprint.MeshA, seamA, new MeshWindingNumber(imprint.MeshB), onB,
-            keepAInside, reverse: false, fromA: true);
-        Emit(imprint.MeshB, seamB, new MeshWindingNumber(imprint.MeshA), onA,
-            keepBInside, reverseB, fromA: false);
-        return HalfEdgeMesh.Build(positions, faces);
+        Emit(imprint.MeshA, seamA, imprint.MeshB, onB, keepAInside, reverse: false, fromA: true);
+        progress?.Report(0.95);
+        Emit(imprint.MeshB, seamB, imprint.MeshA, onA, keepBInside, reverseB, fromA: false);
+        progress?.ThrowIfCancelled();
+        var result = HalfEdgeMesh.Build(positions, faces);
+        progress?.Report(1);
+        return result;
 
         void Emit(
-            HalfEdgeMesh mesh, HashSet<(int, int)> seam, MeshWindingNumber other,
+            HalfEdgeMesh mesh, HashSet<(int, int)> seam, HalfEdgeMesh otherMesh,
             CoincidentSurface? coincident, bool keepInside, bool reverse, bool fromA)
         {
             var shared = Coincidences(mesh, coincident);
             var patch = Patches(mesh, seam, shared, out int patchCount);
-            var keep = Classify(mesh, patch, patchCount, shared, other, keepInside, operation, fromA);
+            var keep = Classify(mesh, patch, patchCount, shared, otherMesh, keepInside, operation, fromA);
+            // The loop walk is manual, not LINQ: Face.Vertices() allocates two iterators per
+            // call, and this runs once per face of both operands.
+            var corners = new List<int>(4);
             for (int f = 0; f < mesh.FaceCount; f++)
             {
                 if (!keep[patch[f]])
                     continue;
-                var loop = mesh.GetFace(f).Vertices().Select(v => Intern(v.Position)).ToArray();
+                corners.Clear();
+                var start = mesh.GetFace(f).AnyHalfEdge;
+                var he = start;
+                do
+                {
+                    corners.Add(Intern(he.Origin.Position));
+                    he = he.Next;
+                } while (he != start);
+                var loop = corners.ToArray();
                 if (reverse)
                     Array.Reverse(loop);
                 faces.Add(loop);
@@ -95,6 +112,19 @@ internal static class MeshBooleanExact
             return positions.Count - 1;
         }
     }
+
+    /// <summary>
+    /// A view of <paramref name="progress"/> whose [0, 1] maps onto
+    /// [<paramref name="from"/>, <paramref name="to"/>], so a sub-phase can report its own
+    /// completion without knowing where it sits in the whole operation. Cancellation passes
+    /// straight through.
+    /// </summary>
+    private static ProgressCancel? Slice(ProgressCancel? progress, double from, double to) =>
+        progress is null
+            ? null
+            : new ProgressCancel(
+                () => progress.CancelRequested,
+                fraction => progress.Report(from + (to - from) * fraction));
 
     /// <summary>
     /// The imprinted mesh's edges that lie on the intersection curve, as canonical vertex
@@ -158,20 +188,23 @@ internal static class MeshBooleanExact
             while (stack.Count > 0)
             {
                 int face = stack.Pop();
-                foreach (var halfEdge in mesh.GetFace(face).HalfEdges())
+                // Manual loop walk: Face.HalfEdges() allocates an iterator per call, and the
+                // flood visits every face of both operands.
+                var start = mesh.GetFace(face).AnyHalfEdge;
+                var halfEdge = start;
+                do
                 {
                     int p = halfEdge.Origin.Index, q = halfEdge.Destination.Index;
-                    if (seam.Contains(p < q ? (p, q) : (q, p)))
-                        continue;
                     var twin = halfEdge.Twin;
-                    if (twin.IsBoundary)
+                    halfEdge = halfEdge.Next;
+                    if (seam.Contains(p < q ? (p, q) : (q, p)) || twin.IsBoundary)
                         continue;
                     int neighbour = twin.Face.Index;
                     if (patch[neighbour] >= 0 || shared[neighbour] != shared[face])
                         continue;
                     patch[neighbour] = id;
                     stack.Push(neighbour);
-                }
+                } while (halfEdge != start);
             }
         }
         return patch;
@@ -185,7 +218,7 @@ internal static class MeshBooleanExact
     /// </summary>
     private static bool[] Classify(
         HalfEdgeMesh mesh, int[] patch, int patchCount, Coincidence[] shared,
-        MeshWindingNumber other, bool keepInside, BooleanOperation operation, bool fromA)
+        HalfEdgeMesh otherMesh, bool keepInside, BooleanOperation operation, bool fromA)
     {
         var probe = new int[patchCount];
         var area = new double[patchCount];
@@ -200,6 +233,14 @@ internal static class MeshBooleanExact
             }
         }
 
+        int questions = 0;
+        for (int p = 0; p < patchCount; p++)
+        {
+            if (shared[probe[p]] == Coincidence.None)
+                questions++;
+        }
+        var other = Winding(otherMesh, questions);
+
         var keep = new bool[patchCount];
         for (int p = 0; p < patchCount; p++)
         {
@@ -210,6 +251,34 @@ internal static class MeshBooleanExact
         }
         return keep;
     }
+
+    /// <summary>
+    /// Roughly how many exact solid-angle queries the Barill multipole hierarchy costs to
+    /// build, per triangle. Measured on this benchmark set: the build runs ~0.7 µs per
+    /// triangle, an exact query ~20 ns per triangle.
+    /// </summary>
+    private const int HierarchyBreakEvenQueries = 32;
+
+    /// <summary>
+    /// The winding-number oracle for one classification pass, sized to the number of
+    /// questions it will actually be asked.
+    /// <para>
+    /// This is the boolean's biggest measured surprise: a boolean asks ONE question per
+    /// surface patch — typically two to eight — and building an O(n log n) multipole
+    /// hierarchy to answer eight questions cost 66–86% of the whole classification phase
+    /// (43 ms of 65 on two 32k-triangle spheres). The exact sum is O(n) per query with a
+    /// tiny constant, so below the break-even the "slow" algorithm is the fast one.
+    /// </para>
+    /// <para>
+    /// Both entry points take the imprinted mesh directly: it is already fully
+    /// triangulated, so the public constructor's defensive <c>Triangulated()</c> copy was
+    /// pure waste as well.
+    /// </para>
+    /// </summary>
+    private static MeshWindingNumber Winding(HalfEdgeMesh triangulated, int questions) =>
+        questions <= HierarchyBreakEvenQueries
+            ? MeshWindingNumber.Direct(triangulated)
+            : MeshWindingNumber.FromTriangulated(triangulated);
 
     /// <summary>
     /// The set algebra of surface the two solids share. With normals AGREEING both solids

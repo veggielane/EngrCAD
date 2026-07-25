@@ -339,6 +339,53 @@ public class ExactBooleanTests
         AssertSolid(stack, 9 + 4 + 1, expectedEuler: 2);
     }
 
+    // ---------------------------------------------------------------- progress + cancel
+
+    [Fact]
+    public void Cancellation_StopsTheBooleanAndLeavesTheOperandsUntouched()
+    {
+        var box = Box(-1, -1, -1, 1, 1, 1);
+        var cylinder = MeshPrimitives.Cylinder(0.4, 4, 64).Transformed(Matrix4d.CreateTranslation((0, 0, -2)));
+        int boxFaces = box.FaceCount, cylinderFaces = cylinder.FaceCount;
+
+        Assert.Throws<OperationCanceledException>(
+            () => MeshBoolean.Difference(box, cylinder, Exact, new ProgressCancel(() => true)));
+
+        // Kernel operations never return half-built geometry, and the inputs are immutable.
+        Assert.Equal(boxFaces, box.FaceCount);
+        Assert.Equal(cylinderFaces, cylinder.FaceCount);
+    }
+
+    [Fact]
+    public void Progress_IsMonotoneAndReachesOne()
+    {
+        var reported = new List<double>();
+        var box = Box(-1, -1, -1, 1, 1, 1);
+        var cylinder = MeshPrimitives.Cylinder(0.4, 4, 64).Transformed(Matrix4d.CreateTranslation((0, 0, -2)));
+
+        var result = MeshBoolean.Difference(box, cylinder, Exact, new ProgressCancel(reported.Add));
+
+        Assert.NotEmpty(reported);
+        Assert.Equal(1.0, reported[^1], 12);
+        for (int i = 1; i < reported.Count; i++)
+            Assert.True(reported[i] >= reported[i - 1], $"progress went backwards at {i}: {reported[i - 1]} → {reported[i]}");
+        Assert.All(reported, f => Assert.InRange(f, 0, 1));
+        result.Validate();
+    }
+
+    [Fact]
+    public void CancellationIsIgnoredByTheBspPath_ButTheApiStillAccepts()
+    {
+        // The BSP clipper is a recursive tree walk with no checkpoint to poll; the parameter
+        // is accepted so callers need not branch on the method.
+        var a = Box(0, 0, 0, 2, 2, 2);
+        var b = Box(1, 1, 1, 3, 3, 3);
+
+        var result = MeshBoolean.Union(a, b, BooleanMethod.Bsp, new ProgressCancel(() => true));
+
+        Assert.True(result.FaceCount > 0);
+    }
+
     [Fact]
     public void TheDefaultMethodIsExact()
     {

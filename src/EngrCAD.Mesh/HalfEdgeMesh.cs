@@ -370,9 +370,36 @@ public sealed class HalfEdgeMesh
         return Build(positions, orderedFaces);
     }
 
-    /// <summary>New mesh with every face fan-triangulated from its first vertex.</summary>
+    /// <summary>True when every face already has exactly three sides.</summary>
+    public bool IsTriangulated
+    {
+        get
+        {
+            for (int f = 0; f < FaceCount; f++)
+            {
+                int start = _faceHe[f];
+                if (_heNext[_heNext[_heNext[start]]] != start)
+                    return false;
+            }
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// New mesh with every face fan-triangulated from its first vertex — or this mesh
+    /// itself when it is already all triangles, which is safe because a
+    /// <see cref="HalfEdgeMesh"/> is immutable once built.
+    /// <para>
+    /// The short circuit matters: the general path is a full <see cref="Build"/>, manifold
+    /// validation included, and the exact boolean triangulates BOTH operands on entry. A
+    /// boolean's output is all triangles, so cascaded operations (drilling five holes) were
+    /// paying for a complete revalidating rebuild of both operands at every stage.
+    /// </para>
+    /// </summary>
     public HalfEdgeMesh Triangulated()
     {
+        if (IsTriangulated)
+            return this;
         var (positions, faces) = ToIndexed();
         var triangles = new List<int[]>();
         foreach (var face in faces)

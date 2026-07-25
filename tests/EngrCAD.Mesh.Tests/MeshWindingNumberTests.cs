@@ -6,6 +6,34 @@ namespace EngrCAD.Mesh.Tests;
 public class MeshWindingNumberTests
 {
     [Fact]
+    public void Direct_SkipsTheHierarchyAndStillAnswersExactly()
+    {
+        // The hierarchy costs ~0.7 µs per triangle to build and an exact query ~20 ns per
+        // triangle, so callers making a handful of queries — a boolean asks one per surface
+        // patch — are better off without it. Skipping it must be a cost decision only: every
+        // entry point has to keep answering, and answer at least as accurately.
+        var sphere = MeshPrimitives.UvSphere(1.0, segments: 32, rings: 16).Triangulated();
+        var fast = MeshWindingNumber.FromTriangulated(sphere);
+        var direct = MeshWindingNumber.Direct(sphere);
+
+        foreach (var p in new Vector3d[] { (0, 0, 0), (0.4, -0.2, 0.1), (0.99, 0, 0), (2, 0, 0), (0, 3, -1.5) })
+        {
+            Assert.Equal(fast.WindingNumber(p), direct.WindingNumber(p), 12);
+            // FastWindingNumber falls through to the exact sum, so it is exact here, not zero.
+            Assert.Equal(direct.WindingNumber(p), direct.FastWindingNumber(p), 12);
+            Assert.Equal(fast.IsInside(p), direct.IsInside(p));
+        }
+    }
+
+    [Fact]
+    public void Direct_RejectsMeshesThatAreNotTriangulated()
+    {
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1))); // quad faces
+
+        Assert.Throws<ArgumentException>(() => MeshWindingNumber.Direct(box));
+    }
+
+    [Fact]
     public void ClosedSphere_ExactWinding_IsOneInsideZeroOutside()
     {
         var sphere = MeshPrimitives.UvSphere(1.0, segments: 48, rings: 24);

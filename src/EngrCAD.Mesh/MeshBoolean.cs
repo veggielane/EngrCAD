@@ -63,32 +63,42 @@ public static class MeshBoolean
     /// </summary>
     private const BooleanMethod DefaultMethod = BooleanMethod.Exact;
 
-    /// <summary>Everything in either solid.</summary>
-    public static HalfEdgeMesh Union(HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method) =>
+    /// <summary>
+    /// Everything in either solid. <paramref name="progress"/> reports and cancels
+    /// cooperatively; <see cref="BooleanMethod.Bsp"/> ignores it (the BSP clipper's
+    /// recursion has no checkpoint to poll at).
+    /// </summary>
+    public static HalfEdgeMesh Union(
+        HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method, ProgressCancel? progress = null) =>
         method == BooleanMethod.Exact
-            ? MeshBooleanExact.Combine(a, b, BooleanOperation.Union)
+            ? MeshBooleanExact.Combine(a, b, BooleanOperation.Union, progress)
             : UnionBsp(a, b);
 
     /// <summary>Everything in <paramref name="a"/> but not in <paramref name="b"/>.</summary>
-    public static HalfEdgeMesh Difference(HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method) =>
+    public static HalfEdgeMesh Difference(
+        HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method, ProgressCancel? progress = null) =>
         method == BooleanMethod.Exact
-            ? MeshBooleanExact.Combine(a, b, BooleanOperation.Difference)
+            ? MeshBooleanExact.Combine(a, b, BooleanOperation.Difference, progress)
             : DifferenceBsp(a, b);
 
     /// <summary>Everything in both solids.</summary>
-    public static HalfEdgeMesh Intersection(HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method) =>
+    public static HalfEdgeMesh Intersection(
+        HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method, ProgressCancel? progress = null) =>
         method == BooleanMethod.Exact
-            ? MeshBooleanExact.Combine(a, b, BooleanOperation.Intersection)
+            ? MeshBooleanExact.Combine(a, b, BooleanOperation.Intersection, progress)
             : IntersectionBsp(a, b);
 
     /// <summary>Everything in either solid, via <see cref="DefaultMethod"/>.</summary>
-    public static HalfEdgeMesh Union(HalfEdgeMesh a, HalfEdgeMesh b) => Union(a, b, DefaultMethod);
+    public static HalfEdgeMesh Union(HalfEdgeMesh a, HalfEdgeMesh b, ProgressCancel? progress = null) =>
+        Union(a, b, DefaultMethod, progress);
 
     /// <summary>Everything in <paramref name="a"/> but not in <paramref name="b"/>, via <see cref="DefaultMethod"/>.</summary>
-    public static HalfEdgeMesh Difference(HalfEdgeMesh a, HalfEdgeMesh b) => Difference(a, b, DefaultMethod);
+    public static HalfEdgeMesh Difference(HalfEdgeMesh a, HalfEdgeMesh b, ProgressCancel? progress = null) =>
+        Difference(a, b, DefaultMethod, progress);
 
     /// <summary>Everything in both solids, via <see cref="DefaultMethod"/>.</summary>
-    public static HalfEdgeMesh Intersection(HalfEdgeMesh a, HalfEdgeMesh b) => Intersection(a, b, DefaultMethod);
+    public static HalfEdgeMesh Intersection(HalfEdgeMesh a, HalfEdgeMesh b, ProgressCancel? progress = null) =>
+        Intersection(a, b, DefaultMethod, progress);
 
     private static HalfEdgeMesh UnionBsp(HalfEdgeMesh a, HalfEdgeMesh b)
     {

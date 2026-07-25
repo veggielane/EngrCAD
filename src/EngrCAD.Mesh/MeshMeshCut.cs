@@ -207,7 +207,9 @@ public static class MeshMeshCut
     /// </summary>
     /// <exception cref="InvalidOperationException">The imprint could not be realized;
     /// both meshes are left untouched (the edit is transactional).</exception>
-    public static MeshImprint Imprint(HalfEdgeMesh a, HalfEdgeMesh b)
+    /// <exception cref="OperationCanceledException"><paramref name="progress"/> reported
+    /// cancellation; nothing is returned and both inputs are untouched.</exception>
+    public static MeshImprint Imprint(HalfEdgeMesh a, HalfEdgeMesh b, ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(a);
         ArgumentNullException.ThrowIfNull(b);
@@ -222,8 +224,10 @@ public static class MeshMeshCut
             throw new ArgumentException("Boolean operands are degenerate (zero extent).");
         double epsilon = RelativeEpsilon * scale;
 
+        progress?.ThrowIfCancelled();
         var pairs = new List<(int Item, int OtherItem)>();
         Bvh.Build(meshA.Boxes).QueryOverlap(Bvh.Build(meshB.Boxes), pairs);
+        progress?.Report(0.1);
 
         var points = new SeamPointTable(epsilon);
         var planA = new ImprintPlan();
@@ -234,8 +238,17 @@ public static class MeshMeshCut
 
         Span<Crossing> crossA = stackalloc Crossing[3];
         Span<Crossing> crossB = stackalloc Crossing[3];
+        int examined = 0;
         foreach (var (fa, fb) in pairs)
         {
+            // Coarse polling: the per-pair test is a few dozen flops, so checking every pair
+            // would cost more than the work it guards.
+            if (progress is not null && (++examined & 1023) == 0)
+            {
+                progress.ThrowIfCancelled();
+                progress.Report(0.1 + 0.3 * examined / pairs.Count);
+            }
+
             var outcome = Intersect(meshA, fa, meshB, fb, epsilon, points, crossA, crossB,
                 out var start, out var end);
             if (outcome == PairOutcome.CoplanarOverlap)
@@ -258,8 +271,10 @@ public static class MeshMeshCut
 
         var positions = points.Points;
         SnapToExistingVertices(meshA, planA, meshB, planB, positions, epsilon);
-        var cutA = MeshImprinter.Imprint(triA, planA, positions, epsilon, "first");
-        var cutB = MeshImprinter.Imprint(triB, planB, positions, epsilon, "second");
+        progress?.ThrowIfCancelled();
+        progress?.Report(0.4);
+        var cutA = MeshImprinter.Imprint(triA, planA, positions, epsilon, "first", progress, 0.4, 0.7);
+        var cutB = MeshImprinter.Imprint(triB, planB, positions, epsilon, "second", progress, 0.7, 1.0);
 
         // The table also interns crossings that lost the interval overlap; the reported
         // curve is only what became a segment.

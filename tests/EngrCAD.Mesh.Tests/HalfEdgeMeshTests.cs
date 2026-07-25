@@ -219,4 +219,21 @@ public class HalfEdgeMeshTests
             .ToList();
         Assert.Equal(4, ringAroundTop.Count);
     }
+
+    [Fact]
+    public void Triangulated_ReturnsTheSameInstanceWhenAlreadyTriangular()
+    {
+        // Not a micro-optimization: the general path is a full manifold-validating Build,
+        // and the exact boolean triangulates BOTH operands on entry, so cascaded booleans
+        // (whose inputs are already triangle meshes) were rebuilding everything per stage.
+        // Returning `this` is safe because a HalfEdgeMesh is immutable once built.
+        var quads = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 2, 3)));
+        Assert.False(quads.IsTriangulated);
+
+        var triangles = quads.Triangulated();
+
+        Assert.True(triangles.IsTriangulated);
+        Assert.NotSame(quads, triangles);
+        Assert.Same(triangles, triangles.Triangulated());
+    }
 }

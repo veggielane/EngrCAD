@@ -78,7 +78,37 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   locked by tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a
   shell with boundary edges — a hole in the solid), any model at ~1e-5 scale (BSP's
   absolute 1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every
-  polygon is discarded and the result is empty), and flush-mating parts (below).
+  polygon is discarded and the result is empty), and flush-mating parts (below). All three
+  operations take an optional `ProgressCancel` (the exact path only — the BSP clipper is a
+  recursive tree walk with no checkpoint to poll).
+
+  *Performance*, measured in Release over eleven representative pairs (Debug is
+  pessimistic: `EditableMesh` runs a full `Validate()` after every operator there). The
+  exact path is now **1.6–2.2× faster than it was** and, except on very coarse operands,
+  faster than BSP as well — dramatically so on curved meshes (two 48×24 spheres: 7.4 ms vs
+  262 ms; crossed 128-gon cylinders: 3.8 ms vs 54 ms), and BSP stack-overflows outright on
+  a 32k-triangle sphere pair where the exact path takes 58 ms. Three fixes, all found by
+  instrumenting phases rather than by inspection, and none where the reading eye would
+  look:
+  1. **`MeshImprinter` located interior seam points by scanning every fragment ever cut
+     from the host face** — O(k²) in the points landing on ONE face, which is exactly the
+     shape of a bore's rim landing on a single cap triangle. 96% of the imprint for a
+     64-sided bore through a box. Replaced by a walking point location (step across
+     whichever edge the target lies furthest outside of) with the old scan as the fallback,
+     so it is an optimization and not a change of answer.
+  2. **The boolean built two Barill multipole hierarchies to ask about eight points.**
+     Classification asks ONE question per surface patch; building an O(n log n) hierarchy
+     for that was 66–86% of the whole classification phase. `MeshWindingNumber.Direct`
+     skips the hierarchy (exact O(n) sums), and the boolean picks by question count against
+     a measured break-even of ~32 queries. Classification of two 32k-triangle spheres:
+     65 ms → 6 ms.
+  3. **`Triangulated()` rebuilt meshes that were already triangles**, and the exact boolean
+     triangulates both operands on entry — so cascaded booleans revalidated everything at
+     every stage. It now returns `this`, which is safe because `HalfEdgeMesh` is immutable.
+
+  Left on the table (Core's, not the mesh engine's): the broad phase — two `Bvh.Build`s
+  plus `QueryOverlap` — is now the single largest line on dense operands, ~22 ms of the
+  58 ms sphere-sphere boolean.
 - **`CoincidentSurface`** — the coplanar half of the exact boolean: what to do where the
   two solids **share** boundary instead of crossing it (stacked parts, a boss standing on
   a plate, a tool bottoming out exactly on the far face). The winding number is exactly ½
@@ -165,6 +195,11 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   quadrupole) multipole expansion of their winding field (β radius test, default 2),
   giving O(log n) queries with error far below the ½ decision threshold. `IsInside`
   thresholds at ½. Construction triangulates and indexes once; the mesh may be open.
+  `FromTriangulated` skips the triangulating copy when the caller already paid for it;
+  **`Direct` additionally skips the hierarchy**, making every query the exact O(n) sum.
+  That is the right trade below ~32 queries — the hierarchy costs ~0.7 µs per triangle to
+  build and an exact query ~20 ns per triangle — and it is a cost decision only:
+  `FastWindingNumber` and `IsInside` fall through to the exact sum, so they stay correct.
 - **`PolygonTriangulator`** — 2D triangulation with holes; a faithful port of mapbox
   earcut (minus z-order hashing).
 - **`HoleFiller`** — hole filling for open meshes, construct-new (g3 `SimpleHoleFiller` /
