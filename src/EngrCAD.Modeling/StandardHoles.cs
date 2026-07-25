@@ -82,4 +82,12 @@ public static class StandardHoles
     /// <summary>Recommended minimum pilot depth for a Tappex Trisert® of this size
     /// (insert length + 2 mm bottom clearance); pass to <see cref="Shape.Drill"/>.</summary>
     public static double TrisertMinimumDepth(double size) => Row(size).TrisertLength + 2.0;
+
+    /// <summary>Outside diameter of a Tappex Trisert® of this size — which is also the
+    /// pilot bore <see cref="Trisert"/> cuts. ⚠ Verify against the current datasheet.</summary>
+    public static double TrisertDiameter(double size) => Row(size).TrisertDiameter;
+
+    /// <summary>Body length of a Tappex Trisert® of this size. ⚠ Verify against the
+    /// current datasheet.</summary>
+    public static double TrisertLength(double size) => Row(size).TrisertLength;
 }

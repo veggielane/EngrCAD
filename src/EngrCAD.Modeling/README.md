@@ -637,6 +637,97 @@ var plate = new Part("plate", plateShape)
   from `HoleSpec`/`ThreadSpec` ("⌀5.5 ↧14", "M6×1 ↧12") so drilled/tapped parts can
   label themselves from the same specs that cut them.
 
+## Standard components ("smart" hardware)
+
+Real hardware, where **a component is more than geometry: placing it modifies the host
+model and assembles itself.** One call cuts what the part needs and adds the occurrence:
+
+```csharp
+var top = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);   // Box(70, 44, 12) top
+
+var build = new ComponentAssembly("plate", Shape.Box(70, 44, 12), Palette.Sage);
+build.Place(StandardComponents.CapScrew(5, 16), [new(-24, 0), new(24, 0)], top);
+build.Place(StandardComponents.TrisertInsert(5), [new(0, 0)], top);
+
+scene.AddTab("hardware").Add(build.ToAssembly("bracket"));
+// plate now has two Ø10 counterbores over Ø5.5 clearance holes and one Ø7.1 insert
+// pilot; the assembly has the plate plus three posed component occurrences.
+```
+
+A `HardwareComponent` carries three things: its own parametric `Body` (a `Shape`), a
+seating convention, and a **host preparation** — the cut the target body needs
+(`Prepare`, and `PrepareAnchor` for the far body of a stack). The catalogue is
+deliberately small and correct rather than broad:
+
+| Component | Host preparation | Body (v1 fidelity) |
+| --- | --- | --- |
+| `StandardComponents.CapScrew(size, length, seating, fit)` — ISO 4762 SHCS | ISO 273 clearance hole, plus the DIN 974 counterbore when `ScrewSeating.Counterbored` (the default); as an anchor, the coarse tap-drill pilot plus two pitches of runout | head cylinder (dk, k = d) on a plain shank, one exact revolve — **no hex socket, no modeled thread** (use `Shape.ExternalThread`) |
+| `StandardComponents.TrisertInsert(size)` — Tappex Trisert® | the catalogue pilot bore (`StandardHoles.Trisert`) at `TrisertMinimumDepth` | plain sleeve bored to the thread's minor diameter — no knurl, no flange |
+| `StandardComponents.Dowel(diameter, length, inserted)` — ISO 2338 m6 | reamed hole at the **nominal** diameter, just past the inserted length (both bodies of a stack) | cylinder with 45° end chamfers rather than the standard's crowned ends |
+
+⚠ ISO 4762 head diameters and the Trisert table are transcribed, not derived — both
+carry a verify-against-the-datasheet warning in the source. Head height (k = d), the
+thread profile and the clearance/counterbore/tap-drill sizes all come from formulas or
+tables already in `StandardHoles`/`StandardThreads`.
+
+**The local frame is one rule.** A component's `Body` is modeled with **+Z out of the
+host** and the origin at its *seating datum* — the surface it bears on (a cap screw's
+head underside, an insert's or a dowel's top face). `SeatDepth` says how far below the
+host's face that datum sits, so a counterbored screw is the same geometry as a proud
+one, just posed deeper; `SeatFrame(face, point)` turns a point on a face into the
+occurrence pose. `InsertedLength` (how far the body reaches below the datum) is what
+makes a stack computable.
+
+**Preparation is a `Feature`, and that is the point.** `Place` appends a
+`ComponentFeature` to a `FeatureHistory`, so placements regenerate, cache and suppress
+like any other step:
+
+- `build.Suppress(placement)` removes the component's bore from the host **and** its
+  occurrence from the assembly — one switch, both halves.
+- Leave the face out and the component seats on `FeatureContext.TopPlane`, re-resolved
+  every regeneration: change an upstream thickness parameter and the fasteners move with
+  the face they sit on, their holes re-cut through the new body.
+- `ComponentAssembly.History` is public, so placements interleave with your own
+  features; `new ComponentAssembly(name, history)` decorates an existing parametric
+  model instead of a fixed shape.
+- Depths resolve explicit-first: `ComponentSite.Depth(natural)` prefers the placement's
+  `Depth` parameter, and `ComponentSite.ThroughDepth` answers "all the way through this
+  body" (the host's extent below the face plus 5%, so a through tool never ends coplanar
+  with the far face — which `Drill` rejects) without the component knowing the host's
+  size.
+
+`ToAssembly()` regenerates and returns an `Assembly` whose occurrence 0 is the prepared
+host (also `build.Host`) followed by one occurrence per placed component. Components are
+shared by reference — `HardwareComponent.ToPart()` hands back one `Part` however many
+times it is placed, so N fasteners mesh once.
+
+### The full fastener stack
+
+`PlaceThrough` prepares **both** bodies from one call — clearance (and counterbore) in
+the near body, the threaded engagement in the far one:
+
+```csharp
+var coverFace = SketchPlane.At((0, 0, 10), Vector3d.UnitX, Vector3d.UnitY);
+var mateFace  = SketchPlane.At((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY);
+
+var cover = new ComponentAssembly("cover", Shape.Box(60, 40, 10).Translate(0, 0, 5));
+var basePlate = new ComponentAssembly("base", Shape.Box(60, 40, 20).Translate(0, 0, -10));
+
+cover.PlaceThrough(StandardComponents.CapScrew(5, 16),
+                   [new(-20, 0), new(20, 0)], coverFace, basePlate, mateFace);
+// cover: Ø10 counterbore + Ø5.5 clearance through.  base: Ø4.2 tap-drill pilot,
+// 13.1 deep — 11.5 of engagement plus two pitches of runout, computed not guessed.
+```
+
+The engagement is geometric: the grip is the distance from the component's seating datum
+down to the anchor face, and what is left of `InsertedLength` engages the far body.
+Placement points are **projected** onto the anchor face along the fastener axis, so its
+2D axes need not match the seating face's; non-parallel faces, an anchor above the seat
+and a component too short to reach are all rejected with the numbers in the message. The
+screw is placed **once** (on the near body) — the far half carries `Assemble = false`.
+To anchor into an insert rather than a tapped hole, place the insert on the far body
+itself and use `Place` on the near one.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for
@@ -654,4 +745,7 @@ Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
 non-uniformly scaled spheres. For text: OpenType/CFF (cubic) outlines, `GPOS` kerning,
 text on a curve, variable fonts, and B-Rep booleans for sketch-extrusion tools (which
-would make engraving B-Rep-native).
+would make engraving B-Rep-native). For standard components: more families (button and
+countersunk heads, nuts, washers, bearings), higher body fidelity (hex sockets, modeled
+threads on the shank, knurled inserts), and stacks that anchor into a placed component
+(an insert) rather than the screw's own tapped pilot.
