@@ -10,12 +10,30 @@ engines.
   manifold Surface Nets (dual contouring): one vertex per *connected component of inside
   corners* per cell (plain one-vertex-per-cell produces non-manifold edges on thin
   sheets and saddles), one quad per interior sign-changing grid edge, wound outward.
-  Surfaces crossing the sampling region come out open there. Grid sampling runs in
-  parallel over i-slabs via `ParallelFor.Blocks` (each block fills and evaluates a
-  disjoint slice, so the mesh is bit-for-bit identical to a sequential run); the
-  topology passes stay sequential so output ordering never depends on scheduling. The
+  Surfaces crossing the sampling region come out open there. The
   optional `ProgressCancel` reports coarse progress and cancels cooperatively
   (throws `OperationCanceledException`, partial results discarded).
+  - **Sampling is deinterleaved and streamed.** The grid is never materialized as points:
+    coordinates are generated from the indices straight into pooled x/y/z scratch and fed
+    to `Sdf.Evaluate(x, y, z, distances)` — the SoA batch entry — so the round trip that
+    built a `Vector3d[]` corner array only for the AST root to transpose it back apart is
+    gone (24 bytes per corner, and one pass over the whole grid). Samples live in a
+    **sliding window of whole x-slabs** sized to a 64 MB budget, with cell vertices and the
+    three quad passes interleaved into the same walk, so peak memory scales with the
+    grid's cross-section rather than its volume: a 1024³ grid needs 16 MB of samples where
+    the dense array needed 8.6 GB. Below about resolution 200 the whole grid fits the
+    budget and the window IS the grid — the small-model path is unchanged.
+    Measured on the reference machine (win-arm64, Release, idle): res 96 **39.9 → 15.6 ms**
+    and 40.9 → 19.9 MB; res 256 **735.5 → 258.8 ms** and 562 → 145 MB; res 384
+    **1922.7 → 747.5 ms** and 1842 → 289 MB. See `SurfaceNetsBenchmark`.
+  - **Output is bit-for-bit independent of both the batching and the window.** Slabs are
+    sampled in parallel via `ParallelFor.Blocks` (every sample lands in its own slot), the
+    topology passes stay sequential, and quads are emitted into per-axis buckets keyed by
+    the loop variable that was outermost in the dense version's three emission passes, then
+    concatenated — which reproduces the dense face ordering exactly while letting the
+    passes run slab by slab. `SurfaceNetsSamplingTests` locks all of it against golden
+    bit-hashes of the pre-streaming output, against a wrapper that forces every batch back
+    through the scalar `Evaluate`, and across window sizes from "whole grid" to "two slabs".
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces

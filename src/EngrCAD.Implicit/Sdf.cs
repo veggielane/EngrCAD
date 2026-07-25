@@ -63,6 +63,38 @@ public abstract class Sdf
     }
 
     /// <summary>
+    /// Batch evaluation from <em>already deinterleaved</em> coordinates — for bulk callers
+    /// that generate sample positions procedurally (grid sampling) rather than holding an
+    /// array of <see cref="Vector3d"/>. It skips the transpose that
+    /// <see cref="Evaluate(ReadOnlySpan{Vector3d}, Span{double})"/> performs, and it lets a
+    /// caller stream an arbitrarily long run through a fixed-size coordinate buffer instead
+    /// of materializing one point per sample: <c>Polygonize</c> saves 24 bytes per grid
+    /// corner that way.
+    /// <para>
+    /// Results are bit-for-bit identical to the interleaved overload (both drive the same
+    /// <see cref="EvaluateBatch"/> seam, chunked identically). Note that a node overriding
+    /// the interleaved overload to intercept whole batches does <em>not</em> intercept this
+    /// one — <see cref="EvaluateBatch"/> is the seam that always sees every batch.
+    /// </para>
+    /// </summary>
+    public void Evaluate(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        if (y.Length < x.Length || z.Length < x.Length || distances.Length < x.Length)
+            throw new ArgumentException("Coordinate and distance spans must be at least as long as x.");
+
+        // Chunked exactly like the interleaved entry, so operator temporaries stay cache
+        // resident no matter how long a run the caller streams through.
+        for (int start = 0; start < x.Length; start += SdfBatch.ChunkLength)
+        {
+            int length = Math.Min(SdfBatch.ChunkLength, x.Length - start);
+            EvaluateBatch(
+                x.Slice(start, length), y.Slice(start, length), z.Slice(start, length),
+                distances.Slice(start, length));
+        }
+    }
+
+    /// <summary>
     /// The SIMD seam: evaluate a batch given deinterleaved coordinates (all four spans
     /// share a length). Structure-of-arrays is the layout a lane-wise kernel needs — the
     /// interleaved <see cref="Vector3d"/> form the public API takes would cost a strided

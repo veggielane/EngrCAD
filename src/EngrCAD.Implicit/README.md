@@ -7,7 +7,13 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
 
 - **`Sdf`** (abstract base) — `Evaluate(point)`, batch `Evaluate(span, span)`,
   finite-difference `Normal`, and conservative `Bounds` propagated through every node
-  (infinite for unbounded fields).
+  (infinite for unbounded fields). Batches come in two shapes: interleaved
+  `Evaluate(ReadOnlySpan<Vector3d>, Span<double>)` for callers holding point arrays, and
+  **deinterleaved `Evaluate(x, y, z, distances)`** for callers that generate coordinates
+  procedurally (grid sampling) — the latter skips the transpose entirely and lets a caller
+  stream an arbitrarily long run through a fixed-size coordinate buffer instead of
+  materializing one `Vector3d` per sample. Both drive the same internal `EvaluateBatch`
+  SIMD seam, chunked identically, so they agree bit for bit.
 - **SIMD batch evaluation** (`BatchEvaluation.cs`) — the batch entry point is the
   throughput path, and it is vectorized; see [Batch evaluation](#batch-evaluation-simd).
 - **Primitives** (exact distances, Quilez forms): sphere, box, cylinder, cone
