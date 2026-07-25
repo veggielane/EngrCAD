@@ -9,40 +9,34 @@ implementing. Ordered roughly by value-for-effort within each section.
 
 ## Mesh engine (EngrCAD.Mesh)
 
-- [ ] **Editable mesh (Euler operators)** — our `HalfEdgeMesh` is immutable-after-build;
-  g3's `DMesh3_edge_operators` (SplitEdge/CollapseEdge/FlipEdge/PokeTriangle/MergeEdges,
-  all with bowtie/non-manifold guards) shows the operator set a mutable engine needs.
-  Study `RefCountVector` (sparse index allocator with free list + `CompactInPlace`) and
-  `SmallListSet` (pooled adjacency lists, zero per-vertex allocation) for the storage
-  model, and `Timestamp/ShapeTimestamp` counters for cache/spatial-tree invalidation.
+Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-identical
+undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
+`MeshExtrude` (faces/thicken), selections + connected components. Remaining:
+
+- [ ] **Phase B: imprint boolean + editor-powered repairs** — the exact-intersection
+  boolean rewrite (`MeshMeshCut` + `MeshBoolean`: cut both meshes along exact
+  intersection segments via `Bvh.QueryOverlap` candidate pairs + triangle–triangle
+  segments, imprint with `EditableMesh.SplitEdge`, classify by `MeshWindingNumber`,
+  weld; `MeshChangeSet` gives transactional rollback of failed imprints; g3's honest
+  coplanar-case caveats apply). Plus the editor-dependent repairs: `MergeCoincidentEdges`
+  (crack closing = `MergeEdges` + spatial-hash search over coincident boundary pairs —
+  slots between MeshRepair's weld and orientation passes), `RegionOperator`
+  (extract-modify-reinsert as a change-set session; `MeshFaceSelection.ToMesh()` +
+  `BoundaryLoops()` are the extraction half), and `MeshRepair` gaining hole-fill
+  integration for a full `AutoRepair`.
 - [ ] **Isotropic remeshing with constraints** — `Remesher`/`RemesherPro` +
   `MeshConstraints` (fixed edges, no-flip, project-to-target) +
-  `SharpEdgeReprojectionRemesh` for feature recovery. Would give us quality control after
-  booleans/decimation, and pairs with our `MeshSdf` as the projection target. Also a
-  prerequisite for good FEA tet-mesh input (see Simulation).
-- [ ] **Hole-filling suite** — we have none. g3 has a whole ladder: `SimpleHoleFiller` →
-  `PlanarHoleFiller` (map to 2D, handles nested holes) → `MinimalHoleFill` (sharp-edge
-  reconstruction) → `SmoothedHoleFill` (fill+remesh+Laplacian) → `AutoHoleFill`
-  (strategy dispatch). Start with planar + simple; the dispatch pattern is worth copying.
-- [ ] **Mesh repair pipeline** — `MeshAutoRepair` sequencing (orient → weld → degenerate
-  removal → fill → non-manifold cleanup), `MeshRepairOrientation` (consistent winding
-  across components), `MergeCoincidentEdges` (crack closing — overlaps our `MeshWelder`
-  zip but edge-based). A repair entry point would let us ingest dirty STL files.
-- [ ] **Extrude/shell mesh ops** — `MeshExtrudeFaces` (face-set extrude),
-  `MeshExtrudeMesh` (offset + stitch = thicken/shell). Complements our SDF
-  `Shell`/`Offset` with a direct mesh route.
-- [ ] **Boolean alternative: intersection-imprint + winding classification** —
-  `MeshMeshCut` + `MeshBoolean` (cut both meshes along exact intersection segments,
-  classify by winding number, weld). This is the exact-intersection rewrite our BSP
-  booleans' roadmap calls for; g3's is a working reference including its honest
-  coplanar-case caveats. `MeshWindingNumber` exists and could also harden
-  `BrepBoolean`'s SDF-probe classification.
-- [ ] **Selection/region model** — `MeshVertex/Edge/FaceSelection` (grow/contract),
-  `MeshConnectedComponents`, `RegionOperator` (extract-modify-reinsert a submesh with
-  index maps), `DSubmesh3`. Foundation for local editing and the viewer's selection
-  becoming operational (delete/move a face region).
-- [ ] **Undo/redo change records** — `DMesh3Changes` (reversible add/remove/modify
-  records). The transactional pattern a real editor needs.
+  `SharpEdgeReprojectionRemesh` for feature recovery; now buildable on
+  `EditableMesh`'s split/collapse/flip. Quality control after booleans/decimation,
+  pairs with `MeshSdf` as projection target, and a prerequisite for good FEA tet
+  input (see Simulation).
+- [ ] Hole-filling upper tiers — `MinimalHoleFill` (sharp-edge reconstruction) and
+  `SmoothedHoleFill` (fill+remesh+Laplacian; needs remeshing above) on top of the
+  landed `FillAll` dispatch.
+- [ ] Port `MeshDecimator` onto `EditableMesh.CollapseEdge` (measured
+  bit-identical-or-better comparison, like the PQ upgrade precedent).
+- [ ] `MeshExtrude.Faces` overload taking `MeshFaceSelection`; mutable in-place
+  variants of fill/extrude once callers want them.
 
 ## Implicit engine (EngrCAD.Implicit)
 
@@ -231,7 +225,10 @@ export — is recorded in CLAUDE.md):
 - [ ] model-validation report (volumes, bounds, manifoldness per body) in the viewer —
   the `assert/echo` analog
 - [ ] export 3MF / AMF (zip+XML; 3MF is the modern printing format), OFF
-- [ ] import STL/OBJ/OFF (+ repair pipeline) — work on existing models
+- [ ] `Shape.From(path)` import sugar — the engine layer ✅ landed (`MeshReader` STL/
+  OBJ/OFF + `MeshRepair.Clean` + `ReadAndRepair`); wrap it in Modeling for user-facing
+  import, then a docs-site example becomes executable (write-with-StlWriter →
+  dirty-in-memory → ReadAndRepair)
 - [ ] import/export DXF + SVG (2D profiles in/out; SVG also useful for drawings)
 
 ## OpenCASCADE (OCCT) feature parity (open items)

@@ -67,9 +67,19 @@ Each engine uses the data structure its mathematics wants:
 - **Storage is struct-of-arrays** (index lists), while the public traversal API is
   lightweight **handle structs** (`Vertex`, `HalfEdge`, `Face`) that read naturally under
   LINQ — this is the project's "LINQ-native" style at the topology level.
-- **Immutability after build**: algorithms (subdivision, decimation, booleans) return new
-  meshes. Mutation-based editing (edge collapse in place, etc.) can be added later behind
-  the same handles.
+- **Immutability after build — enforced structurally**: algorithms (subdivision,
+  decimation, booleans) return new meshes, and every downstream consumer (booleans,
+  welds, viewer caches, `MeshSdf`) relies on that reference semantics. Mutation lives
+  in a separate **`EditableMesh` companion** (free-list SoA copied from the immutable
+  mesh, compacted back via the manifold-validating `Build`) rather than behind a
+  facade over shared storage — a facade would make the immutable contract enforceable
+  only by discipline. Its five Euler operators carry g3's full guard sets (guards run
+  before the first mutation; a refusal returns an enum reason and touches nothing),
+  and undo is a **journal of slot writes** — the complete journal, including
+  free-list links and counters, so do→revert restores bit-identical state and
+  element IDs (g3's per-element add/remove records were rejected precisely because
+  they don't restore IDs; replay verifies each slot's expected value before writing,
+  so out-of-order application throws instead of corrupting).
 - **Booleans are BSP-based** (csg.js): robust enough for well-conditioned inputs and two
   orders of magnitude simpler than exact intersection booleans. The known BSP weakness —
   the two sides of an intersection seam are tessellated independently, leaving T-junction
