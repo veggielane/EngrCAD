@@ -589,6 +589,53 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **Surface Nets streams the grid in a window of x-slabs.** The dense sampler's *memory*
+  was the wall on resolution, not its speed. Cells only ever need value slabs i and i+1
+  and cell maps for i−1 and i, so the whole algorithm fits a sliding window; sizing that
+  window to a memory budget makes the small case (window == whole grid) the *same code
+  path* rather than a second implementation, which is the property that kept the change
+  safe. The load-bearing subtlety is face ordering: the three quad passes are nested
+  differently (X is i-major, Y j-major, Z k-major), so streaming by i must bucket Y quads
+  by j and Z quads by k and concatenate at the end to reproduce the dense order exactly.
+  Miss that and "bit-for-bit identical" quietly holds for vertices and fails for faces.
+- **A deinterleaved batch entry exists because bulk producers *generate* their samples.**
+  The interleaved `Vector3d` overload stays the general API, but forcing a procedural
+  producer through an array of points costs 24 bytes per sample and a transpose the root
+  immediately undoes. Both overloads drive the same `EvaluateBatch` seam with the same
+  chunking, so they agree bit for bit — and a node that overrides the *interleaved* public
+  entry to intercept whole batches would not see the deinterleaved one, which is exactly
+  why `EvaluateBatch`, not either public entry, is documented as the seam that always sees
+  every batch.
+- **Two-level block index, chosen over hashing.** A hash table would also have made large
+  sparse domains work, but two dense array indices are faster, need no key type, and avoid
+  this repo's standing lesson about packing structured 3D keys into hashed integers. The
+  idea is g3's `BiGrid3`; g3's own implementation is an unfinished stub with no value API
+  and no in-repo consumer, so the idea was adopted and the code was not. Surveying a
+  library is for ideas, not implementations — the same conclusion the hole-fill work
+  reached independently.
+- **The extruded-region node memoizes per (x, y), and that beats the SIMD underneath it.**
+  A prism's field is constant along z and every bulk consumer samples z fastest, so a
+  batch is normally a handful of long constant-xy runs. This is an *exact* memoization —
+  same input, same double — and the run test is deliberately an identity comparison
+  (`==` on the coordinates), not a geometric one: an ulp-different coordinate simply
+  misses the cache and gets its own evaluation. Worth roughly 10× on engraving-shaped
+  profiles, where the vector kernels beneath it are worth about a third of that. Naming a
+  task "vectorize X" can point at the wrong lever entirely; the win was structural, in the
+  *consumer*.
+- **`SketchRegion` preserves segment order even though it need not.** The distance fold is
+  a running minimum over non-negative results with no NaN and no negative zero (every
+  distance comes out of `Math.Sqrt`/`Math.Abs`), so it is order-independent — but keeping
+  construction order makes the batch path a literal transcription of the scalar loop,
+  which is what makes "bit-for-bit" reviewable rather than merely asserted.
+- **Why there is no mesh-specific narrow band.** The generic band derives its sign from
+  the source, which is sign-exact by contract, under a provable culling argument
+  (|d(centre)| − circumradius > band ⟹ the node cannot straddle). A mesh-specific band
+  must find its own sign *outside* the band: SDFGen and g3 use ray-crossing parity, and
+  propagating the band's sign outward through the chamfer scan is not sound, because the
+  chamfer's argmin is not the Euclidean argmin — "the nearest band sample is on my side"
+  is not a theorem. Trading a proof for a ray cast, on the one property that boolean
+  classification depends on kernel-wide, is the wrong trade — even though 74–85% of such a
+  bake's wall clock genuinely is source evaluation.
 - **A sliver's normal is the boundary curve's binormal — which is why "harmless" zero-area
   triangles are not.** For three points at arc spacing h on a curve,
   (P₁−P₀) × (P₂−P₁) ≈ h³·T × K, and T × K = k_g·N + k_n·(T × N). A sliver clipped along a

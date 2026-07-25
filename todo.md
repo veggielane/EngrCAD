@@ -54,25 +54,28 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 
 ## Implicit engine (EngrCAD.Implicit)
 
-- [ ] **Sparse/multiresolution grids** — `DSparseGrid3` (block-hashed), `BiGrid3`
-  (two-level), `HBitArray` (hierarchical bit array for sparse iteration). Storage
-  substrate for large SDF domains that our dense Surface Nets sampling can't handle;
-  `LazyGridSdf`'s 16³-block cache is the natural seam to build on.
-- [ ] **Mesh-specific narrow band** (the generic `Sdf.NarrowBand` ✅ landed) — triangle
-  rasterization into the band plus closest-triangle propagation would beat the generic
-  octree culling for meshes specifically. Belongs in Interop next to `MeshSdf`.
-- [ ] **Feed Surface Nets deinterleaved coordinates** (Interop) — now that batch
-  evaluation is vectorized, sampling is a *minority* of `Polygonize`'s cost (it gained
-  only 1.25× where bakes gained 3×), and it still builds a full-size `Vector3d[]` corner
-  array that the root immediately transposes back apart.
-- [ ] **Vectorize `SketchRegion.SignedDistance`** (Modeling) — now the scalar bottleneck
-  under `Sdf.ExtrudedRegion`/`RevolvedRegion`, which the SIMD work left untouched.
+- [ ] **Arc distance without `Atan2`** — `SketchRegion`'s lane-wise kernels cover lines
+  and full circles; *partial* arcs stay scalar because `ArcSeg.Distance` decides in-sweep
+  via `Math.Atan2`, which has no bit-exact vector form. A cross/dot wedge test would
+  vectorize, but it changes the boolean at the sweep boundary, so it needs its own
+  exactness argument rather than a transcription. Same for béziers, whose control points
+  `SketchRegion` cannot reach today (private to `CubicSeg`).
 
 ## Interop / meshing (EngrCAD.Interop)
 
-- [ ] **Continuation ("surface-following") meshing** — `MarchingCubesPro` only evaluates
-  cells near the surface it discovers, instead of the full grid our Surface Nets
-  samples. Big win for high resolutions; adapt the idea to Surface Nets.
+- [ ] **Continuation ("surface-following") Surface Nets** — the slab-streaming sampler
+  fixed the *memory* wall (peak is O(n²) now, so resolution 1024 is reachable) but still
+  evaluates every grid corner. `MarchingCubesPro`'s idea of only visiting cells near the
+  discovered surface is the remaining win, and the slab walk is a natural place to hang it.
+- [ ] **Packet nearest-triangle query for `MeshSdf`** — 74–85% of a mesh narrow band's
+  wall clock is inside `Bvh.Nearest`. *Seeding* the branch and bound with the previous
+  coherent sample was built, verified bit-identical and measured at only 1.12–1.20× (a
+  nearest-first search is already its own seed) — see `MeshSdfBatchTests` for the numbers
+  and the reverted approach; **don't redo it**. The untried lever is a packet query: one
+  traversal per coherent block collecting the candidate triangles for all its points at
+  once, then a short per-point scan, which attacks node-test cost rather than the initial
+  bound. Needs care over tie-breaking (equidistant triangles must resolve to the same one
+  `Bvh.Nearest` picks) and a fallback when the candidate list blows up.
 - [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`). The zip
   handles single-loop bands with single-sample rungs; three cases still ear-clip or
   refuse, each cheap on its own:
