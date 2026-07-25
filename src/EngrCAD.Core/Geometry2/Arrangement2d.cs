@@ -283,16 +283,30 @@ public sealed class Arrangement2d
         // Positive loops bound cells; negative loops are island perimeters — holes of the
         // smallest strictly-larger positive loop containing them, or the unbounded outside
         // (dropped) when uncontained. Zero-area loops (pure spurs) are dropped.
+        //
+        // A hole loop must come from a DIFFERENT connected component than the cell it fills:
+        // a face's boundary is one walk, so a loop reachable from the cell's own loop would
+        // have been traced as part of it (a dangling slit), never as a separate cycle. That
+        // structural rule replaces what used to be an area comparison alone, and it is not
+        // an optimization — a lone convex cell's own reversed perimeter has an area equal to
+        // the cell's up to ULPS, and when the reversed area lost a bit the strict `>` test
+        // let the outer face pass as the cell's own hole. The probe vertex is shared by both
+        // loops, so the containment test was a coin flip, and the cell came out with zero
+        // area and was dropped: an entire operand silently vanished from a union.
+        var component = ConnectedComponents();
         var cellLoops = loops.Where(l => l.Area > 0).ToList();
         var holeAssignments = cellLoops.Select(_ => new List<int[]>()).ToList();
         foreach (var (holeVertices, holeArea) in loops.Where(l => l.Area < 0))
         {
             var probe = _vertices[holeVertices[0]];
+            int holeComponent = component[holeVertices[0]];
             int best = -1;
             double bestArea = double.PositiveInfinity;
             for (int i = 0; i < cellLoops.Count; i++)
             {
                 double area = cellLoops[i].Area;
+                if (component[cellLoops[i].Vertices[0]] == holeComponent)
+                    continue;
                 if (area > -holeArea && area < bestArea && LoopContains(cellLoops[i].Vertices, probe))
                 {
                     best = i;
@@ -605,6 +619,33 @@ public sealed class Arrangement2d
     /// <summary>0 for directions with angle in [0, π) (east axis inclusive), 1 for [π, 2π).</summary>
     private static int HalfPlane(Vector2d from, Vector2d to) =>
         to.Y > from.Y || (to.Y == from.Y && to.X > from.X) ? 0 : 1;
+
+    /// <summary>Component id per vertex (union-find over the edges): two vertices share an
+    /// id exactly when a path of edges joins them. Used by <see cref="ExtractCells"/> to
+    /// keep a component's own outer walk from being mistaken for one of its holes.</summary>
+    private int[] ConnectedComponents()
+    {
+        var parent = new int[_vertices.Count];
+        for (int v = 0; v < parent.Length; v++)
+            parent[v] = v;
+
+        int Find(int v)
+        {
+            while (parent[v] != v)
+                v = parent[v] = parent[parent[v]];   // path halving
+            return v;
+        }
+
+        foreach (var (a, b) in _edges)
+        {
+            int ra = Find(a), rb = Find(b);
+            if (ra != rb)
+                parent[ra] = rb;
+        }
+        for (int v = 0; v < parent.Length; v++)
+            parent[v] = Find(v);
+        return parent;
+    }
 
     private double LoopSignedArea(IReadOnlyList<int> loop)
     {

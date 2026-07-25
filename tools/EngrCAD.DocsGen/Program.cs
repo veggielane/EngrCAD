@@ -185,8 +185,8 @@ var options = ScriptOptions.Default
         typeof(Shape).Assembly)
     .AddImports(
         "System", "System.IO", "System.Linq", "System.Collections.Generic",
-        "EngrCAD.Core", "EngrCAD.Mesh", "EngrCAD.Implicit", "EngrCAD.BRep",
-        "EngrCAD.Interop", "EngrCAD.Query", "EngrCAD.Modeling");
+        "EngrCAD.Core", "EngrCAD.Core.Geometry2", "EngrCAD.Mesh", "EngrCAD.Implicit",
+        "EngrCAD.BRep", "EngrCAD.Interop", "EngrCAD.Query", "EngrCAD.Modeling");
 
 var rendered = 0;
 var executed = 0;

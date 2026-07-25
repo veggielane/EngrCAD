@@ -4,6 +4,8 @@
   href: sketching.md
 - name: 2D sketch booleans
   href: sketch-booleans.md
+- name: 2D views (offset, section, silhouette)
+  href: 2d-views.md
 - name: Extrude, revolve, sweep
   href: extrude-revolve-sweep.md
 - name: Booleans

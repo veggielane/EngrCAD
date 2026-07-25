@@ -220,8 +220,6 @@ What remains from mapping OpenSCAD's feature set against EngrCAD (the covered gr
 primitives, 3D booleans, transforms, linear/rotate extrude + RMF sweep, STEP/STL/OBJ/PNG
 export — is recorded in CLAUDE.md):
 
-- [ ] wedge primitive (the OCCT gap; cone ✅ landed — revolved-line side surface +
-  `Sdf.Cone` + `MeshPrimitives.Cone` + `Shape.Cone`, Native in all three reps)
 - [ ] **Text follow-ups** (`Shape.Text` ✅ landed — dependency-free TrueType reader,
   glyphs → exact sketch segments, containment-based counter detection, layout with
   `kern` kerning): **CFF/OpenType-PostScript outlines** (`CFF ` table, cubic Béziers →
@@ -232,11 +230,6 @@ export — is recorded in CLAUDE.md):
   **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
   font reference).
 - [ ] `surface()` — heightmap (image/data grid) → mesh terrain
-- [ ] 2D booleans — union/difference/intersection of profiles/regions (needed by the
-  sketch engine; `Arrangement2d`+`GraphCells2d` is the mechanism)
-- [ ] 2D booleans on profiles still need a region model, but the primitives are in:
-  `ConvexHull2` ✅ (Core, monotone chain — closes the 2D-hull line; 3D quickhull ✅
-  `Shape.Hull`), `Arrangement2d` ✅ + exact predicates ✅ (the mechanism named above)
 - [ ] `minkowski()` — general Minkowski sum is hard; the important special case is
   rounding, which we already have cheaply (SDF `Offset` ≡ sphere-Minkowski, and
   `Filleting`). Document the equivalence; general polyhedron⊕polyhedron is low priority
@@ -250,14 +243,25 @@ export — is recorded in CLAUDE.md):
   box/cylinder/extrude/sphere/torus/cone)
 - [ ] `resize()` — non-uniform scale to target bounds (mesh: easy; SDF: breaks the
   distance metric — document lower-bound semantics; B-Rep: needs affine surfaces)
-- [ ] `offset(r|delta, chamfer)` (2D) — polygon offsetting with round/miter/chamfer
-  corners (classic Clipper-style); feeds shells, pockets, and toolpaths
+- [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
+  chamfer joins, erosion as complement dilation): **exact curved offsets** (arcs stay
+  arcs — today everything flattens first, same limitation as all region work); variable
+  offset along the outline; open-path offsetting (a stroke, for toolpaths).
 - [ ] `linear_extrude(twist, scale, slices)` — twisted/tapered extrusion (a
   `SweptSurface` variant with per-v rotation/scale; g3's `GenCylGenerators` is the
   mesh route)
-- [ ] `projection(cut=false)` — solid's shadow as a 2D outline (needs 2D booleans)
-- [ ] `projection(cut=true)` — planar cross-section as a 2D region (mesh: plane cut
-  loops → polygons; B-Rep: `SurfaceIntersection` per face + loop assembly)
+- [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
+  `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
+  - [ ] **`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.** Repro: the
+    64-segment torus silhouette viewed side-on. Areas are right to 6 significant figures
+    and order-independent after quantization; it is the HOLE COUNT that is unreliable
+    there, which is why the test asserts on hole area. A cell-classification fix, not an
+    epsilon one.
+  - [ ] **B-Rep silhouettes** — true silhouette curves on curved surfaces. Today the
+    outline is always mesh-derived, so its fidelity is the mesh's however exact the solid.
+  - [ ] **`OfSolid` on a flush plane** — a plane containing a face or an edge throws
+    (that section is an area, not a curve). A proper answer needs coplanar-face handling,
+    the same gap as coplanar booleans.
 - [ ] `roof()` — straight-skeleton roof over a polygon; low priority
 - [ ] **`TessellationQuality` options type** — unify `segmentsPerCircle`/
   `curveSamples`/`resolution` into one type (max angle, max chord deviation, min/max

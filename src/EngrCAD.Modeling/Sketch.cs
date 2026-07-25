@@ -269,6 +269,24 @@ public sealed class Sketch
     public IReadOnlyList<Region2d> Subtract(Sketch other, double chordTolerance = DefaultChordTolerance) =>
         Region2dBoolean.Difference(ToRegions(chordTolerance), Requires(other).ToRegions(chordTolerance));
 
+    /// <summary>
+    /// This sketch grown (positive <paramref name="delta"/>) or shrunk (negative) by a
+    /// constant distance, as regions — clearance fits, wall shells, pocket stock, cutter
+    /// compensation. Corners are closed by <paramref name="join"/>; see
+    /// <see cref="Region2dOffset"/> for the join geometry and the miter-limit rule.
+    ///
+    /// <para>An inward offset may split the sketch into several regions or consume it
+    /// entirely (a 2 mm rib shrunk by 1.5 mm is nothing), which is why this returns a list.
+    /// Flattening follows <see cref="ToRegions(double)"/>: arcs and béziers become polylines
+    /// first, and round joins are inscribed arcs, so the result sits just inside the true
+    /// offset.</para>
+    /// </summary>
+    public IReadOnlyList<Region2d> Offset(
+        double delta, OffsetJoin join = OffsetJoin.Round,
+        double miterLimit = Region2dOffset.DefaultMiterLimit,
+        double chordTolerance = DefaultChordTolerance) =>
+        Region2dOffset.Offset(ToRegions(chordTolerance), delta, join, miterLimit, chordTolerance);
+
     private static Sketch Requires(Sketch other) =>
         other ?? throw new ArgumentNullException(nameof(other));
 
