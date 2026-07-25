@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using EngrCAD.Core;
 
 namespace EngrCAD.Mesh;
@@ -44,13 +45,24 @@ public static class ObjReader
         string? line;
         while ((line = reader.ReadLine()) is not null)
         {
-            // Backslash line continuation (rare but part of the format).
-            while (line.EndsWith('\\'))
+            // Backslash line continuation (rare but part of the format). Accumulated in a
+            // builder, never by repeated concatenation: a file with n continuation lines
+            // would otherwise copy the whole joined line n times (O(n²)).
+            if (line.EndsWith('\\'))
             {
-                string? next = reader.ReadLine();
-                if (next is null)
-                    break;
-                line = line[..^1] + " " + next;
+                var joined = new StringBuilder(line, 0, line.Length - 1, line.Length * 2);
+                string? next;
+                while ((next = reader.ReadLine()) is not null)
+                {
+                    joined.Append(' ');
+                    if (!next.EndsWith('\\'))
+                    {
+                        joined.Append(next);
+                        break;
+                    }
+                    joined.Append(next, 0, next.Length - 1);
+                }
+                line = joined.ToString();
             }
 
             int comment = line.IndexOf('#');

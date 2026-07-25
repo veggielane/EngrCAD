@@ -1,3 +1,5 @@
+using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 
 namespace EngrCAD.Mesh;
@@ -31,6 +33,8 @@ public enum MeshOperationResult
     WouldCollapseTetrahedron,
     /// <summary>Collapsing would reduce a triangle attached only through its apex to an isolated edge.</summary>
     WouldCollapseLastTriangle,
+    /// <summary>The edge borders no face at all (a wire edge); there is nothing to collapse.</summary>
+    IsolatedEdge,
     /// <summary>A numeric parameter is out of range (e.g. split parameter outside (0, 1)).</summary>
     InvalidParameter,
 }
@@ -62,8 +66,10 @@ public readonly record struct EdgeCollapseInfo(
 
 /// <summary>Result details of <see cref="EditableMesh.PokeFace"/>.</summary>
 /// <param name="NewVertex">The interior vertex the face was poked with.</param>
-/// <param name="Faces">All faces of the fan (first is the reused original face index).</param>
-public readonly record struct FacePokeInfo(int NewVertex, int[] Faces);
+/// <param name="Faces">All faces of the fan (first is the reused original face index).
+/// Immutable: a plain <c>int[]</c> here would let a caller rewrite the reported topology
+/// after the fact (and record equality would silently compare stale contents).</param>
+public readonly record struct FacePokeInfo(int NewVertex, ImmutableArray<int> Faces);
 
 /// <summary>Result details of <see cref="EditableMesh.MergeEdges"/>.</summary>
 /// <param name="KeptHalfEdge">The kept edge's interior half-edge (its twin is now the discarded edge's interior half-edge).</param>
@@ -355,7 +361,8 @@ public sealed partial class EditableMesh
         SetVertexOut(m, spokesOut[0]);
 
         CommitOperation(nameof(PokeFace));
-        info = new FacePokeInfo(m, faces);
+        // The scratch array is never touched again, so hand it over without a copy.
+        info = new FacePokeInfo(m, ImmutableCollectionsMarshal.AsImmutableArray(faces));
         return MeshOperationResult.Ok;
     }
 
@@ -378,6 +385,11 @@ public sealed partial class EditableMesh
         int a = _heOrigin[h], b = _heOrigin[h2]; // keep a, remove b
         int t0 = _heFace[h], t1 = _heFace[h2];
         bool left = t0 >= 0, right = t1 >= 0;
+        // A wire edge (void on both sides) has no triangles to remove and no boundary
+        // chain to splice — the later guards would index face-less half-edges. Build
+        // cannot produce one today, so this is defensive: refuse, never throw.
+        if (!left && !right)
+            return MeshOperationResult.IsolatedEdge;
         if (left && FaceDegree(t0) != 3)
             return MeshOperationResult.NotATriangle;
         if (right && FaceDegree(t1) != 3)

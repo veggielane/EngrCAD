@@ -358,6 +358,20 @@ public class EditableMeshTests
         Assert.Equal(MeshOperationResult.NotAFace, editable.PokeFace(-1, out _));
     }
 
+    [Fact]
+    public void PokeFace_ReportedFaces_AreImmutable()
+    {
+        // FacePokeInfo reports an ImmutableArray, not an int[]: a caller cannot rewrite
+        // the reported topology after the operation (and the record's equality can never
+        // compare contents that changed behind its back).
+        var editable = EditableMesh.FromMesh(MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1))));
+        Assert.Equal(MeshOperationResult.Ok, editable.PokeFace(0, out var info));
+
+        Assert.False(info.Faces.IsDefault);
+        Assert.Equal(info, info with { });                 // same underlying storage compares equal
+        Assert.All(info.Faces, f => Assert.True(editable.IsFace(f)));
+    }
+
     // ---------------------------------------------------------------- merge
 
     [Fact]

@@ -32,9 +32,11 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     also blocks all valence-3 endpoint flips),
   - `CollapseEdge` (destination merges into origin; link condition — shared neighbors
     must be exactly the opposite apexes — plus interior-edge both-endpoints-boundary
-    bow-tie, duplicate-edge, isolated-tetrahedron, and last-triangle guards; the
+    bow-tie, duplicate-edge, isolated-tetrahedron, last-triangle, and wire-edge
+    (`IsolatedEdge`, defensive — `Build` cannot produce a face-less edge) guards; the
     decimator keeps its own equivalent on its face-set scratch state),
-  - `PokeFace` (any n-gon → fan around centroid or explicit point),
+  - `PokeFace` (any n-gon → fan around centroid or explicit point; the reported fan
+    faces come back as an `ImmutableArray`, not a caller-writable `int[]`),
   - `MergeEdges` (welds two **boundary half-edges** head-to-tail — the crack-closing
     primitive; handles shared-endpoint seams and full slit closure, and automatically
     welds the doubled boundary edges the guards deliberately admit, g3-style).
