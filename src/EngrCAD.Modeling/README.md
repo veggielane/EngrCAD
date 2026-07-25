@@ -334,15 +334,23 @@ via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 tessellate on the render thread. Part names are unique per tab. `Part` is
 deliberately a leaf — tabs and assemblies are the containers.
 
+**`Part.TryGetSolid()` lowers the part's exact B-Rep at most ONCE and caches it**
+(null when the part has no exact form — an SDF or mesh part, a Shape with no B-Rep
+route, or a lowering that failed). Everything that needs the solid takes it from
+there: the display mesh (`GetMesh` tessellates it), the feature-edge overlay,
+selector-based annotations, STEP export, and construction previews of the whole part.
+Before this, each of those compiled the graph independently — on a five-hole drilled
+plate that was three ~9 s lowerings, and `Scene.PreMesh` of a heavy Shape scene went
+from **32.8 s to 10.1 s** once they shared one. `PreMesh` primes it off the render
+thread like the mesh; a lowering that fails is remembered, so the failure surfaces
+once (verbatim from `GetMesh`) instead of being retried per consumer.
+
 `Part.GetFeatureEdges(quality)` is the display **edge overlay**, cached the same
-way (and primed by `PreMesh`): parts with B-Rep geometry — a `BrepSolid`, or a
-`Shape` with a B-Rep lowering — sample their ACTUAL B-Rep edges at display
-resolution (`BrepFeatureEdges` in Interop, at least 96 segments per circle
-regardless of mesh quality), so exact circles stay smooth at any tessellation;
+way (and primed by `PreMesh`): parts with an exact solid sample their ACTUAL B-Rep
+edges at display resolution (`BrepFeatureEdges` in Interop, at least 96 segments per
+circle regardless of mesh quality), so exact circles stay smooth at any tessellation;
 everything else (SDF/mesh parts, failed lowerings) falls back to mesh-dihedral
-extraction. Note the cost: a Shape part's B-Rep is lowered a second time for the
-edges (the mesh route does not retain its intermediate solid) — that is why
-`PreMesh` primes the cache off the render thread.
+extraction.
 
 ### Assemblies (v1: occurrences)
 

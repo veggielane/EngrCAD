@@ -1,3 +1,4 @@
+using System.Runtime.ExceptionServices;
 using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
@@ -74,7 +75,6 @@ public sealed class Part
     // ---- annotations (PMI) ----
     private readonly List<Annotation> _annotationList = [];
     private (IReadOnlyList<ResolvedAnnotation>? Resolved, string? Error)? _resolvedAnnotations;
-    private BrepSolid? _annotationSolid;   // lazily lowered target for selector queries
 
     public Part(string name, Shape shape, PartColor? color = null, Matrix4d? transform = null)
         : this(name, (object)shape, color, transform) { }
@@ -119,27 +119,83 @@ public sealed class Part
             Transform = t;
     }
 
+    // ---- the exact solid, lowered ONCE per part ----
+    private BrepSolid? _solid;
+    private bool _solidLowered;
+    private Exception? _solidError;
+
     /// <summary>
-    /// The display mesh, produced on first call (Shapes via their best route, B-Reps
-    /// via tessellation, SDFs via Surface Nets, meshes as-is) and cached — the first
-    /// caller's <paramref name="quality"/> wins. Scenes pre-mesh all parts with their
-    /// own quality, so parts shown through a scene use the scene's settings.
+    /// This part's geometry as an exact B-Rep, or null when it has none (an SDF or
+    /// mesh part, a <see cref="Shape"/> with no B-Rep route, or a lowering that
+    /// failed). <b>Lowered at most once per part and cached</b>: the display mesh, the
+    /// feature-edge overlay, selector-based annotations, construction previews, and
+    /// STEP export all take it from here, so a heavy graph is compiled once instead of
+    /// once per consumer. Like <see cref="GetMesh"/> this belongs off the render
+    /// thread — <see cref="Scene.PreMesh"/> primes it.
+    /// </summary>
+    public BrepSolid? TryGetSolid()
+    {
+        lock (_meshLock)
+            return SolidCore();
+    }
+
+    /// <summary><see cref="TryGetSolid"/> with the lock already held.</summary>
+    private BrepSolid? SolidCore()
+    {
+        if (_solidLowered)
+            return _solid;
+        _solidLowered = true;
+        try
+        {
+            _solid = Geometry switch
+            {
+                BrepSolid direct => direct,
+                Shape shape when shape.CanConvertTo(TargetRep.Brep) => shape.ToBrep(),
+                _ => null,
+            };
+        }
+        catch (Exception exception)
+        {
+            // A lowering that CanConvertTo accepted but that failed anyway (a boolean
+            // the splitter cannot do, a validation guard). Remembered rather than
+            // rethrown here: GetMesh replays it verbatim, GetFeatureEdges falls back
+            // to mesh dihedrals, and neither pays for the failed lowering twice.
+            _solidError = exception;
+            _solid = null;
+        }
+        return _solid;
+    }
+
+    /// <summary>
+    /// The display mesh, produced on first call (Shapes and B-Reps by tessellating the
+    /// cached <see cref="TryGetSolid"/> solid, other Shapes via their best route, SDFs
+    /// via Surface Nets, meshes as-is) and cached — the first caller's
+    /// <paramref name="quality"/> wins. Scenes pre-mesh all parts with their own
+    /// quality, so parts shown through a scene use the scene's settings.
     /// </summary>
     public HalfEdgeMesh GetMesh(MeshQuality? quality = null)
     {
         lock (_meshLock)
         {
-            return _mesh ??= Geometry switch
-            {
-                HalfEdgeMesh mesh => mesh,
-                Shape shape => shape.ToMesh(quality),
-                BrepSolid solid => BRepTessellator.Tessellate(
-                    solid,
-                    (quality ?? MeshQuality.Default).SegmentsPerCircle,
-                    (quality ?? MeshQuality.Default).CurveSamples),
-                Sdf sdf => SurfaceNets.Polygonize(sdf, (quality ?? MeshQuality.Default).SdfResolution),
-                _ => throw new InvalidOperationException($"Unknown geometry type {Geometry.GetType().Name}."),
-            };
+            if (_mesh is not null)
+                return _mesh;
+            var q = quality ?? MeshQuality.Default;
+            if (Geometry is HalfEdgeMesh direct)
+                return _mesh = direct;
+            if (Geometry is Sdf sdf)
+                return _mesh = SurfaceNets.Polygonize(sdf, q.SdfResolution);
+
+            // B-Rep-representable geometry (a BrepSolid part or a Shape with a B-Rep
+            // route): tessellate the ONE cached solid. This is exactly what
+            // Shape.ToMesh does for such a graph — it just re-lowered every time.
+            if (SolidCore() is { } solid)
+                return _mesh = BRepTessellator.Tessellate(solid, q.SegmentsPerCircle, q.CurveSamples);
+            if (_solidError is { } error)
+                ExceptionDispatchInfo.Capture(error).Throw();   // same failure ToMesh would raise
+
+            if (Geometry is Shape shape)
+                return _mesh = shape.ToMesh(quality);   // implicit/mesh route
+            throw new InvalidOperationException($"Unknown geometry type {Geometry.GetType().Name}.");
         }
     }
 
@@ -245,16 +301,15 @@ public sealed class Part
         }
     }
 
-    /// <summary>The selector target: this part's geometry as a B-Rep (lowered once,
-    /// cached — Part geometry is fixed at construction).</summary>
-    private BrepSolid LowerForAnnotations() => _annotationSolid ??= Geometry switch
-    {
-        BrepSolid solid => solid,
-        Shape shape => shape.ToBrep(),
-        _ => throw new InvalidOperationException(
-            $"selector-based annotations need B-Rep-representable geometry " +
-            $"(this part holds {Geometry.GetType().Name})."),
-    };
+    /// <summary>The selector target: the part's shared cached solid (see
+    /// <see cref="TryGetSolid"/>) — annotations do NOT lower the geometry again.</summary>
+    private BrepSolid LowerForAnnotations() => SolidCore()
+        ?? throw new InvalidOperationException(
+            _solidError is { } error
+                ? $"selector-based annotations need an exact solid, and this part's " +
+                  $"geometry failed to lower: {error.GetType().Name}: {error.Message}"
+                : $"selector-based annotations need B-Rep-representable geometry " +
+                  $"(this part holds {Geometry.GetType().Name}).");
 
     private IReadOnlyList<(Vector3d A, Vector3d B)>? _featureEdges;
 
@@ -277,13 +332,9 @@ public sealed class Part
             if (_featureEdges is not null)
                 return _featureEdges;
             var q = quality ?? MeshQuality.Default;
-            var solid = Geometry switch
-            {
-                BrepSolid direct => direct,
-                Shape shape => TryLowerBrep(shape),
-                _ => null,
-            };
-            if (solid is not null)
+            // The SHARED cached solid — no second lowering (this used to be a Shape
+            // part's second full B-Rep compile).
+            if (SolidCore() is { } solid)
             {
                 try
                 {
@@ -298,18 +349,6 @@ public sealed class Part
                 }
             }
             return _featureEdges = MeshFeatureEdges.Extract(GetMesh(quality));
-        }
-
-        static BrepSolid? TryLowerBrep(Shape shape)
-        {
-            try
-            {
-                return shape.CanConvertTo(TargetRep.Brep) ? shape.ToBrep() : null;
-            }
-            catch
-            {
-                return null;   // failed lowering: mesh-dihedral fallback
-            }
         }
     }
 
@@ -496,16 +535,19 @@ public sealed class Scene
     /// (idempotent; a part instanced many times through assemblies is meshed once).
     /// Hosts call this off the UI thread before handing tabs to the viewport, and may
     /// pass their own default quality as <paramref name="fallback"/> — used only when
-    /// the scene did not choose an explicit quality (see <see cref="ResolveQuality"/>).</summary>
+    /// the scene did not choose an explicit quality (see <see cref="ResolveQuality"/>).
+    /// <para>The mesh, the feature edges, and selector annotations of a B-Rep-backed
+    /// part all come from the ONE solid <see cref="Part.TryGetSolid"/> caches, so this
+    /// pass lowers each part at most once.</para></summary>
     public void PreMesh(MeshQuality? fallback = null)
     {
         var quality = ResolveQuality(fallback);
         foreach (var part in AllParts)
         {
             part.GetMesh(quality);
-            // Prime the feature-edge cache too: for Shape parts the B-Rep edge route
-            // lowers the shape again, which must happen here (off the render thread),
-            // not lazily inside a GL upload.
+            // Prime the feature-edge cache too (extraction over the already-lowered
+            // solid): it must happen here, off the render thread, not lazily inside a
+            // GL upload.
             part.GetFeatureEdges(quality);
             // Pre-resolve annotations too: selector dimensions lower to B-Rep, which
             // must not happen on the render thread. Failures are cached diagnostics

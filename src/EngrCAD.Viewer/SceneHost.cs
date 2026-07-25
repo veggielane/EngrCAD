@@ -587,9 +587,17 @@ internal sealed class SceneHost
 
         _statusText.Text = $"preview: building '{node.Label}' ...";
         var quality = _scene?.ResolveQuality(EngrCad.CurrentOptions.Quality);
+        // Previewing the whole part (the root row) is the part's own geometry, which
+        // Scene.PreMesh already lowered — reuse that solid instead of compiling again.
+        var part = instanceIndex >= 0 && instanceIndex < _instances.Count
+            ? _instances[instanceIndex].Part
+            : null;
         Task.Run(() =>
         {
-            var preview = _previewCache.Get(node, quality);
+            var known = part is not null && ReferenceEquals(node.Target, part.Geometry)
+                ? part.TryGetSolid()
+                : null;
+            var preview = _previewCache.Get(node, quality, known);
             Avalonia.Threading.Dispatcher.UIThread.Post(() =>
             {
                 if (_previewKey == key)   // the user moved on while we lowered

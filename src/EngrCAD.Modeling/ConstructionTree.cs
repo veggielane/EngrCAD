@@ -328,7 +328,13 @@ public sealed class ConstructionPreview
     /// lowers to B-Rep), so callers must run this OFF the UI/render thread — see
     /// <see cref="ConstructionPreviewCache"/>.
     /// </summary>
-    public static ConstructionPreview Build(ConstructionNode node, MeshQuality? quality = null)
+    /// <param name="node">The row to preview.</param>
+    /// <param name="quality">Display resolution for chorded curves.</param>
+    /// <param name="solid">The row's already-lowered solid, when the caller has one
+    /// (a part's <see cref="Part.TryGetSolid"/> for the root row) — skips lowering it
+    /// again.</param>
+    public static ConstructionPreview Build(
+        ConstructionNode node, MeshQuality? quality = null, BrepSolid? solid = null)
     {
         ArgumentNullException.ThrowIfNull(node);
         var q = quality ?? MeshQuality.Default;
@@ -336,6 +342,8 @@ public sealed class ConstructionPreview
         {
             if (node.Sketch is { } sketch)
                 return From(SketchOutline(sketch, node.Placement, q));
+            if (solid is not null)
+                return From(SolidEdges(solid, q));
             if (node.Target is { } shape)
                 return From(ShapeEdges(shape, q));
             return new ConstructionPreview([], Aabb.Empty, $"'{node.Label}' has no geometry to preview.");
@@ -366,10 +374,7 @@ public sealed class ConstructionPreview
         {
             try
             {
-                return BrepFeatureEdges.Extract(
-                    shape.ToBrep(),
-                    Math.Max(96, quality.SegmentsPerCircle),
-                    Math.Max(48, quality.CurveSamples));
+                return SolidEdges(shape.ToBrep(), quality);
             }
             catch
             {
@@ -378,6 +383,10 @@ public sealed class ConstructionPreview
         }
         return MeshFeatureEdges.Extract(shape.ToMesh(quality));
     }
+
+    private static IReadOnlyList<(Vector3d A, Vector3d B)> SolidEdges(BrepSolid solid, MeshQuality quality) =>
+        BrepFeatureEdges.Extract(
+            solid, Math.Max(96, quality.SegmentsPerCircle), Math.Max(48, quality.CurveSamples));
 
     /// <summary>
     /// A sketch drawn as it is: every curve of the outer loop and each hole, flattened
@@ -455,14 +464,19 @@ public sealed class ConstructionPreviewCache
     /// The preview for a row, building (and caching) it on the calling thread when it
     /// is not cached yet. Blocking — call it from a background task.
     /// </summary>
-    public ConstructionPreview Get(ConstructionNode node, MeshQuality? quality = null)
+    /// <param name="node">The row to preview.</param>
+    /// <param name="quality">Display resolution for chorded curves.</param>
+    /// <param name="solid">An already-lowered solid for this row, when the caller has
+    /// one (see <see cref="ConstructionPreview.Build"/>).</param>
+    public ConstructionPreview Get(
+        ConstructionNode node, MeshQuality? quality = null, BrepSolid? solid = null)
     {
         if (TryGet(node, out var cached))
             return cached;
         // Built outside the lock: two threads racing on the same row do the work twice
         // but publish the same value, which is far better than serializing every
         // preview behind one lock.
-        var preview = ConstructionPreview.Build(node, quality);
+        var preview = ConstructionPreview.Build(node, quality, solid);
         lock (_lock)
         {
             if (_previews.TryGetValue(node.CacheKey, out var raced))

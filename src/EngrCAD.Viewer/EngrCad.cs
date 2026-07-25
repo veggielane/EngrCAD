@@ -410,18 +410,12 @@ public static class EngrCad
         var solids = new List<(string Name, BrepSolid Solid)>();
         foreach (var part in scene.AllParts)
         {
-            switch (part.Geometry)
-            {
-                case BrepSolid solid:
-                    solids.Add((part.Name, solid));
-                    break;
-                case Shape shape when shape.CanConvertTo(TargetRep.Brep):
-                    solids.Add((part.Name, shape.ToBrep()));
-                    break;
-                default:
-                    log.Error($"skipping '{part.Name}': not B-Rep-representable (STEP needs exact solids)");
-                    break;
-            }
+            // The part's shared cached solid (Part.TryGetSolid) — the same lowering the
+            // display mesh and edge overlay used, not a fresh compile per export.
+            if (part.TryGetSolid() is { } solid)
+                solids.Add((part.Name, solid));
+            else
+                log.Error($"skipping '{part.Name}': not B-Rep-representable (STEP needs exact solids)");
         }
         if (solids.Count == 0)
         {

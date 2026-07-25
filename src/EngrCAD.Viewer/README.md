@@ -221,7 +221,11 @@ Dark-themed layout around one shared GL viewport:
   B-Rep edges** sampled at display resolution (`BrepFeatureEdges` in Interop — a
   bore rim stays a smooth circle however coarse the mesh; smooth seams like
   wrap-split junctions are classified by exact surface normals and omitted), other
-  parts fall back to mesh dihedrals (`MeshFeatureEdges`).
+  parts fall back to mesh dihedrals (`MeshFeatureEdges`). The edges, the display
+  mesh, selector annotations, construction previews, and STEP export all share the
+  ONE solid `Part.TryGetSolid()` caches — a Shape part is no longer lowered once per
+  consumer (see the Modeling README; `Scene.PreMesh` of a heavy Shape scene measured
+  32.8 s before, 10.1 s after).
 - **Status bar** (bottom): last input on the left, control hints on the right.
 
 `EngrCad.Show` may be called once per process (Avalonia allows a single application
