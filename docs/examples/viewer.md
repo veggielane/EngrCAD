@@ -75,6 +75,64 @@ scene.Add(new Part("block", block, Palette.Steel,
 
 ![A section plane cutting a block, exposing two intersecting bores with SDF isolines on the cut](images/section-cutaway.png)
 
+### Several planes, and oblique ones
+
+Up to **four** section planes combine at once. `SectionCombine.Intersection` (the
+default) clips only where *every* plane excludes, which gives the classic **quarter
+cut** from two perpendicular planes and an **octant** from three; `Union` clips where
+*any* does. With a single plane the two rules coincide.
+
+Planes need not be axis-aligned — `SectionPlane.Through(point, normal)` takes any
+normal, and `SectionPlane.On(frame)` any `Frame3d`. Fence options only spell
+axis-aligned cuts, so a snippet declares the list itself:
+
+```csharp render:section-oblique
+var housing = Shape.Box(44, 44, 30)
+    - Shape.Cylinder(13, 40)                                  // main bore
+    - Shape.Cylinder(5, 60).RotateY(Math.PI / 2);             // cross bore
+
+var scene = new Scene();
+scene.Add(new Part("housing", housing, Palette.Steel));
+
+// Quarter cut, rotated 30 degrees about Z: two perpendicular oblique planes.
+double a = Math.PI / 6;
+var sectionPlanes = new[]
+{
+    SectionPlane.Through((0, 0, 0), (Math.Cos(a), Math.Sin(a), 0)),
+    SectionPlane.Through((0, 0, 0), (-Math.Sin(a), Math.Cos(a), 0)),
+};
+```
+
+![A housing quarter-cut by two oblique planes, exposing the main bore and a cross bore](images/section-oblique.png)
+
+A `render:` snippet may declare `sectionPlanes` (any `IEnumerable<SectionPlane>`),
+`sectionCombine`, and `camera` alongside its `scene` — the same convention `scene`
+already uses. They win over the fence's `section:` option, which stays the short
+spelling for the common axis-aligned case.
+
+### Hardware is drawn unsectioned
+
+`Part.ClippedBySection = false` renders **and picks** a part whole inside a cutaway.
+That is not a rendering trick but a drafting rule: bolts, screws, nuts, keys, pins and
+other solid fasteners are drawn unsectioned, because cutting a solid fastener
+lengthwise shows nothing and only clutters the section. `HardwareComponent.ToPart()`
+sets it for you, so a sectioned assembly shows its housing cut open with the fasteners
+standing whole in their (sectioned) holes:
+
+```csharp render:section-unsectioned-fasteners
+var top = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
+
+var build = new ComponentAssembly("plate", Shape.Box(70, 40, 12), Palette.Sage);
+build.Place(StandardComponents.CapScrew(5, 16), [new(-22, 0), new(22, 0)], top);
+
+var scene = new Scene();
+scene.AddTab("cut").Add(build.ToAssembly("bracket"));
+
+var sectionPlanes = new[] { SectionPlane.On(SectionAxis.Y, 0) };
+```
+
+![A plate sectioned at y = 0 with its two cap screws standing whole in the cut counterbores](images/section-unsectioned-fasteners.png)
+
 ### SDF isolines on the cut
 
 Parts whose geometry is an `Sdf` — or a `Shape` with an implicit lowering, which is

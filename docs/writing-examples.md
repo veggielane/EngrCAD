@@ -36,9 +36,29 @@ planes instead of boolean-cut fakes:
 | Option | Meaning |
 | --- | --- |
 | `style:<points\|wireframe\|shaded\|shaded-edges>` | Global view style for the screenshot (default `shaded-edges`). |
-| `section:<x\|y\|z>,<offset>` | Renders with a real axis-aligned section plane at the offset (SDF-routed parts get their isoline overlay on the cut). |
+| `section:<x\|y\|z>,<offset>` | Renders with a real axis-aligned section plane at the offset (SDF-routed parts get their isoline overlay on the cut). Repeat with `;` for a quarter or octant cut: `section:x,0;y,0`. |
 
 Unknown options fail the build.
+
+### Render inputs the fence cannot spell
+
+An oblique plane, a plane *list* with an explicit combine rule, or a specific camera
+pose would each need its own mini-language in the info string. Instead a `render:`
+snippet may **declare them as variables**, exactly the way it already declares
+`Scene scene`:
+
+| Variable | Type | Effect |
+| --- | --- | --- |
+| `scene` | `Scene` | **Required.** What gets rendered. |
+| `sectionPlanes` | any `IEnumerable<SectionPlane>` | Section planes, oblique allowed (`SectionPlane.Through(point, normal)`, `SectionPlane.On(frame)`). Wins over the fence's `section:`. |
+| `sectionCombine` | `SectionCombine` | `Intersection` (default — the quarter/octant cutaway) or `Union`. |
+| `camera` | `CameraState` | An explicit pose instead of the auto-framed iso view. |
+
+`EngrCAD.Viewer` is imported for exactly these types. A variable of the right name but
+the **wrong type is an error**, never a silent miss — an example that quietly ignored
+its own section plane would be a trap. See
+[the viewer page](examples/viewer.md#several-planes-and-oblique-ones) for a worked
+oblique quarter cut.
 
 ## The harness contract
 
@@ -47,8 +67,9 @@ Each tagged snippet runs as an isolated C# *script* (Roslyn scripting) with:
 - **Implicit usings**: `System`, `System.IO`, `System.Linq`,
   `System.Collections.Generic`, and the EngrCAD namespaces `EngrCAD.Core`,
   `EngrCAD.Mesh`, `EngrCAD.Implicit`, `EngrCAD.BRep`, `EngrCAD.Interop`,
-  `EngrCAD.Query`, `EngrCAD.Modeling`. (`EngrCAD.Viewer` is *not* imported — snippets
-  never open windows; the generator does the offscreen rendering itself.)
+  `EngrCAD.Query`, `EngrCAD.Modeling`, `EngrCAD.Core.Geometry2`, and `EngrCAD.Viewer`
+  (for the render-input types above only — snippets never open windows; the generator
+  does the offscreen rendering itself).
 - **References**: all EngrCAD kernel assemblies.
 - **A global `Scratch`** (`string`): a writable temp directory for snippets that
   produce files (STL/STEP/OBJ exports). Never write anywhere else.

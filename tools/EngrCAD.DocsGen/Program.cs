@@ -182,11 +182,15 @@ var options = ScriptOptions.Default
         typeof(EngrCAD.BRep.BrepSolid).Assembly,
         typeof(EngrCAD.Interop.BrepBoolean).Assembly,
         typeof(EngrCAD.Query.SpatialCollection<>).Assembly,
-        typeof(Shape).Assembly)
+        typeof(Shape).Assembly,
+        // The viewer, so a snippet can declare `sectionPlanes`/`camera` (see below) --
+        // SectionPlane and CameraState live there.
+        typeof(EngrCad).Assembly)
     .AddImports(
         "System", "System.IO", "System.Linq", "System.Collections.Generic",
         "EngrCAD.Core", "EngrCAD.Core.Geometry2", "EngrCAD.Mesh", "EngrCAD.Implicit",
-        "EngrCAD.BRep", "EngrCAD.Interop", "EngrCAD.Query", "EngrCAD.Modeling");
+        "EngrCAD.BRep", "EngrCAD.Interop", "EngrCAD.Query", "EngrCAD.Modeling",
+        "EngrCAD.Viewer");
 
 var rendered = 0;
 var executed = 0;
@@ -219,6 +223,24 @@ foreach (var s in snippets)
         continue;
     }
 
+    // Optional snippet-declared render inputs, by the same convention as `scene`. Fence
+    // options cannot express an oblique plane, a plane LIST or an explicit camera, and
+    // adding a mini-language to the info string to carry them would be worse than letting
+    // the snippet -- which is real C# with the whole API in scope -- simply declare them.
+    // A variable of the right name but the wrong type is an ERROR, never a silent miss:
+    // a docs example that quietly ignored its own section plane would be a trap.
+    if (!TryReadVariable<IEnumerable<SectionPlane>>(state, "sectionPlanes", s, errors, out var declaredPlanes)
+        || !TryReadVariable<SectionCombine?>(state, "sectionCombine", s, errors, out var declaredCombine)
+        || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera))
+        continue;
+
+    var planes = declaredPlanes is null ? s.SectionPlanes : [.. declaredPlanes];
+    if (planes is { Count: 0 })
+    {
+        errors.Add($"{s.File} ({s.Id}): `sectionPlanes` is empty -- drop the variable to render unsectioned.");
+        continue;
+    }
+
     var pngPath = Path.Combine(imagesDir, $"{s.Id}.png");
     if (canRender)
     {
@@ -226,9 +248,12 @@ foreach (var s in snippets)
         {
             // 2x supersampled relative to the display size in the docs pages — the
             // offscreen renderer has no MSAA, so browser downscaling anti-aliases.
-            EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120, camera: null,
-                s.Style, s.SectionAxis, s.SectionOffset,
-                sectionPlanes: s.SectionPlanes);
+            EngrCad.RenderToImage(scene, pngPath, width: 1600, height: 1120, declaredCamera,
+                s.Style,
+                planes is { Count: > 0 } ? AxisOf(planes[0]) : s.SectionAxis,
+                planes is { Count: > 0 } ? planes[0].Offset : s.SectionOffset,
+                sectionPlanes: planes,
+                sectionCombine: declaredCombine ?? SectionCombine.Intersection);
             rendered++;
         }
         catch (Exception ex)
@@ -288,12 +313,35 @@ static bool TryParseSection(string value, out List<SectionPlane> planes)
     return planes.Count > 0;
 }
 
-/// <summary>Which world axis an axis-aligned section plane sits on (the fences only
-/// ever build those, so the mapping is total).</summary>
+/// <summary>Which world axis an axis-aligned section plane sits on. A snippet-declared
+/// plane may be oblique, in which case this is only the legacy single-axis hint that
+/// `sectionPlanes` overrides anyway -- Z is the harmless default.</summary>
 static SectionAxis AxisOf(SectionPlane plane) =>
     plane.Normal == EngrCAD.Core.Vector3d.UnitX ? SectionAxis.X
     : plane.Normal == EngrCAD.Core.Vector3d.UnitY ? SectionAxis.Y
     : SectionAxis.Z;
+
+/// <summary>
+/// Reads an optional snippet-declared variable. Returns false only when the variable
+/// exists with an incompatible type -- which is reported as an error rather than
+/// ignored, so a docs page cannot silently lose the render input it declared.
+/// </summary>
+static bool TryReadVariable<T>(
+    ScriptState<object> state, string name, Snippet snippet, List<string> errors, out T? value)
+{
+    value = default;
+    var variable = state.Variables.LastOrDefault(v => v.Name == name);
+    if (variable?.Value is null)
+        return true;
+    if (variable.Value is T typed)
+    {
+        value = typed;
+        return true;
+    }
+    errors.Add($"{snippet.File} ({snippet.Id}): `{name}` must be a {typeof(T).Name}, "
+             + $"but the snippet declared a {variable.Value.GetType().Name}.");
+    return false;
+}
 
 internal sealed record Snippet(
     string Id, bool Render, string File, string Code,

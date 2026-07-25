@@ -417,13 +417,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   display-mode cycler; likewise no toolbar affordance for oblique section planes (hosts
   must set `ViewportControl.SectionPlanes` directly), and AO streaming reports only one
   status line rather than per-part progress in the tree.
-- [ ] **DocsGen fence options cannot express the newer viewer features** — `render:`
-  understands only `section:<x|y|z>,<offset>`, so an oblique plane, a plane *list*, or a
-  construction preview cannot be captured in a docs page. The clean fix is to let a
-  snippet optionally define extra variables the way it already defines `Scene scene`
-  (e.g. `IReadOnlyList<SectionPlane> sectionPlanes`, `ConstructionPreviewRequest
-  preview`), which would unblock `section-oblique`, `section-unsectioned-fasteners` and
-  a construction-preview example page.
+- [ ] **A construction-preview docs example.** DocsGen snippets can now declare
+  `sectionPlanes`/`sectionCombine`/`camera` alongside `scene` (which unblocked
+  `section-oblique` and `section-unsectioned-fasteners`), but a construction-tree
+  preview still has no headless entry point to render through — previews are built by
+  the SceneHost on selection, not by anything `RenderToImage` can drive. Needs a
+  `ConstructionPreviewRequest`-shaped seam in the offscreen path first.
 - [ ] **3D-annotation (PMI) follow-ups** (v1 ✅ landed: `Annotation`/`LinearDimension`
   (point-to-point + `BetweenFaces` selectors)/`RadialDimension.OnEdge`/`LeaderNote`/
   `DatumLabel` + `HoleCallout`/`ThreadCallout` in Modeling; `StrokeFont` +
