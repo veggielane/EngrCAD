@@ -60,11 +60,19 @@ engines.
     zero: there the sliver's normal is perpendicular to the surface's and its sign is pure
     rounding noise, so half the slivers face inward. Measured on
     `Shape.Box(30, 20, 6).FilletEdges(2, topRim)`: **13 088 triangles, 808 of them
-    inverted**, rendering as a dark folded lens at every mitered corner — now **280 with
-    none**. The count also stopped being quadratic (refinement had been subdividing the
-    long diagonals the clipper left behind), and the mesh volume moved from −1.5e-4 to
-    −4.8e-5 of the analytic prism, because the strip's facets no longer sag where the
-    monotone-decrease rule cut a refinement cascade.
+    inverted** (worst facet-vs-surface normal agreement −0.22), rendering as a dark folded
+    lens at every mitered corner — now **280 with none** (worst agreement 0.99994).
+
+    The cost stopped being quadratic too, and that mattered more than it looked: the
+    clipper left long interior diagonals that refinement then subdivided, and the
+    monotone-decrease rule that keeps that cascade terminating cut it in unpredictable
+    places, so the ear-clipped mesh **did not converge**. Measured on the same box:
+    13 088 triangles at curveSamples 24, 147 744 at 96, 642 160 at 144, 904 928 at 176,
+    621 392 at 192 (not even monotonic), and refusal at 256; the volumes wandered —
+    3516.70, 3517.03, 3516.82, 3516.84, 3517.04 — against an analytic 3517.2274 they
+    never approached. The strip is linear in the sample count (280 → 552 → 1096 → 2184)
+    and converges quadratically from inside, so the mesh volume moved from −1.5e-4 to
+    −4.8e-5 of the analytic prism and keeps improving.
 
     Other numerical lessons baked in: earcut's exact-collinear filtering would drop
     iso-parameter run vertices (uv-collinear is *not* 3D-collinear — an unzippable
@@ -85,9 +93,10 @@ engines.
     back to the surface's natural grid, which covers the whole parameter rectangle rather
     than the trimmed face — not merely coarse but the *wrong* geometry, welding into an
     open mesh with no complaint. The sample counts belong in the message because some
-    failures only appear at high density: before the strip path, refinement gave up at
-    about `curveSamples = 192` on a filleted box and the silent fallback handed back an
-    open mesh.
+    failures only appear at high density: with the ear clipper, refinement on a filleted
+    box's bands gave up at `curveSamples = 256` (measured; the backlog note guessed 192,
+    where it still converged — after 900 k triangles) and the silent fallback handed back
+    an open mesh.
 
     Remaining gaps: pole-bounded single-chain bands with holes and |winding| > 1 loops
     are refused (they used to fall back to the grid), a rung sampled at more than two
