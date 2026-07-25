@@ -41,6 +41,12 @@ operations. Depends only on `EngrCAD.Core`.
   generator, solving z(v) + pitch·u/2π = z_cap makes v (hence radius) linear in u —
   and is always built on the band's own axis frame so its parameter IS the surface u
   (phase alignment).
+  `LoftRailCurve` is the curve a fixed section parameter traces across a `LoftedSurface`
+  (the loft analogue of `SweptRailCurve`); it evaluates the surface itself rather than
+  re-interpolating the junction points, so a rail edge and the face's u = 0 grid column are
+  the same arithmetic. `PhaseShiftedCurve` moves a closed curve's seam,
+  P(t) = base(wrap(t + shift)) — how lofting aligns successive closed sections so the skin
+  does not twist; `Underlying` forwards (a shifted circle still samples as a circle).
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
@@ -54,7 +60,20 @@ operations. Depends only on `EngrCAD.Core`.
   P(u, v) = O + X·r(v)·cos u + Y·r(v)·sin u + Z·(z(v) + pitch·u/2π) with (r(v), z(v))
   linear from `ProfileStart` to `ProfileEnd`, u a finite turning-angle interval spanning
   all turns (NOT periodic — the axial advance makes every u distinct, so inverse
-  evaluation never wraps a seam), v ∈ [0, 1]. Exact analytic normals and exact
+  evaluation never wraps a seam), v ∈ [0, 1]; and `LoftedSurface` — the lateral skin of a
+  loft, P(u, v) = Σ α_k(v)·C_k(u_k) with u_k the section curve's own parameter at the
+  normalized u, both parameters over [0, 1]. The blend α is the **cardinal basis** of
+  B-spline interpolation (A[k][j] = N_{j,p}(v_k) at the section parameters,
+  α_k(v) = Σ_j N_{j,p}(v)·(A⁻¹)[j][k], degree p = min(3, sections − 1)): solving the
+  interpolation ONCE at construction is what makes a loft a surface at all — a chord-length
+  re-parameterization recomputed per u would give every strip its own v mapping and the
+  shared rails would disagree. α_k(v_j) = δ_jk is applied as an **exact-equality special
+  case**, so the tessellation grid's v = 0 / v = 1 rows reproduce the first and last section
+  curves bit-for-bit (they are also the shared cap and neighbour edges). `NaturalUSegments`
+  mirrors `BRepTessellator.SampleEdge`'s rules for the sections that ARE the face's u
+  boundaries — the rule lives on the surface because only it knows what its sections are.
+  Exact analytic `DerivativeU`/`DerivativeV`/`NormalAt`.
+  Exact analytic normals and exact
   closed-form `TryProjectPoint` (the point's angle fixes u up to whole turns, the axial
   coordinate solves v linearly; in-range v preferred so steep generators can't alias
   onto the neighboring turn; dz = 0 helicoid ramps solve v from the radius).
@@ -99,6 +118,25 @@ operations. Depends only on `EngrCAD.Core`.
   - `Revolve(profile, axisOrigin, axisDir, angle?, holes?)` — full turn (torus topology,
     no caps) or partial (planar caps; closed profiles give pipe elbows; holes allowed).
   - `Sweep(profile, path, holes?)` — rotation-minimizing frames along an open path.
+  - `Loft(sections, style)` — skins a closed solid through a list of planar sections
+    (OCCT `BRepOffsetAPI_ThruSections`): each corresponding pair of profile segments becomes
+    one `LoftedSurface` strip, junctions become `LoftRailCurve` rails, the first and last
+    sections are capped. `LoftStyle.Smooth` is one face per strip interpolating ALL sections
+    (intermediate sections leave no edge); `LoftStyle.Ruled` is a band of faces per interval
+    (every section is an edge loop). Two sections are the same solid either way.
+    **Compatibility is by segment index and normalized parameter** — sections must already
+    have the same segment count, and a mismatch is rejected with a message saying so rather
+    than being papered over (no degree elevation / knot merging yet). The one automatic fix
+    is representational: where one section's strip is straight and another's is curved, the
+    straight one is re-expressed as an exact degree-1 NURBS so both take the tessellator's
+    generic sampling rule and the grid welds. **Alignment** happens before skinning:
+    sections wound against the loft direction are reversed, multi-segment sections are
+    cyclically rotated to the least-twist segment pairing, and closed single-curve sections
+    get a continuous seam shift — all three minimize the same **centroid-relative** sum of
+    squared corner travel (leaving the sections' separation in that objective makes it a
+    large constant plus a tiny quadratic well, which measurably cost eight digits: a seam
+    shift resolved to only ~3e-9, i.e. 3e-8 of positional twist, past weld tolerance).
+    The v parameterization is global to the loft (mean chord length), never per strip.
   - `MakeThreadedRod(pitchProfile, pitch, length[, frame])` — a helically threaded rod
     whose entire lateral boundary is ONE co-rotating sweep of a per-pitch profile
     (boolean-free by design: winding a ridge onto a core cylinder would be the
@@ -240,7 +278,13 @@ two spiral cuts) and take the same path.
 ## Not yet implemented
 
 Coplanar/tangent boolean cases, general fillet chains with corner patches,
-NURBS surface export. `HelicalSurface` faces cannot be exported to STEP (same bucket
+NURBS surface export. Loft gaps: sections must already be segment-compatible (no degree
+elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
+close back on the first section, guide curves / spine, and the "pipe shell with evolution
+law" generalization (a section scaled and twisted along a spine — which is a loft whose
+sections are generated rather than given, so it lands on `LoftedSurface` once a law
+evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept surfaces).
+`HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have
 no tessellation path, and helical∩cylinder / helical∩helical intersections fall to
