@@ -128,6 +128,83 @@ public sealed class ViewportControl : OpenGlControlBase
         Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
     }
 
+    /// <summary>
+    /// Re-poses the instances already shown — same parts, same order, new world matrices.
+    /// The exploded-view path: <c>Tab.Instances(factor)</c> returns the same list in the
+    /// same order whatever the factor, so animating an explode must NOT go through
+    /// <see cref="SetInstances"/>, which deletes and re-uploads every buffer. This
+    /// touches only the per-instance matrices, so N instances keep sharing ONE mesh, one
+    /// GPU buffer set and one pick BVH across the whole animation.
+    /// <para>Falls back to a full <see cref="SetInstances"/> when the list no longer
+    /// matches part-for-part (a live reload changed the document under the animation).</para>
+    /// <para><paramref name="frame"/> re-frames the camera to the NEW bounds — pass it
+    /// once when an explode is switched on (parts move outside the old framing), never
+    /// per animation step, where a camera chasing the geometry is unusable.</para>
+    /// </summary>
+    public void SetInstancePoses(IReadOnlyList<PartInstance> instances, bool frame = false)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        lock (_sceneLock)
+        {
+            if (_pending is not null || instances.Count != _instances.Count)
+            {
+                // Geometry is already in flight (or the shape of the document changed):
+                // let the full path win rather than racing it.
+                _pending = (instances, frame, null);
+                Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
+                return;
+            }
+            for (int i = 0; i < instances.Count; i++)
+            {
+                if (!ReferenceEquals(instances[i].Part, _instances[i].Part))
+                {
+                    _pending = (instances, frame, null);
+                    Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
+                    return;
+                }
+            }
+            _pendingPoses = (instances, frame);
+        }
+        Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
+    }
+
+    private (IReadOnlyList<PartInstance> Instances, bool Frame)? _pendingPoses;
+
+    /// <summary>Applies a queued pose update on the render thread: new model matrices and
+    /// world centres, refreshed scene bounds and grid, and the caches that key on
+    /// positions invalidated. No GL buffer is created or destroyed.</summary>
+    private void ApplyPoses(GL gl, IReadOnlyList<PartInstance> instances, bool frame)
+    {
+        lock (_sceneLock)
+        {
+            if (instances.Count != _meshes.Count)
+                return;
+            var bounds = Aabb.Empty;
+            for (int i = 0; i < instances.Count; i++)
+            {
+                var worldBounds = instances[i].Bounds();
+                _meshes[i] = _meshes[i] with
+                {
+                    Model = instances[i].World,
+                    WorldCenter = worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
+                };
+                _instances[i] = instances[i];
+                bounds = bounds.Union(worldBounds);
+            }
+            RebuildGrid(gl, bounds);
+            _sceneBounds = bounds;
+            _sectionContours.Invalidate();   // the cut moved relative to the parts
+            LoadAnnotations(report: false);  // annotations are posed by the instance transform
+            _preview.Set(null, Matrix4d.Identity);
+
+            if (frame && !bounds.IsEmpty)
+            {
+                _target = bounds.Center;
+                _distance = CameraMath.FrameDistance(bounds);
+            }
+        }
+    }
+
     /// <summary>Shows a message in the status overlay (used by script hosts for errors).</summary>
     public void ShowStatus(string message) =>
         Avalonia.Threading.Dispatcher.UIThread.Post(() => Report(message));
@@ -451,16 +528,25 @@ public sealed class ViewportControl : OpenGlControlBase
         var gl = _gl;
 
         (IReadOnlyList<PartInstance> Instances, bool Frame, IReadOnlyList<bool>? Visible)? update = null;
+        (IReadOnlyList<PartInstance> Instances, bool Frame)? poses = null;
         lock (_sceneLock)
         {
             if (_pending is not null)
             {
                 update = _pending;
                 _pending = null;
+                _pendingPoses = null;   // the full swap supersedes any queued re-pose
+            }
+            else if (_pendingPoses is not null)
+            {
+                poses = _pendingPoses;
+                _pendingPoses = null;
             }
         }
         if (update is { } u)
             ApplyInstances(gl, u.Instances, u.Frame, u.Visible);
+        else if (poses is { } p)
+            ApplyPoses(gl, p.Instances, p.Frame);
         if (_ambientOcclusion)
             BackfillOcclusion(gl);   // no-op unless a part was uploaded with AO off
 

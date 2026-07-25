@@ -1,0 +1,757 @@
+using System.Text;
+using EngrCAD.Core;
+
+namespace EngrCAD.Modeling;
+
+/// <summary>Knobs for <see cref="MateSet.Solve"/>.</summary>
+public sealed class MateSolverSettings
+{
+    /// <summary>Convergence tolerance, in model units. Every residual is a LENGTH (see
+    /// <see cref="MateSet"/> on how angular residuals are scaled), so the default is the
+    /// 1e-9 absolute weld tier: geometry a mate places must weld with geometry the
+    /// kernel builds.</summary>
+    public double Tolerance { get; init; } = EngrCAD.Core.Tolerance.Default.Linear;
+
+    /// <summary>Maximum Levenberg–Marquardt iterations before the solve is declared
+    /// failed. Rigid-body mate systems converge quadratically near a solution; 100 is
+    /// generous and exists so a hopeless system fails in milliseconds, not forever.</summary>
+    public int MaxIterations { get; init; } = 100;
+
+    /// <summary>When true, a solve that converges but leaves free degrees of freedom is
+    /// still reported as a failure (<see cref="MateSet.Solve"/> throws). Off by default:
+    /// an under-constrained assembly is legitimate CAD — a hinge is SUPPOSED to keep a
+    /// rotation — and the count is always reported either way.</summary>
+    public bool RequireFullyConstrained { get; init; }
+}
+
+/// <summary>What a mate solve did, and what it could not do.</summary>
+/// <param name="Converged">Every residual fell below the tolerance.</param>
+/// <param name="Iterations">Levenberg–Marquardt steps taken.</param>
+/// <param name="Residual">The largest remaining residual, in model units.</param>
+/// <param name="FreeDegreesOfFreedom">6 × the number of occurrences the mates actually
+/// move (grounded ones, and ones no mate mentions, are not counted).</param>
+/// <param name="ConstrainedDegreesOfFreedom">The rank of the constraint Jacobian at the
+/// solution — how many of those degrees of freedom the mates actually pin down.</param>
+/// <param name="Diagnostics">Human-readable notes: which mates are worst, which
+/// occurrences no mate mentions, what is still free.</param>
+public sealed record MateSolveResult(
+    bool Converged,
+    int Iterations,
+    double Residual,
+    int FreeDegreesOfFreedom,
+    int ConstrainedDegreesOfFreedom,
+    IReadOnlyList<string> Diagnostics)
+{
+    /// <summary>Degrees of freedom the mates leave open (0 = fully constrained).</summary>
+    public int RemainingDegreesOfFreedom => FreeDegreesOfFreedom - ConstrainedDegreesOfFreedom;
+
+    /// <summary>True when the mates do not pin the assembly completely. Not an error by
+    /// itself — see <see cref="MateSolverSettings.RequireFullyConstrained"/>.</summary>
+    public bool IsUnderConstrained => RemainingDegreesOfFreedom > 0;
+
+    /// <summary>
+    /// True when the solve did not converge. For a rigid-body mate system that means the
+    /// constraints cannot all be satisfied at once — usually genuinely contradictory
+    /// mates (over-constrained), occasionally a start pose too far from any solution.
+    /// <see cref="Diagnostics"/> names the mates carrying the residual, which is the
+    /// difference between the two cases in practice.
+    /// </summary>
+    public bool IsOverConstrained => !Converged;
+
+    public override string ToString()
+    {
+        var text = new StringBuilder();
+        text.Append(Converged ? "solved" : "FAILED")
+            .Append($" in {Iterations} iteration{(Iterations == 1 ? "" : "s")}; ")
+            .Append($"worst residual {Residual:g3}; ")
+            .Append($"{ConstrainedDegreesOfFreedom} of {FreeDegreesOfFreedom} DOF constrained");
+        if (RemainingDegreesOfFreedom > 0)
+            text.Append($" ({RemainingDegreesOfFreedom} free)");
+        foreach (string note in Diagnostics)
+            text.Append("\n  · ").Append(note);
+        return text.ToString();
+    }
+}
+
+/// <summary>A mate solve that could not be satisfied; carries the full
+/// <see cref="MateSolveResult"/>.</summary>
+public sealed class MateSolveException(MateSolveResult result)
+    : InvalidOperationException($"The mates could not be solved.\n{result}")
+{
+    /// <summary>The failed solve's report.</summary>
+    public MateSolveResult Result { get; } = result;
+}
+
+/// <summary>
+/// The constraints on one <see cref="Assembly"/>, and the solver that turns them into
+/// occurrence poses.
+///
+/// <code>
+/// var mates = new MateSet(rig)
+///     .Ground(baseOccurrence)
+///     .Add(Mate.Planar(
+///         MateGeometry.PlanarFace(baseOccurrence, s => s.PlanarFacesWithNormal(Vector3d.UnitZ).First()),
+///         MateGeometry.PlanarFace(lidOccurrence,  s => s.PlanarFacesWithNormal(-Vector3d.UnitZ).First())))
+///     .Add(Mate.Concentric(
+///         MateGeometry.CylindricalFace(baseOccurrence, s => Bore(s, 0)),
+///         MateGeometry.CylindricalFace(lidOccurrence,  s => Bore(s, 0))));
+///
+/// var report = mates.Solve();          // writes Occurrence.Frame; throws if unsatisfiable
+/// </code>
+///
+/// <para><b>What it solves.</b> <see cref="Assembly.Flatten(double)"/> composes
+/// <see cref="Occurrence.Frame"/>s, and those frames are mutable — so mating is exactly
+/// "solve for the frames". The unknowns are the <b>direct</b> occurrences of this
+/// assembly that at least one mate mentions and that are not
+/// <see cref="Ground(Occurrence)">grounded</see>: six numbers each (translation plus a
+/// rotation increment about the occurrence's own origin). A nested sub-assembly is one
+/// rigid body, which is the correct semantics and needs no special case; mating INTO a
+/// sub-assembly's internals is not supported and is rejected loudly rather than
+/// silently ignored.</para>
+///
+/// <para><b>How.</b> Levenberg–Marquardt on the constraint residuals with an
+/// <b>analytic</b> Jacobian (finite differences would cap accuracy near 1e-8, an order
+/// worse than the weld tier this aims at). Angular residuals are multiplied by the
+/// assembly's characteristic length so every residual is a length and one linear
+/// tolerance is meaningful; the rotation variables are divided by the same length so
+/// every Jacobian column is O(1). Rank comes from a diagonally pivoted Cholesky of
+/// JᵀJ — a rank-revealing factorization for the symmetric positive-semidefinite matrix
+/// it is — which is what lets the deliberately redundant rotational residual encodings
+/// (3 rows carrying 2 constraints) be counted correctly.</para>
+///
+/// <para><b>Honesty rules.</b> A solve that does not converge writes NOTHING: the
+/// occurrence frames are restored, so a failed mate never leaves an assembly half-moved.
+/// The result always reports how many degrees of freedom the mates actually pinned, so
+/// an under-constrained assembly says so rather than pretending.</para>
+/// </summary>
+public sealed class MateSet
+{
+    private readonly List<Mate> _mates = [];
+    private readonly HashSet<Occurrence> _grounded = [];
+
+    /// <param name="assembly">The assembly whose occurrence frames are solved for.</param>
+    public MateSet(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        Assembly = assembly;
+    }
+
+    /// <summary>The assembly being constrained.</summary>
+    public Assembly Assembly { get; }
+
+    /// <summary>The mates, in the order they were added.</summary>
+    public IReadOnlyList<Mate> Mates => _mates;
+
+    /// <summary>Occurrences pinned in place (their frames are inputs, not unknowns).</summary>
+    public IReadOnlyCollection<Occurrence> Grounded => _grounded;
+
+    /// <summary>Adds a mate (chainable). Both ends must reference direct occurrences of
+    /// <see cref="Assembly"/>, or be world-fixed.</summary>
+    public MateSet Add(Mate mate)
+    {
+        ArgumentNullException.ThrowIfNull(mate);
+        Validate(mate.A, mate);
+        Validate(mate.B, mate);
+        _mates.Add(mate);
+        return this;
+    }
+
+    /// <summary>Pins an occurrence in place — the assembly's datum (chainable). Without
+    /// at least one ground (or a world-fixed mate end), the whole assembly can drift as
+    /// a rigid body and the solve reports 6 free degrees of freedom.</summary>
+    public MateSet Ground(Occurrence occurrence)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+        if (!Assembly.Occurrences.Contains(occurrence))
+            throw new ArgumentException(
+                $"Occurrence '{occurrence.Name}' is not a direct occurrence of assembly " +
+                $"'{Assembly.Name}'.", nameof(occurrence));
+        _grounded.Add(occurrence);
+        return this;
+    }
+
+    private void Validate(in MateRef reference, Mate mate)
+    {
+        if (reference.Occurrence is not { } occurrence)
+            return;
+        if (!Assembly.Occurrences.Contains(occurrence))
+            throw new ArgumentException(
+                $"Mate '{mate.Name}' references occurrence '{occurrence.Name}', which is not a direct " +
+                $"occurrence of assembly '{Assembly.Name}'. Mates constrain one assembly level: build a " +
+                $"MateSet on the sub-assembly to arrange its own occurrences.", nameof(mate));
+    }
+
+    /// <summary>
+    /// Solves the mates and writes the occurrence frames. Throws
+    /// <see cref="MateSolveException"/> when the constraints cannot be satisfied (and
+    /// leaves every frame untouched), or when
+    /// <see cref="MateSolverSettings.RequireFullyConstrained"/> is set and degrees of
+    /// freedom remain.
+    /// </summary>
+    public MateSolveResult Solve(MateSolverSettings? settings = null)
+    {
+        settings ??= new MateSolverSettings();
+        var result = TrySolve(settings);
+        if (!result.Converged || (settings.RequireFullyConstrained && result.IsUnderConstrained))
+            throw new MateSolveException(result);
+        return result;
+    }
+
+    /// <summary>
+    /// <see cref="Solve"/> without the exception: returns the report either way, and
+    /// writes the occurrence frames only when it converged.
+    /// </summary>
+    public MateSolveResult TrySolve(MateSolverSettings? settings = null) =>
+        new Solver(this, settings ?? new MateSolverSettings()).Run();
+
+    // =====================================================================
+    //  The solver
+    // =====================================================================
+
+    /// <summary>
+    /// Rank threshold on SINGULAR values, relative to the largest — dimensionless, so it
+    /// deliberately sits outside the linear <see cref="Tolerance"/> ladder. The pivots of
+    /// the JᵀJ factorization are squared singular values, so it is applied SQUARED
+    /// (comparing a squared quantity against an unsquared epsilon is the mistake this
+    /// codebase has paid for repeatedly).
+    /// </summary>
+    private const double RankRelativeTolerance = 1e-8;
+
+    private sealed class Solver(MateSet set, MateSolverSettings settings)
+    {
+        private readonly List<Occurrence> _free = [];
+        private readonly Dictionary<Occurrence, int> _block = [];
+        private Frame3d[] _poses = [];
+        private double _length = 1;     // characteristic length: residual/variable scaling
+        private int _rows;
+        private int _columns;
+
+        public MateSolveResult Run()
+        {
+            var mates = set.Mates;
+            var diagnostics = new List<string>();
+
+            foreach (var mate in mates)
+            {
+                Register(mate.A);
+                Register(mate.B);
+            }
+
+            _columns = _free.Count * 6;
+            _rows = mates.Sum(m => m.RowCount);
+            _poses = [.. _free.Select(o => o.Frame)];
+            _length = CharacteristicLength();
+
+            if (_rows == 0)
+            {
+                Note(diagnostics);
+                return new MateSolveResult(true, 0, 0, _columns, 0, diagnostics);
+            }
+
+            var original = (Frame3d[])_poses.Clone();
+            var residual = new double[_rows];
+            var jacobian = new double[_rows * _columns];
+
+            double worst = Evaluate(residual);
+            int iteration = 0;
+            int steps = 0;
+            double lambda = 1e-3;
+
+            // _columns == 0 means every mated occurrence is grounded: there is nothing to
+            // move, so the residual below IS the answer (and says so if the mates are
+            // violated) rather than a vacuous success.
+            while (_columns > 0 && worst > settings.Tolerance && iteration < settings.MaxIterations)
+            {
+                iteration++;
+                Jacobian(jacobian);
+                var normal = new double[_columns * _columns];
+                var gradient = new double[_columns];
+                NormalEquations(jacobian, residual, normal, gradient);
+
+                double maxDiagonal = 0;
+                for (int i = 0; i < _columns; i++)
+                    maxDiagonal = Math.Max(maxDiagonal, normal[i * _columns + i]);
+                // Exact-zero semantic test: a Jacobian with no entries at all means the
+                // mates cannot move anything, so there is no step to take.
+                if (maxDiagonal <= 0)
+                    break;
+
+                var before = (Frame3d[])_poses.Clone();
+                bool accepted = false;
+                for (int attempt = 0; attempt < 12 && !accepted; attempt++)
+                {
+                    var damped = (double[])normal.Clone();
+                    for (int i = 0; i < _columns; i++)
+                        damped[i * _columns + i] += lambda * maxDiagonal;
+
+                    if (!SolveSpd(damped, gradient, out var step))
+                    {
+                        lambda *= 8;
+                        continue;
+                    }
+
+                    Array.Copy(before, _poses, before.Length);
+                    Apply(step);                       // step solves A δ = g, so move by −δ
+                    double candidate = Evaluate(residual);
+                    if (candidate < worst)
+                    {
+                        worst = candidate;
+                        lambda = Math.Max(lambda / 3, 1e-12);
+                        accepted = true;
+                        steps++;
+                    }
+                    else
+                    {
+                        lambda *= 8;
+                    }
+                }
+
+                if (!accepted)
+                {
+                    Array.Copy(before, _poses, before.Length);
+                    worst = Evaluate(residual);
+                    break;                              // no damping value improves it
+                }
+            }
+
+            bool converged = worst <= settings.Tolerance;
+
+            // Rank at the final pose: how much of the free motion the mates actually pin.
+            Jacobian(jacobian);
+            var final = new double[_columns * _columns];
+            var unusedGradient = new double[_columns];
+            NormalEquations(jacobian, residual, final, unusedGradient);
+            int rank = Rank(final, _columns);
+
+            if (converged)
+            {
+                for (int i = 0; i < _free.Count; i++)
+                    _free[i].Frame = _poses[i];
+            }
+            else
+            {
+                // Refuse loudly AND cleanly. The frames were never written during
+                // iteration — only here, on success — so "restore" is really "discard the
+                // working poses": the assembly is left exactly as the caller left it.
+                Array.Copy(original, _poses, original.Length);
+                WorstMates(residual, diagnostics);
+                if (steps == 0 && _columns > 0)
+                {
+                    // The residual is nonzero but its gradient is not: a STATIONARY start.
+                    // The textbook case is an Angle or Perpendicular mate whose directions
+                    // begin exactly parallel — d/dθ cos θ is zero at θ = 0, so no
+                    // first-order step exists. Randomly nudging and retrying would
+                    // "sometimes converge", which is worse than saying so.
+                    diagnostics.Add(
+                        "no first-order motion improves the residual: the starting pose is a stationary " +
+                        "configuration for these mates (an Angle or Perpendicular mate whose directions " +
+                        "start exactly parallel is the usual cause). Place the occurrence roughly where it " +
+                        "belongs and solve again.");
+                }
+            }
+
+            Note(diagnostics);
+            if (_columns - rank > 0)
+                diagnostics.Add(FreedomNote(_columns - rank));
+
+            return new MateSolveResult(converged, iteration, worst, _columns, rank, diagnostics);
+        }
+
+        private void Register(in MateRef reference)
+        {
+            if (reference.Occurrence is not { } occurrence)
+                return;
+            if (set.Grounded.Contains(occurrence) || _block.ContainsKey(occurrence))
+                return;
+            _block[occurrence] = _free.Count;
+            _free.Add(occurrence);
+        }
+
+        private void Note(List<string> diagnostics)
+        {
+            var unmated = set.Assembly.Occurrences
+                .Where(o => !_block.ContainsKey(o) && !set.Grounded.Contains(o))
+                .Select(o => o.Name)
+                .ToList();
+            if (unmated.Count > 0)
+            {
+                string names = string.Join(", ", unmated.Take(6));
+                if (unmated.Count > 6)
+                    names += $", +{unmated.Count - 6} more";
+                diagnostics.Add($"no mate mentions {names} — left where they were placed");
+            }
+        }
+
+        private static string FreedomNote(int remaining) =>
+            $"{remaining} degree{(remaining == 1 ? "" : "s")} of freedom remain: the mates do not " +
+            "pin the assembly completely (add a mate, or ground an occurrence)";
+
+        private void WorstMates(double[] residual, List<string> diagnostics)
+        {
+            var offenders = new List<(string Name, double Residual)>();
+            int row = 0;
+            foreach (var mate in set.Mates)
+            {
+                double peak = 0;
+                for (int i = 0; i < mate.RowCount; i++)
+                    peak = Math.Max(peak, Math.Abs(residual[row + i]));
+                row += mate.RowCount;
+                offenders.Add((mate.Name, peak));
+            }
+            foreach (var (name, peak) in offenders.OrderByDescending(o => o.Residual).Take(3))
+                diagnostics.Add($"'{name}' is off by {peak:g4}");
+            diagnostics.Add("nothing was moved — the occurrence frames are unchanged");
+        }
+
+        /// <summary>The model's own scale, from the geometry the mates reference: mate
+        /// points and occurrence origins. Used to convert angular residuals to lengths and
+        /// to normalize the rotation variables. Falls back to 1 for a mate set whose
+        /// references all sit at the origin, where no scale is observable.</summary>
+        private double CharacteristicLength()
+        {
+            double length = 0;
+            foreach (var mate in set.Mates)
+            {
+                length = Math.Max(length, mate.A.Point.Length);
+                length = Math.Max(length, mate.B.Point.Length);
+            }
+            foreach (var occurrence in set.Assembly.Occurrences)
+                length = Math.Max(length, occurrence.Frame.Origin.Length);
+            return length > 0 ? length : 1;   // exact-zero semantic test
+        }
+
+        // ---- residuals ----
+
+        private readonly record struct End(int Block, Vector3d Origin, Vector3d Point, Vector3d Direction);
+
+        private End Evaluate(in MateRef reference)
+        {
+            if (reference.Occurrence is not { } occurrence)
+                return new End(-1, Vector3d.Zero, reference.Point, reference.Direction);
+            bool free = _block.TryGetValue(occurrence, out int block);
+            var frame = free ? _poses[block] : occurrence.Frame;   // grounded: its frame is an input
+            return new End(
+                free ? block : -1,
+                frame.Origin,
+                frame.ToWorld(reference.Point),
+                frame.ToWorldVector(reference.Direction));
+        }
+
+        /// <summary>Fills the residual vector and returns the largest absolute entry.</summary>
+        private double Evaluate(double[] residual)
+        {
+            int row = 0;
+            foreach (var mate in set.Mates)
+            {
+                var a = Evaluate(mate.A);
+                var b = Evaluate(mate.B);
+                var w = b.Point - a.Point;
+                switch (mate.Kind)
+                {
+                    case MateKind.Coincident:
+                        Write(residual, ref row, w);
+                        break;
+
+                    case MateKind.Planar:
+                        // Normals oppose (3 rows, rank 2) and the faces sit `gap` apart
+                        // along A's normal (1 row).
+                        Write(residual, ref row, (a.Direction + b.Direction) * _length);
+                        residual[row++] = w.Dot(a.Direction) - mate.Value;
+                        break;
+
+                    case MateKind.Concentric:
+                        // Axes parallel (3 rows, rank 2) and A's axis passes through B's
+                        // reference point (3 rows, rank 2).
+                        Write(residual, ref row, a.Direction.Cross(b.Direction) * _length);
+                        Write(residual, ref row, w - a.Direction * w.Dot(a.Direction));
+                        break;
+
+                    case MateKind.Parallel:
+                        Write(residual, ref row, a.Direction.Cross(b.Direction) * _length);
+                        break;
+
+                    case MateKind.Perpendicular:
+                        residual[row++] = a.Direction.Dot(b.Direction) * _length;
+                        break;
+
+                    case MateKind.Angle:
+                        residual[row++] = (a.Direction.Dot(b.Direction) - Math.Cos(mate.Value)) * _length;
+                        break;
+
+                    default:   // Distance
+                        residual[row++] = w.Length - mate.Value;
+                        break;
+                }
+            }
+
+            double worst = 0;
+            for (int i = 0; i < residual.Length; i++)
+                worst = Math.Max(worst, Math.Abs(residual[i]));
+            return worst;
+        }
+
+        private static void Write(double[] residual, ref int row, in Vector3d value)
+        {
+            residual[row++] = value.X;
+            residual[row++] = value.Y;
+            residual[row++] = value.Z;
+        }
+
+        // ---- analytic Jacobian ----
+
+        /// <summary>Derivative of an end's world point and direction with respect to
+        /// variable <paramref name="column"/>. Translation variables move the point and
+        /// leave the direction; rotation variables (scaled by the characteristic length so
+        /// the columns are O(1)) rotate both about the occurrence's own origin.</summary>
+        private (Vector3d Point, Vector3d Direction) Derivative(in End end, int column)
+        {
+            if (end.Block < 0)
+                return (Vector3d.Zero, Vector3d.Zero);
+            int local = column - end.Block * 6;
+            if (local < 0 || local >= 6)
+                return (Vector3d.Zero, Vector3d.Zero);
+            if (local < 3)
+                return (Unit(local), Vector3d.Zero);
+            var axis = Unit(local - 3);
+            return (axis.Cross(end.Point - end.Origin) / _length, axis.Cross(end.Direction) / _length);
+        }
+
+        private static Vector3d Unit(int index) => index switch
+        {
+            0 => Vector3d.UnitX,
+            1 => Vector3d.UnitY,
+            _ => Vector3d.UnitZ,
+        };
+
+        private void Jacobian(double[] jacobian)
+        {
+            Array.Clear(jacobian);
+            int row = 0;
+            foreach (var mate in set.Mates)
+            {
+                var a = Evaluate(mate.A);
+                var b = Evaluate(mate.B);
+                var w = b.Point - a.Point;
+                int start = row;
+                for (int column = 0; column < _columns; column++)
+                {
+                    var (dPa, dDa) = Derivative(a, column);
+                    var (dPb, dDb) = Derivative(b, column);
+                    var dw = dPb - dPa;
+                    row = start;
+                    switch (mate.Kind)
+                    {
+                        case MateKind.Coincident:
+                            Set(jacobian, ref row, column, dw);
+                            break;
+
+                        case MateKind.Planar:
+                            Set(jacobian, ref row, column, (dDa + dDb) * _length);
+                            jacobian[row++ * _columns + column] = dw.Dot(a.Direction) + w.Dot(dDa);
+                            break;
+
+                        case MateKind.Concentric:
+                            Set(jacobian, ref row, column,
+                                (dDa.Cross(b.Direction) + a.Direction.Cross(dDb)) * _length);
+                            // d/dx of  w − (w·n)n   with both w and n varying.
+                            Set(jacobian, ref row, column,
+                                dw - dDa * w.Dot(a.Direction)
+                                   - a.Direction * (dw.Dot(a.Direction) + w.Dot(dDa)));
+                            break;
+
+                        case MateKind.Parallel:
+                            Set(jacobian, ref row, column,
+                                (dDa.Cross(b.Direction) + a.Direction.Cross(dDb)) * _length);
+                            break;
+
+                        case MateKind.Perpendicular:
+                        case MateKind.Angle:
+                            jacobian[row++ * _columns + column] =
+                                (dDa.Dot(b.Direction) + a.Direction.Dot(dDb)) * _length;
+                            break;
+
+                        default:   // Distance
+                        {
+                            // |w| is not differentiable at w = 0; any unit direction is a
+                            // valid descent direction there, and one step moves the points
+                            // apart so the true gradient takes over.
+                            double norm = w.Length;
+                            var unit = norm > 0 ? w / norm : Vector3d.UnitX;
+                            jacobian[row++ * _columns + column] = unit.Dot(dw);
+                            break;
+                        }
+                    }
+                }
+                row = start + mate.RowCount;
+            }
+        }
+
+        private void Set(double[] jacobian, ref int row, int column, in Vector3d value)
+        {
+            jacobian[row++ * _columns + column] = value.X;
+            jacobian[row++ * _columns + column] = value.Y;
+            jacobian[row++ * _columns + column] = value.Z;
+        }
+
+        private void NormalEquations(double[] jacobian, double[] residual, double[] normal, double[] gradient)
+        {
+            Array.Clear(normal);
+            Array.Clear(gradient);
+            for (int r = 0; r < _rows; r++)
+            {
+                int offset = r * _columns;
+                double rr = residual[r];
+                for (int i = 0; i < _columns; i++)
+                {
+                    double ji = jacobian[offset + i];
+                    // Exact-zero skip: the Jacobian is very sparse (each mate touches at
+                    // most 12 of the columns), so this is the difference between an O(n²)
+                    // and an O(12n) inner loop, not a tolerance decision.
+                    if (ji == 0)
+                        continue;
+                    gradient[i] += ji * rr;
+                    int row = i * _columns;
+                    for (int j = 0; j < _columns; j++)
+                        normal[row + j] += ji * jacobian[offset + j];
+                }
+            }
+        }
+
+        /// <summary>Moves the poses by −<paramref name="step"/> (the step solves
+        /// <c>A δ = Jᵀr</c>, and Gauss–Newton descends against the gradient).</summary>
+        private void Apply(double[] step)
+        {
+            for (int i = 0; i < _free.Count; i++)
+            {
+                var frame = _poses[i];
+                var translation = new Vector3d(-step[i * 6], -step[i * 6 + 1], -step[i * 6 + 2]);
+                // Rotation variables were scaled by the characteristic length; undo that
+                // to get the true rotation vector.
+                var rotation = new Vector3d(-step[i * 6 + 3], -step[i * 6 + 4], -step[i * 6 + 5]) / _length;
+                _poses[i] = Frame3d.FromXY(
+                    frame.Origin + translation, Rotate(frame.X, rotation), Rotate(frame.Y, rotation));
+            }
+        }
+
+        /// <summary>Rodrigues rotation of <paramref name="v"/> by the rotation vector
+        /// <paramref name="w"/> (axis × angle).</summary>
+        private static Vector3d Rotate(in Vector3d v, in Vector3d w)
+        {
+            double theta = w.Length;
+            if (theta <= 0)          // exact-zero semantic test: no rotation requested
+                return v;
+            var k = w / theta;
+            double c = Math.Cos(theta), s = Math.Sin(theta);
+            return v * c + k.Cross(v) * s + k * (k.Dot(v) * (1 - c));
+        }
+
+        // ---- dense linear algebra (small, dense, symmetric positive definite) ----
+
+        /// <summary>Cholesky solve of a symmetric positive-definite system; false when the
+        /// matrix is not positive definite (the caller raises the damping and retries).</summary>
+        private bool SolveSpd(double[] a, double[] b, out double[] x)
+        {
+            int n = _columns;
+            var l = new double[n * n];
+            for (int i = 0; i < n; i++)
+            {
+                for (int j = 0; j <= i; j++)
+                {
+                    double sum = a[i * n + j];
+                    for (int k = 0; k < j; k++)
+                        sum -= l[i * n + k] * l[j * n + k];
+                    if (i == j)
+                    {
+                        if (sum <= 0)   // exact-zero/negative pivot: not positive definite
+                        {
+                            x = [];
+                            return false;
+                        }
+                        l[i * n + i] = Math.Sqrt(sum);
+                    }
+                    else
+                    {
+                        l[i * n + j] = sum / l[j * n + j];
+                    }
+                }
+            }
+
+            var y = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                double sum = b[i];
+                for (int k = 0; k < i; k++)
+                    sum -= l[i * n + k] * y[k];
+                y[i] = sum / l[i * n + i];
+            }
+            x = new double[n];
+            for (int i = n - 1; i >= 0; i--)
+            {
+                double sum = y[i];
+                for (int k = i + 1; k < n; k++)
+                    sum -= l[k * n + i] * x[k];
+                x[i] = sum / l[i * n + i];
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Rank of a symmetric positive-semidefinite matrix by diagonally pivoted
+        /// Cholesky (symmetric Gaussian elimination on the largest remaining diagonal) —
+        /// the standard rank-revealing factorization for this class of matrix, and the
+        /// reason the redundant rotational residual rows do not inflate the DOF count.
+        /// </summary>
+        private static int Rank(double[] a, int n)
+        {
+            if (n == 0)
+                return 0;
+            var m = (double[])a.Clone();
+            var live = new bool[n];
+            Array.Fill(live, true);
+
+            double first = 0;
+            for (int i = 0; i < n; i++)
+                first = Math.Max(first, m[i * n + i]);
+            if (first <= 0)          // exact-zero semantic test: nothing is constrained
+                return 0;
+            // Pivots are SQUARED singular values, so the relative singular-value threshold
+            // enters squared.
+            double floor = first * RankRelativeTolerance * RankRelativeTolerance;
+
+            int rank = 0;
+            for (int step = 0; step < n; step++)
+            {
+                int pivot = -1;
+                double best = floor;
+                for (int i = 0; i < n; i++)
+                {
+                    if (live[i] && m[i * n + i] > best)
+                    {
+                        best = m[i * n + i];
+                        pivot = i;
+                    }
+                }
+                if (pivot < 0)
+                    break;
+
+                rank++;
+                live[pivot] = false;
+                double d = m[pivot * n + pivot];
+                for (int i = 0; i < n; i++)
+                {
+                    if (!live[i])
+                        continue;
+                    double factor = m[i * n + pivot] / d;
+                    if (factor == 0)
+                        continue;
+                    for (int j = 0; j < n; j++)
+                    {
+                        if (live[j])
+                            m[i * n + j] -= factor * m[pivot * n + j];
+                    }
+                }
+            }
+            return rank;
+        }
+    }
+}

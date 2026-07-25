@@ -87,6 +87,10 @@ internal static partial class Log
     [LoggerMessage(EventId = 12, Level = LogLevel.Error, Message = "--ao requires on or off")]
     internal static partial void UsageAmbientOcclusion(ILogger logger);
 
+    [LoggerMessage(EventId = 16, Level = LogLevel.Error,
+        Message = "--explode requires a non-negative factor (0 assembled, 1 fully exploded)")]
+    internal static partial void UsageExplode(ILogger logger);
+
     [LoggerMessage(EventId = 13, Level = LogLevel.Error,
         Message = "--mesh requires lazy (mesh each tab when it is first shown) or all"
                 + " (mesh the whole document before the window opens)")]
@@ -144,6 +148,11 @@ internal static partial class Log
     [LoggerMessage(EventId = 30, Level = LogLevel.Error,
         Message = "No B-Rep-representable parts; nothing exported.")]
     internal static partial void NoBrepParts(ILogger logger);
+
+    [LoggerMessage(EventId = 31, Level = LogLevel.Information,
+        Message = "wrote {Path} (STEP assembly: {ProductCount} product(s), {InstanceCount} occurrence(s))")]
+    internal static partial void WroteStepAssembly(
+        ILogger logger, string path, int productCount, int instanceCount);
 
     // ---- live modeling loop ----
 

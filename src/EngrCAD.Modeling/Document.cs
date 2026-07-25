@@ -60,6 +60,17 @@ public sealed class Part
     /// resulting shape graph.</summary>
     public FeatureHistory? History { get; }
 
+    /// <summary>
+    /// The catalogue item this part IS, when it came from one
+    /// (<see cref="HardwareComponent.ToPart"/>); null for designed parts. Two things
+    /// read it: a <see cref="Bom">bill of materials</see> (a hardware line carries the
+    /// component, so a purchasing view can reach its designation and dimensions), and
+    /// the default explode direction (<see cref="Assembly.AutoExplode"/> moves a
+    /// fastener along its OWN axis, which its local frame already knows, instead of
+    /// radially from the assembly centre).
+    /// </summary>
+    public HardwareComponent? Hardware { get; internal set; }
+
     /// <summary>Display color; when null, the tab assigns the next palette color on add.</summary>
     public PartColor? Color { get; set; }
 
@@ -540,16 +551,34 @@ public sealed class Tab
     /// transform, path = its name), then each assembly's instances depth-first
     /// (paths like "gearbox/stack.2/bolt"). This ordered list is the seam viewers
     /// consume — instance index i here is instance index i in the viewport.
+    /// <para><paramref name="explode"/> (0 assembled → 1 fully exploded) scales the
+    /// assemblies' <see cref="Occurrence.ExplodeOffset"/>s; loose parts never move, since
+    /// they belong to no assembly and so have nothing to explode away from. The instance
+    /// COUNT and ORDER are independent of it, which is what lets a viewer animate the
+    /// factor without re-uploading a single buffer.</para>
     /// </summary>
-    public IReadOnlyList<PartInstance> Instances()
+    public IReadOnlyList<PartInstance> Instances(double explode = 0)
     {
         var instances = new List<PartInstance>(_parts.Count);
         foreach (var part in _parts)
             instances.Add(new PartInstance(part, part.Transform, part.Name));
         foreach (var assembly in _assemblies)
-            assembly.FlattenInto(Frame3d.WorldXY, assembly.Name, instances);
+            assembly.FlattenInto(Frame3d.WorldXY, assembly.Name, instances, explode);
         return instances;
     }
+
+    /// <summary>Derives explode offsets for every assembly in this tab
+    /// (<see cref="Assembly.AutoExplode"/>). Off the render thread: it needs the parts'
+    /// bounds.</summary>
+    public void AutoExplode(double distance = 0, bool overwrite = false, MeshQuality? quality = null)
+    {
+        foreach (var assembly in _assemblies)
+            assembly.AutoExplode(distance, overwrite, quality);
+    }
+
+    /// <summary>True when any assembly in this tab has something to explode — the cheap
+    /// probe a viewer uses to decide whether to offer the control at all.</summary>
+    public bool HasAssemblies => _assemblies.Count > 0;
 
     /// <summary>Every distinct part shown in this tab — loose parts plus assembly
     /// parts, each exactly once (reference identity) however many times it is placed.</summary>
@@ -640,7 +669,20 @@ public sealed class Scene
     public IEnumerable<Part> AllParts => _tabs.SelectMany(t => t.AllParts).Distinct();
 
     /// <summary>Every posed part instance across all tabs (see <see cref="Tab.Instances"/>).</summary>
-    public IEnumerable<PartInstance> AllInstances => _tabs.SelectMany(t => t.Instances());
+    public IEnumerable<PartInstance> AllInstances => Instances();
+
+    /// <summary>Every posed part instance across all tabs, at an explode factor
+    /// (0 assembled → 1 fully exploded).</summary>
+    public IEnumerable<PartInstance> Instances(double explode = 0) =>
+        _tabs.SelectMany(t => t.Instances(explode));
+
+    /// <summary>Derives explode offsets for every assembly in the scene
+    /// (<see cref="Assembly.AutoExplode"/>). Off the render thread: it needs bounds.</summary>
+    public void AutoExplode(double distance = 0, bool overwrite = false, MeshQuality? quality = null)
+    {
+        foreach (var tab in _tabs)
+            tab.AutoExplode(distance, overwrite, quality);
+    }
 
     public Tab AddTab(string name)
     {

@@ -61,6 +61,15 @@ public sealed class EngrCadOptions
     public double? SectionOffset { get; set; }
 
     /// <summary>
+    /// Exploded-view factor for headless renders and for the window's initial state:
+    /// 0 (the default) assembled, 1 fully exploded, anything between interpolates.
+    /// Non-zero derives the occurrence offsets through <c>Assembly.AutoExplode</c> unless
+    /// the design set them itself. Assembly-free scenes are unaffected — a loose part
+    /// belongs to no assembly and so has nothing to explode away from.
+    /// </summary>
+    public double Explode { get; set; }
+
+    /// <summary>
     /// Several section planes for headless renders — two perpendicular planes are the
     /// classic quarter cut, three an octant. When set it wins over
     /// <see cref="SectionAxis"/>/<see cref="SectionOffset"/>; null (the default) keeps
@@ -234,6 +243,17 @@ public sealed class EngrCadBuilder
         return this;
     }
 
+    /// <summary>Sets the exploded-view factor (0 assembled → 1 fully exploded) for
+    /// headless renders and the window's initial state. <c>--explode &lt;factor&gt;</c>
+    /// wins over this default. See <see cref="EngrCadOptions.Explode"/>.</summary>
+    public EngrCadBuilder WithExplode(double factor)
+    {
+        if (factor < 0)
+            throw new ArgumentOutOfRangeException(nameof(factor), "An explode factor cannot be negative.");
+        Options.Explode = factor;
+        return this;
+    }
+
     /// <summary>Enables or disables baked ambient occlusion for the viewport and for
     /// headless renders (<c>--ao on|off</c> wins over this default). On by default —
     /// see <see cref="EngrCadOptions.AmbientOcclusion"/>.</summary>
@@ -276,7 +296,8 @@ public sealed class EngrCadBuilder
     public void RenderToImage(
         Scene scene, string path, CameraState? camera = null,
         ViewStyle? style = null, SectionAxis? sectionAxis = null, double? sectionOffset = null,
-        bool? ambientOcclusion = null, IReadOnlyList<SectionPlane>? sectionPlanes = null)
+        bool? ambientOcclusion = null, IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        double? explode = null)
     {
         scene.PreMesh(Options.Quality); // meshes cache, so the inner PreMesh is a no-op
         EngrCad.RenderToImage(scene, path, Options.RenderWidth, Options.RenderHeight, camera,
@@ -285,6 +306,8 @@ public sealed class EngrCadBuilder
             sectionOffset ?? Options.SectionOffset,
             ambientOcclusion ?? Options.AmbientOcclusion,
             sectionPlanes ?? Options.SectionPlanes,
-            Options.SectionCombine);
+            Options.SectionCombine,
+            preview: null,
+            explode ?? Options.Explode);
     }
 }

@@ -98,6 +98,24 @@ internal sealed class SceneHost
     private string? _previewKey;
     private Tab? _currentTabContent;
 
+    // ---- exploded view ----
+
+    /// <summary>The toolbar's explode toggle and factor slider. Both are disabled for a
+    /// tab with no assemblies: a loose part belongs to no assembly, so it has nothing to
+    /// explode away from and a live control would be a lie.</summary>
+    private readonly ToggleButton _explodeToggle;
+
+    private readonly Slider _explodeSlider;
+
+    /// <summary>Current explode factor (0 = assembled). Kept here rather than read back
+    /// off the slider so a tab switch can re-apply it without a round trip.</summary>
+    private double _explode;
+
+    /// <summary>Whether this tab's occurrence offsets have been derived yet
+    /// (<c>Assembly.AutoExplode</c> needs the parts' bounds, so it runs once, on a
+    /// background task).</summary>
+    private readonly HashSet<string> _explodePlanned = [];
+
     public ViewportControl Viewport { get; }
     public Control Root { get; }
 
@@ -222,6 +240,38 @@ internal sealed class SceneHost
         ToolTip.SetTip(measure, "Measure: click two surface points to dimension the distance (Esc clears)");
         measure.IsCheckedChanged += (_, _) => Viewport.MeasureMode = measure.IsChecked ?? false;
         toolbar.Children.Add(measure);
+        toolbar.Children.Add(new Border { Width = 8 });
+
+        // Exploded view: a scalar 0 -> 1 scaling each occurrence's ExplodeOffset. The
+        // slider re-flattens and re-poses ONLY (SetInstancePoses), so dragging it never
+        // re-uploads a buffer; the offsets themselves are derived once, off the UI thread.
+        _explodeSlider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 1,
+            Value = 0,
+            Width = 96,
+            IsEnabled = false,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(_explodeSlider, "Exploded view: drag to pull the assembly apart");
+        // Dragging never moves the camera; only switching the toggle on re-frames
+        // (ToggleExplode does that explicitly).
+        _explodeSlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == RangeBase.ValueProperty)
+                ApplyExplode(_explodeSlider.Value);
+        };
+        _explodeToggle = new ToggleButton { Content = "Explode", Padding = new Thickness(10, 4), FontSize = 12 };
+        ToolTip.SetTip(_explodeToggle, "Exploded view (assemblies only)");
+        _explodeToggle.IsCheckedChanged += (_, _) => ToggleExplode(_explodeToggle.IsChecked ?? false);
+        toolbar.Children.Add(_explodeToggle);
+        toolbar.Children.Add(_explodeSlider);
+
+        var bom = ToolButton("BOM", ShowBom);
+        ToolTip.SetTip(bom, "Bill of materials for this tab (quantities per part; CSV saved beside it)");
+        toolbar.Children.Add(bom);
+
         toolbar.Children.Add(new Border { Width = 8 });
         var capture = ToolButton("Capture", () => Viewport.SaveScreenshot());
         ToolTip.SetTip(capture, "Save the current view as a PNG (path appears in the status bar)");
@@ -358,10 +408,18 @@ internal sealed class SceneHost
         var tab = _scene.Tabs.FirstOrDefault(t => t.Name == name);
         bool restored = !keepCamera && name is not null && _tabCameras.ContainsKey(name);
 
+        // The explode control follows the tab: only an assembly has anything to explode.
+        // The factor itself is kept (a tab switch does not silently re-assemble), but a
+        // tab whose offsets have not been derived simply flattens un-exploded until they
+        // are — never a blocking mesh on the UI thread.
+        bool explodable = tab?.HasAssemblies ?? false;
+        _explodeToggle.IsEnabled = explodable;
+        _explodeSlider.IsEnabled = explodable && (_explodeToggle.IsChecked ?? false);
+
         // keepCamera (live reload of the same tab) and a remembered pose both suppress
         // auto-framing; a first visit frames to the tab's bounds. The tree walks the
         // same tab structure Instances() flattens, so row instance indices line up.
-        var instances = tab?.Instances() ?? [];
+        var instances = tab?.Instances(_explode) ?? [];
 
         // A new instance list clears the viewport's preview overlay (ApplyInstances);
         // drop our matching row state so the tree agrees with what is drawn.
@@ -389,6 +447,135 @@ internal sealed class SceneHost
         }
 
         ShowProperties(-1);
+    }
+
+    // ---- exploded view ----
+
+    /// <summary>Turns the explode control on or off. Turning it on derives the offsets
+    /// once, on a background task: <c>AutoExplode</c> reads the instances' bounds, which
+    /// means meshing, and that must never happen on the UI thread — the same rule
+    /// construction previews follow.</summary>
+    private void ToggleExplode(bool on)
+    {
+        _explodeSlider.IsEnabled = on && (_currentTabContent?.HasAssemblies ?? false);
+        if (!on)
+        {
+            _explodeSlider.Value = 0;
+            ApplyExplode(0);
+            return;
+        }
+        if (_currentTabContent is not { HasAssemblies: true } tab)
+        {
+            _statusText.Text = "explode: this tab has no assemblies";
+            return;
+        }
+        if (_explodePlanned.Contains(tab.Name))
+        {
+            FullyExplode();
+            return;
+        }
+
+        _statusText.Text = "explode: working out where everything goes ...";
+        var quality = _scene?.ResolveQuality(EngrCad.CurrentOptions.Quality);
+        Task.Run(() =>
+        {
+            tab.AutoExplode(quality: quality);
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                _explodePlanned.Add(tab.Name);
+                if (_explodeToggle.IsChecked ?? false)
+                    FullyExplode();
+            });
+        });
+
+        // Switching explode ON re-frames ONCE: the parts move outside the assembled
+        // framing, so keeping the old camera would show an empty middle. The slider
+        // itself never re-frames — a camera chasing the geometry every tick is unusable.
+        // Setting the slider queues a pose update; the explicit call right after
+        // supersedes it with the framing variant, so the render thread applies one.
+        void FullyExplode()
+        {
+            _explodeSlider.Value = 1;
+            ApplyExplode(1, frame: true);
+        }
+    }
+
+    /// <summary>Re-poses the viewport at a factor. Cheap by construction: the instance
+    /// list is the same parts in the same order at every factor, so only the matrices
+    /// change and every shared buffer stays put.</summary>
+    private void ApplyExplode(double factor, bool frame = false)
+    {
+        _explode = factor;
+        if (_currentTabContent is not { } tab)
+            return;
+        _tabInstances = tab.Instances(factor);
+        Viewport.SetInstancePoses(_tabInstances, frame);
+    }
+
+    // ---- bill of materials ----
+
+    /// <summary>Shows the current tab's BOM in a window and drops a CSV beside it, the
+    /// same "write a file and report the path" convention the Capture button uses.</summary>
+    private void ShowBom()
+    {
+        if (_currentTabContent is not { } tab)
+        {
+            _statusText.Text = "BOM: nothing to list";
+            return;
+        }
+
+        var bom = Bom.For(tab);
+        string csvPath = Path.Combine(
+            Path.GetTempPath(),
+            $"engrcad-bom-{string.Concat(tab.Name.Select(c => char.IsLetterOrDigit(c) ? c : '-'))}.csv");
+        string? saved = null;
+        try
+        {
+            File.WriteAllText(csvPath, bom.ToCsv());
+            saved = csvPath;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // A read-only temp directory must not take the window down with it.
+        }
+
+        var text = new TextBlock
+        {
+            Text = bom.ToText(pathsShown: 4),
+            FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+            FontSize = 12,
+            Foreground = BrightText,
+            TextWrapping = TextWrapping.NoWrap,
+        };
+        var body = new StackPanel { Spacing = 8, Children = { text } };
+        if (saved is not null)
+        {
+            body.Children.Add(new TextBlock
+            {
+                Text = $"CSV: {saved}",
+                Foreground = DimText,
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        new Window
+        {
+            Title = $"Bill of materials — {tab.Name}",
+            Width = 720,
+            Height = 460,
+            Background = PanelBrush,
+            Content = new ScrollViewer
+            {
+                Padding = new Thickness(16),
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                Content = body,
+            },
+        }.Show();
+
+        _statusText.Text = saved is null
+            ? $"BOM: {bom.LineCount} item(s), {bom.TotalQuantity} occurrence(s)"
+            : $"BOM: {bom.LineCount} item(s), {bom.TotalQuantity} occurrence(s) — wrote {saved}";
     }
 
     // ---- on-demand meshing callbacks (all on the UI thread) ----
