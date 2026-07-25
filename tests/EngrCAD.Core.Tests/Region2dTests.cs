@@ -198,4 +198,38 @@ public class Region2dTests
     {
         Assert.Empty(Region2d.FromLoops([]));
     }
+
+    // ---- exact collinear simplification ----
+
+    [Fact]
+    public void WithoutCollinearVertices_DropsOnlyExactlyCollinearInteriorPoints()
+    {
+        // A square whose bottom edge carries two T-junction vertices and whose right edge
+        // carries one bulged out by a single ulp.
+        double bulged = Math.BitIncrement(4.0);
+        var loop = Region2d.WithoutCollinearVertices([
+            new Vector2d(0, 0), new(1, 0), new(2, 0), new(4, 0),
+            new Vector2d(bulged, 2), new(4, 4), new(0, 4),
+        ]);
+
+        // The two exactly-collinear bottom vertices go; the one-ulp bulge stays, because
+        // "exactly on the line" is decided exactly and it is not.
+        Assert.Equal([
+            new Vector2d(0, 0), new(4, 0), new(bulged, 2), new(4, 4), new(0, 4),
+        ], loop);
+        Assert.Equal(16.0, Region2d.SignedArea(loop), 12);
+    }
+
+    [Fact]
+    public void WithoutCollinearVertices_KeepsAtLeastATriangleAndCascades()
+    {
+        // Every interior point of the two long edges is exactly collinear; the pass repeats
+        // until stable and never eats below three points.
+        var loop = Region2d.WithoutCollinearVertices([
+            new Vector2d(0, 0), new(1, 0), new(2, 0), new(3, 0), new(4, 0),
+            new Vector2d(2, 3), new(1, 1.5), new(0.5, 0.75),
+        ]);
+        Assert.Equal(3, loop.Count);
+        Assert.Equal(6.0, Region2d.SignedArea(loop), 12);
+    }
 }

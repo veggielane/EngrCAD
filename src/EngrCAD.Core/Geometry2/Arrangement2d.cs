@@ -53,7 +53,7 @@ public sealed class Arrangement2d
     /// <para>This fan order IS the arrangement's combinatorial embedding: walking it
     /// clockwise from the reverse of an incoming directed edge yields the next edge of the
     /// face on that edge's left. <see cref="ExtractCells"/> traces every face this way, and
-    /// region-boolean boundary tracing re-walks the same order restricted to the kept
+    /// <see cref="Region2dBoolean"/> re-walks the same order restricted to the kept
     /// boundary — they must agree, so the order lives here rather than in either caller.</para>
     /// </summary>
     public int[][] BuildCcwEdgeFans()

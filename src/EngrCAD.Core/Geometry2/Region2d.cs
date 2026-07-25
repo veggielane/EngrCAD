@@ -171,6 +171,18 @@ public sealed class Region2d
         return regions;
     }
 
+    /// <summary>Everything covered by this region or <paramref name="other"/> — see
+    /// <see cref="Region2dBoolean"/>.</summary>
+    public IReadOnlyList<Region2d> Union(Region2d other) => Region2dBoolean.Union(this, other);
+
+    /// <summary>Everything covered by both this region and <paramref name="other"/> — see
+    /// <see cref="Region2dBoolean"/>.</summary>
+    public IReadOnlyList<Region2d> Intersect(Region2d other) => Region2dBoolean.Intersection(this, other);
+
+    /// <summary>This region with <paramref name="other"/> cut away — see
+    /// <see cref="Region2dBoolean"/>.</summary>
+    public IReadOnlyList<Region2d> Subtract(Region2d other) => Region2dBoolean.Difference(this, other);
+
     /// <summary>Outer loop first, then the holes — the order <c>Region2d.FromLoops</c> round-trips.</summary>
     public IEnumerable<IReadOnlyList<Vector2d>> AllLoops()
     {
@@ -248,6 +260,52 @@ public sealed class Region2d
             return ParityInside(outer, p);
         }
         return false;
+    }
+
+    /// <summary>
+    /// Drops vertices that lie EXACTLY on the straight line between their neighbours and
+    /// strictly between them — the T-junction vertices an <see cref="Arrangement2d"/> leaves
+    /// behind when two coincident edges are merged. Both tests are exact
+    /// (<see cref="Predicates2d.Orient2dSign"/> plus a dominant-axis coordinate comparison),
+    /// so the polygon's point set is provably unchanged; the betweenness test also means a
+    /// 180-degree reversal (a slit) is never removed. Repeats until stable, never below 3
+    /// points.
+    /// </summary>
+    public static IReadOnlyList<Vector2d> WithoutCollinearVertices(IReadOnlyList<Vector2d> loop)
+    {
+        var points = new List<Vector2d>(loop);
+        bool changed = true;
+        while (changed && points.Count > 3)
+        {
+            changed = false;
+            for (int i = 0; i < points.Count && points.Count > 3;)
+            {
+                var previous = points[(i - 1 + points.Count) % points.Count];
+                var current = points[i];
+                var next = points[(i + 1) % points.Count];
+                if (Predicates2d.Orient2dSign(previous, current, next) == 0
+                    && StrictlyBetween(previous, next, current))
+                {
+                    points.RemoveAt(i);
+                    changed = true;
+                }
+                else
+                {
+                    i++;
+                }
+            }
+        }
+        return points;
+    }
+
+    /// <summary>For p exactly on the line through a and b: is it strictly between them?
+    /// Decided by exact coordinate comparison on the dominant axis (as
+    /// <see cref="Arrangement2d"/> does).</summary>
+    private static bool StrictlyBetween(in Vector2d a, in Vector2d b, in Vector2d p)
+    {
+        if (Math.Abs(b.X - a.X) >= Math.Abs(b.Y - a.Y))
+            return a.X < b.X ? a.X < p.X && p.X < b.X : b.X < p.X && p.X < a.X;
+        return a.Y < b.Y ? a.Y < p.Y && p.Y < b.Y : b.Y < p.Y && p.Y < a.Y;
     }
 
     /// <summary>Do two closed loops have a PROPER crossing (segment interiors on opposite

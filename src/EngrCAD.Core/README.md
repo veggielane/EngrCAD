@@ -63,7 +63,26 @@ concerns.
   DEPTH — even depth = an outer boundary, odd depth = a hole of its deepest container, so an
   island inside a hole becomes a region of its own — the "nested loop hierarchy" a sketch
   front door needs. Regions are polygonal by construction; curved input is flattened to a
-  chord tolerance before it reaches this type.
+  chord tolerance before it reaches this type. `WithoutCollinearVertices(loop)` drops
+  vertices lying EXACTLY between their neighbours (exact orientation + dominant-axis
+  betweenness, so a 180-degree slit reversal is never eaten).
+- **`Geometry2.Region2dBoolean`** — `Union` / `Intersection` / `Difference` of regions (or
+  region *sets*, each read as the union of its members), returning a list of canonical
+  regions; empty result = empty list. Both operands' loops go into one `Arrangement2d`
+  (which splits crossings and dedupes coincident edges), `ExtractCells` carves the plane
+  into interior-disjoint cells, each cell is classified once by membership in A and B, kept
+  cells' directed loop edges are collected, and **an edge with kept cells on BOTH sides is
+  interior and disappears** — what remains is the result boundary, re-traced with the
+  arrangement's own CCW fan order so kept material always stays on the left (outer loops CCW,
+  hole loops CW). `Region2d.FromLoops` then re-derives the nesting, so a hole CREATED by the
+  operation (square minus a centred square) is detected exactly like any other, and a
+  difference that splits one region in two just yields two loops. Interior sample points are
+  **clearance-based and scale-free**: for each outer-loop edge take the midpoint m and the
+  distance d to the nearest OTHER arrangement edge — the open disk of radius d around m meets
+  no other edge, so `m + d/2` along the inward (left) normal is strictly interior — using the
+  edge with the largest clearance. No triangulation, no shrink factor, no epsilon; and since
+  the cell boundary contains every operand edge, the sample can never sit on A's or B's
+  boundary, so `Contains`'s closed-set convention never has to decide a tie.
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
   centroid axis, flat node array, allocation-free stack traversal). Queries (all
   zero-allocation per query, results appended to caller-provided lists):
