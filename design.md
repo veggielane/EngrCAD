@@ -368,6 +368,16 @@ The conversion triangle is complete; each direction has a deliberately chosen al
 `Shape` is a representation-agnostic operation graph — the hybrid kernel's front door.
 Design decisions:
 
+- **The construction tree is the seam between an immutable graph and stateful UI.** A
+  tree row is *a node reference plus a positional path*, and both halves earn their
+  keep: `Shape` is an immutable, shared graph, so one sub-shape can appear at several
+  paths (a pattern operand). The **path** distinguishes rows and carries expansion and
+  selection state, so it survives a live reload that rebuilds the graph; the
+  **reference** is what previews are keyed by, so a shared sub-shape lowers once no
+  matter how many rows show it. Previews are line geometry only (a sketch flattened
+  onto its plane, or a sub-shape's feature edges) — never meshes — built on a
+  background task, because the one rule the viewer cannot break is that lowering never
+  runs on the UI or render thread.
 - **Text maps onto the sketch vocabulary exactly, which is why it is cheap.** TrueType
   `glyf` outlines are lines plus quadratic Béziers, and `Sketch` already has `LineTo`
   and `QuadraticTo` — so a glyph converts with no flattening and inherits everything a

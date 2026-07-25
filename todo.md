@@ -320,14 +320,18 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   click-to-pose with eased animation, hover highlight, drag-orbits) — rotate-snap
   dragging like commercial cubes; SceneHost toolbar buttons could delegate to
   `ViewCubeMath.PoseFor` for one pose source.
-- [ ] B-Rep edge-silhouette follow-ups (`Part.GetFeatureEdges`/`BrepFeatureEdges` ✅
-  landed — B-Rep-backed parts overlay their exact edges at display resolution) —
-  a Shape-level B-Rep lowering cache: `PreMesh` currently lowers a Shape part's
-  B-Rep twice (once inside `ToMesh`, once for the edge overlay) because the mesh
-  route does not retain its intermediate solid; a `Part`-cached solid (or Shape
-  lowering memoization) would also serve STEP export and annotation resolution
-  (which lowers a third time). Also: silhouette-adaptive edge sampling (a fixed
-  96/circle undersamples very large rims).
+- [ ] Silhouette-adaptive edge sampling — a fixed 96/circle undersamples very large
+  rims (the double/triple B-Rep lowering that used to sit here is fixed:
+  `Part.TryGetSolid()`).
+- [ ] **Construction-tree follow-ups** (tree + per-node preview ✅ landed) — a
+  **rollback bar** (drag a marker in the feature list; suppress below it),
+  **suppress-from-tree**, and **`[Param]` editing** in the properties panel: all cheap
+  now, since the rows already carry the `Feature`, its `Suppressed` flag and
+  `ParamInfo`. Also: construction previews don't render in headless `RenderToImage`
+  (the same parity gap isolines had), and a preview clears on live reload because node
+  references change — it could be restored by path.
+- [ ] Move `SectionContours`' per-part implicit lowering onto `Part` alongside
+  `TryGetSolid`, so the SDF lowering is cached the same way the B-Rep one now is.
 - [ ] **Construction tree in the viewer (Shape graph / features as tree rows)** — today
   the model tree lists parts and assembly occurrences; it should also expand a part
   into **how it was built**: for a `Shape`-backed part the operation graph (each node
