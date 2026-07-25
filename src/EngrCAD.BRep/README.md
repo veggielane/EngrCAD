@@ -171,6 +171,29 @@ operations. Depends only on `EngrCAD.Core`.
   faces, caps with holes, selecting a cap, and a taper large enough to fold the profile
   (checked by winding *and* per-edge direction against the original loop, since a signed
   area alone can stay positive while one edge has already reversed).
+- **`Shelling`** — offset solids and hollowing (OCCT `BRepOffsetAPI_MakeOffsetShape` /
+  `MakeThickSolid`): `Shelling.Offset(solid, distance)` moves every face along its own
+  normal (positive grows, negative shrinks) and `Shelling.Shell(solid, thickness,
+  openingSelector?)` hollows to walls of that thickness. For a **polyhedral** solid this is
+  exact with no approximation anywhere: an offset plane is a plane, and each offset vertex is
+  the algebraic intersection of the three planes that met there. Topology is carried over
+  verbatim, so hole loops and genus survive — offsetting a plate inward shrinks its outline
+  and *grows* its bore, because a bore wall's outward normal points into the bore.
+  Shelling adds the hollowing structure: the offset copy becomes an inward-facing inner
+  boundary (flipped plane axes + loops walked backwards with flipped senses, so it is
+  genuinely CCW about the flipped normal rather than an `IsReversed` flag), and each face
+  named as an opening contributes a **rim** face — the removed face's own loops as its outer
+  boundary (they supply the second use of every edge that face used to carry) plus the inner
+  opening as a hole. With no opening the cavity is sealed and the result is a **two-shell**
+  solid; with openings it is one shell, and two opposite openings give a genus-1 tube.
+  Rejections are loud: curved faces (a cylinder offsets to a cylinder and a revolve to the
+  revolve of an `OffsetCurve3d` generator, but their *corners* need surface–surface
+  re-intersection, not a three-plane solve), vertices where more than three faces meet (the
+  offset corner is over-determined and needs corner patches), adjacent openings (zero-width
+  rim), openings on a face with holes, multi-shell inputs, and an offset that locally folds
+  the solid. **Not** checked: an offset large enough to make distant surfaces pass through
+  each other with no local symptom — the same contract OCCT offers and `OffsetCurve3d`
+  already documents for curves.
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
   common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
@@ -305,6 +328,10 @@ sections are generated rather than given, so it lands on `LoftedSurface` once a 
 evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept surfaces).
 Draft gaps: curved faces (the general face-offset-and-reintersect), caps with holes,
 per-face angles in one call, and drafting about a non-planar neutral surface.
+Shelling gaps: curved faces (cylinders/revolves offset exactly, but their corners need
+surface–surface re-intersection), higher-valence vertices (corner patches — the same
+missing machinery as sharp-corner fillets), adjacent openings, variable per-face
+thickness, and global self-intersection detection.
 `HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have
