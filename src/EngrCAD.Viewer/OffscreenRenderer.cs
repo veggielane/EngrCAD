@@ -189,13 +189,13 @@ public static class OffscreenRenderer
     {
         // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
         string header = ViewerShaders.Header(es: true);
-        uint meshProgram = ViewerShaders.LinkProgram(
+        uint meshProgram = ViewerPrograms.LinkProgram(
             gl, header + ViewerShaders.MeshVertex, header + ViewerShaders.MeshFragment, bindAttributes: true);
-        uint lineProgram = ViewerShaders.LinkProgram(
+        uint lineProgram = ViewerPrograms.LinkProgram(
             gl, header + ViewerShaders.LineVertex, header + ViewerShaders.LineFragment, bindAttributes: true);
-        uint pointProgram = ViewerShaders.LinkProgram(
+        uint pointProgram = ViewerPrograms.LinkProgram(
             gl, header + ViewerShaders.PointVertex, header + ViewerShaders.PointFragment, bindAttributes: true);
-        uint bgProgram = ViewerShaders.LinkProgram(
+        uint bgProgram = ViewerPrograms.LinkProgram(
             gl, header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment, bindAttributes: false);
 
         var bounds = Aabb.Empty;
@@ -215,7 +215,7 @@ public static class OffscreenRenderer
         gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
         // Meshes without a baked-occlusion buffer read this constant (the GL default
         // would be 0 = fully occluded = black parts).
-        RenderGeometry.SetDefaultOcclusion(gl);
+        RenderUploads.SetDefaultOcclusion(gl);
 
         // Background gradient: vertexless fullscreen triangle, no depth.
         uint bgVao = gl.GenVertexArray();
@@ -251,8 +251,8 @@ public static class OffscreenRenderer
         if (furniture)
         {
             var (gridVertices, axesVertices) = RenderGeometry.BuildGridAndAxes(bounds);
-            var (gridVao, _) = RenderGeometry.UploadLines(gl, gridVertices);
-            var (axesVao, _) = RenderGeometry.UploadLines(gl, axesVertices);
+            var (gridVao, _) = RenderUploads.UploadLines(gl, gridVertices);
+            var (axesVao, _) = RenderUploads.UploadLines(gl, axesVertices);
 
             gl.Uniform3(uLineColor, 0.24f, 0.26f, 0.29f);
             gl.BindVertexArray(gridVao);
@@ -291,7 +291,7 @@ public static class OffscreenRenderer
                     // Baked per-vertex occlusion (cached per mesh, shared with the
                     // window pass, deterministic) — the whole AO story is vertex data,
                     // so both passes shade from identical floats.
-                    (vao, _, _, _) = RenderGeometry.UploadMesh(gl, render,
+                    (vao, _, _, _) = RenderUploads.UploadMesh(gl, render,
                         ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null);
                     indexCount = render.Indices.Length;
                 }
@@ -305,7 +305,7 @@ public static class OffscreenRenderer
                     var featureEdges = part.GetFeatureEdges();
                     if (featureEdges.Count > 0)
                     {
-                        (edgeVao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
+                        (edgeVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
                         edgeVertexCount = featureEdges.Count * 2;
                     }
                 }
@@ -316,7 +316,7 @@ public static class OffscreenRenderer
                     var wireEdges = WireframeEdges.Extract(mesh);
                     if (wireEdges.Count > 0)
                     {
-                        (wireVao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
+                        (wireVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
                         wireVertexCount = wireEdges.Count * 2;
                     }
                 }

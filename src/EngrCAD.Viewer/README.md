@@ -3,6 +3,30 @@
 Cross-platform viewer **library**: Avalonia UI with an OpenGL viewport rendering kernel
 geometry. The only project allowed UI/rendering dependencies (Avalonia, Silk.NET).
 
+## Where the render model lives: `EngrCAD.Viewer.Core`
+
+The UI-free half of the render core is **not in this project**. It sits in
+[`src/EngrCAD.Viewer.Core`](../EngrCAD.Viewer.Core/README.md) — same `EngrCAD.Viewer`
+namespace, separate assembly, **no Avalonia and no Silk.NET** — so a third front end
+(the Blazor WebAssembly client, whose GL is WebGL2 through JS interop) can *share* it
+instead of copying it. Copying is precisely the failure `RenderCore.cs` was created to
+stop: the window and offscreen passes once duplicated ~150 lines and drifted silently.
+
+Over there: `ViewStyle`, `SectionAxis`/`SectionPlane`/`SectionCombine`, `SectionClip`
+(`Hides`/`Siblings`), `EffectiveMode`/`RenderModes`, `ViewerShaders` (the GLSL sources
+and `MaxSectionPlanes`; `Header(es)` already emits both an ES3 and a desktop 3.3
+header, and WebGL2 wants the ES3 one), `CameraMath`, and the pure half of
+`RenderGeometry` (`BuildGridAndAxes`, `NiceStep`, `SegmentVertices`).
+
+Still here, in `RenderCore.cs`, because each one takes a Silk.NET `GL`:
+`ViewerPrograms` (`LinkProgram`/`CompileShader`), `SectionUniforms` (the single place
+either pass writes the section uniforms), and `RenderUploads` (`UploadMesh`,
+`UploadLines`, `UploadOcclusion`, `SetDefaultOcclusion`).
+
+Consumers see no difference: the namespace did not move, so `using EngrCAD.Viewer;`
+still resolves `SectionPlane` and `ViewStyle`, and `EngrCAD.Viewer` references
+`EngrCAD.Viewer.Core` transitively.
+
 ## Usage
 
 Design code builds an `EngrCAD.Modeling.Scene` (parts grouped into tabs) and hands it
@@ -94,7 +118,7 @@ Dark-themed layout around one shared GL viewport:
 - **Global view style** (`ViewportControl.ViewStyle`, the toolbar dropdown): the
   classic CAD display-style selector — **Points / Wireframe / Shaded / Shaded +
   Edges** — applied to the whole viewport. Precedence rule (one place:
-  `RenderModes.Resolve` in `RenderCore.cs`, shared verbatim with the offscreen
+  `RenderModes.Resolve` in `EngrCAD.Viewer.Core`, shared verbatim with the offscreen
   pass): the global style decides how parts render *by default*; a part whose
   `Part.DisplayMode` is explicitly **non-default** (Wireframe or Translucent)
   overrides the global style for that part. `DisplayMode.Shaded` IS the default, so
@@ -647,12 +671,13 @@ gracefully on machines with no GPU/ANGLE.
   works on CI and locked sessions), then the default display. The same Silk.NET `GL`
   surface then draws the scene and `glReadPixels` reads it back.
 - **The look matches the viewport by construction**: both passes draw with the shared
-  render core in `RenderCore.cs` — `ViewerShaders` (ONE shader set; the only feature
+  render core, which now lives in its own assembly — **`EngrCAD.Viewer.Core`** —
+  `ViewerShaders` (ONE shader set; the only feature
   the offscreen pass neutralizes is the selection highlight, uHighlight 0 — there is
   no interactive selection offscreen), `RenderModes` (the global-style x per-part-mode
   precedence and the translucent back-to-front sort), `CameraMath`
   (LookAt/projection/column-major writer, the scene-scaled near/far frustum, and the
-  auto-framing distance), and `RenderGeometry` (grid/axes builder, line/mesh upload).
+  auto-framing distance), and `RenderGeometry` (grid/axes builder, segment flattening).
   Evolve the look there and it lands in the window and in headless renders at once; do
   not re-fork per-pass copies. Shader sources must stay pure ASCII (ANGLE rejects the
   whole shader on any non-ASCII byte — this once black-screened the viewport).

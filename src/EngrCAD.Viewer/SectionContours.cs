@@ -360,9 +360,9 @@ internal sealed class SectionContourRenderer
                 _buffers.Add(default);
                 continue;
             }
-            var (zeroVao, zeroVbo) = RenderGeometry.UploadLines(gl, geometry.ZeroVertices);
-            var (positiveVao, positiveVbo) = RenderGeometry.UploadLines(gl, geometry.PositiveVertices);
-            var (negativeVao, negativeVbo) = RenderGeometry.UploadLines(gl, geometry.NegativeVertices);
+            var (zeroVao, zeroVbo) = RenderUploads.UploadLines(gl, geometry.ZeroVertices);
+            var (positiveVao, positiveVbo) = RenderUploads.UploadLines(gl, geometry.PositiveVertices);
+            var (negativeVao, negativeVbo) = RenderUploads.UploadLines(gl, geometry.NegativeVertices);
             _buffers.Add((zeroVao, zeroVbo, positiveVao, positiveVbo, negativeVao, negativeVbo));
         }
     }

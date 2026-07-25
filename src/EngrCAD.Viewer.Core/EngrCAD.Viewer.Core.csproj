@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD's UI-free render model: view styles, section planes and their clip rule, render-mode precedence, the GLSL shader sources, camera/projection math and scene-furniture geometry. No Avalonia, no Silk.NET - shared by the desktop viewer, the headless renderer and browser (WebGL2) front ends.</Description>
+    <!-- Deliberately EngrCAD.Viewer, not EngrCAD.Viewer.Core: the assembly is new but
+         the namespace is not. See README.md. -->
+    <RootNamespace>EngrCAD.Viewer</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Core for the math structs, Modeling for DisplayMode (RenderModes.Resolve's
+         precedence rule is stated in terms of it). NOTHING that touches a GL binding:
+         this assembly must stay loadable in a WebAssembly client. -->
+    <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
+    <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
+  </ItemGroup>
+</Project>

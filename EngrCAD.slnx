@@ -8,6 +8,7 @@
     <Project Path="src/EngrCAD.Interop/EngrCAD.Interop.csproj" />
     <Project Path="src/EngrCAD.Query/EngrCAD.Query.csproj" />
     <Project Path="src/EngrCAD.Modeling/EngrCAD.Modeling.csproj" />
+    <Project Path="src/EngrCAD.Viewer.Core/EngrCAD.Viewer.Core.csproj" />
     <Project Path="src/EngrCAD.Viewer/EngrCAD.Viewer.csproj" />
     <Project Path="src/EngrCAD.Mcp/EngrCAD.Mcp.csproj" />
   </Folder>

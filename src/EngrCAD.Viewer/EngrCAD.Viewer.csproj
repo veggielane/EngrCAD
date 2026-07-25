@@ -22,5 +22,8 @@
     <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
     <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
     <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
+    <!-- The UI-free render model (same EngrCAD.Viewer namespace, separate assembly) so
+         a WebAssembly front end can share it without Avalonia or Silk.NET. -->
+    <ProjectReference Include="..\EngrCAD.Viewer.Core\EngrCAD.Viewer.Core.csproj" />
   </ItemGroup>
 </Project>

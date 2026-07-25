@@ -248,7 +248,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
         // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
         // the GL default for a disabled attribute is 0, which would shade parts black.
-        RenderGeometry.SetDefaultOcclusion(_gl);
+        RenderUploads.SetDefaultOcclusion(_gl);
 
         _lineProgram = CompileLineProgram(_gl);
         _uLineModel = _gl.GetUniformLocation(_lineProgram, "uModel");
@@ -359,10 +359,10 @@ public sealed class ViewportControl : OpenGlControlBase
         // up without an occlusion buffer, which reads the constant 1.0 and is exactly the
         // flat-lit shading; the background bake (StartOcclusionBake) then publishes its
         // result and BackfillOcclusion attaches it on a later frame.
-        var (vao, vbo, ebo, aoVbo) = RenderGeometry.UploadMesh(gl, render,
+        var (vao, vbo, ebo, aoVbo) = RenderUploads.UploadMesh(gl, render,
             _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null);
-        var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
-        var (wireVao, wireVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
+        var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
+        var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
         _gpuBuffers.Add(new PartBuffers(part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo));
 
         var boxes = new Aabb[render.TriangleCount];
@@ -419,7 +419,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 continue;
             if (Viewer.AmbientOcclusion.TryGet(buffers.Part.GetMesh()) is not { } occlusion)
                 continue;   // still baking — flat-lit for now, attached when it lands
-            _gpuBuffers[i] = buffers with { AoVbo = RenderGeometry.UploadOcclusion(gl, buffers.Vao, occlusion) };
+            _gpuBuffers[i] = buffers with { AoVbo = RenderUploads.UploadOcclusion(gl, buffers.Vao, occlusion) };
             attached = true;
         }
         if (attached)
@@ -479,8 +479,8 @@ public sealed class ViewportControl : OpenGlControlBase
 
         var (gridVertices, axesVertices) = RenderGeometry.BuildGridAndAxes(bounds);
         _gridCount = gridVertices.Length / 3;
-        (_gridVao, _gridVbo) = RenderGeometry.UploadLines(gl, gridVertices);
-        (_axesVao, _axesVbo) = RenderGeometry.UploadLines(gl, axesVertices);
+        (_gridVao, _gridVbo) = RenderUploads.UploadLines(gl, gridVertices);
+        (_axesVao, _axesVbo) = RenderUploads.UploadLines(gl, axesVertices);
     }
 
     private static Vector3d PickVertex(RenderMesh mesh, uint index) => new(
@@ -1625,19 +1625,19 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private string ShaderHeader => ViewerShaders.Header(GlVersion.Type == GlProfileType.OpenGLES);
 
-    private uint CompileProgram(GL gl) => ViewerShaders.LinkProgram(
+    private uint CompileProgram(GL gl) => ViewerPrograms.LinkProgram(
         gl, ShaderHeader + ViewerShaders.MeshVertex, ShaderHeader + ViewerShaders.MeshFragment,
         bindAttributes: true);
 
-    private uint CompileLineProgram(GL gl) => ViewerShaders.LinkProgram(
+    private uint CompileLineProgram(GL gl) => ViewerPrograms.LinkProgram(
         gl, ShaderHeader + ViewerShaders.LineVertex, ShaderHeader + ViewerShaders.LineFragment,
         bindAttributes: true);
 
-    private uint CompilePointProgram(GL gl) => ViewerShaders.LinkProgram(
+    private uint CompilePointProgram(GL gl) => ViewerPrograms.LinkProgram(
         gl, ShaderHeader + ViewerShaders.PointVertex, ShaderHeader + ViewerShaders.PointFragment,
         bindAttributes: true);
 
-    private uint CompileBackgroundProgram(GL gl) => ViewerShaders.LinkProgram(
+    private uint CompileBackgroundProgram(GL gl) => ViewerPrograms.LinkProgram(
         gl, ShaderHeader + ViewerShaders.BackgroundVertex, ShaderHeader + ViewerShaders.BackgroundFragment,
         bindAttributes: false);
 

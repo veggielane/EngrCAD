@@ -485,7 +485,7 @@ internal sealed class ViewCube
             AddVertex(fills, c);
             AddVertex(fills, d);
         }
-        (_fillVao, _fillVbo) = RenderGeometry.UploadLines(gl, [.. fills]);
+        (_fillVao, _fillVbo) = RenderUploads.UploadLines(gl, [.. fills]);
 
         // Edges: the 12 cube edges as line segments.
         var edges = new List<(Vector3d A, Vector3d B)>();
@@ -501,7 +501,7 @@ internal sealed class ViewCube
         }
         float[] edgeVertices = RenderGeometry.SegmentVertices(edges);
         _edgeVertexCount = edges.Count * 2;
-        (_edgeVao, _edgeVbo) = RenderGeometry.UploadLines(gl, edgeVertices);
+        (_edgeVao, _edgeVbo) = RenderUploads.UploadLines(gl, edgeVertices);
 
         // Labels: stroke-font words per face, lifted slightly off the surface so they
         // beat the (polygon-offset-pushed) fills; back faces' labels lose the depth
@@ -511,7 +511,7 @@ internal sealed class ViewCube
             AddWord(labels, n * 1.01, r, u, word);
         float[] labelVertices = RenderGeometry.SegmentVertices(labels);
         _labelVertexCount = labels.Count * 2;
-        (_labelVao, _labelVbo) = RenderGeometry.UploadLines(gl, labelVertices);
+        (_labelVao, _labelVbo) = RenderUploads.UploadLines(gl, labelVertices);
     }
 
     private static void AddVertex(List<float> vertices, in Vector3d p)

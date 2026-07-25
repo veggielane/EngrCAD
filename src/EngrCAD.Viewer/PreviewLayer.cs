@@ -157,7 +157,7 @@ internal sealed class PreviewLayer
         Release(gl);
         if (_segments.Length == 0)
             return;
-        (_vao, _vbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(_segments));
+        (_vao, _vbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(_segments));
         _vertexCount = _segments.Length * 2;
         _uploaded = true;
     }

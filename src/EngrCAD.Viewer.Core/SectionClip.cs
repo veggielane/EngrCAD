@@ -12,8 +12,13 @@ namespace EngrCAD.Viewer;
 /// picking and hover apply the same rule on the CPU so a click cannot select a part
 /// through the cut-away half. If the shader rule ever changes, both sides must change
 /// here together. Pure math, no GL — unit-tested directly.
+/// <para>
+/// Public because every front end owes its users the same answer: a browser client that
+/// picks or hovers must apply this rule on the CPU too, or it will disagree with its own
+/// shader about which corner a quarter cut removed.
+/// </para>
 /// </summary>
-internal static class SectionClip
+public static class SectionClip
 {
     /// <summary>Whether the active section planes hide <paramref name="world"/>.</summary>
     public static bool Hides(

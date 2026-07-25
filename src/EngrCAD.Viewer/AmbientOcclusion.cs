@@ -31,7 +31,7 @@ namespace EngrCAD.Viewer;
 // nothing left to give. Blocking the window on it made opening the demo feel broken.
 // Instead the window shows the scene IMMEDIATELY, flat-lit, and each part's occlusion
 // arrives as its bake finishes: a mesh VAO with no occlusion buffer reads the constant
-// 1.0 (RenderGeometry.SetDefaultOcclusion), which is EXACTLY the ambient-occlusion-off
+// 1.0 (RenderUploads.SetDefaultOcclusion), which is EXACTLY the ambient-occlusion-off
 // shading, so an unbaked part is not a placeholder — it is the correct flat-lit render
 // of that part, and the only thing that changes when the bake lands is that crevices
 // darken. Cheapest part first, so most of a scene lights up in the first frames.

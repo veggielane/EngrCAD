@@ -394,7 +394,7 @@ internal sealed class AnnotationLayer
         Release(gl);
         if (_segments.Count == 0)
             return;
-        (_vao, _vbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(_segments));
+        (_vao, _vbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(_segments));
         _vertexCount = _segments.Count * 2;
         _uploaded = true;
     }
@@ -430,7 +430,7 @@ internal sealed class AnnotationLayer
         if (segments.Count == 0)
             return;
 
-        var (vao, _) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(segments));
+        var (vao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(segments));
         gl.UseProgram(lineProgram);
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(uModel, 1, false, matrix);
