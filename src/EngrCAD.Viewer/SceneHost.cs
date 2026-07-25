@@ -33,6 +33,9 @@ internal sealed class SceneHost
     private static readonly IBrush DisabledText = new SolidColorBrush(Color.FromRgb(0x6b, 0x70, 0x79));
     private static readonly IBrush PreviewText = new SolidColorBrush(Color.FromRgb(0x59, 0xea, 0xff));
 
+    /// <summary>A part that could not be meshed (its row stays, its geometry cannot).</summary>
+    private static readonly IBrush FailedText = new SolidColorBrush(Color.FromRgb(0xe0, 0x7b, 0x6b));
+
     private readonly StackPanel _tabStrip;
     private readonly StackPanel _tree;
     private readonly StackPanel _properties;
@@ -40,6 +43,28 @@ internal sealed class SceneHost
     private readonly Dictionary<string, CameraState> _tabCameras = [];
     private Scene? _scene;
     private string? _currentTab;
+
+    // ---- on-demand tab meshing (see TabMeshLoader) ----
+
+    /// <summary>Meshes the tab being shown on a background task and hands the geometry
+    /// back here as it lands. A tab already meshed (a revisit, or any tab when
+    /// <see cref="EngrCadOptions.LazyTabMeshing"/> is off) publishes in one go with no
+    /// background work, which is exactly the pre-lazy behavior.</summary>
+    private readonly TabMeshLoader _loader;
+
+    private readonly Border _loadingPanel;
+    private readonly TextBlock _loadingText;
+    private readonly TextBlock _loadingFlavor;
+    private readonly ProgressBar _loadingBar;
+
+    /// <summary>The tab's instances as the document lists them — kept because a part
+    /// that fails to mesh drops out of what the viewport holds, and the tree then has to
+    /// be rebuilt from the full list with that part marked.</summary>
+    private IReadOnlyList<PartInstance> _tabInstances = [];
+
+    /// <summary>Parts of the current tab that could not be meshed, with why. Their rows
+    /// stay visible (and say so) but carry no viewport index.</summary>
+    private Dictionary<Part, string> _failed = [];
 
     /// <summary>One model-tree row backed by a viewport instance (assembly header rows
     /// are not instances — they only contribute an ancestor checkbox).</summary>
@@ -80,6 +105,15 @@ internal sealed class SceneHost
     {
         Viewport = new ViewportControl { BaseTitle = title };
         Viewport.SelectionChanged += OnViewportSelection;
+
+        _loader = new TabMeshLoader(
+            callback => Avalonia.Threading.Dispatcher.UIThread.Post(callback),
+            PrepareForDisplay)
+        {
+            Ready = OnMeshBatch,
+            Progress = OnMeshProgress,
+            Completed = OnMeshCompleted,
+        };
 
         // ---- toolbar ----
         var toolbar = new StackPanel
@@ -234,6 +268,36 @@ internal sealed class SceneHost
         };
         Viewport.Status = message => _statusText.Text = message;
 
+        // ---- meshing overlay (centered over the viewport, hidden when idle) ----
+        // The primary line is the honest count; the secondary names the route the part
+        // takes through the kernel (MeshFlavor). The bar is determinate: parts done out
+        // of parts to do, refined within a part where the route reports fractions.
+        _loadingText = new TextBlock { Foreground = BrightText, FontSize = 13 };
+        _loadingFlavor = new TextBlock
+        {
+            Foreground = DimText,
+            FontSize = 11,
+            FontStyle = FontStyle.Italic,
+            Margin = new Thickness(0, 3, 0, 9),
+        };
+        _loadingBar = new ProgressBar { Minimum = 0, Maximum = 1, Value = 0, Height = 6, Width = 300 };
+        _loadingPanel = new Border
+        {
+            Background = ChromeBrush,
+            BorderBrush = PanelBrush,
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(4),
+            Padding = new Thickness(18, 14),
+            // Bottom-center, not center: parts appear as they are meshed, and a panel
+            // over the middle of the viewport would cover the ones already loaded.
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Bottom,
+            Margin = new Thickness(0, 0, 0, 26),
+            IsVisible = false,
+            IsHitTestVisible = false,   // never steals orbit drags from the viewport
+            Child = new StackPanel { Children = { _loadingText, _loadingFlavor, _loadingBar } },
+        };
+
         // ---- assemble ----
         var chrome = new Border
         {
@@ -249,7 +313,8 @@ internal sealed class SceneHost
         root.Children.Add(statusBar);
         root.Children.Add(treePanel);
         root.Children.Add(propertiesPanel);
-        root.Children.Add(Viewport);
+        // The viewport fills what is left, with the meshing overlay drawn above it.
+        root.Children.Add(new Grid { Children = { Viewport, _loadingPanel } });
         Root = root;
 
         ShowProperties(-1);
@@ -301,11 +366,19 @@ internal sealed class SceneHost
         // A new instance list clears the viewport's preview overlay (ApplyInstances);
         // drop our matching row state so the tree agrees with what is drawn.
         _previewKey = null;
-        // Rows FIRST, then hand the instances over together with the visibility they
-        // imply: the swap happens on the render thread, so per-row SetVisible calls
-        // made now would land on the outgoing list and be wiped.
-        RebuildTree(tab, instances);
-        Viewport.SetInstances(instances, frame: !keepCamera && !restored, visible: EffectiveVisibility());
+        _failed = [];
+        _tabInstances = instances;
+        // Rows FIRST — the whole tab's rows, including parts still to be meshed, so the
+        // tree shows what is coming — then hand the geometry over as the loader
+        // publishes it (OnMeshBatch), together with the visibility it implies: the swap
+        // happens on the render thread, so per-row SetVisible calls made now would land
+        // on the outgoing list and be wiped.
+        RebuildTree(tab, instances, _failed);
+        _loader.Start(new TabMeshRequest(
+            name ?? "",
+            instances,
+            _scene.ResolveQuality(EngrCad.CurrentOptions.Quality),
+            Frame: !keepCamera && !restored));
         if (restored)
             Viewport.Camera = _tabCameras[name!];
 
@@ -318,14 +391,111 @@ internal sealed class SceneHost
         ShowProperties(-1);
     }
 
+    // ---- on-demand meshing callbacks (all on the UI thread) ----
+
+    /// <summary>One part's worth of preparation, on the loader's worker thread: the
+    /// display mesh, feature edges and annotations, plus the ambient-occlusion bake the
+    /// eager path does in <see cref="EngrCad.ShowCore"/> — everything that must not
+    /// happen on the render thread.</summary>
+    private static void PrepareForDisplay(Part part, MeshQuality? quality, ProgressCancel? progress)
+    {
+        part.Prepare(quality, progress);
+        if (EngrCad.CurrentOptions.AmbientOcclusion)
+            AmbientOcclusion.Prime([part]);
+    }
+
+    /// <summary>Geometry the loader has ready for the tab in front of the user: hand it
+    /// to the viewport, which uploads it on the next frame. Batches arrive in tab order
+    /// and grow, so the parts already loaded stay put — and stay orbitable — while the
+    /// rest is still being meshed.</summary>
+    private void OnMeshBatch(TabMeshBatch batch)
+    {
+        if (!string.Equals(batch.TabName, _currentTab ?? "", StringComparison.Ordinal))
+            return;   // belt and braces: the loader already drops superseded jobs
+        if (batch.Failed.Count != _failed.Count)
+        {
+            // A part dropped out of what the viewport can show. Rebuild the rows from
+            // the full tab with it marked, so row indices keep matching the instances
+            // the viewport actually holds.
+            _failed = batch.Failed.ToDictionary(part => part, part => _failed.GetValueOrDefault(part, ""));
+            RebuildTree(_currentTabContent, _tabInstances, _failed);
+        }
+        Viewport.SetInstances(batch.Ready, batch.Frame, EffectiveVisibility());
+        if (batch.Final)
+            _loadingPanel.IsVisible = false;
+    }
+
+    /// <summary>Progress of the tab being meshed: an honest count in the primary line, a
+    /// determinate bar, and the kernel route as a secondary line.</summary>
+    private void OnMeshProgress(TabMeshProgress progress)
+    {
+        if (!string.Equals(progress.TabName, _currentTab ?? "", StringComparison.Ordinal))
+            return;
+        int at = Math.Min(progress.Completed + 1, Math.Max(progress.Total, 1));
+        string message = $"meshing '{progress.TabName}' — {at} of {progress.Total} "
+                       + $"part{(progress.Total == 1 ? "" : "s")}: '{progress.PartName}'";
+        _loadingText.Text = message;
+        _loadingFlavor.Text = progress.Flavor;
+        _loadingBar.Value = progress.Fraction;
+        _loadingPanel.IsVisible = true;
+        _statusText.Text = message;
+    }
+
+    /// <summary>The tab finished (or finished with casualties). Failures become a status
+    /// message and a log line — never a swallowed exception, and never a bar left
+    /// spinning.</summary>
+    private void OnMeshCompleted(TabMeshCompletion completion)
+    {
+        _loadingPanel.IsVisible = false;
+        if (!string.Equals(completion.TabName, _currentTab ?? "", StringComparison.Ordinal))
+            return;
+
+        var log = EngrCad.CurrentOptions.Log ?? EngrCadLog.Console;
+        if (completion.Failures.Count > 0)
+        {
+            foreach (var failure in completion.Failures)
+            {
+                log.Error($"part '{failure.PartName}' failed to mesh: {failure.Message}");
+                foreach (var instance in _tabInstances)
+                {
+                    if (instance.Part.Name == failure.PartName)
+                        _failed[instance.Part] = failure.Message;
+                }
+            }
+            // Redraw the rows so the failed ones can carry their reason as a tooltip.
+            RebuildTree(_currentTabContent, _tabInstances, _failed);
+            var first = completion.Failures[0];
+            _statusText.Text = completion.Failures.Count == 1
+                ? $"'{first.PartName}' failed to mesh: {first.Message}"
+                : $"{completion.Failures.Count} parts failed to mesh (first: '{first.PartName}': {first.Message})";
+            return;
+        }
+
+        if (completion.Cancelled)
+        {
+            _statusText.Text = $"meshing '{completion.TabName}' stopped";
+            return;
+        }
+        _statusText.Text = $"meshed '{completion.TabName}' — {completion.PartCount} "
+                         + $"part{(completion.PartCount == 1 ? "" : "s")} "
+                         + $"in {completion.Elapsed.TotalSeconds:F1} s";
+    }
+
     // ---- model tree ----
 
-    private void RebuildTree(Tab? tab, IReadOnlyList<PartInstance> instances)
+    private void RebuildTree(
+        Tab? tab, IReadOnlyList<PartInstance> instances, IReadOnlyDictionary<Part, string> failed)
     {
         _tree.Children.Clear();
         _partRows.Clear();
         _constructionRows.Clear();
-        _instances = instances;
+        // A part that failed to mesh is not in the viewport's list, so it must not
+        // consume an index here either — everything after it would address the wrong
+        // instance. Its row still appears, without an index (see AddPartRow).
+        _instances = failed.Count == 0
+            ? instances
+            : [.. instances.Where(i => !failed.ContainsKey(i.Part))];
+        _failedRows = failed;
         _currentTabContent = tab;
         if (tab is null)
             return;
@@ -334,12 +504,21 @@ internal sealed class SceneHost
         // assembly depth-first — so the running instance index matches the viewport.
         int next = 0;
         foreach (var part in tab.Parts)
-            AddPartRow(part.Name, part, next++, depth: 0, ancestors: []);
+            AddPartRow(part.Name, part, NextIndex(part, ref next), depth: 0, ancestors: []);
         foreach (var assembly in tab.Assemblies)
             AddAssemblyRows(assembly, assembly.Name, assembly.Name, depth: 0, ancestors: [], ref next);
 
         HighlightConstructionRow();
     }
+
+    /// <summary>Instances the tree currently believes are un-meshable, so rows can say
+    /// so (a snapshot of <see cref="_failed"/> at the last rebuild).</summary>
+    private IReadOnlyDictionary<Part, string> _failedRows = new Dictionary<Part, string>();
+
+    /// <summary>The viewport index for a part row: the running counter, except for a
+    /// part that failed to mesh — it has no instance in the viewport, so it gets −1 and
+    /// does not advance the counter.</summary>
+    private int NextIndex(Part part, ref int next) => _failedRows.ContainsKey(part) ? -1 : next++;
 
     /// <summary>Rebuilds the tree in place (an expander toggled). The model tree is a
     /// plain StackPanel of rows — a few dozen controls — so a rebuild is cheaper than
@@ -349,7 +528,7 @@ internal sealed class SceneHost
     /// straight through (an expander toggle must not un-hide anything).</summary>
     private void RefreshTree()
     {
-        RebuildTree(_currentTabContent, _instances);
+        RebuildTree(_currentTabContent, _tabInstances, _failed);
         ApplyVisibility();
     }
 
@@ -381,7 +560,7 @@ internal sealed class SceneHost
         foreach (var occurrence in assembly.Occurrences)
         {
             if (occurrence.Part is { } part)
-                AddPartRow(occurrence.Name, part, next++, depth + 1, groupAncestors);
+                AddPartRow(occurrence.Name, part, NextIndex(part, ref next), depth + 1, groupAncestors);
             else
                 AddAssemblyRows(occurrence.SubAssembly!, occurrence.Name, $"{path}/{occurrence.Name}",
                     depth + 1, groupAncestors, ref next);
@@ -412,7 +591,10 @@ internal sealed class SceneHost
 
     private void AddPartRow(string name, Part part, int index, int depth, IReadOnlyList<CheckBox> ancestors)
     {
-        var check = VisibilityCheckBox($"V{RowId(index)}");
+        // Rows key on the occurrence path; a part with no instance (it failed to mesh)
+        // has no path, so its own name keys it instead.
+        string rowId = index >= 0 ? RowId(index) : $"!{name}";
+        var check = VisibilityCheckBox($"V{rowId}");
 
         // Display-mode cycler: a tiny per-row button, CAD-tree style. It writes
         // through Part.DisplayMode (shared by every instance of the part), so the
@@ -443,6 +625,7 @@ internal sealed class SceneHost
         };
         DockPanel.SetDock(mode, Dock.Right);
 
+        bool broken = _failedRows.TryGetValue(part, out string? failure);
         var label = new Button
         {
             Content = name,
@@ -451,8 +634,10 @@ internal sealed class SceneHost
             Padding = new Thickness(4, 2),
             HorizontalAlignment = HorizontalAlignment.Stretch,
             HorizontalContentAlignment = HorizontalAlignment.Left,
-            Foreground = BrightText,
+            Foreground = broken ? FailedText : BrightText,
         };
+        if (broken)
+            ToolTip.SetTip(label, $"failed to mesh: {failure}");
         label.Click += (_, _) =>
         {
             Viewport.Select(index == Viewport.Selected ? -1 : index);
@@ -462,7 +647,7 @@ internal sealed class SceneHost
         // Construction expander: parts that know how they were built (a Shape graph or
         // a FeatureHistory) get a disclosure triangle that reveals the build steps.
         var construction = part.ConstructionTree();
-        string partKey = $"P{RowId(index)}";
+        string partKey = $"P{rowId}";
         var expander = ExpanderButton(
             construction is not null, _expanded.Contains(partKey),
             "Show how this part was built",
@@ -763,7 +948,6 @@ internal sealed class SceneHost
 
         var instance = _instances[index];
         var part = instance.Part;
-        var mesh = part.GetMesh();
         AddProperty("Name", instance.Path);
         if (instance.Path != part.Name)
             AddProperty("Part", part.Name);
@@ -776,6 +960,20 @@ internal sealed class SceneHost
             _ => part.Geometry.GetType().Name,
         });
         AddProperty("Display", part.DisplayMode.ToString().ToLowerInvariant());
+
+        // Everything below reads the display mesh. Asking for it here would BLOCK the
+        // UI thread on a part the loader is still meshing (and mesh it a second time
+        // for one that was never queued), so an unprepared part reports its status
+        // instead — the numbers appear when its batch lands.
+        if (!part.HasMesh)
+        {
+            AddProperty("Status", _failedRows.TryGetValue(part, out string? failure)
+                ? $"failed to mesh — {failure}"
+                : "meshing...");
+            return;
+        }
+
+        var mesh = part.GetMesh();
         AddProperty("Faces", mesh.FaceCount.ToString("N0"));
         AddProperty("Closed", mesh.IsClosed ? "yes" : "no");
         AddProperty("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)");

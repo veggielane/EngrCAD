@@ -132,6 +132,64 @@ public class BuilderTests
     }
 
     [Fact]
+    public void LazyTabMeshing_IsOnByDefaultAndOptOutIsOneFlag()
+    {
+        Assert.True(new EngrCadOptions().LazyTabMeshing);
+        Assert.True(EngrCad.Configure().Options.LazyTabMeshing);
+
+        Assert.False(EngrCad.Configure().WithLazyTabMeshing(false).Options.LazyTabMeshing);
+        Assert.True(EngrCad.Configure().WithLazyTabMeshing(false).WithLazyTabMeshing().Options.LazyTabMeshing);
+    }
+
+    [Fact]
+    public void Run_ParsesMeshModeSwitch()
+    {
+        // Parsed before the (deliberately bad, non-.png) render path is rejected — no GL.
+        foreach (var (spelling, expected) in new (string, bool)[]
+        {
+            ("lazy", true),
+            ("on-demand", true),
+            ("all", false),
+            ("eager", false),
+            ("ALL", false),   // case-insensitive
+        })
+        {
+            var options = new EngrCadOptions { Log = new ListLog() };
+            Assert.Equal(2, EngrCad.Configure(options).Run(["--render", "--mesh", spelling], CylinderScene));
+            Assert.Equal(expected, options.LazyTabMeshing);
+        }
+
+        foreach (var args in new string[][]
+        {
+            ["--render", "out.png", "--mesh", "sometimes"],
+            ["--render", "out.png", "--mesh"],
+        })
+        {
+            var log = new ListLog();
+            Assert.Equal(2, EngrCad.Configure().WithLog(log).Run(args, CylinderScene));
+            Assert.Contains(log.Errors, m => m.Contains("--mesh"));
+        }
+    }
+
+    [Fact]
+    public void HeadlessPathsMeshWhatTheyNeed_WhateverTheLazyFlagSays()
+    {
+        // --export and --render prepare their own geometry, so the lazy default (which
+        // only governs the window) must not leave them with nothing to write.
+        var path = TempFile(".stl");
+        try
+        {
+            var log = new ListLog();
+            Assert.Equal(0, EngrCad.Configure().WithLog(log).Run(["--export", path], CylinderScene));
+            Assert.True(new FileInfo(path).Length > 84);   // header + at least one triangle
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Configure_WrapsAnExistingOptionsInstance()
     {
         // The IOptions<EngrCadOptions> pattern: DI provides the POCO, Configure uses it.

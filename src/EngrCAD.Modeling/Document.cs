@@ -167,13 +167,35 @@ public sealed class Part
     }
 
     /// <summary>
+    /// Whether the display mesh has already been produced — a non-blocking probe (it
+    /// takes no lock, so it never waits behind a mesh in flight on another thread).
+    /// Hosts that mesh lazily use it to decide whether a part can be shown/inspected
+    /// right now or is still being prepared; false may lag a just-finished mesh by an
+    /// instant, which only ever costs one extra "not ready yet" answer.
+    /// </summary>
+    public bool HasMesh => Volatile.Read(ref _mesh) is not null;
+
+    /// <summary>
     /// The display mesh, produced on first call (Shapes and B-Reps by tessellating the
     /// cached <see cref="TryGetSolid"/> solid, other Shapes via their best route, SDFs
     /// via Surface Nets, meshes as-is) and cached — the first caller's
     /// <paramref name="quality"/> wins. Scenes pre-mesh all parts with their own
     /// quality, so parts shown through a scene use the scene's settings.
     /// </summary>
-    public HalfEdgeMesh GetMesh(MeshQuality? quality = null)
+    public HalfEdgeMesh GetMesh(MeshQuality? quality = null) => GetMesh(quality, null);
+
+    /// <summary>
+    /// <see cref="GetMesh(MeshQuality?)"/> with progress reporting and cooperative
+    /// cancellation for the routes that support them.
+    /// <para><b>Only the SDF route observes <paramref name="progress"/></b> (Surface
+    /// Nets polygonization reports fractions and polls for cancellation). B-Rep
+    /// lowering and tessellation run to completion: their result is cached inside
+    /// <see cref="TryGetSolid"/>, and abandoning one mid-flight would leave that cache
+    /// claiming a lowering it never produced. A host that wants to stop early therefore
+    /// cancels between parts, not inside one — the part in flight finishes and its mesh
+    /// is kept, so returning to it is instant.</para>
+    /// </summary>
+    public HalfEdgeMesh GetMesh(MeshQuality? quality, ProgressCancel? progress)
     {
         lock (_meshLock)
         {
@@ -183,7 +205,7 @@ public sealed class Part
             if (Geometry is HalfEdgeMesh direct)
                 return _mesh = direct;
             if (Geometry is Sdf sdf)
-                return _mesh = SurfaceNets.Polygonize(sdf, q.SdfResolution);
+                return _mesh = SurfaceNets.Polygonize(sdf, q.SdfResolution, progress);
 
             // B-Rep-representable geometry (a BrepSolid part or a Shape with a B-Rep
             // route): tessellate the ONE cached solid. This is exactly what
@@ -199,6 +221,7 @@ public sealed class Part
         }
     }
 
+    private readonly Lock _constructionLock = new();
     private ConstructionNode? _constructionTree;
     private bool _constructionTreeBuilt;
 
@@ -209,10 +232,13 @@ public sealed class Part
     /// carry no construction information). Built once and cached — a part's geometry is
     /// fixed at construction, so node references are stable and usable as preview-cache
     /// keys (<see cref="ConstructionPreviewCache"/>).
+    /// <para>Guarded by its own lock, NOT the mesh lock: the tree is read from the
+    /// geometry graph and needs no mesh, so a viewer building tree rows on the UI
+    /// thread must never queue behind a part being meshed on a worker.</para>
     /// </summary>
     public ConstructionNode? ConstructionTree()
     {
-        lock (_meshLock)
+        lock (_constructionLock)
         {
             if (!_constructionTreeBuilt)
             {
@@ -352,6 +378,29 @@ public sealed class Part
         }
     }
 
+    /// <summary>
+    /// Produces everything a viewer needs from this part off the render thread: the
+    /// display mesh, the feature-edge overlay, and the resolved annotations — one
+    /// part's worth of <see cref="Scene.PreMesh"/>, exposed per part so a host can
+    /// prepare incrementally (the viewer meshes only the tab being viewed, publishing
+    /// parts as they land). Idempotent: every product is cached, so a second call costs
+    /// nothing and a prepared part displays instantly.
+    /// <para><paramref name="progress"/> is reported over this part alone (0 → 1); only
+    /// the SDF route reports intermediate fractions or observes cancellation — see
+    /// <see cref="GetMesh(MeshQuality?, ProgressCancel?)"/>.</para>
+    /// </summary>
+    public void Prepare(MeshQuality? quality = null, ProgressCancel? progress = null)
+    {
+        GetMesh(quality, progress);
+        // Feature edges and selector annotations both read the ONE cached solid the
+        // mesh already lowered, so this is extraction only — but it must still happen
+        // here rather than lazily inside a GL upload.
+        GetFeatureEdges(quality);
+        if (Annotations.Count > 0)
+            TryResolveAnnotations(out _, out _);
+        progress?.Report(1);
+    }
+
     /// <summary>World-space bounds of the display mesh with <see cref="Transform"/> applied.</summary>
     public Aabb Bounds(MeshQuality? quality = null) => Bounds(Transform, quality);
 
@@ -461,6 +510,35 @@ public sealed class Tab
                 }
             }
         }
+    }
+
+    /// <summary>
+    /// Prepares just this tab's parts for display (<see cref="Part.Prepare"/> each
+    /// distinct part, in order) — the on-demand sibling of <see cref="Scene.PreMesh"/>
+    /// for hosts that mesh a tab when it is first viewed instead of meshing the whole
+    /// document up front. Idempotent, so a second visit costs nothing.
+    /// <para><paramref name="progress"/> reports the fraction of this tab's parts done
+    /// (finer within a part where the route supports it) and is polled BETWEEN parts
+    /// for cancellation: a part already in flight finishes and stays cached rather than
+    /// being thrown away — see <see cref="Part.GetMesh(MeshQuality?, ProgressCancel?)"/>
+    /// for why mid-part cancellation is not offered. Cancellation surfaces as
+    /// <see cref="OperationCanceledException"/>.</para>
+    /// </summary>
+    public void PreMesh(MeshQuality? quality = null, ProgressCancel? progress = null)
+    {
+        var parts = AllParts.ToList();
+        for (int i = 0; i < parts.Count; i++)
+        {
+            progress?.ThrowIfCancelled();
+            int index = i;
+            var perPart = progress is null
+                ? null
+                : new ProgressCancel(
+                    () => progress.CancelRequested,
+                    fraction => progress.Report((index + fraction) / parts.Count));
+            parts[i].Prepare(quality, perPart);
+        }
+        progress?.Report(1);
     }
 
     /// <summary>World-space bounds of everything shown (loose parts and assembly

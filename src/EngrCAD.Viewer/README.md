@@ -308,6 +308,69 @@ edges, BVH) is deduped by part reference. A future optimization is true GPU
 instancing (one draw call per part with a matrix buffer); today it is one draw call
 per instance over shared buffers, which is already flat in memory.
 
+## On-demand tab meshing (the window opens immediately)
+
+A document's tabs are meshed **when they are first viewed**, not before the window
+opens (`EngrCadOptions.LazyTabMeshing`, **on by default**). Measured on
+`samples/EngrCAD.Demo` — 8 tabs, 17 parts, two of which take ~14 s and ~9 s to lower
+and tessellate — the window went from **~54 s to ~3.5 s**, and the tabs the user never
+opens cost nothing at all.
+
+What the user sees when a tab needs work:
+
+- The tab's rows appear in the model tree **immediately** (the whole tab, including
+  parts still to come), so the tree says what is loading.
+- Parts appear **as they are meshed**, in tab order — the viewport is live and
+  orbitable while the rest is still computing, not a frozen window.
+- A **progress panel** at the bottom of the viewport: the honest count
+  (`meshing 'sketch' — 3 of 3 parts: 'standard holes'`), a determinate bar, and a
+  secondary line naming the route this part takes through the kernel
+  (`Lowering to B-Rep...`, `Polygonizing the field...`, `Tessellating surfaces...`,
+  and — only for geometry that genuinely carries NURBS, which sketch profiles and
+  glyph outlines do — `Reticulating splines...`). The same text goes to the status bar.
+- **Revisiting a tab is instant**: meshes are cached per `Part`, so the whole tab
+  republishes in one go with no background work and no progress UI.
+
+`TabMeshLoader.cs` is the state machine (Avalonia-free, so it is unit-tested
+headlessly in `TabMeshLoaderTests`), and the rules it enforces are the ones such a
+feature usually gets wrong:
+
+- **Nothing heavy on the UI or render thread.** Preparation runs on a background task
+  (`Part.Prepare` — mesh, feature edges, annotations — plus the AO bake), exactly the
+  discipline `Scene.PreMesh` and the construction-tree previews already follow. The
+  properties panel likewise reports `meshing...` for a part that isn't ready rather
+  than blocking on `GetMesh`.
+- **A stale result can never land in the wrong tab.** Every request takes the next
+  generation token; the worker re-checks it between parts and every callback re-checks
+  it after being posted to the UI thread, so switching tabs mid-job discards both the
+  remaining work and any result already in flight.
+- **Switching away cancels at the next part boundary**, not mid-part. `Part.GetMesh`
+  passes the `ProgressCancel` to Surface Nets (which polls it and reports fractions, so
+  SDF parts also give sub-part progress), but a B-Rep lowering is *not* interruptible:
+  its result is cached inside `Part.TryGetSolid`, and abandoning one would leave that
+  cache claiming a lowering it never produced. So a part in flight finishes, its mesh
+  stays cached — returning to that tab is then instant — and only its *publication* is
+  dropped.
+- **A part that throws is named, not swallowed.** It drops out of the published
+  instances (there is no geometry to upload), its tree row turns red with the reason as
+  a tooltip, the failure goes to the status bar and the `IEngrCadLog`, and the rest of
+  the tab still loads with the bar still reaching the end.
+- **Hot reload keeps working**: after a `dotnet watch` patch the *current* tab
+  re-meshes on the loader's task (camera preserved), and the other tabs stay lazy.
+
+**The escape hatch** is one flag: `.WithLazyTabMeshing(false)`,
+`EngrCadOptions.LazyTabMeshing = false`, or `--mesh all` on the command line restores
+the eager behavior — `Scene.PreMesh` for the whole document before the first frame, no
+progress UI, every tab instant once the window appears. (`--mesh lazy` is the default
+spelling.) Headless paths are unaffected either way: `--export`, `--render` and
+`RenderToImage` mesh exactly what they need, eagerly.
+
+> **Custom hosts**: with lazy meshing on, `EngrCad.Show` no longer pre-meshes the
+> document, so a host that drives `ViewportControl.SetParts`/`SetInstances` itself must
+> prepare its own parts off the render thread first (`Part.Prepare`, `Tab.PreMesh` or
+> `Scene.PreMesh`) — the contract `SetInstances` always documented — or opt out with
+> `.WithLazyTabMeshing(false)`.
+
 ## The live-modeling loop
 
 Hand `EngrCad.ShowLive` a scene *factory* and run the model under `dotnet watch`:
@@ -345,13 +408,14 @@ return EngrCad.Configure()
     .WithViewStyle(ViewStyle.Shaded)                           // --render view style
     .WithSection(SectionAxis.Z, 6)                             // --render section plane
     .WithAmbientOcclusion(false)                               // baked AO (on by default)
+    .WithLazyTabMeshing(false)                                 // mesh everything up front
     .WithLog(msg => logger.LogInformation("{Message}", msg))   // status/error seam
     .Run(args, BuildScene);
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
 `RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`,
-`AmbientOcclusion`, `Log`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
+`AmbientOcclusion`, `LazyTabMeshing`, `Log`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
 `RenderToImage`) mirror the static `EngrCad` entry points with those options
 applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain
 the simple path.
