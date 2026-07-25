@@ -82,6 +82,21 @@ public readonly record struct SectionPlane(Vector3d Normal, double Offset)
     /// <summary>An axis-aligned plane perpendicular to <paramref name="axis"/>.</summary>
     public static SectionPlane On(SectionAxis axis, double offset) => new(axis.Direction(), offset);
 
+    /// <summary>
+    /// A plane placed by a rigid frame: the frame's origin lies ON the section plane and
+    /// its <b>Z axis points at the clipped side</b>. This is how a cut gets an arbitrary
+    /// orientation — everything downstream (the shaders, <see cref="SectionClip"/>, the
+    /// isoline overlay) has always taken a general normal; only the toolbar's axis
+    /// cycler is restricted to X/Y/Z. Pairs naturally with a sketch plane or a
+    /// <c>BrepQueries.Frame(face)</c>, so a section can be taken ON a face.
+    /// </summary>
+    public static SectionPlane On(in Frame3d frame) => new(frame.Z, frame.Origin.Dot(frame.Z));
+
+    /// <summary>A plane through <paramref name="point"/> whose <paramref name="normal"/>
+    /// points at the clipped side (need not be unit length).</summary>
+    public static SectionPlane Through(in Vector3d point, in Vector3d normal) =>
+        new(normal, point.Dot(normal));
+
     /// <summary>The same plane with the kept and clipped sides swapped.</summary>
     public SectionPlane Flipped() => new(-Normal, -Offset);
 }

@@ -540,13 +540,17 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.Uniform1(_uAlpha, 1f);
         gl.Enable(EnableCap.PolygonOffsetFill);
         gl.PolygonOffset(1f, 1f);
+        bool anyPlanes = activePlanes.Count > 0;
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (!_visible[i])
                 continue;
             var em = EffectiveModeOf(i);
             if (em is EffectiveMode.Shaded or EffectiveMode.ShadedWithEdges)
+            {
+                SectionFor(_meshSection, gl, i, anyPlanes);
                 DrawFill(gl, i, matrix);
+            }
         }
         gl.Disable(EnableCap.PolygonOffsetFill);
 
@@ -554,12 +558,12 @@ public sealed class ViewportControl : OpenGlControlBase
         // full triangle wireframe for wireframe parts. Lines belong to the model, so
         // the section plane clips them consistently with the fills.
         gl.UseProgram(_lineProgram);
-        _lineSection.SetEnabled(gl, true);   // model lines clip with the fills
         bool anyPoints = false;
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (!_visible[i])
                 continue;
+            SectionFor(_lineSection, gl, i, anyPlanes);   // model lines clip with their fill
             var m = _meshes[i];
             switch (EffectiveModeOf(i))
             {
@@ -595,6 +599,7 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 if (!_visible[i] || EffectiveModeOf(i) != EffectiveMode.Points)
                     continue;
+                SectionFor(_pointSection, gl, i, anyPlanes);
                 var m = _meshes[i];
                 CameraMath.WriteColumnMajor(m.Model, matrix);
                 gl.UniformMatrix4(_uPointModel, 1, false, matrix);
@@ -636,7 +641,10 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             gl.DepthMask(false);
             for (int k = 0; k < translucentCount; k++)
+            {
+                SectionFor(_meshSection, gl, _translucentOrder[k], anyPlanes);
                 DrawFill(gl, _translucentOrder[k], matrix);
+            }
             gl.DepthMask(true);
             gl.Disable(EnableCap.Blend);
 
@@ -646,7 +654,10 @@ public sealed class ViewportControl : OpenGlControlBase
             for (int k = 0; k < translucentCount; k++)
             {
                 if (_meshes[_translucentOrder[k]].EdgeVertexCount > 0)
+                {
+                    SectionFor(_lineSection, gl, _translucentOrder[k], anyPlanes);
                     DrawFeatureEdges(gl, _translucentOrder[k], matrix);
+                }
             }
         }
         // Section-plane SDF isolines, after everything else so they read as an
@@ -938,6 +949,18 @@ public sealed class ViewportControl : OpenGlControlBase
                 color.B + (0.35f - color.B) * 0.35f)
             : color;
 
+    /// <summary>
+    /// The per-draw-group section switch, applied per PART: a part with
+    /// <see cref="Part.ClippedBySection"/> false draws whole inside a cutaway (the
+    /// drafting convention for fasteners and ribs). Turning the shader's master switch
+    /// off is exactly what "this part is not sectioned" means — the plane set stays
+    /// uploaded, so the next part clips again with no re-upload. Picking mirrors it by
+    /// not consulting <see cref="SectionClip"/> for such parts, which is what keeps the
+    /// clickable and the visible surface the same one.
+    /// </summary>
+    private void SectionFor(in SectionUniforms uniforms, GL gl, int index, bool anyPlanes) =>
+        uniforms.SetEnabled(gl, anyPlanes && _instances[index].Part.ClippedBySection);
+
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
         var m = _meshes[index];
@@ -1056,8 +1079,11 @@ public sealed class ViewportControl : OpenGlControlBase
                     var world = _meshes[i].Model.TransformPoint(origin + direction * t);
                     // A surface the section plane clipped away is not there to click:
                     // skip it and keep looking, so the ray lands on the interior the
-                    // cut exposed rather than the removed shell.
-                    if (SectionClip.Hides(_sectionEnabled, world, _sectionPlanes, _sectionCombine))
+                    // cut exposed rather than the removed shell. A part exempted from
+                    // sectioning is never clipped, so it is never skipped either — the
+                    // CPU mirror of turning the shader's master switch off for it.
+                    if (_instances[i].Part.ClippedBySection
+                        && SectionClip.Hides(_sectionEnabled, world, _sectionPlanes, _sectionCombine))
                         continue;
                     bestT = t;
                     best = i;

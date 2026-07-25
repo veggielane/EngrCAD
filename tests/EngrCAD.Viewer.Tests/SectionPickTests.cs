@@ -116,6 +116,61 @@ public class SectionPickTests
         Assert.False(SectionClip.Hides(true, (-1, -1, 0), diagonal, SectionCombine.Intersection));
     }
 
+    // ---- arbitrary orientation: a plane placed by a frame ----
+
+    [Fact]
+    public void OnAFrame_PutsTheOriginOnThePlaneAndClipsAlongItsZ()
+    {
+        // The whole point of the Frame3d factory: a cut can face anywhere, because the
+        // shaders and this rule have always taken a general normal — only the toolbar's
+        // axis cycler is restricted to X/Y/Z.
+        var frame = Frame3d.FromNormal((1, 2, 3), new Vector3d(1, 1, 1).Normalized());
+        var plane = SectionPlane.On(frame);
+
+        // The frame origin lies exactly ON the plane, so it survives the strict test.
+        Assert.False(SectionClip.Hides(true, frame.Origin, [plane], SectionCombine.Intersection));
+        // Along +Z is the clipped side, along -Z the kept one.
+        Assert.True(SectionClip.Hides(true, frame.Origin + frame.Z, [plane], SectionCombine.Intersection));
+        Assert.False(SectionClip.Hides(true, frame.Origin - frame.Z, [plane], SectionCombine.Intersection));
+        // Sliding within the plane changes nothing.
+        Assert.False(SectionClip.Hides(true, frame.Origin + frame.X * 9 - frame.Y * 4,
+            [plane], SectionCombine.Intersection));
+    }
+
+    [Fact]
+    public void ThroughAPoint_IsTheSamePlaneAsTheFrameForm()
+    {
+        var normal = new Vector3d(0, 3, 4).Normalized();   // 3-4-5, exactly representable
+        var point = new Vector3d(-2, 5, 1);
+        var frame = Frame3d.FromNormal(point, normal);
+        var a = SectionPlane.On(frame);
+        var b = SectionPlane.Through(point, normal);
+
+        foreach (var probe in new Vector3d[] { (0, 0, 0), (10, -3, 7), point, point + normal })
+        {
+            Assert.Equal(
+                SectionClip.Hides(true, probe, [a], SectionCombine.Intersection),
+                SectionClip.Hides(true, probe, [b], SectionCombine.Intersection));
+        }
+    }
+
+    [Fact]
+    public void AnObliquePlaneQuarterCutsLikeAnAxisAlignedOne()
+    {
+        // Two 45-degree planes: the combine rules must not care about orientation.
+        SectionPlane[] cut =
+        [
+            SectionPlane.Through((0, 0, 0), new Vector3d(1, 1, 0).Normalized()),
+            SectionPlane.Through((0, 0, 0), new Vector3d(1, -1, 0).Normalized()),
+        ];
+        // +X is excluded by BOTH (dot > 0 either way), so Intersection removes it.
+        Assert.True(SectionClip.Hides(true, (5, 0, 0), cut, SectionCombine.Intersection));
+        // +Y is excluded by the first only.
+        Assert.False(SectionClip.Hides(true, (0, 5, 0), cut, SectionCombine.Intersection));
+        Assert.True(SectionClip.Hides(true, (0, 5, 0), cut, SectionCombine.Union));
+        Assert.False(SectionClip.Hides(true, (-5, 0, 0), cut, SectionCombine.Union));
+    }
+
     // ---- the cut-face (sibling) rule that clips anything drawn ON a section plane ----
 
     /// <summary>How far <c>SectionContours</c> lifts its lines to the kept side of the

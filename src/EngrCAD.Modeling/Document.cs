@@ -67,6 +67,18 @@ public sealed class Part
     /// Viewers may also change it interactively (per-part cycler in the model tree).</summary>
     public DisplayMode DisplayMode { get; set; } = DisplayMode.Shaded;
 
+    /// <summary>
+    /// Whether a viewer's section planes cut this part (default true). Setting it false
+    /// makes the part render — and pick — whole inside a cutaway, which is the drafting
+    /// convention every standard shares: shafts, bolts, nuts, washers, keys, pins and
+    /// ribs are drawn UNSECTIONED in a section view, because cutting a solid fastener
+    /// lengthwise shows nothing and only clutters the section. It also gives assemblies
+    /// the "cut the housing, keep the internals" view for free. An exempt part is not
+    /// clipped, gets no cut-material shading, and contributes no section isolines (it
+    /// has no cut face to draw them on).
+    /// </summary>
+    public bool ClippedBySection { get; set; } = true;
+
     public Matrix4d Transform { get; set; } = Matrix4d.Identity;
 
     private readonly Lock _meshLock = new();

@@ -470,6 +470,15 @@ via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 tessellate on the render thread. Part names are unique per tab. `Part` is
 deliberately a leaf — tabs and assemblies are the containers.
 
+Two display flags travel with the part rather than with a viewer, so a design states
+its own intent: `Part.DisplayMode` (Shaded / Wireframe / Translucent) and
+`Part.ClippedBySection` (default true). Setting the latter false makes a viewer's
+section planes leave the part whole — the convention every drafting standard shares,
+that shafts, bolts, nuts, keys, pins and ribs are drawn **unsectioned** in a section
+view, because cutting a solid fastener lengthwise shows nothing and only clutters the
+section. It is the "cut the housing, keep the internals" switch for assemblies, and it
+has no effect at all when no section is active.
+
 **`Part.TryGetSolid()` lowers the part's exact B-Rep at most ONCE and caches it**
 (null when the part has no exact form — an SDF or mesh part, a Shape with no B-Rep
 route, or a lowering that failed). Everything that needs the solid takes it from

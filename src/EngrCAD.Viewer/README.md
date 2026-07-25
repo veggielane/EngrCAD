@@ -138,6 +138,24 @@ Dark-themed layout around one shared GL viewport:
   single-plane output is unchanged. `SectionClip.Hides` carries the combine rule too,
   since otherwise picking and rendering would disagree about which corner a quarter
   cut removes.
+  **Arbitrary orientation**: `SectionPlane.On(Frame3d)` places a plane by a rigid frame
+  (origin on the plane, +Z at the clipped side) and `SectionPlane.Through(point,
+  normal)` by a point and a direction — so a cut can face anywhere, including *along a
+  face* (`BrepQueries.Frame(face)`) or a sketch plane. Nothing downstream needed
+  changing: the shaders, `SectionClip` and the isoline overlay have always taken a
+  general normal; only the toolbar's axis cycler is restricted to X/Y/Z, and hosts reach
+  past it with `ViewportControl.SectionPlanes` (or `RenderToImage(sectionPlanes:)`).
+  **Per-part opt-out**: `Part.ClippedBySection = false` makes a part render *and pick*
+  whole inside a cutaway. That is the drafting convention every standard shares —
+  shafts, bolts, nuts, washers, keys, pins and ribs are drawn unsectioned, because
+  cutting a solid fastener lengthwise shows nothing and only clutters the section — and
+  it gives assemblies the "cut the housing, keep the internals" view for free. It is
+  implemented as the shader's own master switch flipped per draw group
+  (`ViewportControl.SectionFor`, mirrored in the offscreen pass), with picking simply
+  not consulting `SectionClip` for such a part, so the clickable and the visible surface
+  stay the same one; an exempt part also contributes no isolines, having no cut face to
+  draw them on. With no section active the flag changes nothing at all (renders are
+  byte-identical), so design code can set it unconditionally.
 - **SDF isolines on the section plane** (automatic when available): when the section
   plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
   exists (`CanConvertTo(Implicit)`; lowered once and cached per part, never per

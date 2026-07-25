@@ -178,7 +178,8 @@ public static class OffscreenRenderer
     /// <summary>One instance's draw data after mode resolution (buffers shared per part).</summary>
     private readonly record struct InstanceDraw(
         EffectiveMode Mode, uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-        uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter);
+        uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
+        bool SectionClipped);
 
     private static unsafe byte[] Draw(
         GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture,
@@ -327,7 +328,8 @@ public static class OffscreenRenderer
             draws.Add(new InstanceDraw(
                 mode, shared.Vao, shared.IndexCount, shared.EdgeVao, shared.EdgeVertexCount,
                 shared.WireVao, shared.WireVertexCount, instance.World, part.Color ?? Palette.Steel,
-                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
+                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
+                section && part.ClippedBySection));
         }
 
         // Shaded fills, pushed back slightly so the edge overlay wins the depth test.
@@ -347,7 +349,8 @@ public static class OffscreenRenderer
         gl.Uniform3(uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uHighlight"), 0f);  // no selection offscreen
-        new SectionUniforms(gl, meshProgram).Write(gl, planes, sectionCombine);
+        var meshSection = new SectionUniforms(gl, meshProgram);
+        meshSection.Write(gl, planes, sectionCombine);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
             ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
         gl.Uniform1(uAlpha, 1f);
@@ -361,6 +364,10 @@ public static class OffscreenRenderer
         {
             if (d.Mode is not (EffectiveMode.Shaded or EffectiveMode.ShadedWithEdges))
                 continue;
+            // Per-PART section switch (Part.ClippedBySection): a fastener or rib draws
+            // whole inside a cutaway, the drafting convention. Same rule, same place in
+            // the pass as the window's SectionFor.
+            meshSection.SetEnabled(gl, d.SectionClipped);
             CameraMath.WriteColumnMajor(d.Model, matrix);
             gl.UniformMatrix4(uModel, 1, false, matrix);
             gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
@@ -372,9 +379,9 @@ public static class OffscreenRenderer
         // Line overlay: feature edges for shaded-with-edges parts, full wireframe for
         // wireframe parts. Model lines are section-clipped consistently with fills.
         gl.UseProgram(lineProgram);
-        lineSection.SetEnabled(gl, section);   // model lines clip with the fills
         foreach (var d in draws)
         {
+            lineSection.SetEnabled(gl, d.SectionClipped);   // model lines clip with their fill
             switch (d.Mode)
             {
                 case EffectiveMode.ShadedWithEdges when d.EdgeVertexCount > 0:
@@ -407,11 +414,13 @@ public static class OffscreenRenderer
             CameraMath.WriteColumnMajor(proj, matrix);
             gl.UniformMatrix4(gl.GetUniformLocation(pointProgram, "uProj"), 1, false, matrix);
             gl.Uniform1(gl.GetUniformLocation(pointProgram, "uPointSize"), 4f * supersample);
-            new SectionUniforms(gl, pointProgram).Write(gl, planes, sectionCombine);
+            var pointSection = new SectionUniforms(gl, pointProgram);
+            pointSection.Write(gl, planes, sectionCombine);
             foreach (var d in draws)
             {
                 if (d.Mode != EffectiveMode.Points)
                     continue;
+                pointSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uPointModel, 1, false, matrix);
                 gl.Uniform3(uPointColor, d.Color.R, d.Color.G, d.Color.B);
@@ -448,6 +457,7 @@ public static class OffscreenRenderer
             for (int k = 0; k < translucentCount; k++)
             {
                 var d = draws[translucentOrder[k]];
+                meshSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uModel, 1, false, matrix);
                 gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
@@ -464,6 +474,7 @@ public static class OffscreenRenderer
                 var d = draws[translucentOrder[k]];
                 if (d.EdgeVertexCount == 0)
                     continue;
+                lineSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uLineModel, 1, false, matrix);
                 gl.BindVertexArray(d.EdgeVao);

@@ -104,7 +104,8 @@ internal static class SectionContours
         var bounds = Aabb.Empty;
         for (int i = 0; i < instances.Count; i++)
         {
-            if (visible[i] && SdfRoute(instances[i].Part, report) is not null)
+            if (visible[i] && instances[i].Part.ClippedBySection
+                && SdfRoute(instances[i].Part, report) is not null)
                 bounds = bounds.Union(instances[i].Bounds());
         }
         if (bounds.IsEmpty)
@@ -123,7 +124,10 @@ internal static class SectionContours
 
         for (int i = 0; i < instances.Count; i++)
         {
-            if (!visible[i] || SdfRoute(instances[i].Part) is not { } sdf)
+            // A part exempt from sectioning has no cut face, so it has nothing to draw
+            // isolines on (Part.ClippedBySection).
+            if (!visible[i] || !instances[i].Part.ClippedBySection
+                || SdfRoute(instances[i].Part) is not { } sdf)
                 continue;
             var instance = instances[i];
             var world = instance.Bounds();
