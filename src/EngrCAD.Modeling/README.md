@@ -45,6 +45,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
 | `PatternLinear` / `PatternCircular` | ✅ native (multi-shell when disjoint) | ✅ native | ✅ native |
 | `Hull(...)` (convex hull) | ❌ mesh construction, no B-Rep import | 🔶 bridged (hull mesh → mesh SDF) | 🔶 quickhull over tessellated operand vertices (exact for polyhedral operands) |
+| `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) · ❌ revolve/sweep/rim/drill (no mirrored lowering yet) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
@@ -261,6 +262,77 @@ can and cannot represent. One boundary: downstream B-Rep booleans may cut modele
 threads only with planes perpendicular to the thread axis (the exact spiral case) —
 cuts along the threads fail loudly; use clearance or the implicit route for those.
 
+## Text
+
+Modeled text — OpenSCAD's `text()`, but exact. TrueType `glyf` outlines are straight
+lines and **quadratic** Béziers, and `SketchBuilder` already has `LineTo`/`QuadraticTo`,
+so glyph contours map onto sketch segments with **no flattening**. Text therefore
+inherits the whole pipeline: exact NURBS profiles in B-Rep, the exact 2D signed distance
+in implicit, crisp tessellation in mesh — Native in all three, no bridge anywhere.
+
+```csharp
+var font = TrueTypeFont.Load(@"C:\Windows\Fonts\arial.ttf");
+
+var badge = Shape.Text("ENGRCAD", font, size: 9, height: 1.5,
+                       style: new TextStyle { Align = TextAlign.Center });
+
+IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 2D, for your own ops
+```
+
+- **Fonts** (`Text/TrueTypeFont.cs`) are read by a hand-rolled, dependency-free parser
+  (kernel projects pack to NuGet and take no third-party dependencies — the same reason
+  `PngWriter` and the EGL binding are hand-rolled). Tables: `head`, `maxp`, `cmap`
+  (formats 4 and 12), `loca`, `glyf` (simple **and** composite glyphs, with the
+  repeat/short-vector coordinate compression), `hhea`/`hmtx`, plus optional `kern`
+  (format 0), `name` and `OS/2`. Hinting instructions are skipped — modeled text is
+  resolution independent. **OpenType/CFF (`.otf`, PostScript cubic outlines) and
+  TrueType Collections (`.ttc`) are rejected with a message naming the limitation**,
+  never silently mis-modeled.
+- **Size is the em size** (the typographic meaning of "12 point"); capitals are shorter.
+  When a drawing specifies letter height, convert with `font.EmSizeForCapHeight(h)`.
+- **The origin is the baseline** at the start of the first line — x along the writing
+  direction, y up. Descenders reach below y = 0, further lines sit below the first, and
+  `TextStyle.Align` decides whether x = 0 is a line's start, middle or end.
+- **`TextStyle`** carries `LetterSpacing` (tracking, inserted between glyphs only),
+  `LineSpacing` (baseline step, default 1.2), `Align` and `Kerning` — all spacing as a
+  multiple of the em size, so one style is correct at every size. Kerning comes from the
+  legacy `kern` table; fonts that ship kerning only in OpenType `GPOS` lay out on their
+  advance widths alone (`font.HasKerning` reports which).
+- **Counters** (the holes in O, A, 8) are separate contours. TrueType's convention is
+  clockwise outlines and counter-clockwise counters, but real fonts violate it often
+  enough that orientation is not trusted: contours are nested by **containment** (a
+  point-in-region majority vote using the sketch's own exact parity), even depth draws
+  and odd depth becomes a hole attached to its immediate parent. An island inside a
+  counter becomes its own top-level sketch.
+- **Missing characters throw**, naming the character and the font — a part number
+  engraved with a character silently dropped is worse than a failed build. Blank glyphs
+  (space) draw nothing and still advance the pen.
+- `TextOutlines` also measures: `AdvanceWidth` (exact typographic width, never touches
+  an outline), `Bounds` (the actual ink) and `LineHeight`.
+
+**Embossing and engraving need no new operation** — place the text on a face and
+boolean it:
+
+```csharp
+var plate = Shape.Box(60, 20, 4);                                   // top face at z = 2
+var top = SketchPlane.On(plate.ToBrep().PlanarFacesWithNormal(Vector3d.UnitZ).First());
+var style = new TextStyle { Align = TextAlign.Center };
+
+var embossed = plate | Shape.Text("EC", font, 8, height: 1, top, style);        // raised
+
+var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);         // 1 mm down
+var engraved = plate - Shape.Text("EC", font, 8, height: 1.5, pocket, style);   // tool overshoots
+```
+
+The engraving tool deliberately **overshoots** the face (1.5 deep for a 1 mm pocket), the
+same rule `Shape.Drill` follows so booleans never see coplanar faces. One honest
+boundary: **engraving is exact through the implicit route but not yet through B-Rep** —
+subtracting a sketch-extrusion tool that pokes out of one face is a pre-existing gap in
+the boolean engine (it is not text-specific: `Shape.Box(...) - Shape.Extrude(Sketch.Rectangle(...), ...)`
+fails the same way, while a `Shape.Box` or `Sketch.Circle` tool is fine). Until that
+lands, engrave through the field: `Shape.From(engraved.ToImplicit()).ToMesh()`. Embossing
+by union is B-Rep-native today.
+
 ## The document model: Part, Assembly, Tab, Scene
 
 Parts carry all their own information — name, geometry from **any** engine (`Shape`,
@@ -389,4 +461,6 @@ host fallback > `MeshQuality` defaults**.
 
 Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
-non-uniformly scaled spheres.
+non-uniformly scaled spheres. For text: OpenType/CFF (cubic) outlines, `GPOS` kerning,
+text on a curve, variable fonts, and B-Rep booleans for sketch-extrusion tools (which
+would make engraving B-Rep-native).
