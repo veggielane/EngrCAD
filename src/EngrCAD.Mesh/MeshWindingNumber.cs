@@ -56,9 +56,28 @@ public sealed class MeshWindingNumber
     public double Beta { get; }
 
     public MeshWindingNumber(HalfEdgeMesh mesh, double beta = 2.0)
-        : this(beta, mesh.Triangulated())
+        : this(beta, mesh.Triangulated(), hierarchy: true)
     {
     }
+
+    /// <summary>
+    /// Builds over an already-triangulated mesh WITHOUT the multipole hierarchy: every
+    /// query is then the exact O(triangles) solid-angle sum, and construction costs only a
+    /// scan of the corners.
+    /// <para>
+    /// Use it when the caller makes few queries. The hierarchy costs roughly 0.7 µs per
+    /// triangle to build — about thirty exact queries' worth — so below that it is pure
+    /// overhead. <see cref="MeshBooleanExact"/> is the motivating case: it asks one question
+    /// per surface patch, typically fewer than ten, and building two hierarchies for that
+    /// was measured at 66–86% of its whole classification phase.
+    /// </para>
+    /// <para>
+    /// <see cref="FastWindingNumber"/> and <see cref="IsInside"/> stay correct — they fall
+    /// through to the exact sum — so this is a cost decision, never an accuracy one.
+    /// </para>
+    /// </summary>
+    public static MeshWindingNumber Direct(HalfEdgeMesh triangulated) =>
+        new(beta: 2.0, RequireTriangles(triangulated), hierarchy: false);
 
     /// <summary>
     /// Builds directly over a mesh that is already fully triangulated, skipping the
@@ -68,21 +87,25 @@ public sealed class MeshWindingNumber
     /// already paid for <see cref="HalfEdgeMesh.Triangulated"/> — e.g.
     /// <c>MeshSdf</c>'s winding-number mode — so the mesh is not rebuilt twice.
     /// </summary>
-    public static MeshWindingNumber FromTriangulated(HalfEdgeMesh triangulated, double beta = 2.0)
+    public static MeshWindingNumber FromTriangulated(HalfEdgeMesh triangulated, double beta = 2.0) =>
+        new(beta, RequireTriangles(triangulated), hierarchy: true);
+
+    private static HalfEdgeMesh RequireTriangles(HalfEdgeMesh triangulated)
     {
+        ArgumentNullException.ThrowIfNull(triangulated);
         foreach (var face in triangulated.Faces)
         {
             var h0 = face.AnyHalfEdge;
             if (h0.Next.Next.Next != h0)
                 throw new ArgumentException(
-                    $"Face {face.Index} is not a triangle; FromTriangulated requires a fully triangulated mesh.",
+                    $"Face {face.Index} is not a triangle; this entry point requires a fully triangulated mesh.",
                     nameof(triangulated));
         }
-        return new MeshWindingNumber(beta, triangulated);
+        return triangulated;
     }
 
     /// <summary>Core constructor; <paramref name="triangulated"/> must contain only triangles.</summary>
-    private MeshWindingNumber(double beta, HalfEdgeMesh triangulated)
+    private MeshWindingNumber(double beta, HalfEdgeMesh triangulated, bool hierarchy)
     {
         if (beta <= 0)
             throw new ArgumentOutOfRangeException(nameof(beta), "Beta must be positive.");
@@ -103,8 +126,9 @@ public sealed class MeshWindingNumber
             centroids[i] = (a[i] + b[i] + c[i]) / 3.0;
         }
 
-        if (n == 0)
+        if (n == 0 || !hierarchy)
         {
+            // No hierarchy: the corners stay in face order and every query is the exact sum.
             _a = a;
             _b = b;
             _c = c;
@@ -260,12 +284,13 @@ public sealed class MeshWindingNumber
     /// <summary>
     /// Second-order fast winding number at <paramref name="point"/> (Barill et al. 2018):
     /// clusters farther than <see cref="Beta"/> × radius use their multipole expansion,
-    /// near clusters descend to exact per-triangle solid angles.
+    /// near clusters descend to exact per-triangle solid angles. Instances built by
+    /// <see cref="Direct"/> have no hierarchy and answer with the exact sum instead.
     /// </summary>
     public double FastWindingNumber(in Vector3d point)
     {
         if (_nodeCount == 0)
-            return 0;
+            return _a.Length == 0 ? 0 : WindingNumber(point);
 
         var q = point;
         double sum = 0;

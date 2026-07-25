@@ -6,8 +6,8 @@ namespace EngrCAD.Mesh;
 /// Read-only face-index selection over a <see cref="HalfEdgeMesh"/> — v1 of the
 /// selection/region model (g3 <c>MeshFaceSelection</c>). Selections are immutable:
 /// <see cref="Grow"/>/<see cref="Contract"/> return new selections, matching the engine's
-/// immutable-after-<c>Build</c> meshes. The extract-modify-reinsert <c>RegionOperator</c>
-/// workflow needs the mutable topology editor and is the phase-B follow-up.
+/// immutable-after-<c>Build</c> meshes. <see cref="MeshRegionOperator"/> builds the
+/// extract-modify-reinsert workflow (g3 <c>RegionOperator</c>) on top.
 /// </summary>
 public sealed class MeshFaceSelection
 {
@@ -176,7 +176,15 @@ public sealed class MeshFaceSelection
     /// bow-tie check in <see cref="HalfEdgeMesh.Build"/> and throws
     /// <see cref="ArgumentException"/>.
     /// </summary>
-    public HalfEdgeMesh ToMesh()
+    public HalfEdgeMesh ToMesh() => ToMesh(out _);
+
+    /// <summary>
+    /// <see cref="ToMesh()"/>, additionally reporting where each extracted vertex came
+    /// from: <paramref name="vertexMap"/><c>[sub]</c> is the index of that vertex in
+    /// <see cref="Mesh"/>. <see cref="MeshRegionOperator"/> needs the map to put an edited
+    /// region back.
+    /// </summary>
+    public HalfEdgeMesh ToMesh(out IReadOnlyList<int> vertexMap)
     {
         if (_set.Count == 0)
             throw new InvalidOperationException("Cannot extract an empty selection.");
@@ -193,11 +201,14 @@ public sealed class MeshFaceSelection
 
         var remap = new Dictionary<int, int>(usedVertices.Count);
         var positions = new List<Vector3d>(usedVertices.Count);
+        var toBase = new List<int>(usedVertices.Count);
         foreach (int v in usedVertices)
         {
             remap.Add(v, positions.Count);
             positions.Add(Mesh.GetPosition(v));
+            toBase.Add(v);
         }
+        vertexMap = toBase;
 
         var faces = new List<int[]>(faceLoops.Count);
         foreach (var loop in faceLoops)

@@ -61,9 +61,9 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   coplanar) throw with the reason. Output goes through the manifold-validating `Build`
   as a safety net.
 - **`MeshBoolean`** — union/difference/intersection, two algorithms behind one API.
-  `BooleanMethod.Bsp` (the default) clips BSP trees (csg.js) plus a seam-zipping pass so
-  results come out topologically closed. `BooleanMethod.Exact` selects the **imprint
-  boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
+  `BooleanMethod.Exact` is **the default**; `BooleanMethod.Bsp` keeps the older BSP-tree
+  clipper (csg.js plus a seam-zipping pass) reachable for comparison. The default is the
+  **imprint boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
   flood-fill each mesh's faces into **patches** bounded by that curve, classify each patch
   once by the other mesh's `MeshWindingNumber` at the centroid of its largest triangle,
   keep the halves the operation calls for (difference reverses the tool's kept patches),
@@ -74,14 +74,68 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   *Classification assumption*: after the imprint no face straddles the other surface, so a
   whole patch is inside or outside — probing per patch (rather than per face) is what
   keeps seam slivers, whose centroids sit arbitrarily close to the other surface, from
-  deciding anything. Measured: flipping the default to `Exact` passes every test in every
-  project except the ones that pin BSP behaviour deliberately; it stays opt-in only
-  because the exact path REJECTS coplanar overlapping faces (flush-mating operands) that
-  BSP handles. Cases the BSP path gets wrong and the exact path gets right, both locked by
-  tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a shell with
-  boundary edges — a hole in the solid), and any model at ~1e-5 scale (BSP's absolute
-  1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every polygon is
-  discarded and the result is empty).
+  deciding anything. Cases the BSP path gets wrong and the exact path gets right, all
+  locked by tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a
+  shell with boundary edges — a hole in the solid), any model at ~1e-5 scale (BSP's
+  absolute 1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every
+  polygon is discarded and the result is empty), and flush-mating parts (below). All three
+  operations take an optional `ProgressCancel` (the exact path only — the BSP clipper is a
+  recursive tree walk with no checkpoint to poll).
+
+  *Performance*, measured in Release over eleven representative pairs (Debug is
+  pessimistic: `EditableMesh` runs a full `Validate()` after every operator there). The
+  exact path is now **1.6–2.2× faster than it was** and, except on very coarse operands,
+  faster than BSP as well — dramatically so on curved meshes (two 48×24 spheres: 7.4 ms vs
+  262 ms; crossed 128-gon cylinders: 3.8 ms vs 54 ms), and BSP stack-overflows outright on
+  a 32k-triangle sphere pair where the exact path takes 58 ms. Three fixes, all found by
+  instrumenting phases rather than by inspection, and none where the reading eye would
+  look:
+  1. **`MeshImprinter` located interior seam points by scanning every fragment ever cut
+     from the host face** — O(k²) in the points landing on ONE face, which is exactly the
+     shape of a bore's rim landing on a single cap triangle. 96% of the imprint for a
+     64-sided bore through a box. Replaced by a walking point location (step across
+     whichever edge the target lies furthest outside of) with the old scan as the fallback,
+     so it is an optimization and not a change of answer.
+  2. **The boolean built two Barill multipole hierarchies to ask about eight points.**
+     Classification asks ONE question per surface patch; building an O(n log n) hierarchy
+     for that was 66–86% of the whole classification phase. `MeshWindingNumber.Direct`
+     skips the hierarchy (exact O(n) sums), and the boolean picks by question count against
+     a measured break-even of ~32 queries. Classification of two 32k-triangle spheres:
+     65 ms → 6 ms.
+  3. **`Triangulated()` rebuilt meshes that were already triangles**, and the exact boolean
+     triangulates both operands on entry — so cascaded booleans revalidated everything at
+     every stage. It now returns `this`, which is safe because `HalfEdgeMesh` is immutable.
+
+  Left on the table (Core's, not the mesh engine's): the broad phase — two `Bvh.Build`s
+  plus `QueryOverlap` — is now the single largest line on dense operands, ~22 ms of the
+  58 ms sphere-sphere boolean.
+- **`CoincidentSurface`** — the coplanar half of the exact boolean: what to do where the
+  two solids **share** boundary instead of crossing it (stacked parts, a boss standing on
+  a plate, a tool bottoming out exactly on the far face). The winding number is exactly ½
+  on such a face and decides nothing, so those faces are classified by **normal
+  agreement** instead — normals agreeing means both solids lie on the same side, normals
+  opposing means they mate back to back — and the set algebra follows:
+
+  | normals | union | intersection | difference (A − B) |
+  |---|---|---|---|
+  | agree | keep one copy | keep one copy | drop both |
+  | oppose | drop both | drop both | keep A's copy |
+
+  The surviving copy is always the FIRST mesh's: both meshes cover the region, so exactly
+  one copy can ever remain, and A's needs no special case. Membership is decided at the
+  face centroid against a BVH of the other mesh's coincident carriers, which is legal
+  because the coincident region's **rim is imprinted by the ordinary transversal path** —
+  a coplanar patch ends where the other solid's surface leaves the shared plane, i.e. at a
+  transverse face, and that pair does produce a segment. Coincidence is also a patch
+  boundary in the flood fill, so a ½ can never leak into an ordinary patch's probe.
+  Two numerical lessons: this classifier reads only the **sign** of an area-weighted
+  normal against a plane, because `Vector3d.TryNormalize(Tolerance.Default)` applies the
+  ABSOLUTE 1e-9 to a cross product and so stops recognizing mating faces below ~1e-4 scale
+  (measured: a non-manifold union at 1e-5 — the BSP defect, reintroduced); and the
+  coplanar-overlap test's separating-axis margin is `epsilon × edge length`, since
+  `Orient2d` returns twice an AREA and comparing it to a bare epsilon made triangles that
+  merely touch along a shared edge — the commonest relation between neighbouring solids —
+  report as overlapping.
 - **`MeshMeshCut` / `MeshImprint`** — exact mesh–mesh intersection and imprint: the two
   meshes come back cut along their common curve, sharing it vertex-for-vertex. Broad
   phase is `Bvh.QueryOverlap` over per-triangle boxes; the narrow phase is the Möller
@@ -102,11 +156,13 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   after the split (the operator's lerp only picks a valid topological parameter). A
   crossing landing within the degeneracy guard of an existing vertex snaps to it on both
   sides, moving the other mesh's vertex if it has one there too — the only geometry the
-  algorithm ever perturbs. Coplanar overlapping faces are **rejected loudly**
-  (`NotSupportedException`): an overlap has no curve to imprint and its faces lie on the
-  other solid's surface, where the winding number is exactly ½. Coplanar faces that only
-  touch along an edge are fine. `MeshImprint` reports the shared `Points`/`Segments`,
-  the chained `Polylines` (a closed loop repeats its first index), and `Length`.
+  algorithm ever perturbs. Coplanar overlapping faces contribute no curve (two coplanar
+  triangles meet in an area, not a segment) and are reported separately as
+  `CoincidentFacesA`/`CoincidentFacesB` — whole carrier triangles, a complete superset of
+  the shared surface that consumers clip by containment (see `CoincidentSurface`).
+  Coplanar faces that only touch along an edge are not coincident at all.
+  `MeshImprint` reports the shared `Points`/`Segments`, the chained `Polylines` (a closed
+  loop repeats its first index), and `Length`.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
 - **`MeshDecimator`** — quadric error metric (Garland–Heckbert) edge collapse with link
   condition and normal-flip guards; boundaries are preserved exactly. Candidates live in
@@ -139,6 +195,11 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   quadrupole) multipole expansion of their winding field (β radius test, default 2),
   giving O(log n) queries with error far below the ½ decision threshold. `IsInside`
   thresholds at ½. Construction triangulates and indexes once; the mesh may be open.
+  `FromTriangulated` skips the triangulating copy when the caller already paid for it;
+  **`Direct` additionally skips the hierarchy**, making every query the exact O(n) sum.
+  That is the right trade below ~32 queries — the hierarchy costs ~0.7 µs per triangle to
+  build and an exact query ~20 ns per triangle — and it is a cost decision only:
+  `FastWindingNumber` and `IsInside` fall through to the exact sum, so they stay correct.
 - **`PolygonTriangulator`** — 2D triangulation with holes; a faithful port of mapbox
   earcut (minus z-order hashing).
 - **`HoleFiller`** — hole filling for open meshes, construct-new (g3 `SimpleHoleFiller` /
@@ -185,9 +246,29 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   around each destination vertex through selected faces — correct even at pinch
   vertices), and patch extraction (`ToMesh()`: remapped construct-new submesh; a
   selection touching itself only at a vertex fails `Build`'s bow-tie check with a
-  "pinch" message). Edges are stored canonically as the lower half-edge index of each
-  twin pair, matching `mesh.Edges`. The extract-modify-reinsert `RegionOperator` needs
-  the mutable topology editor and is the phase-B follow-up.
+  "pinch" message; the `ToMesh(out vertexMap)` overload also reports where each extracted
+  vertex came from). Edges are stored canonically as the lower half-edge index of each
+  twin pair, matching `mesh.Edges`.
+- **`MeshRegionOperator`** — extract-modify-reinsert (g3 `RegionOperator`): pull a face
+  selection out as a mesh in its own right, edit it with anything that takes a mesh, put
+  it back. `Extract(mesh, selection)` → `.Region` (+ `RegionToBaseVertex`, `SeamEdges`);
+  `Reinsert(replacement)` returns a NEW session over the NEW mesh whose selection is the
+  reinserted faces, so edits chain (g3's `CurrentBaseTriangles`, without the mutation).
+  Two things worth knowing:
+  - **Transactionality is free**, which is why this is NOT built on `MeshChangeSet` the
+    way g3 builds it on an in-place editor: `HalfEdgeMesh` is immutable after `Build`, so
+    a refused or failed reinsertion leaves the caller holding the original — there is no
+    half-applied state for a journal to undo.
+  - **The seam is the contract, and it may not be refined.** A replacement must reproduce
+    the region's boundary as the same *directed* edges at bit-identical positions
+    (direction proves the orientation matches; exactness because this engine welds shared
+    geometry by equality, so a rim that drifted 1e-12 would weld into a crack instead of
+    failing). Splitting a seam edge is refused too — the base face on the other side still
+    holds the un-split edge, so the result would be a T-junction; refining across a seam
+    means refining the neighbours, which is a different operation. Edits that satisfy the
+    contract: anything confined to the interior, and `MeshDecimator` (its exact boundary
+    preservation IS this contract). `LoopSubdivision` is not one — it splits *and* smooths
+    the open boundary — and is refused with a message naming the offending edge.
 - **`MeshConnectedComponents`** — edge-connected face components (g3
   `MeshConnectedComponents`): deterministic ascending-seed flood fill returning
   `MeshComponent`s (face selection + area + divergence signed volume + closed flag) with
