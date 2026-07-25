@@ -86,7 +86,9 @@ operand position while `Math.Min`/`Math.Max` break it by sign, so a result that 
 zero may carry the opposite sign bit (±0 compare equal; no consumer can tell them apart).
 `BatchEvaluationTests` asserts this over the whole node catalogue at randomized points,
 at structured points that land exactly on surfaces/edges/corners, and at every batch
-length around the register and chunk boundaries.
+length around the register and chunk boundaries. The suite also passes with
+`DOTNET_EnableHWIntrinsic=0`, which drives every kernel down its scalar tail loop — the
+no-SIMD fallback is exercised, not assumed.
 
 **What is vectorized**: every primitive except the gyroid (sphere, box, cylinder, cone,
 torus, capsule, half-space), every set operator and smooth blend, offset/shell, and the
