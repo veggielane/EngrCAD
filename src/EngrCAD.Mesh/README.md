@@ -62,6 +62,31 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   as a safety net.
 - **`MeshBoolean`** — union/difference/intersection via BSP clipping (csg.js) plus a
   seam-zipping pass so results come out topologically closed.
+- **`MeshMeshCut` / `MeshImprint`** — exact mesh–mesh intersection and imprint: the two
+  meshes come back cut along their common curve, sharing it vertex-for-vertex. Broad
+  phase is `Bvh.QueryOverlap` over per-triangle boxes; the narrow phase is the Möller
+  interval test (corner distances to the other plane → each triangle's interval on the
+  common line → the overlap of the two intervals). **Every intersection point is one mesh
+  edge crossing one face plane of the other mesh**, evaluated from the edge's
+  lower-indexed endpoint, so its value depends only on (edge, plane) — the two faces
+  sharing that edge and the two meshes get bit-identical coordinates, and the seam welds
+  by equality rather than by tolerance. All degeneracy tests are **relative to the
+  operands' extent** (1e-13, the scale-free tier), never the absolute 1e-9 weld tier;
+  that is what makes the cut work on 1e-5-scale models and on near-tangent pairs where
+  the BSP path's absolute constants fail. The imprint itself is
+  `EditableMesh`-only — `SplitEdge` for points on edges (updating both adjacent faces, so
+  no T-junction can appear), `PokeFace` for points inside a face, and `FlipEdge`
+  constraint recovery (Anglada) for the segments themselves — wrapped in one
+  `MeshChangeSet`, so a refusal reverts the journal and leaves the mesh bit-identical
+  instead of half-cut. Split vertices are written to the exact shared coordinate right
+  after the split (the operator's lerp only picks a valid topological parameter). A
+  crossing landing within the degeneracy guard of an existing vertex snaps to it on both
+  sides, moving the other mesh's vertex if it has one there too — the only geometry the
+  algorithm ever perturbs. Coplanar overlapping faces are **rejected loudly**
+  (`NotSupportedException`): an overlap has no curve to imprint and its faces lie on the
+  other solid's surface, where the winding number is exactly ½. Coplanar faces that only
+  touch along an edge are fine. `MeshImprint` reports the shared `Points`/`Segments`,
+  the chained `Polylines` (a closed loop repeats its first index), and `Length`.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
 - **`MeshDecimator`** — quadric error metric (Garland–Heckbert) edge collapse with link
   condition and normal-flip guards; boundaries are preserved exactly. Candidates live in
