@@ -2,6 +2,8 @@
   href: primitives.md
 - name: Sketching
   href: sketching.md
+- name: 2D sketch booleans
+  href: sketch-booleans.md
 - name: Extrude, revolve, sweep
   href: extrude-revolve-sweep.md
 - name: Booleans

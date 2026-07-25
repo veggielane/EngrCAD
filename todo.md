@@ -326,6 +326,29 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   lowering memoization) would also serve STEP export and annotation resolution
   (which lowers a third time). Also: silhouette-adaptive edge sampling (a fixed
   96/circle undersamples very large rims).
+- [ ] **Construction tree in the viewer (Shape graph / features as tree rows)** — today
+  the model tree lists parts and assembly occurrences; it should also expand a part
+  into **how it was built**: for a `Shape`-backed part the operation graph (each node
+  already knows its label via `Shape.Describe()`, the same text `Explain` prints), and
+  for a `FeatureHistory`-backed part the ordered feature list with names, suppression
+  state, and `[Param]` values. Nested/child rows per operand of booleans, patterns, etc.
+  - **Selecting a node previews it in the viewport.** Selecting a **sketch** draws the
+    sketch itself — its curves placed on their `SketchPlane` in 3D (arcs/béziers
+    flattened for display only), which needs a curve/polyline overlay path; the line
+    program plus the `AnnotationLayer`/feature-edge overlays are the precedents for
+    drawing non-mesh geometry. Selecting an intermediate operation previews **that
+    subtree's** geometry (lower just that sub-shape — cheap near the leaves, and the
+    result is cacheable per node), which is effectively a rollback view.
+  - Natural follow-ons once the tree exists: a **rollback bar** (show the model as of
+    feature N), suppress/unsuppress from the tree (`FeatureHistory` already supports
+    suppression), highlight the faces a feature created (needs the topological-naming
+    item), and editing `[Param]`s in the properties panel (already an open item under
+    parametric-features follow-ups — this is its UI half).
+  - Design notes: `Shape` is an immutable graph, so a tree row is just a node reference
+    plus a path; per-node preview lowering must stay off the render thread like
+    `Scene.PreMesh`, and previews should be cached per node (the B-Rep lowering cache
+    item above serves this too). Sketches are pure 2D + a plane, so a display polyline
+    is cheap and exact enough at screen resolution.
 - [ ] Ideas: ambient occlusion or matcap shading.
 
 ## Blazor web viewer
