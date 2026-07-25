@@ -369,6 +369,67 @@ public abstract class Shape
         return new HullShape([.. operands]);
     }
 
+    // ---- Text ----
+
+    /// <summary>
+    /// Modeled text (OpenSCAD's <c>text()</c> in 3D): the glyph outlines of
+    /// <paramref name="text"/> extruded <paramref name="height"/> along the normal of
+    /// <paramref name="plane"/> (default world XY) and unioned. TrueType outlines are
+    /// lines and quadratic Béziers, which map onto <see cref="Sketch"/> segments
+    /// exactly — so text is as exact as any other sketch feature: exact NURBS profiles
+    /// in B-Rep, the exact 2D signed distance in implicit, crisp tessellation in mesh.
+    /// Counters (the holes in O, A, 8) come through as holes.
+    /// <para><paramref name="size"/> is the <b>em size</b>; for a specified letter
+    /// height use <c>font.EmSizeForCapHeight(h)</c>. The text's origin is the
+    /// <b>baseline</b> at the start of the first line (see
+    /// <see cref="TextOutlines"/> for the full convention), and
+    /// <see cref="TextStyle"/> carries spacing, line spacing, alignment and
+    /// kerning.</para>
+    /// <para><b>Engraving and embossing</b> need no special operation: place the text
+    /// on a face with <c>SketchPlane.On(face)</c> (or an explicit
+    /// <c>SketchPlane.At(...)</c>) and union it to emboss, or sink the plane by the
+    /// depth and subtract a tool that overshoots the face to engrave. Note the honest
+    /// boundary documented in the Modeling README: the text itself is exact in every
+    /// representation, but <em>booleans between lettering and a body</em> are limited by
+    /// the B-Rep boolean engine's handling of sketch-extrusion tools (a limitation with
+    /// nothing to do with text). Route those through the implicit lowering —
+    /// <c>Shape.From(result.ToImplicit())</c> — where the boolean is exact.</para>
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var font = TrueTypeFont.Load(fontPath);
+    /// var plate = Shape.Box(70, 22, 4);                                  // top face at z = 2
+    /// var top = SketchPlane.At((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+    /// var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+    /// var style = new TextStyle { Align = TextAlign.Center };
+    ///
+    /// var badge = Shape.Text("ENGRCAD", font, size: 12, height: 1.2, top, style);
+    /// var embossed = plate | badge;
+    /// var engraved = plate - Shape.Text("ENGRCAD", font, 12, 1.5, pocket, style);
+    /// </code>
+    /// </example>
+    /// <exception cref="ArgumentException">The text draws nothing (empty or all
+    /// blanks), or the font has no glyph for one of its characters.</exception>
+    public static Shape Text(
+        string text, TrueTypeFont font, double size, double height,
+        SketchPlane? plane = null, TextStyle? style = null)
+    {
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+
+        var sketches = TextOutlines.Sketches(text, font, size, style);
+        if (sketches.Count == 0)
+            throw new ArgumentException(
+                $"\"{text}\" produces no geometry: it is empty or contains only blank glyphs.", nameof(text));
+
+        // Glyphs are disjoint in any sane layout, so this union takes the boolean
+        // engine's disjoint fast path (whole-body classification, multi-shell result).
+        var glyphs = new List<Shape>(sketches.Count);
+        foreach (var sketch in sketches)
+            glyphs.Add(Extrude(sketch, height, plane));
+        return UnionTree(glyphs);
+    }
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);
