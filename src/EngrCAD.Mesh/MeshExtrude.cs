@@ -68,6 +68,31 @@ public static class MeshExtrude
     }
 
     /// <summary>
+    /// Extrudes a <see cref="MeshFaceSelection"/> by the uniform <paramref name="offset"/>
+    /// vector — the selection vocabulary (<c>Grow</c>/<c>Contract</c>/conversions) feeding the
+    /// extrusion directly, so a patch found by traversal need not be unpacked into indices.
+    /// The selection must belong to <paramref name="mesh"/>.
+    /// </summary>
+    public static HalfEdgeMesh Faces(HalfEdgeMesh mesh, MeshFaceSelection selection, in Vector3d offset) =>
+        Faces(mesh, ValidatedSelection(mesh, selection), offset);
+
+    /// <summary>
+    /// Extrudes a <see cref="MeshFaceSelection"/> by <paramref name="distance"/> along
+    /// area-weighted patch-only vertex normals. The selection must belong to
+    /// <paramref name="mesh"/>.
+    /// </summary>
+    public static HalfEdgeMesh Faces(HalfEdgeMesh mesh, MeshFaceSelection selection, double distance) =>
+        Faces(mesh, ValidatedSelection(mesh, selection), distance);
+
+    private static IEnumerable<int> ValidatedSelection(HalfEdgeMesh mesh, MeshFaceSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        if (!ReferenceEquals(selection.Mesh, mesh))
+            throw new ArgumentException("The selection belongs to a different mesh.", nameof(selection));
+        return selection.Indices;
+    }
+
+    /// <summary>
     /// Thickens a surface into a solid shell: the input faces stay put as the front skin,
     /// a reversed copy is offset by <paramref name="thickness"/> <b>against</b> the vertex
     /// normals (material behind the surface), and each boundary loop is stitched with a

@@ -217,6 +217,28 @@ public sealed partial class EditableMesh
         CommitOperation(nameof(SetPosition));
     }
 
+    /// <summary>
+    /// Moves many vertices as <b>one</b> operation: one change record, one timestamp bump,
+    /// one DEBUG validation. This is the smoothing/projection primitive — a per-vertex
+    /// <see cref="SetPosition"/> loop would emit one undo record and one full-structure
+    /// validation per vertex, which is O(n²) in DEBUG builds over a whole-mesh pass.
+    /// </summary>
+    /// <param name="vertices">Live vertex indices.</param>
+    /// <param name="positions">New positions, one per index.</param>
+    public void SetPositions(ReadOnlySpan<int> vertices, ReadOnlySpan<Vector3d> positions)
+    {
+        if (vertices.Length != positions.Length)
+            throw new ArgumentException("One position is required per vertex index.", nameof(positions));
+        foreach (int v in vertices)
+            CheckVertex(v);
+        if (vertices.Length == 0)
+            return;
+        BeginOperation();
+        for (int i = 0; i < vertices.Length; i++)
+            SetPositionSlot(vertices[i], positions[i]);
+        CommitOperation(nameof(SetPositions));
+    }
+
     /// <summary>Origin vertex of a live half-edge.</summary>
     public int Origin(int halfEdge)
     {
@@ -359,6 +381,57 @@ public sealed partial class EditableMesh
             if (_faceAlive[f])
                 yield return f;
         }
+    }
+
+    /// <summary>
+    /// Number of edges incident to the vertex (its one-ring size) — for a boundary vertex
+    /// the boundary edges count once each, so this is the incident-<i>edge</i> count, which
+    /// is what valence-based remeshing means by valence.
+    /// </summary>
+    public int Valence(int vertex)
+    {
+        CheckVertex(vertex);
+        int start = _vertexOut[vertex];
+        if (start < 0)
+            return 0;
+        int he = start;
+        int count = 0;
+        int guard = _heOrigin.Count;
+        do
+        {
+            count++;
+            he = _heTwin[_hePrev[he]];
+            if (guard-- < 0)
+                throw new InvalidOperationException($"Vertex {vertex}: outgoing walk did not close (corrupt topology).");
+        } while (he != start);
+        return count;
+    }
+
+    /// <summary>
+    /// Allocation-free counterpart of <see cref="OutgoingHalfEdges(int)"/>: fills
+    /// <paramref name="buffer"/> with the vertex's outgoing half-edges and returns the count,
+    /// or −1 when the buffer is too small (the iterator overload allocates an enumerator per
+    /// call, which the remeshing inner loops cannot afford).
+    /// </summary>
+    public int OutgoingHalfEdges(int vertex, Span<int> buffer)
+    {
+        CheckVertex(vertex);
+        int start = _vertexOut[vertex];
+        if (start < 0)
+            return 0;
+        int he = start;
+        int count = 0;
+        int guard = _heOrigin.Count;
+        do
+        {
+            if (count >= buffer.Length)
+                return -1;
+            buffer[count++] = he;
+            he = _heTwin[_hePrev[he]];
+            if (guard-- < 0)
+                throw new InvalidOperationException($"Vertex {vertex}: outgoing walk did not close (corrupt topology).");
+        } while (he != start);
+        return count;
     }
 
     /// <summary>All half-edges leaving the vertex, one full turn around it.</summary>

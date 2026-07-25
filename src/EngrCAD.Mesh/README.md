@@ -39,7 +39,12 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     faces come back as an `ImmutableArray`, not a caller-writable `int[]`),
   - `MergeEdges` (welds two **boundary half-edges** head-to-tail — the crack-closing
     primitive; handles shared-endpoint seams and full slit closure, and automatically
-    welds the doubled boundary edges the guards deliberately admit, g3-style).
+    welds the doubled boundary edges the guards deliberately admit, g3-style),
+  - `SetPositions(vertices, positions)` — many vertices as **one** operation (one change
+    record, one timestamp bump, one DEBUG validation). A per-vertex `SetPosition` loop over a
+    whole-mesh smoothing pass is O(n²) in DEBUG, which is what the remesher needs this for;
+    `Valence` and `OutgoingHalfEdges(vertex, Span<int>)` are the allocation-free ring
+    queries beside it (the iterator overload allocates an enumerator per call).
   Every vertex keeps the invariant that its outgoing pointer prefers the boundary
   half-edge, so `IsBoundaryVertex` stays O(1) through arbitrary edit sequences.
   `Validate()` checks the full structure (twin involution, ring closure/completeness,
@@ -62,8 +67,19 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   as a safety net.
 - **`MeshBoolean`** — union/difference/intersection, two algorithms behind one API.
   `BooleanMethod.Exact` is **the default**; `BooleanMethod.Bsp` keeps the older BSP-tree
-  clipper (csg.js plus a seam-zipping pass) reachable for comparison. The default is the
-  **imprint boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
+  clipper (csg.js plus a seam-zipping pass) reachable for comparison. Every BSP tree walk
+  (`Build`, `ClipTo`, `ClipPolygons`, `AllPolygons`, `Invert`) uses an **explicit stack,
+  never recursion**: the splitting plane is the first polygon's plane, so a convex body — a
+  sphere above all — builds an essentially degenerate chain whose depth is O(polygons), and
+  two 32k-triangle spheres used to kill the process with a stack overflow inside `Build`
+  (measured: a 3000-node chain is fine, 4000 crashes). Depth is a property of the input, so
+  no stack size would have been "enough". The iterative walks keep the recursive visit order
+  exactly, because the polygon order feeds the next `Build` and therefore decides how the
+  result gets subdivided. What the fix bought is honesty rather than speed: the 32k sphere
+  pair now *completes* in 74.9 s and returns an **open** 347k-face shell, where the exact
+  path takes 0.71 s and returns a closed 50k-face mesh — the measurement that makes BSP
+  legacy. The default is the **imprint boolean**: cut both meshes along their exact
+  intersection curve (`MeshMeshCut`),
   flood-fill each mesh's faces into **patches** bounded by that curve, classify each patch
   once by the other mesh's `MeshWindingNumber` at the centroid of its largest triangle,
   keep the halves the operation calls for (difference reverses the tool's kept patches),
@@ -168,11 +184,24 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   condition and normal-flip guards; boundaries are preserved exactly. Candidates live in
   Core's `IndexPriorityQueue` (one always-current entry per undirected edge, re-keyed in
   place on neighborhood changes — replaced the lazy stamped-duplicates queue at equal
-  speed and equal-or-better quality). Optional `ProgressCancel` parameter reports
-  progress and cancels cooperatively (`OperationCanceledException`). Gotcha preserved in
-  a comment: never key edge maps by a packed `(min &lt;&lt; 32) | max` long — the default
-  long hash is `lo ^ hi`, which collapses structured mesh-edge keys into a handful of
-  hash buckets (measured 4× whole-algorithm slowdown); tuple keys hash properly.
+  speed and equal-or-better quality). The topology layer is **`EditableMesh.CollapseEdge`**,
+  which is what that operator exists for; it replaced a private indexed-face-set scratch
+  state (a `HashSet` of faces per vertex plus its own link check) after a measured
+  comparison recorded in `MeshDecimatorQualityTests`: **bit-identical output** on twelve
+  fixture/budget pairs, **0.84×** the time (Release, best of 9 after a 1.5 s warm-up budget),
+  and — the substantive win — correct at 1e-5 scale, where the old path lost **91%** of the
+  volume because it normalized face normals against the absolute 1e-9 weld tolerance. That
+  is an absolute epsilon on a cross product, i.e. an *area*, so below ~1e-4 scale every face
+  read as degenerate and contributed no quadric at all; the guards are now `1e-13 × extent`,
+  the scale-free tier. Optional `ProgressCancel` parameter reports progress and cancels
+  cooperatively (`OperationCanceledException`). Two gotchas preserved in comments: never key
+  edge maps by a packed `(min &lt;&lt; 32) | max` long — the default long hash is `lo ^ hi`,
+  which collapses structured mesh-edge keys into a handful of hash buckets (measured 4×
+  whole-algorithm slowdown), tuple keys hash properly; and **seed the priority queue in a
+  second pass**, after every face has contributed its quadric — folding the seeding into the
+  accumulation loop keys the whole initial queue off partial quadrics, which still produces a
+  closed, manifold mesh at exactly the requested face count and is only visible as a 2.4×
+  worse approximation error at light decimation.
 - **`MeshPlaneCut`** — slices a mesh by a plane, keeping the side the normal points away
   from (material below the plane, as when slicing for printing). Builds a new mesh:
   kept faces copied, crossing faces Sutherland–Hodgman-clipped with exact line-plane
@@ -219,14 +248,49 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   reports a `HoleFillOutcome` per boundary loop: planar where the loop fits a plane
   within `PlanarityTolerance` (absolute, default weld 1e-9 — exact cut/tessellation rims
   qualify, curved rims miss by their sagitta), grouped by common plane; else simple under
-  `MaxSimpleFillVertices`; else `Skipped` with the reason. The smoothed / minimal-surface
-  fill tiers of g3's `AutoHoleFill` are future work.
+  `MaxSimpleFillVertices`; else the `Fallback` tier below, or `Skipped` with the reason.
+  - **`FillMinimal(mesh, loop)`** — the **minimum-weight triangulation of the rim's own
+    vertices** (Barequet–Sharir / Liepa dynamic program), g3's `MinimalHoleFill` tier. No new
+    vertices, so the patch interpolates the rim exactly and cannot bulge; the weight is the
+    pair (largest dihedral angle, total area) compared lexicographically, which is why
+    removing two adjacent faces of a box and refilling restores the box's **exact** volume —
+    the fill puts the corner back rather than cutting a flat chord across it. This is the
+    tier for holes in faceted geometry. *Deliberate deviation from g3*, which seeds a fan and
+    runs four iterative edge-flip passes its own comments call unstable ("strong ordering
+    effects", "will frequently not converge", a hard pass cap to stop the oscillation, a
+    forced interior-vertex removal stage with a debugger break in it): the dynamic program is
+    the standard algorithm here — deterministic, globally optimal for the stated weight,
+    O(n³) time and O(n²) memory in the rim length, and it cannot oscillate. Chords that
+    already join two rim vertices elsewhere in the mesh are forbidden (using one would give
+    that edge a third face), which can leave a rim with no admissible triangulation; that
+    throws, and `FillAll` reports it. The dihedral measure is `atan2(|a×b|, a·b)` on the raw
+    (unnormalized) normals — exact at any magnitude, no normalization and no epsilon.
+  - **`FillSmoothed(mesh, loop, options)`** — a **relaxed membrane**: a coarse fan is remeshed
+    to the hole's own mean rim-edge length with its rim pinned, and Laplacian smoothing pulls
+    the interior into a smooth surface spanning it (g3's `SmoothedHoleFill`). The tier for
+    holes in curved geometry, where a flat minimal patch reads as a dent. The patch is built,
+    remeshed and relaxed **as a standalone mesh** and stitched back, so the surrounding
+    surface is untouched (g3's `ConstrainToHoleInterior = true` mode; its default instead
+    grows two rings into the original mesh, trading fidelity for blending). The stitch is
+    exact, not tolerant: rim vertices are pinned **and** rim edges are barred from splitting
+    (`RemeshOptions.SplitFixedEdges`), so the patch comes back with the rim it went in with,
+    vertex for vertex, and the halves weld by index — an extra rim vertex would be a
+    T-junction. `TargetEdgeLength` defaults to the hole's own mean rim edge, so the fill
+    matches the surrounding tessellation at any model scale (g3's equivalent defaults to an
+    absolute 2.5 world units, which is silently wrong for anything not in millimetres).
+    Iterated Laplacian smoothing with a fixed boundary converges to the same membrane a
+    linear solve would give, so no sparse solver is carried.
+  - `HoleFillOptions.Fallback` selects which tier `FillAll` uses for the loops the planar and
+    simple fills decline, and defaults to **`None`** — reporting a hole honestly beats
+    inventing questionable geometry, and callers who want maximum closure (repair pipelines)
+    opt in. `MaxMinimalFillVertices` (default 256) caps the cubic dynamic program.
 - **`MeshExtrude`** — construct-new extrusion ops (g3 `MeshExtrudeFaces` /
   `MeshExtrudeMesh`). `Faces(mesh, faceIndices, offsetVector | distance)` pulls a face
   patch off the mesh: patch vertices shared with the rest (or on the open mesh boundary)
   are duplicated at the offset position, interior patch vertices move in place, and each
   patch-boundary half-edge a→b gains the wall quad [a, b, b′, a′] — exactly the two
-  directed edges freed by moving the patch, so winding is correct by construction and
+  directed edges freed by moving the patch (a `MeshFaceSelection` overload takes the
+  selection vocabulary directly), so winding is correct by construction and
   closed meshes stay closed (multiple disjoint regions each get their own walls; input
   face indices survive, walls appended). The distance form offsets along area-weighted
   patch-only vertex normals. `Thicken(mesh, thickness)` turns a surface into a solid
@@ -234,6 +298,58 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   a reversed copy offsets <i>against</i> the vertex normals (material behind the
   surface), and each boundary loop is stitched with a quad band; open surfaces become
   closed slabs/shells, closed meshes become hollow two-shell solids.
+- **`Remesher`** — isotropic remeshing to a uniform target edge length (g3's
+  `Remesher`/`RemesherPro`, Botsch &amp; Kobbelt's split/collapse/flip/smooth loop) built on
+  `EditableMesh`'s guarded Euler operators, which is exactly what those operators exist for.
+  One pass is: a single sweep over the edges trying **collapse → flip → split** per edge
+  (at most one succeeds, first wins), then a full double-buffered smoothing pass
+  (`RemeshSmoothing.Uniform` or `Cotangent`), then a projection pass. Returns a
+  `RemeshResult` with the mesh and the operation counts.
+  - The sweep visits edges on a **modulo-prime stride**, not in index order: with sequential
+    ids on a tessellated cylinder, every tiny edge collapses into its neighbour in turn and
+    the whole mesh erodes away; jumping around breaks that symmetry. The stride is a fixed
+    constant and the algorithm uses **no random number generator anywhere** — two runs give
+    bit-identical positions. Its coprimality with the half-edge capacity is checked (g3
+    leaves that hole open: a capacity that is a multiple of its prime would visit a sub-cycle
+    and miss most of the mesh).
+  - **Constraints are expressed on vertices, not edges**, which is a deliberate departure
+    from g3 forced by our topology: an undirected edge is named by the smaller of a twin
+    pair, and a collapse *merges* edge pairs — the surviving edge generally gets a different
+    canonical index, and freed indices are recycled — so an edge-keyed constraint table goes
+    stale (worse: silently aliases a different edge) after the first collapse. Vertex indices
+    never do, because a collapse always removes the *unpinned* end. Everything g3 spells with
+    edge flags follows: an edge with two pinned ends can be neither collapsed (both ends
+    fixed) nor flipped (a flip destroys the edge), which is `NoCollapse | NoFlip`, while
+    splitting stays legal and the midpoint inherits the pin — a constrained chain keeps its
+    geometry and gains resolution. `SplitFixedEdges = false` adds `NoSplit` for callers who
+    need the chain back vertex for vertex (the smoothed hole fill's stitch).
+  - `PreserveBoundary` (default on) and `FeatureAngleDegrees` (default 30°) are **re-derived
+    from the current geometry at the start of every pass**, so they need no bookkeeping at
+    all: boundary-ness is intrinsic, and a crease's dihedral is unchanged by splitting it.
+    Explicit `FixedVertices` are honoured too. Documented limitation, pinned by a test:
+    feature detection reads the dihedral of the mesh it is given, and a *coarse tessellation
+    of a smooth surface* has large dihedrals — `UvSphere(12, 8)` facets meet at ~30°, so the
+    default pins much of it. Pass 0 (or a larger angle) when remeshing tessellated curvature.
+  - Split/collapse thresholds are **1.33 L / 0.66 L**, not Botsch's 4/3 and 4/5: with the
+    classic factors an edge just over 4/3·L splits into halves of ≈0.667·L, *below* the
+    0.8·L collapse threshold, so every split immediately produces two collapse candidates.
+  - Every threshold is relative to the target edge length and every degeneracy guard to its
+    square (areas scale quadratically — the BSP lesson), so remeshing behaves identically at
+    1e-5 scale. Guards read the **sign** of the dot of two unnormalized cross products, never
+    `TryNormalize` against an absolute tolerance.
+  - Measured convergence (Release, `UvSphere(1, 12, 8)` → target 0.25): 90% of the input's
+    edges are outside the [0.66 L, 1.33 L] band; after 40 passes **0%** are, at 73 ms. Note
+    that in DEBUG builds `EditableMesh` runs a full `Validate()` after every operator, so
+    remeshing is O(n) per operation there and DEBUG timings are meaningless.
+- **`IProjectionTarget` / `MeshProjectionTarget`** — the surface a remesh pulls vertices back
+  onto. Smoothing shrinks a model (Laplacian flow is curvature flow — a sphere loses radius
+  every pass), and projection is what undoes it, so the remesh changes the tessellation and
+  leaves the shape. `MeshProjectionTarget` is a BVH over a **snapshot** of the target's
+  triangles (the mesh being remeshed is mutating underneath) plus the exact closest point on
+  the winning triangle (Ericson's Voronoi-region form: six barycentric sign tests, no
+  tolerance anywhere); queries are allocation-free through `Bvh.Nearest<TMetric>`. The
+  interface lives here so `EngrCAD.Mesh` needs no dependency on the implicit engine —
+  an SDF-backed target is a few lines in a consumer (`p − d(p)·∇d(p)`).
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping.
 - **Selections** (`MeshFaceSelection` / `MeshVertexSelection` / `MeshEdgeSelection`) —

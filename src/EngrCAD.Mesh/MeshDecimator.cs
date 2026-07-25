@@ -9,11 +9,15 @@ namespace EngrCAD.Mesh;
 /// conditions and a normal-flip check. Boundary vertices are never collapsed, so open
 /// meshes keep their boundary exactly. Polygon meshes are triangulated first.
 /// <para>
-/// Note: this runs on its own indexed-face-set scratch state, not on
-/// <see cref="EditableMesh"/>. <see cref="EditableMesh.CollapseEdge"/> is the canonical
-/// guarded half-edge collapse (same link condition plus the boundary/tetrahedron
-/// cases); porting the decimator onto it would change traversal order and guard
-/// behavior, so it stays as-is until a measured comparison justifies the switch.
+/// The topology layer is <see cref="EditableMesh"/>: <see cref="EditableMesh.CollapseEdge"/>
+/// is the canonical guarded half-edge collapse, and this is what it exists for. It replaced a
+/// private indexed-face-set scratch representation (a <c>HashSet</c> of faces per vertex plus
+/// its own link-condition check) after a measured comparison — <c>MeshDecimatorQualityTests</c>
+/// carries the numbers: <b>bit-identical output</b> on twelve fixture/budget pairs, <b>0.84x</b>
+/// the time, and correct at 1e-5 scale, where the old path lost 91% of the volume because it
+/// normalized face normals against the absolute 1e-9 weld tolerance — an absolute epsilon on a
+/// cross product, i.e. an area, so below ~1e-4 scale every face was "degenerate" and
+/// contributed no quadric at all.
 /// </para>
 /// </summary>
 public static class MeshDecimator
@@ -41,69 +45,62 @@ public static class MeshDecimator
 
     private sealed class DecimationState
     {
-        private readonly List<Vector3d> _positions;
-        private readonly List<(int A, int B, int C)> _faces;
-        private readonly bool[] _faceAlive;
-        private readonly bool[] _vertexAlive;
-        private readonly bool[] _vertexBoundary;
-        private readonly HashSet<int>[] _vertexFaces;
+        private readonly EditableMesh _mesh;
         private readonly Quadric[] _quadrics;
-        private int _aliveFaceCount;
-
-        // One live entry per undirected edge: the IndexPriorityQueue's Update/Remove
-        // replace the former lazy-PQ stamps (duplicate entries skipped on dequeue), so
-        // every queued entry is always current. The id map is keyed by the (min, max)
-        // vertex pair as a tuple — NOT a packed long, whose default hash (lo ^ hi) sends
-        // the structured keys of grid meshes (b = a + 1, a + row, ...) into a handful of
-        // buckets and turns every lookup into a linear chain scan.
+        private readonly bool[] _boundary;
+        private readonly double _degenerateAreaSquared;
         private readonly IndexPriorityQueue _queue = new();
         private readonly Dictionary<(int, int), int> _edgeIds = [];
         private readonly List<(int A, int B, Vector3d Optimal)> _edgeData = [];
+        private int[] _ring = new int[16];
 
         public DecimationState(HalfEdgeMesh mesh)
         {
-            var (positions, faces) = mesh.ToIndexed();
-            _positions = [.. positions];
-            _faces = faces.Select(f => (f[0], f[1], f[2])).ToList();
-            _faceAlive = new bool[_faces.Count];
-            Array.Fill(_faceAlive, true);
-            _aliveFaceCount = _faces.Count;
-            _vertexAlive = new bool[_positions.Count];
-            Array.Fill(_vertexAlive, true);
-            _vertexBoundary = new bool[_positions.Count];
+            _mesh = EditableMesh.FromMesh(mesh);
+            _quadrics = new Quadric[mesh.VertexCount];
+            _boundary = new bool[mesh.VertexCount];
+
+            // Scale-free degeneracy floor, replacing the original's absolute 1e-24 on a
+            // SQUARED AREA: an absolute area epsilon fails quadratically with model scale
+            // (the BSP lesson). 1e-13 x extent is the exact boolean's tier; squared twice
+            // because the guarded quantity is |cross|^2 = (2 x area)^2.
+            double extent = Math.Max(mesh.ComputeBounds().Size.Length, double.Epsilon);
+            double doubledArea = 2 * 1e-13 * extent * extent;
+            _degenerateAreaSquared = doubledArea * doubledArea;
+
             foreach (var vertex in mesh.Vertices)
-                _vertexBoundary[vertex.Index] = !vertex.IsIsolated && vertex.IsBoundary;
+                _boundary[vertex.Index] = !vertex.IsIsolated && vertex.IsBoundary;
 
-            _vertexFaces = new HashSet<int>[_positions.Count];
-            for (int v = 0; v < _positions.Count; v++)
-                _vertexFaces[v] = [];
-            for (int f = 0; f < _faces.Count; f++)
+            var triangles = new (int A, int B, int C)[mesh.FaceCount];
+            foreach (var face in mesh.Faces)
             {
-                var (a, b, c) = _faces[f];
-                _vertexFaces[a].Add(f);
-                _vertexFaces[b].Add(f);
-                _vertexFaces[c].Add(f);
-            }
-
-            // Area-weighted plane quadrics.
-            _quadrics = new Quadric[_positions.Count];
-            for (int f = 0; f < _faces.Count; f++)
-            {
-                var (a, b, c) = _faces[f];
-                var raw = (_positions[b] - _positions[a]).Cross(_positions[c] - _positions[a]);
-                double area = raw.Length * 0.5;
-                if (!raw.TryNormalize(Tolerance.Default, out var n))
+                int h0 = face.AnyHalfEdge.Index;
+                int a = mesh.HeOrigin(h0), b = mesh.HeOrigin(mesh.HeNext(h0)), c = mesh.HeOrigin(mesh.HePrev(h0));
+                triangles[face.Index] = (a, b, c);
+                var pa = mesh.GetPosition(a);
+                var raw = (mesh.GetPosition(b) - pa).Cross(mesh.GetPosition(c) - pa);
+                double length = raw.Length;
+                // Exact-zero guard, NOT Tolerance.Default: the original normalizes this cross
+                // product against the absolute 1e-9 weld tier, so every face of a model below
+                // ~1e-4 scale is treated as degenerate and contributes no quadric at all.
+                if (length == 0)
                     continue;
-                var q = Quadric.FromPlane(n, -n.Dot(_positions[a]), area);
+                var n = raw / length;
+                var q = Quadric.FromPlane(n, -n.Dot(pa), length * 0.5);
                 _quadrics[a] += q;
                 _quadrics[b] += q;
                 _quadrics[c] += q;
             }
 
+            // Seeding is a SECOND pass, in the original's order (per face, a-b, b-c, c-a):
+            // an edge's priority is its two endpoints' summed quadrics, which are only
+            // complete once every face has contributed. Folding this into the loop above
+            // silently keys the whole initial queue off partial quadrics — measured as a
+            // 2.4x worse approximation error at light decimation, where the early (cheapest)
+            // choices dominate the result.
             var seeded = new HashSet<(int, int)>();
-            for (int f = 0; f < _faces.Count; f++)
+            foreach (var (a, b, c) in triangles)
             {
-                var (a, b, c) = _faces[f];
                 TrySeed(a, b, seeded);
                 TrySeed(b, c, seeded);
                 TrySeed(c, a, seeded);
@@ -112,7 +109,7 @@ public static class MeshDecimator
 
         private void TrySeed(int a, int b, HashSet<(int, int)> seeded)
         {
-            var key = a < b ? (a, b) : (b, a);
+            var key = EdgeKey(a, b);
             if (seeded.Add(key))
                 Enqueue(key.Item1, key.Item2);
         }
@@ -121,7 +118,7 @@ public static class MeshDecimator
 
         private void Enqueue(int a, int b)
         {
-            if (_vertexBoundary[a] || _vertexBoundary[b])
+            if (_boundary[a] || _boundary[b])
                 return;
             var q = _quadrics[a] + _quadrics[b];
             var optimal = OptimalPosition(q, a, b);
@@ -140,35 +137,36 @@ public static class MeshDecimator
         {
             if (q.TryOptimize(out var v))
                 return v;
-            // Singular quadric (flat regions): best of endpoints and midpoint.
-            var mid = (_positions[a] + _positions[b]) * 0.5;
+            var pa = _mesh.GetPosition(a);
+            var pb = _mesh.GetPosition(b);
+            var mid = (pa + pb) * 0.5;
             var best = mid;
             double bestError = q.Error(mid);
-            if (q.Error(_positions[a]) < bestError)
+            if (q.Error(pa) < bestError)
             {
-                best = _positions[a];
-                bestError = q.Error(_positions[a]);
+                best = pa;
+                bestError = q.Error(pa);
             }
-            if (q.Error(_positions[b]) < bestError)
-                best = _positions[b];
+            if (q.Error(pb) < bestError)
+                best = pb;
             return best;
         }
 
         public void CollapseUntil(int targetFaceCount, ProgressCancel? progress)
         {
-            int initialAlive = _aliveFaceCount;
+            int initialAlive = _mesh.FaceCount;
             int sinceCheckpoint = 0;
-            while (_aliveFaceCount > targetFaceCount && _queue.TryDequeue(out int id, out _))
+            while (_mesh.FaceCount > targetFaceCount && _queue.TryDequeue(out int id, out _))
             {
                 var (a, b, optimal) = _edgeData[id];
-                if (_vertexAlive[a] && _vertexAlive[b])
+                if (_mesh.IsVertex(a) && _mesh.IsVertex(b))
                     TryCollapse(a, b, optimal);
 
                 if (progress is not null && ++sinceCheckpoint >= 256)
                 {
                     sinceCheckpoint = 0;
                     progress.ThrowIfCancelled();
-                    progress.Report((double)(initialAlive - _aliveFaceCount) / (initialAlive - targetFaceCount));
+                    progress.Report((double)(initialAlive - _mesh.FaceCount) / (initialAlive - targetFaceCount));
                 }
             }
             progress?.ThrowIfCancelled();
@@ -177,114 +175,80 @@ public static class MeshDecimator
 
         private void TryCollapse(int a, int b, in Vector3d optimal)
         {
-            // The faces shared by a and b vanish; an interior manifold edge has exactly 2.
-            var sharedFaces = _vertexFaces[a].Where(_vertexFaces[b].Contains).ToList();
-            if (sharedFaces.Count != 2)
+            int he = _mesh.FindHalfEdge(a, b);
+            if (he < 0)
+                return;
+            int face0 = _mesh.FaceOf(he);
+            int face1 = _mesh.FaceOf(_mesh.Twin(he));
+            if (face0 < 0 || face1 < 0)
+                return; // interior edges only, as in the original
+
+            if (!RingSurvivesMove(a, optimal, face0, face1) || !RingSurvivesMove(b, optimal, face0, face1))
                 return;
 
-            // Link condition: the vertex neighborhoods may only meet at the two vertices
-            // opposite the collapsing edge, or the collapse pinches the surface.
-            var linkA = NeighborVertices(a);
-            linkA.IntersectWith(NeighborVertices(b));
-            if (linkA.Count != 2)
+            // Neighbours of b lose their edges to it; collect them before the collapse so the
+            // stale queue entries can be dropped.
+            int count = FillRing(b);
+            Span<int> neighbors = count <= 64 ? stackalloc int[count] : new int[count];
+            for (int i = 0; i < count; i++)
+                neighbors[i] = _mesh.Origin(_mesh.Twin(_ring[i]));
+
+            // Link condition, bow-ties, tetrahedra and last-triangle cases are the operator's
+            // guards; a refusal leaves the mesh untouched.
+            if (_mesh.CollapseEdge(he, out _) != MeshOperationResult.Ok)
                 return;
-
-            // Normal-flip / degeneracy guard on every surviving incident face.
-            foreach (int f in _vertexFaces[a].Concat(_vertexFaces[b]))
-            {
-                if (sharedFaces.Contains(f))
-                    continue;
-                var (fa, fb, fc) = _faces[f];
-                var p0 = _positions[fa];
-                var p1 = _positions[fb];
-                var p2 = _positions[fc];
-                var before = (p1 - p0).Cross(p2 - p0);
-                var q0 = fa == a || fa == b ? optimal : p0;
-                var q1 = fb == a || fb == b ? optimal : p1;
-                var q2 = fc == a || fc == b ? optimal : p2;
-                var after = (q1 - q0).Cross(q2 - q0);
-                // 1e-24 = (1e-12)² floor on the squared doubled-area: rejects collapses
-                // producing sub-degenerate triangles whose normal direction is noise.
-                // A quality guard on area² units, not the model-unit Tolerance.Linear.
-                if (after.LengthSquared < 1e-24 || before.Dot(after) <= 0)
-                    return;
-            }
-
-            // Execute.
-            var bNeighbors = NeighborVertices(b);
-            _positions[a] = optimal;
+            _mesh.SetPosition(a, optimal);
             _quadrics[a] += _quadrics[b];
-            foreach (int f in sharedFaces)
-            {
-                _faceAlive[f] = false;
-                _aliveFaceCount--;
-                var (fa, fb, fc) = _faces[f];
-                _vertexFaces[fa].Remove(f);
-                _vertexFaces[fb].Remove(f);
-                _vertexFaces[fc].Remove(f);
-            }
-            foreach (int f in _vertexFaces[b].ToList())
-            {
-                var (fa, fb, fc) = _faces[f];
-                _faces[f] = (fa == b ? a : fa, fb == b ? a : fb, fc == b ? a : fc);
-                _vertexFaces[a].Add(f);
-            }
-            _vertexAlive[b] = false;
 
-            // Edges that referenced the dead vertex are gone; their surviving twins
-            // around a are re-enqueued below with fresh priorities.
-            foreach (int neighbor in bNeighbors)
+            foreach (int neighbor in neighbors)
             {
                 if (_edgeIds.TryGetValue(EdgeKey(b, neighbor), out int id) && _queue.Contains(id))
                     _queue.Remove(id);
             }
-
-            foreach (int neighbor in NeighborVertices(a))
+            count = FillRing(a);
+            for (int i = 0; i < count; i++)
+            {
+                int neighbor = _mesh.Origin(_mesh.Twin(_ring[i]));
                 Enqueue(Math.Min(a, neighbor), Math.Max(a, neighbor));
+            }
         }
 
-        private HashSet<int> NeighborVertices(int v)
+        /// <summary>Normal-flip and degeneracy guard, identical in form to the original's.</summary>
+        private bool RingSurvivesMove(int vertex, in Vector3d newPosition, int skipFace0, int skipFace1)
         {
-            var neighbors = new HashSet<int>();
-            foreach (int f in _vertexFaces[v])
+            int count = FillRing(vertex);
+            for (int i = 0; i < count; i++)
             {
-                var (a, b, c) = _faces[f];
-                neighbors.Add(a);
-                neighbors.Add(b);
-                neighbors.Add(c);
+                int face = _mesh.FaceOf(_ring[i]);
+                if (face < 0 || face == skipFace0 || face == skipFace1)
+                    continue;
+                int h0 = _mesh.FaceHalfEdge(face);
+                int h1 = _mesh.Next(h0);
+                int h2 = _mesh.Next(h1);
+                int v0 = _mesh.Origin(h0), v1 = _mesh.Origin(h1), v2 = _mesh.Origin(h2);
+                var p0 = _mesh.GetPosition(v0);
+                var p1 = _mesh.GetPosition(v1);
+                var p2 = _mesh.GetPosition(v2);
+                var before = (p1 - p0).Cross(p2 - p0);
+                var q0 = v0 == vertex ? newPosition : p0;
+                var q1 = v1 == vertex ? newPosition : p1;
+                var q2 = v2 == vertex ? newPosition : p2;
+                var after = (q1 - q0).Cross(q2 - q0);
+                if (after.LengthSquared < _degenerateAreaSquared || before.Dot(after) <= 0)
+                    return false;
             }
-            neighbors.Remove(v);
-            return neighbors;
+            return true;
         }
 
-        public HalfEdgeMesh BuildResult()
+        private int FillRing(int vertex)
         {
-            var remap = new int[_positions.Count];
-            Array.Fill(remap, -1);
-            var positions = new List<Vector3d>();
-            var faces = new List<int[]>();
-            for (int f = 0; f < _faces.Count; f++)
-            {
-                if (!_faceAlive[f])
-                    continue;
-                var (a, b, c) = _faces[f];
-                if (a == b || b == c || c == a)
-                    continue;
-                int[] loop = [Map(a), Map(b), Map(c)];
-                faces.Add(loop);
-            }
-            return HalfEdgeMesh.Build(positions, faces);
-
-            int Map(int v)
-            {
-                if (remap[v] < 0)
-                {
-                    remap[v] = positions.Count;
-                    positions.Add(_positions[v]);
-                }
-                return remap[v];
-            }
+            int count;
+            while ((count = _mesh.OutgoingHalfEdges(vertex, _ring)) < 0)
+                _ring = new int[_ring.Length * 2];
+            return count;
         }
+
+        public HalfEdgeMesh BuildResult() => _mesh.ToMesh();
     }
 
     /// <summary>Symmetric 4×4 error quadric (10 unique coefficients).</summary>

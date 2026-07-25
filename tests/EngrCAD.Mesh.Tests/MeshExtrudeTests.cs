@@ -194,4 +194,44 @@ public class MeshExtrudeTests
         Assert.Throws<ArgumentOutOfRangeException>(() => MeshExtrude.Thicken(plane, 0));
         Assert.Throws<ArgumentOutOfRangeException>(() => MeshExtrude.Thicken(plane, -1));
     }
+
+    // ---- MeshFaceSelection overloads ----
+
+    [Fact]
+    public void Faces_SelectionOverload_MatchesTheIndexOverload()
+    {
+        var box = MeshPrimitives.Box(2, 2, 2).Triangulated();
+        var top = MeshFaceSelection.FromIndices(box, box.Faces.Where(f => f.Normal().Z > 0.9).Select(f => f.Index));
+        var offset = new Vector3d(0, 0, 0.5);
+
+        var fromIndices = MeshExtrude.Faces(box, top.Indices, offset);
+        var fromSelection = MeshExtrude.Faces(box, top, offset);
+
+        Assert.Equal(fromIndices.FaceCount, fromSelection.FaceCount);
+        Assert.Equal(fromIndices.Volume(), fromSelection.Volume(), 12);
+        Assert.Equal(box.Volume() + 2 * 2 * 0.5, fromSelection.Volume(), 12);
+    }
+
+    [Fact]
+    public void Faces_SelectionOverload_DistanceForm()
+    {
+        var box = MeshPrimitives.Box(2, 2, 2).Triangulated();
+        var top = MeshFaceSelection.FromIndices(box, box.Faces.Where(f => f.Normal().Z > 0.9).Select(f => f.Index));
+
+        var extruded = MeshExtrude.Faces(box, top, 0.5);
+
+        extruded.Validate();
+        Assert.True(extruded.IsClosed);
+        Assert.Equal(box.Volume() + 2 * 2 * 0.5, extruded.Volume(), 12);
+    }
+
+    [Fact]
+    public void Faces_SelectionFromAnotherMesh_Throws()
+    {
+        var box = MeshPrimitives.Box(2, 2, 2).Triangulated();
+        var other = MeshPrimitives.Box(2, 2, 2).Triangulated();
+        var selection = MeshFaceSelection.FromIndices(other, [0]);
+
+        Assert.Throws<ArgumentException>(() => MeshExtrude.Faces(box, selection, Vector3d.UnitZ));
+    }
 }
