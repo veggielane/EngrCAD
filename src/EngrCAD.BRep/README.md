@@ -41,6 +41,12 @@ operations. Depends only on `EngrCAD.Core`.
   generator, solving z(v) + pitch·u/2π = z_cap makes v (hence radius) linear in u —
   and is always built on the band's own axis frame so its parameter IS the surface u
   (phase alignment).
+  `LoftRailCurve` is the curve a fixed section parameter traces across a `LoftedSurface`
+  (the loft analogue of `SweptRailCurve`); it evaluates the surface itself rather than
+  re-interpolating the junction points, so a rail edge and the face's u = 0 grid column are
+  the same arithmetic. `PhaseShiftedCurve` moves a closed curve's seam,
+  P(t) = base(wrap(t + shift)) — how lofting aligns successive closed sections so the skin
+  does not twist; `Underlying` forwards (a shifted circle still samples as a circle).
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
@@ -54,7 +60,20 @@ operations. Depends only on `EngrCAD.Core`.
   P(u, v) = O + X·r(v)·cos u + Y·r(v)·sin u + Z·(z(v) + pitch·u/2π) with (r(v), z(v))
   linear from `ProfileStart` to `ProfileEnd`, u a finite turning-angle interval spanning
   all turns (NOT periodic — the axial advance makes every u distinct, so inverse
-  evaluation never wraps a seam), v ∈ [0, 1]. Exact analytic normals and exact
+  evaluation never wraps a seam), v ∈ [0, 1]; and `LoftedSurface` — the lateral skin of a
+  loft, P(u, v) = Σ α_k(v)·C_k(u_k) with u_k the section curve's own parameter at the
+  normalized u, both parameters over [0, 1]. The blend α is the **cardinal basis** of
+  B-spline interpolation (A[k][j] = N_{j,p}(v_k) at the section parameters,
+  α_k(v) = Σ_j N_{j,p}(v)·(A⁻¹)[j][k], degree p = min(3, sections − 1)): solving the
+  interpolation ONCE at construction is what makes a loft a surface at all — a chord-length
+  re-parameterization recomputed per u would give every strip its own v mapping and the
+  shared rails would disagree. α_k(v_j) = δ_jk is applied as an **exact-equality special
+  case**, so the tessellation grid's v = 0 / v = 1 rows reproduce the first and last section
+  curves bit-for-bit (they are also the shared cap and neighbour edges). `NaturalUSegments`
+  mirrors `BRepTessellator.SampleEdge`'s rules for the sections that ARE the face's u
+  boundaries — the rule lives on the surface because only it knows what its sections are.
+  Exact analytic `DerivativeU`/`DerivativeV`/`NormalAt`.
+  Exact analytic normals and exact
   closed-form `TryProjectPoint` (the point's angle fixes u up to whole turns, the axial
   coordinate solves v linearly; in-range v preferred so steep generators can't alias
   onto the neighboring turn; dz = 0 helicoid ramps solve v from the radius).
@@ -99,6 +118,25 @@ operations. Depends only on `EngrCAD.Core`.
   - `Revolve(profile, axisOrigin, axisDir, angle?, holes?)` — full turn (torus topology,
     no caps) or partial (planar caps; closed profiles give pipe elbows; holes allowed).
   - `Sweep(profile, path, holes?)` — rotation-minimizing frames along an open path.
+  - `Loft(sections, style)` — skins a closed solid through a list of planar sections
+    (OCCT `BRepOffsetAPI_ThruSections`): each corresponding pair of profile segments becomes
+    one `LoftedSurface` strip, junctions become `LoftRailCurve` rails, the first and last
+    sections are capped. `LoftStyle.Smooth` is one face per strip interpolating ALL sections
+    (intermediate sections leave no edge); `LoftStyle.Ruled` is a band of faces per interval
+    (every section is an edge loop). Two sections are the same solid either way.
+    **Compatibility is by segment index and normalized parameter** — sections must already
+    have the same segment count, and a mismatch is rejected with a message saying so rather
+    than being papered over (no degree elevation / knot merging yet). The one automatic fix
+    is representational: where one section's strip is straight and another's is curved, the
+    straight one is re-expressed as an exact degree-1 NURBS so both take the tessellator's
+    generic sampling rule and the grid welds. **Alignment** happens before skinning:
+    sections wound against the loft direction are reversed, multi-segment sections are
+    cyclically rotated to the least-twist segment pairing, and closed single-curve sections
+    get a continuous seam shift — all three minimize the same **centroid-relative** sum of
+    squared corner travel (leaving the sections' separation in that objective makes it a
+    large constant plus a tiny quadratic well, which measurably cost eight digits: a seam
+    shift resolved to only ~3e-9, i.e. 3e-8 of positional twist, past weld tolerance).
+    The v parameterization is global to the loft (mean chord length), never per strip.
   - `MakeThreadedRod(pitchProfile, pitch, length[, frame])` — a helically threaded rod
     whose entire lateral boundary is ONE co-rotating sweep of a per-pitch profile
     (boolean-free by design: winding a ridge onto a core cylinder would be the
@@ -114,6 +152,48 @@ operations. Depends only on `EngrCAD.Core`.
     Euler–Poincaré 0 at genus 0. Exact volume for ANY length:
     L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
 
+- **`Draft`** — draft angles (OCCT `BRepOffsetAPI_DraftAngle`), the moulding/casting taper:
+  `Draft.Apply(solid, neutralOrigin, pullDirection, angle, faceSelector?)` (or the
+  `neutralFace` overload, which pulls *into* the solid so drafting about a box's bottom face
+  narrows it going up). Each selected face's plane is **rotated about its neutral line** —
+  where it meets the neutral plane — by exactly `angle` toward the pull direction, and every
+  corner is then the exact algebraic intersection of three planes: the rotated normal is
+  `n·cos θ + p̂⊥·sin θ` (p̂⊥ = the pull direction's component in the face plane), and the
+  anchor slides along that same in-plane direction onto the neutral plane, so it lies on the
+  neutral line the rotation fixes. Nothing is offset, projected or fitted — a drafted box is
+  exactly a frustum, geometry ON the neutral plane provably does not move (it is the parting
+  line), and drafting twice by θ/2 equals drafting once by θ. Faces the selector does not
+  name keep their planes exactly; their corners still move, because the drafted neighbours
+  they meet did. The rebuild uses `PlaneSurface` faces (not a ruled loft), so the result
+  stays selectable by the same `BrepQueries` vocabulary and STEP-exportable.
+  v1 handles **planar-faced prisms** — two caps perpendicular to the pull direction,
+  single-loop caps, four-sided planar sides — and rejects everything else loudly: curved
+  faces, caps with holes, selecting a cap, and a taper large enough to fold the profile
+  (checked by winding *and* per-edge direction against the original loop, since a signed
+  area alone can stay positive while one edge has already reversed).
+- **`Shelling`** — offset solids and hollowing (OCCT `BRepOffsetAPI_MakeOffsetShape` /
+  `MakeThickSolid`): `Shelling.Offset(solid, distance)` moves every face along its own
+  normal (positive grows, negative shrinks) and `Shelling.Shell(solid, thickness,
+  openingSelector?)` hollows to walls of that thickness. For a **polyhedral** solid this is
+  exact with no approximation anywhere: an offset plane is a plane, and each offset vertex is
+  the algebraic intersection of the three planes that met there. Topology is carried over
+  verbatim, so hole loops and genus survive — offsetting a plate inward shrinks its outline
+  and *grows* its bore, because a bore wall's outward normal points into the bore.
+  Shelling adds the hollowing structure: the offset copy becomes an inward-facing inner
+  boundary (flipped plane axes + loops walked backwards with flipped senses, so it is
+  genuinely CCW about the flipped normal rather than an `IsReversed` flag), and each face
+  named as an opening contributes a **rim** face — the removed face's own loops as its outer
+  boundary (they supply the second use of every edge that face used to carry) plus the inner
+  opening as a hole. With no opening the cavity is sealed and the result is a **two-shell**
+  solid; with openings it is one shell, and two opposite openings give a genus-1 tube.
+  Rejections are loud: curved faces (a cylinder offsets to a cylinder and a revolve to the
+  revolve of an `OffsetCurve3d` generator, but their *corners* need surface–surface
+  re-intersection, not a three-plane solve), vertices where more than three faces meet (the
+  offset corner is over-determined and needs corner patches), adjacent openings (zero-width
+  rim), openings on a face with holes, multi-shell inputs, and an offset that locally folds
+  the solid. **Not** checked: an offset large enough to make distant surfaces pass through
+  each other with no local symptom — the same contract OCCT offers and `OffsetCurve3d`
+  already documents for curves.
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
   common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
@@ -277,7 +357,19 @@ two spiral cuts) and take the same path.
 ## Not yet implemented
 
 Coplanar/tangent boolean cases, general fillet chains with corner patches,
-NURBS surface export. `HelicalSurface` faces cannot be exported to STEP (same bucket
+NURBS surface export. Loft gaps: sections must already be segment-compatible (no degree
+elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
+close back on the first section, guide curves / spine, and the "pipe shell with evolution
+law" generalization (a section scaled and twisted along a spine — which is a loft whose
+sections are generated rather than given, so it lands on `LoftedSurface` once a law
+evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept surfaces).
+Draft gaps: curved faces (the general face-offset-and-reintersect), caps with holes,
+per-face angles in one call, and drafting about a non-planar neutral surface.
+Shelling gaps: curved faces (cylinders/revolves offset exactly, but their corners need
+surface–surface re-intersection), higher-valence vertices (corner patches — the same
+missing machinery as sharp-corner fillets), adjacent openings, variable per-face
+thickness, and global self-intersection detection.
+`HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have
 no tessellation path, and helical∩cylinder / helical∩helical intersections fall to

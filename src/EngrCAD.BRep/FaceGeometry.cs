@@ -40,6 +40,7 @@ public static class FaceGeometry
         RevolvedSurface r when r.IsFullTurn => 2 * Math.PI,
         ExtrudedSurface e when e.Generator.IsClosed => e.DomainU.Length,
         SweptSurface s when s.Generator.IsClosed => s.DomainU.Length,
+        LoftedSurface l when l.IsClosedU => l.DomainU.Length,
         _ => 0,
     };
 

@@ -45,7 +45,7 @@ public static class BRepTessellator
                 case HelicalSurface helical:
                     TessellateHelicalBand(face, helical, edgePolylines, polygons);
                     break;
-                case ExtrudedSurface or RevolvedSurface or SweptSurface:
+                case ExtrudedSurface or RevolvedSurface or SweptSurface or LoftedSurface:
                 {
                     var (uParams, vParams, closedU, closedV) = GridParams(face.Surface, segmentsPerCircle, curveSamples);
                     // Full-domain faces (the factories' and wrap-splitter's output) keep
@@ -181,6 +181,14 @@ public static class BRepTessellator
             CurveParams(swept.Generator, segmentsPerCircle, curveSamples),
             EvenParams(swept.Path.Domain, curveSamples, includeEnd: true),
             swept.Generator.IsClosed, false),
+        // A loft's u boundaries ARE its section curves and its v boundaries its rails, so
+        // the surface owns the u rule (see LoftedSurface.NaturalUSegments, which mirrors
+        // SampleEdge) and v takes the generic curve density the rails are sampled at.
+        LoftedSurface lofted => (
+            EvenParams(lofted.DomainU, lofted.NaturalUSegments(segmentsPerCircle, curveSamples),
+                includeEnd: !lofted.IsClosedU),
+            EvenParams(lofted.DomainV, curveSamples, includeEnd: true),
+            lofted.IsClosedU, false),
         _ => throw new NotSupportedException($"No grid sampling for {surface.GetType().Name}."),
     };
 
