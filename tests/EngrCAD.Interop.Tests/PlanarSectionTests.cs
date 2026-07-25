@@ -2,6 +2,7 @@ using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Core.Geometry2;
 using EngrCAD.Interop;
+using EngrCAD.Mesh;
 using Xunit;
 
 namespace EngrCAD.Interop.Tests;
@@ -188,6 +189,114 @@ public class PlanarSectionTests
 
         var error = Assert.Throws<NotSupportedException>(() => PlanarSection.OfSolid(box, PlaneAtZ(1)));
         Assert.Contains("flush", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ---- silhouettes: projection(cut = false) ----
+
+    [Fact]
+    public void BoxSilhouette_IsTheExactFootprint()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-5, -3, -2), (5, 3, 2)));
+
+        var outline = Assert.Single(
+            PlanarSection.SilhouetteOfMesh(BRepTessellator.Tessellate(box), PlaneAtZ(0)));
+
+        Assert.Equal(60.0, outline.Area, 12);
+        Assert.Equal(4, outline.Outer.Count);   // the top face's two triangles merged back
+        Assert.Empty(outline.Holes);
+    }
+
+    [Fact]
+    public void SphereSilhouette_ConvergesToItsGreatCircleFromBelow()
+    {
+        const double radius = 5;
+        var sphere = SolidFactory.MakeSphere(radius);
+        double exact = Math.PI * radius * radius;
+
+        var coarse = Assert.Single(
+            PlanarSection.SilhouetteOfMesh(BRepTessellator.Tessellate(sphere, 16, 12), PlaneAtZ(0)));
+        var fine = Assert.Single(
+            PlanarSection.SilhouetteOfMesh(BRepTessellator.Tessellate(sphere, 64, 48), PlaneAtZ(0)));
+
+        Assert.True(coarse.Area < fine.Area, "refining the mesh can only add outline area");
+        Assert.True(fine.Area < exact, "an inscribed mesh never exceeds the true disk");
+        Assert.InRange(fine.Area, exact * 0.998, exact);
+        Assert.Equal(64, fine.Outer.Count);
+    }
+
+    [Fact]
+    public void SilhouetteOfADrilledPlate_KeepsATHROUGHHoleAndDropsABlindOne()
+    {
+        var plate = SolidFactory.MakeBox(new Aabb((-10, -6, 0), (10, 6, 4)));
+        var through = SolidFactory.Extrude(
+            Profile.Circle((-5, 0, -1), Vector3d.UnitX, Vector3d.UnitY, 2), Vector3d.UnitZ * 6);
+        var blind = SolidFactory.Extrude(
+            Profile.Circle((5, 0, 2), Vector3d.UnitX, Vector3d.UnitY, 2), Vector3d.UnitZ * 3);
+        var drilled = BrepBoolean.Difference(BrepBoolean.Difference(plate, through), blind);
+
+        var outline = Assert.Single(
+            PlanarSection.SilhouetteOfMesh(BRepTessellator.Tessellate(drilled), PlaneAtZ(0)));
+
+        // Only the hole that goes all the way through interrupts the shadow.
+        var hole = Assert.Single(outline.Holes);
+        Assert.True(Region2d.SignedArea(hole) < 0);
+        Assert.InRange(outline.Area, 20 * 12 - Math.PI * 4, 20 * 12);
+        Assert.True(outline.Contains(new Vector2d(5, 0)), "the blind pocket casts no hole");
+        Assert.False(outline.Contains(new Vector2d(-5, 0)));
+    }
+
+    [Fact]
+    public void TorusSilhouette_AlongTheAxisIsAnAnnulus_AcrossTheAxisIsSolid()
+    {
+        const double major = 6, minor = 2;
+        var torus = BRepTessellator.Tessellate(SolidFactory.MakeTorus(major, minor), 64, 48);
+
+        var down = Assert.Single(PlanarSection.SilhouetteOfMesh(torus, PlaneAtZ(0)));
+        var across = Assert.Single(PlanarSection.SilhouetteOfMesh(
+            torus, Frame3d.FromOrthonormal(Vector3d.Zero, Vector3d.UnitY, Vector3d.UnitZ)));
+
+        Assert.Single(down.Holes);
+        double annulus = Math.PI * ((major + minor) * (major + minor) - (major - minor) * (major - minor));
+        Assert.InRange(down.Area, annulus * 0.99, annulus);
+
+        // Side on, the outline is {|z| <= r, |x| <= R + sqrt(r^2 - z^2)}: a rectangle with
+        // two half-discs on the ends, and no MEANINGFUL hole. This is the view where every
+        // quad is nearly edge-on, and the 2D boolean can leave a pinhole of ~1e-7 of the
+        // outline at such near-tangencies (a known limitation, documented in the Interop
+        // README) -- so the assertion is on hole AREA, not hole count.
+        double sideOn = 4 * major * minor + Math.PI * minor * minor;
+        double pinholes = across.Holes.Sum(h => Math.Abs(Region2d.SignedArea(h)));
+        Assert.True(pinholes < 1e-5 * across.Area, $"unexpected hole area {pinholes} in the side-on outline");
+        Assert.InRange(across.Area, sideOn * 0.98, sideOn);
+    }
+
+    [Fact]
+    public void SilhouetteOfAnOpenMesh_KeepsEveryFace()
+    {
+        // Back-face dropping is exact only because a closed body's shadow is covered by its
+        // front faces. An open mesh gets no such guarantee, so nothing is dropped: half a
+        // box, open at the top, still casts the box's full footprint.
+        var box = SolidFactory.MakeBox(new Aabb((-5, -3, -2), (5, 3, 2)));
+        var openHalf = MeshPlaneCut.Cut(
+            BRepTessellator.Tessellate(box), Vector3d.Zero, Vector3d.UnitZ, cap: false).Mesh;
+        Assert.False(openHalf.IsClosed);
+
+        var outline = Assert.Single(PlanarSection.SilhouetteOfMesh(openHalf, PlaneAtZ(0)));
+
+        Assert.Equal(60.0, outline.Area, 12);
+    }
+
+    [Fact]
+    public void SilhouetteOfTwoSeparateBodies_IsTwoRegions()
+    {
+        var pair = BrepBoolean.Union(
+            SolidFactory.MakeBox(new Aabb((-8, -2, -2), (-4, 2, 2))),
+            SolidFactory.MakeBox(new Aabb((4, -2, -2), (8, 2, 2))));
+
+        var outline = PlanarSection.SilhouetteOfMesh(BRepTessellator.Tessellate(pair), PlaneAtZ(0));
+
+        Assert.Equal(2, outline.Count);
+        Assert.Equal(2 * 4 * 4.0, TotalArea(outline), 9);
     }
 
     [Fact]

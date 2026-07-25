@@ -553,6 +553,19 @@ public abstract class Shape
             ? PlanarSection.OfSolid(ToBrep(), plane.Frame, chordTolerance)
             : PlanarSection.OfMesh(ToMesh(quality), plane.Frame);
 
+    /// <summary>
+    /// The OUTLINE the shape casts along <paramref name="plane"/>'s normal, as 2D regions
+    /// in the plane's coordinates — OpenSCAD's <c>projection(cut = false)</c>. A through
+    /// hole survives as a hole; a blind pocket or an internal cavity does not (there is
+    /// material in front of it).
+    ///
+    /// <para>Computed from the mesh at <paramref name="quality"/> — a silhouette is the
+    /// union of the projected faces, so its fidelity is the mesh's, and a finer mesh costs
+    /// more union work. See <see cref="PlanarSection.SilhouetteOfMesh"/> for the cost.</para>
+    /// </summary>
+    public IReadOnlyList<Region2d> Silhouette(SketchPlane plane, MeshQuality? quality = null) =>
+        PlanarSection.SilhouetteOfMesh(ToMesh(quality), plane.Frame);
+
     private void ThrowIfImpossible(TargetRep target)
     {
         var report = Explain(target);

@@ -166,6 +166,10 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   section). Exact geometry when the shape lowers to B-Rep, otherwise from the display
   mesh; cavities become holes automatically. Move the plane off any flush face or
   in-plane edge: a section running along a face is an area, not a curve, and is refused.
+- **`shape.Silhouette(plane, quality)`** is the OUTLINE the shape casts along the plane's
+  normal (`projection(cut = false)`) — a through hole survives as a hole, a blind pocket
+  does not. Always from the mesh (a silhouette is the union of the projected faces), so
+  fidelity and cost both follow the mesh quality; see the Interop README for the numbers.
 
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,

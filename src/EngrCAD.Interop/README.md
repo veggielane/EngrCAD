@@ -155,6 +155,47 @@ Degenerate placements are refused with guidance rather than answered plausibly: 
 **containing a whole edge** (a sphere cut exactly at its equator — the section runs along
 two faces' shared boundary, where every probe is a tie).
 
+### Silhouettes (`PlanarSection.SilhouetteOfMesh`)
+
+`projection(cut = false)`: the outline a body casts along the plane's normal. A through
+hole survives as a hole; a blind pocket or an internal cavity does not. Every face's
+projection is a region and the silhouette is their union — three things make that
+affordable, and the ordering matters far more than the face count:
+
+1. **Back faces are dropped first**, halving the input. EXACT for a closed mesh and only
+   for a closed mesh: a ray along the normal leaves the solid through a front-facing face,
+   so the front-facing projections already cover the whole outline. An open mesh keeps
+   every face, because that argument does not hold.
+2. **Faces are Morton-sorted by projected centroid**, so the fold merges neighbours first
+   and intermediate boundaries stay simple. Merging face 1 with face 900 produces two
+   disjoint regions and no cancellation at all.
+3. **The fold is `Region2dBoolean.UnionAll`'s balanced tree.**
+
+Measured on a torus tessellated at 64 segments (3072 front-facing faces): Morton-sorted
+balanced tree **67 ms**, unsorted balanced tree **2.4 s** (36×), linear accumulate
+**259 s** (3800×). A 128-segment sphere (12k front-facing faces) takes ~240 ms. Mesh
+fidelity is the knob — the union is exact for whatever mesh it is given.
+
+**Projected coordinates are quantized to 1e-12 of the outline's extent** before the union
+(`PlanarSection.SilhouetteGrid`, the scale-free tier — never an absolute weld tolerance),
+and this is load-bearing. Two mesh vertices on the same feature line — a torus's latitude
+ring, a cylinder's rim — are only equal to within ULPS once projected, since each was
+evaluated independently. Two edges that should be collinear then sit ~2e-16 apart: far too
+small for the arrangement to see as a T-junction, far too large to ignore. The sliver cell
+left between them is one ULP thick, so its interior sample rounds back onto its own
+boundary, and the union's answer starts to depend on the merge order (measured: a
+16-segment torus viewed side-on came out 60.42 unsorted and 59.33 Morton-sorted, the truth
+being 60.42) — a 64-segment one threw "boundary tracing hit a dead end" outright. Snapping
+to a grid ~4500 ULPs wide collapses those pairs to identical doubles, the arrangement
+dedupes them as coincident edges, and no sliver is ever built. It is nine orders below the
+chord tolerance a polygonal region carries anyway.
+
+**Known limitation**: in near-tangent views (a torus seen side-on, where every quad is
+almost edge-on) the 2D boolean can still leave a **pinhole** of ~1e-7 of the outline area.
+Areas are correct to 6 significant figures and order-independent; only the hole COUNT is
+unreliable there, so filter holes by area if that matters. The residual cause is cell
+classification in `Region2dBoolean` at near-tangency, not the silhouette.
+
 ## Planar iso-contours (`SdfContours`)
 
 `SdfContours.OnPlane(sdf, origin, uSide, vSide, uSamples, vSamples, levels)` samples an

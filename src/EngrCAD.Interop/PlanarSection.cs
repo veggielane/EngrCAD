@@ -138,6 +138,176 @@ public static class PlanarSection
         return Region2d.FromLoops(loops);
     }
 
+    /// <summary>
+    /// The SILHOUETTE of a mesh viewed along the plane's normal — OpenSCAD's
+    /// <c>projection(cut = false)</c>: the outline the body would cast, as 2D regions in the
+    /// plane's coordinates. Internal cavities that do not reach the outline disappear (they
+    /// are covered by the material in front of them); a through-hole survives as a hole.
+    ///
+    /// <para><b>Approach and cost.</b> Every triangle's projection is a region and the
+    /// silhouette is their union — but unioning thousands of triangles naively is the
+    /// expensive way to do anything in 2D, so three things shape the work:</para>
+    /// <list type="number">
+    /// <item><b>Back-facing triangles are dropped first</b>, halving the input. This is
+    /// EXACT for a closed mesh and only for a closed mesh: a ray along the normal through
+    /// any point of the shadow leaves the solid through a front-facing triangle, so the
+    /// front-facing projections already cover the whole outline. An open mesh keeps every
+    /// triangle, because that argument does not hold.</item>
+    /// <item><b>Triangles are Morton-sorted by projected centroid</b>, so the fold merges
+    /// neighbours first and intermediate boundaries stay simple. Sorting is what makes the
+    /// tree pay: merging triangle 1 with triangle 900 produces two disjoint regions and no
+    /// cancellation at all.</item>
+    /// <item><b>The fold is <see cref="Region2dBoolean.UnionAll"/>'s balanced tree</b>, and
+    /// each merge discards its children's interior edges before climbing — which is why the
+    /// cost grows with the OUTLINE's complexity rather than the triangle count.</item>
+    /// </list>
+    ///
+    /// <para><b>Projected coordinates are quantized</b> to <see cref="SilhouetteGrid"/> times
+    /// the outline's extent before the union — see that constant. Without it the answer
+    /// depends on the merge order, and the tracer can dead-end outright.</para>
+    ///
+    /// <para>Being honest about the cost: the union dominates, and its shape matters far more
+    /// than the triangle count. Measured on a torus tessellated at 64 segments (3072
+    /// front-facing faces): Morton-sorted balanced tree <b>67 ms</b>, unsorted balanced tree
+    /// <b>2.4 s</b>, linear accumulate <b>259 s</b>. A 128-segment sphere (12k front-facing
+    /// faces) takes ~240 ms. Tessellate coarsely when an approximate outline will do — the
+    /// union is exact for whatever mesh it is given, so mesh fidelity is the knob.</para>
+    /// </summary>
+    public static IReadOnlyList<Region2d> SilhouetteOfMesh(HalfEdgeMesh mesh, in Frame3d plane)
+    {
+        ArgumentNullException.ThrowIfNull(mesh);
+        var normal = plane.Z;
+        bool closed = mesh.IsClosed;
+
+        // Pass 1: project, cull, and measure the extent (which sets the quantization step).
+        var projected = new List<List<Vector2d>>(mesh.FaceCount);
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        for (int f = 0; f < mesh.FaceCount; f++)
+        {
+            var face = mesh.GetFace(f);
+            // Drop back faces on a closed mesh (see the remarks) — and drop nothing on an
+            // open one, where the covering argument fails.
+            if (closed && face.NormalRaw.Dot(normal) <= 0)
+                continue;
+
+            var loop = new List<Vector2d>(3);
+            foreach (var vertex in face.Vertices())
+            {
+                var flat = Flat(plane, vertex.Position);
+                loop.Add(flat);
+                minX = Math.Min(minX, flat.X);
+                minY = Math.Min(minY, flat.Y);
+                maxX = Math.Max(maxX, flat.X);
+                maxY = Math.Max(maxY, flat.Y);
+            }
+            if (loop.Count >= 3)
+                projected.Add(loop);
+        }
+        if (projected.Count == 0)
+            return [];
+
+        double grid = Math.Max(maxX - minX, maxY - minY) * SilhouetteGrid;
+
+        // Pass 2: quantize, drop the edge-on faces, and note the centroids for the sort.
+        var faces = new List<(Vector2d[] Loop, Vector2d Centre)>(projected.Count);
+        var bounds = Aabb.Empty;
+        foreach (var loop in projected)
+        {
+            var snapped = new Vector2d[loop.Count];
+            var centre = Vector2d.Zero;
+            for (int i = 0; i < loop.Count; i++)
+            {
+                snapped[i] = Quantize(loop[i], grid);
+                centre += snapped[i];
+            }
+            // Exact-zero test: a face projecting edge-on covers no area at all.
+            if (Region2d.SignedArea(snapped) == 0)
+                continue;
+            centre /= snapped.Length;
+            faces.Add((snapped, centre));
+            bounds = bounds.Union((centre.X, centre.Y, 0));
+        }
+        if (faces.Count == 0)
+            return [];
+
+        var sorted = MortonOrder(faces, bounds);
+        var regions = new List<Region2d>(sorted.Count);
+        foreach (int index in sorted)
+            regions.Add(new Region2d(faces[index].Loop));
+        return Region2dBoolean.UnionAll(regions);
+    }
+
+    /// <summary>
+    /// Quantization step for silhouette coordinates, RELATIVE to the outline's extent
+    /// (the scale-free tier — never an absolute weld tolerance).
+    ///
+    /// <para><b>Why it is needed.</b> Two mesh vertices that lie on the same feature line —
+    /// a torus's latitude ring, a cylinder's rim — are only equal to within ULPS once
+    /// projected, because each was evaluated independently. Two edges that should be
+    /// collinear then sit ~2e-16 apart, which is far too small for the arrangement's
+    /// crossing logic to see as a T-junction and far too large to ignore: it leaves a sliver
+    /// cell one ULP thick, whose interior sample rounds back onto its own boundary.
+    /// Downstream, the union's answer starts to depend on the merge order (measured: a
+    /// 16-segment torus viewed side-on came out 60.42 unsorted and 59.33 Morton-sorted, the
+    /// truth being 60.42), and a 64-segment one threw "boundary tracing hit a dead end"
+    /// outright. Snapping to a grid ~4500 ULPs wide collapses those pairs to identical
+    /// doubles, so the arrangement dedupes them as coincident edges and no sliver is ever
+    /// built. With it, every merge order agrees and the areas converge cleanly on the
+    /// analytic value.</para>
+    ///
+    /// <para>1e-12 of the extent is nine orders below the chord tolerance a polygonal region
+    /// carries anyway, so it cannot move a boundary a caller could notice.</para>
+    /// </summary>
+    public const double SilhouetteGrid = 1e-12;
+
+    private static Vector2d Quantize(in Vector2d point, double grid) =>
+        grid > 0                                   // exact-zero guard: a degenerate extent
+            ? new Vector2d(Math.Round(point.X / grid) * grid, Math.Round(point.Y / grid) * grid)
+            : point;
+
+    private static Vector2d Flat(in Frame3d plane, in Vector3d point)
+    {
+        var local = plane.ToLocal(point);
+        return new Vector2d(local.X, local.Y);
+    }
+
+    /// <summary>Indices in Morton (Z-curve) order of the projected centroids, quantized to
+    /// 16 bits per axis over the centroid bounds — spatial locality so the balanced union
+    /// merges neighbours first.</summary>
+    private static List<int> MortonOrder(
+        List<(Vector2d[] Loop, Vector2d Centre)> faces, in Aabb bounds)
+    {
+        double spanX = bounds.Max.X - bounds.Min.X;
+        double spanY = bounds.Max.Y - bounds.Min.Y;
+        double scaleX = spanX > 0 ? 65535.0 / spanX : 0;   // exact-zero guard: a degenerate
+        double scaleY = spanY > 0 ? 65535.0 / spanY : 0;   // span puts everything in bucket 0
+        double minX = bounds.Min.X, minY = bounds.Min.Y;
+
+        var keys = new uint[faces.Count];
+        var order = new List<int>(faces.Count);
+        for (int i = 0; i < faces.Count; i++)
+        {
+            uint x = (uint)Math.Clamp((faces[i].Centre.X - minX) * scaleX, 0, 65535);
+            uint y = (uint)Math.Clamp((faces[i].Centre.Y - minY) * scaleY, 0, 65535);
+            keys[i] = Interleave(x) | (Interleave(y) << 1);
+            order.Add(i);
+        }
+        order.Sort((p, q) => keys[p].CompareTo(keys[q]));
+        return order;
+    }
+
+    /// <summary>Spreads the low 16 bits of x so every other bit is zero (Morton part1by1).</summary>
+    private static uint Interleave(uint x)
+    {
+        x &= 0x0000FFFF;
+        x = (x | (x << 8)) & 0x00FF00FF;
+        x = (x | (x << 4)) & 0x0F0F0F0F;
+        x = (x | (x << 2)) & 0x33333333;
+        x = (x | (x << 1)) & 0x55555555;
+        return x;
+    }
+
     // ---- mesh helpers ----
 
     private static bool StraddlesPlane(HalfEdgeMesh mesh, in Vector3d origin, in Vector3d normal)
