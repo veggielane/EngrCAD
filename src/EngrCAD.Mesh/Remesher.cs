@@ -87,6 +87,15 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     public double FeatureAngleDegrees { get; init; } = 30;
 
     /// <summary>
+    /// Whether an edge with two pinned ends may still be split. True (the default) lets a
+    /// constrained chain gain resolution without moving — the midpoint lies on the chain
+    /// itself. Set false when the pinned ring must come out vertex for vertex, which is what
+    /// a patch that has to be stitched back into a surrounding mesh needs: an extra ring
+    /// vertex there is a T-junction.
+    /// </summary>
+    public bool SplitFixedEdges { get; init; } = true;
+
+    /// <summary>
     /// Extra vertices to pin, by index into the <b>input</b> mesh. Indices survive the
     /// internal triangulation (it never renumbers vertices) and pinned vertices are never
     /// removed, so these stay valid for the whole remesh.
@@ -443,6 +452,8 @@ public static class Remesher
         private bool TrySplit(int he, int a, int b)
         {
             bool inherit = IsFixed(a) && IsFixed(b);
+            if (inherit && !_options.SplitFixedEdges)
+                return false;
             if (_mesh.SplitEdge(he, out var info) != MeshOperationResult.Ok)
                 return false;
             EnsureVertexCapacity();
