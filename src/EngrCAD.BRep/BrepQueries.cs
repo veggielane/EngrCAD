@@ -240,6 +240,19 @@ public static class BrepQueries
     public static IEnumerable<BrepEdge> Edges(this BrepFace face) =>
         face.Loops.SelectMany(l => l.Coedges).Select(c => c.Edge).Distinct();
 
+    /// <summary>
+    /// The edges of a face's OUTER loop only — its rim, excluding hole loops. This is the
+    /// unit rim chamfering and filleting operate on, so it is the selector to reach for
+    /// when addressing a feature by edges rather than by face.
+    /// </summary>
+    public static IEnumerable<BrepEdge> RimEdges(this BrepFace face) =>
+        face.OuterLoop.Coedges.Select(c => c.Edge).Distinct();
+
+    /// <summary>The solid's convex edges — the ones a chamfer or fillet removes material
+    /// from (see <see cref="IsConvex"/>).</summary>
+    public static IEnumerable<BrepEdge> ConvexEdges(this BrepSolid solid) =>
+        solid.Edges.Where(e => solid.IsConvex(e));
+
     /// <summary>The faces sharing an edge (2 on a manifold interior edge; possibly one
     /// face twice for seam edges).</summary>
     public static IReadOnlyList<BrepFace> FacesOf(this BrepSolid solid, BrepEdge edge)

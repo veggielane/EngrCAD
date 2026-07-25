@@ -299,6 +299,95 @@ operations. Depends only on `EngrCAD.Core`.
   into band sub-faces — pulled signed area is meaningless for them (the hemisphere
   band between a bitten equator and an untouched cap ring is the canonical case).
 
+- **`Filleting`** — rim chamfering and filleting as topology surgery on an existing solid
+  (no booleans): the outer rim of a planar face is replaced by a bevel or blend band, the
+  face shrinks, and the neighbours drop.
+  - **Chamfer** — straight rim edges become planar strips that MITER at sharp corners
+    (both strips contain the straight corner segment, so it is their shared edge by
+    construction); a full circular rim becomes an exact cone band. Sizing is two setbacks
+    (`ChamferRim`) or the "distance and angle" spelling `ChamferRimAtAngle(setback,
+    degrees)` — setback measured IN the chamfered face, angle measured FROM it, 45° being
+    the symmetric case.
+  - **Fillet** — a full circular rim becomes an exact quarter-torus (`FilletEdge`); a
+    tangent-continuous chain of lines and arcs becomes quarter-cylinder and
+    quarter-torus-segment bands sharing circular junction arcs; and a **sharp corner
+    between two straight rim edges MITERS on an exact ellipse**. Two equal-radius quarter
+    cylinders whose axes intersect are a bicylinder, whose intersection is two ellipses;
+    the branch through this corner has semi-axes `up·r` (vertical) and `bottom − centre`
+    (horizontal, length `r/cos(Δ/2)` for a turn of Δ) — perpendicular by construction, so
+    the exact conic is read straight off the two points the surgery already computed, with
+    no trigonometry to round off. The circular junction arc is literally the
+    `|bottom − centre| = r` specialization. Reflex corners work too (their bands reach
+    PAST the edge's end to meet the miter, so the band surface is built to span it).
+    A sharp corner at an ARC is refused: that blend pairs a torus with a cylinder and is
+    not a conic.
+    <br/>**Why a miter and not a ball.** A spherical patch is the classic corner where
+    THREE blended edges meet. At a rim corner only two are blended — the two side faces
+    keep their sharp shared edge — and a sphere of the fillet radius there is tangent to
+    all three planes at single points, so at the tangency plane the cross-section would
+    jump from a rounded corner to a sharp one. The miter is the only surface that closes
+    the two-blended-edge configuration, and it is exactly what the union of the two edges'
+    removed slivers produces: the cross-section at depth t is the face inset by
+    δ(t) = r − √(r² − t²) with sharp corners, which makes the volume of a filleted prism
+    analytic through the offset-polygon law
+    `V = A₀·h − P₀·r²(1 − π/4) + (Σ tan(θᵢ/2))·r³(5/3 − π/2)` — signed turns, so reflex
+    corners are covered by the same formula.
+  - **Whole-solid filleting** (`FilletAllEdges`) is the OTHER classic corner: three blended
+    edges meeting at a vertex, which is where the spherical patch belongs. It is built as
+    the exact morphological opening (K ⊖ B_r) ⊕ B_r — for a convex polyhedron, erode every
+    face plane inward by r, then dilate — so it needs no booleans and nothing to seal:
+    every face keeps its own plane with a shrunk boundary, every edge becomes a cylindrical
+    band about the ERODED edge line, and every vertex becomes a spherical patch on the
+    ERODED vertex, bounded by great-circle arcs. Each curve is created once and handed to
+    both of its faces, so senses follow mechanically and the result is manifold by
+    construction (a box gives 6 + 12 + 8 = 26 faces, 48 edges, 24 vertices). Every face is
+    FULL-DOMAIN, so it all tessellates on the natural grid and the volume converges
+    quadratically onto Steiner's formula
+    `V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³` — the last term because the eight octants
+    are exactly one ball. Refused loudly: concave edges (an opening cannot round them),
+    vertices of valence ≠ 3, and corners where no incident face is perpendicular to the
+    other two. That last restriction is what keeps the patch an exact surface of
+    revolution — the spherical triangle is then the lune between two meridians of that
+    face's normal, closed by an equatorial great circle — and it holds for every box, every
+    convex prism, and every sheared box. A general trihedral corner's spherical triangle
+    has no exact revolved form, and there is no other tessellable surface type for it.
+    <br/>All the corner arcs are `CurveSegment` over `Circle3d`, never rational NURBS arcs:
+    the patch is a surface of revolution sampled at even ANGLES, so an arc parameterized
+    any other way samples to different points and the patch stops welding to its band.
+    <br/>Known gap: `StepWriter` exports these solids correctly (a STEP
+    `SURFACE_OF_REVOLUTION` is unbounded by definition and the face boundary trims it), but
+    `StepReader` cannot re-trim a CLOSED generator when the swept angle came from rails —
+    the corner patches' meridian boundaries are circles through the axis, which no rim rule
+    recognizes — so a re-imported rounded solid meshes non-manifold. The reader now emits a
+    diagnostic saying exactly that instead of failing silently. Second known gap:
+    `BrepBoolean` cannot yet cut a whole-solid fillet (a fragment's re-surfaced sub-band
+    loses the corner arcs from its domain); the solid itself is sound — every loop point
+    projects inside its own face's domain, which is a locked test — so this is a boolean
+    limitation, not a construction one. Mitered RIM fillets do cut correctly.
+  - **Selection** — by face (`FilletRim`/`ChamferRim`) or by EDGE (`FilletEdges`/
+    `ChamferEdges`, and `RimFacesFor` which resolves a selection into the rim features
+    that reproduce it). A complete planar face rim resolves; a partial run does not, and is
+    refused before any surgery runs, because a band that stops partway along a rim has to
+    terminate somewhere and every exact termination is a different surface. Filleting EVERY
+    edge of a convex solid is refused for the same reason in reverse: its vertices need the
+    spherical corner patch, which is a different construction from rim surgery.
+  - Numerical rules the surgery depends on (all learned from real cracks): rim circles come
+    from EDGE SAMPLES (`ActualCircle`), never from `Underlying` — a translated extrusion
+    top's underlying circle sits at the base; every new rim edge is built in the top face's
+    traversal direction, which fixes every sense mechanically; domain-driven neighbour
+    surfaces (extruded/revolved) must be re-TRIMMED, since their tessellation grids ignore
+    the loops; arc corner offsets are computed from the arc's own radial, because
+    finite-difference tangents carry ~1e-9 of angular error — enough to rotate a band
+    generator past the weld tolerance; and a band whose loop was mitered must still SPAN
+    every loop point in its surface domain, for the same grid reason.
+  - Tessellation note: mitered bands are genuinely trimmed faces (their loops cut across
+    the parameter rectangle), so they take `TrimmedFaceTessellator`'s ear-clip + midpoint
+    refinement rather than the natural grid. That is correct but costly — the refinement
+    fills the band with an O(curveSamples²) triangulation where a strip of
+    O(curveSamples) would do, and it leaves the mesh volume a few parts in 10⁵ under the
+    exact one at default quality. A dedicated strip path for extruded trimmed bands in
+    `BRepTessellator` is the follow-up.
+
 - **STEP export/import** — `StepWriter.Write/WriteFile` (ISO 10303-21 AP214
   `MANIFOLD_SOLID_BREP`; analytic surfaces/curves, rational NURBS via the
   complex-instance form, wrapper-curve simplification; swept surfaces not exportable)
@@ -356,8 +445,20 @@ two spiral cuts) and take the same path.
 
 ## Not yet implemented
 
-Coplanar/tangent boolean cases, general fillet chains with corner patches,
-NURBS surface export. Loft gaps: sections must already be segment-compatible (no degree
+Coplanar/tangent boolean cases,
+NURBS surface export. Filleting gaps, all refused loudly rather than approximated:
+**spherical corner patches on non-perpendicular trihedral vertices** (`FilletAllEdges`
+covers the perpendicular ones — boxes, convex prisms — which is where an exact surface of
+revolution exists), **partial edge runs** (a band that stops mid-rim needs a
+termination surface — cliff, setback or vertex blend — that this engine does not build),
+**sharp corners at arc rim edges** (torus ∩ cylinder is not a conic), and
+**variable-radius fillets**: the band itself would be exact — a linear radius law between
+two equal-weight rational arcs is a degree-(2,1) NURBS whose v-sections are true circles,
+and it stays G1 with both neighbours — but the corner where two such bands meet is the
+intersection of two non-cylindrical surfaces, which is not a conic, so there is no exact
+miter to weld them on. Variable-SETBACK chamfers do not have that problem (the corner
+segment is a boundary ruling of both bilinear strips) and are the cheaper next step.
+Loft gaps: sections must already be segment-compatible (no degree
 elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution
 law" generalization (a section scaled and twisted along a spine — which is a loft whose
@@ -366,8 +467,8 @@ evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept 
 Draft gaps: curved faces (the general face-offset-and-reintersect), caps with holes,
 per-face angles in one call, and drafting about a non-planar neutral surface.
 Shelling gaps: curved faces (cylinders/revolves offset exactly, but their corners need
-surface–surface re-intersection), higher-valence vertices (corner patches — the same
-missing machinery as sharp-corner fillets), adjacent openings, variable per-face
+surface–surface re-intersection — the same missing machinery as the non-perpendicular
+corner patches above), higher-valence vertices, adjacent openings, variable per-face
 thickness, and global self-intersection detection.
 `HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band

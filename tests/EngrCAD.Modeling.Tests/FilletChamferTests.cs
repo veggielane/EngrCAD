@@ -97,11 +97,84 @@ public class FilletChamferTests
     }
 
     [Fact]
-    public void SharpCornerFillet_ThrowsWithGuidance()
+    public void SharpCornerFillet_MitersOnExactEllipses()
     {
-        var shape = Shape.Box(2, 2, 1).Fillet(0.2, Top);
+        // The corners of a box top are sharp: the two quarter-cylinder bands miter on the
+        // exact bicylinder ellipse. Volume by the offset-polygon law (see
+        // Interop's FilletCornerVolumeTests for the derivation).
+        double w = 2, d = 2, h = 1, r = 0.2;
+        var solid = Shape.Box(w, d, h).Fillet(r, Top).ToBrep();
+        solid.Validate();
+        Assert.Equal(4, solid.Edges.Count(e => e.Curve is Ellipse3d));
+
+        var mesh = BRepTessellator.Tessellate(solid, 64, 32);
+        Assert.True(mesh.IsClosed);
+        double exact = w * d * h
+            - 2 * (w + d) * r * r * (1 - Math.PI / 4)
+            + 4 * r * r * r * (5.0 / 3 - Math.PI / 2);
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 3e-4,
+            $"filleted box volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void SharpCornerAtAnArc_StillThrowsWithGuidance()
+    {
+        // A slot's straight side meets its end arc tangentially, so a slot fillets fine;
+        // a sketch whose arc meets a line at an angle has no exact blend there.
+        var sketch = Sketch.Start(0, 0).LineTo(2, 0).ArcTo(new Vector2d(0, 2), 2, clockwise: false).Close();
+        var shape = Shape.Extrude(sketch, 1).Fillet(0.2, Top);
         var exception = Assert.Throws<NotSupportedException>(() => shape.ToBrep());
-        Assert.Contains("tangent-continuous", exception.Message);
+        Assert.Contains("sharp corner at an arc", exception.Message);
+    }
+
+    [Fact]
+    public void ChamferAtAngle_ExactVolume()
+    {
+        // Setback a in the top face, angle θ from it ⇒ the neighbours drop b = a·tan θ.
+        // Every face stays planar, so the slice integral is exact:
+        // V = w·d·h − a·b·(w+d) + 4a²b/3.
+        double w = 4, d = 3, h = 2, a = 0.5, degrees = 30;
+        double b = a * Math.Tan(degrees * Math.PI / 180);
+        var solid = Shape.Box(w, d, h).ChamferAtAngle(a, degrees, Top).ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid);
+        Assert.True(mesh.IsClosed);
+        double exact = w * d * h - a * b * (w + d) + 4 * a * a * b / 3;
+        Assert.True(Math.Abs(mesh.Volume() - exact) < 1e-9, $"volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void EdgeSelectedFillet_MatchesTheFaceSelector()
+    {
+        var byFace = Shape.Box(4, 3, 2).Fillet(0.4, Top);
+        var byEdges = Shape.Box(4, 3, 2).FilletEdges(0.4, s => Top(s).SelectMany(f => f.RimEdges()));
+        double faceVolume = BRepTessellator.Tessellate(byFace.ToBrep(), 64, 32).Volume();
+        double edgeVolume = BRepTessellator.Tessellate(byEdges.ToBrep(), 64, 32).Volume();
+        Assert.Equal(faceVolume, edgeVolume, 12);
+    }
+
+    [Fact]
+    public void EdgeSelectedChamfer_BothRims_ExactVolume()
+    {
+        // Selecting edges from two rims at once: each removes a·b·(w+d) − 4a²b/3.
+        double w = 4, d = 3, h = 2, c = 0.3;
+        var shape = Shape.Box(w, d, h).ChamferEdges(c, s =>
+            s.PlanarFacesWithNormal(Vector3d.UnitZ).Concat(s.PlanarFacesWithNormal(-Vector3d.UnitZ))
+                .SelectMany(f => f.RimEdges()));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid);
+        Assert.True(mesh.IsClosed);
+        double exact = w * d * h - 2 * (c * c * (w + d) - 4 * c * c * c / 3);
+        Assert.True(Math.Abs(mesh.Volume() - exact) < 1e-9, $"volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void EdgeSelection_ThatIsNotACompleteRim_Throws()
+    {
+        var shape = Shape.Box(2, 2, 1).FilletEdges(0.2, s => Top(s).SelectMany(f => f.RimEdges()).Take(1));
+        var exception = Assert.Throws<NotSupportedException>(() => shape.ToBrep());
+        Assert.Contains("complete rims", exception.Message);
     }
 
     [Fact]
