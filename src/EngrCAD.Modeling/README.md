@@ -129,6 +129,19 @@ revolve axis (vases, domes) work everywhere on full turns: on-axis stretches rev
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
 
+**Degeneracy guards scale with the sketch.** A sketch's units and scale are entirely the
+caller's choice — a micron seal groove and a metre weldment go through the same
+constructor — so its degeneracy tests are RELATIVE (`Sketch.RelativeDegeneracy`, 1e-12):
+the enclosed area is compared against the sketch's extent², an arc chord against its
+endpoints' coordinate magnitude, and `ArcThrough`'s circumcenter determinant (four times
+a signed triangle area, hence quadratic) against that magnitude squared. Absolute floors
+were wrong in both directions at once — they rejected a legitimate 1 µm × 0.5 µm pocket
+as "encloses no area" while accepting a 1000 × 1e-10 sliver, and called a perfectly good
+micron-scale 3-point arc collinear while building a radius-1e15 circle from three
+metre-scale points that were collinear to round-off. Two things stay absolute on purpose:
+sketch **closure** (1e-9, the weld tier — those endpoints become exactly shared vertices
+downstream) and the arc **sweep** guards (1e-12 rad; angles are dimensionless).
+
 ### 2D regions and sketch booleans
 
 Sketches also lower to **polygonal `Region2d`s** (Core's `Geometry2` — outer loop +

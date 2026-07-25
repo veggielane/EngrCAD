@@ -64,6 +64,21 @@ public readonly struct SketchPlane
 /// </summary>
 public sealed class Sketch
 {
+    /// <summary>
+    /// The epsilon ladder's <b>scale-free degeneracy</b> tier for sketch geometry: a
+    /// quantity is degenerate when it is this small RELATIVE to the coordinates that
+    /// produced it — the enclosed area against the sketch's extent², a chord against the
+    /// endpoints' magnitude, a circumcenter determinant against that magnitude squared.
+    /// Absolute floors cannot serve here: a sketch is a user-authored profile whose units
+    /// and scale are entirely the caller's choice (a micron-scale seal groove and a
+    /// metre-scale weldment both go through this constructor), and an absolute area floor
+    /// fails quadratically with that scale in BOTH directions. Deliberately NOT a
+    /// <c>Tolerance</c> — this is a degeneracy/round-off test, not a model-unit
+    /// coincidence test; sketch closure still uses the 1e-9 absolute weld tier because
+    /// those endpoints become exactly-shared vertices downstream.
+    /// </summary>
+    internal const double RelativeDegeneracy = 1e-12;
+
     internal IReadOnlyList<SketchSegment> Segments { get; }   // outer loop, normalized CCW
     internal IReadOnlyList<Sketch> Holes { get; }
 
@@ -82,8 +97,19 @@ public sealed class Sketch
         }
 
         double signed = segments.Sum(s => s.SignedAreaContribution());
-        // Absolute degenerate-area guard in sketch-area units (round-off scale).
-        if (Math.Abs(signed) < 1e-12)
+        // Degenerate-area guard, RELATIVE to the sketch's own extent. An absolute area
+        // floor is a latent scale bug of exactly the kind CLAUDE.md records for BSP's
+        // plane epsilon: area is quadratic in scale, so one fixed number is simultaneously
+        // too coarse for a small sketch (a legitimate sub-micron profile encloses less
+        // than 1e-12 and was rejected) and far too fine for a large one (a metre-scale
+        // sliver 1e-10 wide encloses 1e-7 and sailed through). Comparing |area| against
+        // extent² is the only scale-free form. Non-strict, so an exactly-zero area is
+        // always rejected — including the all-points-coincident case where extent is 0.
+        var bounds = Aabb.Empty;
+        foreach (var segment in segments)
+            bounds = bounds.Union(segment.Bounds());
+        double extent = Math.Max(bounds.Size.X, bounds.Size.Y);
+        if (Math.Abs(signed) <= extent * extent * RelativeDegeneracy)
             throw new ArgumentException("Sketch encloses no area.");
         Segments = signed < 0 ? [.. segments.Reverse().Select(s => s.Reversed())] : segments;
         Holes = holes;
@@ -307,9 +333,13 @@ public sealed class SketchBuilder
     {
         var chord = end - _current;
         double length = chord.Length;
-        if (length < 1e-12)
+        // Both guards are relative to the coordinate magnitudes involved (see
+        // Sketch.RelativeDegeneracy): "coincident" and "radius short of the semicircle by
+        // round-off" are statements about precision at this scale, not about millimetres.
+        double floor = Sketch.RelativeDegeneracy * Magnitude(_current, end);
+        if (length <= floor)
             throw new ArgumentException("Arc endpoints coincide; use Circle for full circles.");
-        if (radius < length / 2 - 1e-12)
+        if (radius < length / 2 - floor)
             throw new ArgumentException($"Radius {radius} is too small for a chord of length {length}.");
 
         double h = Math.Sqrt(Math.Max(0, radius * radius - length * length / 4));
@@ -322,6 +352,8 @@ public sealed class SketchBuilder
         double startAngle = Math.Atan2(_current.Y - center.Y, _current.X - center.X);
         double endAngle = Math.Atan2(end.Y - center.Y, end.X - center.X);
         double sweep = endAngle - startAngle;
+        // Angles are dimensionless, so these two ARE legitimately absolute: 1e-12 rad is
+        // the round-off band around a zero sweep at any model scale.
         if (!clockwise)
             sweep = sweep <= 1e-12 ? sweep + 2 * Math.PI : sweep;      // positive
         else
@@ -338,7 +370,12 @@ public sealed class SketchBuilder
         // Circumcenter of (current, via, end).
         var a = _current;
         double d = 2 * (a.X * (via.Y - end.Y) + via.X * (end.Y - a.Y) + end.X * (a.Y - via.Y));
-        if (Math.Abs(d) < 1e-12)
+        // d is four times the signed triangle area, so it is QUADRATIC in the coordinates:
+        // an absolute floor called a perfectly good micron-scale arc collinear while
+        // passing genuinely collinear metre-scale points through. Compare against
+        // magnitude² instead (see Sketch.RelativeDegeneracy).
+        double magnitude = Magnitude(a, via, end);
+        if (Math.Abs(d) <= Sketch.RelativeDegeneracy * magnitude * magnitude)
             throw new ArgumentException("Arc points are collinear.");
         double a2 = a.LengthSquared, b2 = via.LengthSquared, c2 = end.LengthSquared;
         var center = new Vector2d(
@@ -378,8 +415,18 @@ public sealed class SketchBuilder
 
     public Sketch Close()
     {
+        // Weld-scale (1e-9) absolute, deliberately: the closing point becomes an exactly
+        // shared vertex downstream, and the weld tier is absolute by policy.
         if (_current.DistanceTo(_start) > 1e-9)
             _segments.Add(new LineSeg(_current, _start));
         return new Sketch([.. _segments], []);
     }
+
+    /// <summary>Largest coordinate magnitude among the given points — the scale a
+    /// degeneracy test at this point in the path is relative to.</summary>
+    private static double Magnitude(in Vector2d a, in Vector2d b) =>
+        Math.Max(Math.Max(Math.Abs(a.X), Math.Abs(a.Y)), Math.Max(Math.Abs(b.X), Math.Abs(b.Y)));
+
+    private static double Magnitude(in Vector2d a, in Vector2d b, in Vector2d c) =>
+        Math.Max(Magnitude(a, b), Math.Max(Math.Abs(c.X), Math.Abs(c.Y)));
 }
