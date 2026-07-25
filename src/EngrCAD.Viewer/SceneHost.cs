@@ -26,6 +26,13 @@ internal sealed class SceneHost
     private static readonly IBrush DimText = new SolidColorBrush(Color.FromRgb(0x9a, 0xa0, 0xaa));
     private static readonly IBrush BrightText = new SolidColorBrush(Color.FromRgb(0xdd, 0xe1, 0xe6));
 
+    // Construction-tree row colors: a modeling step, a sketch (matching the preview
+    // overlay's construction cyan), a suppressed feature, and the previewed row.
+    private static readonly IBrush StepText = new SolidColorBrush(Color.FromRgb(0xc3, 0xc9, 0xd2));
+    private static readonly IBrush SketchText = new SolidColorBrush(Color.FromRgb(0x6f, 0xd0, 0xe6));
+    private static readonly IBrush DisabledText = new SolidColorBrush(Color.FromRgb(0x6b, 0x70, 0x79));
+    private static readonly IBrush PreviewText = new SolidColorBrush(Color.FromRgb(0x59, 0xea, 0xff));
+
     private readonly StackPanel _tabStrip;
     private readonly StackPanel _tree;
     private readonly StackPanel _properties;
@@ -41,6 +48,30 @@ internal sealed class SceneHost
 
     private readonly List<PartRow> _partRows = [];
     private IReadOnlyList<PartInstance> _instances = [];
+
+    // ---- construction tree (expandable build history under each part row) ----
+
+    /// <summary>Expanded row keys ("P{index}" for a part row, "N{index}#{path}" for a
+    /// construction node). Kept across rebuilds so expansion survives a tab switch or a
+    /// live reload of the same design.</summary>
+    private readonly HashSet<string> _expanded = [];
+
+    /// <summary>Rows the user unchecked. The tree rebuilds itself when an expander is
+    /// toggled, so visibility must live here rather than in the checkbox controls —
+    /// otherwise expanding a part would silently re-show everything it had hidden.
+    /// Keyed by occurrence path, so it also survives tab switches and live reloads.</summary>
+    private readonly HashSet<string> _hiddenRows = [];
+
+    /// <summary>Construction rows currently drawn (with each row's resting color), so
+    /// the previewed one can be highlighted without another rebuild.</summary>
+    private readonly List<(string Key, Button Label, IBrush Idle)> _constructionRows = [];
+
+    /// <summary>Previews are lowered ONCE per graph node and memoized here (survives
+    /// tab switches; a sub-shape shared by several rows is lowered once).</summary>
+    private readonly ConstructionPreviewCache _previewCache = new();
+
+    private string? _previewKey;
+    private Tab? _currentTabContent;
 
     public ViewportControl Viewport { get; }
     public Control Root { get; }
@@ -59,10 +90,14 @@ internal sealed class SceneHost
         };
         toolbar.Children.Add(ToolButton("Fit", () => Viewport.Frame()));
         toolbar.Children.Add(new Border { Width = 8 });
-        toolbar.Children.Add(ToolButton("Front", () => SetView(-Math.PI / 2, 0)));
-        toolbar.Children.Add(ToolButton("Top", () => SetView(-Math.PI / 2, Math.PI / 2)));
-        toolbar.Children.Add(ToolButton("Right", () => SetView(0, 0)));
-        toolbar.Children.Add(ToolButton("Iso", () => SetView(-Math.PI / 4, Math.Asin(1 / Math.Sqrt(3)))));
+        // Standard views: the SAME pose source the view cube uses
+        // (ViewCubeMath.PoseFor), so the toolbar and the widget can never disagree —
+        // a button is just a named cube direction. Top/Bottom keep the current yaw,
+        // as the cube's TOP face click does (yaw is unconstrained at the poles).
+        toolbar.Children.Add(ToolButton("Front", () => SetView(-Vector3d.UnitY)));
+        toolbar.Children.Add(ToolButton("Top", () => SetView(Vector3d.UnitZ)));
+        toolbar.Children.Add(ToolButton("Right", () => SetView(Vector3d.UnitX)));
+        toolbar.Children.Add(ToolButton("Iso", () => SetView((1, -1, 1))));
         toolbar.Children.Add(new Border { Width = 8 });
         var projection = new ToggleButton { Content = "Ortho", Padding = new Thickness(10, 4), FontSize = 12 };
         projection.IsCheckedChanged += (_, _) => Viewport.Orthographic = projection.IsChecked ?? false;
@@ -143,7 +178,9 @@ internal sealed class SceneHost
 
         // ---- model tree (left) ----
         _tree = new StackPanel { Spacing = 2 };
-        var treePanel = SidePanel("MODEL", _tree, width: 190);
+        // Wide enough for indented construction rows ("Sketch(4 curves, 1 hole)" at
+        // depth 3) without truncation.
+        var treePanel = SidePanel("MODEL", _tree, width: 225);
 
         // ---- properties (right) ----
         _properties = new StackPanel { Spacing = 3 };
@@ -193,9 +230,13 @@ internal sealed class SceneHost
         ShowProperties(-1);
     }
 
-    private void SetView(double yaw, double pitch)
+    /// <summary>Points the camera along a standard cube direction (distance and target
+    /// kept), through <see cref="ViewCubeMath.PoseFor"/> — the one pose source shared
+    /// with the view cube.</summary>
+    private void SetView(in Vector3d direction)
     {
         var camera = Viewport.Camera;
+        var (yaw, pitch) = ViewCubeMath.PoseFor(direction, camera.Yaw);
         Viewport.Camera = new CameraState(yaw, pitch, camera.Distance, camera.Target);
     }
 
@@ -231,7 +272,15 @@ internal sealed class SceneHost
         // auto-framing; a first visit frames to the tab's bounds. The tree walks the
         // same tab structure Instances() flattens, so row instance indices line up.
         var instances = tab?.Instances() ?? [];
-        Viewport.SetInstances(instances, frame: !keepCamera && !restored);
+
+        // A new instance list clears the viewport's preview overlay (ApplyInstances);
+        // drop our matching row state so the tree agrees with what is drawn.
+        _previewKey = null;
+        // Rows FIRST, then hand the instances over together with the visibility they
+        // imply: the swap happens on the render thread, so per-row SetVisible calls
+        // made now would land on the outgoing list and be wiped.
+        RebuildTree(tab, instances);
+        Viewport.SetInstances(instances, frame: !keepCamera && !restored, visible: EffectiveVisibility());
         if (restored)
             Viewport.Camera = _tabCameras[name!];
 
@@ -241,7 +290,6 @@ internal sealed class SceneHost
                 button.FontWeight = _scene.Tabs[i].Name == name ? FontWeight.Bold : FontWeight.Normal;
         }
 
-        RebuildTree(tab, instances);
         ShowProperties(-1);
     }
 
@@ -251,7 +299,9 @@ internal sealed class SceneHost
     {
         _tree.Children.Clear();
         _partRows.Clear();
+        _constructionRows.Clear();
         _instances = instances;
+        _currentTabContent = tab;
         if (tab is null)
             return;
 
@@ -261,22 +311,30 @@ internal sealed class SceneHost
         foreach (var part in tab.Parts)
             AddPartRow(part.Name, part, next++, depth: 0, ancestors: []);
         foreach (var assembly in tab.Assemblies)
-            AddAssemblyRows(assembly, assembly.Name, depth: 0, ancestors: [], ref next);
+            AddAssemblyRows(assembly, assembly.Name, assembly.Name, depth: 0, ancestors: [], ref next);
+
+        HighlightConstructionRow();
+    }
+
+    /// <summary>Rebuilds the tree in place (an expander toggled). The model tree is a
+    /// plain StackPanel of rows — a few dozen controls — so a rebuild is cheaper than
+    /// maintaining incremental insertions, and expansion state lives in
+    /// <see cref="_expanded"/>/<see cref="_hiddenRows"/> rather than in the controls.
+    /// The instance list is unchanged here, so the remembered visibility is pushed
+    /// straight through (an expander toggle must not un-hide anything).</summary>
+    private void RefreshTree()
+    {
+        RebuildTree(_currentTabContent, _instances);
+        ApplyVisibility();
     }
 
     /// <summary>An assembly header row (checkbox hides the whole subtree) plus its
     /// occurrences, indented one level per nesting depth (always expanded in v1).</summary>
     private void AddAssemblyRows(
-        Assembly assembly, string label, int depth, IReadOnlyList<CheckBox> ancestors, ref int next)
+        Assembly assembly, string label, string path, int depth,
+        IReadOnlyList<CheckBox> ancestors, ref int next)
     {
-        var check = new CheckBox
-        {
-            IsChecked = true,
-            MinWidth = 0,
-            Padding = new Thickness(0),
-            VerticalAlignment = VerticalAlignment.Center,
-        };
-        check.IsCheckedChanged += (_, _) => ApplyVisibility();
+        var check = VisibilityCheckBox($"A{path}");
         ToolTip.SetTip(check, "Show/hide the whole assembly");
 
         var title = new TextBlock
@@ -300,20 +358,36 @@ internal sealed class SceneHost
             if (occurrence.Part is { } part)
                 AddPartRow(occurrence.Name, part, next++, depth + 1, groupAncestors);
             else
-                AddAssemblyRows(occurrence.SubAssembly!, occurrence.Name, depth + 1, groupAncestors, ref next);
+                AddAssemblyRows(occurrence.SubAssembly!, occurrence.Name, $"{path}/{occurrence.Name}",
+                    depth + 1, groupAncestors, ref next);
         }
     }
 
-    private void AddPartRow(string name, Part part, int index, int depth, IReadOnlyList<CheckBox> ancestors)
+    /// <summary>A visibility checkbox whose state lives in <see cref="_hiddenRows"/>,
+    /// so tree rebuilds (expander toggles, tab switches, live reloads) preserve it.</summary>
+    private CheckBox VisibilityCheckBox(string key)
     {
         var check = new CheckBox
         {
-            IsChecked = true,
+            IsChecked = !_hiddenRows.Contains(key),
             MinWidth = 0,
             Padding = new Thickness(0),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        check.IsCheckedChanged += (_, _) => ApplyVisibility();
+        check.IsCheckedChanged += (_, _) =>
+        {
+            if (check.IsChecked ?? true)
+                _hiddenRows.Remove(key);
+            else
+                _hiddenRows.Add(key);
+            ApplyVisibility();
+        };
+        return check;
+    }
+
+    private void AddPartRow(string name, Part part, int index, int depth, IReadOnlyList<CheckBox> ancestors)
+    {
+        var check = VisibilityCheckBox($"V{RowId(index)}");
 
         // Display-mode cycler: a tiny per-row button, CAD-tree style. It writes
         // through Part.DisplayMode (shared by every instance of the part), so the
@@ -360,26 +434,270 @@ internal sealed class SceneHost
             OnViewportSelection(Viewport.Selected);
         };
 
+        // Construction expander: parts that know how they were built (a Shape graph or
+        // a FeatureHistory) get a disclosure triangle that reveals the build steps.
+        var construction = part.ConstructionTree();
+        string partKey = $"P{RowId(index)}";
+        var expander = ExpanderButton(
+            construction is not null, _expanded.Contains(partKey),
+            "Show how this part was built",
+            () =>
+            {
+                Toggle(partKey);
+                RefreshTree();
+            });
+
         _tree.Children.Add(new DockPanel
         {
             Margin = new Thickness(depth * 14, 0, 0, 0),
-            Children = { check, mode, label },
+            Children = { expander, check, mode, label },
         });
         _partRows.Add(new PartRow(index, part, check, ancestors, label, mode));
+
+        if (construction is not null && _expanded.Contains(partKey))
+            AddConstructionRows(index, construction, depth + 1);
+    }
+
+    /// <summary>
+    /// One construction-tree row and (when expanded) its children. A row maps to a
+    /// graph node by reference plus its positional <c>Path</c>; clicking it previews
+    /// that node — a sketch drawn on its plane, or the geometry of that sub-graph
+    /// (a rollback view) — and clicking it again clears the preview.
+    /// </summary>
+    private void AddConstructionRows(int instanceIndex, ConstructionNode node, int depth)
+    {
+        string key = NodeKey(instanceIndex, node);
+        bool expanded = _expanded.Contains(key);
+        var expander = ExpanderButton(node.Children.Count > 0, expanded, null, () =>
+        {
+            Toggle(key);
+            RefreshTree();
+        });
+
+        var panel = new DockPanel { Margin = new Thickness(depth * 14, 0, 0, 0) };
+        panel.Children.Add(expander);
+
+        if (node.Detail is { Length: > 0 } detail)
+        {
+            var value = new TextBlock
+            {
+                Text = detail,
+                Foreground = DimText,
+                FontSize = 10,
+                Padding = new Thickness(4, 3),
+                VerticalAlignment = VerticalAlignment.Center,
+                [DockPanel.DockProperty] = Dock.Right,
+            };
+            panel.Children.Add(value);
+        }
+
+        var idle = NodeBrush(node);
+        if (!node.CanPreview)
+        {
+            // Value rows (a [Param]) are text, not a disabled button — a greyed-out
+            // button reads as "broken control" rather than "this is a value".
+            panel.Children.Add(new TextBlock
+            {
+                Text = node.Label,
+                Foreground = idle,
+                FontSize = 11,
+                Padding = new Thickness(4, 3),
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            _tree.Children.Add(panel);
+            AddChildRows(instanceIndex, node, depth, expanded);
+            return;
+        }
+
+        var label = new Button
+        {
+            Content = node.Label,
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(4, 1),
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Left,
+            Foreground = idle,
+        };
+        ToolTip.SetTip(label, $"{node.Kind}: click to preview this step in the viewport");
+        label.Click += (_, _) => PreviewNode(instanceIndex, node, key);
+        panel.Children.Add(label);
+
+        _tree.Children.Add(panel);
+        _constructionRows.Add((key, label, idle));
+        AddChildRows(instanceIndex, node, depth, expanded);
+    }
+
+    private void AddChildRows(int instanceIndex, ConstructionNode node, int depth, bool expanded)
+    {
+        if (!expanded)
+            return;
+        foreach (var child in node.Children)
+            AddConstructionRows(instanceIndex, child, depth + 1);
+    }
+
+    /// <summary>Expansion/preview keys are built from the occurrence PATH, not the
+    /// instance index, so expanded rows survive a live reload that reorders parts.</summary>
+    private string RowId(int instanceIndex) =>
+        instanceIndex >= 0 && instanceIndex < _instances.Count
+            ? _instances[instanceIndex].Path
+            : instanceIndex.ToString();
+
+    private string NodeKey(int instanceIndex, ConstructionNode node) =>
+        $"N{RowId(instanceIndex)}#{node.Path}";
+
+    private void Toggle(string key)
+    {
+        if (!_expanded.Add(key))
+            _expanded.Remove(key);
+    }
+
+    /// <summary>Row colors that say what a row IS: sketches read as construction
+    /// geometry (the preview color), suppressed features dim out, parameters are
+    /// values, everything else is a modeling step.</summary>
+    private static IBrush NodeBrush(ConstructionNode node) => node switch
+    {
+        { Suppressed: true } => DisabledText,
+        { Kind: ConstructionNodeKind.Sketch } => SketchText,
+        { Kind: ConstructionNodeKind.Parameter } => DimText,
+        _ => StepText,
+    };
+
+    /// <summary>A disclosure triangle; an invisible placeholder of the same width when
+    /// the row has nothing to expand, so labels stay aligned.</summary>
+    private static Control ExpanderButton(bool enabled, bool expanded, string? tip, Action onClick)
+    {
+        if (!enabled)
+            return new Border { Width = 14 };
+        var button = new Button
+        {
+            Content = expanded ? "▾" : "▸",   // down / right pointing triangle
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(0),
+            Width = 14,
+            FontSize = 9,
+            Foreground = DimText,
+            VerticalAlignment = VerticalAlignment.Center,
+            [DockPanel.DockProperty] = Dock.Left,
+        };
+        if (tip is not null)
+            ToolTip.SetTip(button, tip);
+        button.Click += (_, _) => onClick();
+        return button;
+    }
+
+    // ---- construction preview ----
+
+    /// <summary>
+    /// Previews one construction row in the viewport (clicking the showing row clears
+    /// it). The heavy part — lowering the sub-shape — runs on a background task and is
+    /// memoized per graph node, exactly the discipline <c>Scene.PreMesh</c> follows:
+    /// nothing that tessellates ever touches the UI or render thread, and a second
+    /// click on the same row is instant.
+    /// </summary>
+    private void PreviewNode(int instanceIndex, ConstructionNode node, string key)
+    {
+        if (!node.CanPreview)
+            return;
+        if (_previewKey == key)
+        {
+            ClearPreview();
+            return;
+        }
+
+        _previewKey = key;
+        HighlightConstructionRow();
+        var world = instanceIndex >= 0 && instanceIndex < _instances.Count
+            ? _instances[instanceIndex].World
+            : Matrix4d.Identity;
+
+        if (_previewCache.TryGet(node, out var cached))
+        {
+            ApplyPreview(node, cached, world);
+            return;
+        }
+
+        _statusText.Text = $"preview: building '{node.Label}' ...";
+        var quality = _scene?.ResolveQuality(EngrCad.CurrentOptions.Quality);
+        // Previewing the whole part (the root row) is the part's own geometry, which
+        // Scene.PreMesh already lowered — reuse that solid instead of compiling again.
+        var part = instanceIndex >= 0 && instanceIndex < _instances.Count
+            ? _instances[instanceIndex].Part
+            : null;
+        Task.Run(() =>
+        {
+            var known = part is not null && ReferenceEquals(node.Target, part.Geometry)
+                ? part.TryGetSolid()
+                : null;
+            var preview = _previewCache.Get(node, quality, known);
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (_previewKey == key)   // the user moved on while we lowered
+                    ApplyPreview(node, preview, world);
+            });
+        });
+    }
+
+    private void ApplyPreview(ConstructionNode node, ConstructionPreview preview, in Matrix4d world)
+    {
+        if (preview.Error is { } error)
+        {
+            Viewport.SetConstructionPreview(null);
+            _statusText.Text = error;
+            return;
+        }
+        Viewport.SetConstructionPreview(preview.Segments, world);
+        _statusText.Text = preview.IsEmpty
+            ? $"preview: '{node.Label}' has no visible edges"
+            : $"preview: {node.Label} ({preview.Segments.Count} edges)";
+    }
+
+    private void ClearPreview()
+    {
+        _previewKey = null;
+        Viewport.SetConstructionPreview(null);
+        HighlightConstructionRow();
+        _statusText.Text = "preview: cleared";
+    }
+
+    private void HighlightConstructionRow()
+    {
+        foreach (var (key, label, idle) in _constructionRows)
+        {
+            bool active = key == _previewKey;
+            label.FontWeight = active ? FontWeight.Bold : FontWeight.Normal;
+            label.Foreground = active ? PreviewText : idle;
+        }
     }
 
     /// <summary>Effective visibility per instance: its own checkbox AND every ancestor
     /// assembly checkbox — unchecking a parent hides the subtree without touching the
     /// children's own check state.</summary>
-    private void ApplyVisibility()
+    private bool[] EffectiveVisibility()
     {
+        var visible = new bool[_instances.Count];
+        Array.Fill(visible, true);
         foreach (var row in _partRows)
         {
-            bool visible = row.Own.IsChecked ?? true;
+            if (row.Index < 0 || row.Index >= visible.Length)
+                continue;
+            bool shown = row.Own.IsChecked ?? true;
             foreach (var ancestor in row.Ancestors)
-                visible &= ancestor.IsChecked ?? true;
-            Viewport.SetVisible(row.Index, visible);
+                shown &= ancestor.IsChecked ?? true;
+            visible[row.Index] = shown;
         }
+        return visible;
+    }
+
+    /// <summary>Pushes <see cref="EffectiveVisibility"/> into the viewport (for changes
+    /// against the instance list it is already showing).</summary>
+    private void ApplyVisibility()
+    {
+        var visible = EffectiveVisibility();
+        for (int i = 0; i < visible.Length; i++)
+            Viewport.SetVisible(i, visible[i]);
     }
 
     private static readonly DisplayMode[] DisplayModes = Enum.GetValues<DisplayMode>();

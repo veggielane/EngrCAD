@@ -149,13 +149,34 @@ public sealed class FeatureHistory
         return _lastResult;
     }
 
-    /// <summary>Regenerates and wraps the result as a document-model part.</summary>
+    /// <summary>
+    /// The body as of feature <paramref name="index"/> — the shape the history had
+    /// produced after applying features 0..index — or null when nothing has been
+    /// regenerated that far. This is the rollback view the construction tree previews:
+    /// a suppressed (or not-yet-run) step reports the last body that WAS produced,
+    /// which is exactly the body it passed through untouched.
+    /// </summary>
+    public Shape? BodyAfter(int index)
+    {
+        if (index < 0 || index >= _cache.Count)
+            return null;
+        for (int i = index; i >= 0; i--)
+        {
+            if (_cache[i] is { } cached)
+                return cached.Output;
+        }
+        return null;
+    }
+
+    /// <summary>Regenerates and wraps the result as a document-model part. The part
+    /// keeps a reference to this history, so viewers can show the feature list
+    /// (<see cref="Part.ConstructionTree"/>).</summary>
     public Part ToPart(string name, PartColor? color = null, Matrix4d? transform = null)
     {
         var result = Regenerate();
         if (result.Body is null)
             throw new InvalidOperationException($"The history produced no body:\n{result}");
-        return new Part(name, result.Body, color, transform);
+        return new Part(name, result.Body, this, color, transform);
     }
 
     // ---- JSON parameter overrides ----
