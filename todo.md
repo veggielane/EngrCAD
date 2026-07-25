@@ -122,27 +122,39 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   measures the axial gap to an **arbitrary point of a tilted face's plane** (whatever
   `IsPlanar` reports as origin), so it is ill-defined precisely in the band a wider
   angle would admit. Needs coplanar-boolean evidence before touching.
-- [ ] **Minimum-volume 3D OBB — blocked on a layering decision.** The exact method
-  (Freeman–Shapira: the min-volume box has a face flush with a hull face, so project per
-  hull face and take `Fitting2d.MinAreaBox`) needs a 3D convex hull, but `ConvexHull`
-  lives in EngrCAD.Mesh, which *references* Core — so `Fitting3d` cannot call it, and a
-  second quickhull in Core would be worse than today's PCA heuristic. Decide: move
-  `ConvexHull` into Core, or add `Fitting3d.MinVolumeBox(hullVertices, hullTriangles)`
-  taking a caller-supplied hull. The algorithm is spelled out in `FitBox`'s doc comment.
-- [ ] **`Bvh.Build` + `QueryOverlap` is now the largest single line in the exact mesh
-  boolean** — ~22 ms of a 58 ms boolean on 32k-triangle operands, after the mesh-side
-  costs were fixed. Two builds plus the overlap query; worth attacking in Core (faster
-  build, or reusing a hierarchy across a boolean cascade).
-- [ ] **Core follow-ups** — thread `ProgressCancel` through `BRepTessellator` and
-  `MeshSdf`/winding builds (unstarted); `Region2dBoolean`'s O(E²) interior-sample
-  clearance scans still want the same index the arrangement broad phase now has
-  (**re-benchmark the arrangement speedup on a quiet machine** — the measured
-  candidate-pair reduction is a solid 9.1% of the full scan, but wall-clock numbers
-  were taken with several agents building concurrently and disagreed by 3×);
+- [ ] **`Fitting3d.MinVolumeBox`'s per-family angle is a sweep + golden section, not an
+  algebraic root solve** (the OBB itself ✅ landed). O'Rourke derives the critical angle in
+  closed form; worth doing if a hull ever shows a minimum hiding in a bracket narrower
+  than the 3.75° sweep. The box always contains every input point regardless. Also: a
+  convenience overload in EngrCAD.Mesh (`MinVolumeBox(HalfEdgeMesh hull)`) would spare
+  callers the `ConvexHull.Compute(...).Triangulated().ToIndexed()` dance.
+  **Correction worth remembering**: this item used to state, and `Fitting3d`'s own doc
+  comment used to assert, that the minimum-volume box has a face flush with a hull face
+  (Freeman–Shapira). That is FALSE in 3D — the regular tetrahedron on alternate corners
+  of [−1,1]³ fits its cube at volume 8 while every face-flush candidate measures 16.
+  The shipped implementation follows O'Rourke instead.
+- [ ] **Core follow-ups** — thread `ProgressCancel` through the mesh booleans
+  (`MeshMeshCut`); `BRepTessellator` ✅ landed, and `MeshSdf`/winding builds were measured
+  (21.8 ms / 29.2 ms on 32 040 triangles) and deliberately declined, since viewer
+  cancellation is granular to a whole part. Also: `Part.GetMesh` should pass its
+  `ProgressCancel` to `BRepTessellator.Tessellate` (one line in
+  `EngrCAD.Modeling/Document.cs`, plus relaxing the doc paragraph there — only the
+  *lowering* must run to completion, not the tessellation of an already-cached solid);
   intersection-segment queries over `Bvh.QueryOverlap` pairs (the triangle–triangle
   layer belongs to EngrCAD.Mesh); routing `FaceSplitter`'s planar tracing through
   `Arrangement2d` (deferred — boolean-critical); optionally migrate
   `MeshWindingNumber` onto `Bvh`'s per-node ranges.
+- [ ] **`Region2dBoolean.ContainedIn` is still O(cells × operand vertices)** — the next
+  quadratic term after the clearance scan (now BVH-backed: a union of 120 overlapping
+  32-gons went 436.2 → 93.6 ms, its classification phase 367.7 → 8.8 ms) and the
+  arrangement's insertion, though an order of magnitude smaller in the cases measured.
+  A per-operand `Region2d` point-location index would close it. **Still owed**:
+  re-benchmark the arrangement broad phase on a quiet machine — the candidate-pair
+  reduction is a solid 9.1%, but the wall-clock numbers were taken under load and
+  disagreed by 3×.
+- [ ] **`Bvh.Build` follow-ups** (the build ✅ landed 4.9× faster and bit-identical) —
+  reusing a hierarchy across a boolean cascade is untried, and after the fix the broad
+  phase is 10.0 ms of a ~199 ms exact union, so the remaining wins are elsewhere.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
@@ -167,31 +179,35 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 - [ ] **2D sketch constraint solver** — sketching landed geometry-only by design; the
   Onshape-style layer on top is constraints (coincident/tangent/parallel/dimensions)
   solved variationally. Also future: elliptical arcs, sketch offset/thicken.
-- [ ] **Biarc fitting** — `BiArcFit2` (two tangent-continuous arcs through
-  point+tangent pairs). Converts our marched intersection polylines into exact-ish
-  arc/line B-Rep curves — better STEP output and lighter seam edges.
-- [ ] **2D NURBS/Bezier curves for profiles** — `NURBSCurve2`, `BezierCurve2`,
-  `BSplineBasis` (we have 3D NURBS; sketching wants 2D + arc-length via
-  `ArcLengthParam`).
-- [ ] **Drill follow-ups** — cross-validate holes across *separate* `Drill` calls
-  (per-call validation landed); avoid `DrillShape`'s read-only validation lowering
-  (the body lowers twice on the B-Rep path); drill-tip angles, thread
-  cosmetics/annotation, hole tables.
-- [ ] **`SweptSurface.TryProjectPoint` still pays the generic 2D grid** — the 1D
-  reduction that made extrusions and revolves ~15× faster does not apply directly
-  (an RMF frame varies along the path), but seeding on the path parameter first would
-  still beat a 17×17 scan. Only swept-tube geometry pays this today; `NurbsSurface`
-  likewise keeps the base implementation, legitimately.
+- [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
+  but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
+  polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`
+  emitting fitted arcs instead of degree-1 sampled polylines for
+  `TransformedCurve(NurbsCurve)`, and lighter B-Rep seam edges. Each needs a policy
+  decision about *who* owns the tolerance.
+- [ ] **`ExtrudedSurface`/`RevolvedSurface` inverse evaluation refines from a single best
+  seed** — the same defect `SweptSurface` just fixed. A generator whose projection into
+  the reduced plane is near-degenerate hides two branches inside one seed interval and 1D
+  Newton returns the *mirrored* parameter: on-surface, structurally valid, geometrically
+  wrong. `SweptSurface.SolveGeneratorParameter`'s rule (refine from every local minimum
+  *and its two neighbours*) ports directly. Deliberately not done with the fix, because
+  these two carry the whole boolean regression surface.
+- [ ] **`Curve3d.ArcLength`/`ParameterAtLength`** — the 2D family has adaptive-Simpson arc
+  length with a bracketed-Newton inverse and a caching `ArcLengthTable2d`; the 3D side
+  still has only per-type `Length()` on the conics and the helix.
+- [ ] **2D curve ↔ `Sketch` bridge** — `Sketch` builds its own segment types and `Curve2d`
+  is a parallel vocabulary. They should meet (a sketch segment exposing a `Curve2d`, or
+  `Profile` accepting `Curve2d` chains) before either grows further.
+- [ ] **Drill follow-ups** — drill-tip angles, thread cosmetics/annotation, hole tables.
+  Also **cross-PLANE hole validation**: spacing is cross-validated only among drills
+  sharing a placement plane, so opposing bores on the two faces of a plate can still
+  produce intersecting tools. Needs a tool-vs-tool solid intersection test rather than a
+  2D centre-distance one.
 - [ ] **Ambient occlusion is now the largest single cost of opening a window** (~7–8 s
   of an ~11 s demo launch before lazy tabs; two thread parts alone are 5.7 s and
   already saturate every core, so parallelism has no more to give). The next lever is
   showing the scene flat-lit immediately and streaming occlusion in as bakes finish —
   *not* making the bake less honest.
-- [ ] **`Shape.From(brepSolid)` is unsafe as a *boolean operand* when lowered twice** —
-  `ShapeCompiler.LowerBrep` hands the raw solid to `BrepBoolean`, which consumes its
-  inputs, so this was already a hazard sequentially, not just under the new parallel
-  `PreMesh`. Fix by cloning at the `SourceShape` boundary or making `BrepBoolean`
-  non-consuming. Not exercised by any test, sample or docs page today.
 - [ ] **Do NOT "optimize" `BrepQueries.Bounds`** — it is deliberately conservative-over
   for trimmed fragments (the sphere-piercing fix depends on that), and profiling proved
   it is not a bottleneck: on the worst engraving case only 113 of 894 face pairs survive
@@ -384,13 +400,36 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   `Shape.Shell` beside the SDF one), and a `docs/examples` page with a render fence.
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
   with faces-to-remove semantics
-- [ ] Shape healing (`ShapeFix`): fix wires/faces/gaps/small edges — needed the moment
-  we import foreign STEP
+- [ ] **Shape-healing follow-ups** (`ShapeHealing.Heal/Analyze` ✅ landed — six passes,
+  every repair a return value):
+  - [ ] **Geometric gap closing for CURVED edges** (OCCT `ShapeFix_Wire::FixGaps`) —
+    re-fit or trim a circle/NURBS through its unified endpoints. `RefitStraightEdges`
+    covers lines (a line is determined by its endpoints); curved gaps are counted in
+    `Notes` and left, because inventing curve geometry is a modelling operation, not a
+    repair. Probably wants per-entity tolerances on `BrepEdge`/`BrepVertex`, which this
+    topology does not carry.
+  - [ ] **Face-orientation and shell repair** (OCCT `ShapeFix_Shell`) — outward-normal
+    voting per connected component and splitting a shell whose faces form several
+    components: the B-Rep counterpart of `MeshRepair`'s winding flood.
 - [ ] Local operations: split shape by shape, glue faces
 - [ ] Surface interpolation + least-squares approximation (`GeomAPI_PointsToBSpline`
   proper; curve interpolation exists)
 - [ ] Ray-parity B-Rep point classifier (drop the `MeshSdf` bridge in booleans)
-- [ ] Inertia / center-of-mass global properties (volume/area exist)
+- [ ] **Exact-surface mass-property quadrature** (OCCT `BRepGProp` + `GProp_Domain`) —
+  mass properties ✅ landed by tessellate-then-sum with Richardson extrapolation (1.9e-7
+  relative on a cylinder at default quality). Exact quadrature is worth doing only
+  *after* trimmed parameter-space boundaries become exact, since the domain scan is the
+  accuracy limit, not the quadrature. Would make analytic primitives exact rather than
+  1e-7.
+- [ ] **Move `SymmetricEigen3` from internal to public in EngrCAD.Core** and delete the
+  duplicated cyclic-Jacobi solver in `EngrCAD.Mesh/MassProperties.cs`. Core's sorts
+  descending, `MassProperties.Principal()` wants ascending — expose both orderings or
+  sort at the call site. Also consider moving `SymmetricTensor3` to Core, where a
+  symmetric 3×3 type belongs.
+- [ ] **Per-part material in the document model** — `Part.MassProperties(density)` takes
+  density as an argument because a `Part` has no material. A `Material` (name + density +
+  display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
+  and is the natural seed for the BOM and for Simulation.
 - [ ] Topological naming / modification history (which output face came from which
   input face) — the foundation of parametric rebuilds surviving edits
 - [ ] STEP follow-ups — unit scaling (mm assumed today); CONICAL/TOROIDAL_SURFACE
@@ -552,15 +591,13 @@ stdout guarded, geometry evaluated lazily). Remaining:
   topological IDs (selectors are the naming story today), property-panel UI editing of
   `[Param]`s, feature list in the viewer model tree, a feature registry for UI
   insertion.
-- [ ] **Assemblies follow-ups** (v1 landed: `Assembly`/`Occurrence` DAG with `Frame3d`
-  poses, `PartInstance` flattening, viewer hierarchy/visibility/selection, shared-part
-  GPU buffers) — **mates/constraints** (solve for the occurrence frames `Flatten`
-  composes — the frames are already mutable), exploded views, BOM (count occurrences
-  per distinct part — trivial over `Flatten()`), STEP assembly export
-  (`NEXT_ASSEMBLY_USAGE_OCCURRENCE` from the same flattening), true GPU instanced
-  drawing (matrix buffer, one draw per part), tree expand/collapse, per-instance
-  color/display-mode overrides, retro-assign palette colors when parts are added to an
-  assembly after `Tab.Add`.
+- [ ] **Assemblies follow-ups** (v2 landed: BOM, exploded views, mates, STEP assembly
+  export + import) — true GPU instanced drawing (matrix buffer, one draw per part), tree
+  expand/collapse, per-instance color/display-mode overrides, retro-assign palette colors
+  when parts are added to an assembly after `Tab.Add`, **mates ACROSS assembly levels**
+  (v1 constrains one level; a sub-assembly is one rigid body), mate
+  persistence/serialization alongside `SaveParameters`, and an **explode-path renderer**
+  (the dashed leader lines drafting standards draw between an exploded part and its seat).
 - [ ] **Standard component library — breadth and fidelity** (v1 landed:
   `HardwareComponent` + `ComponentFeature` + `ComponentAssembly`; ISO 4762 SHCS, Tappex
   Trisert, ISO 2338 dowel; the full two-body fastener stack). Follow-ups: more families
@@ -569,9 +606,6 @@ stdout guarded, geometry evaluated lazily). Remaining:
   knurled/flanged inserts, ISO 2338's crowned pin ends); and stacks that anchor into a
   *placed component* — today `PlaceThrough` always cuts the screw's own tapped pilot in
   the far body, so anchoring into an insert means placing the insert separately.
-- [ ] **Component BOM** — `ComponentAssembly.Placements` (→ `PlacedComponent`) is
-  already a parts list with designations and poses, so a BOM export is now a small step.
-  Pairs with the deferred assembly BOM item.
 - [ ] **Frame3d enabled next steps** — `FeatureContext.TopPlane` could become
   `SketchPlane.On(topFace)` (behavior decision: drill origins would move from world
   (0,0,z) to the face centroid); arbitrary section planes from a frame; `StepWriter`

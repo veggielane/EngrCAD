@@ -231,7 +231,8 @@ foreach (var s in snippets)
     // a docs example that quietly ignored its own section plane would be a trap.
     if (!TryReadVariable<IEnumerable<SectionPlane>>(state, "sectionPlanes", s, errors, out var declaredPlanes)
         || !TryReadVariable<SectionCombine?>(state, "sectionCombine", s, errors, out var declaredCombine)
-        || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera))
+        || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera)
+        || !TryReadVariable<double?>(state, "explode", s, errors, out var declaredExplode))
         continue;
 
     var planes = declaredPlanes is null ? s.SectionPlanes : [.. declaredPlanes];
@@ -253,7 +254,8 @@ foreach (var s in snippets)
                 planes is { Count: > 0 } ? AxisOf(planes[0]) : s.SectionAxis,
                 planes is { Count: > 0 } ? planes[0].Offset : s.SectionOffset,
                 sectionPlanes: planes,
-                sectionCombine: declaredCombine ?? SectionCombine.Intersection);
+                sectionCombine: declaredCombine ?? SectionCombine.Intersection,
+                explode: declaredExplode ?? 0);
             rendered++;
         }
         catch (Exception ex)

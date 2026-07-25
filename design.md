@@ -589,6 +589,109 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **A BVH build's node numbering is not observable; its item permutation is.** Query
+  results are appended in leaf-visit order, `Nearest` breaks distance ties by traversal
+  order, and the imprint boolean interns seam points in `QueryOverlap` order — so a build
+  that produces "an equally good tree" silently repermutes downstream geometry. Left and
+  right children are adjacent by construction, so *relabelling* nodes changes nothing;
+  that is what lets sibling subtrees be built concurrently and then renumbered into the
+  canonical sequential order. Quickselect would have been faster still and was rejected
+  for exactly this reason. Every future builder rewrite must reproduce
+  `BvhBuildOrderTests`' fingerprints or argue, with a measurement, that the new tree is
+  better.
+- **The 2D rotating-calipers theorem does not lift to 3D, and this repo asserted that it
+  did.** In the plane the minimum-area rectangle has a side collinear with a hull edge.
+  The 3D analogue — a box face flush with a hull face — is *false*, and the counterexample
+  is four vertices and a cube: the regular tetrahedron on alternate corners of [−1,1]³
+  fits that cube at volume 8, while every face-flush candidate measures 16. O'Rourke's
+  true characterization is that two *adjacent* box faces each contain a hull *edge*. This
+  is a sibling of the epsilon lesson: a theorem that "obviously generalizes" is a claim to
+  be tested, not repeated — `Fitting3d`'s own doc comment carried the false version until
+  the implementation of it failed its first test.
+- **Cancellation follows the cache, not the clock.** The rule is not "don't cancel long
+  operations" but "don't abandon work whose result is cached". Tessellating an
+  already-cached `BrepSolid` is downstream of the lowering, so it may observe a token; the
+  lowering that produced it may not. `MeshSdf` and the winding hierarchy were measured
+  (21.8 ms and 29.2 ms on 32 040 triangles) and left un-plumbed on purpose — viewer
+  cancellation is granular to a whole part, so checkpoints inside a 20 ms constructor buy
+  nothing.
+- **Reuse the hierarchy you already have.** `Region2dBoolean`'s 2D nearest-edge query goes
+  through the 3D `Bvh` with edges embedded at z = 0, so the branch-and-bound prunes with
+  exactly the 2D box distance; a second 2D-only hierarchy would have to be maintained
+  forever for no gain. It is bit-identical because only the minimum *distance* is
+  consumed, never which edge attained it — and a minimum over doubles is order-independent.
+  Worth checking that property explicitly before claiming any indexing change is free.
+- **A swept surface's inverse evaluation is 1D too, but the reduction is geometric rather
+  than algebraic.** Extrusions and revolves reduce because one parameter has a closed
+  form. A `SweptSurface` has no such parameter — yet its points at path parameter v all
+  lie in the frame plane at v, so `f(v) = (p − Path(v))·Tangent(v) = 0` determines v with
+  no reference to u at all. The generalization: **when a surface is a sweep, look for a
+  scalar condition the path parameter satisfies alone; it need not be a closed form.**
+  Because f is multi-rooted on a curving path the solve is bracket-and-bisect rather than
+  seed-and-Newton — the bracket is what guarantees convergence.
+- **A seed table of the profile is not a seed table of the surface.** The generator a
+  sweep carries is projected into the start frame before it becomes profile offsets, and
+  that projection can be far thinner than the generator. Two branches then fit inside one
+  seed interval, the sampled distance shows one broad minimum spanning both, and Newton
+  from the single best seed converges to the *mirrored* parameter — an answer that is on
+  the surface, passes every structural check, and is tens of millimetres wrong. Refining
+  from every local minimum and its neighbours fixes it combinatorially, with no new
+  epsilon.
+- **Biarc fitting is offered, never applied.** Marching-tracer output stays a
+  `PolylineCurve3d`; a caller opts in and receives the deviation the fit achieved, measured
+  against the input samples. The metric deliberately says nothing about the true curve
+  *between* samples — that is a property of the sampling, not of the fit — and non-planar
+  input is refused rather than flattened. Two construction rules: the free parameter uses
+  the conjugate-multiplied form `d = |v|²/(√disc + v·t)`, which removes the reference
+  implementation's branch on a squared quantity by *being* both branches; and the second
+  arc is built backwards from the end point so round-off concentrates on the interior
+  joint, never on a data point a neighbouring piece has to hand over.
+- **`BrepSolid.Clone()` is what makes "booleans consume their inputs" survivable.**
+  Geometry is shared, not copied — curves and surfaces are immutable once constructed
+  (trimming produces new `CurveSegment`s rather than editing carriers), so only topology
+  needs duplicating and a clone is cheap.
+- **Mass properties store the volume-weighted second moment, not the inertia tensor.**
+  I = tr(S)·Id − S is a one-liner in either direction, but S is what transforms as a clean
+  congruence and what adds under the parallel-axis theorem, so `Transformed`,
+  `InertiaAbout`, `WithDensity` and `Combine` are two lines each instead of four special
+  cases — and the stored quantity stays density-free. `Transformed` refuses shear and
+  non-uniform scale: volume, centroid and inertia are well-defined under a general affine
+  map but *surface area* is not a function of the input properties there, and refusing
+  beats returning a silently-wrong area.
+- **Never integrate moments about the world origin.** The divergence-theorem sum is over
+  terms of size |r|³ that cancel down to the volume, so a 10 mm cube posed at
+  (1e6, 2e6, 3e6) measures 6.5e-7 relative about the origin and 5.2e-12 about its own
+  bounding-box centre. Re-centring costs one subtraction per vertex. The companion testing
+  lesson: **an axis-aligned box at a round offset is a useless fixture for a cancellation
+  test** — its coordinates are integers, its products are exact below 2⁵³, the errors
+  cancel to zero, and the first version of the test "passed" while proving nothing. Rotate
+  first.
+- **`Validate()` is blind to geometric wire gaps.** It compares vertex *references*, so a
+  sewn face soup passes it and then dies in the tessellator as a bow-tie vertex. This is
+  the B-Rep analogue of the "closed but wrong" boolean lesson: a structural check that
+  cannot see a geometric defect. Topological repair and geometric repair are different
+  jobs, which is why healing has a separate refit pass and why its test measures the wire
+  gap directly instead of trusting `Validate()`.
+- **Explode rides the flattening, not a second path.** An exploded view is a scalar
+  composed into each occurrence frame's origin during `Flatten`; everything downstream —
+  window, offscreen render, STEP export, BOM — is unchanged code. The load-bearing property
+  is that the instance *list* (count, order, part references) is identical at every
+  factor, which is what makes a matrix-only viewport update legal and keeps shared
+  meshes, buffers and pick BVHs shared throughout an animation. And the datum is the
+  largest body, never the centroid: a centroid-relative radial rule degenerates exactly
+  when it matters, because on a spread-out assembly the centroid sits in empty space and
+  the base flies away from nothing.
+- **Mates are a small dense nonlinear least-squares problem, deliberately.** Six unknowns
+  per free occurrence, an analytic Jacobian, one global length scale making residuals and
+  columns dimensionally uniform, and rank from a pivoted Cholesky. That is enough for the
+  mates people actually use, converges to the weld tier, and — critically — can *report*
+  what it did not pin. A general variational solver that occasionally converges would be
+  worse. Angle and perpendicular mates have a genuine singular start (d/dθ cos θ = 0 at
+  θ = 0); that is the derivative of a cosine, not a bug to engineer around, so the solver
+  detects it and names the cause.
+- **STEP assemblies share products the way the display path shares parts.** Reference
+  identity on the solid gives one PRODUCT and N occurrences; posing the geometry and
+  writing it N times would throw away the structure the format exists to carry.
 - **Surface Nets streams the grid in a window of x-slabs.** The dense sampler's *memory*
   was the wall on resolution, not its speed. Cells only ever need value slabs i and i+1
   and cell maps for i−1 and i, so the whole algorithm fits a sliding window; sizing that
