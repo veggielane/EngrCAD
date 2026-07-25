@@ -84,8 +84,17 @@ concerns.
   the cell boundary contains every operand edge, the sample can never sit on A's or B's
   boundary, so `Contains`'s closed-set convention never has to decide a tie.
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
-  centroid axis, flat node array, allocation-free stack traversal). Queries (all
-  zero-allocation per query, results appended to caller-provided lists):
+  centroid axis, flat node array, allocation-free stack traversal). The build sorts the
+  item permutation per node through a **contiguous key array** (`Array.Sort(double[],
+  int[])`) rather than an `IComparer<int>` over scattered centroids, and **forks sibling
+  subtrees onto the thread pool** above 4096 items (capped at ~2^(log2 cores + 1) tasks so
+  a nested caller cannot flood the pool); a canonical renumbering pass replays the
+  sequential node numbering afterwards, so **the tree is bit-identical to the original
+  builder's** — item permutation, node ranges and bounds — and independent of scheduling
+  (locked by fingerprint tests in `BvhBuildOrderTests`, which every future builder rewrite
+  must reproduce). Measured on 8 cores: 32 400 triangle boxes 22.6 ms → 4.6 ms (4.9×),
+  130 000 random boxes 142.5 ms → 33.6 ms. Queries (all zero-allocation per query, results
+  appended to caller-provided lists):
   - box overlap and ray candidate queries (`Query`);
   - `QueryAll(ray, List<BvhRayHit>)` — every item whose box the ray passes through,
     ordered by ascending box entry t (ties by item index). Collect-then-range-sort:
@@ -142,8 +151,25 @@ concerns.
     in-plane spread (largest) — a natural deterministic in-plane basis. Throws when
     the points don't determine a plane.
   - `Fitting3d.FitBox` → `OrientedBox3d` (a `Frame3d` + half extents) — PCA oriented
-    box, re-centered to the tightest box with the PCA axes (good-fit heuristic, not
-    the minimum-volume box).
+    box, re-centered to the tightest box with the PCA axes (good-fit heuristic, needs no
+    hull, tolerates degenerate clouds).
+  - `Fitting3d.MinVolumeBox(hullVertices, hullTriangles)` → `OrientedBox3d` — the
+    **minimum-volume** oriented box. **The 2D calipers theorem does not lift to 3D**: the
+    minimum-volume box need NOT have a face flush with a hull face (Freeman–Shapira, and a
+    great many implementations, assume it does). The regular tetrahedron on alternate
+    corners of [−1, 1]³ is bounded by that cube at volume 8 while every face-flush
+    candidate measures 16 — locked by a test. What holds is **O'Rourke's**
+    characterization: at least two ADJACENT box faces each contain a hull EDGE, which makes
+    each pair of hull edge directions a one-parameter family (swept + golden-section
+    refined; unordered, so only j > i is searched). Face-flush candidates are evaluated
+    exactly on top of that — inside a face's plane the 2D calipers theorem *does* apply —
+    and PCA + axis-aligned seed the search, so the result can never lose to `FitBox`.
+    The **hull is the caller's to supply**, deliberately: Core owns no polyhedron type and
+    the 3D quickhull lives in EngrCAD.Mesh because it speaks `HalfEdgeMesh`; passing the
+    hull as plain data (`ConvexHull.Compute(points).Triangulated().ToIndexed()`, a B-Rep
+    solid's planar faces, or one the caller already has) keeps the layering intact. Cost is
+    O(E² · h) — measured 3.6 / 22 / 122 ms for 18 / 42 / 78-vertex hulls on 8 cores, with
+    the edge loop parallelized deterministically (own slot per index, in-order reduction).
   - All built on an internal cyclic-Jacobi `SymmetricEigen3` (3×3 symmetric
     eigen-decomposition, unconditionally convergent).
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over
