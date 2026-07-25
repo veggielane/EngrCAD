@@ -116,7 +116,10 @@ public class ExactBooleanTests
 
         exact.Validate();
         Assert.True(exact.IsClosed);
-        Assert.Equal(MeshBoolean.Difference(box, sphere).SignedVolume(), exact.SignedVolume(), 9);
+        // Named explicitly: Exact is the default now, so the two-argument overload would
+        // make this a tautology rather than a cross-check.
+        Assert.Equal(
+            MeshBoolean.Difference(box, sphere, BooleanMethod.Bsp).SignedVolume(), exact.SignedVolume(), 9);
     }
 
     [Fact]
@@ -143,11 +146,12 @@ public class ExactBooleanTests
         var vertical = MeshPrimitives.Cylinder(1.0, 6.0, 48).Transformed(Matrix4d.CreateTranslation((0, 0, -3)));
         var horizontal = vertical.Transformed(Matrix4d.CreateRotationX(Math.PI / 2));
 
+        const BooleanMethod Bsp = BooleanMethod.Bsp; // named: Exact is the default now
         foreach (var (exact, bsp) in new[]
         {
-            (MeshBoolean.Union(vertical, horizontal, Exact), MeshBoolean.Union(vertical, horizontal)),
-            (MeshBoolean.Difference(vertical, horizontal, Exact), MeshBoolean.Difference(vertical, horizontal)),
-            (MeshBoolean.Intersection(vertical, horizontal, Exact), MeshBoolean.Intersection(vertical, horizontal)),
+            (MeshBoolean.Union(vertical, horizontal, Exact), MeshBoolean.Union(vertical, horizontal, Bsp)),
+            (MeshBoolean.Difference(vertical, horizontal, Exact), MeshBoolean.Difference(vertical, horizontal, Bsp)),
+            (MeshBoolean.Intersection(vertical, horizontal, Exact), MeshBoolean.Intersection(vertical, horizontal, Bsp)),
         })
         {
             exact.Validate();
@@ -170,7 +174,7 @@ public class ExactBooleanTests
         var cylinder = MeshPrimitives.Cylinder(0.999999999, 4, 64)
             .Transformed(Matrix4d.CreateTranslation((0, 0, -2)));
 
-        var bsp = MeshBoolean.Difference(box, cylinder);
+        var bsp = MeshBoolean.Difference(box, cylinder, BooleanMethod.Bsp);
         Assert.False(bsp.IsClosed, "this test exists because the BSP path cracks here");
 
         var exact = MeshBoolean.Difference(box, cylinder, Exact);
@@ -188,7 +192,7 @@ public class ExactBooleanTests
         var a = Box(0, 0, 0, 2 * s, 2 * s, 2 * s);
         var b = Box(s, s, s, 3 * s, 3 * s, 3 * s);
 
-        Assert.Equal(0, MeshBoolean.Union(a, b).FaceCount);
+        Assert.Equal(0, MeshBoolean.Union(a, b, BooleanMethod.Bsp).FaceCount);
 
         AssertSolid(MeshBoolean.Union(a, b, Exact), 15 * s * s * s, expectedEuler: 2);
         AssertSolid(MeshBoolean.Intersection(a, b, Exact), s * s * s, expectedEuler: 2);
@@ -336,18 +340,34 @@ public class ExactBooleanTests
     }
 
     [Fact]
-    public void DefaultMethodIsUnchanged()
+    public void TheDefaultMethodIsExact()
     {
-        // The two-argument overloads must keep producing exactly what they always did.
+        // The two-argument overloads route to the imprint boolean. This is the whole point
+        // of the coincident-surface work: the exact path is no longer opt-in, so a scene
+        // built with plain MeshBoolean.Union gets the scale-free, near-tangency-proof
+        // algorithm without asking.
         var a = Box(0, 0, 0, 2, 2, 2);
         var b = Box(1, 1, 1, 3, 3, 3);
 
         var (positions, faces) = MeshBoolean.Union(a, b).ToIndexed();
-        var (bspPositions, bspFaces) = MeshBoolean.Union(a, b, BooleanMethod.Bsp).ToIndexed();
+        var (exactPositions, exactFaces) = MeshBoolean.Union(a, b, Exact).ToIndexed();
 
-        Assert.Equal(bspPositions, positions);
-        Assert.Equal(bspFaces.Count, faces.Count);
+        Assert.Equal(exactPositions, positions);
+        Assert.Equal(exactFaces.Count, faces.Count);
         for (int f = 0; f < faces.Count; f++)
-            Assert.Equal(bspFaces[f], faces[f]);
+            Assert.Equal(exactFaces[f], faces[f]);
+
+        // And the BSP path is still reachable, unchanged, for anyone who needs it.
+        Assert.Equal(15.0, MeshBoolean.Union(a, b, BooleanMethod.Bsp).SignedVolume(), 9);
+    }
+
+    [Fact]
+    public void FlushMatingPartsWorkThroughTheDefaultOverload()
+    {
+        // The case that kept the default on BSP. No method argument, no ceremony.
+        var lower = Box(0, 0, 0, 1, 1, 1);
+        var upper = Box(0, 0, 1, 1, 1, 2);
+
+        AssertSolid(MeshBoolean.Union(lower, upper), 2, expectedEuler: 2);
     }
 }

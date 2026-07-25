@@ -6,18 +6,18 @@ namespace EngrCAD.Mesh;
 public enum BooleanMethod
 {
     /// <summary>
-    /// BSP clipping (csg.js) plus a seam-zipping pass — the original implementation and
-    /// still the default. Fast and tolerant of coplanar operands, but its degeneracy tests
-    /// are absolute (1e-9): it discards every polygon of a model at ~1e-5 scale and leaves
-    /// boundary edges where two surfaces come within 1e-9 of tangency.
+    /// BSP clipping (csg.js) plus a seam-zipping pass — the original implementation, kept
+    /// for comparison and as an escape hatch. Its degeneracy tests are absolute (1e-9): it
+    /// discards every polygon of a model at ~1e-5 scale and leaves boundary edges where two
+    /// surfaces come within 1e-9 of tangency.
     /// </summary>
     Bsp,
 
     /// <summary>
     /// Exact intersection imprint (<see cref="MeshMeshCut"/>) + winding-number
-    /// classification. Scale-free (every guard is relative to the operands' extent), and
-    /// the two halves weld by exact coordinate equality rather than by tolerance.
-    /// Coplanar overlapping faces are rejected instead of approximated.
+    /// classification, with coincident (coplanar-overlapping) surface classified by normal
+    /// agreement. Scale-free — every guard is relative to the operands' extent — and the
+    /// two halves weld by exact coordinate equality rather than by tolerance. The default.
     /// </summary>
     Exact,
 }
@@ -34,34 +34,34 @@ internal enum BooleanOperation
 /// Boolean operations on closed meshes. Inputs are triangulated internally; both must be
 /// closed with outward winding.
 /// <para>
-/// The default <see cref="BooleanMethod.Bsp"/> path clips BSP trees (csg.js approach).
+/// The default <see cref="BooleanMethod.Exact"/> path is the imprint boolean: cut both
+/// meshes along their exact common curve, classify each surface patch by the other mesh's
+/// generalized winding number — or, where the two solids share boundary instead of
+/// crossing it, by normal agreement — keep the halves the operation calls for, and weld by
+/// exact coordinate equality. Every guard is relative to the operands' extent, so it is
+/// scale-free and survives near-tangency.
+/// </para>
+/// <para>
+/// <see cref="BooleanMethod.Bsp"/> selects the older BSP-tree clipper (csg.js approach).
 /// It tessellates the two sides of an intersection seam independently (T-junctions), so a
 /// seam-zipping pass inserts the matching vertices on both sides before rebuilding —
 /// results are topologically closed for well-conditioned inputs. Near-degenerate inputs
 /// (tangent surfaces) and models far from unit scale remain fragile, because every
 /// constant in it is absolute.
 /// </para>
-/// <para>
-/// <see cref="BooleanMethod.Exact"/> selects the imprint boolean instead: cut both meshes
-/// along their exact common curve, classify each surface patch by the other mesh's
-/// generalized winding number, keep the halves the operation calls for, and weld. Its
-/// guards are relative to the operands' extent, so it is scale-free and survives
-/// near-tangency; it rejects coplanar overlapping faces rather than guessing at them.
-/// </para>
 /// </summary>
 public static class MeshBoolean
 {
     /// <summary>
-    /// The method the two-argument overloads use. Flipping this one constant to
-    /// <see cref="BooleanMethod.Exact"/> was measured against the whole solution suite:
-    /// every test in every project passes except the ones that pin BSP behaviour on
-    /// purpose, so the exact path is a drop-in for everything the codebase does today.
-    /// It stays on <see cref="BooleanMethod.Bsp"/> for one reason — the exact path
-    /// REJECTS coplanar overlapping faces (flush-mating operands, e.g. stacking two boxes
-    /// face to face) where BSP produces the right answer. Flip it once coplanar overlaps
-    /// are classified rather than refused.
+    /// The method the two-argument overloads use. It moved to
+    /// <see cref="BooleanMethod.Exact"/> once coincident (coplanar-overlapping) surface was
+    /// classified rather than refused — flush-mating operands, e.g. stacking two boxes face
+    /// to face, were the last thing BSP did that the exact path could not. The flip was
+    /// measured against the whole solution suite: every test in every project passes, bar
+    /// the ones that pin BSP behaviour on purpose, which now name
+    /// <see cref="BooleanMethod.Bsp"/> explicitly.
     /// </summary>
-    private const BooleanMethod DefaultMethod = BooleanMethod.Bsp;
+    private const BooleanMethod DefaultMethod = BooleanMethod.Exact;
 
     /// <summary>Everything in either solid.</summary>
     public static HalfEdgeMesh Union(HalfEdgeMesh a, HalfEdgeMesh b, BooleanMethod method) =>

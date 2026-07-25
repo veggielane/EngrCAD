@@ -61,9 +61,9 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   coplanar) throw with the reason. Output goes through the manifold-validating `Build`
   as a safety net.
 - **`MeshBoolean`** — union/difference/intersection, two algorithms behind one API.
-  `BooleanMethod.Bsp` (the default) clips BSP trees (csg.js) plus a seam-zipping pass so
-  results come out topologically closed. `BooleanMethod.Exact` selects the **imprint
-  boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
+  `BooleanMethod.Exact` is **the default**; `BooleanMethod.Bsp` keeps the older BSP-tree
+  clipper (csg.js plus a seam-zipping pass) reachable for comparison. The default is the
+  **imprint boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
   flood-fill each mesh's faces into **patches** bounded by that curve, classify each patch
   once by the other mesh's `MeshWindingNumber` at the centroid of its largest triangle,
   keep the halves the operation calls for (difference reverses the tool's kept patches),
