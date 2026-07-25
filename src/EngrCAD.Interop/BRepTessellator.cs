@@ -201,10 +201,10 @@ public static class BRepTessellator
         Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
         double[] uParams, double[] vParams, bool closedU, bool closedV)
     {
-        // Seam-scale (~1e-7) boundary match: loop samples vs the natural grid boundary
-        // agree to tessellation error, not weld precision; 1e-18 = (1e-9)² is the
-        // squared weld tolerance for the all-points-coincident pole test.
-        const double tolerance = 1e-7;
+        // Ladder seam tier: loop samples vs the natural grid boundary agree to
+        // tessellation error, not weld precision; 1e-18 = (1e-9)² is the squared weld
+        // tolerance for the all-points-coincident pole test.
+        const double tolerance = FaceGeometry.SeamTolerance;
         var surface = face.Surface;
         var boundary = new List<Vector3d>();
 

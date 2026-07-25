@@ -132,4 +132,23 @@ public class FaceGeometryTests
             new Aabb((3, -2, -1), (7, 2, 2))));
         Assert.Throws<ArgumentException>(() => FaceSplitter.SplitByClosedCurve(split.FaceWithHole, farCircle));
     }
+
+    /// <summary>
+    /// Locks the epsilon ladder's two named B-Rep tiers to their documented values.
+    /// These are boolean-critical: <c>SealSeams</c>, the tessellator's full-domain
+    /// boundary match and <c>Profile</c>'s chain join all key on the seam tier, while
+    /// every pullback call site keys on the inverse-evaluation tier. A "cleanup" that
+    /// tightens either toward the 1e-9 weld tolerance silently unwelds boolean output,
+    /// so the values are asserted exactly rather than tolerantly.
+    /// </summary>
+    [Fact]
+    public void EpsilonLadder_NamedTiers_HoldTheirDocumentedValues()
+    {
+        Assert.Equal(1e-7, FaceGeometry.SeamTolerance);
+        Assert.Equal(1e-6, FaceGeometry.InverseEvaluationTolerance);
+
+        // Ordering is the invariant that matters: weld < seam < inverse evaluation.
+        Assert.True(Tolerance.Default.Linear < FaceGeometry.SeamTolerance);
+        Assert.True(FaceGeometry.SeamTolerance < FaceGeometry.InverseEvaluationTolerance);
+    }
 }

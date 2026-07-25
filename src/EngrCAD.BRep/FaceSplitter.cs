@@ -49,10 +49,10 @@ public static class TopologyEditor
     /// </summary>
     public static void SealSeams(IReadOnlyList<BrepFace> keptFaces)
     {
-        // Boolean-critical absolute value: seam vertices built independently on the two
-        // sides coincide only to tracer/projection error (~1e-7) — looser than the 1e-9
-        // weld tolerance, tighter than the 1e-6 inverse-evaluation tolerance.
-        const double tolerance = 1e-7;
+        // Boolean-critical: seam vertices built independently on the two sides coincide
+        // only to tracer/projection error, so this is the ladder's seam tier — looser
+        // than the 1e-9 weld tolerance, tighter than the inverse-evaluation tolerance.
+        const double tolerance = FaceGeometry.SeamTolerance;
         var keptSet = keptFaces.ToHashSet();
         var edges = keptFaces.SelectMany(f => f.Loops).SelectMany(l => l.Coedges)
             .Select(c => c.Edge).Distinct().ToList();
@@ -127,6 +127,19 @@ public static class TopologyEditor
 /// </summary>
 public static class FaceSplitter
 {
+    /// <summary>
+    /// Deduplication window in <b>curve-parameter</b> space (not model units), used when
+    /// merging crossings that name the same point: an endpoint hit reported by two
+    /// adjacent boundary edges, or a mandatory boolean seam break landing on a crossing
+    /// the arrangement already found. Both sides are computed by different routes
+    /// (Newton refinement vs the other solid's split parameters), so they agree only to
+    /// refinement error. Curve domains here are O(1) (unit segments, radians, arc
+    /// lengths of modeling-scale features), which is why an absolute window works; the
+    /// end-of-domain guards nearby scale by <c>Domain.Length</c> instead because they
+    /// must stay meaningful on arbitrarily reparameterized curves.
+    /// </summary>
+    private const double CrossingParameterDedupe = 1e-8;
+
     /// <summary>
     /// Splits a face along a closed curve lying in its interior. The original face's
     /// loops are kept and the curve becomes an inner (hole) loop wound opposite the outer
@@ -346,7 +359,7 @@ public static class FaceSplitter
         foreach (double breakParam in mandatoryBreaks ?? [])
         {
             double s = WrapParam(curve, curve.Domain.Clamp(breakParam));
-            if (crossings.Any(c => Math.Abs(c.CurveParam - s) < 1e-8))
+            if (crossings.Any(c => Math.Abs(c.CurveParam - s) < CrossingParameterDedupe))
                 continue;
             if (!surface.TryProjectPoint(curve.PointAt(s), out var uv, FaceGeometry.InverseEvaluationTolerance))
                 continue; // off this face's surface — the break belongs elsewhere
@@ -389,7 +402,7 @@ public static class FaceSplitter
             .OrderBy(c => c.CurveParam)
             .Aggregate(new List<Crossing>(), (list, c) =>
             {
-                if (list.Count == 0 || Math.Abs(list[^1].CurveParam - c.CurveParam) > 1e-8)
+                if (list.Count == 0 || Math.Abs(list[^1].CurveParam - c.CurveParam) > CrossingParameterDedupe)
                     list.Add(c);
                 return list;
             });
@@ -436,7 +449,7 @@ public static class FaceSplitter
         foreach (double raw in mandatoryBreaks ?? [])
         {
             double s = WrapParam(curve, curve.Domain.Clamp(raw));
-            if (!breaks.Any(existing => Math.Abs(existing - s) < 1e-8))
+            if (!breaks.Any(existing => Math.Abs(existing - s) < CrossingParameterDedupe))
                 breaks.Add(s);
         }
         if (breaks.Count < 2)

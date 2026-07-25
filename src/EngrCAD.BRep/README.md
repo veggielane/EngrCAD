@@ -211,6 +211,31 @@ operations. Depends only on `EngrCAD.Core`.
   Units: millimetres assumed; other declared length units produce a diagnostic, not
   scaling.
 
+### Named epsilon tiers
+
+The epsilon ladder documented in `CLAUDE.md` has two named B-Rep constants, both on
+`FaceGeometry`, both boolean-critical and both locked by
+`FaceGeometryTests.EpsilonLadder_NamedTiers_HoldTheirDocumentedValues`:
+
+- `FaceGeometry.SeamTolerance` (**1e-7, seam tier**) — the distance at which geometry
+  constructed *independently* on the two sides of one shared curve still counts as
+  coincident. Used by `TopologyEditor.SealSeams` (vertex unification + seam-edge
+  merging), `Profile`'s chain-join check, and Interop's `BRepTessellator`
+  full-domain boundary match. Geometry built EXACTLY on both sides (tessellation
+  welds, mandatory seam breaks, clone dedupe) stays on the 1e-9 weld tier — do not
+  promote those sites here.
+- `FaceGeometry.InverseEvaluationTolerance` (**1e-6, inverse-evaluation tier**) — every
+  `Surface.TryProjectPoint` pullback in BRep and Interop.
+
+`FaceSplitter.CrossingParameterDedupe` (1e-8) is a *curve-parameter*-space window, not
+model units: it merges crossings that name the same point (an endpoint hit reported by
+two adjacent boundary edges; a mandatory boolean break landing on a crossing the
+arrangement already found). The end-of-domain guards beside it scale by `Domain.Length`
+instead, because they must stay meaningful on arbitrarily reparameterized curves.
+
+`SurfaceIntersection.TracerSettings` collects the marching tracer's own constants; see
+the surface-intersection section above.
+
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator` +
 `TrimmedFaceTessellator` for faces whose loops don't cover the surface's grid domain).
 Helical bands tessellate as sheared grids whose columns are iso-axial rungs — the
