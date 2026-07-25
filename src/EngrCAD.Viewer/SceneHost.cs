@@ -448,12 +448,12 @@ internal sealed class SceneHost
         if (!string.Equals(completion.TabName, _currentTab ?? "", StringComparison.Ordinal))
             return;
 
-        var log = EngrCad.CurrentOptions.Log ?? EngrCadLog.Console;
+        var log = EngrCadLoggers.Resolve(EngrCad.CurrentOptions);
         if (completion.Failures.Count > 0)
         {
             foreach (var failure in completion.Failures)
             {
-                log.Error($"part '{failure.PartName}' failed to mesh: {failure.Message}");
+                Log.PartFailedToMesh(log, failure.PartName, failure.Message);
                 foreach (var instance in _tabInstances)
                 {
                     if (instance.Part.Name == failure.PartName)

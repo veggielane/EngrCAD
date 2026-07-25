@@ -1,5 +1,6 @@
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
+using Microsoft.Extensions.Logging;
 
 namespace EngrCAD.Mcp;
 
@@ -61,11 +62,12 @@ public static class EngrCadMcp
         ArgumentNullException.ThrowIfNull(options);
 
         using var guard = StdoutGuard.Claim();
-        // Only when the caller did not configure a sink: EngrCadLog.Console writes Info
-        // with Console.WriteLine, which the guard has already sent to stderr, but being
-        // explicit means a future default cannot quietly reintroduce the bug.
-        options.Log ??= EngrCadLog.From(message => Console.Error.WriteLine(message));
-        var log = options.Log;
+        // Only when the caller did not configure a sink. The default console logger
+        // already resolves Console.Out per call, which the guard has pointed at stderr —
+        // but naming the stderr sink explicitly means a future default cannot quietly
+        // reintroduce the bug.
+        options.Logger ??= EngrCadLoggers.StandardError;
+        var log = options.Logger;
 
         SceneSession session;
         try
@@ -75,13 +77,12 @@ public static class EngrCadMcp
         }
         catch (Exception e)
         {
-            log.Error($"model error: {e.GetType().Name}: {e.Message}");
+            McpLog.ModelError(log, e);
             return 1;
         }
 
         var tools = new SceneTools(session);
-        log.Info($"engrcad mcp: serving '{options.Title}' "
-               + $"({session.Scene.Tabs.Count} tab(s), {session.Scene.AllParts.Count()} part(s)) on stdio");
+        McpLog.Serving(log, options.Title, session.Scene.Tabs.Count, session.Scene.AllParts.Count());
 
         try
         {
@@ -96,8 +97,24 @@ public static class EngrCadMcp
         }
         catch (Exception e)
         {
-            log.Error($"mcp server error: {e.GetType().Name}: {e.Message}");
+            McpLog.ServerError(log, e);
             return 1;
         }
     }
+}
+
+/// <summary>The MCP server's log vocabulary — source-generated message templates, like
+/// the viewer's. The exception overloads carry the exception itself rather than a
+/// pre-formatted string, so a structured sink keeps the type and stack.</summary>
+internal static partial class McpLog
+{
+    [LoggerMessage(EventId = 60, Level = LogLevel.Error, Message = "model error")]
+    internal static partial void ModelError(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 61, Level = LogLevel.Information,
+        Message = "engrcad mcp: serving '{Title}' ({TabCount} tab(s), {PartCount} part(s)) on stdio")]
+    internal static partial void Serving(ILogger logger, string title, int tabCount, int partCount);
+
+    [LoggerMessage(EventId = 62, Level = LogLevel.Error, Message = "mcp server error")]
+    internal static partial void ServerError(ILogger logger, Exception exception);
 }

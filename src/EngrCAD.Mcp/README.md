@@ -69,8 +69,10 @@ lands in the middle of the frame stream and every connected client breaks.
 protocol frames and then points `Console.Out` at **stderr**, so anything written
 through `Console.Write*` anywhere in the process afterwards goes to stderr (where MCP
 clients surface it as server logging). The scene factory is invoked *after* that
-redirection, so a model that prints while it builds is safe. The `IEngrCadLog` seam is
-pointed at stderr too when the caller has not configured one.
+redirection, so a model that prints while it builds is safe. The `ILogger` is pointed
+at `EngrCadLoggers.StandardError` too when the caller has not configured one — the
+default console logger resolves `Console.Out` on every call, so it already follows the
+guard, but naming the stderr sink means a future default cannot quietly undo this.
 
 The one thing this cannot defend against is code that opens the standard-output handle
 itself or writes to file descriptor 1 natively. Nothing in EngrCAD does.

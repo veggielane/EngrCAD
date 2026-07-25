@@ -79,8 +79,10 @@ return EngrCad.Configure()
 
 The builder wraps a plain `EngrCadOptions` POCO, so generic-host apps can bind it as
 `IOptions<EngrCadOptions>` and pass it via `EngrCad.Configure(options.Value)`;
-`.WithLog(...)` routes status and error reporting to any delegate or `ILogger`
-without the viewer depending on `Microsoft.Extensions.*`.
+`.WithLogger(logger)` / `.WithLoggerFactory(factory)` route status and error
+reporting to any `ILogger` (the viewer takes
+`Microsoft.Extensions.Logging.Abstractions` — abstractions only, so you still choose
+the sink). Unconfigured, it writes to the console; `NullLogger.Instance` silences it.
 
 ## The live-modeling loop
 

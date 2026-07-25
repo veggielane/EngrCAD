@@ -6,7 +6,7 @@ namespace EngrCAD.Mcp;
 /// A single stray <c>Console.WriteLine</c> — from the design program, from a library,
 /// from <c>EngrCad.Run</c>'s own "wrote part.step" reporting — lands in the middle of
 /// the frame stream and every connected client breaks, usually with an unhelpful parse
-/// error. Routing the <see cref="Viewer.IEngrCadLog"/> seam to stderr is not enough,
+/// error. Routing the <see cref="Viewer.EngrCadOptions.Logger"/> to stderr is not enough,
 /// because model code is arbitrary user code.</para>
 /// <para><b>What it does:</b> takes the real stdout <i>handle</i> for the protocol and
 /// then points <see cref="Console.Out"/> at stderr. Anything written through

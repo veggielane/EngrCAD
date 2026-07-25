@@ -1,5 +1,6 @@
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace EngrCAD.Viewer.Tests;
@@ -34,7 +35,7 @@ public class BuilderRenderTests
         var path = Path.Combine(Path.GetTempPath(), $"engrcad-builder-flow-{Guid.NewGuid():N}.png");
         try
         {
-            var builder = configure(EngrCad.Configure().WithRenderSize(160, 120).WithLog(_ => { }));
+            var builder = configure(EngrCad.Configure().WithRenderSize(160, 120).WithLogger(NullLogger.Instance));
             Assert.Equal(0, builder.Run(["--render", path, .. extraArgs], BoxScene));
             return File.ReadAllBytes(path);
         }
@@ -71,13 +72,13 @@ public class BuilderRenderTests
     {
         Skip.If(SkipReason is not null, SkipReason);
 
-        var messages = new List<string>();
+        var capture = new ListLogger();
         var path = Path.Combine(Path.GetTempPath(), $"engrcad-builder-render-{Guid.NewGuid():N}.png");
         try
         {
             int code = EngrCad.Configure()
                 .WithRenderSize(200, 150)
-                .WithLog(messages.Add)
+                .WithLogger(capture)
                 .Run(["--render", path], () =>
                 {
                     var scene = new Scene();
@@ -86,7 +87,7 @@ public class BuilderRenderTests
                 });
             Assert.Equal(0, code);
             Assert.Equal((200, 150), PngSize(path));
-            Assert.Contains(messages, m => m.Contains("wrote"));
+            Assert.Contains(capture.Infos, m => m.Contains("wrote"));
         }
         finally
         {

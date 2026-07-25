@@ -6,6 +6,7 @@ using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Mesh;
 using EngrCAD.Modeling;
+using Microsoft.Extensions.Logging;
 
 namespace EngrCAD.Viewer;
 
@@ -142,7 +143,7 @@ public static class EngrCad
     internal static void ShowLiveCore(Func<Scene> sceneFactory, EngrCadOptions options)
     {
         _liveFactory = sceneFactory;
-        var log = options.Log ?? EngrCadLog.Console;
+        var log = EngrCadLoggers.Resolve(options);
         string title = options.Title;
 
         Scene scene;
@@ -158,7 +159,7 @@ public static class EngrCad
         }
 
         if (startupError is not null)
-            log.Error($"model error: {startupError} (showing empty scene)");
+            Log.ModelErrorAtStartup(log, startupError);
 
         ShowCore(scene, options, viewport =>
         {
@@ -196,7 +197,7 @@ public static class EngrCad
 
     internal static int RunCore(string[] args, Func<Scene> sceneFactory, EngrCadOptions options)
     {
-        var log = options.Log ?? EngrCadLog.Console;
+        var log = EngrCadLoggers.Resolve(options);
 
         // Render options are parsed up front so a typo fails fast with a usage error
         // (exit 2) regardless of which mode was requested; they only affect --render.
@@ -205,7 +206,7 @@ public static class EngrCad
         {
             if (styleIndex + 1 >= args.Length || !TryParseStyle(args[styleIndex + 1], out var style))
             {
-                log.Error("--render-style requires a style: points, wireframe, shaded, or shaded-edges");
+                Log.UsageRenderStyle(log);
                 return 2;
             }
             options.RenderStyle = style;
@@ -233,8 +234,7 @@ public static class EngrCad
             }
             if (planes.Count == 0)
             {
-                log.Error("--section requires an axis (x, y, or z) and a numeric offset, e.g. --section z 6"
-                        + " (repeat the pair for a quarter or octant cut: --section x 0 y 0)");
+                Log.UsageSection(log);
                 return 2;
             }
             options.SectionPlanes = planes.Count > 1 ? planes : null;
@@ -245,7 +245,7 @@ public static class EngrCad
         {
             if (aoIndex + 1 >= args.Length || !TryParseSwitch(args[aoIndex + 1], out bool ao))
             {
-                log.Error("--ao requires on or off");
+                Log.UsageAmbientOcclusion(log);
                 return 2;
             }
             options.AmbientOcclusion = ao;
@@ -256,8 +256,7 @@ public static class EngrCad
         {
             if (meshIndex + 1 >= args.Length || !TryParseMeshMode(args[meshIndex + 1], out bool lazy))
             {
-                log.Error("--mesh requires lazy (mesh each tab when it is first shown) or all"
-                        + " (mesh the whole document before the window opens)");
+                Log.UsageMeshMode(log);
                 return 2;
             }
             options.LazyTabMeshing = lazy;
@@ -268,7 +267,7 @@ public static class EngrCad
         {
             if (exportIndex + 1 >= args.Length)
             {
-                log.Error("--export requires a file path (.step or .obj)");
+                Log.UsageExport(log);
                 return 2;
             }
             return Export(sceneFactory(), args[exportIndex + 1], options, log);
@@ -279,7 +278,7 @@ public static class EngrCad
         {
             if (renderIndex + 1 >= args.Length)
             {
-                log.Error("--render requires a file path (.png)");
+                Log.UsageRender(log);
                 return 2;
             }
             return RenderHeadless(sceneFactory(), args[renderIndex + 1], options, log);
@@ -319,7 +318,7 @@ public static class EngrCad
             var viewport = _liveViewport;
             if (factory is null || viewport is null)
                 return;
-            var log = CurrentOptions.Log ?? EngrCadLog.Console;
+            var log = EngrCadLoggers.Resolve(CurrentOptions);
             try
             {
                 var scene = factory();
@@ -332,15 +331,18 @@ public static class EngrCad
                 // darkens as the viewport's background bake catches up, which is what
                 // keeps a hot-reload edit feeling instant.
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => Host?.SetScene(scene));
-                string status = $"reloaded at {DateTime.Now:HH:mm:ss} — {scene.AllParts.Count()} part(s)";
-                viewport.ShowStatus(status);
-                log.Info(status);
+                // The overlay wants one prose line; the log wants fields. Same facts,
+                // formatted for their own audience.
+                var now = DateTime.Now;
+                int parts = scene.AllParts.Count();
+                viewport.ShowStatus($"reloaded at {now:HH:mm:ss} — {parts} part(s)");
+                Log.Reloaded(log, now, parts);
             }
             catch (Exception e)
             {
-                string status = $"model error: {Describe(e)} (keeping last good scene)";
-                viewport.ShowStatus(status);
-                log.Error(status);
+                string error = Describe(e);
+                viewport.ShowStatus($"model error: {error} (keeping last good scene)");
+                Log.ModelErrorOnReload(log, error);
             }
         });
     }
@@ -393,28 +395,28 @@ public static class EngrCad
 
     // ---- headless render ----
 
-    private static int RenderHeadless(Scene scene, string path, EngrCadOptions options, IEngrCadLog log)
+    private static int RenderHeadless(Scene scene, string path, EngrCadOptions options, ILogger log)
     {
         if (!scene.AllParts.Any())
         {
-            log.Error("The scene has no parts to render.");
+            Log.NothingToRender(log);
             return 1;
         }
         if (!Path.GetExtension(path).Equals(".png", StringComparison.OrdinalIgnoreCase))
         {
-            log.Error($"Unsupported render format '{Path.GetExtension(path)}' — use .png.");
+            Log.UnsupportedRenderFormat(log, Path.GetExtension(path));
             return 2;
         }
         if (!OffscreenRenderer.IsAvailable)
         {
-            log.Error($"Offscreen rendering is not available: {OffscreenRenderer.UnavailableReason}");
+            Log.OffscreenUnavailable(log, OffscreenRenderer.UnavailableReason);
             return 1;
         }
         scene.PreMesh(options.Quality); // meshes cache, so RenderToImage's PreMesh is a no-op
         RenderToImage(scene, path, options.RenderWidth, options.RenderHeight, camera: null,
             options.RenderStyle, options.SectionAxis, options.SectionOffset, options.AmbientOcclusion,
             options.SectionPlanes, options.SectionCombine);
-        log.Info($"wrote {path} ({scene.AllParts.Count()} part(s))");
+        Log.WroteImage(log, path, scene.AllParts.Count());
         return 0;
     }
 
@@ -468,11 +470,11 @@ public static class EngrCad
 
     // ---- headless export ----
 
-    private static int Export(Scene scene, string path, EngrCadOptions options, IEngrCadLog log)
+    private static int Export(Scene scene, string path, EngrCadOptions options, ILogger log)
     {
         if (!scene.AllParts.Any())
         {
-            log.Error("The scene has no parts to export.");
+            Log.NothingToExport(log);
             return 1;
         }
 
@@ -481,25 +483,25 @@ public static class EngrCad
         {
             case ".obj":
                 WriteMergedObj(scene, path, quality);
-                log.Info($"wrote {path} ({scene.AllInstances.Count()} instance(s), merged)");
+                Log.WroteObj(log, path, scene.AllInstances.Count());
                 return 0;
 
             case ".stl":
                 StlWriter.WriteFile(
                     [.. scene.AllInstances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
-                log.Info($"wrote {path} ({scene.AllInstances.Count()} instance(s), merged binary STL)");
+                Log.WroteStl(log, path, scene.AllInstances.Count());
                 return 0;
 
             case ".step" or ".stp":
                 return ExportStep(scene, path, log);
 
             default:
-                log.Error($"Unsupported export format '{Path.GetExtension(path)}' — use .step, .stl, or .obj.");
+                Log.UnsupportedExportFormat(log, Path.GetExtension(path));
                 return 2;
         }
     }
 
-    private static int ExportStep(Scene scene, string path, IEngrCadLog log)
+    private static int ExportStep(Scene scene, string path, ILogger log)
     {
         var solids = new List<(string Name, BrepSolid Solid)>();
         foreach (var part in scene.AllParts)
@@ -509,18 +511,18 @@ public static class EngrCad
             if (part.TryGetSolid() is { } solid)
                 solids.Add((part.Name, solid));
             else
-                log.Error($"skipping '{part.Name}': not B-Rep-representable (STEP needs exact solids)");
+                Log.SkippingNonBrepPart(log, part.Name);
         }
         if (solids.Count == 0)
         {
-            log.Error("No B-Rep-representable parts; nothing exported.");
+            Log.NoBrepParts(log);
             return 1;
         }
 
         if (solids.Count == 1)
         {
             StepWriter.WriteFile(solids[0].Solid, path, solids[0].Name);
-            log.Info($"wrote {path} ('{solids[0].Name}')");
+            Log.WroteStep(log, path, solids[0].Name);
             return 0;
         }
 
@@ -533,7 +535,7 @@ public static class EngrCad
             var safe = string.Concat(name.Select(c => char.IsLetterOrDigit(c) ? c : '-'));
             var partPath = Path.Combine(directory, $"{stem}.{safe}{extension}");
             StepWriter.WriteFile(solid, partPath, name);
-            log.Info($"wrote {partPath} ('{name}')");
+            Log.WroteStep(log, partPath, name);
         }
         return 0;
     }

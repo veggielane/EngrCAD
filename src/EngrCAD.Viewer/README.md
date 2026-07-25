@@ -422,7 +422,7 @@ feature usually gets wrong:
   dropped.
 - **A part that throws is named, not swallowed.** It drops out of the published
   instances (there is no geometry to upload), its tree row turns red with the reason as
-  a tooltip, the failure goes to the status bar and the `IEngrCadLog`, and the rest of
+  a tooltip, the failure goes to the status bar and the `ILogger`, and the rest of
   the tab still loads with the bar still reaching the end.
 - **Hot reload keeps working**: after a `dotnet watch` patch the *current* tab
   re-meshes on the loader's task (camera preserved), and the other tabs stay lazy.
@@ -478,13 +478,13 @@ return EngrCad.Configure()
     .WithSection(SectionAxis.Z, 6)                             // --render section plane
     .WithAmbientOcclusion(false)                               // baked AO (on by default)
     .WithLazyTabMeshing(false)                                 // mesh everything up front
-    .WithLog(msg => logger.LogInformation("{Message}", msg))   // status/error seam
+    .WithLogger(logger)                                        // any ILogger
     .Run(args, BuildScene);
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
 `RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`,
-`AmbientOcclusion`, `LazyTabMeshing`, `Log`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
+`AmbientOcclusion`, `LazyTabMeshing`, `Logger`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
 `RenderToImage`) mirror the static `EngrCad` entry points with those options
 applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain
 the simple path.
@@ -495,34 +495,63 @@ the simple path.
   its own quality is never silently overridden, while scenes that didn't care
   inherit the host's setting everywhere — display, `--export .stl/.obj`, `--render`,
   and hot reloads.
-- **Logging seam** (`IEngrCadLog`: `Info`/`Error`): everything the entry points
-  report — export confirmations, usage errors, headless-render results, and the
-  live-reload status/error messages that appear in the overlay — goes through the
-  configured log. The default is `EngrCadLog.Console` (Info → stdout, Error →
-  stderr, the historical behavior). `WithLog(Action<string>)` adapts a plain
-  delegate; `EngrCadLog.From(info, error)` keeps the two streams separate.
+- **Logging** (`ILogger`): everything the entry points report — export
+  confirmations, usage errors, headless-render results, and the live-reload
+  status/error messages that appear in the overlay — goes through the configured
+  `ILogger`. `WithLogger(ILogger)` or `WithLoggerFactory(ILoggerFactory)` (category
+  `EngrCAD`) set it; `NullLogger.Instance` silences it.
 
-### `Microsoft.Extensions` friendliness (without the dependency)
+### Logging: `Microsoft.Extensions.Logging.Abstractions`
 
-The viewer deliberately does **not** reference `Microsoft.Extensions.*`.
-`EngrCadOptions` is a plain mutable POCO, so it binds as
-`IOptions<EngrCadOptions>` out of the box, and `EngrCad.Configure(EngrCadOptions)`
-accepts the DI-provided instance directly:
+This **reverses an earlier deliberate decision.** The viewer used to define its own
+two-method `IEngrCadLog` seam specifically to avoid a `Microsoft.Extensions.*`
+dependency, with adapter snippets in this README for consumers who wanted `ILogger`.
+That shim is gone: Chris approved taking the dependency, and the trade actually
+favours it — nearly every .NET host already has an `ILogger`, so the shim was making
+*everyone* write an adapter in order to save a reference that most of them already
+had transitively. The package taken is **`Microsoft.Extensions.Logging.Abstractions`**
+— abstractions only, no provider — so consumers still choose their own sink, and the
+kernel-projects-carry-no-UI-dependency rule is untouched (a logging abstraction is
+not UI; the kernel projects take no reference at all).
+
+What that buys, beyond deleting a shim:
+
+- **Levels**, so a partial success can say so. `skipping 'x': not B-Rep-representable`
+  is now a *Warning* rather than sharing one `Error` channel with "nothing exported".
+- **Structured messages.** Every message is a source-generated `[LoggerMessage]`
+  template with named placeholders (`Logging.cs` holds the whole vocabulary), so a
+  structured sink receives `Path`/`PartCount`/`PartName` as fields instead of a
+  pre-baked string, and disabled levels allocate nothing.
+- **Stable event IDs** (10s usage, 20s export/render, 40s live reload, 50s display,
+  60s MCP) that sinks and dashboards can key on as message text evolves.
+
+**The default is the console, not `NullLogger`.** A library defaults to silence; a
+program's front door does not — and `EngrCad.Run` *is* the front door of a model
+program, where "wrote part.step" and the usage errors are that program's console
+output. `EngrCadLoggers.Console` (Information → stdout, Warning and above → stderr)
+is therefore what an unconfigured entry point uses, exactly reproducing the historical
+behavior. Pass `NullLogger.Instance` for silence — deliberately, not by accident.
+`EngrCadLoggers.StandardError` puts everything on stderr, which is what
+`EngrCAD.Mcp` wants (stdout carries the protocol).
+
+### `IOptions<EngrCadOptions>` friendliness
+
+`EngrCadOptions` is a plain mutable POCO, so it binds as `IOptions<EngrCadOptions>`
+out of the box, and `EngrCad.Configure(EngrCadOptions)` accepts the DI-provided
+instance directly:
 
 ```csharp
 // In a generic-host app:
 builder.Services.Configure<EngrCadOptions>(builder.Configuration.GetSection("EngrCad"));
 
-// In the model program, with IOptions<EngrCadOptions> options and ILogger logger:
+// In the model program, with IOptions<EngrCadOptions> options and ILogger<Thing> logger:
 return EngrCad.Configure(options.Value)
-    .WithLog(EngrCadLog.From(
-        msg => logger.LogInformation("{Message}", msg),
-        msg => logger.LogError("{Message}", msg)))
+    .WithLogger(logger)
     .Run(args, BuildScene);
 ```
 
 (Delegate/interface-typed properties are simply left unbound by configuration
-binding — set `Log`/`OnViewportReady` in code.)
+binding — set `Logger`/`OnViewportReady` in code.)
 
 ## Headless offscreen rendering (screenshots without a window)
 

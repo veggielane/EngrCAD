@@ -589,6 +589,26 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **Logging is `Microsoft.Extensions.Logging.Abstractions`, and that reversed an earlier
+  decision.** The viewer originally defined a two-method `IEngrCadLog` seam *specifically*
+  to avoid a `Microsoft.Extensions.*` reference, with adapter snippets in its README. The
+  reversal is worth recording because the original reasoning was locally sound and
+  globally wrong: to save one reference that nearly every .NET host already has
+  transitively, the shim made *every* consumer write an adapter. Abstractions-only (no
+  provider) keeps the substance of the original goal — consumers still choose their sink,
+  and the kernel projects take no reference at all, so "kernel code carries no UI
+  dependency" is untouched; a logging abstraction is not UI. What the standard interface
+  bought that the shim could not: **levels** (a skipped part is a Warning, not an error
+  sharing one channel with "nothing exported"), **structured templates** with named
+  placeholders instead of pre-baked strings, and **stable event IDs** for sinks to key on.
+  Two deliberate choices sit on top. The unconfigured default is a console logger rather
+  than `NullLogger`, because a *library* defaults to silence but a *program's front door*
+  does not, and `EngrCad.Run` is a model program's front door — `NullLogger.Instance` is
+  available and explicit for anyone who wants silence. And the console logger resolves
+  `Console.Out` on every call rather than caching the writer, so it follows
+  `EngrCAD.Mcp`'s `StdoutGuard` when that repoints stdout at stderr; caching would
+  reintroduce exactly the protocol corruption the guard exists to prevent.
+
 - **Filleting** (`Filleting.FilletEdge`): closed circular rims where a planar cap meets a
   coaxial cylindrical band are replaced by an exact quarter-torus (`RevolvedSurface` over
   a `CurveSegment` arc), patching the cap and band in place through their loops. General

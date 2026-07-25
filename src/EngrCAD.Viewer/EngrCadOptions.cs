@@ -1,54 +1,14 @@
 using EngrCAD.Modeling;
+using Microsoft.Extensions.Logging;
 
 namespace EngrCAD.Viewer;
 
 /// <summary>
-/// The minimal logging seam for viewer entry points (<see cref="EngrCad.Run"/>,
-/// exports, the live-reload overlay). Deliberately not <c>Microsoft.Extensions.Logging</c>
-/// so the viewer carries no framework dependency — a consumer that uses
-/// <c>ILogger</c> adapts it in a few lines (see the README's "Configuring" section).
-/// The default when none is configured is <see cref="EngrCadLog.Console"/>.
-/// </summary>
-public interface IEngrCadLog
-{
-    /// <summary>Progress and success messages ("wrote part.step", "reloaded at ...").</summary>
-    void Info(string message);
-
-    /// <summary>Failures and warnings (usage errors, model exceptions, skipped parts).</summary>
-    void Error(string message);
-}
-
-/// <summary>Ready-made <see cref="IEngrCadLog"/> implementations.</summary>
-public static class EngrCadLog
-{
-    /// <summary>The default log: Info to stdout, Error to stderr — the historical
-    /// console behavior of <see cref="EngrCad.Run"/>.</summary>
-    public static IEngrCadLog Console { get; } = new ConsoleLog();
-
-    /// <summary>Adapts plain delegates to <see cref="IEngrCadLog"/>; with only
-    /// <paramref name="info"/> given, errors go through the same delegate.</summary>
-    public static IEngrCadLog From(Action<string> info, Action<string>? error = null) =>
-        new DelegateLog(info, error ?? info);
-
-    private sealed class ConsoleLog : IEngrCadLog
-    {
-        public void Info(string message) => System.Console.WriteLine(message);
-        public void Error(string message) => System.Console.Error.WriteLine(message);
-    }
-
-    private sealed class DelegateLog(Action<string> info, Action<string> error) : IEngrCadLog
-    {
-        public void Info(string message) => info(message);
-        public void Error(string message) => error(message);
-    }
-}
-
-/// <summary>
 /// Host-level defaults for the viewer entry points — a plain POCO so it binds
-/// directly as <c>IOptions&lt;EngrCadOptions&gt;</c> in a generic-host app (no
-/// Microsoft.Extensions dependency here; delegate/interface properties are simply
-/// left unbound by configuration). Build one by hand, from DI, or fluently via
-/// <see cref="EngrCad.Configure()"/>.
+/// directly as <c>IOptions&lt;EngrCadOptions&gt;</c> in a generic-host app
+/// (delegate/interface properties, <see cref="Logger"/> among them, are simply left
+/// unbound by configuration and set in code). Build one by hand, from DI, or fluently
+/// via <see cref="EngrCad.Configure()"/>.
 /// </summary>
 public sealed class EngrCadOptions
 {
@@ -71,9 +31,14 @@ public sealed class EngrCadOptions
     /// <see cref="EngrCadBuilder.RenderToImage"/>.</summary>
     public int RenderHeight { get; set; } = 800;
 
-    /// <summary>Where status/error reporting goes (exports, headless renders, the
-    /// live-reload messages that also appear in the overlay). Null = console.</summary>
-    public IEngrCadLog? Log { get; set; }
+    /// <summary>
+    /// Where status/error reporting goes (exports, headless renders, the live-reload
+    /// messages that also appear in the overlay). Null means
+    /// <see cref="EngrCadLoggers.Console"/> — see that type for why the default is a
+    /// console sink rather than <c>NullLogger.Instance</c>, and pass
+    /// <c>NullLogger.Instance</c> when you want silence.
+    /// </summary>
+    public ILogger? Logger { get; set; }
 
     /// <summary>Callback invoked once the GL viewport exists — custom hosts capture
     /// the <see cref="ViewportControl"/> here.</summary>
@@ -204,17 +169,21 @@ public sealed class EngrCadBuilder
         return this;
     }
 
-    /// <summary>Routes status/error reporting through <paramref name="log"/> instead
-    /// of the console.</summary>
-    public EngrCadBuilder WithLog(IEngrCadLog log)
+    /// <summary>Routes status/error reporting through <paramref name="logger"/> instead
+    /// of the console. Pass <c>NullLogger.Instance</c> for silence.</summary>
+    public EngrCadBuilder WithLogger(ILogger logger)
     {
-        Options.Log = log ?? throw new ArgumentNullException(nameof(log));
+        Options.Logger = logger ?? throw new ArgumentNullException(nameof(logger));
         return this;
     }
 
-    /// <summary>Routes status/error reporting through a delegate (e.g.
-    /// <c>logger.LogInformation</c> via a one-line lambda).</summary>
-    public EngrCadBuilder WithLog(Action<string> log) => WithLog(EngrCadLog.From(log));
+    /// <summary>Routes status/error reporting through a logger from
+    /// <paramref name="factory"/>, under the <c>EngrCAD</c> category.</summary>
+    public EngrCadBuilder WithLoggerFactory(ILoggerFactory factory)
+    {
+        ArgumentNullException.ThrowIfNull(factory);
+        return WithLogger(factory.CreateLogger("EngrCAD"));
+    }
 
     /// <summary>Registers a callback invoked once the GL viewport exists.</summary>
     public EngrCadBuilder WithViewportReady(Action<ViewportControl> callback)

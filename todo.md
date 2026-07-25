@@ -535,34 +535,18 @@ stdout guarded, geometry evaluated lazily). Remaining:
 - [ ] **Parametric model layer / scripting** — fluent C# builder over the retained
   document model; `.csx` scripting via Roslyn (C# *is* our SCAD language); reusable
   parametric components as plain C# methods — document the pattern.
-- [ ] **Adopt `ILogger` properly and delete the `IEngrCadLog` shim** — Chris has
-  approved taking the dependency, which reverses the earlier deliberate
-  no-Microsoft.Extensions decision (the Viewer README documents that rationale and must
-  be updated to say why it changed). Take
-  **`Microsoft.Extensions.Logging.Abstractions`** — abstractions only, no provider — so
-  consumers keep choosing their own sink, and it stays compatible with the
-  kernel-projects-carry-no-UI-dependency rule (a logging abstraction is not UI).
-  - Replace `IEngrCadLog`/`EngrCadLog.Console`/`EngrCadLog.From(delegates)` with
-    `ILogger`/`ILoggerFactory`; `EngrCadOptions.Log` becomes an `ILogger`, the builder
-    gains `WithLogger`/`WithLoggerFactory`, and the default becomes
-    `NullLogger.Instance`. This is a breaking public-API change — fine at 0.1.0, but
-    call it out in the package notes.
-  - **Distinguish logging from program output.** `EngrCad.Run`'s `wrote part.step` and
-    the live-reload overlay messages are user-facing CLI output, not diagnostics;
-    decide deliberately which become `ILogger` Information and which stay direct
-    console writes. Note `--mcp` mode needs everything off stdout (stdio carries the
-    protocol) — with `ILogger` that becomes a provider/sink choice rather than a
-    special case, which is an argument for routing it all through logging.
-  - **Structured logging, not interpolated strings**: message templates with named
-    placeholders, and `LoggerMessage`/source-generated logging on anything that could
-    run hot — the performance mandate (no allocation in hot paths) applies to logging
-    calls too, so guard with `IsEnabled` where a message would allocate.
-  - Then extend inward: optional `ILogger` on long-running kernel operations alongside
-    the existing `ProgressCancel` (booleans, tessellation, `MeshSdf`/winding builds,
-    STEP import). Keep diagnostics that are *results* as return values —
-    `StepReadResult.Diagnostics`, `MeshRepair`'s reports and `Explain`'s node report are
-    data the caller acts on, not log lines; logging complements them rather than
-    replacing them.
+- [ ] **Logging follow-ups** (`ILogger` adoption ✅ landed — the `IEngrCadLog` shim is
+  gone, `EngrCAD.Viewer`/`EngrCAD.Mcp` take
+  `Microsoft.Extensions.Logging.Abstractions`, every message is a source-generated
+  `[LoggerMessage]` template with a stable event ID, and levels now distinguish a
+  skipped part (Warning) from a failed export (Error)) — remaining: **extend inward**
+  with an optional `ILogger` on the long-running kernel operations, alongside the
+  existing `ProgressCancel` (booleans, `BRepTessellator`, `MeshSdf`/winding builds,
+  STEP import). That means the kernel projects take the abstractions reference too;
+  weigh it per project rather than blanket-adding it. Keep diagnostics that are
+  *results* as return values — `StepReadResult.Diagnostics`, `MeshRepair`'s reports
+  and `Explain`'s node report are data the caller acts on, not log lines; logging
+  complements them rather than replacing them.
 - [ ] Sheet metal (bend allowances, flanges, unfold) — big, separate domain.
 - [ ] nuget.org publish — `Directory.Build.props` URLs are placeholders; a real remote
   exists (github.com/veggielane/EngrCAD). GitHub Pages needs Settings → Pages →

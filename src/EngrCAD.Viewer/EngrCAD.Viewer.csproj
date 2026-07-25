@@ -9,6 +9,9 @@
     <!-- Transitive pin: Avalonia 11.3.2 pulls 0.21.2, which has GHSA-xrw6-gwf8-vvr9. -->
     <PackageReference Include="Tmds.DBus.Protocol" Version="0.21.3" />
     <PackageReference Include="Silk.NET.OpenGL" Version="2.22.0" />
+    <!-- Abstractions only, no provider: consumers keep choosing their own sink, and a
+         logging abstraction is not a UI dependency, so the kernel rule is untouched. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
   </ItemGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="EngrCAD.Viewer.Tests" />

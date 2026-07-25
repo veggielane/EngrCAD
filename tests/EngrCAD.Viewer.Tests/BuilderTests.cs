@@ -1,5 +1,6 @@
 using EngrCAD.Modeling;
 using EngrCAD.Viewer;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace EngrCAD.Viewer.Tests;
@@ -7,20 +8,12 @@ namespace EngrCAD.Viewer.Tests;
 /// <summary>
 /// <see cref="EngrCad.Configure()"/> / <see cref="EngrCadBuilder"/> — headless paths
 /// only (no Avalonia lifetime): configuration accumulation, quality precedence through
-/// exports, and the <see cref="IEngrCadLog"/> seam.
+/// exports, and the <c>ILogger</c> seam.
 /// </summary>
 public class BuilderTests
 {
     private static string TempFile(string extension) =>
         Path.Combine(Path.GetTempPath(), $"engrcad-test-{Guid.NewGuid():N}{extension}");
-
-    private sealed class ListLog : IEngrCadLog
-    {
-        public List<string> Infos { get; } = [];
-        public List<string> Errors { get; } = [];
-        public void Info(string message) => Infos.Add(message);
-        public void Error(string message) => Errors.Add(message);
-    }
 
     // Fresh scene/part per call: Part.GetMesh caches the first caller's quality.
     private static Scene CylinderScene() =>
@@ -36,14 +29,14 @@ public class BuilderTests
     public void Configure_AccumulatesOptions()
     {
         var quality = new MeshQuality { SdfResolution = 128 };
-        var log = new ListLog();
+        var log = new ListLogger();
         Action<ViewportControl> ready = _ => { };
 
         var options = EngrCad.Configure()
             .WithTitle("bracket")
             .WithQuality(quality)
             .WithRenderSize(1920, 1080)
-            .WithLog(log)
+            .WithLogger(log)
             .WithViewportReady(ready)
             .Options;
 
@@ -51,7 +44,7 @@ public class BuilderTests
         Assert.Same(quality, options.Quality);
         Assert.Equal(1920, options.RenderWidth);
         Assert.Equal(1080, options.RenderHeight);
-        Assert.Same(log, options.Log);
+        Assert.Same(log, options.Logger);
         Assert.Same(ready, options.OnViewportReady);
     }
 
@@ -88,20 +81,20 @@ public class BuilderTests
             ("SHADED-EDGES", ViewStyle.ShadedWithEdges),   // case-insensitive
         })
         {
-            var options = new EngrCadOptions { Log = new ListLog() };
+            var options = new EngrCadOptions { Logger = new ListLogger() };
             Assert.Equal(2, EngrCad.Configure(options).Run(
                 ["--render", "--render-style", spelling], CylinderScene));
             Assert.Equal(expected, options.RenderStyle);
         }
 
         // Invalid or missing values are usage errors (exit 2) with a hint.
-        var log = new ListLog();
-        Assert.Equal(2, EngrCad.Configure().WithLog(log)
+        var log = new ListLogger();
+        Assert.Equal(2, EngrCad.Configure().WithLogger(log)
             .Run(["--render", "out.png", "--render-style", "bogus"], CylinderScene));
         Assert.Contains(log.Errors, m => m.Contains("--render-style"));
 
-        log = new ListLog();
-        Assert.Equal(2, EngrCad.Configure().WithLog(log)
+        log = new ListLogger();
+        Assert.Equal(2, EngrCad.Configure().WithLogger(log)
             .Run(["--render", "out.png", "--render-style"], CylinderScene));
         Assert.Contains(log.Errors, m => m.Contains("--render-style"));
     }
@@ -111,7 +104,7 @@ public class BuilderTests
     {
         // Valid switch parses into the options before the (deliberately bad, non-.png)
         // render path is rejected — no GL is touched.
-        var options = new EngrCadOptions { Log = new ListLog() };
+        var options = new EngrCadOptions { Logger = new ListLogger() };
         Assert.Equal(2, EngrCad.Configure(options).Run(
             ["--render", "--section", "y", "-3.5"], CylinderScene));
         Assert.Equal(SectionAxis.Y, options.SectionAxis);
@@ -125,8 +118,8 @@ public class BuilderTests
             ["--render", "out.png", "--section", "z"],
         })
         {
-            var log = new ListLog();
-            Assert.Equal(2, EngrCad.Configure().WithLog(log).Run(args, CylinderScene));
+            var log = new ListLogger();
+            Assert.Equal(2, EngrCad.Configure().WithLogger(log).Run(args, CylinderScene));
             Assert.Contains(log.Errors, m => m.Contains("--section"));
         }
     }
@@ -154,7 +147,7 @@ public class BuilderTests
             ("ALL", false),   // case-insensitive
         })
         {
-            var options = new EngrCadOptions { Log = new ListLog() };
+            var options = new EngrCadOptions { Logger = new ListLogger() };
             Assert.Equal(2, EngrCad.Configure(options).Run(["--render", "--mesh", spelling], CylinderScene));
             Assert.Equal(expected, options.LazyTabMeshing);
         }
@@ -165,8 +158,8 @@ public class BuilderTests
             ["--render", "out.png", "--mesh"],
         })
         {
-            var log = new ListLog();
-            Assert.Equal(2, EngrCad.Configure().WithLog(log).Run(args, CylinderScene));
+            var log = new ListLogger();
+            Assert.Equal(2, EngrCad.Configure().WithLogger(log).Run(args, CylinderScene));
             Assert.Contains(log.Errors, m => m.Contains("--mesh"));
         }
     }
@@ -179,8 +172,8 @@ public class BuilderTests
         var path = TempFile(".stl");
         try
         {
-            var log = new ListLog();
-            Assert.Equal(0, EngrCad.Configure().WithLog(log).Run(["--export", path], CylinderScene));
+            var log = new ListLogger();
+            Assert.Equal(0, EngrCad.Configure().WithLogger(log).Run(["--export", path], CylinderScene));
             Assert.True(new FileInfo(path).Length > 84);   // header + at least one triangle
         }
         finally
@@ -208,15 +201,15 @@ public class BuilderTests
         Assert.Throws<ArgumentOutOfRangeException>(() => EngrCad.Configure().WithRenderSize(0, 100));
         Assert.Throws<ArgumentOutOfRangeException>(() => EngrCad.Configure().WithRenderSize(100, -1));
         Assert.Throws<ArgumentNullException>(() => EngrCad.Configure().WithQuality(null!));
-        Assert.Throws<ArgumentNullException>(() => EngrCad.Configure().WithLog((IEngrCadLog)null!));
+        Assert.Throws<ArgumentNullException>(() => EngrCad.Configure().WithLogger(null!));
         Assert.Throws<ArgumentNullException>(() => EngrCad.Configure(null!));
     }
 
     [Fact]
     public void Run_RoutesMessagesThroughTheLogSeam()
     {
-        var log = new ListLog();
-        var builder = EngrCad.Configure().WithLog(log);
+        var log = new ListLogger();
+        var builder = EngrCad.Configure().WithLogger(log);
 
         // Usage error: reported through the seam, not the console.
         Assert.Equal(2, builder.Run(["--export"], CylinderScene));
@@ -237,14 +230,66 @@ public class BuilderTests
     }
 
     [Fact]
-    public void WithLog_DelegateOverload_CapturesMessages()
+    public void NullLogger_SilencesTheEntryPoints()
     {
-        var messages = new List<string>();
+        // The opt-in silence: the exit code still reports the usage error, nothing is
+        // written. (The default is deliberately the console sink, not this -- Run is a
+        // program's front door; see EngrCadLoggers.)
         int code = EngrCad.Configure()
-            .WithLog(messages.Add)
+            .WithLogger(NullLogger.Instance)
             .Run(["--render"], CylinderScene); // missing path → usage error
         Assert.Equal(2, code);
-        Assert.Contains(messages, m => m.Contains("--render requires"));
+    }
+
+    [Fact]
+    public void WithLoggerFactory_CreatesAnEngrCadCategoryLogger()
+    {
+        var factory = new RecordingLoggerFactory();
+        int code = EngrCad.Configure()
+            .WithLoggerFactory(factory)
+            .Run(["--render"], CylinderScene);
+
+        Assert.Equal(2, code);
+        Assert.Equal("EngrCAD", factory.Category);
+        Assert.Contains(factory.Logger.Errors, m => m.Contains("--render requires"));
+        Assert.Throws<ArgumentNullException>(() => EngrCad.Configure().WithLoggerFactory(null!));
+    }
+
+    [Fact]
+    public void MessagesCarryStableEventIds()
+    {
+        // Event IDs are the contract a structured sink keys on, so they are asserted
+        // rather than left to drift with the message text.
+        var log = new ListLogger();
+        Assert.Equal(2, EngrCad.Configure().WithLogger(log).Run(["--export"], CylinderScene));
+        Assert.Equal([14], log.EventIds);
+
+        var path = TempFile(".stl");
+        try
+        {
+            log = new ListLogger();
+            Assert.Equal(0, EngrCad.Configure().WithLogger(log).Run(["--export", path], CylinderScene));
+            Assert.Equal([22], log.EventIds);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    private sealed class RecordingLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
+    {
+        public ListLogger Logger { get; } = new();
+        public string? Category { get; private set; }
+
+        public Microsoft.Extensions.Logging.ILogger CreateLogger(string categoryName)
+        {
+            Category = categoryName;
+            return Logger;
+        }
+
+        public void AddProvider(Microsoft.Extensions.Logging.ILoggerProvider provider) { }
+        public void Dispose() { }
     }
 
     [Fact]
@@ -266,7 +311,7 @@ public class BuilderTests
         var path = TempFile(".obj");
         try
         {
-            var builder = configure(EngrCad.Configure().WithLog(new ListLog()));
+            var builder = configure(EngrCad.Configure().WithLogger(new ListLogger()));
             Assert.Equal(0, builder.Run(["--export", path], () => Fill(scene)));
             return File.ReadAllLines(path).Count(l => l.StartsWith("v "));
         }
