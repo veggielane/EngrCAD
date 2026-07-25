@@ -248,6 +248,17 @@ Each engine uses the data structure its mathematics wants:
   r/|n·axis|), or two parallel lines; plane/sphere and sphere/sphere → `Circle3d`;
   parallel cylinders → two lines. Unbounded results are clipped to the caller's region.
   Tangential contacts are deliberately not reported (they are not curves).
+- **Bounded planar-carrier tier** — an extrusion of a straight generator *is* a plane,
+  but a **bounded** one, so it cannot simply be promoted: the analytic line has to be
+  clipped to the generator's parallelogram, not just to the caller's region
+  (`TryPlanarPatch`, straightness decided by sampling the real generator, since
+  `Underlying` is a type hint and not a position). Better, when the generator's plane is
+  *parallel to the cutting plane*, the section is exactly the generator **translated**
+  along `direction·v` (`TryPlaneExtrudedSection`) — exact for any generator shape
+  (lines, slot arcs, glyph Béziers), and its endpoints come from the generator's own
+  points, so adjacent profile segments share their corner bit-for-bit and the outline
+  closes. This tier exists because the marching tier below cannot terminate a curve
+  exactly on a boundary (see the next bullet), and pocket walls need exactly that.
 - **Marching tier** for every other pair: grid-sample both surfaces, pair nearby samples
   with a BVH `Nearest` query, refine each pair onto the intersection with damped
   Gauss–Newton, then trace each branch with a tangent predictor (`n_a × n_b`) and a
@@ -257,7 +268,14 @@ Each engine uses the data structure its mathematics wants:
   don't split; closed loops are detected by proximity to the start; consumed seeds
   prevent duplicate branches. Output is `PolylineCurve3d` — exact at the traced
   vertices (corrector converges to ~1e-10), chordal in between; step size derives from
-  the region diagonal.
+  the region diagonal. **A tracer curve never ends exactly on a bounded generator's
+  end**: the trace loop breaks the step *after* the corrector leaves the domain, so the
+  polyline stops up to one march step short. That is fine for closed loops and for
+  curves clipped by a region, and fatal wherever the curve must terminate on a boundary
+  — which is why the bounded planar tier above exists (a pocket outline whose four cuts
+  each miss their corners by a fraction of a millimetre never closes, and the boolean
+  is then left with single-use edges, or worse takes the disjoint fast path and buries
+  the tool as an internal cavity: closed, valid, and wrong).
 
 This is the gateway to trimming: the traced/analytic curves are exactly what face
 splitting and B-Rep booleans will consume.

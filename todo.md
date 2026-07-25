@@ -125,8 +125,14 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   (per-call validation landed); avoid `DrillShape`'s read-only validation lowering
   (the body lowers twice on the B-Rep path); drill-tip angles, thread
   cosmetics/annotation, hole tables.
-- [ ] **Boolean/splitting edge cases** (currently unreachable or loudly rejected, from
-  the cross-drill work) — equal-radius perpendicular cylinders (tangent bicylinder:
+- [ ] **Boolean/splitting edge cases** (all now LOUD rather than silent — sketch-
+  extrusion pockets/slots/engraving are exact as of the bounded-planar-carrier fix) —
+  a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of
+  a side face) throws `Open splitting curves must start and end outside the face`;
+  flush/coplanar embossing does not fuse (the union leaves touching shells with the
+  right volume — sink the tool a fraction to fuse); extruded-line × cylinder/sphere/
+  revolved pairs still march, so a **bounded conic-clipping tier** would extend the win
+  the planar tier just delivered; equal-radius perpendicular cylinders (tangent bicylinder:
   overlapping v-ranges rejected; the tracer's degenerate output there is untested);
   `CylinderSurface` bands can't wrap-split (tools lower to extruded circles today, but
   a raw `MakeCylinder` cross-drill tool would throw); `CurveSegment`-over-polyline
