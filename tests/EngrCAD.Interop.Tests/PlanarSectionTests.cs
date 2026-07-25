@@ -1,0 +1,203 @@
+using EngrCAD.BRep;
+using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
+using EngrCAD.Interop;
+using Xunit;
+
+namespace EngrCAD.Interop.Tests;
+
+/// <summary>
+/// Planar cross-sections (<c>projection(cut = true)</c>) through both routes. Curved
+/// sections come out as INSCRIBED polygons, so every curved assertion brackets the analytic
+/// value from below by the discretization rather than guessing a tolerance.
+/// </summary>
+public class PlanarSectionTests
+{
+    private static Frame3d PlaneAtZ(double z) =>
+        Frame3d.FromOrthonormal((0, 0, z), Vector3d.UnitX, Vector3d.UnitY);
+
+    private static double TotalArea(IReadOnlyList<Region2d> regions) => regions.Sum(r => r.Area);
+
+    /// <summary>Area of a regular polygon inscribed in a circle of the given radius whose
+    /// chords stay within <paramref name="tolerance"/> of it — the most a section of that
+    /// circle can lose. A chord of sagitta s on radius r sits at distance r − s, so the
+    /// polygon contains the disk of radius r − s.</summary>
+    private static double InscribedDiskAreaAtLeast(double radius, double tolerance) =>
+        Math.PI * (radius - tolerance) * (radius - tolerance);
+
+    // ---- straight sections are exact through the B-Rep route ----
+
+    [Fact]
+    public void BoxSection_IsTheExactRectangle()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-5, -3, -2), (5, 3, 2)));
+
+        var section = PlanarSection.OfSolid(box, PlaneAtZ(0));
+
+        var rectangle = Assert.Single(section);
+        Assert.Equal(60.0, rectangle.Area, 12);
+        Assert.Equal(4, rectangle.Outer.Count);     // four corners, not eight
+        Assert.Empty(rectangle.Holes);
+        Assert.Equal(-5.0, rectangle.Bounds.Min.X, 12);
+        Assert.Equal(3.0, rectangle.Bounds.Max.Y, 12);
+        Assert.True(rectangle.IsCounterClockwise);
+    }
+
+    [Fact]
+    public void BoxSection_IsTheSameArrayFromTheMesh()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-5, -3, -2), (5, 3, 2)));
+
+        var fromBrep = PlanarSection.OfSolid(box, PlaneAtZ(0.5));
+        var fromMesh = PlanarSection.OfMesh(BRepTessellator.Tessellate(box), PlaneAtZ(0.5));
+
+        Assert.Equal(60.0, TotalArea(fromBrep), 12);
+        Assert.Equal(60.0, TotalArea(fromMesh), 12);   // planar faces tessellate exactly
+    }
+
+    [Fact]
+    public void SectionOfATiltedPlane_UsesThePlanesOwnCoordinates()
+    {
+        // A unit cube cut by x + z = 0.1 (a 45-degree plane, deliberately off the corners
+        // so no edge lies in it). The cut runs from (-0.4, 0.5) to (0.5, -0.4) in XZ, so
+        // the section is a 0.9*sqrt(2) by 1 rectangle in the plane's own axes.
+        var cube = SolidFactory.MakeBox(new Aabb((-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)));
+        var plane = Frame3d.FromOrthonormal(
+            (0.1, 0, 0), Vector3d.UnitY, new Vector3d(1, 0, 1).Normalized());
+
+        var section = Assert.Single(PlanarSection.OfSolid(cube, plane));
+
+        Assert.Equal(0.9 * Math.Sqrt(2), section.Area, 9);
+        Assert.Equal(4, section.Outer.Count);
+    }
+
+    // ---- curved sections: inscribed, bracketed by the chord tolerance ----
+
+    [Fact]
+    public void CylinderSection_IsAnInscribedCircle()
+    {
+        const double radius = 4, tolerance = 1e-3;
+        var cylinder = SolidFactory.MakeCylinder(radius, 6);
+
+        var section = Assert.Single(PlanarSection.OfSolid(cylinder, PlaneAtZ(3), tolerance));
+
+        Assert.InRange(section.Area, InscribedDiskAreaAtLeast(radius, tolerance), Math.PI * radius * radius);
+        Assert.Empty(section.Holes);
+    }
+
+    [Fact]
+    public void CylinderSection_IsSmootherFromTheBRepThanFromTheMesh()
+    {
+        // The whole point of the B-Rep route: fidelity comes from the chord tolerance, not
+        // from whatever tessellation the display happens to use.
+        const double radius = 4;
+        var cylinder = SolidFactory.MakeCylinder(radius, 6);
+        var mesh = BRepTessellator.Tessellate(cylinder);
+
+        var fromBrep = Assert.Single(PlanarSection.OfSolid(cylinder, PlaneAtZ(3), 1e-4));
+        var fromMesh = Assert.Single(PlanarSection.OfMesh(mesh, PlaneAtZ(3)));
+
+        double exact = Math.PI * radius * radius;
+        Assert.True(exact - fromBrep.Area < exact - fromMesh.Area,
+            "the exact route must lose less area than the tessellated one");
+        Assert.True(fromBrep.Outer.Count > fromMesh.Outer.Count);
+    }
+
+    [Fact]
+    public void SphereSection_WorksOnPoleBoundedFaces()
+    {
+        // The north hemisphere is one face whose only rim is BELOW the cut, so a one-sided
+        // upward parity ray sees no crossing at all: this is the case that used to return
+        // an empty section.
+        const double radius = 5, height = 2, tolerance = 1e-3;
+        var sphere = SolidFactory.MakeSphere(radius);
+        double sectionRadius = Math.Sqrt(radius * radius - height * height);
+
+        var section = Assert.Single(PlanarSection.OfSolid(sphere, PlaneAtZ(height), tolerance));
+
+        Assert.InRange(section.Area,
+            InscribedDiskAreaAtLeast(sectionRadius, tolerance), Math.PI * sectionRadius * sectionRadius);
+    }
+
+    // ---- nesting is detected, not declared ----
+
+    [Fact]
+    public void DrilledPlateSection_HasTheBoreAsAHole()
+    {
+        const double bore = 2.5, tolerance = 1e-3;
+        var plate = SolidFactory.MakeBox(new Aabb((-10, -6, 0), (10, 6, 4)));
+        var tool = SolidFactory.Extrude(
+            Profile.Circle((0, 0, -1), Vector3d.UnitX, Vector3d.UnitY, bore), Vector3d.UnitZ * 6);
+        var drilled = BrepBoolean.Difference(plate, tool);
+
+        var section = Assert.Single(PlanarSection.OfSolid(drilled, PlaneAtZ(2), tolerance));
+
+        Assert.Single(section.Holes);
+        Assert.Equal(4, section.Outer.Count);
+        // The boundary is exact; the bore is inscribed, so the plate keeps slightly MORE
+        // area than the analytic value, by at most the hole's own flattening deficit.
+        double exact = 20 * 12 - Math.PI * bore * bore;
+        Assert.InRange(section.Area, exact, 20 * 12 - InscribedDiskAreaAtLeast(bore, tolerance));
+    }
+
+    [Fact]
+    public void TorusSection_ThroughItsHole_IsAnAnnulus()
+    {
+        const double major = 6, minor = 2, tolerance = 1e-3;
+        var torus = SolidFactory.MakeTorus(major, minor);
+
+        var section = Assert.Single(PlanarSection.OfSolid(torus, PlaneAtZ(0.5), tolerance));
+
+        // A plane perpendicular to the torus axis cuts an annulus; the radii come from the
+        // minor circle at that height.
+        double half = Math.Sqrt(minor * minor - 0.25);
+        var hole = Assert.Single(section.Holes);
+        Assert.True(hole.Count > 4);
+        double exact = Math.PI * ((major + half) * (major + half) - (major - half) * (major - half));
+        Assert.InRange(section.Area, exact * (1 - 1e-3), exact);
+    }
+
+    [Fact]
+    public void SectionOfTwoSeparateBodies_IsTwoRegions()
+    {
+        var left = SolidFactory.MakeBox(new Aabb((-8, -2, -2), (-4, 2, 2)));
+        var right = SolidFactory.MakeBox(new Aabb((4, -2, -2), (8, 2, 2)));
+        var pair = BrepBoolean.Union(left, right);
+
+        var section = PlanarSection.OfSolid(pair, PlaneAtZ(0));
+
+        Assert.Equal(2, section.Count);
+        Assert.Equal(2 * 4 * 4.0, TotalArea(section), 9);
+    }
+
+    // ---- misses and degeneracies ----
+
+    [Fact]
+    public void APlaneThatMissesTheSolid_ReturnsNothing()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-1, -1, -1), (1, 1, 1)));
+
+        Assert.Empty(PlanarSection.OfSolid(box, PlaneAtZ(5)));
+        Assert.Empty(PlanarSection.OfMesh(BRepTessellator.Tessellate(box), PlaneAtZ(5)));
+    }
+
+    [Fact]
+    public void APlaneFlushWithAFace_IsRefused()
+    {
+        var box = SolidFactory.MakeBox(new Aabb((-1, -1, -1), (1, 1, 1)));
+
+        var error = Assert.Throws<NotSupportedException>(() => PlanarSection.OfSolid(box, PlaneAtZ(1)));
+        Assert.Contains("flush", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void APlaneContainingAWholeEdge_IsRefused()
+    {
+        // The sphere's equator lies entirely in z = 0: the section would run along the
+        // shared boundary of both hemispheres, where containment is a tie.
+        var sphere = SolidFactory.MakeSphere(5);
+
+        var error = Assert.Throws<NotSupportedException>(() => PlanarSection.OfSolid(sphere, PlaneAtZ(0)));
+        Assert.Contains("edge", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+}

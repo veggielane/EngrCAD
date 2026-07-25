@@ -1,6 +1,8 @@
 using EngrCAD.BRep;
 using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
 using EngrCAD.Implicit;
+using EngrCAD.Interop;
 using EngrCAD.Mesh;
 
 namespace EngrCAD.Modeling;
@@ -529,6 +531,27 @@ public abstract class Shape
     public ConversionReport Explain(TargetRep target) => ShapeCompiler.Classify(this, target);
 
     public bool CanConvertTo(TargetRep target) => Explain(target).IsConvertible;
+
+    // ---- Planar views ----
+
+    /// <summary>
+    /// The cross-section through <paramref name="plane"/> as 2D regions in the plane's own
+    /// coordinates — OpenSCAD's <c>projection(cut = true)</c>, and the drawing-view section.
+    /// Cavities become holes automatically.
+    ///
+    /// <para>Exact geometry is used when the shape lowers to B-Rep (fidelity set by
+    /// <paramref name="chordTolerance"/> alone, so a bore rim is as smooth as asked for);
+    /// otherwise the section is taken from the display mesh at
+    /// <paramref name="quality"/>. Move the plane off any flush face or in-plane edge — a
+    /// section that runs along a face is an area, not a curve, and is refused.</para>
+    /// </summary>
+    public IReadOnlyList<Region2d> Section(
+        SketchPlane plane,
+        double chordTolerance = PlanarSection.DefaultChordTolerance,
+        MeshQuality? quality = null) =>
+        CanConvertTo(TargetRep.Brep)
+            ? PlanarSection.OfSolid(ToBrep(), plane.Frame, chordTolerance)
+            : PlanarSection.OfMesh(ToMesh(quality), plane.Frame);
 
     private void ThrowIfImpossible(TargetRep target)
     {

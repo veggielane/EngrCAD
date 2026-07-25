@@ -115,6 +115,46 @@ this project's conversions.)
   degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
   and still requires a closed mesh.
 
+## Planar cross-sections (`PlanarSection`)
+
+`projection(cut = true)`: the cross-section of a solid through a plane, as 2D
+`Region2d`s in the plane's own coordinates. Nesting is re-derived by
+`Region2d.FromLoops`, so a bore inside a plate becomes a hole without anyone declaring it.
+
+- **`PlanarSection.OfMesh(mesh, plane)`** — `MeshPlaneCut`'s ordered boundary loops
+  projected into the plane. Fidelity is the mesh's; a plane that misses the mesh returns
+  an empty list rather than throwing.
+- **`PlanarSection.OfSolid(solid, plane, chordTolerance)`** — the exact route:
+  `SurfaceIntersection` per face, trimmed to the face, chained into loops. Fidelity is set
+  by `chordTolerance` alone rather than by whatever tessellation the display uses, so a
+  bore rim is as smooth as asked for; curved sections are INSCRIBED polygons (the same
+  one-sided contract as `Sketch.ToRegions`), straight sections exact.
+
+Three things make the B-Rep route close reliably:
+
+1. **Edge crossings are the loop-assembly key.** A section curve leaves a face exactly
+   where the plane crosses one of the face's EDGES, and that edge is shared with the
+   neighbouring face — so the crossings are solved once per edge, by bisection on the
+   edge's own exact curve, and both faces use the *same* point. Runs are then chained by
+   node INDEX, not by welding two independently computed endpoints (which would be the
+   1e-7 seam tier at best, with drift). The endpoints are the node POSITIONS, never the
+   curve re-evaluated at the searched parameter — a ternary search leaves ~5e-11 residual,
+   enough to stop a box's section corner being exactly a corner.
+2. **Keep/drop probes sit at a piece's MIDPOINT**, never at an end (which is on the trim
+   boundary, where containment is a tie) — the same rule `BrepBoolean` learned.
+3. **Containment is decided by a TWO-sided v-ray parity.** Both directions agree for a
+   properly closed trim (a vertical line crosses a closed loop an even number of times).
+   They disagree exactly on a POLE-BOUNDED face, where one side of the domain is a point
+   rather than a rim: a sphere's northern hemisphere has its only rim BELOW the cut, so
+   `FaceGeometry.Contains`'s one-sided upward ray sees no crossing and calls the probe
+   outside — which returned an empty section for every sphere. When the two disagree the
+   probe is between the rim and the pole, hence inside.
+
+Degenerate placements are refused with guidance rather than answered plausibly: a plane
+**flush with a planar face** (the section there is an area, not a curve) and a plane
+**containing a whole edge** (a sphere cut exactly at its equator — the section runs along
+two faces' shared boundary, where every probe is a tie).
+
 ## Planar iso-contours (`SdfContours`)
 
 `SdfContours.OnPlane(sdf, origin, uSide, vSide, uSamples, vSamples, levels)` samples an

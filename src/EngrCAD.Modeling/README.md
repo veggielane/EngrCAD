@@ -161,6 +161,11 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   per edge and per corner rather than chasing edges.
 - `Profile.FromRegion(region, frame)` (BRep) returns the `(outer, holes)` pair the
   solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`.
+- **`shape.Section(plane, chordTolerance)`** goes the other way — a 3D body back to 2D
+  regions in the plane's own coordinates (`projection(cut = true)`, the drawing-view
+  section). Exact geometry when the shape lowers to B-Rep, otherwise from the display
+  mesh; cavities become holes automatically. Move the plane off any flush face or
+  in-plane edge: a section running along a face is an area, not a curve, and is refused.
 
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,
