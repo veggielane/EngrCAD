@@ -116,9 +116,26 @@ concerns.
   R's bounds grown by 3d — so there is no second algorithm and no special case for necks,
   islands, or holes merging. Cost is the union's: measured ~30 ms for a 16-gon and ~260 ms
   for a 512-gon outward round offset.
+
+  boundary, so `Contains`'s closed-set convention never has to decide a tie. The clearance
+  comes from a **`Bvh` over the arrangement's edges built once per boolean** (edges embedded
+  at z = 0, so the branch-and-bound's box distance is exactly the 2D one), replacing a
+  per-loop-edge linear scan that made classification O(E²) — **bit-identical**, because only
+  the minimum DISTANCE is used and a minimum over doubles does not depend on visit order.
+  Measured on a union of 120 overlapping 32-gons (7 776 arrangement edges, 1 969 cells):
+  classification 367.7 ms → 8.8 ms, whole union 436.2 ms → 93.6 ms.
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
-  centroid axis, flat node array, allocation-free stack traversal). Queries (all
-  zero-allocation per query, results appended to caller-provided lists):
+  centroid axis, flat node array, allocation-free stack traversal). The build sorts the
+  item permutation per node through a **contiguous key array** (`Array.Sort(double[],
+  int[])`) rather than an `IComparer<int>` over scattered centroids, and **forks sibling
+  subtrees onto the thread pool** above 4096 items (capped at ~2^(log2 cores + 1) tasks so
+  a nested caller cannot flood the pool); a canonical renumbering pass replays the
+  sequential node numbering afterwards, so **the tree is bit-identical to the original
+  builder's** — item permutation, node ranges and bounds — and independent of scheduling
+  (locked by fingerprint tests in `BvhBuildOrderTests`, which every future builder rewrite
+  must reproduce). Measured on 8 cores: 32 400 triangle boxes 22.6 ms → 4.6 ms (4.9×),
+  130 000 random boxes 142.5 ms → 33.6 ms. Queries (all zero-allocation per query, results
+  appended to caller-provided lists):
   - box overlap and ray candidate queries (`Query`);
   - `QueryAll(ray, List<BvhRayHit>)` — every item whose box the ray passes through,
     ordered by ascending box entry t (ties by item index). Collect-then-range-sort:
@@ -207,6 +224,26 @@ concerns.
     which references Core, so Core cannot call it and a second quickhull here would be
     worse than the heuristic. Moving the hull into Core, or an overload taking a
     caller-supplied hull, is the open decision (todo.md).
+
+    box, re-centered to the tightest box with the PCA axes (good-fit heuristic, needs no
+    hull, tolerates degenerate clouds).
+  - `Fitting3d.MinVolumeBox(hullVertices, hullTriangles)` → `OrientedBox3d` — the
+    **minimum-volume** oriented box. **The 2D calipers theorem does not lift to 3D**: the
+    minimum-volume box need NOT have a face flush with a hull face (Freeman–Shapira, and a
+    great many implementations, assume it does). The regular tetrahedron on alternate
+    corners of [−1, 1]³ is bounded by that cube at volume 8 while every face-flush
+    candidate measures 16 — locked by a test. What holds is **O'Rourke's**
+    characterization: at least two ADJACENT box faces each contain a hull EDGE, which makes
+    each pair of hull edge directions a one-parameter family (swept + golden-section
+    refined; unordered, so only j > i is searched). Face-flush candidates are evaluated
+    exactly on top of that — inside a face's plane the 2D calipers theorem *does* apply —
+    and PCA + axis-aligned seed the search, so the result can never lose to `FitBox`.
+    The **hull is the caller's to supply**, deliberately: Core owns no polyhedron type and
+    the 3D quickhull lives in EngrCAD.Mesh because it speaks `HalfEdgeMesh`; passing the
+    hull as plain data (`ConvexHull.Compute(points).Triangulated().ToIndexed()`, a B-Rep
+    solid's planar faces, or one the caller already has) keeps the layering intact. Cost is
+    O(E² · h) — measured 3.6 / 22 / 122 ms for 18 / 42 / 78-vertex hulls on 8 cores, with
+    the edge loop parallelized deterministically (own slot per index, in-order reduction).
   - All built on an internal cyclic-Jacobi `SymmetricEigen3` (3×3 symmetric
     eigen-decomposition, unconditionally convergent).
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over

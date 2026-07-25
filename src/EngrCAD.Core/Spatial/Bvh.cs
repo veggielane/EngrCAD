@@ -147,51 +147,81 @@ public sealed class Bvh
         if (n == 0)
             return new Bvh([], 0, items, boxCopy);
 
-        var centroids = new Vector3d[n];
-        for (int i = 0; i < n; i++)
-            centroids[i] = boxCopy[i].Center;
-
-        var builder = new Builder(boxCopy, centroids, items, maxLeafSize, new Node[2 * n - 1]);
-        builder.Subdivide(builder.AllocateNode(), 0, n);
-        return new Bvh(builder.Nodes, builder.NodeCount, items, boxCopy);
+        var builder = new Builder(boxCopy, items, maxLeafSize, new Node[2 * n - 1]);
+        builder.Subdivide(0, 0, n, 0);
+        return new Bvh(builder.FinalNodes, builder.NodeCount, items, boxCopy);
     }
 
     private sealed class Builder
     {
-        public Node[] Nodes { get; }
-        public int NodeCount { get; private set; }
+        /// <summary>
+        /// Subtrees below this size are built inline: the fork has to pay for itself, and a
+        /// median split's work is linearithmic in the node's own count, so the top few levels
+        /// carry most of it.
+        /// </summary>
+        private const int ParallelMinItems = 4096;
 
         private readonly Aabb[] _boxes;
-        private readonly Vector3d[] _centroids;
+        // Centroids as three contiguous double arrays rather than one Vector3d[]: the split
+        // key for an axis is then a straight gather into a scratch array that Array.Sort's
+        // primitive-key overload can chew through, with no delegate per comparison.
+        private readonly double[] _cx, _cy, _cz;
+        private readonly double[] _keys;
         private readonly int[] _items;
         private readonly int _maxLeafSize;
-        private readonly IComparer<int>[] _axisComparers;
+        private readonly int _maxParallelDepth;
+        private readonly Node[] _nodes;
+        private int _nodeCount = 1;   // node 0 is the root; children are allocated in pairs
+        private volatile bool _forked;
 
-        public Builder(Aabb[] boxes, Vector3d[] centroids, int[] items, int maxLeafSize, Node[] nodes)
+        public Builder(Aabb[] boxes, int[] items, int maxLeafSize, Node[] nodes)
         {
             _boxes = boxes;
-            _centroids = centroids;
             _items = items;
             _maxLeafSize = maxLeafSize;
-            Nodes = nodes;
-            _axisComparers =
-            [
-                Comparer<int>.Create((a, b) => centroids[a].X.CompareTo(centroids[b].X)),
-                Comparer<int>.Create((a, b) => centroids[a].Y.CompareTo(centroids[b].Y)),
-                Comparer<int>.Create((a, b) => centroids[a].Z.CompareTo(centroids[b].Z)),
-            ];
+            _nodes = nodes;
+
+            int n = boxes.Length;
+            _cx = new double[n];
+            _cy = new double[n];
+            _cz = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                var c = boxes[i].Center;
+                _cx[i] = c.X;
+                _cy[i] = c.Y;
+                _cz[i] = c.Z;
+            }
+            _keys = new double[n];
+
+            // Cap the fork-out so a Build nested inside an already-parallel caller (Scene
+            // priming meshes part-by-part, say) cannot flood the pool: at most 2^depth - 1
+            // extra tasks, sized to the machine.
+            int cores = Environment.ProcessorCount;
+            int depth = 0;
+            while ((1 << depth) < cores) depth++;
+            _maxParallelDepth = cores > 1 ? Math.Min(depth + 1, 8) : 0;
         }
 
-        public int AllocateNode() => NodeCount++;
+        public int NodeCount => _nodeCount;
 
-        public void Subdivide(int nodeIndex, int first, int count)
+        /// <summary>
+        /// The finished node array. When subtrees were built concurrently the allocation order
+        /// depended on scheduling, so it is replayed into the canonical sequential order — the
+        /// tree's SHAPE never depended on scheduling, only its node numbering, and callers
+        /// key per-node side data by <see cref="NodeView.Index"/>.
+        /// </summary>
+        public Node[] FinalNodes => _forked ? Renumber() : _nodes;
+
+        public void Subdivide(int nodeIndex, int first, int count, int depth)
         {
             var bounds = Aabb.Empty;
             var centroidBounds = Aabb.Empty;
             for (int i = first; i < first + count; i++)
             {
-                bounds = bounds.Union(_boxes[_items[i]]);
-                centroidBounds = centroidBounds.Union(_centroids[_items[i]]);
+                int item = _items[i];
+                bounds = bounds.Union(_boxes[item]);
+                centroidBounds = centroidBounds.Union(new Vector3d(_cx[item], _cy[item], _cz[item]));
             }
 
             // Median split on the longest centroid axis; degenerate spread becomes a leaf.
@@ -201,18 +231,77 @@ public sealed class Bvh
             int axis = centroidBounds.LongestAxis;
             if (count <= _maxLeafSize || centroidBounds.Size[axis] <= 0)
             {
-                Nodes[nodeIndex] = new Node { Bounds = bounds, Left = -1, First = first, Count = count };
+                _nodes[nodeIndex] = new Node { Bounds = bounds, Left = -1, First = first, Count = count };
                 return;
             }
 
-            Array.Sort(_items, first, count, _axisComparers[axis]);
+            var source = axis == 0 ? _cx : axis == 1 ? _cy : _cz;
+            for (int i = first; i < first + count; i++)
+                _keys[i] = source[_items[i]];
+            Array.Sort(_keys, _items, first, count);
             int mid = first + count / 2;
 
-            int left = AllocateNode();
-            int right = AllocateNode();
-            Nodes[nodeIndex] = new Node { Bounds = bounds, Left = left, First = first, Count = count };
-            Subdivide(left, first, mid - first);
-            Subdivide(right, mid, first + count - mid);
+            int left = Interlocked.Add(ref _nodeCount, 2) - 2;
+            _nodes[nodeIndex] = new Node { Bounds = bounds, Left = left, First = first, Count = count };
+
+            // Sibling subtrees own disjoint slices of _items and _keys and disjoint node
+            // indices, so they never race.
+            if (count >= ParallelMinItems && depth < _maxParallelDepth)
+            {
+                _forked = true;
+                var right = Task.Run(() => Subdivide(left + 1, mid, first + count - mid, depth + 1));
+                Subdivide(left, first, mid - first, depth + 1);
+                right.GetAwaiter().GetResult();   // rethrows with the original stack, not an AggregateException
+            }
+            else
+            {
+                Subdivide(left, first, mid - first, depth + 1);
+                Subdivide(left + 1, mid, first + count - mid, depth + 1);
+            }
+        }
+
+        /// <summary>
+        /// Re-labels nodes in the order a purely sequential build would have allocated them:
+        /// pre-order DFS, both children numbered when their parent is processed. Left/right
+        /// stay adjacent, so traversal — and therefore every query's result order — is
+        /// untouched either way; this only makes the numbering reproducible.
+        /// </summary>
+        private Node[] Renumber()
+        {
+            var final = new Node[_nodeCount];
+            Span<int> source = stackalloc int[64];
+            Span<int> target = stackalloc int[64];
+            int top = 0;
+            source[top] = 0;
+            target[top] = 0;
+            top++;
+            int next = 1;
+            while (top > 0)
+            {
+                top--;
+                var node = _nodes[source[top]];
+                int destination = target[top];
+                if (node.Left < 0)
+                {
+                    final[destination] = node;
+                    continue;
+                }
+                int left = next++, right = next++;
+                final[destination] = new Node
+                {
+                    Bounds = node.Bounds,
+                    Left = left,
+                    First = node.First,
+                    Count = node.Count,
+                };
+                source[top] = node.Left + 1;
+                target[top] = right;
+                top++;
+                source[top] = node.Left;
+                target[top] = left;
+                top++;
+            }
+            return final;
         }
     }
 

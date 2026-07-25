@@ -35,6 +35,8 @@ engines.
     bit-hashes of the pre-streaming output, against a wrapper that forces every batch back
     through the scalar `Evaluate`, and across window sizes from "whole grid" to "two slabs".
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
+
+- **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress?)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
@@ -93,6 +95,26 @@ engines.
     −4.8e-5 of the analytic prism and keeps improving.
 
     Other numerical lessons baked in: earcut's exact-collinear filtering would drop
+
+    fragments such as a bore wall cut through by a slot) go through
+    `TrimmedFaceTessellator`: loops pulled into (u, v), non-wrapping regions ear-clipped
+    by an exact-coordinate clipper (shortest-diagonal ears, on-edge points block, holes
+    bridged), band-like regions (loops winding the period — rings subdivided into arcs)
+    strip-zipped chain-to-chain or fanned to a pole, then oversized interior edges
+    midpoint-split to the natural grid density with new vertices on the exact surface.
+    Boundary vertices are always the exact shared edge samples, so seams weld at 1e-9.
+  - **Progress + cancellation** (`ProgressCancel? progress = null`, free when absent) is
+    polled at **edge and face boundaries** — the coarse checkpoints, since one trimmed face
+    is an indivisible ear-clipping job — and cancellation throws rather than returning a
+    partial mesh. It is safe to cancel here precisely because the tessellation's own result
+    is discarded wholesale; the rule the document model learned the hard way is that
+    abandoning work whose result is **cached** (a `Shape`'s lowered `BrepSolid`) leaves the
+    cache claiming a lowering it never produced, so **never pass a cancellable progress
+    from inside a lowering**. Tessellating an already-cached solid is downstream of the
+    lowering and may observe the token.
+    Routing between grid and trimmed paths is a two-sided 3D match of loop samples
+    against the natural grid boundary — precisely the invariant grid welding needs.
+    Numerical lessons baked in: earcut's exact-collinear filtering would drop
     iso-parameter run vertices (uv-collinear is *not* 3D-collinear — an unzippable
     crack), jittering breeds zero-area folds that refine into non-manifold welds, and
     ~1e-9 inverse-evaluation jitter demands an epsilon blocking band plus midpoint→vertex
@@ -202,6 +224,12 @@ this project's conversions.)
   (non-watertight) meshes, where the distance is still to the existing surface and the sign
   degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
   and still requires a closed mesh.
+  **`MeshSdf` construction deliberately takes no `ProgressCancel`** — measured, then
+  declined: on a 32 040-triangle mesh the pseudonormal constructor is 21.8 ms and the
+  winding-number hierarchy 29.2 ms (8 cores). Cancellation in the viewer is granular to a
+  whole part, which takes seconds, so checkpoints inside a 20 ms constructor buy nothing
+  and would have to be threaded through call sites that sit *inside* cached lowerings —
+  exactly where a token must not reach.
 
 ## Planar cross-sections (`PlanarSection`)
 
