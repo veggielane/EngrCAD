@@ -186,9 +186,15 @@ export — is recorded in CLAUDE.md):
 
 - [ ] wedge primitive (the OCCT gap; cone ✅ landed — revolved-line side surface +
   `Sdf.Cone` + `MeshPrimitives.Cone` + `Shape.Cone`, Native in all three reps)
-- [ ] `text()` — font outlines → `Profile`s (extrudable text). Parse font glyphs
-  (TrueType via a .NET lib) → polygon outlines with holes; g3's `PolygonFont2d` shows a
-  poor-man's variant
+- [ ] **Text follow-ups** (`Shape.Text` ✅ landed — dependency-free TrueType reader,
+  glyphs → exact sketch segments, containment-based counter detection, layout with
+  `kern` kerning): **CFF/OpenType-PostScript outlines** (`CFF ` table, cubic Béziers →
+  `BezierTo`) — rejected loudly today, and supporting it opens every `.otf`; **GPOS
+  kerning** (modern fonts ship kerning only there); **text on a curve/path** (layout
+  maps the pen position to a frame instead of a straight baseline); **variable fonts**
+  (`fvar`/`gvar`); **vertical alignment** for text blocks (horizontal-only today);
+  **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
+  font reference).
 - [ ] `surface()` — heightmap (image/data grid) → mesh terrain
 - [ ] 2D booleans — union/difference/intersection of profiles/regions (needed by the
   sketch engine; `Arrangement2d`+`GraphCells2d` is the mechanism)

@@ -368,6 +368,17 @@ The conversion triangle is complete; each direction has a deliberately chosen al
 `Shape` is a representation-agnostic operation graph — the hybrid kernel's front door.
 Design decisions:
 
+- **Text maps onto the sketch vocabulary exactly, which is why it is cheap.** TrueType
+  `glyf` outlines are lines plus quadratic Béziers, and `Sketch` already has `LineTo`
+  and `QuadraticTo` — so a glyph converts with no flattening and inherits everything a
+  sketch has: exact NURBS profiles for B-Rep, the exact 2D signed distance for the
+  implicit engine, crisp tessellation for printing. The font reader is hand-rolled for
+  the same reason `PngWriter` and the EGL binding are: kernel projects pack to NuGet and
+  do not take third-party dependencies. Counter (hole) classification is deliberately
+  containment-based rather than orientation-based — real fonts violate TrueType's
+  CW-outer convention — and deliberately self-contained from `Region2d` so text does not
+  couple to the 2D region engine. Glyph unions ride the boolean disjoint fast path (one
+  shell per glyph), which is why a whole word lowers cheaply.
 - **A deferred AST, not eager geometry** (mirrors the `Sdf` design): primitives,
   extrude/revolve/sweep, booleans, smooth blends/offset/shell/lattice, transforms, and
   `From(engine object)` leaves. Nothing is computed until `ToBrep()`, `ToImplicit()`,
