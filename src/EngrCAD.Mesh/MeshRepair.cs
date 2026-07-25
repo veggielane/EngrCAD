@@ -33,6 +33,19 @@ public sealed record MeshRepairOptions
     /// (<see cref="MeshWelder"/>'s seam zip), closing cracks where one side is
     /// subdivided finer than the other.</summary>
     public bool ZipTJunctions { get; init; } = true;
+
+    /// <summary>
+    /// Distance within which <see cref="MeshRepair.AutoRepair(MeshReadResult, MeshRepairOptions?)"/>
+    /// welds leftover coincident boundary edge pairs
+    /// (<see cref="MeshRepair.MergeCoincidentEdges"/>). Defaults to
+    /// <see cref="WeldTolerance"/>. Because every merge is guarded, this can be loosened
+    /// far beyond a safe vertex-weld distance: an unsafe merge is refused, not applied.
+    /// </summary>
+    public double? CrackMergeTolerance { get; init; }
+
+    /// <summary>Options for the hole-filling stage of
+    /// <see cref="MeshRepair.AutoRepair(MeshReadResult, MeshRepairOptions?)"/>.</summary>
+    public HoleFillOptions HoleFill { get; init; } = HoleFillOptions.Default;
 }
 
 /// <summary>What <see cref="MeshRepair.Clean(MeshReadResult, MeshRepairOptions?)"/> did.</summary>
@@ -60,6 +73,15 @@ public sealed class MeshRepairReport
     /// <summary>Vertices inserted into unmatched edges by the T-junction zip.</summary>
     public int TJunctionVerticesInserted { get; init; }
 
+    /// <summary>Coincident boundary edge pairs welded by the crack merge (AutoRepair only).</summary>
+    public int CracksMerged { get; init; }
+
+    /// <summary>Boundary loops closed by the hole filler (AutoRepair only).</summary>
+    public int HolesFilled { get; init; }
+
+    /// <summary>Boundary loops the hole filler declined to close (AutoRepair only); see <see cref="Notes"/>.</summary>
+    public int HolesSkipped { get; init; }
+
     /// <summary>True when the repaired mesh is closed (watertight).</summary>
     public bool IsClosed { get; init; }
 
@@ -71,9 +93,29 @@ public sealed class MeshRepairReport
         $"merged {VerticesMerged} vertices, removed {DuplicateFacesRemoved} duplicate + " +
         $"{DegenerateFacesRemoved} degenerate faces, rewound {FacesRewound} faces, " +
         $"flipped {ComponentsFlipped} of {ComponentCount} components, " +
-        $"inserted {TJunctionVerticesInserted} T-junction vertices; " +
+        $"inserted {TJunctionVerticesInserted} T-junction vertices" +
+        (CracksMerged > 0 ? $", welded {CracksMerged} crack edges" : "") +
+        (HolesFilled > 0 || HolesSkipped > 0 ? $", filled {HolesFilled} of {HolesFilled + HolesSkipped} holes" : "") +
+        "; " +
         (IsClosed ? "result is closed" : "result has open boundaries") +
         (Notes.Count > 0 ? $"; notes: {string.Join(" | ", Notes)}" : "");
+
+    internal MeshRepairReport With(bool isClosed, int cracksMerged, int holesFilled, int holesSkipped, IReadOnlyList<string> notes) =>
+        new()
+        {
+            VerticesMerged = VerticesMerged,
+            DuplicateFacesRemoved = DuplicateFacesRemoved,
+            DegenerateFacesRemoved = DegenerateFacesRemoved,
+            ComponentCount = ComponentCount,
+            FacesRewound = FacesRewound,
+            ComponentsFlipped = ComponentsFlipped,
+            TJunctionVerticesInserted = TJunctionVerticesInserted,
+            CracksMerged = cracksMerged,
+            HolesFilled = holesFilled,
+            HolesSkipped = holesSkipped,
+            IsClosed = isClosed,
+            Notes = notes,
+        };
 }
 
 /// <summary>
@@ -91,12 +133,75 @@ public sealed class MeshRepairReport
 /// topological surgery (fins, holes to fill) are out of scope until the mutable
 /// Euler operators land — such soups still fail the final Build, loudly.
 /// </summary>
-public static class MeshRepair
+public static partial class MeshRepair
 {
     /// <summary>Runs the pipeline on a reader result's welded soup.</summary>
     public static (HalfEdgeMesh Mesh, MeshRepairReport Report) Clean(
         MeshReadResult soup, MeshRepairOptions? options = null) =>
         Clean(soup.Positions, soup.Faces, options);
+
+    /// <summary>
+    /// <see cref="Clean(MeshReadResult, MeshRepairOptions?)"/> plus the topological
+    /// surgery that needs a valid mesh to stand on: leftover cracks are welded pair-wise
+    /// (<see cref="MergeCoincidentEdges"/>) and whatever boundary loops remain go to
+    /// <see cref="HoleFiller.FillAll"/>. The full "make this printable" dispatch — the
+    /// cheap, always-safe passes first, surgery only where the geometry still asks for it.
+    /// Returns early (doing nothing extra) when <c>Clean</c> already produced a closed
+    /// mesh, so the common case costs nothing.
+    /// </summary>
+    public static (HalfEdgeMesh Mesh, MeshRepairReport Report) AutoRepair(
+        MeshReadResult soup, MeshRepairOptions? options = null) =>
+        AutoRepair(soup.Positions, soup.Faces, options);
+
+    /// <summary>Full repair of an existing mesh; see <see cref="AutoRepair(MeshReadResult, MeshRepairOptions?)"/>.</summary>
+    public static (HalfEdgeMesh Mesh, MeshRepairReport Report) AutoRepair(
+        HalfEdgeMesh mesh, MeshRepairOptions? options = null)
+    {
+        var (positions, faces) = mesh.ToIndexed();
+        return AutoRepair(positions, faces, options);
+    }
+
+    /// <summary>Full repair of a raw indexed soup; see <see cref="AutoRepair(MeshReadResult, MeshRepairOptions?)"/>.</summary>
+    public static (HalfEdgeMesh Mesh, MeshRepairReport Report) AutoRepair(
+        IReadOnlyList<Vector3d> positions, IReadOnlyList<int[]> faces, MeshRepairOptions? options = null)
+    {
+        var opt = options ?? new MeshRepairOptions();
+        var (mesh, report) = Clean(positions, faces, opt);
+        if (mesh.IsClosed)
+            return (mesh, report);
+
+        var notes = new List<string>(report.Notes);
+
+        // 1. Weld coincident boundary edge pairs. Guarded, so a merge that would pinch the
+        //    surface is refused rather than applied; positions never move.
+        int merged = 0;
+        var editable = EditableMesh.FromMesh(mesh);
+        merged = MergeCoincidentEdges(editable, opt.CrackMergeTolerance ?? opt.WeldTolerance);
+        if (merged > 0)
+            mesh = editable.ToMesh();
+
+        // 2. Whatever is still open is a genuine hole, not a crack.
+        int filled = 0, skipped = 0;
+        if (!mesh.IsClosed)
+        {
+            var result = HoleFiller.FillAll(mesh, opt.HoleFill);
+            mesh = result.Mesh;
+            foreach (var outcome in result.Outcomes)
+            {
+                if (outcome.Method == HoleFillMethod.Skipped)
+                {
+                    skipped++;
+                    notes.Add($"Hole {outcome.LoopIndex} ({outcome.VertexCount} vertices) left open: {outcome.Message}");
+                }
+                else
+                {
+                    filled++;
+                }
+            }
+        }
+
+        return (mesh, report.With(mesh.IsClosed, merged, filled, skipped, notes));
+    }
 
     /// <summary>Runs the pipeline on an existing mesh (e.g. to re-orient an
     /// inward-wound but manifold import). Faces may be polygons; they are preserved.</summary>

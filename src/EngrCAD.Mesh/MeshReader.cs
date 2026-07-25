@@ -40,9 +40,20 @@ public static class MeshReader
     /// <see cref="InvalidOperationException"/> when the file's defects need
     /// topological surgery beyond repair v1 (see <see cref="MeshRepair"/>).
     /// </summary>
+    /// <param name="path">Mesh file to read.</param>
+    /// <param name="options">Repair options; <c>null</c> uses the defaults.</param>
+    /// <param name="fillHolesAndCracks">Run the full
+    /// <see cref="MeshRepair.AutoRepair(MeshReadResult, MeshRepairOptions?)"/> dispatch —
+    /// the soup passes plus pair-wise crack welding and hole filling — instead of the
+    /// soup passes alone. Off by default: closing holes invents geometry, which an
+    /// importer should only do when asked.</param>
     public static (HalfEdgeMesh Mesh, MeshRepairReport Report) ReadAndRepair(
-        string path, MeshRepairOptions? options = null) =>
-        MeshRepair.Clean(ReadFile(path), options); // read welds exactly (1e-9); repair applies the crack weld
+        string path, MeshRepairOptions? options = null, bool fillHolesAndCracks = false)
+    {
+        // Read welds exactly (1e-9); repair applies the crack weld.
+        var soup = ReadFile(path);
+        return fillHolesAndCracks ? MeshRepair.AutoRepair(soup, options) : MeshRepair.Clean(soup, options);
+    }
 
     private static string Normalize(string extension) =>
         (extension.StartsWith('.') ? extension : "." + extension).ToLowerInvariant();
