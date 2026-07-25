@@ -82,7 +82,13 @@ concerns.
   no other edge, so `m + d/2` along the inward (left) normal is strictly interior — using the
   edge with the largest clearance. No triangulation, no shrink factor, no epsilon; and since
   the cell boundary contains every operand edge, the sample can never sit on A's or B's
-  boundary, so `Contains`'s closed-set convention never has to decide a tie.
+  boundary, so `Contains`'s closed-set convention never has to decide a tie. The clearance
+  comes from a **`Bvh` over the arrangement's edges built once per boolean** (edges embedded
+  at z = 0, so the branch-and-bound's box distance is exactly the 2D one), replacing a
+  per-loop-edge linear scan that made classification O(E²) — **bit-identical**, because only
+  the minimum DISTANCE is used and a minimum over doubles does not depend on visit order.
+  Measured on a union of 120 overlapping 32-gons (7 776 arrangement edges, 1 969 cells):
+  classification 367.7 ms → 8.8 ms, whole union 436.2 ms → 93.6 ms.
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
   centroid axis, flat node array, allocation-free stack traversal). The build sorts the
   item permutation per node through a **contiguous key array** (`Array.Sort(double[],

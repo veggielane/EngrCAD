@@ -1,3 +1,5 @@
+using EngrCAD.Core.Spatial;
+
 namespace EngrCAD.Core.Geometry2;
 
 /// <summary>
@@ -24,7 +26,11 @@ namespace EngrCAD.Core.Geometry2;
 /// far from every boundary as this construction can put it. The choice is scale-free (no
 /// epsilon, no shrink factor) and needs no polygon triangulation; since the cell boundary
 /// contains every edge of both operands, the sample can never land on A's or B's boundary,
-/// so the closed/open convention of <see cref="Region2d.Contains"/> never matters here.</para>
+/// so the closed/open convention of <see cref="Region2d.Contains"/> never matters here.
+/// The clearance itself comes from a <see cref="Bvh"/> over the arrangement's edges, built
+/// once per boolean — it replaced a per-loop-edge linear scan that made classification
+/// O(E²), and it is bit-identical because only the minimum DISTANCE is ever used, never
+/// which edge attained it.</para>
 ///
 /// <para><b>Inputs</b> may be single regions or lists (a list means the union of its
 /// members); results are always canonical (CCW outer, CW holes) and an empty result is an
@@ -94,10 +100,11 @@ public static class Region2dBoolean
             return [];
 
         // Classify every cell once, and record the directed loop edges of the kept ones.
+        var edges = new EdgeIndex(arrangement);
         var kept = new HashSet<(int From, int To)>();
         foreach (var cell in arrangement.ExtractCells())
         {
-            var sample = InteriorSample(arrangement, cell);
+            var sample = InteriorSample(arrangement, edges, cell);
             bool inA = ContainedIn(a, sample);
             bool inB = ContainedIn(b, sample);
             bool keep = op switch
@@ -206,7 +213,8 @@ public static class Region2dBoolean
     /// with the greatest clearance to any other arrangement edge, pushed half that clearance
     /// along the inward (left) normal.
     /// </summary>
-    private static Vector2d InteriorSample(Arrangement2d arrangement, ArrangementCell2d cell)
+    private static Vector2d InteriorSample(
+        Arrangement2d arrangement, EdgeIndex edges, ArrangementCell2d cell)
     {
         var loop = cell.OuterVertices;
         var sample = default(Vector2d);
@@ -223,17 +231,8 @@ public static class Region2dBoolean
             if (!(length > 0))
                 continue; // exact-zero division guard (scale-free, not a tolerance)
             var midpoint = (a + b) * 0.5;
-            int sourceEdge = arrangement.FindEdge(va, vb);
 
-            double clearance = double.PositiveInfinity;
-            for (int edge = 0; edge < arrangement.EdgeCount && clearance > bestClearance; edge++)
-            {
-                if (edge == sourceEdge)
-                    continue;
-                var (x, y) = arrangement.EdgeAt(edge);
-                clearance = Math.Min(clearance,
-                    PointSegmentDistance(midpoint, arrangement.VertexAt(x), arrangement.VertexAt(y)));
-            }
+            double clearance = edges.NearestDistance(midpoint, arrangement.FindEdge(va, vb));
             if (double.IsInfinity(clearance) || clearance <= bestClearance)
                 continue;
             bestClearance = clearance;
@@ -251,6 +250,67 @@ public static class Region2dBoolean
         foreach (int vertex in loop)
             centroid += arrangement.VertexAt(vertex);
         return centroid / loop.Count;
+    }
+
+    /// <summary>
+    /// A <see cref="Bvh"/> over the arrangement's edges, built ONCE per boolean and shared
+    /// by every cell's interior sample.
+    ///
+    /// <para>The clearance search used to be a linear scan of every arrangement edge per
+    /// loop edge, i.e. O(E²) over the whole boolean — and unlike insertion's scan it is not
+    /// hidden by anything else: a union of 60 overlapping 32-gons spends most of its
+    /// classification time here. The result is UNCHANGED bit for bit, because only the
+    /// minimum DISTANCE is used (never which edge attained it) and a minimum over doubles
+    /// does not depend on the order they are visited in.</para>
+    ///
+    /// <para>Edges are embedded at z = 0 in the 3D <see cref="Bvh"/> rather than growing a
+    /// second, 2D hierarchy: the box distance the branch-and-bound prunes with is then
+    /// exactly the 2D one.</para>
+    /// </summary>
+    private sealed class EdgeIndex
+    {
+        private readonly Vector2d[] _starts;
+        private readonly Vector2d[] _ends;
+        private readonly Bvh _bvh;
+
+        public EdgeIndex(Arrangement2d arrangement)
+        {
+            int count = arrangement.EdgeCount;
+            _starts = new Vector2d[count];
+            _ends = new Vector2d[count];
+            var boxes = new Aabb[count];
+            for (int e = 0; e < count; e++)
+            {
+                var (x, y) = arrangement.EdgeAt(e);
+                var p = arrangement.VertexAt(x);
+                var q = arrangement.VertexAt(y);
+                _starts[e] = p;
+                _ends[e] = q;
+                boxes[e] = Aabb.Empty
+                    .Union(new Vector3d(p.X, p.Y, 0))
+                    .Union(new Vector3d(q.X, q.Y, 0));
+            }
+            _bvh = Bvh.Build(boxes);
+        }
+
+        /// <summary>
+        /// Distance from <paramref name="point"/> to the nearest edge other than
+        /// <paramref name="skip"/>; positive infinity when there is no other edge.
+        /// </summary>
+        public double NearestDistance(in Vector2d point, int skip)
+        {
+            var metric = new SegmentDistance(_starts, _ends, point, skip);
+            _bvh.Nearest(new Vector3d(point.X, point.Y, 0), ref metric, out _, out double distance);
+            return distance;
+        }
+
+        private readonly struct SegmentDistance(
+            Vector2d[] starts, Vector2d[] ends, Vector2d point, int skip) : IBvhDistance
+        {
+            public double DistanceTo(int item) => item == skip
+                ? double.PositiveInfinity
+                : PointSegmentDistance(point, starts[item], ends[item]);
+        }
     }
 
     private static double PointSegmentDistance(in Vector2d point, in Vector2d a, in Vector2d b)

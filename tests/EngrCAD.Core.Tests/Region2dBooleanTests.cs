@@ -282,6 +282,51 @@ public class Region2dBooleanTests
         Assert.True(overlaps > 100, $"expected mostly-overlapping random pairs, got {overlaps}");
     }
 
+    /// <summary>
+    /// A many-cell arrangement — the case that used to be O(E²) in the interior-sample
+    /// clearance scan, now answered from a BVH over the arrangement's edges. Overlapping
+    /// tiles fuse into ONE rectangle with an exactly known area, which is only true if
+    /// every one of the hundreds of cells got a strictly-interior sample and was classified
+    /// correctly; a single misclassified cell punches a hole or leaves a slit.
+    /// </summary>
+    [Fact]
+    public void ManyOverlappingTiles_FuseIntoOneRectangleOfExactArea()
+    {
+        var tiles = new List<Region2d>();
+        for (int i = 0; i < 8; i++)
+            for (int j = 0; j < 8; j++)
+                tiles.Add(Box(i * 0.75, j * 0.75, i * 0.75 + 1, j * 0.75 + 1));
+
+        var union = Region2dBoolean.Union(tiles, []);
+
+        var single = Assert.Single(union);
+        Assert.Empty(single.Holes);
+        // The tiles span [0, 7*0.75 + 1] = [0, 6.25] on both axes.
+        Assert.Equal(6.25 * 6.25, single.Area, 9);
+        AssertCanonical(union);
+    }
+
+    /// <summary>
+    /// The same scale, but with the cells that must be DROPPED: a plate riddled with
+    /// pockets. Interior samples decide each pocket, so the area identity is the check.
+    /// </summary>
+    [Fact]
+    public void PlateWithManyPockets_KeepsEveryHole()
+    {
+        var plate = Box(0, 0, 20, 20);
+        var pockets = new List<Region2d>();
+        for (int i = 0; i < 6; i++)
+            for (int j = 0; j < 6; j++)
+                pockets.Add(Box(1 + i * 3, 1 + j * 3, 2 + i * 3, 2 + j * 3));
+
+        var result = Region2dBoolean.Difference([plate], pockets);
+
+        var single = Assert.Single(result);
+        Assert.Equal(36, single.Holes.Count);
+        Assert.Equal(400 - 36, single.Area, 9);
+        AssertCanonical(result);
+    }
+
     private static Region2d RandomHullRegion(Random random)
     {
         // Convex hulls of random point clouds are simple polygons by construction; the
