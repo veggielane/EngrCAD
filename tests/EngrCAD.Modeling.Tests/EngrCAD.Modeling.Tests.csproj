@@ -6,6 +6,9 @@
     <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.0" />
     <PackageReference Include="xunit" Version="2.9.3" />
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.0" />
+    <!-- Runtime-conditional skip: the optional real-system-font tests skip (not fail)
+         on machines without one — no font binary is committed here (licensing). -->
+    <PackageReference Include="Xunit.SkippableFact" Version="1.5.23" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />

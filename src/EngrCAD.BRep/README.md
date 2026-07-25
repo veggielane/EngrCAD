@@ -64,6 +64,13 @@ operations. Depends only on `EngrCAD.Core`.
   edge use; `SatisfiesEulerFormula(genus)` checks V − E + F − (L − F) − 2(S − G) = 0.
 - **`Profile`** — planar closed chain of curve segments (or one closed curve) used by the
   modeling operations; winding is auto-corrected per operation.
+  `Profile.FromRegion(region, frame?)` places a Core `Geometry2.Region2d`
+  (polygon-with-holes, the output of the 2D sketch engine's booleans) on a `Frame3d` and
+  returns the `(outer, holes)` pair `Extrude`/`Revolve`/`Sweep` take — the 2D front door
+  into the solid factories; `FromLoop(points, frame)` does one loop. Regions are polygonal,
+  so these profiles are polygonal: a region derived from curved sketch input carries that
+  flattening (see `Sketch.ToRegions`), whereas a sketch handed straight to a modeling
+  operation keeps its exact arcs and NURBS.
 - **`SolidFactory`** — `MakeBox`, `MakeCylinder`, `MakeSphere`, `MakeTorus`,
   `MakeCone(r1, r2, height[, baseCenter, axis])` (frustum; the side is an exact
   `RevolvedSurface` of the slanted line generator, reusing the revolved-band machinery —

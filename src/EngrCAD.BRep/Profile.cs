@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
 
 namespace EngrCAD.BRep;
 
@@ -124,4 +125,35 @@ public sealed class Profile
 
     public static Profile Circle(in Vector3d center, in Vector3d xDirection, in Vector3d yDirection, double radius) =>
         new([new Circle3d(center, xDirection, yDirection, radius)]);
+
+    /// <summary>
+    /// A 2D <see cref="Region2d"/> placed on a plane, as the (outer, holes) pair the
+    /// modeling operations take: <c>SolidFactory.Extrude(outer, direction, holes)</c>,
+    /// <c>Revolve</c>, <c>Sweep</c>. The region's 2D x/y become <paramref name="plane"/>'s
+    /// X/Y (default: the world XY plane).
+    ///
+    /// <para>Regions are polygonal, so the profiles are polygonal — a region produced by 2D
+    /// booleans from curved sketch input carries that flattening (see
+    /// <c>Sketch.ToRegions</c>); a sketch handed straight to a modeling operation keeps its
+    /// exact arcs and NURBS instead.</para>
+    /// </summary>
+    public static (Profile Outer, IReadOnlyList<Profile> Holes) FromRegion(Region2d region, Frame3d? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        var frame = plane ?? Frame3d.WorldXY;
+        return (
+            FromLoop(region.Outer, frame),
+            [.. region.Holes.Select(hole => FromLoop(hole, frame))]);
+    }
+
+    /// <summary>One closed 2D loop as a polygonal profile on a plane (the region's 2D x/y
+    /// become the frame's X/Y). The loop closes implicitly — do not repeat the first point.</summary>
+    public static Profile FromLoop(IReadOnlyList<Vector2d> loop, in Frame3d plane)
+    {
+        ArgumentNullException.ThrowIfNull(loop);
+        var corners = new Vector3d[loop.Count];
+        for (int i = 0; i < loop.Count; i++)
+            corners[i] = plane.ToWorld(new Vector3d(loop[i].X, loop[i].Y, 0));
+        return FromPoints(corners);
+    }
 }

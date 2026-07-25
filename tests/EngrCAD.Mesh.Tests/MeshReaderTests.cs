@@ -264,6 +264,53 @@ public class MeshReaderTests
     }
 
     [Fact]
+    public void BinaryStl_FromAGrowingStream_DetectsSizeFromTheFileLengthNotTheBuffer()
+    {
+        // The reader buffers into a MemoryStream and reads GetBuffer() (never ToArray(),
+        // which would double peak memory). GetBuffer's capacity is rounded up to a power
+        // of two, so every size test must use the stream's Length: a 1-facet binary STL
+        // is 134 bytes in a 256-byte buffer, and the 84 + 50 * n detection would fail
+        // outright against the buffer length.
+        var bytes = BinaryStlBytes([((0, 0, 0), (1, 0, 0), (0, 1, 0))]);
+        Assert.Equal(134, bytes.Length);
+
+        using var source = new MemoryStream();
+        source.Write(bytes, 0, bytes.Length);
+        source.Position = 0;
+        var result = StlReader.Read(source);
+
+        Assert.Single(result.Faces);
+        Assert.Empty(result.Diagnostics.Warnings); // no "trailing bytes ignored" from padding
+    }
+
+    [Fact]
+    public void Obj_ManyBackslashContinuations_JoinIntoOneRecord()
+    {
+        // Continuations accumulate in a StringBuilder; the naive `line = line + next`
+        // loop is O(n^2) in the number of continued lines. 200 corners keeps the test
+        // fast either way — this locks the semantics, not the speed.
+        const int corners = 200;
+        var text = new System.Text.StringBuilder();
+        for (int i = 0; i < corners; i++)
+        {
+            double angle = 2 * Math.PI * i / corners;
+            text.Append("v ").Append(Math.Cos(angle).ToString("R", System.Globalization.CultureInfo.InvariantCulture))
+                .Append(' ').Append(Math.Sin(angle).ToString("R", System.Globalization.CultureInfo.InvariantCulture))
+                .AppendLine(" 0");
+        }
+        text.AppendLine("f \\");
+        for (int i = 1; i <= corners; i++)
+            text.AppendLine(i == corners ? i.ToString() : i + " \\");
+
+        var result = ObjReader.Read(new StringReader(text.ToString()));
+
+        Assert.Equal(corners, result.Positions.Count);
+        // One n-gon, triangulated into n - 2 triangles.
+        Assert.Equal(corners - 2, result.Faces.Count);
+        Assert.Empty(result.Diagnostics.Warnings);
+    }
+
+    [Fact]
     public void Obj_IndexForms_NegativeAndSlashed_AllResolve()
     {
         const string text = """

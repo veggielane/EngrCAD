@@ -107,6 +107,19 @@ Each engine uses the data structure its mathematics wants:
   more times are triangulated on their **Newell plane** (robust for near-degenerate
   polygons) before clipping — fanning from vertex 0 is only valid for star-shaped
   polygons and silently mis-clips otherwise.
+- **The exact (imprint) boolean uses Euler operators + flip recovery, not per-face CDT.**
+  `MeshMeshCut` finds intersection segments (BVH broad phase, Möller interval narrow
+  phase) and `MeshImprinter` cuts them into both meshes with `EditableMesh.SplitEdge`
+  (edge crossings), `PokeFace` (interior points), and constrained `FlipEdge` recovery
+  (Anglada). The reason for operators over per-face triangulation: a `SplitEdge` updates
+  **both** adjacent faces, so an intra-mesh T-junction cannot arise by construction,
+  and every step is guarded and journaled — a failed imprint reverts bit-identically
+  through `MeshChangeSet` instead of leaving a half-cut mesh. Classification is then
+  **per patch** (flood-fill across non-seam edges, one winding-number probe at the
+  largest triangle's centroid), because the intersection curve is an edge of both
+  meshes, so no patch straddles the other surface. It stays opt-in
+  (`BooleanMethod.Exact`) only because coplanar overlaps are rejected rather than
+  classified; BSP handles those, so the default cannot flip until they are.
 - **Winding-number classification** (`MeshWindingNumber`) gives robust inside/outside
   for non-watertight meshes: `WindingNumber` sums signed solid angles
   (Van Oosterom–Strackee) exactly, `FastWindingNumber` is the Barill/Jacobson order-2
@@ -355,6 +368,27 @@ The conversion triangle is complete; each direction has a deliberately chosen al
 `Shape` is a representation-agnostic operation graph — the hybrid kernel's front door.
 Design decisions:
 
+- **The construction tree is the seam between an immutable graph and stateful UI.** A
+  tree row is *a node reference plus a positional path*, and both halves earn their
+  keep: `Shape` is an immutable, shared graph, so one sub-shape can appear at several
+  paths (a pattern operand). The **path** distinguishes rows and carries expansion and
+  selection state, so it survives a live reload that rebuilds the graph; the
+  **reference** is what previews are keyed by, so a shared sub-shape lowers once no
+  matter how many rows show it. Previews are line geometry only (a sketch flattened
+  onto its plane, or a sub-shape's feature edges) — never meshes — built on a
+  background task, because the one rule the viewer cannot break is that lowering never
+  runs on the UI or render thread.
+- **Text maps onto the sketch vocabulary exactly, which is why it is cheap.** TrueType
+  `glyf` outlines are lines plus quadratic Béziers, and `Sketch` already has `LineTo`
+  and `QuadraticTo` — so a glyph converts with no flattening and inherits everything a
+  sketch has: exact NURBS profiles for B-Rep, the exact 2D signed distance for the
+  implicit engine, crisp tessellation for printing. The font reader is hand-rolled for
+  the same reason `PngWriter` and the EGL binding are: kernel projects pack to NuGet and
+  do not take third-party dependencies. Counter (hole) classification is deliberately
+  containment-based rather than orientation-based — real fonts violate TrueType's
+  CW-outer convention — and deliberately self-contained from `Region2d` so text does not
+  couple to the 2D region engine. Glyph unions ride the boolean disjoint fast path (one
+  shell per glyph), which is why a whole word lowers cheaply.
 - **A deferred AST, not eager geometry** (mirrors the `Sdf` design): primitives,
   extrude/revolve/sweep, booleans, smooth blends/offset/shell/lattice, transforms, and
   `From(engine object)` leaves. Nothing is computed until `ToBrep()`, `ToImplicit()`,

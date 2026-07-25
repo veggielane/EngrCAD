@@ -23,7 +23,9 @@ first visit). Picking reports part names in the title bar.
 
 Dark-themed layout around one shared GL viewport:
 
-- **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views, a
+- **Toolbar**: Fit (zoom to visible parts), Front/Top/Right/Iso standard views (each
+  a cube direction resolved by `ViewCubeMath.PoseFor` — the view cube's own pose
+  source), a
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
   a **Section** toggle with an **X/Y/Z axis cycler** button beside it (see below),
@@ -62,8 +64,12 @@ Dark-themed layout around one shared GL viewport:
   to the model); the ground grid and world axes are scene furniture and stay
   unclipped. Custom hosts drive `SectionEnabled` / `SectionAxis` / `SectionOffset`
   (`SectionHeight` remains as a delegating legacy alias from the Z-only days).
-  Picking ignores the section plane in v1 — a click can select a part through the
-  cut-away half.
+  **Picking and hover honor the cut**: a surface the plane removed cannot be clicked
+  through, so the ray lands on the interior the section exposed instead of the shell
+  in front of it. The CPU test is `SectionClip.Hides` — deliberately the shaders' own
+  discard rule (`dot(world, axis) > offset`) in one place, so the visible and the
+  pickable surface cannot drift apart; the exposed cut face (exactly on the plane)
+  stays pickable, matching the strict `>`.
 - **SDF isolines on the section plane** (automatic when available): when the section
   plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
   exists (`CanConvertTo(Implicit)`; lowered once and cached per part, never per
@@ -97,8 +103,17 @@ Dark-themed layout around one shared GL viewport:
   smoothstep-eased move along the shortest yaw path with distance and target kept.
   Hovering brightens the face/edge/corner under the cursor (its whole face set
   lightens) so the click target reads before clicking. Dragging that starts on the
-  cube orbits the main camera like anywhere else, and clicks inside the cube's
-  square region never pick parts through the widget. Implementation (all in
+  cube orbits the main camera like anywhere else and then **rotate-snaps** on release:
+  the view settles onto the nearest of the 26 standard orientations
+  (`ViewCubeMath.NearestStandardDirection` — the direction closest to the camera's
+  view direction, idempotent so an already-standard view does not drift), the way
+  commercial cubes finish a drag. Dragging anywhere else in the viewport still orbits
+  freely. Clicks inside the cube's square region never pick parts through the widget.
+  `ViewportControl.SnapViewCube()` drives the snap directly.
+  **`ViewCubeMath.PoseFor` is the single pose source**: the toolbar's
+  Front/Top/Right/Iso buttons are named cube directions passed through it, so the
+  buttons and the widget can never disagree (Top/Bottom keep the current yaw, as a
+  TOP face click already did — yaw is unconstrained at the poles). Implementation (all in
   `ViewCube.cs`): drawn after the scene into its own ~104-DIP sub-viewport with the
   depth buffer cleared (always on top), reusing the existing flat-color line
   program — face fills are 6 flat-shaded tones (top lightest), edges and labels are
@@ -123,8 +138,8 @@ Dark-themed layout around one shared GL viewport:
   on pointer move, **throttled** to every 4+ DIPs of travel (`HoverThrottle` in
   `ViewCube.cs`, unit-tested); redraws happen only when the hovered index actually
   changes, and hover clears when a drag/press starts or the pointer leaves the
-  viewport or enters the cube region. Hover inherits picking's v1 behavior of
-  ignoring the section plane (it can hover a part through the cut-away half).
+  viewport or enters the cube region. Hover shares the pick raycast, so it honors the
+  section plane exactly as clicking does.
 - **3D annotations (PMI)**: parts annotated in Modeling (`Part.Annotate` —
   selector-measured `LinearDimension`/`RadialDimension`, `LeaderNote`,
   `DatumLabel`, hole/thread callouts; see the Modeling README) render as classic
@@ -145,7 +160,8 @@ Dark-themed layout around one shared GL viewport:
   show their part's annotations in place; per-part resolution failures (a selector
   broken by an edit) surface in the status bar instead of killing the scene. The
   toolbar **Annot** toggle (`ViewportControl.ShowAnnotations`, default on) hides
-  them. **Unlike the view cube, annotations DO render in headless offscreen output**
+  them, and **hiding a part hides its annotations with it** (the overlay's item set is
+  rebuilt from the visible instances, so dimensions never float over an absent part). **Unlike the view cube, annotations DO render in headless offscreen output**
   — they are documentation content, so docs images can carry dimensions.
 - **Measure tool** (toolbar **Measure**, `ViewportControl.MeasureMode`): while on,
   clicks pick **surface points** (the existing pick raycast, returning the exact
@@ -161,13 +177,35 @@ Dark-themed layout around one shared GL viewport:
   `Tab.Instances()`, so row order matches viewport instance indices). Visibility
   checkboxes exist at every level: a part row toggles that instance, an assembly row
   hides its whole subtree (effective visibility = own checkbox AND all ancestors;
-  unchecking a parent does not touch the children's own state). Clicking a name
+  unchecking a parent does not touch the children's own state). Visibility is
+  remembered per occurrence path, so it survives expanding a construction row, a tab
+  switch, or a live reload — the tree hands the resolved visibility to the viewport
+  *with* the instance list (`SetInstances(..., visible:)`), since the swap happens on
+  the render thread and later per-row calls would land on the outgoing list. Clicking a name
   selects the *occurrence* (bold + gold in the viewport), and viewport picks
   highlight the tree row — selection stays in sync both ways and reports occurrence
   paths ("stack/clamp.2/bolt") in the title/status bar. Each part row also has a
   small **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part
   through Shaded → Wireframe → Translucent (see below); the mode lives on the
   shared `Part`, so every instance of that part changes together.
+- **Construction tree** (the disclosure triangle on a part row): expands a part into
+  **how it was built** — for a `Shape` part the operation graph as nested rows
+  (booleans, drills, rims and patterns showing their operands as children, and a
+  **sketch row** under every sketch-driven extrude/revolve/sweep); for a
+  `FeatureHistory` part the ordered feature list with names, suppression state, and
+  `[Param]` values. Rows come straight from `Part.ConstructionTree()` in
+  EngrCAD.Modeling (see its README) — the viewer adds no naming of its own.
+  **Clicking a row previews it in the viewport**: a sketch draws its curves on its
+  `SketchPlane` in 3D, any other row draws the feature edges of that sub-graph's
+  geometry — i.e. the model *as of that step*, a rollback view — in construction cyan,
+  drawn over the model (depth test off) so it reads against the finished part.
+  Clicking the showing row again clears it. The lowering happens on a **background
+  task** and is memoized per graph node (`ConstructionPreviewCache`), so the UI never
+  stalls and a second click is instant; a step that cannot be lowered reports in the
+  status bar instead of throwing. Expansion state is keyed by occurrence path, so it
+  survives tab switches and live reloads. Custom hosts drive the overlay directly via
+  `ViewportControl.SetConstructionPreview(segments, world)`. (Rollback bars,
+  suppress-from-tree, and `[Param]` editing are follow-ups.)
 - **Per-part display modes** (`Part.DisplayMode`, default `Shaded`): design code sets
   it (`part.DisplayMode = DisplayMode.Translucent`) and the tree's per-row cycler
   changes it live; custom hosts drive `ViewportControl.SetDisplayMode(index, mode)`.
@@ -203,7 +241,11 @@ Dark-themed layout around one shared GL viewport:
   B-Rep edges** sampled at display resolution (`BrepFeatureEdges` in Interop — a
   bore rim stays a smooth circle however coarse the mesh; smooth seams like
   wrap-split junctions are classified by exact surface normals and omitted), other
-  parts fall back to mesh dihedrals (`MeshFeatureEdges`).
+  parts fall back to mesh dihedrals (`MeshFeatureEdges`). The edges, the display
+  mesh, selector annotations, construction previews, and STEP export all share the
+  ONE solid `Part.TryGetSolid()` caches — a Shape part is no longer lowered once per
+  consumer (see the Modeling README; `Scene.PreMesh` of a heavy Shape scene measured
+  32.8 s before, 10.1 s after).
 - **Status bar** (bottom): last input on the left, control hints on the right.
 
 `EngrCad.Show` may be called once per process (Avalonia allows a single application

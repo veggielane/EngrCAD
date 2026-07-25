@@ -32,9 +32,11 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     also blocks all valence-3 endpoint flips),
   - `CollapseEdge` (destination merges into origin; link condition — shared neighbors
     must be exactly the opposite apexes — plus interior-edge both-endpoints-boundary
-    bow-tie, duplicate-edge, isolated-tetrahedron, and last-triangle guards; the
+    bow-tie, duplicate-edge, isolated-tetrahedron, last-triangle, and wire-edge
+    (`IsolatedEdge`, defensive — `Build` cannot produce a face-less edge) guards; the
     decimator keeps its own equivalent on its face-set scratch state),
-  - `PokeFace` (any n-gon → fan around centroid or explicit point),
+  - `PokeFace` (any n-gon → fan around centroid or explicit point; the reported fan
+    faces come back as an `ImmutableArray`, not a caller-writable `int[]`),
   - `MergeEdges` (welds two **boundary half-edges** head-to-tail — the crack-closing
     primitive; handles shared-endpoint seams and full slit closure, and automatically
     welds the doubled boundary edges the guards deliberately admit, g3-style).
@@ -58,8 +60,53 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   vertices, not sliver fans); degenerate inputs (&lt; 4 points, coincident, collinear,
   coplanar) throw with the reason. Output goes through the manifold-validating `Build`
   as a safety net.
-- **`MeshBoolean`** — union/difference/intersection via BSP clipping (csg.js) plus a
-  seam-zipping pass so results come out topologically closed.
+- **`MeshBoolean`** — union/difference/intersection, two algorithms behind one API.
+  `BooleanMethod.Bsp` (the default) clips BSP trees (csg.js) plus a seam-zipping pass so
+  results come out topologically closed. `BooleanMethod.Exact` selects the **imprint
+  boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
+  flood-fill each mesh's faces into **patches** bounded by that curve, classify each patch
+  once by the other mesh's `MeshWindingNumber` at the centroid of its largest triangle,
+  keep the halves the operation calls for (difference reverses the tool's kept patches),
+  and weld the two halves by **exact coordinate equality** — the imprint guarantees
+  bit-identical seam vertices, so there is no gap to bridge and no tolerance to pick. At
+  every seam edge exactly one face survives on each side (adjacent faces lie on opposite
+  sides of the other surface), which is why the result is closed and manifold.
+  *Classification assumption*: after the imprint no face straddles the other surface, so a
+  whole patch is inside or outside — probing per patch (rather than per face) is what
+  keeps seam slivers, whose centroids sit arbitrarily close to the other surface, from
+  deciding anything. Measured: flipping the default to `Exact` passes every test in every
+  project except the ones that pin BSP behaviour deliberately; it stays opt-in only
+  because the exact path REJECTS coplanar overlapping faces (flush-mating operands) that
+  BSP handles. Cases the BSP path gets wrong and the exact path gets right, both locked by
+  tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a shell with
+  boundary edges — a hole in the solid), and any model at ~1e-5 scale (BSP's absolute
+  1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every polygon is
+  discarded and the result is empty).
+- **`MeshMeshCut` / `MeshImprint`** — exact mesh–mesh intersection and imprint: the two
+  meshes come back cut along their common curve, sharing it vertex-for-vertex. Broad
+  phase is `Bvh.QueryOverlap` over per-triangle boxes; the narrow phase is the Möller
+  interval test (corner distances to the other plane → each triangle's interval on the
+  common line → the overlap of the two intervals). **Every intersection point is one mesh
+  edge crossing one face plane of the other mesh**, evaluated from the edge's
+  lower-indexed endpoint, so its value depends only on (edge, plane) — the two faces
+  sharing that edge and the two meshes get bit-identical coordinates, and the seam welds
+  by equality rather than by tolerance. All degeneracy tests are **relative to the
+  operands' extent** (1e-13, the scale-free tier), never the absolute 1e-9 weld tier;
+  that is what makes the cut work on 1e-5-scale models and on near-tangent pairs where
+  the BSP path's absolute constants fail. The imprint itself is
+  `EditableMesh`-only — `SplitEdge` for points on edges (updating both adjacent faces, so
+  no T-junction can appear), `PokeFace` for points inside a face, and `FlipEdge`
+  constraint recovery (Anglada) for the segments themselves — wrapped in one
+  `MeshChangeSet`, so a refusal reverts the journal and leaves the mesh bit-identical
+  instead of half-cut. Split vertices are written to the exact shared coordinate right
+  after the split (the operator's lerp only picks a valid topological parameter). A
+  crossing landing within the degeneracy guard of an existing vertex snaps to it on both
+  sides, moving the other mesh's vertex if it has one there too — the only geometry the
+  algorithm ever perturbs. Coplanar overlapping faces are **rejected loudly**
+  (`NotSupportedException`): an overlap has no curve to imprint and its faces lie on the
+  other solid's surface, where the winding number is exactly ½. Coplanar faces that only
+  touch along an edge are fine. `MeshImprint` reports the shared `Points`/`Segments`,
+  the chained `Polylines` (a closed loop repeats its first index), and `Length`.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
 - **`MeshDecimator`** — quadric error metric (Garland–Heckbert) edge collapse with link
   condition and normal-flip guards; boundaries are preserved exactly. Candidates live in
@@ -187,8 +234,21 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   right an inside-out but manifold import), or a raw soup, and return the repaired
   mesh + a `MeshRepairReport` (vertices merged, duplicates/degenerates removed,
   components, faces rewound, components flipped, T-junction insertions, closedness,
-  notes). Defects needing topological surgery (fins, hole filling) still fail the
-  final `Build` — loudly, with post-repair edge diagnostics — until the Euler
-  operators land. Known v1 limitation: nested cavity shells are oriented outward
-  like everything else. `MeshReader.ReadAndRepair(path, options?)` is the one-call
-  import path (read welds exactly at 1e-9; repair applies the crack weld).
+  notes). Known v1 limitation: nested cavity shells are oriented outward
+  like everything else. `MeshReader.ReadAndRepair(path, options?, fillHolesAndCracks?)`
+  is the one-call import path (read welds exactly at 1e-9; repair applies the crack weld).
+  - **`MergeCoincidentEdges(EditableMesh, tolerance)`** — crack closing by welding
+    boundary edge PAIRS with the editor's `MergeEdges`, the topological complement of
+    vertex welding. Two boundary half-edges pair up when they run in **opposite**
+    directions with matching endpoints (a same-direction pair would fold the surface, and
+    is skipped); candidates come from a spatial hash on edge midpoints. Because every
+    merge runs the operator's manifold guards, the tolerance can be loosened far past a
+    safe vertex-weld distance — an unsafe merge is *refused*, leaving that crack open,
+    never corrupting the mesh. Vertex positions never move.
+  - **`AutoRepair(...)`** — the full dispatch: `Clean`'s soup passes, then (only if the
+    result is still open) `MergeCoincidentEdges` for leftover cracks and
+    `HoleFiller.FillAll` for what remains, which by then is a genuine hole rather than a
+    crack. Reports `CracksMerged` / `HolesFilled` / `HolesSkipped` and notes each refused
+    hole. An already-closed `Clean` result returns immediately, so the common case costs
+    nothing. Defects beyond even this (fins, self-intersections) still fail `Clean`'s
+    final `Build`, loudly, with post-repair edge diagnostics.

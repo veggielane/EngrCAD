@@ -45,6 +45,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
 | `PatternLinear` / `PatternCircular` | ✅ native (multi-shell when disjoint) | ✅ native | ✅ native |
 | `Hull(...)` (convex hull) | ❌ mesh construction, no B-Rep import | 🔶 bridged (hull mesh → mesh SDF) | 🔶 quickhull over tessellated operand vertices (exact for polyhedral operands) |
+| `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) · ❌ revolve/sweep/rim/drill (no mirrored lowering yet) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
@@ -128,6 +129,41 @@ revolve axis (vases, domes) work everywhere on full turns: on-axis stretches rev
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
 
+### 2D regions and sketch booleans
+
+Sketches also lower to **polygonal `Region2d`s** (Core's `Geometry2` — outer loop +
+holes, exact containment, exact area) which support union/intersection/difference:
+
+```csharp
+var plate  = Sketch.Rectangle(20, 10);
+var pocket = Sketch.Rectangle(6, 4);
+
+var region = plate.Subtract(pocket)[0];              // a hole is CREATED by the cut
+var (outer, holes) = Profile.FromRegion(region, SketchPlane.XY.Frame);
+var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
+```
+
+- `sketch.ToRegions(chordTolerance)` → regions; `Sketch.ToRegions(sketches, tol)` takes
+  SEVERAL sketches as one bag of loops and **detects the nesting itself** — draw the
+  plate outline and its bolt holes as separate sketches and the holes fall out, no
+  `WithHole` needed. (`Region2d.FromLoops` is the classifier: even containment depth =
+  outer, odd = hole of its deepest container, so an island inside a hole is its own
+  region.)
+- `Union` / `Intersect` / `Subtract` on sketches (and on `Region2d`) run Core's
+  arrangement-based `Region2dBoolean`.
+- `Profile.FromRegion(region, frame)` (BRep) returns the `(outer, holes)` pair the
+  solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`.
+
+**Fidelity contract — read this before using regions for curved sketches.** Arcs and
+béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,
+sagitta-sized for arcs, adaptive de Casteljau for béziers); lines are exact. Anything
+built from a region inherits that approximation. A sketch handed straight to
+`Shape.Extrude/Revolve/Sweep` is untouched and keeps its **exact** curves — exact NURBS
+profiles for B-Rep and the exact 2D signed distance (`ToRegion()`, singular) for
+implicit, which is what makes sketch extrusions implicit-*Native*. Exact curved 2D
+booleans are a documented follow-up (todo.md); until then, prefer 3D booleans on
+exact solids when curved boundaries must stay exact.
+
 ## Parametric features (FeatureScript, but plain C#)
 
 A feature is a class with `[Param]` properties and an `Apply` body; a model is an
@@ -159,6 +195,57 @@ references are **selector-based** (`FeatureContext.Lowered` + `BrepQueries`) —
 queries that survive regeneration; persistent topological IDs are future work.
 Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, patterns,
 `BooleanFeature`) cover simple histories; `Feature.FromFunc` handles one-offs.
+`FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
+(the cached prefix output), which the construction tree below previews.
+
+## The construction tree: how a part was built
+
+`part.ConstructionTree()` answers "how was this made?" as a row tree any viewer (or
+script) can walk without knowing the graph's internal node types:
+
+```csharp
+var root = part.ConstructionTree();      // null for raw B-Rep/mesh/SDF parts
+foreach (var row in root!.Flatten())
+    Console.WriteLine($"{row.Path,-6} [{row.Kind}] {row.Label}");
+// ""     [Operation] Drill(2 holes)
+// "0"    [Operation] Extrude(sketch)
+// "0/0"  [Sketch]    Sketch(4 curves, 1 holes)
+```
+
+Two sources feed it:
+
+- a **`Shape`-backed part** gives the operation graph — one row per node, operands as
+  children (booleans, hulls, drills, rims, patterns, transforms). Labels come from the
+  node's own `Describe()`, the same text `Explain` prints, so they cannot drift.
+  Sketch-driven extrude/revolve/sweep rows carry a **sketch child row** holding the
+  `Sketch` and its placement matrix.
+- a **`FeatureHistory`-backed part** (`history.ToPart(...)`, or `new Part(name,
+  history)`) gives the ordered feature list instead: names, `Suppressed` state, and
+  each feature's `[Param]` values as leaf rows. `Part.History` is the link.
+
+A row identifies a graph node **by reference plus a positional `Path`** ("0/1/0").
+Both halves matter: `Shape` is immutable and shared, so one sub-shape can appear at
+several paths (a pattern operand), and the path is what distinguishes the rows while
+the reference is what previews are keyed by. Trees are built once per `Part` and
+cached, so node references are stable across UI rebuilds.
+
+### Previews (what a row looks like)
+
+`ConstructionPreview.Build(node)` turns a row into display **line geometry**:
+
+- a **sketch** row: its curves flattened onto its `SketchPlane` in 3D (lines exact,
+  arcs and Béziers chorded at display resolution — a preview, not a lowering).
+- any other row: the feature edges of that sub-graph's geometry, by the same rule
+  `Part.GetFeatureEdges` uses (exact B-Rep edges when the sub-shape has a B-Rep
+  lowering, mesh dihedrals otherwise). Selecting an intermediate operation therefore
+  shows the model **as of that step** — a rollback view.
+
+Building a preview lowers geometry, so it must not run on a UI or render thread — the
+same rule `Scene.PreMesh` follows. `ConstructionPreviewCache` is the memo: `TryGet`
+takes the synchronous fast path, `Get` builds and caches (call it on a background
+task). Entries key on the shape reference, so a sub-shape shared by several rows is
+lowered **once**; a failed lowering is reported as `ConstructionPreview.Error` rather
+than thrown, so one bad step is a status message, not a crash.
 
 ## Queries, chamfer & fillet
 
@@ -261,6 +348,87 @@ can and cannot represent. One boundary: downstream B-Rep booleans may cut modele
 threads only with planes perpendicular to the thread axis (the exact spiral case) —
 cuts along the threads fail loudly; use clearance or the implicit route for those.
 
+## Text
+
+Modeled text — OpenSCAD's `text()`, but exact. TrueType `glyf` outlines are straight
+lines and **quadratic** Béziers, and `SketchBuilder` already has `LineTo`/`QuadraticTo`,
+so glyph contours map onto sketch segments with **no flattening**. Text therefore
+inherits the whole pipeline: exact NURBS profiles in B-Rep, the exact 2D signed distance
+in implicit, crisp tessellation in mesh — Native in all three, no bridge anywhere.
+
+```csharp
+var font = TrueTypeFont.Load(@"C:\Windows\Fonts\arial.ttf");
+
+var badge = Shape.Text("ENGRCAD", font, size: 9, height: 1.5,
+                       style: new TextStyle { Align = TextAlign.Center });
+
+IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 2D, for your own ops
+```
+
+- **Fonts** (`Text/TrueTypeFont.cs`) are read by a hand-rolled, dependency-free parser
+  (kernel projects pack to NuGet and take no third-party dependencies — the same reason
+  `PngWriter` and the EGL binding are hand-rolled). Tables: `head`, `maxp`, `cmap`
+  (formats 4 and 12), `loca`, `glyf` (simple **and** composite glyphs, with the
+  repeat/short-vector coordinate compression), `hhea`/`hmtx`, plus optional `kern`
+  (format 0), `name` and `OS/2`. Hinting instructions are skipped — modeled text is
+  resolution independent. **OpenType/CFF (`.otf`, PostScript cubic outlines) and
+  TrueType Collections (`.ttc`) are rejected with a message naming the limitation**,
+  never silently mis-modeled.
+- **Size is the em size** (the typographic meaning of "12 point"); capitals are shorter.
+  When a drawing specifies letter height, convert with `font.EmSizeForCapHeight(h)`.
+- **The origin is the baseline** at the start of the first line — x along the writing
+  direction, y up. Descenders reach below y = 0, further lines sit below the first, and
+  `TextStyle.Align` decides whether x = 0 is a line's start, middle or end.
+- **`TextStyle`** carries `LetterSpacing` (tracking, inserted between glyphs only),
+  `LineSpacing` (baseline step, default 1.2), `Align` and `Kerning` — all spacing as a
+  multiple of the em size, so one style is correct at every size. Kerning comes from the
+  legacy `kern` table; fonts that ship kerning only in OpenType `GPOS` lay out on their
+  advance widths alone (`font.HasKerning` reports which).
+- **Counters** (the holes in O, A, 8) are separate contours. TrueType's convention is
+  clockwise outlines and counter-clockwise counters, but real fonts violate it often
+  enough that orientation is not trusted: contours are nested by **containment** (a
+  point-in-region majority vote using the sketch's own exact parity), even depth draws
+  and odd depth becomes a hole attached to its immediate parent. An island inside a
+  counter becomes its own top-level sketch.
+- **Missing characters throw**, naming the character and the font — a part number
+  engraved with a character silently dropped is worse than a failed build. Blank glyphs
+  (space) draw nothing and still advance the pen.
+- `TextOutlines` also measures: `AdvanceWidth` (exact typographic width, never touches
+  an outline), `Bounds` (the actual ink) and `LineHeight`.
+
+### Embossing and engraving
+
+No new operation is needed — place the text on a face with `SketchPlane.On(face)` (or an
+explicit `SketchPlane.At`) and boolean it. The engraving tool deliberately **overshoots**
+the face (1.5 deep for a 1 mm pocket), the same rule `Shape.Drill` follows so booleans
+never see coplanar faces:
+
+```csharp
+var plate = Shape.Box(70, 22, 4);                                   // top face at z = 2
+var top = SketchPlane.On(plate.ToBrep().PlanarFacesWithNormal(Vector3d.UnitZ).First());
+var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);   // 1 mm down
+var style = new TextStyle { Align = TextAlign.Center };
+
+var embossed = plate | Shape.Text("ENGRCAD", font, 12, height: 1.2, top, style);
+var engraved = plate - Shape.Text("ENGRCAD", font, 12, height: 1.5, pocket, style);
+
+scene.Add(new Part("badge", Shape.From(engraved.ToImplicit())));    // see the caveat below
+```
+
+**Caveat, and it is the one thing to know about this feature.** `Shape.Text` on its own
+is Native and robust in every representation — a seven-letter word lowers to a valid
+multi-shell B-Rep and a closed mesh. But **booleans between lettering and a body are
+limited by the existing B-Rep boolean engine**: glyph side walls are sketch extrusions,
+and the marching tracer that cuts them against a face only closes its loops in simple
+cases. In practice one or two embossed glyphs come out clean; longer words, and *every*
+engraving (a subtraction whose tool pokes out of one face), fail. This is **not
+text-specific** — `Shape.Box(60, 20, 4) - Shape.Extrude(Sketch.Rectangle(10, 5), 1.5, pocket)`
+fails identically with no text involved, while a `Shape.Box` or `Sketch.Circle` tool is
+fine. Until that gap closes, do body∩text booleans **through the implicit route**, where
+the subtraction is exact: `Shape.From(shape.ToImplicit()).ToMesh(quality)` (raise
+`SdfResolution` for crisp lettering). For a purely visual plate, adding the body and the
+lettering as two `Part`s keeps both exact and skips the boolean entirely.
+
 ## The document model: Part, Assembly, Tab, Scene
 
 Parts carry all their own information — name, geometry from **any** engine (`Shape`,
@@ -283,15 +451,23 @@ via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 tessellate on the render thread. Part names are unique per tab. `Part` is
 deliberately a leaf — tabs and assemblies are the containers.
 
+**`Part.TryGetSolid()` lowers the part's exact B-Rep at most ONCE and caches it**
+(null when the part has no exact form — an SDF or mesh part, a Shape with no B-Rep
+route, or a lowering that failed). Everything that needs the solid takes it from
+there: the display mesh (`GetMesh` tessellates it), the feature-edge overlay,
+selector-based annotations, STEP export, and construction previews of the whole part.
+Before this, each of those compiled the graph independently — on a five-hole drilled
+plate that was three ~9 s lowerings, and `Scene.PreMesh` of a heavy Shape scene went
+from **32.8 s to 10.1 s** once they shared one. `PreMesh` primes it off the render
+thread like the mesh; a lowering that fails is remembered, so the failure surfaces
+once (verbatim from `GetMesh`) instead of being retried per consumer.
+
 `Part.GetFeatureEdges(quality)` is the display **edge overlay**, cached the same
-way (and primed by `PreMesh`): parts with B-Rep geometry — a `BrepSolid`, or a
-`Shape` with a B-Rep lowering — sample their ACTUAL B-Rep edges at display
-resolution (`BrepFeatureEdges` in Interop, at least 96 segments per circle
-regardless of mesh quality), so exact circles stay smooth at any tessellation;
+way (and primed by `PreMesh`): parts with an exact solid sample their ACTUAL B-Rep
+edges at display resolution (`BrepFeatureEdges` in Interop, at least 96 segments per
+circle regardless of mesh quality), so exact circles stay smooth at any tessellation;
 everything else (SDF/mesh parts, failed lowerings) falls back to mesh-dihedral
-extraction. Note the cost: a Shape part's B-Rep is lowered a second time for the
-edges (the mesh route does not retain its intermediate solid) — that is why
-`PreMesh` primes the cache off the render thread.
+extraction.
 
 ### Assemblies (v1: occurrences)
 
@@ -389,4 +565,6 @@ host fallback > `MeshQuality` defaults**.
 
 Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
-non-uniformly scaled spheres.
+non-uniformly scaled spheres. For text: OpenType/CFF (cubic) outlines, `GPOS` kerning,
+text on a curve, variable fonts, and B-Rep booleans for sketch-extrusion tools (which
+would make engraving B-Rep-native).

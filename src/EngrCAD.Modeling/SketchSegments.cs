@@ -26,6 +26,15 @@ internal abstract class SketchSegment
 
     /// <summary>Splits into y-monotone pieces for robust even–odd parity.</summary>
     public abstract IEnumerable<MonotonePiece> MonotonePieces();
+
+    /// <summary>
+    /// Appends this segment's polyline approximation — <see cref="Start"/> inclusive,
+    /// <see cref="End"/> EXCLUSIVE, so chaining a closed loop's segments produces each joint
+    /// exactly once — deviating from the true curve by no more than
+    /// <paramref name="chordTolerance"/>. Straight segments are exact; curves are not (this
+    /// is the lossy step of the region pipeline, see <c>Sketch.ToRegions</c>).
+    /// </summary>
+    public abstract void Flatten(double chordTolerance, List<Vector2d> into);
 }
 
 /// <summary>A y-monotone stretch of a segment: the parity ray test reduces to the
@@ -67,6 +76,9 @@ internal sealed class LineSeg(Vector2d start, Vector2d end) : SketchSegment
         if (Math.Abs(start.Y - end.Y) > 0)
             yield return new LinePiece(start, end);
     }
+
+    /// <summary>Exact: a line's polyline approximation is the line.</summary>
+    public override void Flatten(double chordTolerance, List<Vector2d> into) => into.Add(start);
 
     private sealed class LinePiece : MonotonePiece
     {
@@ -198,6 +210,21 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
             bool rightBranch = Math.Cos(mid) >= 0;
             yield return new ArcPiece(center, radius, from.Y, to.Y, rightBranch);
         }
+    }
+
+    /// <summary>
+    /// Uniform angular subdivision sized by the sagitta r·(1 − cos(Δ/2)) ≤ tolerance, so no
+    /// chord bulges further than <paramref name="chordTolerance"/> from the true arc.
+    /// Capped at 90° per chord so even a very coarse tolerance keeps a circle a circle.
+    /// </summary>
+    public override void Flatten(double chordTolerance, List<Vector2d> into)
+    {
+        double maxAngle = chordTolerance >= radius
+            ? Math.PI / 2
+            : Math.Min(Math.PI / 2, 2 * Math.Acos(1 - chordTolerance / radius));
+        int count = Math.Max(1, (int)Math.Ceiling(Math.Abs(sweep) / maxAngle));
+        for (int i = 0; i < count; i++)
+            into.Add(PointAt(startAngle + sweep * i / count));
     }
 
     private sealed class ArcPiece : MonotonePiece
@@ -338,6 +365,44 @@ internal sealed class CubicSeg(Vector2d p0, Vector2d c1, Vector2d c2, Vector2d p
             if (t > 1e-12 && t < 1 - 1e-12)
                 breaks.Add(t);
         }
+    }
+
+    /// <summary>
+    /// Adaptive de Casteljau subdivision: a piece is emitted once both control points sit
+    /// within <paramref name="chordTolerance"/> of its chord, which bounds the curve's own
+    /// deviation (the curve lies in the control hull). Depth-capped so a cusp cannot spin.
+    /// </summary>
+    public override void Flatten(double chordTolerance, List<Vector2d> into) =>
+        Subdivide(p0, c1, c2, p3, chordTolerance, 0, into);
+
+    private static void Subdivide(
+        Vector2d a, Vector2d b, Vector2d c, Vector2d d, double tolerance, int depth, List<Vector2d> into)
+    {
+        if (depth >= 16 || (ChordDistance(a, d, b) <= tolerance && ChordDistance(a, d, c) <= tolerance))
+        {
+            into.Add(a);
+            return;
+        }
+        var ab = Vector2d.Lerp(a, b, 0.5);
+        var bc = Vector2d.Lerp(b, c, 0.5);
+        var cd = Vector2d.Lerp(c, d, 0.5);
+        var abc = Vector2d.Lerp(ab, bc, 0.5);
+        var bcd = Vector2d.Lerp(bc, cd, 0.5);
+        var mid = Vector2d.Lerp(abc, bcd, 0.5);
+        Subdivide(a, ab, abc, mid, tolerance, depth + 1, into);
+        Subdivide(mid, bcd, cd, d, tolerance, depth + 1, into);
+    }
+
+    /// <summary>Distance from a control point to the chord SEGMENT (degenerate chords —
+    /// a bézier that returns to its start — measure to the point).</summary>
+    private static double ChordDistance(in Vector2d from, in Vector2d to, in Vector2d point)
+    {
+        var direction = to - from;
+        double lengthSquared = direction.LengthSquared;
+        if (!(lengthSquared > 0))
+            return point.DistanceTo(from); // exact-zero division guard
+        double t = Math.Clamp((point - from).Dot(direction) / lengthSquared, 0, 1);
+        return point.DistanceTo(from + direction * t);
     }
 
     private sealed class CubicPiece : MonotonePiece

@@ -43,36 +43,41 @@ public static class StlReader
     {
         using var buffer = new MemoryStream();
         stream.CopyTo(buffer);
-        var bytes = buffer.ToArray();
+        // GetBuffer + Length, never ToArray: ToArray copies the whole file a second time,
+        // doubling peak memory on large STLs. The readers take (bytes, length) spans.
+        var bytes = buffer.GetBuffer();
+        int length = checked((int)buffer.Length);
 
         var warnings = new List<string>();
-        return DetectBinary(bytes, warnings)
-            ? ReadBinary(bytes, weldTolerance, warnings)
-            : ReadAscii(System.Text.Encoding.ASCII.GetString(bytes), weldTolerance, warnings);
+        return DetectBinary(bytes, length, warnings)
+            ? ReadBinary(bytes, length, weldTolerance, warnings)
+            : ReadAscii(System.Text.Encoding.ASCII.GetString(bytes, 0, length), weldTolerance, warnings);
     }
 
-    private static bool DetectBinary(byte[] bytes, List<string> warnings)
+    // The buffer may be longer than the file (MemoryStream.GetBuffer over-allocates), so
+    // every size test uses `length`, never bytes.Length.
+    private static bool DetectBinary(byte[] bytes, int length, List<string> warnings)
     {
         // 1. Definitive: exact binary size 84 + 50·n. Runs before any header sniffing
         //    because binary headers routinely begin with "solid".
-        if (bytes.Length >= 84)
+        if (length >= 84)
         {
             uint declared = BitConverter.ToUInt32(bytes, 80);
-            if (84L + 50L * declared == bytes.Length)
+            if (84L + 50L * declared == length)
                 return true;
         }
 
         // 2. ASCII candidate: leading "solid" and a printable prefix. Binary files with
         //    trailing padding can also start with "solid", hence the text check.
-        if (StartsWithSolid(bytes))
+        if (StartsWithSolid(bytes, length))
         {
-            if (LooksLikeText(bytes))
+            if (LooksLikeText(bytes, length))
                 return false;
             warnings.Add("File starts with 'solid' but contains non-text bytes; parsing as binary STL.");
             return true;
         }
 
-        if (bytes.Length >= 84)
+        if (length >= 84)
         {
             warnings.Add("File size does not match 84 + 50 * n and there is no 'solid' prefix; " +
                          "parsing as binary STL (file may be truncated or padded).");
@@ -83,15 +88,15 @@ public static class StlReader
         return false;
     }
 
-    private static bool StartsWithSolid(byte[] bytes)
+    private static bool StartsWithSolid(byte[] bytes, int length)
     {
         int i = 0;
-        if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+        if (length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
             i = 3; // UTF-8 BOM
-        while (i < bytes.Length && (bytes[i] == ' ' || bytes[i] == '\t' || bytes[i] == '\r' || bytes[i] == '\n'))
+        while (i < length && (bytes[i] == ' ' || bytes[i] == '\t' || bytes[i] == '\r' || bytes[i] == '\n'))
             i++;
         ReadOnlySpan<byte> keyword = "solid"u8;
-        if (i + keyword.Length > bytes.Length)
+        if (i + keyword.Length > length)
             return false;
         for (int k = 0; k < keyword.Length; k++)
         {
@@ -101,9 +106,9 @@ public static class StlReader
         return true;
     }
 
-    private static bool LooksLikeText(byte[] bytes)
+    private static bool LooksLikeText(byte[] bytes, int length)
     {
-        int n = Math.Min(bytes.Length, 500);
+        int n = Math.Min(length, 500);
         for (int i = 0; i < n; i++)
         {
             byte b = bytes[i];
@@ -113,15 +118,15 @@ public static class StlReader
         return true;
     }
 
-    private static MeshReadResult ReadBinary(byte[] bytes, double weldTolerance, List<string> warnings)
+    private static MeshReadResult ReadBinary(byte[] bytes, int length, double weldTolerance, List<string> warnings)
     {
-        long declared = bytes.Length >= 84 ? BitConverter.ToUInt32(bytes, 80) : 0;
-        long available = bytes.Length >= 84 ? (bytes.Length - 84) / 50 : 0;
+        long declared = length >= 84 ? BitConverter.ToUInt32(bytes, 80) : 0;
+        long available = length >= 84 ? (length - 84) / 50 : 0;
         long count = Math.Min(declared, available);
         if (count < declared)
             warnings.Add($"Binary STL declares {declared} facets but only {available} complete records are present.");
         else if (available > declared)
-            warnings.Add($"Binary STL declares {declared} facets; {(available - declared) * 50 + (bytes.Length - 84) % 50} trailing bytes ignored.");
+            warnings.Add($"Binary STL declares {declared} facets; {(available - declared) * 50 + (length - 84) % 50} trailing bytes ignored.");
 
         var welder = new MeshSoupOps.VertexWelder(weldTolerance);
         var faces = new List<int[]>((int)count);

@@ -45,6 +45,50 @@ public sealed class Arrangement2d
     public Vector2d VertexAt(int index) => _vertices[index];
     public (int A, int B) EdgeAt(int index) => _edges[index];
 
+    /// <summary>
+    /// For every vertex, its incident edge ids sorted counter-clockwise from east, using
+    /// exact comparisons only (half-plane by coordinate comparison + exact
+    /// <see cref="Predicates2d.Orient2d"/>). Indexed by vertex id.
+    ///
+    /// <para>This fan order IS the arrangement's combinatorial embedding: walking it
+    /// clockwise from the reverse of an incoming directed edge yields the next edge of the
+    /// face on that edge's left. <see cref="ExtractCells"/> traces every face this way, and
+    /// <see cref="Region2dBoolean"/> re-walks the same order restricted to the kept
+    /// boundary — they must agree, so the order lives here rather than in either caller.</para>
+    /// </summary>
+    public int[][] BuildCcwEdgeFans()
+    {
+        var fans = new int[_vertices.Count][];
+        for (int v = 0; v < _vertices.Count; v++)
+        {
+            var list = _vertexEdges[v].ToArray();
+            int vv = v;
+            Array.Sort(list, (e1, e2) => CompareCcw(vv, OtherVertex(e1, vv), OtherVertex(e2, vv)));
+            fans[v] = list;
+        }
+        return fans;
+    }
+
+    /// <summary>The endpoint of <paramref name="edge"/> that is not <paramref name="vertex"/>.</summary>
+    public int OtherVertex(int edge, int vertex)
+    {
+        var (a, b) = _edges[edge];
+        return a == vertex ? b : a;
+    }
+
+    /// <summary>The id of the edge joining two vertices, or -1 when they are not adjacent
+    /// (the arrangement never holds two edges between the same vertex pair).</summary>
+    public int FindEdge(int v0, int v1)
+    {
+        foreach (int eid in _vertexEdges[v0])
+        {
+            var (a, b) = _edges[eid];
+            if (a == v1 || b == v1)
+                return eid;
+        }
+        return -1;
+    }
+
     /// <summary>Materializes a loop of vertex indices (as produced by <see cref="ExtractCells"/>) into points.</summary>
     public IReadOnlyList<Vector2d> PointsOf(IReadOnlyList<int> loop)
     {
@@ -153,7 +197,7 @@ public sealed class Arrangement2d
         {
             int v0 = onSegment[i].Vid;
             int v1 = onSegment[i + 1].Vid;
-            if (v0 != v1 && FindEdgeBetween(v0, v1) < 0)
+            if (v0 != v1 && FindEdge(v0, v1) < 0)
                 AddEdge(v0, v1);
         }
     }
@@ -169,18 +213,7 @@ public sealed class Arrangement2d
     /// </summary>
     public IReadOnlyList<ArrangementCell2d> ExtractCells()
     {
-        int vertexCount = _vertices.Count;
-
-        // Sort each vertex's outgoing directed edges counter-clockwise from east, using
-        // exact comparisons only (half-plane by coordinate comparison + exact Orient2d).
-        var outgoing = new int[vertexCount][]; // edge ids, CCW-sorted
-        for (int v = 0; v < vertexCount; v++)
-        {
-            var list = _vertexEdges[v].ToArray();
-            int vv = v;
-            Array.Sort(list, (e1, e2) => CompareCcw(vv, OtherVertex(e1, vv), OtherVertex(e2, vv)));
-            outgoing[v] = list;
-        }
+        var outgoing = BuildCcwEdgeFans();
 
         // Trace every directed edge once. Directed edge id: 2*edge + (0: A→B, 1: B→A).
         var visited = new bool[_edges.Count * 2];
@@ -309,17 +342,6 @@ public sealed class Arrangement2d
         return found >= 0 ? found : AddVertex(position);
     }
 
-    private int FindEdgeBetween(int v0, int v1)
-    {
-        foreach (int eid in _vertexEdges[v0])
-        {
-            var (a, b) = _edges[eid];
-            if (a == v1 || b == v1)
-                return eid;
-        }
-        return -1;
-    }
-
     private int FindVertex(Vector2d position)
     {
         long x0 = GridCoordinate((position.X - VertexSnapTolerance) / _gridCell);
@@ -383,12 +405,6 @@ public sealed class Arrangement2d
         if (Math.Abs(b.X - a.X) >= Math.Abs(b.Y - a.Y))
             return a.X < b.X ? a.X < p.X && p.X < b.X : b.X < p.X && p.X < a.X;
         return a.Y < b.Y ? a.Y < p.Y && p.Y < b.Y : b.Y < p.Y && p.Y < a.Y;
-    }
-
-    private int OtherVertex(int eid, int vid)
-    {
-        var (a, b) = _edges[eid];
-        return a == vid ? b : a;
     }
 
     /// <summary>

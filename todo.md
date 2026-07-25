@@ -13,17 +13,19 @@ Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-ident
 undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
 `MeshExtrude` (faces/thicken), selections + connected components. Remaining:
 
-- [ ] **Phase B: imprint boolean + editor-powered repairs** — the exact-intersection
-  boolean rewrite (`MeshMeshCut` + `MeshBoolean`: cut both meshes along exact
-  intersection segments via `Bvh.QueryOverlap` candidate pairs + triangle–triangle
-  segments, imprint with `EditableMesh.SplitEdge`, classify by `MeshWindingNumber`,
-  weld; `MeshChangeSet` gives transactional rollback of failed imprints; g3's honest
-  coplanar-case caveats apply). Plus the editor-dependent repairs: `MergeCoincidentEdges`
-  (crack closing = `MergeEdges` + spatial-hash search over coincident boundary pairs —
-  slots between MeshRepair's weld and orientation passes), `RegionOperator`
-  (extract-modify-reinsert as a change-set session; `MeshFaceSelection.ToMesh()` +
-  `BoundaryLoops()` are the extraction half), and `MeshRepair` gaining hole-fill
-  integration for a full `AutoRepair`.
+- [ ] **Coplanar-overlap classification for the exact boolean** — THE single blocker to
+  making `BooleanMethod.Exact` the default (it is otherwise a measured drop-in for the
+  whole suite; flipping it is then one constant in `MeshBoolean.cs`). Today coplanar
+  overlapping faces are rejected loudly, while BSP handles flush-stacked parts
+  correctly — and real designs union flush parts. Approach: imprint the overlap
+  boundary, then classify coincident patches by normal agreement (same direction: keep
+  one; opposite: drop both).
+- [ ] **Exact-boolean performance** is unmeasured — profile it (note `EditableMesh`
+  runs a full `Validate()` after every operator in DEBUG, so Debug timings are
+  pessimistic, O(n) per op), and thread `ProgressCancel` through `MeshMeshCut`.
+- [ ] **`RegionOperator`** — extract-modify-reinsert a submesh as a change-set session
+  (`MeshFaceSelection.ToMesh()` + `BoundaryLoops()` are the extraction half). The one
+  piece of mesh Phase B not reached.
 - [ ] **Isotropic remeshing with constraints** — `Remesher`/`RemesherPro` +
   `MeshConstraints` (fixed edges, no-flip, project-to-target) +
   `SharpEdgeReprojectionRemesh` for feature recovery; now buildable on
@@ -37,12 +39,6 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   bit-identical-or-better comparison, like the PQ upgrade precedent).
 - [ ] `MeshExtrude.Faces` overload taking `MeshFaceSelection`; mutable in-place
   variants of fill/extrude once callers want them.
-- [ ] Wave-A review flags (all low) — `CollapseEdge` on a hypothetical isolated edge
-  throws instead of returning a result code (unreachable today; add the early guard);
-  `StlReader` `MemoryStream.ToArray()` doubles peak memory (use GetBuffer+length);
-  `FacePokeInfo` exposes a mutable `int[]` breaking record equality
-  (`IReadOnlyList`/`ImmutableArray`); `ObjReader` backslash-continuation is O(n²)
-  string concat for pathological files.
 
 ## Implicit engine (EngrCAD.Implicit)
 
@@ -190,9 +186,15 @@ export — is recorded in CLAUDE.md):
 
 - [ ] wedge primitive (the OCCT gap; cone ✅ landed — revolved-line side surface +
   `Sdf.Cone` + `MeshPrimitives.Cone` + `Shape.Cone`, Native in all three reps)
-- [ ] `text()` — font outlines → `Profile`s (extrudable text). Parse font glyphs
-  (TrueType via a .NET lib) → polygon outlines with holes; g3's `PolygonFont2d` shows a
-  poor-man's variant
+- [ ] **Text follow-ups** (`Shape.Text` ✅ landed — dependency-free TrueType reader,
+  glyphs → exact sketch segments, containment-based counter detection, layout with
+  `kern` kerning): **CFF/OpenType-PostScript outlines** (`CFF ` table, cubic Béziers →
+  `BezierTo`) — rejected loudly today, and supporting it opens every `.otf`; **GPOS
+  kerning** (modern fonts ship kerning only there); **text on a curve/path** (layout
+  maps the pen position to a frame instead of a straight baseline); **variable fonts**
+  (`fvar`/`gvar`); **vertical alignment** for text blocks (horizontal-only today);
+  **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
+  font reference).
 - [ ] `surface()` — heightmap (image/data grid) → mesh terrain
 - [ ] 2D booleans — union/difference/intersection of profiles/regions (needed by the
   sketch engine; `Arrangement2d`+`GraphCells2d` is the mechanism)
@@ -318,14 +320,41 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   click-to-pose with eased animation, hover highlight, drag-orbits) — rotate-snap
   dragging like commercial cubes; SceneHost toolbar buttons could delegate to
   `ViewCubeMath.PoseFor` for one pose source.
-- [ ] B-Rep edge-silhouette follow-ups (`Part.GetFeatureEdges`/`BrepFeatureEdges` ✅
-  landed — B-Rep-backed parts overlay their exact edges at display resolution) —
-  a Shape-level B-Rep lowering cache: `PreMesh` currently lowers a Shape part's
-  B-Rep twice (once inside `ToMesh`, once for the edge overlay) because the mesh
-  route does not retain its intermediate solid; a `Part`-cached solid (or Shape
-  lowering memoization) would also serve STEP export and annotation resolution
-  (which lowers a third time). Also: silhouette-adaptive edge sampling (a fixed
-  96/circle undersamples very large rims).
+- [ ] Silhouette-adaptive edge sampling — a fixed 96/circle undersamples very large
+  rims (the double/triple B-Rep lowering that used to sit here is fixed:
+  `Part.TryGetSolid()`).
+- [ ] **Construction-tree follow-ups** (tree + per-node preview ✅ landed) — a
+  **rollback bar** (drag a marker in the feature list; suppress below it),
+  **suppress-from-tree**, and **`[Param]` editing** in the properties panel: all cheap
+  now, since the rows already carry the `Feature`, its `Suppressed` flag and
+  `ParamInfo`. Also: construction previews don't render in headless `RenderToImage`
+  (the same parity gap isolines had), and a preview clears on live reload because node
+  references change — it could be restored by path.
+- [ ] Move `SectionContours`' per-part implicit lowering onto `Part` alongside
+  `TryGetSolid`, so the SDF lowering is cached the same way the B-Rep one now is.
+- [ ] **Construction tree in the viewer (Shape graph / features as tree rows)** — today
+  the model tree lists parts and assembly occurrences; it should also expand a part
+  into **how it was built**: for a `Shape`-backed part the operation graph (each node
+  already knows its label via `Shape.Describe()`, the same text `Explain` prints), and
+  for a `FeatureHistory`-backed part the ordered feature list with names, suppression
+  state, and `[Param]` values. Nested/child rows per operand of booleans, patterns, etc.
+  - **Selecting a node previews it in the viewport.** Selecting a **sketch** draws the
+    sketch itself — its curves placed on their `SketchPlane` in 3D (arcs/béziers
+    flattened for display only), which needs a curve/polyline overlay path; the line
+    program plus the `AnnotationLayer`/feature-edge overlays are the precedents for
+    drawing non-mesh geometry. Selecting an intermediate operation previews **that
+    subtree's** geometry (lower just that sub-shape — cheap near the leaves, and the
+    result is cacheable per node), which is effectively a rollback view.
+  - Natural follow-ons once the tree exists: a **rollback bar** (show the model as of
+    feature N), suppress/unsuppress from the tree (`FeatureHistory` already supports
+    suppression), highlight the faces a feature created (needs the topological-naming
+    item), and editing `[Param]`s in the properties panel (already an open item under
+    parametric-features follow-ups — this is its UI half).
+  - Design notes: `Shape` is an immutable graph, so a tree row is just a node reference
+    plus a path; per-node preview lowering must stay off the render thread like
+    `Scene.PreMesh`, and previews should be cached per node (the B-Rep lowering cache
+    item above serves this too). Sketches are pure 2D + a plane, so a display polyline
+    is cheap and exact enough at screen resolution.
 - [ ] Ideas: ambient occlusion or matcap shading.
 
 ## Blazor web viewer

@@ -2,6 +2,8 @@
   href: primitives.md
 - name: Sketching
   href: sketching.md
+- name: 2D sketch booleans
+  href: sketch-booleans.md
 - name: Extrude, revolve, sweep
   href: extrude-revolve-sweep.md
 - name: Booleans
@@ -12,6 +14,8 @@
   href: transforms-patterns.md
 - name: Holes & standard sizes
   href: holes.md
+- name: Text
+  href: text.md
 - name: Threads
   href: threads.md
 - name: Chamfer & fillet

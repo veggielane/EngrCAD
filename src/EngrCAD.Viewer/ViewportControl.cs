@@ -47,7 +47,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _gpuBuffers = [];
 
     private readonly object _sceneLock = new();
-    private (IReadOnlyList<PartInstance> Instances, bool Frame)? _pending;
+    private (IReadOnlyList<PartInstance> Instances, bool Frame, IReadOnlyList<bool>? Visible)? _pending;
 
     // The view-cube orientation widget (top-right overlay); all cube logic lives in
     // ViewCube.cs — this control only steps its animation, draws it after the scene,
@@ -87,6 +87,10 @@ public sealed class ViewportControl : OpenGlControlBase
     // AnnotationLayer.cs; this class feeds items, draws, and releases it).
     private readonly AnnotationLayer _annotations = new();
 
+    // Construction-tree preview overlay (self-contained in PreviewLayer.cs; this class
+    // feeds one line batch, draws, and releases it).
+    private readonly PreviewLayer _preview = new();
+
     /// <summary>
     /// Replaces the displayed parts (one tab's worth of loose parts, each posed by its
     /// own <see cref="Part.Transform"/>). Convenience wrapper over
@@ -103,11 +107,17 @@ public sealed class ViewportControl : OpenGlControlBase
     /// the camera auto-frames to the instances' bounds, otherwise it is left
     /// untouched. Parts should be pre-meshed (<c>Scene.PreMesh</c>) so no tessellation
     /// happens on the render thread.
+    /// <para><paramref name="visible"/> seeds per-instance visibility with the list
+    /// (null = all visible). It travels WITH the instances rather than through later
+    /// <see cref="SetVisible"/> calls because the swap happens on the render thread:
+    /// a host that remembers hidden rows would otherwise write them into the outgoing
+    /// list and have them wiped when the new one lands.</para>
     /// </summary>
-    public void SetInstances(IReadOnlyList<PartInstance> instances, bool frame)
+    public void SetInstances(
+        IReadOnlyList<PartInstance> instances, bool frame, IReadOnlyList<bool>? visible = null)
     {
         lock (_sceneLock)
-            _pending = (instances, frame);
+            _pending = (instances, frame, visible);
         Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
     }
 
@@ -132,7 +142,7 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 // An explicit pose wins over any auto-framing still queued.
                 if (_pending is { } pending)
-                    _pending = (pending.Instances, false);
+                    _pending = (pending.Instances, false, pending.Visible);
             }
             RequestNextFrameRendering();
         }
@@ -191,7 +201,8 @@ public sealed class ViewportControl : OpenGlControlBase
     /// distinct part is prepared and uploaded once (cached display mesh → RenderMesh,
     /// feature/wire edges, pick BVH); instances reference the shared buffers with
     /// per-instance model matrices. GL context must be current.</summary>
-    private void ApplyInstances(GL gl, IReadOnlyList<PartInstance> instances, bool frame)
+    private void ApplyInstances(
+        GL gl, IReadOnlyList<PartInstance> instances, bool frame, IReadOnlyList<bool>? visible)
     {
         DeleteMeshBuffers(gl);
         lock (_sceneLock)
@@ -206,8 +217,9 @@ public sealed class ViewportControl : OpenGlControlBase
 
             var shared = new Dictionary<Part, SharedMesh>(); // Part has reference identity
             var bounds = Aabb.Empty;
-            foreach (var instance in instances)
+            for (int i = 0; i < instances.Count; i++)
             {
+                var instance = instances[i];
                 var part = instance.Part;
                 if (!shared.TryGetValue(part, out var s))
                 {
@@ -223,7 +235,7 @@ public sealed class ViewportControl : OpenGlControlBase
                     s.WireVao, s.WireVbo, s.WireVertexCount,
                     worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
                 _pickData.Add(s.Pick);
-                _visible.Add(true);
+                _visible.Add(visible is null || i >= visible.Count || visible[i]);
                 _instances.Add(instance);
                 bounds = bounds.Union(worldBounds);
             }
@@ -231,8 +243,9 @@ public sealed class ViewportControl : OpenGlControlBase
             RebuildGrid(gl, bounds);
             _sceneBounds = bounds;
             _sectionContours.Invalidate();   // new scene: cached SDF routes are stale
-            LoadAnnotations(instances);
+            LoadAnnotations(report: true);
             ClearMeasurement();              // measure points reference the old scene
+            _preview.Set(null, Matrix4d.Identity);   // preview referenced the old scene
 
             if (frame && !bounds.IsEmpty)
             {
@@ -318,6 +331,7 @@ public sealed class ViewportControl : OpenGlControlBase
         DeleteMeshBuffers(_gl);
         _sectionContours.Release(_gl);
         _annotations.Release(_gl);
+        _preview.Release(_gl);
         _meshes.Clear();
         if (_gridVbo != 0)
         {
@@ -343,7 +357,7 @@ public sealed class ViewportControl : OpenGlControlBase
             return;
         var gl = _gl;
 
-        (IReadOnlyList<PartInstance> Instances, bool Frame)? update = null;
+        (IReadOnlyList<PartInstance> Instances, bool Frame, IReadOnlyList<bool>? Visible)? update = null;
         lock (_sceneLock)
         {
             if (_pending is not null)
@@ -353,7 +367,7 @@ public sealed class ViewportControl : OpenGlControlBase
             }
         }
         if (update is { } u)
-            ApplyInstances(gl, u.Instances, u.Frame);
+            ApplyInstances(gl, u.Instances, u.Frame, u.Visible);
 
         // View-cube hook 1: a click on the cube armed a pose animation — advance the
         // orbit camera toward it and keep frames coming until it lands.
@@ -556,6 +570,11 @@ public sealed class ViewportControl : OpenGlControlBase
         // chrome. Billboard geometry rebuilds only when the camera pose, viewport,
         // or annotation set changes (value-equality cache in the layer).
         DrawAnnotations(gl, height, scaling, matrix);
+
+        // Construction-tree preview: the selected build step's geometry (a sketch on
+        // its plane, or an intermediate operation's edges) drawn over the model, so a
+        // rollback view reads against the finished part.
+        _preview.Draw(gl, _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
         gl.BindVertexArray(0);
 
         // View-cube hook 2: the orientation widget draws last, over everything, into
@@ -670,22 +689,25 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
-    /// <summary>Collects the instances' resolved annotations for the overlay
+    /// <summary>Collects the VISIBLE instances' resolved annotations for the overlay
     /// (pre-resolved off-thread by <c>Scene.PreMesh</c>; per-part failures surface in
-    /// the status overlay instead of killing the scene).</summary>
-    private void LoadAnnotations(IReadOnlyList<PartInstance> instances)
+    /// the status overlay instead of killing the scene). Re-run when visibility
+    /// changes: hiding a part must hide its dimensions too, otherwise they float in
+    /// empty space. Caller holds <see cref="_sceneLock"/>.</summary>
+    private void LoadAnnotations(bool report)
     {
         var items = new List<AnnotationItem>();
-        foreach (var instance in instances)
+        for (int i = 0; i < _instances.Count; i++)
         {
-            if (instance.Part.Annotations.Count == 0)
+            var instance = _instances[i];
+            if (!_visible[i] || instance.Part.Annotations.Count == 0)
                 continue;
             if (instance.Part.TryResolveAnnotations(out var resolved, out string? error))
             {
                 foreach (var annotation in resolved)
                     items.Add(new AnnotationItem(annotation, instance.World));
             }
-            else if (error is not null)
+            else if (report && error is not null)
                 ShowStatus(error);
         }
         _annotations.SetItems(items);
@@ -701,6 +723,26 @@ public sealed class ViewportControl : OpenGlControlBase
         _annotations.Draw(gl, camera, _showAnnotations,
             _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
     }
+
+    // ---- construction-tree preview (all overlay logic lives in PreviewLayer.cs) ----
+
+    /// <summary>
+    /// Shows the geometry of one construction-tree row over the model — a sketch drawn
+    /// on its plane, or an intermediate operation's feature edges (the rollback view) —
+    /// posed by <paramref name="world"/> (the owning instance's placement). Pass null
+    /// to clear. Thread-safe; the batch uploads inside the next render pass.
+    /// <para>The segments must be built OFF the UI/render thread (lowering a sub-shape
+    /// tessellates) — see <c>ConstructionPreviewCache</c> in EngrCAD.Modeling.</para>
+    /// </summary>
+    public void SetConstructionPreview(
+        IReadOnlyList<(Vector3d A, Vector3d B)>? segments, Matrix4d? world = null)
+    {
+        _preview.Set(segments, world ?? Matrix4d.Identity);
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Whether a construction preview is currently showing.</summary>
+    public bool HasConstructionPreview => _preview.HasPreview;
 
     // ---- view cube hooks (all cube logic lives in ViewCube.cs) ----
 
@@ -871,8 +913,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly List<int> _hitScratch = [];
 
     /// <summary>The nearest visible part under a control-space position (−1 for none):
-    /// unprojected ray + per-part BVH + Möller–Trumbore. Shared by click picking and
-    /// the hover highlight. Ignores the section plane (documented v1 behavior).</summary>
+    /// unprojected ray + per-part BVH + Möller–Trumbore. Shared by click picking, the
+    /// hover highlight, and the measure tool. Honors the section plane: surfaces the
+    /// cut removed cannot be picked through (<see cref="SectionClip"/> applies the
+    /// shaders' own discard rule).</summary>
     private int HitTest(Point pixel) => HitTest(pixel, out _);
 
     /// <summary><see cref="HitTest(Point)"/> that also reports the world-space hit
@@ -916,11 +960,17 @@ public sealed class ViewportControl : OpenGlControlBase
                 var c = PickVertex(mesh, mesh.Indices[triangle * 3 + 2]);
                 if (RayTriangle(ray, a, b, c, out double t) && t < bestT)
                 {
+                    // World-space hit point (local ray back through the instance's
+                    // model matrix): the measure tool's pick, and the section test.
+                    var world = _meshes[i].Model.TransformPoint(origin + direction * t);
+                    // A surface the section plane clipped away is not there to click:
+                    // skip it and keep looking, so the ray lands on the interior the
+                    // cut exposed rather than the removed shell.
+                    if (SectionClip.Hides(_sectionEnabled, world, _sectionAxis, _sectionOffset))
+                        continue;
                     bestT = t;
                     best = i;
-                    // World-space hit point for the measure tool (local ray back
-                    // through the instance's model matrix).
-                    worldPoint = _meshes[i].Model.TransformPoint(origin + direction * t);
+                    worldPoint = world;
                 }
             }
         }
@@ -944,14 +994,19 @@ public sealed class ViewportControl : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
-    /// <summary>Shows or hides a part (index into the current part list).</summary>
+    /// <summary>Shows or hides a part (index into the current part list). A hidden
+    /// part's 3D annotations are hidden with it.</summary>
     public void SetVisible(int index, bool visible)
     {
         lock (_sceneLock)
         {
-            if (index >= 0 && index < _visible.Count)
-                _visible[index] = visible;
+            if (index < 0 || index >= _visible.Count || _visible[index] == visible)
+                return;
+            _visible[index] = visible;
+            LoadAnnotations(report: false);   // dimensions follow their part's visibility
         }
+        // Isolines need no nudge: SectionContourRenderer already detects the changed
+        // visibility set itself (and Invalidate would drop its cached SDF lowerings).
         RequestNextFrameRendering();
     }
 
@@ -1257,9 +1312,15 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         _lastPointer = e.GetPosition(this);
         _pressPointer = _lastPointer;
+        // Remember whether the gesture began on the view cube: a drag that started
+        // there rotate-snaps on release (commercial-cube behavior), while a drag
+        // starting anywhere else orbits freely.
+        _pressedOnCube = ViewCube.InRegion(_pressPointer.X, _pressPointer.Y, Bounds.Width, Bounds.Height);
         ClearHover();   // a press starts a click or drag; hover returns on the next move
         Report($"press at {_pressPointer.X:F0},{_pressPointer.Y:F0}");
     }
+
+    private bool _pressedOnCube;
 
     private void HandleMoved(PointerEventArgs e)
     {
@@ -1317,8 +1378,23 @@ public sealed class ViewportControl : OpenGlControlBase
                     Pick(pos);
             }
         }
+        else if (_pressedOnCube)
+            SnapViewCube();   // dragging ON the cube settles onto a standard view
         else
             Report("release (drag end)");
+        _pressedOnCube = false;
+    }
+
+    /// <summary>
+    /// Rotate-snap: animates the camera to the standard orientation nearest the current
+    /// pose (the face/edge/corner you ended up closest to) — what a drag that started
+    /// on the view cube does on release. Public so tests and custom hosts can drive it
+    /// directly (synthetic mouse input does not reach Avalonia).
+    /// </summary>
+    public void SnapViewCube()
+    {
+        Report($"view: snapped to {_viewCube.SnapToNearest(_yaw, _pitch)}");
+        RequestNextFrameRendering();
     }
 
     private void HandleWheel(PointerWheelEventArgs e)
