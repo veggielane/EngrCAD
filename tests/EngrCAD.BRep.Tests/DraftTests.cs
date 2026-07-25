@@ -225,9 +225,10 @@ public class DraftTests
         Assert.Throws<ArgumentException>(() =>
             Draft.Apply(Block(), BottomOf(Block()), 0.9 * Math.PI / 2));
 
-        // Selecting a cap.
+        // Selecting a cap — alone, or mixed in with valid side faces (never a silent no-op).
         Assert.Throws<ArgumentException>(() =>
             Draft.Apply(Block(), BottomOf(Block()), Ten, f => f.IsPlanar(out _, out var n) && n.Z < -0.9));
+        Assert.Throws<ArgumentException>(() => Draft.Apply(Block(), BottomOf(Block()), Ten, _ => true));
 
         // Selecting nothing.
         Assert.Throws<ArgumentException>(() => Draft.Apply(Block(), BottomOf(Block()), Ten, _ => false));

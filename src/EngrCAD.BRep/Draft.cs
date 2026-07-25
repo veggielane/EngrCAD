@@ -59,6 +59,13 @@ public static class Draft
         var prism = Prism.Recognize(solid, pull);
         var origin = neutralOrigin;
 
+        // A selected cap is always an error, never a silent no-op: caps are the parting
+        // faces and cannot be tapered, so naming one means the selector is wrong.
+        if (faceSelector is not null && (faceSelector(prism.BaseCap) || faceSelector(prism.TopCap)))
+            throw new ArgumentException(
+                "Draft selected a cap face (one perpendicular to the pull direction). Caps are the " +
+                "parting faces and stay put; select the side faces to taper.", nameof(faceSelector));
+
         var planes = new (Vector3d Origin, Vector3d Normal)[prism.SideFaces.Length];
         bool anyDrafted = false;
         for (int i = 0; i < planes.Length; i++)
@@ -75,16 +82,7 @@ public static class Draft
         }
 
         if (faceSelector is not null && !anyDrafted)
-        {
-            foreach (var face in solid.Faces)
-            {
-                if (faceSelector(face) && (ReferenceEquals(face, prism.BaseCap) || ReferenceEquals(face, prism.TopCap)))
-                    throw new ArgumentException(
-                        "Draft selected a cap face (one perpendicular to the pull direction). Caps are the " +
-                        "parting faces and stay put; select the side faces to taper.", nameof(faceSelector));
-            }
-            throw new ArgumentException("Draft selected no face of the solid.", nameof(faceSelector));
-        }
+            throw new ArgumentException("Draft selected no side face of the solid.", nameof(faceSelector));
 
         int n = planes.Length;
         var baseCorners = new Vector3d[n];
