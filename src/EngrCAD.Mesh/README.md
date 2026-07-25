@@ -234,8 +234,21 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   right an inside-out but manifold import), or a raw soup, and return the repaired
   mesh + a `MeshRepairReport` (vertices merged, duplicates/degenerates removed,
   components, faces rewound, components flipped, T-junction insertions, closedness,
-  notes). Defects needing topological surgery (fins, hole filling) still fail the
-  final `Build` — loudly, with post-repair edge diagnostics — until the Euler
-  operators land. Known v1 limitation: nested cavity shells are oriented outward
-  like everything else. `MeshReader.ReadAndRepair(path, options?)` is the one-call
-  import path (read welds exactly at 1e-9; repair applies the crack weld).
+  notes). Known v1 limitation: nested cavity shells are oriented outward
+  like everything else. `MeshReader.ReadAndRepair(path, options?, fillHolesAndCracks?)`
+  is the one-call import path (read welds exactly at 1e-9; repair applies the crack weld).
+  - **`MergeCoincidentEdges(EditableMesh, tolerance)`** — crack closing by welding
+    boundary edge PAIRS with the editor's `MergeEdges`, the topological complement of
+    vertex welding. Two boundary half-edges pair up when they run in **opposite**
+    directions with matching endpoints (a same-direction pair would fold the surface, and
+    is skipped); candidates come from a spatial hash on edge midpoints. Because every
+    merge runs the operator's manifold guards, the tolerance can be loosened far past a
+    safe vertex-weld distance — an unsafe merge is *refused*, leaving that crack open,
+    never corrupting the mesh. Vertex positions never move.
+  - **`AutoRepair(...)`** — the full dispatch: `Clean`'s soup passes, then (only if the
+    result is still open) `MergeCoincidentEdges` for leftover cracks and
+    `HoleFiller.FillAll` for what remains, which by then is a genuine hole rather than a
+    crack. Reports `CracksMerged` / `HolesFilled` / `HolesSkipped` and notes each refused
+    hole. An already-closed `Clean` result returns immediately, so the common case costs
+    nothing. Defects beyond even this (fins, self-intersections) still fail `Clean`'s
+    final `Build`, loudly, with post-repair edge diagnostics.
