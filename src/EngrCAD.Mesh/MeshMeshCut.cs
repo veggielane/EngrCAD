@@ -256,13 +256,8 @@ public static class MeshMeshCut
     {
         var hostsA = HostFaces(planA);
         var hostsB = HostFaces(planB);
-        foreach (var (point, faces) in hostsA)
-            Resolve(point, faces, hostsB.GetValueOrDefault(point));
-        foreach (var (point, faces) in hostsB)
-        {
-            if (!hostsA.ContainsKey(point))
-                Resolve(point, null, faces);
-        }
+        for (int point = 0; point < points.Count; point++)
+            Resolve(point, hostsA.GetValueOrDefault(point), hostsB.GetValueOrDefault(point));
 
         static Dictionary<int, List<int>> HostFaces(ImprintPlan plan)
         {
@@ -281,10 +276,18 @@ public static class MeshMeshCut
 
         void Resolve(int point, List<int>? facesA, List<int>? facesB)
         {
-            int vertexA = FindCorner(meshA, facesA, points[point], epsilon);
-            int vertexB = FindCorner(meshB, facesB, points[point], epsilon);
+            // A crossing that IS a corner of the triangle it was computed on already
+            // carries that mapping; it must be honoured here or the reconciliation below
+            // could move the shared coordinate away from the vertex it names.
+            int vertexA = planA.PointVertex.TryGetValue(point, out int knownA)
+                ? knownA
+                : FindCorner(meshA, facesA, points[point], epsilon);
+            int vertexB = planB.PointVertex.TryGetValue(point, out int knownB)
+                ? knownB
+                : FindCorner(meshB, facesB, points[point], epsilon);
             if (vertexA < 0 && vertexB < 0)
                 return;
+
             var canonical = vertexA >= 0 ? meshA.Positions[vertexA] : meshB.Positions[vertexB];
             points[point] = canonical;
             if (vertexA >= 0)
@@ -292,7 +295,7 @@ public static class MeshMeshCut
             if (vertexB >= 0)
             {
                 planB.MapToVertex(point, vertexB);
-                if (vertexA >= 0 && meshB.Positions[vertexB] != canonical)
+                if (meshB.Positions[vertexB] != canonical)
                     planB.MoveVertex(vertexB, canonical);
             }
         }

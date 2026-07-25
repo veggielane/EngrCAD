@@ -60,8 +60,28 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   vertices, not sliver fans); degenerate inputs (&lt; 4 points, coincident, collinear,
   coplanar) throw with the reason. Output goes through the manifold-validating `Build`
   as a safety net.
-- **`MeshBoolean`** — union/difference/intersection via BSP clipping (csg.js) plus a
-  seam-zipping pass so results come out topologically closed.
+- **`MeshBoolean`** — union/difference/intersection, two algorithms behind one API.
+  `BooleanMethod.Bsp` (the default) clips BSP trees (csg.js) plus a seam-zipping pass so
+  results come out topologically closed. `BooleanMethod.Exact` selects the **imprint
+  boolean**: cut both meshes along their exact intersection curve (`MeshMeshCut`),
+  flood-fill each mesh's faces into **patches** bounded by that curve, classify each patch
+  once by the other mesh's `MeshWindingNumber` at the centroid of its largest triangle,
+  keep the halves the operation calls for (difference reverses the tool's kept patches),
+  and weld the two halves by **exact coordinate equality** — the imprint guarantees
+  bit-identical seam vertices, so there is no gap to bridge and no tolerance to pick. At
+  every seam edge exactly one face survives on each side (adjacent faces lie on opposite
+  sides of the other surface), which is why the result is closed and manifold.
+  *Classification assumption*: after the imprint no face straddles the other surface, so a
+  whole patch is inside or outside — probing per patch (rather than per face) is what
+  keeps seam slivers, whose centroids sit arbitrarily close to the other surface, from
+  deciding anything. Measured: flipping the default to `Exact` passes every test in every
+  project except the ones that pin BSP behaviour deliberately; it stays opt-in only
+  because the exact path REJECTS coplanar overlapping faces (flush-mating operands) that
+  BSP handles. Cases the BSP path gets wrong and the exact path gets right, both locked by
+  tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a shell with
+  boundary edges — a hole in the solid), and any model at ~1e-5 scale (BSP's absolute
+  1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every polygon is
+  discarded and the result is empty).
 - **`MeshMeshCut` / `MeshImprint`** — exact mesh–mesh intersection and imprint: the two
   meshes come back cut along their common curve, sharing it vertex-for-vertex. Broad
   phase is `Bvh.QueryOverlap` over per-triangle boxes; the narrow phase is the Möller

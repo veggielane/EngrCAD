@@ -288,17 +288,16 @@ internal static class MeshImprinter
             {
                 if (vertexOf.ContainsKey(point))
                     continue;
-                // Ends snap to the existing vertices instead of producing a zero-length
-                // sliver edge; the crossing test already keeps genuine crossings clear of
-                // the corners by the same margin.
-                if (t <= endMargin)
+                // Ends snap to the existing vertex instead of producing a zero-length sliver
+                // edge, and that vertex moves onto the seam coordinate so the other mesh
+                // still finds the point exactly where it was told. (The crossing test
+                // already reports corner-hits as vertices, so this is a belt-and-braces
+                // guard on the parameter arithmetic.)
+                if (t <= endMargin || t >= 1 - endMargin)
                 {
-                    vertexOf[point] = mesh.Origin(cursor);
-                    continue;
-                }
-                if (t >= 1 - endMargin)
-                {
-                    vertexOf[point] = destination;
+                    int end = t <= endMargin ? mesh.Origin(cursor) : destination;
+                    vertexOf[point] = end;
+                    mesh.SetPosition(end, points[point]);
                     continue;
                 }
 
