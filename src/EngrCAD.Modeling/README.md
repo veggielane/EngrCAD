@@ -470,6 +470,25 @@ via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 tessellate on the render thread. Part names are unique per tab. `Part` is
 deliberately a leaf — tabs and assemblies are the containers.
 
+**Preparing on demand.** A host that does not want to mesh the whole document before
+showing anything has three finer entry points, all idempotent and all safe off the
+render thread (the viewer meshes a tab when it is first *viewed*, on a background
+task, and shows a progress bar):
+
+| API | What it does |
+| --- | --- |
+| `Part.HasMesh` | Non-blocking probe: is the display mesh already built? Takes no lock, so it never waits behind a mesh in flight on another thread — a UI can ask before deciding to show numbers. |
+| `Part.Prepare(quality, progress)` | One part's worth of `PreMesh`: display mesh + feature edges + resolved annotations. |
+| `Tab.PreMesh(quality, progress)` | The same for one tab's distinct parts, in order — the per-tab sibling of `Scene.PreMesh`. |
+
+`Part.GetMesh(quality, progress)` threads a `ProgressCancel` in, and here the rule is
+narrow on purpose: **only the SDF route observes it** (Surface Nets reports fractions
+and polls for cancellation). A B-Rep lowering runs to completion because its result is
+cached inside `TryGetSolid`, and abandoning one mid-flight would leave that cache
+claiming a lowering it never produced. `Tab.PreMesh` therefore polls for cancellation
+*between* parts: the part in flight finishes and its mesh stays cached (so returning to
+it costs nothing), which is the useful half of cancelling anyway.
+
 **`Part.TryGetSolid()` lowers the part's exact B-Rep at most ONCE and caches it**
 (null when the part has no exact form — an SDF or mesh part, a Shape with no B-Rep
 route, or a lowering that failed). Everything that needs the solid takes it from
