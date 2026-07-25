@@ -611,8 +611,137 @@ Semantics worth knowing:
   loose tab parts flatten too (path = name, world = `Part.Transform`).
 - **Cycles are rejected** at `Add` time; an assembly can appear in many parents
   (a DAG), just never inside itself.
-- v1 is placement only: **mates/constraints, exploded views, and BOM are future
-  work** (mates would solve for the occurrence frames that `Flatten` composes).
+
+### Bill of materials
+
+`Bom` counts occurrences per distinct `Part` over the flattening — the same
+`PartInstance` list viewers render — so nested sub-assemblies roll up for free:
+
+```csharp
+var bom = Bom.For(stack);            // also For(tab), For(scene), For(instances)
+Console.WriteLine(bom.ToText());     // aligned table: QTY / ITEM / KIND / WHERE
+File.WriteAllText("bom.csv", bom.ToCsv());
+```
+
+- A `BomLine` is `(Part, Quantity, Paths)`; `Item` is the catalogue designation for
+  hardware and the part name otherwise, and `Hardware` carries the
+  `HardwareComponent` itself, so `bom.Hardware` / `bom.Manufactured` split the list
+  into bought-in and made. `Part.Hardware` is set by `HardwareComponent.ToPart()`,
+  which caches one part per catalogue item — so N placements of one screw are one
+  line with quantity N.
+- Lines group by part **reference**, the document model's own notion of sameness. Two
+  separately constructed parts that happen to share a name stay two lines (they are
+  two parts); `bom.ByItem()` rolls those together for a purchasing view.
+- `Bom.Structured(assembly)` is the indented BOM: one `BomNode` per item per level,
+  with `Quantity` per parent and `TotalQuantity` multiplied down the tree, so a
+  sub-assembly placed twice doubles everything inside it. The leaf totals agree with
+  the flat list by construction — both count the same occurrences.
+- The viewer's **BOM** toolbar button shows the current tab's table and drops a CSV in
+  the temp directory, reporting the path in the status bar (the `Capture` convention).
+
+### Exploded views
+
+An explode is a scalar 0 → 1 composed into the flattening, so viewers and offscreen
+renders get it for free and no second code path exists:
+
+```csharp
+stack.AutoExplode();                          // derive offsets from the geometry
+var pulledApart = stack.Flatten(explode: 1);  // or tab.Instances(0.4), scene.Instances(t)
+```
+
+- `Occurrence.ExplodeOffset` is where an occurrence goes at factor 1, in the **parent
+  assembly's** coordinates. `Flatten(factor)` adds `factor × offset` to the frame's
+  origin before composing, so nested offsets compose: a sub-assembly moves as a unit
+  and its own occurrences move within it. At factor 0, or with no offset, the frame is
+  returned untouched — an un-exploded flatten is bit-for-bit what it always was.
+- **The instance count and order are independent of the factor.** That is what lets the
+  viewer animate it with `ViewportControl.SetInstancePoses` — matrices only, no GPU
+  buffer touched — so N instances keep sharing one mesh, one buffer set and one pick BVH
+  through the whole animation.
+- `AutoExplode` derives offsets with three rules: the **largest non-catalogue occurrence
+  is the datum and does not move**; **hardware backs out along its own axis** (a
+  `HardwareComponent` body is modeled +Z out of the host, so the occurrence frame's Z
+  *is* the fastener axis — better than any centroid guess, and free); everything else
+  moves **radially away from the datum**, scaled by how far out it already sits, so the
+  outermost item travels the full spread and a stack keeps its order. It needs the
+  parts' bounds, so like `Scene.PreMesh` it belongs off the render thread.
+  - The datum matters: taking the direction from the *assembly centroid* instead is
+    wrong whenever the parts are spread out — the centroid sits in the empty middle and
+    everything, base included, flies away from nothing.
+- Viewer: an **Explode** toggle plus a factor slider (disabled for a tab with no
+  assemblies). Headless: `EngrCad.RenderToImage(..., explode: 1)`,
+  `--explode <factor>`, and `EngrCad.Configure().WithExplode(f)`.
+
+### Mates (constraints)
+
+`Flatten` composes `Occurrence.Frame`s and those frames are mutable, so mating is
+exactly "solve for the frames":
+
+```csharp
+var report = new MateSet(rig)
+    .Ground(baseOccurrence)
+    .Add(Mate.Concentric(
+        MateGeometry.CylindricalFace(baseOccurrence, s => Bore(s)),
+        MateGeometry.CylindricalFace(lidOccurrence,  s => Bore(s))))
+    .Add(Mate.Planar(
+        MateGeometry.PlanarFace(baseOccurrence, s => s.PlanarFacesWithNormal(Vector3d.UnitZ).First()),
+        MateGeometry.PlanarFace(lidOccurrence,  s => s.PlanarFacesWithNormal(-Vector3d.UnitZ).First())))
+    .Solve();                     // writes Occurrence.Frame; throws if unsatisfiable
+```
+
+- **Mate kinds**: `Coincident` (points, 3), `Planar` (faces bear against each other with
+  an optional gap, 3), `Concentric` (axes collinear, 4), `Distance` (1), `Parallel` (2),
+  `Perpendicular` (1), `Angle` (1). `Ground(occurrence)` pins one in place;
+  `MateGeometry.World(point, direction)` mates against space itself.
+- **Geometry references** are `MateRef`s: explicit local coordinates
+  (`MateGeometry.Point/Axis`) or **semantic B-Rep selectors**
+  (`MateGeometry.PlanarFace/CylindricalFace`) — the same `BrepQueries` vocabulary rim
+  features and annotations use. Selectors resolve **once, when the mate is built**: a
+  mate is a numerical constraint, so its geometry is pinned rather than re-queried
+  inside the solver's inner loop.
+- **Scope, deliberately**: mates constrain ONE assembly level — the direct occurrences
+  of the assembly the `MateSet` was built on. A nested sub-assembly is one rigid body,
+  which is the right semantics; mating into a sub-assembly's internals is rejected with
+  a message telling you to build a `MateSet` on the sub-assembly instead.
+- **How it solves**: Levenberg–Marquardt on the residuals with an **analytic** Jacobian
+  (finite differences would cap accuracy near 1e-8, an order worse than the 1e-9 weld
+  tier this aims at). Angular residuals are multiplied by the assembly's characteristic
+  length so every residual is a length and one linear tolerance is meaningful; the
+  rotation variables are divided by the same length so every Jacobian column is O(1).
+- **It refuses loudly.** A solve that does not converge writes NOTHING — the frames are
+  left exactly as the caller left them — and `MateSolveResult.Diagnostics` names the
+  mates carrying the residual. The result also always reports how many degrees of
+  freedom the mates actually pinned (rank of the Jacobian, from a diagonally pivoted
+  Cholesky of JᵀJ), so an under-constrained assembly says so;
+  `MateSolverSettings.RequireFullyConstrained` turns that into a failure too. An
+  under-constrained assembly is legitimate CAD — a hinge is *supposed* to keep a
+  rotation — so it is reported, not refused, by default.
+- **One honest limitation**: an `Angle` or `Perpendicular` mate whose two directions
+  start exactly parallel is a **stationary** configuration — d/dθ cos θ is zero at
+  θ = 0, so no first-order step exists. The solver detects it and says so rather than
+  nudging at random and sometimes converging. Place the occurrence roughly where it
+  belongs and solve again.
+
+### STEP assembly export
+
+`StepAssembly` writes the product-structure form from the same flattening:
+
+```csharp
+StepAssembly.WriteFile(tab, "gearbox.step");    // also (assembly, …), (scene, …), (instances, …)
+```
+
+One `PRODUCT` per distinct solid, one `NEXT_ASSEMBLY_USAGE_OCCURRENCE` per placement,
+and each pose as a `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION` over an
+`ITEM_DEFINED_TRANSFORMATION` — so a bolt placed forty times is written once and
+referenced forty times. Solids come from `Part.TryGetSolid()`, the cache the display
+mesh and edge overlay already share, so exporting lowers nothing a second time.
+`StepAssembly.Plan` returns what will be written **and** what was skipped (parts with
+no exact B-Rep), so a caller can report the gaps instead of shipping a quiet hole; the
+viewer's `--export part.step` uses it and now writes ONE assembly file instead of one
+file per part. `StepReader` reads the structure back (`StepReadResult.Instances`,
+`HasAssemblyStructure`), including nested sub-assemblies, with poses intact. STEP
+placements are rigid, so a scaled or sheared instance transform is refused by name
+rather than written as if it were rigid.
 
 ### Annotations (PMI)
 

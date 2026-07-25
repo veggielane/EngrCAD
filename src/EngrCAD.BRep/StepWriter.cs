@@ -12,6 +12,9 @@ namespace EngrCAD.BRep;
 /// extrusion, surface of revolution. Curves: line, circle, ellipse, NURBS; wrapper
 /// curves are simplified to analytic forms where possible, otherwise sampled into a
 /// degree-1 B-spline. Swept (RMF) surfaces are not exportable yet. Units: millimetres.
+/// <para><see cref="WriteAssembly"/> writes the product-structure form: one PRODUCT per
+/// distinct solid, NEXT_ASSEMBLY_USAGE_OCCURRENCE per placement, poses as
+/// CONTEXT_DEPENDENT_SHAPE_REPRESENTATIONs.</para>
 /// </summary>
 public static class StepWriter
 {
@@ -25,11 +28,88 @@ public static class StepWriter
         var w = new Writer();
         w.EmitHeaderAndContext(name);
         var shells = solid.Shells.Select(s => w.Shell(s)).ToList();
-        int brep = w.Emit($"MANIFOLD_SOLID_BREP('{name}',#{shells[0]})");
+        int brep = w.Emit($"MANIFOLD_SOLID_BREP('{Writer.Text(name)}',#{shells[0]})");
         int representation = w.Emit(
             $"ADVANCED_BREP_SHAPE_REPRESENTATION('',(#{brep}),#{w.GeometricContext})");
         w.Emit($"SHAPE_DEFINITION_REPRESENTATION(#{w.ProductDefinitionShape},#{representation})");
         return w.Finish();
+    }
+
+    /// <summary>
+    /// Writes a STEP <b>assembly</b>: one PRODUCT per distinct solid, one
+    /// NEXT_ASSEMBLY_USAGE_OCCURRENCE per instance, and the instance's pose as a
+    /// CONTEXT_DEPENDENT_SHAPE_REPRESENTATION over an ITEM_DEFINED_TRANSFORMATION —
+    /// the product structure every CAD system reads back as a real assembly tree.
+    /// <para>Instances sharing a solid (reference identity) share ONE product
+    /// definition, so a bolt placed forty times is written once and referenced forty
+    /// times. That is the same sharing the display path gets from
+    /// <c>PartInstance</c>, and it is why an assembly file is not forty copies of a
+    /// bolt.</para>
+    /// <para>Poses must be <b>rigid</b>: a STEP placement is an origin plus two
+    /// directions, so a scaled or sheared instance transform has no representation and
+    /// is rejected by name rather than silently written as if it were rigid.</para>
+    /// </summary>
+    public static string WriteAssembly(
+        IReadOnlyList<StepInstance> instances, string name = "EngrCAD assembly")
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        if (instances.Count == 0)
+            throw new ArgumentException("A STEP assembly needs at least one instance.", nameof(instances));
+
+        var w = new Writer();
+        w.EmitApplicationContexts();
+        var assembly = w.Product(name);
+        w.EmitUnitsAndContext();
+
+        int assemblyAxis = w.OriginPlacement();
+        int assemblyRepresentation = w.Emit(
+            $"SHAPE_REPRESENTATION('{Writer.Text(name)}',(#{assemblyAxis}),#{w.GeometricContext})");
+        w.Emit($"SHAPE_DEFINITION_REPRESENTATION(#{assembly.Shape},#{assemblyRepresentation})");
+
+        // One product per DISTINCT solid (reference identity, like the display path).
+        var products = new Dictionary<BrepSolid, (int Definition, int Representation, int Axis)>();
+        foreach (var instance in instances)
+        {
+            ArgumentNullException.ThrowIfNull(instance.Solid);
+            if (products.ContainsKey(instance.Solid))
+                continue;
+            var product = w.Product(instance.PartName);
+            var shells = instance.Solid.Shells.Select(s => w.Shell(s)).ToList();
+            int brep = w.Emit($"MANIFOLD_SOLID_BREP('{Writer.Text(instance.PartName)}',#{shells[0]})");
+            int axis = w.OriginPlacement();
+            int representation = w.Emit(
+                $"ADVANCED_BREP_SHAPE_REPRESENTATION('{Writer.Text(instance.PartName)}'," +
+                $"(#{axis},#{brep}),#{w.GeometricContext})");
+            w.Emit($"SHAPE_DEFINITION_REPRESENTATION(#{product.Shape},#{representation})");
+            products[instance.Solid] = (product.Definition, representation, axis);
+        }
+
+        int ordinal = 0;
+        foreach (var instance in instances)
+        {
+            var (definition, representation, axis) = products[instance.Solid];
+            string occurrence = Writer.Text(instance.OccurrenceName);
+            int nauo = w.Emit(
+                $"NEXT_ASSEMBLY_USAGE_OCCURRENCE('{++ordinal}','{occurrence}','',"
+                + $"#{assembly.Definition},#{definition},$)");
+            int nauoShape = w.Emit($"PRODUCT_DEFINITION_SHAPE('','',#{nauo})");
+            int placement = w.Placement(instance.OccurrenceName, instance.World);
+            int transformation = w.Emit(
+                $"ITEM_DEFINED_TRANSFORMATION('','',#{axis},#{placement})");
+            int relationship = w.Emit(
+                $"(REPRESENTATION_RELATIONSHIP('','',#{representation},#{assemblyRepresentation})"
+                + $"REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION(#{transformation})"
+                + "SHAPE_REPRESENTATION_RELATIONSHIP())");
+            w.Emit($"CONTEXT_DEPENDENT_SHAPE_REPRESENTATION(#{relationship},#{nauoShape})");
+        }
+        return w.Finish();
+    }
+
+    /// <summary><see cref="WriteAssembly"/> straight to a file.</summary>
+    public static void WriteAssemblyFile(
+        IReadOnlyList<StepInstance> instances, string path, string name = "EngrCAD assembly")
+    {
+        File.WriteAllText(path, WriteAssembly(instances, name));
     }
 
     private sealed class Writer
@@ -64,18 +144,74 @@ public static class StepWriter
         private int Placement(in Vector3d origin, in Vector3d z, in Vector3d x) =>
             Emit($"AXIS2_PLACEMENT_3D('',#{Point(origin)},#{Direction(z)},#{Direction(x)})");
 
+        /// <summary>The identity placement every shape representation is anchored to —
+        /// also the "from" end of an assembly occurrence's transformation.</summary>
+        public int OriginPlacement() => Placement(Vector3d.Zero, Vector3d.UnitZ, Vector3d.UnitX);
+
+        /// <summary>
+        /// A rigid world matrix as an AXIS2_PLACEMENT_3D. A STEP placement is an origin
+        /// plus two orthonormal directions and has no room for scale or shear, so a
+        /// non-rigid instance transform is refused by name instead of being written as
+        /// though it were rigid.
+        /// </summary>
+        public int Placement(string what, in Matrix4d world)
+        {
+            var x = world.TransformVector(Vector3d.UnitX);
+            var y = world.TransformVector(Vector3d.UnitY);
+            var z = world.TransformVector(Vector3d.UnitZ);
+            // Direction cosines and unit lengths are DIMENSIONLESS, so this guard is a
+            // scale-free machine-epsilon test and deliberately not the linear tolerance
+            // ladder: a rotation composed down an assembly chain carries ~1e-15 of drift.
+            const double rigid = 1e-9;
+            if (Math.Abs(x.Length - 1) > rigid || Math.Abs(y.Length - 1) > rigid ||
+                Math.Abs(z.Length - 1) > rigid ||
+                Math.Abs(x.Dot(y)) > rigid || Math.Abs(y.Dot(z)) > rigid || Math.Abs(z.Dot(x)) > rigid)
+            {
+                throw new NotSupportedException(
+                    $"'{what}' is placed by a non-rigid transform (scale or shear), which a STEP " +
+                    "AXIS2_PLACEMENT cannot express. Bake the scale into the part's geometry, or " +
+                    "export that part on its own.");
+            }
+            return Placement(world.TransformPoint(Vector3d.Zero), z, x);
+        }
+
+        /// <summary>Escapes a STEP string literal's body (a single quote doubles).
+        /// Names come from user models, so this is not optional.</summary>
+        public static string Text(string value) => value.Replace("'", "''");
+
         public void EmitHeaderAndContext(string name)
+        {
+            EmitApplicationContexts();
+            ProductDefinitionShape = Product(name).Shape;
+            EmitUnitsAndContext();
+        }
+
+        private int _productContext;
+        private int _definitionContext;
+
+        /// <summary>The application/product contexts every product shares.</summary>
+        public void EmitApplicationContexts()
         {
             int app = Emit("APPLICATION_CONTEXT('automotive design')");
             Emit($"APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2010,#{app})");
-            int productContext = Emit($"PRODUCT_CONTEXT('',#{app},'mechanical')");
-            int definitionContext = Emit($"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')");
-            int product = Emit($"PRODUCT('{name}','{name}','',(#{productContext}))");
+            _productContext = Emit($"PRODUCT_CONTEXT('',#{app},'mechanical')");
+            _definitionContext = Emit($"PRODUCT_DEFINITION_CONTEXT('part definition',#{app},'design')");
+        }
+
+        /// <summary>One PRODUCT and its definition chain: the entity an assembly
+        /// occurrence points at, and the anchor a shape representation hangs from.</summary>
+        public (int Definition, int Shape) Product(string name)
+        {
+            string text = Text(name);
+            int product = Emit($"PRODUCT('{text}','{text}','',(#{_productContext}))");
             Emit($"PRODUCT_RELATED_PRODUCT_CATEGORY('part','',(#{product}))");
             int formation = Emit($"PRODUCT_DEFINITION_FORMATION('','',#{product})");
-            int definition = Emit($"PRODUCT_DEFINITION('design','',#{formation},#{definitionContext})");
-            ProductDefinitionShape = Emit($"PRODUCT_DEFINITION_SHAPE('','',#{definition})");
+            int definition = Emit($"PRODUCT_DEFINITION('design','',#{formation},#{_definitionContext})");
+            return (definition, Emit($"PRODUCT_DEFINITION_SHAPE('','',#{definition})"));
+        }
 
+        public void EmitUnitsAndContext()
+        {
             int length = Emit("(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.))");
             int angle = Emit("(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.))");
             int solidAngle = Emit("(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT())");
@@ -283,3 +419,16 @@ public static class StepWriter
         }
     }
 }
+
+/// <summary>
+/// One placed solid for <see cref="StepWriter.WriteAssembly"/> — the STEP-side mirror of
+/// the document model's flattened part instance. Instances that share a
+/// <see cref="Solid"/> (reference identity) become one PRODUCT with several
+/// NEXT_ASSEMBLY_USAGE_OCCURRENCEs.
+/// </summary>
+/// <param name="PartName">The product's name (shared by every instance of the solid).</param>
+/// <param name="OccurrenceName">This placement's name — the occurrence path reads well here.</param>
+/// <param name="Solid">The geometry, in its own coordinates (never pre-posed).</param>
+/// <param name="World">The rigid placement of this instance in assembly coordinates.</param>
+public readonly record struct StepInstance(
+    string PartName, string OccurrenceName, BrepSolid Solid, Matrix4d World);

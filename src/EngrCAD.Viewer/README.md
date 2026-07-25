@@ -30,8 +30,9 @@ Dark-themed layout around one shared GL viewport:
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
   an **AO** toggle (ambient occlusion, on by default — see below), a **Section**
   toggle with an **X/Y/Z axis cycler** button beside it (see below), an **Annot**
-  toggle (3D annotations, on by default — see below), and a **Measure** toggle
-  (interactive dimensioning — see below).
+  toggle (3D annotations, on by default — see below), a **Measure** toggle
+  (interactive dimensioning — see below), an **Explode** toggle with a factor slider
+  (see below), and a **BOM** button (see below).
 - **Ambient occlusion** (`ViewportControl.AmbientOcclusion`, the toolbar **AO**
   toggle, `EngrCadOptions.AmbientOcclusion` / `.WithAmbientOcclusion(...)` /
   `--ao on|off`; **on by default**): pockets, blind holes, rib roots and the contact
@@ -377,6 +378,50 @@ edges, BVH) is deduped by part reference. A future optimization is true GPU
 instancing (one draw call per part with a matrix buffer); today it is one draw call
 per instance over shared buffers, which is already flat in memory.
 
+**Re-posing without re-uploading**: `SetInstancePoses(instances)` replaces only the
+per-instance world matrices of the list already shown. It exists for the exploded
+view, where `Tab.Instances(factor)` returns the same parts in the same order at every
+factor — going through `SetInstances` there would delete and re-upload every buffer on
+each slider tick. It validates the list part-for-part and falls back to a full
+`SetInstances` if the document changed underneath (a live reload mid-animation).
+
+## Exploded views
+
+The **Explode** toolbar toggle plus its factor slider pull an assembly apart. The
+factor is a scalar 0 → 1 composed into the flattening in EngrCAD.Modeling
+(`Occurrence.ExplodeOffset`, `Assembly.Flatten(factor)`, `Tab.Instances(factor)`), so
+the viewer holds no explode state beyond the number: dragging the slider re-flattens
+and calls `SetInstancePoses`, which touches matrices only. Turning the toggle on
+derives the offsets once via `Assembly.AutoExplode` on a **background task** — it reads
+the instances' bounds, which means meshing, and that must never happen on the UI thread
+(the same rule construction previews follow). The controls are disabled for a tab with
+no assemblies: a loose part belongs to no assembly and has nothing to explode away from.
+
+Headless has the same knob and therefore the same result by construction:
+`EngrCad.RenderToImage(scene, path, …, explode: 1)`, `--explode <factor>`, and
+`EngrCad.Configure().WithExplode(f)`. A non-zero factor derives the offsets itself if
+the design has not set them; a zero factor never touches the document, and an exploded
+render at factor 0 is byte-identical to a plain one.
+
+## Bill of materials
+
+The **BOM** toolbar button shows the current tab's parts list — quantities per distinct
+part, catalogue items marked, and where the occurrences are — in a small window, and
+writes a CSV to the temp directory, reporting the path in the status bar (the same
+"write a file and name it" convention as **Capture**). All the counting lives in
+EngrCAD.Modeling's `Bom`, over the same flattening the viewport renders; the viewer
+only renders the table.
+
+## STEP export of assemblies
+
+`--export part.step` now writes **one assembly file** when the scene has more than one
+solid: one `PRODUCT` per distinct part, one `NEXT_ASSEMBLY_USAGE_OCCURRENCE` per
+placement, poses as `CONTEXT_DEPENDENT_SHAPE_REPRESENTATION`s. (It previously wrote one
+file per part, un-posed.) A single-solid scene still writes the plain
+`MANIFOLD_SOLID_BREP` file. Parts with no exact B-Rep are named on the log rather than
+silently dropped. The machinery is `StepAssembly` in EngrCAD.Modeling over
+`StepWriter.WriteAssembly` — see those READMEs.
+
 ## On-demand tab meshing (the window opens immediately)
 
 A document's tabs are meshed **when they are first viewed**, not before the window
@@ -476,6 +521,7 @@ return EngrCad.Configure()
     .WithRenderSize(1920, 1080)                                // --render image size
     .WithViewStyle(ViewStyle.Shaded)                           // --render view style
     .WithSection(SectionAxis.Z, 6)                             // --render section plane
+    .WithExplode(1)                                            // --render exploded view
     .WithAmbientOcclusion(false)                               // baked AO (on by default)
     .WithLazyTabMeshing(false)                                 // mesh everything up front
     .WithLogger(logger)                                        // any ILogger
@@ -483,7 +529,7 @@ return EngrCad.Configure()
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
-`RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`,
+`RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`, `Explode`,
 `AmbientOcclusion`, `LazyTabMeshing`, `Logger`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
 `RenderToImage`) mirror the static `EngrCad` entry points with those options
 applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain

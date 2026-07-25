@@ -2,11 +2,26 @@ using EngrCAD.Core;
 
 namespace EngrCAD.BRep;
 
-/// <summary>Result of reading a STEP file: the solids plus reader diagnostics.</summary>
+/// <summary>Result of reading a STEP file: the solids, the assembly placements, plus
+/// reader diagnostics.</summary>
 public sealed class StepReadResult
 {
-    /// <summary>The imported solids, in entity-id order of their MANIFOLD_SOLID_BREPs.</summary>
+    /// <summary>The imported solids, in entity-id order of their MANIFOLD_SOLID_BREPs,
+    /// each in its OWN coordinates — a solid placed several times appears once here.</summary>
     public IReadOnlyList<BrepSolid> Solids { get; }
+
+    /// <summary>
+    /// The file's product structure flattened to posed instances — the inverse of
+    /// <see cref="StepWriter.WriteAssembly"/>. Always covers the whole file: when the
+    /// file has no NEXT_ASSEMBLY_USAGE_OCCURRENCE entities
+    /// (<see cref="HasAssemblyStructure"/> is false) every solid appears once at
+    /// identity, so a consumer can use this list without branching.
+    /// </summary>
+    public IReadOnlyList<StepInstance> Instances { get; }
+
+    /// <summary>Whether the file carried real assembly structure
+    /// (NEXT_ASSEMBLY_USAGE_OCCURRENCE), as opposed to being one or more loose solids.</summary>
+    public bool HasAssemblyStructure { get; }
 
     /// <summary>
     /// Skipped/unsupported entities, unit warnings, and reconstruction notes. Empty for
@@ -14,9 +29,15 @@ public sealed class StepReadResult
     /// </summary>
     public IReadOnlyList<string> Diagnostics { get; }
 
-    internal StepReadResult(IReadOnlyList<BrepSolid> solids, IReadOnlyList<string> diagnostics)
+    internal StepReadResult(
+        IReadOnlyList<BrepSolid> solids,
+        IReadOnlyList<StepInstance> instances,
+        bool hasAssemblyStructure,
+        IReadOnlyList<string> diagnostics)
     {
         Solids = solids;
+        Instances = instances;
+        HasAssemblyStructure = hasAssemblyStructure;
         Diagnostics = diagnostics;
     }
 }
@@ -80,7 +101,10 @@ public static class StepReader
                     Note($"Adopted {orphanShellIds.Count} CLOSED_SHELL(s) not referenced by any " +
                          "MANIFOLD_SOLID_BREP into the first solid (multi-shell writer convention).");
                 }
+                int before = solids.Count;
                 BuildSolid(shellIds, solids);
+                if (solids.Count > before)
+                    _solidByBrep[breps[i].Id] = solids[^1];
             }
 
             if (breps.Count == 0 && orphanShellIds.Count > 0)
@@ -93,7 +117,218 @@ public static class StepReader
                 Note("No MANIFOLD_SOLID_BREP or CLOSED_SHELL entities found.");
             }
 
-            return new StepReadResult(solids, _diagnostics);
+            var (instances, structured) = BuildAssembly(solids);
+            return new StepReadResult(solids, instances, structured, _diagnostics);
+        }
+
+        // ---- assembly structure (NEXT_ASSEMBLY_USAGE_OCCURRENCE) ----
+
+        private readonly Dictionary<int, BrepSolid> _solidByBrep = [];
+
+        /// <summary>
+        /// Rebuilds the file's product structure as posed instances: PRODUCT_DEFINITIONs
+        /// carry shapes through SHAPE_DEFINITION_REPRESENTATION, NEXT_ASSEMBLY_USAGE_
+        /// OCCURRENCE gives parent → child, and each occurrence's pose is the
+        /// ITEM_DEFINED_TRANSFORMATION hanging off its CONTEXT_DEPENDENT_SHAPE_
+        /// REPRESENTATION. Sub-assemblies nest, so this composes down the tree exactly as
+        /// the writer composed it up.
+        /// <para>Falls back to "every solid once, at identity" when the file carries no
+        /// occurrences, which keeps the instance list universally usable.</para>
+        /// </summary>
+        private (IReadOnlyList<StepInstance> Instances, bool Structured) BuildAssembly(List<BrepSolid> solids)
+        {
+            var occurrences = file.Entities.Values
+                .Where(e => e.Find("NEXT_ASSEMBLY_USAGE_OCCURRENCE") is not null)
+                .OrderBy(e => e.Id)
+                .ToList();
+
+            // definition id -> the solid its shape representation holds (when it has one)
+            var shapeOf = new Dictionary<int, (BrepSolid Solid, string Name)>();
+            foreach (var entity in file.Entities.Values)
+            {
+                if (entity.Find("SHAPE_DEFINITION_REPRESENTATION") is not { } sdr || sdr.Args.Count < 2)
+                    continue;
+                if (DefinitionOfShape(sdr.Args[0]) is not { } definition)
+                    continue;
+                if (SolidOfRepresentation(sdr.Args[1]) is not { } solid)
+                    continue;
+                shapeOf[definition] = (solid, ProductName(definition));
+            }
+
+            if (occurrences.Count == 0)
+            {
+                // No product structure: every solid stands on its own at identity.
+                var loose = solids
+                    .Select((solid, i) =>
+                    {
+                        var named = shapeOf.Values.FirstOrDefault(v => ReferenceEquals(v.Solid, solid));
+                        string name = named.Name ?? $"solid {i + 1}";
+                        return new StepInstance(name, name, solid, Matrix4d.Identity);
+                    })
+                    .ToList();
+                return (loose, false);
+            }
+
+            // parent definition -> (child definition, occurrence name, pose)
+            var children = new Dictionary<int, List<(int Definition, string Name, Matrix4d World)>>();
+            var placed = new HashSet<int>();
+            var poses = OccurrencePoses();
+            foreach (var entity in occurrences)
+            {
+                var nauo = entity.Find("NEXT_ASSEMBLY_USAGE_OCCURRENCE")!;
+                if (nauo.Args.Count < 5)
+                    continue;
+                int parent = nauo.Args[3].AsReference();
+                int child = nauo.Args[4].AsReference();
+                string name = nauo.Args[1].Text is { Length: > 0 } text ? text : ProductName(child);
+                if (!poses.TryGetValue(entity.Id, out var world))
+                {
+                    // A NAUO with no CONTEXT_DEPENDENT_SHAPE_REPRESENTATION means "placed
+                    // at the parent's origin" — legal, and common for the first component.
+                    world = Matrix4d.Identity;
+                    Note($"Occurrence '{name}' (#{entity.Id}) carries no placement; assuming identity.");
+                }
+                if (!children.TryGetValue(parent, out var list))
+                    children[parent] = list = [];
+                list.Add((child, name, world));
+                placed.Add(child);
+            }
+
+            var roots = children.Keys.Where(d => !placed.Contains(d)).OrderBy(d => d).ToList();
+            if (roots.Count == 0)
+            {
+                Note("The assembly occurrences form a cycle; falling back to un-posed solids.");
+                return (
+                    [.. solids.Select((s, i) => new StepInstance($"solid {i + 1}", $"solid {i + 1}", s,
+                        Matrix4d.Identity))],
+                    false);
+            }
+
+            var instances = new List<StepInstance>();
+            foreach (int root in roots)
+            {
+                // Paths start at the root's CHILDREN, not at the root product itself: the
+                // root is the file's assembly, whose name the caller already has. That
+                // also makes the round trip exact — StepWriter flattens, so it writes the
+                // occurrence path as the occurrence name, and this reads it straight back.
+                Walk(root, Matrix4d.Identity, "", instances, children, shapeOf, []);
+            }
+            return (instances, true);
+        }
+
+        private void Walk(
+            int definition, in Matrix4d world, string path, List<StepInstance> into,
+            Dictionary<int, List<(int Definition, string Name, Matrix4d World)>> children,
+            Dictionary<int, (BrepSolid Solid, string Name)> shapeOf,
+            HashSet<int> onPath)
+        {
+            if (!onPath.Add(definition))
+            {
+                Note($"Assembly cycle at product definition #{definition}; that branch was not expanded.");
+                return;
+            }
+            if (shapeOf.TryGetValue(definition, out var shape))
+                into.Add(new StepInstance(shape.Name, path.Length == 0 ? shape.Name : path, shape.Solid, world));
+            if (children.TryGetValue(definition, out var list))
+            {
+                foreach (var (child, name, local) in list)
+                    Walk(child, world * local, path.Length == 0 ? name : $"{path}/{name}",
+                        into, children, shapeOf, onPath);
+            }
+            onPath.Remove(definition);
+        }
+
+        /// <summary>NAUO entity id → its pose, from the CONTEXT_DEPENDENT_SHAPE_
+        /// REPRESENTATION that names it.</summary>
+        private Dictionary<int, Matrix4d> OccurrencePoses()
+        {
+            var poses = new Dictionary<int, Matrix4d>();
+            foreach (var entity in file.Entities.Values)
+            {
+                if (entity.Find("CONTEXT_DEPENDENT_SHAPE_REPRESENTATION") is not { } cdsr || cdsr.Args.Count < 2)
+                    continue;
+                if (DefinitionOfShape(cdsr.Args[1]) is not { } nauo)
+                    continue;
+                try
+                {
+                    var relationship = file.Entity(cdsr.Args[0].AsReference());
+                    if (relationship.Find("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION") is not { } rrwt
+                        || rrwt.Args.Count < 1)
+                        continue;
+                    var transformation = file.Entity(rrwt.Args[0].AsReference())
+                        .Find("ITEM_DEFINED_TRANSFORMATION");
+                    if (transformation is null || transformation.Args.Count < 4)
+                        continue;
+                    // item_1 lives in the component's own representation, item_2 in the
+                    // parent's: the placement is "put item_1 where item_2 is".
+                    var from = Axis2(transformation.Args[2].AsReference());
+                    var to = Axis2(transformation.Args[3].AsReference());
+                    poses[nauo] = to.ToMatrix() * from.Inverse().ToMatrix();
+                }
+                catch (Exception exception) when (IsRecoverable(exception))
+                {
+                    Note($"Could not read the placement of #{entity.Id}: {exception.Message}");
+                }
+            }
+            return poses;
+        }
+
+        /// <summary>The entity a PRODUCT_DEFINITION_SHAPE characterizes (a
+        /// PRODUCT_DEFINITION, or a NEXT_ASSEMBLY_USAGE_OCCURRENCE for an occurrence's
+        /// own shape).</summary>
+        private int? DefinitionOfShape(in StepValue value)
+        {
+            if (value.Kind != StepValueKind.Reference)
+                return null;
+            var record = file.Entities.TryGetValue(value.Reference, out var entity)
+                ? entity.Find("PRODUCT_DEFINITION_SHAPE")
+                : null;
+            return record is { Args.Count: > 2 } && record.Args[2].Kind == StepValueKind.Reference
+                ? record.Args[2].Reference
+                : null;
+        }
+
+        /// <summary>The MANIFOLD_SOLID_BREP among a representation's items, resolved to
+        /// the solid already built for it.</summary>
+        private BrepSolid? SolidOfRepresentation(in StepValue value)
+        {
+            if (value.Kind != StepValueKind.Reference
+                || !file.Entities.TryGetValue(value.Reference, out var entity))
+                return null;
+            var record = entity.Find("ADVANCED_BREP_SHAPE_REPRESENTATION")
+                ?? entity.Find("SHAPE_REPRESENTATION")
+                ?? entity.Find("REPRESENTATION");
+            if (record is null || record.Args.Count < 2 || record.Args[1].Kind != StepValueKind.List)
+                return null;
+            foreach (var item in record.Args[1].Items)
+            {
+                if (item.Kind == StepValueKind.Reference && _solidByBrep.TryGetValue(item.Reference, out var solid))
+                    return solid;
+            }
+            return null;
+        }
+
+        /// <summary>The PRODUCT's name behind a PRODUCT_DEFINITION.</summary>
+        private string ProductName(int definitionId)
+        {
+            try
+            {
+                var definition = file.Entity(definitionId).Find("PRODUCT_DEFINITION");
+                if (definition is null || definition.Args.Count < 3)
+                    return $"#{definitionId}";
+                var formation = file.Entity(definition.Args[2].AsReference())
+                    .Find("PRODUCT_DEFINITION_FORMATION");
+                if (formation is null || formation.Args.Count < 3)
+                    return $"#{definitionId}";
+                var product = file.Entity(formation.Args[2].AsReference()).Find("PRODUCT");
+                return product is { Args.Count: > 0 } && product.Args[0].Text is { Length: > 0 } name
+                    ? name
+                    : $"#{definitionId}";
+            }
+            catch (Exception exception) when (IsRecoverable(exception))
+            {
+                return $"#{definitionId}";
+            }
         }
 
         private void BuildSolid(List<int> shellIds, List<BrepSolid> solids)

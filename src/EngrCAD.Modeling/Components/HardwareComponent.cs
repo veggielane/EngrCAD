@@ -209,7 +209,14 @@ public abstract class HardwareComponent
     public Part ToPart()
     {
         lock (_gate)
-            return _part ??= new Part(Designation, Body, Color) { ClippedBySection = false };
+            return _part ??= new Part(Designation, Body, Color)
+            {
+                ClippedBySection = false,
+                // The part remembers the catalogue item it IS: a bill of materials reads
+                // it to mark the line as bought-in, and the default explode direction
+                // uses the component's own axis instead of a radial guess.
+                Hardware = this,
+            };
     }
 
     /// <summary>The cut this component needs in the body it is installed into.</summary>

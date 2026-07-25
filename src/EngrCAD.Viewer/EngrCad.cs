@@ -101,6 +101,11 @@ public static class EngrCad
     /// <para>A non-null <paramref name="preview"/> draws one construction-tree row over
     /// the scene exactly as clicking it in the model tree does — the rollback view, in a
     /// still image.</para>
+    /// <para><paramref name="explode"/> (0 assembled → 1 fully exploded) poses the
+    /// assemblies' occurrences through <c>Scene.Instances(explode)</c>. It is the same
+    /// flattening the window animates, so an exploded render and an exploded viewport
+    /// agree by construction; the offsets come from <c>Assembly.AutoExplode</c> (called
+    /// here when nothing has set them yet).</para>
     /// </summary>
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
@@ -109,10 +114,15 @@ public static class EngrCad
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        ConstructionPreviewRequest? preview = null)
+        ConstructionPreviewRequest? preview = null,
+        double explode = 0)
     {
         scene.PreMesh(); // tessellate before touching GL
-        var instances = scene.AllInstances.ToList();
+        // Exact-zero semantic test: only an explode ASKED FOR derives offsets, so a plain
+        // render never touches the document.
+        if (explode != 0)
+            scene.AutoExplode();
+        var instances = scene.Instances(explode).ToList();
         // Building the preview lowers geometry, so it happens HERE, on the caller's
         // thread, before the GL context exists — the headless mirror of the window's
         // background-task rule.
@@ -238,6 +248,20 @@ public static class EngrCad
                 return 2;
             }
             options.SectionPlanes = planes.Count > 1 ? planes : null;
+        }
+
+        int explodeIndex = Array.IndexOf(args, "--explode");
+        if (explodeIndex >= 0)
+        {
+            if (explodeIndex + 1 >= args.Length
+                || !double.TryParse(args[explodeIndex + 1], NumberStyles.Float,
+                        CultureInfo.InvariantCulture, out double factor)
+                || factor < 0)
+            {
+                Log.UsageExplode(log);
+                return 2;
+            }
+            options.Explode = factor;
         }
 
         int aoIndex = Array.IndexOf(args, "--ao");
@@ -415,7 +439,7 @@ public static class EngrCad
         scene.PreMesh(options.Quality); // meshes cache, so RenderToImage's PreMesh is a no-op
         RenderToImage(scene, path, options.RenderWidth, options.RenderHeight, camera: null,
             options.RenderStyle, options.SectionAxis, options.SectionOffset, options.AmbientOcclusion,
-            options.SectionPlanes, options.SectionCombine);
+            options.SectionPlanes, options.SectionCombine, preview: null, options.Explode);
         Log.WroteImage(log, path, scene.AllParts.Count());
         return 0;
     }
@@ -501,42 +525,38 @@ public static class EngrCad
         }
     }
 
+    /// <summary>
+    /// STEP export of a whole scene. Anything with more than one solid is written as ONE
+    /// <b>assembly</b> file (product structure + NEXT_ASSEMBLY_USAGE_OCCURRENCE), built
+    /// from the same <c>PartInstance</c> flattening the viewport renders — so what you
+    /// export is posed exactly as what you see, and a part placed N times is one product
+    /// referenced N times. A single-solid scene still writes the plain
+    /// MANIFOLD_SOLID_BREP file it always did.
+    /// </summary>
     private static int ExportStep(Scene scene, string path, ILogger log)
     {
-        var solids = new List<(string Name, BrepSolid Solid)>();
-        foreach (var part in scene.AllParts)
-        {
-            // The part's shared cached solid (Part.TryGetSolid) — the same lowering the
-            // display mesh and edge overlay used, not a fresh compile per export.
-            if (part.TryGetSolid() is { } solid)
-                solids.Add((part.Name, solid));
-            else
-                Log.SkippingNonBrepPart(log, part.Name);
-        }
-        if (solids.Count == 0)
+        // The parts' shared cached solids (Part.TryGetSolid) — the same lowering the
+        // display mesh and edge overlay used, not a fresh compile per export.
+        var plan = StepAssembly.Plan(scene);
+        foreach (var (part, _) in plan.Skipped)
+            Log.SkippingNonBrepPart(log, part.Name);
+        if (plan.Instances.Count == 0)
         {
             Log.NoBrepParts(log);
             return 1;
         }
 
-        if (solids.Count == 1)
+        if (plan.Instances.Count == 1)
         {
-            StepWriter.WriteFile(solids[0].Solid, path, solids[0].Name);
-            Log.WroteStep(log, path, solids[0].Name);
+            var only = plan.Instances[0];
+            StepWriter.WriteFile(only.Solid, path, only.PartName);
+            Log.WroteStep(log, path, only.PartName);
             return 0;
         }
 
-        // Multiple solids: one file per part, suffixed with a sanitized part name.
-        string directory = Path.GetDirectoryName(path) ?? "";
-        string stem = Path.GetFileNameWithoutExtension(path);
-        string extension = Path.GetExtension(path);
-        foreach (var (name, solid) in solids)
-        {
-            var safe = string.Concat(name.Select(c => char.IsLetterOrDigit(c) ? c : '-'));
-            var partPath = Path.Combine(directory, $"{stem}.{safe}{extension}");
-            StepWriter.WriteFile(solid, partPath, name);
-            Log.WroteStep(log, partPath, name);
-        }
+        StepWriter.WriteAssemblyFile(
+            plan.Instances, path, scene.Tabs.Count == 1 ? scene.Tabs[0].Name : "EngrCAD assembly");
+        Log.WroteStepAssembly(log, path, plan.ProductCount, plan.Instances.Count);
         return 0;
     }
 
