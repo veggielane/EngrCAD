@@ -125,24 +125,26 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   (per-call validation landed); avoid `DrillShape`'s read-only validation lowering
   (the body lowers twice on the B-Rep path); drill-tip angles, thread
   cosmetics/annotation, hole tables.
-- [ ] **B-Rep boolean performance — superlinear in tool faces** (measured tracing the
-  demo's slow startup). Engraving into a plate, Arial, `Shape.Box - Shape.Text`:
-  1 glyph / 19 faces = 3.1 s, 2 glyphs / 30 = 5.0 s, 4 glyphs / 89 = 33.1 s,
-  7 glyphs / 151 = **62.1 s** — while tessellating the *result* is only 1.5 s and is
-  independent of `segmentsPerCircle`, so essentially all of it is `BrepBoolean`. The
-  same cost shows up in ordinary drilling: five csk/cbore/Trisert holes in one box take
-  **14.4 s**. Curved glyphs are worst because every Bézier becomes its own extruded
-  tool face. Profile before optimizing; two things worth checking first: whether the
-  face-pair prefilter is doing its job (`BrepQueries.Bounds` became deliberately
-  conservative-over for trimmed fragments in the sphere-boolean fix, which would pass
-  far more pairs than necessary), and whether the cost is really in face *splitting*
-  or `SealSeams` rather than in pair intersection.
-- [ ] **`Scene.PreMesh` is sequential** — 27 independent parts took 27.2 s wall-clock on
-  a multi-core machine, dominated by two parts. Meshing distinct parts in parallel
-  (`ParallelFor` exists; `Part.GetMesh` already locks per part, and `AllParts` dedupes
-  by reference so each part is meshed once) would cut demo/docs startup to roughly the
-  slowest single part. Verify thread-safety of `Part.TryGetSolid`'s cached lowering and
-  of any shared Shape-lowering memoization first.
+- [ ] **`SweptSurface.TryProjectPoint` still pays the generic 2D grid** — the 1D
+  reduction that made extrusions and revolves ~15× faster does not apply directly
+  (an RMF frame varies along the path), but seeding on the path parameter first would
+  still beat a 17×17 scan. Only swept-tube geometry pays this today; `NurbsSurface`
+  likewise keeps the base implementation, legitimately.
+- [ ] **Ambient occlusion is now the largest single cost of opening a window** (~7–8 s
+  of an ~11 s demo launch before lazy tabs; two thread parts alone are 5.7 s and
+  already saturate every core, so parallelism has no more to give). The next lever is
+  showing the scene flat-lit immediately and streaming occlusion in as bakes finish —
+  *not* making the bake less honest.
+- [ ] **`Shape.From(brepSolid)` is unsafe as a *boolean operand* when lowered twice** —
+  `ShapeCompiler.LowerBrep` hands the raw solid to `BrepBoolean`, which consumes its
+  inputs, so this was already a hazard sequentially, not just under the new parallel
+  `PreMesh`. Fix by cloning at the `SourceShape` boundary or making `BrepBoolean`
+  non-consuming. Not exercised by any test, sample or docs page today.
+- [ ] **Do NOT "optimize" `BrepQueries.Bounds`** — it is deliberately conservative-over
+  for trimmed fragments (the sphere-piercing fix depends on that), and profiling proved
+  it is not a bottleneck: on the worst engraving case only 113 of 894 face pairs survive
+  it, and all 113 intersections resolve analytically in ~1 ms. Recorded so nobody
+  "fixes" it later.
 - [ ] **Boolean/splitting edge cases** (all now LOUD rather than silent — sketch-
   extrusion pockets/slots/engraving are exact as of the bounded-planar-carrier fix) —
   a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of
