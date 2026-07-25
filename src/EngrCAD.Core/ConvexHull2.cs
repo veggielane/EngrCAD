@@ -1,10 +1,19 @@
 namespace EngrCAD.Core;
 
 /// <summary>
-/// 2D convex hull by Andrew's monotone chain: sort lexicographically, build the lower
-/// and upper chains with cross-product turn tests. O(n log n); exactly-collinear edge
-/// points are dropped, so the hull is strictly convex. The 2D counterpart of the mesh
-/// engine's 3D quickhull (`ConvexHull` in EngrCAD.Mesh); geometry3Sharp: `ConvexHull2`.
+/// 2D convex hull by Andrew's monotone chain: sort lexicographically, then build the
+/// lower and upper chains with turn tests. O(n log n); exactly-collinear edge points are
+/// dropped, so the hull is strictly convex. The 2D counterpart of the mesh engine's 3D
+/// quickhull (`ConvexHull` in EngrCAD.Mesh); geometry3Sharp: `ConvexHull2`.
+///
+/// <para><b>The turn test is the adaptive-exact <see cref="Predicates2d.Orient2dSign"/>,
+/// not a raw cross product.</b> A monotone chain is a sequence of orientation decisions
+/// that must be mutually consistent: a naive determinant on nearly-collinear points can
+/// report "left turn" for (a, b, c) and "right turn" for the same three points reached
+/// from the other chain, which pops a vertex that belongs to the hull (or keeps one that
+/// does not) and yields a non-convex output polygon. The predicate is sign-exact for all
+/// finite doubles, so every decision here is the decision exact arithmetic would make and
+/// the output is guaranteed strictly convex.</para>
 /// </summary>
 public static class ConvexHull2
 {
@@ -38,8 +47,9 @@ public static class ConvexHull2
         if (points[order[0]] == points[order[^1]])
             return [order[0]];
 
-        // Lower then upper chain; strict right turns only (cross <= 0 pops), so
-        // duplicates and collinear interior points never survive.
+        // Lower then upper chain; strict left turns only survive (an exact sign <= 0
+        // pops), so duplicates — which are exactly collinear with anything — and
+        // collinear interior points never survive.
         var hull = new int[2 * n];
         int count = 0;
         for (int pass = 0; pass < 2; pass++)
@@ -50,8 +60,7 @@ public static class ConvexHull2
                 int index = order[pass == 0 ? s : n - 1 - s];
                 var p = points[index];
                 while (count - chainStart >= 2 &&
-                       (points[hull[count - 1]] - points[hull[count - 2]])
-                           .Cross(p - points[hull[count - 1]]) <= 0)
+                       Predicates2d.Orient2dSign(points[hull[count - 2]], points[hull[count - 1]], p) <= 0)
                     count--;
                 hull[count++] = index;
             }

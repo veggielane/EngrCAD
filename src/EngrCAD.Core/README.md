@@ -129,7 +129,15 @@ concerns.
   the polygonizer determinism test).
 - **`ConvexHull2`** — 2D convex hull (Andrew's monotone chain, O(n log n)); returns CCW
   strictly-convex hull vertices or indices, degrading gracefully on coincident/collinear
-  input. The planar counterpart of the mesh engine's 3D quickhull.
+  input. The planar counterpart of the mesh engine's 3D quickhull. **The turn test is
+  `Predicates2d.Orient2dSign`, not a raw cross product**: a chain is a sequence of
+  orientation decisions that must be mutually consistent, and a naive determinant on
+  points spread over a wide exponent range (where coordinate differences stop being
+  exact) reports contradictory turns and pops vertices that belong to the hull —
+  measured on ~7% of near-collinear mixed-magnitude clouds, and locked by
+  `ConvexHull2Tests.NearCollinear_MixedMagnitudeSlivers_*`. Hull output is now verified
+  against BigInteger ground truth (`ExactReference`) rather than a tolerance: strictly
+  convex, enclosing every input point, exactly.
 - **Min-bounding fits** (`Fitting2d`, `Fitting3d`; g3: ContMinBox2/ContMinCircle2/
   ContOrientedBox3/OrthogonalPlaneFit3):
   - `Fitting2d.MinAreaBox` → `OrientedBox2d` — minimum-area oriented box via the
