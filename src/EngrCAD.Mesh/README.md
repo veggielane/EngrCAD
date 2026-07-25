@@ -246,9 +246,29 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   around each destination vertex through selected faces — correct even at pinch
   vertices), and patch extraction (`ToMesh()`: remapped construct-new submesh; a
   selection touching itself only at a vertex fails `Build`'s bow-tie check with a
-  "pinch" message). Edges are stored canonically as the lower half-edge index of each
-  twin pair, matching `mesh.Edges`. The extract-modify-reinsert `RegionOperator` needs
-  the mutable topology editor and is the phase-B follow-up.
+  "pinch" message; the `ToMesh(out vertexMap)` overload also reports where each extracted
+  vertex came from). Edges are stored canonically as the lower half-edge index of each
+  twin pair, matching `mesh.Edges`.
+- **`MeshRegionOperator`** — extract-modify-reinsert (g3 `RegionOperator`): pull a face
+  selection out as a mesh in its own right, edit it with anything that takes a mesh, put
+  it back. `Extract(mesh, selection)` → `.Region` (+ `RegionToBaseVertex`, `SeamEdges`);
+  `Reinsert(replacement)` returns a NEW session over the NEW mesh whose selection is the
+  reinserted faces, so edits chain (g3's `CurrentBaseTriangles`, without the mutation).
+  Two things worth knowing:
+  - **Transactionality is free**, which is why this is NOT built on `MeshChangeSet` the
+    way g3 builds it on an in-place editor: `HalfEdgeMesh` is immutable after `Build`, so
+    a refused or failed reinsertion leaves the caller holding the original — there is no
+    half-applied state for a journal to undo.
+  - **The seam is the contract, and it may not be refined.** A replacement must reproduce
+    the region's boundary as the same *directed* edges at bit-identical positions
+    (direction proves the orientation matches; exactness because this engine welds shared
+    geometry by equality, so a rim that drifted 1e-12 would weld into a crack instead of
+    failing). Splitting a seam edge is refused too — the base face on the other side still
+    holds the un-split edge, so the result would be a T-junction; refining across a seam
+    means refining the neighbours, which is a different operation. Edits that satisfy the
+    contract: anything confined to the interior, and `MeshDecimator` (its exact boundary
+    preservation IS this contract). `LoopSubdivision` is not one — it splits *and* smooths
+    the open boundary — and is refused with a message naming the offending edge.
 - **`MeshConnectedComponents`** — edge-connected face components (g3
   `MeshConnectedComponents`): deterministic ascending-seed flood fill returning
   `MeshComponent`s (face selection + area + divergence signed volume + closed flag) with
