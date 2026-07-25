@@ -66,3 +66,23 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   T-junction seam zipping.
 - **`RenderMesh`** — flat (per-face) or smooth (per-vertex) triangle extraction for GPUs.
 - **`ObjWriter`** — minimal Wavefront OBJ export for debugging.
+- **Mesh import** — `StlReader` (binary + ASCII, autodetected: the exact
+  84 + 50·n byte-size test runs *before* any `solid` prefix sniffing, because binary
+  exporters routinely write "solid" into the 80-byte header; the prefix + a
+  printable-text check only decide when the size doesn't match), `ObjReader`
+  (v/f with all index forms incl. negative relative; vt/vn/materials/groups ignored and
+  reported; polygonal faces triangulated in their Newell plane via
+  `PolygonTriangulator` with a fan fallback when earcut filters collinear vertices —
+  a dropped vertex a neighbor still references would open an unweldable T-junction),
+  `OffReader` (OFF + variants; extra color/normal columns ignored with warnings), and
+  the `MeshReader` extension-dispatch facade. All readers weld coincident vertices
+  (spatial hash; representatives keep their exact file coordinates — welding never
+  moves geometry; tolerance parameter defaults to the 1e-9 weld tier) and attempt the
+  manifold `Build`. **Dirty files don't throw**: every reader returns a
+  `MeshReadResult` carrying the welded indexed soup + `MeshReadDiagnostics`
+  (non-manifold / inconsistently-wound / boundary edge counts, duplicate and
+  degenerate faces, parser warnings, the `Build` failure message) with `Mesh` null,
+  so the repair pipeline can take over; `RequireMesh()` throws with the diagnostics
+  summary. Note binary STL is float32-quantized: coincident vertices are
+  bit-identical (default weld is exact), and cracks below one float ulp cannot exist,
+  so repair-time crack welding on STL needs tolerances at or above ~1e-7·|coordinate|.
