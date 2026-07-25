@@ -73,6 +73,38 @@ public abstract class Shape
         return new ConeShape(bottomRadius, topRadius, height);
     }
 
+    /// <summary>
+    /// Rectangular wedge along +Z, centred at the origin — OCCT's
+    /// <c>BRepPrimAPI_MakeWedge</c>, and the remaining primitive OpenSCAD reaches for
+    /// <c>polyhedron</c> to build. The base at z = −height/2 is
+    /// <paramref name="sizeX"/> × <paramref name="sizeY"/>; the top at z = +height/2 keeps
+    /// the same y but is <paramref name="topX"/> wide, centred at
+    /// x = <paramref name="topOffsetX"/>. Native in all three representations.
+    ///
+    /// <para>The family it covers: <paramref name="topX"/> = 0 gives a sharp top edge (a
+    /// symmetric chisel), and moving that edge over one side with
+    /// <c>topOffsetX: ±sizeX/2</c> gives the classic RAMP — a right triangular prism.
+    /// A positive <paramref name="topX"/> gives a truncated wedge (a dovetail rail, a
+    /// draft-angled boss), and <c>topX: sizeX</c> with a nonzero offset gives a sheared
+    /// box. The taper is in x only; a solid tapering in BOTH directions is a loft, not a
+    /// wedge.</para>
+    /// </summary>
+    public static Shape Wedge(
+        double sizeX, double sizeY, double sizeZ, double topX = 0, double topOffsetX = 0)
+    {
+        if (sizeX <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeX));
+        if (sizeY <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeY));
+        if (sizeZ <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeZ));
+        if (topX < 0)
+            throw new ArgumentOutOfRangeException(nameof(topX), "The top width cannot be negative.");
+        if (!double.IsFinite(topOffsetX))
+            throw new ArgumentOutOfRangeException(nameof(topOffsetX));
+        return new WedgeShape(sizeX, sizeY, sizeZ, topX, topOffsetX);
+    }
+
     // ---- Modeling operations ----
 
     public static Shape Extrude(Profile profile, in Vector3d direction, IReadOnlyList<Profile>? holes = null) =>

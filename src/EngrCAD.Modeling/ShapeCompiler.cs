@@ -52,7 +52,9 @@ internal static class ShapeCompiler
     {
         switch (shape)
         {
-            case BoxShape or CylinderShape or ExtrudeShape:
+            // Boxes, cylinders, extrusions and wedges are all extrusions of a planar
+            // profile, and any affine map bakes into the profile exactly.
+            case BoxShape or CylinderShape or ExtrudeShape or WedgeShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native));
                 break;
             // Spheres, tori, and cones are symmetric under reflection: any similarity,
@@ -187,7 +189,7 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared primitives go through a tessellated mesh SDF"));
                 break;
-            case ExtrudeShape { Sketch: not null }:
+            case ExtrudeShape { Sketch: not null } or WedgeShape:
                 entries.Add(rigid
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native, "exact 2D sketch SDF, extruded")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
@@ -377,6 +379,11 @@ internal static class ShapeCompiler
                     cone.BottomRadius * coneScale, cone.TopRadius * coneScale, cone.Height * coneScale,
                     coneBase, coneTop - coneBase);
             }
+
+            // A wedge IS an extrusion of its trapezoidal cross-section; expanding here keeps
+            // one lowering path rather than a fourth per target.
+            case WedgeShape wedge:
+                return LowerBrep(wedge.Expanded, m);
 
             case ExtrudeShape { Sketch: { } sketch } extrude:
             {
@@ -625,6 +632,9 @@ internal static class ShapeCompiler
                 return Place(Sdf.Torus(torus.MajorRadius, torus.MinorRadius), rotation, translation, scale);
             case ConeShape cone:
                 return Place(Sdf.Cone(cone.BottomRadius, cone.TopRadius, cone.Height), rotation, translation, scale);
+
+            case WedgeShape wedge:
+                return LowerImplicit(wedge.Expanded, m, quality);
 
             case ExtrudeShape { Sketch: { } sketch } extrude:
             {

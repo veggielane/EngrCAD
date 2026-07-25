@@ -289,7 +289,7 @@ public static class ConstructionTree
 
     private static ConstructionNodeKind KindOf(Shape shape) => shape switch
     {
-        BoxShape or SphereShape or CylinderShape or TorusShape or ConeShape or ThreadShape =>
+        BoxShape or SphereShape or CylinderShape or TorusShape or ConeShape or WedgeShape or ThreadShape =>
             ConstructionNodeKind.Primitive,
         SourceShape => ConstructionNodeKind.Source,
         _ => ConstructionNodeKind.Operation,
