@@ -53,6 +53,12 @@ public sealed class Part
     /// <summary>The geometry the part was created from (Shape, BrepSolid, HalfEdgeMesh, or Sdf).</summary>
     public object Geometry { get; }
 
+    /// <summary>The parametric history this part was regenerated from, when it came
+    /// from one (<see cref="FeatureHistory.ToPart"/>); null for directly built parts.
+    /// Its presence makes <see cref="ConstructionTree"/> show features instead of the
+    /// resulting shape graph.</summary>
+    public FeatureHistory? History { get; }
+
     /// <summary>Display color; when null, the tab assigns the next palette color on add.</summary>
     public PartColor? Color { get; set; }
 
@@ -81,6 +87,26 @@ public sealed class Part
 
     public Part(string name, Sdf sdf, PartColor? color = null, Matrix4d? transform = null)
         : this(name, (object)sdf, color, transform) { }
+
+    /// <summary>
+    /// A part from a parametric history: regenerates it now and keeps the history, so
+    /// viewers can show the ordered feature list (see <see cref="ConstructionTree"/>)
+    /// instead of the resulting shape graph.
+    /// </summary>
+    public Part(string name, FeatureHistory history, PartColor? color = null, Matrix4d? transform = null)
+        : this(name, RegeneratedBody(history), history, color, transform) { }
+
+    /// <summary>Already-regenerated body plus its history (<see cref="FeatureHistory.ToPart"/>).</summary>
+    internal Part(string name, Shape body, FeatureHistory history, PartColor? color, Matrix4d? transform)
+        : this(name, (object)body, color, transform) => History = history;
+
+    private static Shape RegeneratedBody(FeatureHistory history)
+    {
+        ArgumentNullException.ThrowIfNull(history);
+        var result = history.Regenerate();
+        return result.Body
+            ?? throw new InvalidOperationException($"The history produced no body:\n{result}");
+    }
 
     private Part(string name, object geometry, PartColor? color, Matrix4d? transform)
     {
@@ -114,6 +140,30 @@ public sealed class Part
                 Sdf sdf => SurfaceNets.Polygonize(sdf, (quality ?? MeshQuality.Default).SdfResolution),
                 _ => throw new InvalidOperationException($"Unknown geometry type {Geometry.GetType().Name}."),
             };
+        }
+    }
+
+    private ConstructionNode? _constructionTree;
+    private bool _constructionTreeBuilt;
+
+    /// <summary>
+    /// How this part was built, as a row tree a viewer can expand: the ordered feature
+    /// list when the part came from a <see cref="FeatureHistory"/>, otherwise the
+    /// <see cref="Shape"/> operation graph, otherwise null (raw B-Rep/mesh/SDF parts
+    /// carry no construction information). Built once and cached — a part's geometry is
+    /// fixed at construction, so node references are stable and usable as preview-cache
+    /// keys (<see cref="ConstructionPreviewCache"/>).
+    /// </summary>
+    public ConstructionNode? ConstructionTree()
+    {
+        lock (_meshLock)
+        {
+            if (!_constructionTreeBuilt)
+            {
+                _constructionTreeBuilt = true;
+                _constructionTree = Modeling.ConstructionTree.For(this);
+            }
+            return _constructionTree;
         }
     }
 

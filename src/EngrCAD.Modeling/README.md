@@ -159,6 +159,57 @@ references are **selector-based** (`FeatureContext.Lowered` + `BrepQueries`) —
 queries that survive regeneration; persistent topological IDs are future work.
 Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, patterns,
 `BooleanFeature`) cover simple histories; `Feature.FromFunc` handles one-offs.
+`FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
+(the cached prefix output), which the construction tree below previews.
+
+## The construction tree: how a part was built
+
+`part.ConstructionTree()` answers "how was this made?" as a row tree any viewer (or
+script) can walk without knowing the graph's internal node types:
+
+```csharp
+var root = part.ConstructionTree();      // null for raw B-Rep/mesh/SDF parts
+foreach (var row in root!.Flatten())
+    Console.WriteLine($"{row.Path,-6} [{row.Kind}] {row.Label}");
+// ""     [Operation] Drill(2 holes)
+// "0"    [Operation] Extrude(sketch)
+// "0/0"  [Sketch]    Sketch(4 curves, 1 holes)
+```
+
+Two sources feed it:
+
+- a **`Shape`-backed part** gives the operation graph — one row per node, operands as
+  children (booleans, hulls, drills, rims, patterns, transforms). Labels come from the
+  node's own `Describe()`, the same text `Explain` prints, so they cannot drift.
+  Sketch-driven extrude/revolve/sweep rows carry a **sketch child row** holding the
+  `Sketch` and its placement matrix.
+- a **`FeatureHistory`-backed part** (`history.ToPart(...)`, or `new Part(name,
+  history)`) gives the ordered feature list instead: names, `Suppressed` state, and
+  each feature's `[Param]` values as leaf rows. `Part.History` is the link.
+
+A row identifies a graph node **by reference plus a positional `Path`** ("0/1/0").
+Both halves matter: `Shape` is immutable and shared, so one sub-shape can appear at
+several paths (a pattern operand), and the path is what distinguishes the rows while
+the reference is what previews are keyed by. Trees are built once per `Part` and
+cached, so node references are stable across UI rebuilds.
+
+### Previews (what a row looks like)
+
+`ConstructionPreview.Build(node)` turns a row into display **line geometry**:
+
+- a **sketch** row: its curves flattened onto its `SketchPlane` in 3D (lines exact,
+  arcs and Béziers chorded at display resolution — a preview, not a lowering).
+- any other row: the feature edges of that sub-graph's geometry, by the same rule
+  `Part.GetFeatureEdges` uses (exact B-Rep edges when the sub-shape has a B-Rep
+  lowering, mesh dihedrals otherwise). Selecting an intermediate operation therefore
+  shows the model **as of that step** — a rollback view.
+
+Building a preview lowers geometry, so it must not run on a UI or render thread — the
+same rule `Scene.PreMesh` follows. `ConstructionPreviewCache` is the memo: `TryGet`
+takes the synchronous fast path, `Get` builds and caches (call it on a background
+task). Entries key on the shape reference, so a sub-shape shared by several rows is
+lowered **once**; a failed lowering is reported as `ConstructionPreview.Error` rather
+than thrown, so one bad step is a status message, not a crash.
 
 ## Queries, chamfer & fillet
 

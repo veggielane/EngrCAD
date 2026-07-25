@@ -168,6 +168,24 @@ Dark-themed layout around one shared GL viewport:
   small **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part
   through Shaded → Wireframe → Translucent (see below); the mode lives on the
   shared `Part`, so every instance of that part changes together.
+- **Construction tree** (the disclosure triangle on a part row): expands a part into
+  **how it was built** — for a `Shape` part the operation graph as nested rows
+  (booleans, drills, rims and patterns showing their operands as children, and a
+  **sketch row** under every sketch-driven extrude/revolve/sweep); for a
+  `FeatureHistory` part the ordered feature list with names, suppression state, and
+  `[Param]` values. Rows come straight from `Part.ConstructionTree()` in
+  EngrCAD.Modeling (see its README) — the viewer adds no naming of its own.
+  **Clicking a row previews it in the viewport**: a sketch draws its curves on its
+  `SketchPlane` in 3D, any other row draws the feature edges of that sub-graph's
+  geometry — i.e. the model *as of that step*, a rollback view — in construction cyan,
+  drawn over the model (depth test off) so it reads against the finished part.
+  Clicking the showing row again clears it. The lowering happens on a **background
+  task** and is memoized per graph node (`ConstructionPreviewCache`), so the UI never
+  stalls and a second click is instant; a step that cannot be lowered reports in the
+  status bar instead of throwing. Expansion state is keyed by occurrence path, so it
+  survives tab switches and live reloads. Custom hosts drive the overlay directly via
+  `ViewportControl.SetConstructionPreview(segments, world)`. (Rollback bars,
+  suppress-from-tree, and `[Param]` editing are follow-ups.)
 - **Per-part display modes** (`Part.DisplayMode`, default `Shaded`): design code sets
   it (`part.DisplayMode = DisplayMode.Translucent`) and the tree's per-row cycler
   changes it live; custom hosts drive `ViewportControl.SetDisplayMode(index, mode)`.

@@ -87,6 +87,10 @@ public sealed class ViewportControl : OpenGlControlBase
     // AnnotationLayer.cs; this class feeds items, draws, and releases it).
     private readonly AnnotationLayer _annotations = new();
 
+    // Construction-tree preview overlay (self-contained in PreviewLayer.cs; this class
+    // feeds one line batch, draws, and releases it).
+    private readonly PreviewLayer _preview = new();
+
     /// <summary>
     /// Replaces the displayed parts (one tab's worth of loose parts, each posed by its
     /// own <see cref="Part.Transform"/>). Convenience wrapper over
@@ -233,6 +237,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _sectionContours.Invalidate();   // new scene: cached SDF routes are stale
             LoadAnnotations(instances);
             ClearMeasurement();              // measure points reference the old scene
+            _preview.Set(null, Matrix4d.Identity);   // preview referenced the old scene
 
             if (frame && !bounds.IsEmpty)
             {
@@ -318,6 +323,7 @@ public sealed class ViewportControl : OpenGlControlBase
         DeleteMeshBuffers(_gl);
         _sectionContours.Release(_gl);
         _annotations.Release(_gl);
+        _preview.Release(_gl);
         _meshes.Clear();
         if (_gridVbo != 0)
         {
@@ -556,6 +562,11 @@ public sealed class ViewportControl : OpenGlControlBase
         // chrome. Billboard geometry rebuilds only when the camera pose, viewport,
         // or annotation set changes (value-equality cache in the layer).
         DrawAnnotations(gl, height, scaling, matrix);
+
+        // Construction-tree preview: the selected build step's geometry (a sketch on
+        // its plane, or an intermediate operation's edges) drawn over the model, so a
+        // rollback view reads against the finished part.
+        _preview.Draw(gl, _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
         gl.BindVertexArray(0);
 
         // View-cube hook 2: the orientation widget draws last, over everything, into
@@ -701,6 +712,26 @@ public sealed class ViewportControl : OpenGlControlBase
         _annotations.Draw(gl, camera, _showAnnotations,
             _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
     }
+
+    // ---- construction-tree preview (all overlay logic lives in PreviewLayer.cs) ----
+
+    /// <summary>
+    /// Shows the geometry of one construction-tree row over the model — a sketch drawn
+    /// on its plane, or an intermediate operation's feature edges (the rollback view) —
+    /// posed by <paramref name="world"/> (the owning instance's placement). Pass null
+    /// to clear. Thread-safe; the batch uploads inside the next render pass.
+    /// <para>The segments must be built OFF the UI/render thread (lowering a sub-shape
+    /// tessellates) — see <c>ConstructionPreviewCache</c> in EngrCAD.Modeling.</para>
+    /// </summary>
+    public void SetConstructionPreview(
+        IReadOnlyList<(Vector3d A, Vector3d B)>? segments, Matrix4d? world = null)
+    {
+        _preview.Set(segments, world ?? Matrix4d.Identity);
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>Whether a construction preview is currently showing.</summary>
+    public bool HasConstructionPreview => _preview.HasPreview;
 
     // ---- view cube hooks (all cube logic lives in ViewCube.cs) ----
 
