@@ -70,6 +70,93 @@ public class ViewCubeTests
         Assert.Equal(-Math.Asin(1 / Math.Sqrt(3)), pitch, Tol);
     }
 
+    // ---- rotate-snap (drag on the cube settles onto a standard orientation) ----
+
+    [Fact]
+    public void ViewDirectionInvertsPoseFor()
+    {
+        // The two are exact inverses away from the poles, which is what makes
+        // "snap to the nearest standard view" well defined.
+        foreach (var direction in new Vector3d[] { (0, -1, 0), (1, 0, 0), (1, -1, 1), (-1, 1, -1) })
+        {
+            var unit = direction.Normalized();
+            var (yaw, pitch) = ViewCubeMath.PoseFor(direction, currentYaw: 0.3);
+            var back = ViewCubeMath.ViewDirection(yaw, pitch);
+            Assert.Equal(unit.X, back.X, 9);
+            Assert.Equal(unit.Y, back.Y, 9);
+            Assert.Equal(unit.Z, back.Z, 9);
+        }
+    }
+
+    [Fact]
+    public void SnapPicksTheNearestFace()
+    {
+        // A pose a few degrees off Front snaps back to Front, not to an edge.
+        var (yaw, pitch) = ViewCubeMath.PoseFor((0, -1, 0), currentYaw: 0);
+        var snapped = ViewCubeMath.NearestStandardDirection(yaw + 0.12, pitch + 0.09);
+        Assert.Equal(new Vector3d(0, -1, 0), snapped);
+    }
+
+    [Fact]
+    public void SnapPicksEdgesAndCorners()
+    {
+        var (edgeYaw, edgePitch) = ViewCubeMath.PoseFor((1, -1, 0), currentYaw: 0);
+        Assert.Equal(new Vector3d(1, -1, 0), ViewCubeMath.NearestStandardDirection(edgeYaw + 0.05, edgePitch));
+
+        var (isoYaw, isoPitch) = ViewCubeMath.PoseFor((1, -1, 1), currentYaw: 0);
+        Assert.Equal(new Vector3d(1, -1, 1), ViewCubeMath.NearestStandardDirection(isoYaw - 0.05, isoPitch + 0.04));
+    }
+
+    [Fact]
+    public void SnapIsIdempotent()
+    {
+        // Snapping an already-snapped pose must not drift to a neighbour.
+        foreach (var direction in new Vector3d[]
+                 { (0, -1, 0), (1, 0, 0), (0, 1, 0), (-1, 0, 0), (1, -1, 0), (1, -1, 1), (-1, 1, -1) })
+        {
+            var (yaw, pitch) = ViewCubeMath.PoseFor(direction, currentYaw: 0);
+            var once = ViewCubeMath.NearestStandardDirection(yaw, pitch);
+            Assert.Equal(direction, once);
+            var (yaw2, pitch2) = ViewCubeMath.PoseFor(once, yaw);
+            Assert.Equal(once, ViewCubeMath.NearestStandardDirection(yaw2, pitch2));
+        }
+    }
+
+    [Fact]
+    public void SnapNeverReturnsTheZeroDirection()
+    {
+        // Sweep the orbit space: every pose must land on one of the 26 cube directions.
+        for (double yaw = -Math.PI; yaw <= Math.PI; yaw += 0.37)
+        {
+            for (double pitch = -1.5; pitch <= 1.5; pitch += 0.31)
+            {
+                var snapped = ViewCubeMath.NearestStandardDirection(yaw, pitch);
+                Assert.True(snapped.LengthSquared > 0);
+                foreach (double component in new[] { snapped.X, snapped.Y, snapped.Z })
+                    Assert.Contains(component, new[] { -1.0, 0.0, 1.0 });
+            }
+        }
+    }
+
+    [Fact]
+    public void SnapNearThePoleReachesTopOrBottom()
+    {
+        Assert.Equal(new Vector3d(0, 0, 1), ViewCubeMath.NearestStandardDirection(0.7, ViewCubeMath.PitchLimit));
+        Assert.Equal(new Vector3d(0, 0, -1), ViewCubeMath.NearestStandardDirection(0.7, -ViewCubeMath.PitchLimit));
+    }
+
+    [Fact]
+    public void CubeRegionTestMatchesTheClickRegion()
+    {
+        // The press check that arms rotate-snap must agree with the click router.
+        const double w = 800, h = 600;
+        double inX = w - ViewCubeMath.RegionMarginDip - ViewCubeMath.RegionSizeDip / 2;
+        double inY = ViewCubeMath.RegionMarginDip + ViewCubeMath.RegionSizeDip / 2;
+        Assert.True(ViewCube.InRegion(inX, inY, w, h));
+        Assert.False(ViewCube.InRegion(w / 2, h / 2, w, h));
+        Assert.False(ViewCube.InRegion(inX, h - 10, w, h));
+    }
+
     // ---- shortest-path yaw ----
 
     [Theory]

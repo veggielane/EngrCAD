@@ -155,6 +155,49 @@ internal static class ViewCubeMath
         return (yaw, pitch);
     }
 
+    /// <summary>
+    /// The camera's own view direction (target toward eye) for an orbit pose — the
+    /// inverse of <see cref="PoseFor"/> and the cube face you are looking at.
+    /// </summary>
+    public static Vector3d ViewDirection(double yaw, double pitch) => new(
+        Math.Cos(pitch) * Math.Cos(yaw),
+        Math.Cos(pitch) * Math.Sin(yaw),
+        Math.Sin(pitch));
+
+    /// <summary>
+    /// The standard cube orientation nearest an arbitrary orbit pose: the one of the
+    /// 26 face/edge/corner directions (components in {-1, 0, 1}, not all zero) whose
+    /// direction is closest to the camera's <see cref="ViewDirection"/>. This is what
+    /// commercial cubes snap to when you finish dragging on the widget — the view
+    /// settles onto a documented orientation instead of an arbitrary one. Idempotent:
+    /// snapping an already-snapped pose returns the same direction.
+    /// </summary>
+    public static Vector3d NearestStandardDirection(double yaw, double pitch)
+    {
+        var view = ViewDirection(yaw, pitch);
+        var best = new Vector3d(1, 0, 0);
+        double bestDot = double.NegativeInfinity;
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    if (x == 0 && y == 0 && z == 0)
+                        continue;
+                    var candidate = new Vector3d(x, y, z);
+                    double dot = candidate.Normalized().Dot(view);
+                    if (dot > bestDot)
+                    {
+                        bestDot = dot;
+                        best = candidate;
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
     /// <summary>Equivalent target yaw within half a turn of <paramref name="fromYaw"/>,
     /// so the animation always takes the shortest angular path.</summary>
     public static double ShortestYawTarget(double fromYaw, double toYaw) =>
@@ -268,14 +311,32 @@ internal sealed class ViewCube
         if (!ViewCubeMath.TryMapToRegion(x, y, controlWidth, controlHeight, out double u, out double v))
             return false;
         if (ViewCubeMath.TryHit(yaw, pitch, u, v, out var direction))
-        {
-            var (targetYaw, targetPitch) = ViewCubeMath.PoseFor(direction, yaw);
-            _animation = new ViewCubeAnimation(yaw, pitch, targetYaw, targetPitch);
-            _animationStart = Stopwatch.GetTimestamp();
-            view = ViewCubeMath.Label(direction);
-        }
+            view = AnimateTo(direction, yaw, pitch);
         return true;
     }
+
+    /// <summary>
+    /// Rotate-snap: settles the camera onto the standard orientation nearest the
+    /// current pose, the way commercial cubes finish a drag on the widget. Returns the
+    /// view's name. Called when a drag that STARTED on the cube ends, so free orbiting
+    /// elsewhere in the viewport is untouched.
+    /// </summary>
+    public string SnapToNearest(double yaw, double pitch) =>
+        AnimateTo(ViewCubeMath.NearestStandardDirection(yaw, pitch), yaw, pitch);
+
+    /// <summary>Arms the eased pose animation toward a cube direction.</summary>
+    private string AnimateTo(in Vector3d direction, double yaw, double pitch)
+    {
+        var (targetYaw, targetPitch) = ViewCubeMath.PoseFor(direction, yaw);
+        _animation = new ViewCubeAnimation(yaw, pitch, targetYaw, targetPitch);
+        _animationStart = Stopwatch.GetTimestamp();
+        return ViewCubeMath.Label(direction);
+    }
+
+    /// <summary>Whether a control-space position lies in the cube's screen region
+    /// (the press check that arms rotate-snap on drag end).</summary>
+    public static bool InRegion(double x, double y, double controlWidth, double controlHeight) =>
+        ViewCubeMath.TryMapToRegion(x, y, controlWidth, controlHeight, out _, out _);
 
     /// <summary>
     /// Updates the hover state for a pointer-move at a control-space position.
