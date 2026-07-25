@@ -207,35 +207,84 @@ public class MeshMeshCutTests
         AssertSeamIsSharedByBothMeshes(imprint);
     }
 
-    // ---------------------------------------------------------------- rejections
+    // ---------------------------------------------------------------- coincident surface
 
     [Fact]
-    public void CoplanarOverlap_IsRejectedLoudly()
+    public void CoplanarOverlap_IsReportedAsCoincidentSurface_NotAsCurve()
     {
-        // Two boxes sharing a whole face: the overlap region has no intersection curve and
-        // its faces sit ON the other solid, where the winding number is exactly ½.
+        // Two boxes sharing a whole face. Two coplanar triangles meet in an AREA, so there
+        // is no curve to imprint there — the shared square is reported separately instead,
+        // and the only segments are the rim where the two surfaces genuinely change plane.
         var lower = Box(0, 0, 0, 1, 1, 1);
         var upper = Box(0, 0, 1, 1, 1, 2);
 
-        var error = Assert.Throws<NotSupportedException>(() => MeshMeshCut.Imprint(lower, upper));
+        var imprint = MeshMeshCut.Imprint(lower, upper);
 
-        Assert.Contains("coplanar", error.Message);
-        Assert.Contains("BooleanMethod.Bsp", error.Message);
+        Assert.True(imprint.HasCoincidentSurface);
+        Assert.Equal(2, imprint.CoincidentFacesA.Count);   // the lower box's top face
+        Assert.Equal(2, imprint.CoincidentFacesB.Count);   // the upper box's bottom face
+        Assert.All(imprint.CoincidentFacesA, OnTheSharedPlane);
+        Assert.All(imprint.CoincidentFacesB, OnTheSharedPlane);
+        Assert.Equal(1.0, Area(imprint.CoincidentFacesA), 12);
+        AssertUncutGeometry(lower, imprint.MeshA);
+        AssertUncutGeometry(upper, imprint.MeshB);
+        AssertSeamIsSharedByBothMeshes(imprint);
+
+        static void OnTheSharedPlane((Vector3d A, Vector3d B, Vector3d C) t)
+        {
+            Assert.Equal(1.0, t.A.Z, 15);
+            Assert.Equal(1.0, t.B.Z, 15);
+            Assert.Equal(1.0, t.C.Z, 15);
+        }
     }
 
     [Fact]
-    public void CoplanarFacesThatOnlyTouch_AreNotRejected()
+    public void CoincidentRegionBoundary_IsImprintedByTheOrdinaryTransversalPath()
     {
-        // Sharing a plane is fine as long as the faces do not share area: this bar's side
-        // is flush with the box's side, and the two only meet along a line.
+        // This is what makes centroid classification legal downstream: the shared area's
+        // RIM is a real edge of both meshes. Here the upper box covers only half the lower
+        // box's top face, so the rim runs through the middle of that face — the lower box's
+        // top must come back cut in two along x = 1.
+        var lower = Box(0, 0, 0, 2, 2, 1);
+        var upper = Box(1, 0, 1, 3, 2, 2);
+
+        var imprint = MeshMeshCut.Imprint(lower, upper);
+
+        Assert.True(imprint.HasCoincidentSurface);
+        // The carriers are whole faces, not the clipped overlap: each operand reports the
+        // 2×2 face that carries the shared [1,2]×[0,2] strip. Clipping is the classifier's
+        // job (a face counts as coincident when its centroid falls inside a carrier).
+        Assert.Equal(4.0, Area(imprint.CoincidentFacesA), 12);
+        Assert.Equal(4.0, Area(imprint.CoincidentFacesB), 12);
+        // The rim x = 1, z = 1 is imprinted over its full length into BOTH meshes, at
+        // bit-identical coordinates (split at whatever vertices the triangulations impose).
+        AssertSeamIsSharedByBothMeshes(imprint);
+        double rim = imprint.Segments
+            .Select(s => (P: imprint.Points[s.Start], Q: imprint.Points[s.End]))
+            .Where(s => s.P.X == 1 && s.P.Z == 1 && s.Q.X == 1 && s.Q.Z == 1)
+            .Sum(s => s.P.DistanceTo(s.Q));
+        Assert.Equal(2.0, rim, 12);
+        AssertUncutGeometry(lower, imprint.MeshA);
+        AssertUncutGeometry(upper, imprint.MeshB);
+    }
+
+    [Fact]
+    public void CoplanarFacesThatOnlyTouch_AreNotCoincident()
+    {
+        // Sharing a plane is not sharing surface: this bar's side is flush with the box's
+        // side, and the two only meet along a line — zero area, nothing to classify.
         var box = Box(0, 0, 0, 2, 2, 2);
         var bar = Box(2 - 1e-12, 0.5, 0.5, 4, 1.5, 1.5);
 
         var imprint = MeshMeshCut.Imprint(box, bar);
 
         Assert.NotEmpty(imprint.Segments);
+        Assert.False(imprint.HasCoincidentSurface);
         AssertSeamIsSharedByBothMeshes(imprint);
     }
+
+    private static double Area(IReadOnlyList<(Vector3d A, Vector3d B, Vector3d C)> triangles) =>
+        triangles.Sum(t => 0.5 * (t.B - t.A).Cross(t.C - t.A).Length);
 
     // ---------------------------------------------------------------- transactionality
 

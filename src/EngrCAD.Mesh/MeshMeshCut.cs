@@ -16,12 +16,18 @@ public sealed class MeshImprint
     private IReadOnlyList<IReadOnlyList<int>>? _polylines;
 
     internal MeshImprint(
-        HalfEdgeMesh meshA, HalfEdgeMesh meshB, Vector3d[] points, (int Start, int End)[] segments)
+        HalfEdgeMesh meshA, HalfEdgeMesh meshB, Vector3d[] points, (int Start, int End)[] segments,
+        (Vector3d A, Vector3d B, Vector3d C)[] coincidentA,
+        (Vector3d A, Vector3d B, Vector3d C)[] coincidentB,
+        double epsilon)
     {
         MeshA = meshA;
         MeshB = meshB;
         Points = points;
         Segments = segments;
+        CoincidentFacesA = coincidentA;
+        CoincidentFacesB = coincidentB;
+        Epsilon = epsilon;
     }
 
     /// <summary>The first mesh, triangulated and cut along the intersection curve.</summary>
@@ -42,6 +48,41 @@ public sealed class MeshImprint
     /// both meshes. Order within a pair is unspecified; pairs are unique and undirected.
     /// </summary>
     public IReadOnlyList<(int Start, int End)> Segments { get; }
+
+    /// <summary>
+    /// Triangles of <see cref="MeshA"/> that lie flush on a coplanar triangle of the other
+    /// mesh — the <em>coincident surface</em>, where the two solids share boundary rather
+    /// than cross it. Reported as position triples taken before the cut: the imprint may
+    /// subdivide the faces they came from, and it never moves a vertex further than the
+    /// relative degeneracy guard, so the triples remain a faithful carrier of the surface.
+    /// <para>
+    /// These are whole faces, not the clipped overlap — a triangle appears in full as soon
+    /// as any part of it is shared. That is deliberate: a consumer decides membership by
+    /// testing a point against them, and containment does the clipping. The set is complete
+    /// (every triangle carrying shared surface is present), which is the property that
+    /// matters; being generous costs a wider search, never a wrong answer.
+    /// </para>
+    /// <para>
+    /// Coincident surface carries no intersection curve (two coplanar faces meet in an
+    /// area, not a segment), so nothing here appears in <see cref="Segments"/>. Booleans
+    /// classify it by normal agreement instead of by winding number, which is exactly ½ —
+    /// undefined — on it.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<(Vector3d A, Vector3d B, Vector3d C)> CoincidentFacesA { get; }
+
+    /// <summary><see cref="CoincidentFacesA"/> for <see cref="MeshB"/>.</summary>
+    public IReadOnlyList<(Vector3d A, Vector3d B, Vector3d C)> CoincidentFacesB { get; }
+
+    /// <summary>True when the two meshes share boundary area (see <see cref="CoincidentFacesA"/>).</summary>
+    public bool HasCoincidentSurface => CoincidentFacesA.Count > 0;
+
+    /// <summary>
+    /// The degeneracy guard the cut ran with, <c>1e-13 ×</c> the operands' extent. Consumers
+    /// that have to re-decide "is this point on that triangle" must use the same value or
+    /// they will disagree with the cut about what was coincident.
+    /// </summary>
+    internal double Epsilon { get; }
 
     /// <summary>Total length of the intersection curve.</summary>
     public double Length
@@ -137,10 +178,14 @@ public sealed class MeshImprint
 /// are exactly why it drops small geometry and cracks on near-tangent pairs.
 /// </para>
 /// <para>
-/// Coplanar overlapping faces are <em>rejected</em>, not approximated: an overlap region
-/// has no intersection curve to imprint and its faces sit on the other solid's surface,
-/// where the winding number is undefined (exactly ½). Callers with mating coplanar faces
-/// should nudge one operand or use <see cref="BooleanMethod.Bsp"/>.
+/// Coplanar overlapping faces produce no curve — two coplanar triangles meet in an area,
+/// not a segment — so they are <em>reported</em> rather than imprinted, through
+/// <see cref="MeshImprint.CoincidentFacesA"/>/<see cref="MeshImprint.CoincidentFacesB"/>.
+/// The overlap's <em>boundary</em> still gets imprinted, and by the ordinary transversal
+/// path: that boundary is where one solid's surface leaves the shared plane, i.e. where a
+/// transverse face of one meets the coplanar patch of the other. Booleans therefore find
+/// the coincident region already cut out of both meshes, and classify it by normal
+/// agreement instead of by a winding number that is exactly ½ on it.
 /// </para>
 /// </summary>
 public static class MeshMeshCut
@@ -156,10 +201,10 @@ public static class MeshMeshCut
 
     /// <summary>
     /// Cuts both meshes along their exact intersection curve. Inputs are triangulated
-    /// first; the result's two meshes share the seam vertex-for-vertex.
+    /// first; the result's two meshes share the seam vertex-for-vertex. Faces that overlap
+    /// while coplanar contribute no curve and are reported as coincident surface instead
+    /// (see the type remarks).
     /// </summary>
-    /// <exception cref="NotSupportedException">Faces of the two meshes overlap while
-    /// coplanar (see the type remarks).</exception>
     /// <exception cref="InvalidOperationException">The imprint could not be realized;
     /// both meshes are left untouched (the edit is transactional).</exception>
     public static MeshImprint Imprint(HalfEdgeMesh a, HalfEdgeMesh b)
@@ -184,7 +229,8 @@ public static class MeshMeshCut
         var planA = new ImprintPlan();
         var planB = new ImprintPlan();
         var segments = new HashSet<(int, int)>();
-        int coplanarOverlaps = 0;
+        var coincidentA = new HashSet<int>();
+        var coincidentB = new HashSet<int>();
 
         Span<Crossing> crossA = stackalloc Crossing[3];
         Span<Crossing> crossB = stackalloc Crossing[3];
@@ -194,7 +240,8 @@ public static class MeshMeshCut
                 out var start, out var end);
             if (outcome == PairOutcome.CoplanarOverlap)
             {
-                coplanarOverlaps++;
+                coincidentA.Add(fa);
+                coincidentB.Add(fb);
                 continue;
             }
             if (outcome != PairOutcome.Segment)
@@ -209,13 +256,6 @@ public static class MeshMeshCut
                 : (end.Point, start.Point));
         }
 
-        if (coplanarOverlaps > 0)
-            throw new NotSupportedException(
-                $"Exact mesh boolean: {coplanarOverlaps} face pair(s) overlap while coplanar. " +
-                "A coplanar overlap has no intersection curve to imprint and its faces lie on " +
-                "the other solid's surface, where inside/outside is undefined. Offset one " +
-                "operand past the shared plane, or use BooleanMethod.Bsp.");
-
         var positions = points.Points;
         SnapToExistingVertices(meshA, planA, meshB, planB, positions, epsilon);
         var cutA = MeshImprinter.Imprint(triA, planA, positions, epsilon, "first");
@@ -229,7 +269,9 @@ public static class MeshMeshCut
         int next = 0;
         foreach (var (s, e) in segments)
             curve[next++] = (Intern(s), Intern(e));
-        return new MeshImprint(cutA, cutB, [.. seam], curve);
+        return new MeshImprint(
+            cutA, cutB, [.. seam], curve,
+            Coincident(meshA, coincidentA), Coincident(meshB, coincidentB), epsilon);
 
         int Intern(int point)
         {
@@ -239,6 +281,21 @@ public static class MeshMeshCut
             seam.Add(positions[point]);
             return seam.Count - 1;
         }
+    }
+
+    /// <summary>The recorded faces as position triples, taken before the cut subdivides them.</summary>
+    private static (Vector3d A, Vector3d B, Vector3d C)[] Coincident(CutOperand mesh, HashSet<int> faces)
+    {
+        if (faces.Count == 0)
+            return [];
+        var triangles = new (Vector3d, Vector3d, Vector3d)[faces.Count];
+        int next = 0;
+        foreach (int face in faces)
+        {
+            var tri = mesh.Triangles[face];
+            triangles[next++] = (mesh.Positions[tri[0]], mesh.Positions[tri[1]], mesh.Positions[tri[2]]);
+        }
+        return triangles;
     }
 
     /// <summary>
@@ -495,9 +552,10 @@ public static class MeshMeshCut
             a[i] = Project(meshA.Positions[triA[i]] - origin, ex, ey);
             b[i] = Project(meshB.Positions[triB[i]] - origin, ex, ey);
         }
-        // Separating-axis test on the six edge normals; a positive gap (beyond epsilon on
-        // either triangle's scale) means no shared area. Touching exactly (gap 0) is not
-        // an overlap.
+        // Separating-axis test on the six edge normals (three per triangle — vertex-in-other
+        // tests alone would miss a Star-of-David overlap, where no vertex is inside).
+        // Touching along a shared edge or corner is NOT an overlap: it is the commonest
+        // relation between neighbouring solids and it shares no area to classify.
         return !Separated(a, b, epsilon) && !Separated(b, a, epsilon);
 
         static bool Separated(ReadOnlySpan<Vector2d> polygon, ReadOnlySpan<Vector2d> other, double epsilon)
@@ -507,10 +565,15 @@ public static class MeshMeshCut
             for (int i = 0; i < 3; i++)
             {
                 int j = (i + 1) % 3;
+                // Orient2d is twice a signed AREA, so the epsilon length has to be scaled by
+                // the edge it is measured against to become a distance again.
+                double margin = epsilon * (polygon[j] - polygon[i]).Length;
                 bool allOutside = true;
                 for (int k = 0; k < 3; k++)
                 {
-                    if (sign * Predicates2d.Orient2d(polygon[i], polygon[j], other[k]) > -epsilon * epsilon)
+                    // Strictly inside by more than epsilon: anything less is a sliver of
+                    // shared area no thicker than the degeneracy guard, i.e. a touch.
+                    if (sign * Predicates2d.Orient2d(polygon[i], polygon[j], other[k]) > margin)
                     {
                         allOutside = false;
                         break;

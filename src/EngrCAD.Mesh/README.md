@@ -74,14 +74,38 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   *Classification assumption*: after the imprint no face straddles the other surface, so a
   whole patch is inside or outside — probing per patch (rather than per face) is what
   keeps seam slivers, whose centroids sit arbitrarily close to the other surface, from
-  deciding anything. Measured: flipping the default to `Exact` passes every test in every
-  project except the ones that pin BSP behaviour deliberately; it stays opt-in only
-  because the exact path REJECTS coplanar overlapping faces (flush-mating operands) that
-  BSP handles. Cases the BSP path gets wrong and the exact path gets right, both locked by
-  tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a shell with
-  boundary edges — a hole in the solid), and any model at ~1e-5 scale (BSP's absolute
-  1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every polygon is
-  discarded and the result is empty).
+  deciding anything. Cases the BSP path gets wrong and the exact path gets right, all
+  locked by tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a
+  shell with boundary edges — a hole in the solid), any model at ~1e-5 scale (BSP's
+  absolute 1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every
+  polygon is discarded and the result is empty), and flush-mating parts (below).
+- **`CoincidentSurface`** — the coplanar half of the exact boolean: what to do where the
+  two solids **share** boundary instead of crossing it (stacked parts, a boss standing on
+  a plate, a tool bottoming out exactly on the far face). The winding number is exactly ½
+  on such a face and decides nothing, so those faces are classified by **normal
+  agreement** instead — normals agreeing means both solids lie on the same side, normals
+  opposing means they mate back to back — and the set algebra follows:
+
+  | normals | union | intersection | difference (A − B) |
+  |---|---|---|---|
+  | agree | keep one copy | keep one copy | drop both |
+  | oppose | drop both | drop both | keep A's copy |
+
+  The surviving copy is always the FIRST mesh's: both meshes cover the region, so exactly
+  one copy can ever remain, and A's needs no special case. Membership is decided at the
+  face centroid against a BVH of the other mesh's coincident carriers, which is legal
+  because the coincident region's **rim is imprinted by the ordinary transversal path** —
+  a coplanar patch ends where the other solid's surface leaves the shared plane, i.e. at a
+  transverse face, and that pair does produce a segment. Coincidence is also a patch
+  boundary in the flood fill, so a ½ can never leak into an ordinary patch's probe.
+  Two numerical lessons: this classifier reads only the **sign** of an area-weighted
+  normal against a plane, because `Vector3d.TryNormalize(Tolerance.Default)` applies the
+  ABSOLUTE 1e-9 to a cross product and so stops recognizing mating faces below ~1e-4 scale
+  (measured: a non-manifold union at 1e-5 — the BSP defect, reintroduced); and the
+  coplanar-overlap test's separating-axis margin is `epsilon × edge length`, since
+  `Orient2d` returns twice an AREA and comparing it to a bare epsilon made triangles that
+  merely touch along a shared edge — the commonest relation between neighbouring solids —
+  report as overlapping.
 - **`MeshMeshCut` / `MeshImprint`** — exact mesh–mesh intersection and imprint: the two
   meshes come back cut along their common curve, sharing it vertex-for-vertex. Broad
   phase is `Bvh.QueryOverlap` over per-triangle boxes; the narrow phase is the Möller
@@ -102,11 +126,13 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   after the split (the operator's lerp only picks a valid topological parameter). A
   crossing landing within the degeneracy guard of an existing vertex snaps to it on both
   sides, moving the other mesh's vertex if it has one there too — the only geometry the
-  algorithm ever perturbs. Coplanar overlapping faces are **rejected loudly**
-  (`NotSupportedException`): an overlap has no curve to imprint and its faces lie on the
-  other solid's surface, where the winding number is exactly ½. Coplanar faces that only
-  touch along an edge are fine. `MeshImprint` reports the shared `Points`/`Segments`,
-  the chained `Polylines` (a closed loop repeats its first index), and `Length`.
+  algorithm ever perturbs. Coplanar overlapping faces contribute no curve (two coplanar
+  triangles meet in an area, not a segment) and are reported separately as
+  `CoincidentFacesA`/`CoincidentFacesB` — whole carrier triangles, a complete superset of
+  the shared surface that consumers clip by containment (see `CoincidentSurface`).
+  Coplanar faces that only touch along an edge are not coincident at all.
+  `MeshImprint` reports the shared `Points`/`Segments`, the chained `Polylines` (a closed
+  loop repeats its first index), and `Length`.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
 - **`MeshDecimator`** — quadric error metric (Garland–Heckbert) edge collapse with link
   condition and normal-flip guards; boundaries are preserved exactly. Candidates live in

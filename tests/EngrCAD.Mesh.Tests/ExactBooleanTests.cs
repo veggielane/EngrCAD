@@ -206,15 +206,133 @@ public class ExactBooleanTests
         Assert.Throws<ArgumentException>(() => MeshBoolean.Difference(box, open, Exact));
     }
 
+    // ------------------------------------------------------- flush-mating (coincident) parts
+
     [Fact]
-    public void CoplanarOverlap_IsRejectedInsteadOfGuessed()
+    public void StackedBoxes_ShareAWholeFaceWithOpposingNormals()
     {
+        // The canonical assembly: two parts mating face to face. The shared square is
+        // interior to the union and to the difference's operand, and it bounds nothing at
+        // all in the intersection — the winding number is exactly ½ on it and decides
+        // nothing, so normal agreement decides instead.
         var lower = Box(0, 0, 0, 1, 1, 1);
         var upper = Box(0, 0, 1, 1, 1, 2);
 
-        Assert.Throws<NotSupportedException>(() => MeshBoolean.Union(lower, upper, Exact));
-        // The BSP path still handles it, which is why it stays the default.
-        Assert.Equal(2.0, MeshBoolean.Union(lower, upper).SignedVolume(), 12);
+        AssertSolid(MeshBoolean.Union(lower, upper, Exact), 2, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(lower, upper, Exact), 1, expectedEuler: 2);
+        // A ∩ B is the shared square: zero volume, so an empty solid rather than a sheet.
+        Assert.Equal(0, MeshBoolean.Intersection(lower, upper, Exact).FaceCount);
+    }
+
+    [Fact]
+    public void PartiallyOverlappingFlushFaces_KeepOnlyTheUnsharedRemainder()
+    {
+        // The mating square covers only part of each face, so the coincident region's rim
+        // runs through the middle of both. Each operand keeps the part of its face that the
+        // other does not cover, and they meet along that rim.
+        var lower = Box(0, 0, 0, 2, 2, 1);
+        var upper = Box(1, 0, 1, 3, 2, 2);
+
+        AssertSolid(MeshBoolean.Union(lower, upper, Exact), 8, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(lower, upper, Exact), 4, expectedEuler: 2);
+    }
+
+    [Fact]
+    public void OverlappingSolidsSharingAPlane_KeepExactlyOneCopyOfTheSharedSurface()
+    {
+        // A = [0,2]³, B = [1,3]×[0,2]²: the solids interpenetrate AND their y = 0, y = 2,
+        // z = 0 and z = 2 faces are coplanar with normals AGREEING over x ∈ [1,2]. Keeping
+        // both copies would double the surface; keeping neither would open the result.
+        var a = Box(0, 0, 0, 2, 2, 2);
+        var b = Box(1, 0, 0, 3, 2, 2);
+
+        AssertSolid(MeshBoolean.Union(a, b, Exact), 12, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(a, b, Exact), 4, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(a, b, Exact), 4, expectedEuler: 2);
+    }
+
+    [Fact]
+    public void IdenticalOperands_AreTheDegenerateLimitOfCoincidence()
+    {
+        var mesh = MeshPrimitives.UvSphere(1.0, segments: 24, rings: 12);
+
+        AssertSolid(MeshBoolean.Union(mesh, mesh, Exact), mesh.Volume(), expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(mesh, mesh, Exact), mesh.Volume(), expectedEuler: 2);
+        Assert.Equal(0, MeshBoolean.Difference(mesh, mesh, Exact).FaceCount);
+    }
+
+    [Fact]
+    public void CurvedCoincidentRegion_CylinderStandingOnAPlate()
+    {
+        // The shared area is the cylinder's cap: its rim is a 32-gon cutting clean through
+        // the plate's top face, and inside it the plate's surface disappears.
+        var plate = Box(-2, -2, 0, 2, 2, 1);
+        var post = MeshPrimitives.Cylinder(1, 2, 32).Transformed(Matrix4d.CreateTranslation((0, 0, 1)));
+        double cap = 0.5 * 32 * Math.Sin(2 * Math.PI / 32);
+
+        AssertSolid(MeshBoolean.Union(plate, post, Exact), 16 + 2 * cap, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(plate, post, Exact), 16, expectedEuler: 2);
+    }
+
+    [Fact]
+    public void ToolBottomFlushWithTheFarFace_StillBoresAThroughHole()
+    {
+        // The degenerate drilling case: the tool's flat bottom lands exactly ON the plate's
+        // bottom face, so the bore's far rim is a coincident region rather than a crossing.
+        var plate = Box(-2, -2, 0, 2, 2, 1);
+        var tool = MeshPrimitives.Cylinder(0.5, 1, 32);
+        double bore = 0.5 * 32 * Math.Sin(2 * Math.PI / 32) * 0.25;
+
+        AssertSolid(MeshBoolean.Difference(plate, tool, Exact), 16 - bore, expectedEuler: 0);
+    }
+
+    [Fact]
+    public void CoincidentSurface_IsScaleFree()
+    {
+        // Classification reads the SIGN of an area-weighted normal against a plane; the
+        // moment it normalizes through Tolerance.Default's absolute 1e-9 it inherits the
+        // BSP path's quadratic-in-scale failure and the mating faces stop being recognized
+        // (measured: a non-manifold union at 1e-5).
+        foreach (double s in new[] { 1e-5, 1.0, 1e5 })
+        {
+            var union = MeshBoolean.Union(Box(0, 0, 0, s, s, s), Box(0, 0, s, s, s, 2 * s), Exact);
+
+            union.Validate();
+            Assert.True(union.IsClosed, $"the union at scale {s} must be closed");
+            Assert.Equal(2, union.EulerCharacteristic);
+            // Relative, not the helper's absolute floor: at 1e-5 the volume is 2e-15 and an
+            // absolute tolerance would accept an empty mesh.
+            Assert.Equal(2 * s * s * s, union.SignedVolume(), 2 * s * s * s * 1e-12);
+        }
+    }
+
+    [Fact]
+    public void CoplanarCross_TheCaseTheBRepBooleanCannotClose()
+    {
+        // Two crossing slabs with IDENTICAL z-extents: both caps are coplanar overlaps.
+        // BooleanFailureTests documents the B-Rep kernel refusing this shape; the mesh
+        // kernel's exact path now produces it, so the implicit detour is not the only route.
+        var plate = Box(-5, -5, -2, 5, 5, 2);
+        var bar = Box(-2, -10, -2, 2, 10, 2);
+
+        AssertSolid(MeshBoolean.Union(plate, bar, Exact), 400 + 320 - 160, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(plate, bar, Exact), 160, expectedEuler: 2);
+        // The bar cuts the plate clean in two: a difference with two shells.
+        AssertSolid(MeshBoolean.Difference(plate, bar, Exact), 240, expectedEuler: 4);
+    }
+
+    [Fact]
+    public void CoincidentSurfaceSurvivesCascading()
+    {
+        // Each stage's output feeds the next, so a coincidence handled by inventing geometry
+        // (rather than by dropping the duplicate) would compound.
+        var l1 = Box(0, 0, 0, 3, 3, 1);
+        var l2 = Box(0, 0, 1, 2, 2, 2);
+        var l3 = Box(0, 0, 2, 1, 1, 3);
+
+        var stack = MeshBoolean.Union(MeshBoolean.Union(l1, l2, Exact), l3, Exact);
+
+        AssertSolid(stack, 9 + 4 + 1, expectedEuler: 2);
     }
 
     [Fact]
