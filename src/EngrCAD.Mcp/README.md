@@ -1,0 +1,125 @@
+# EngrCAD.Mcp
+
+Turns a design program into an **MCP server**: an AI assistant can list the model's
+parts, measure them, read how they were built — and *see* them, because the
+`screenshot` tool returns a real rendered PNG.
+
+```csharp
+using EngrCAD.Mcp;
+
+return EngrCadMcp.Run(args, BuildScene, "my bracket");
+
+static Scene BuildScene() { ... }
+```
+
+`EngrCadMcp.Run` adds exactly one switch, `--mcp`, and hands every other argument to
+`EngrCad.Run` — so `--view`, `--export`, `--render` and the `dotnet watch` live loop
+are unchanged. With `--mcp` the program opens no window; it speaks the
+[Model Context Protocol](https://modelcontextprotocol.io) over stdio.
+
+Configure an assistant with:
+
+```json
+{
+  "mcpServers": {
+    "bracket": {
+      "command": "dotnet",
+      "args": ["run", "--project", "samples/MyModel", "--", "--mcp"]
+    }
+  }
+}
+```
+
+## Why this is a separate package
+
+Every `src/*` project packs to NuGet. A protocol stack is not something a viewer
+consumer asked for, so the SDK dependency lives here and nowhere else: reference
+`EngrCAD.Mcp` and you get it, ignore it and the kernel and viewer are exactly as they
+were. This project references `EngrCAD.Viewer` (for the offscreen renderer) and
+[`ModelContextProtocol.Core`](https://www.nuget.org/packages/ModelContextProtocol.Core)
+— the official C# SDK's protocol-and-transports package, deliberately not the
+`ModelContextProtocol` metapackage, which drags in `Microsoft.Extensions.Hosting`.
+This is a library entry point, not a generic host.
+
+## The tools
+
+| Tool | What it does | Cost |
+| --- | --- | --- |
+| `list_tabs` | Tabs with part/assembly/instance counts. | free |
+| `list_parts` | Every distinct part: name, tab, geometry kind, occurrence paths, display mode, colour, annotation count, whether it has an exact B-Rep route. | free |
+| `describe_part` | One part in full: faces, vertices, closed, volume, surface area, local and world bounds, placement, annotations, and the **construction tree** (`Part.ConstructionTree()` — how the part was built, step by step). | meshes that one part |
+| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom), display styles (shaded-edges/shaded/wireframe/points), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open, size, and an optional tab/part filter. | meshes what it renders |
+| `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png`. | meshes what it writes |
+| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. | free |
+
+Plus one resource, `engrcad://scene`: the whole document as JSON (tabs, parts,
+geometry kinds), cheap enough to read on every turn.
+
+Failures come back as `isError` results with a readable message — "No part named
+'flage'. Parts in this scene: Model/flange, …" — never as protocol errors. An
+assistant should be able to correct itself and carry on.
+
+## stdout is the protocol
+
+The stdio transport *is* standard output. One stray `Console.WriteLine` — from the
+design program, from a library, from `EngrCad.Run`'s own "wrote part.step" reporting —
+lands in the middle of the frame stream and every connected client breaks.
+
+`StdoutGuard` handles it. On `--mcp` the server takes the real stdout **handle** for
+protocol frames and then points `Console.Out` at **stderr**, so anything written
+through `Console.Write*` anywhere in the process afterwards goes to stderr (where MCP
+clients surface it as server logging). The scene factory is invoked *after* that
+redirection, so a model that prints while it builds is safe. The `IEngrCadLog` seam is
+pointed at stderr too when the caller has not configured one.
+
+The one thing this cannot defend against is code that opens the standard-output handle
+itself or writes to file descriptor 1 natively. Nothing in EngrCAD does.
+
+`StdioSessionTests` locks the rule: it launches a real child process whose model
+deliberately prints while building, drives a full JSON-RPC session over its
+stdin/stdout, and asserts that **every** stdout line parses as a JSON-RPC frame and
+that the noise turned up on stderr.
+
+## Laziness
+
+Meshing a busy scene costs tens of seconds and most tools need no geometry at all, so
+nothing is tessellated at startup:
+
+- `list_tabs`, `list_parts`, `reload` and the scene resource evaluate **no** geometry
+  (locked by a test using an evaluation-counting SDF).
+- `describe_part` meshes **only the part named**.
+- `screenshot` and `export` mesh only what they are about to draw or write: the whole
+  scene goes through `Scene.PreMesh` (so it inherits that routine's parallelism), while
+  a tab- or part-scoped call meshes just those instances.
+
+Meshes cache on the `Part`, so the second call is free; a `reload` builds a new scene
+and starts over, which is correct — the geometry changed.
+
+## Hosting it yourself
+
+`EngrCadMcp.Serve(factory, options)` runs the server on this process's stdio with the
+guard in place. For a different transport, or to embed the tools in a larger server,
+the pieces are separable:
+
+```csharp
+var session = new SceneSession(BuildScene);      // the live scene + reload
+var tools = new SceneTools(session);             // one method per tool, returns CallToolResult
+var options = EngrCadMcpServer.BuildOptions(tools, "my bracket");
+await EngrCadMcpServer.RunAsync(input, output, tools, "my bracket", cancellationToken);
+```
+
+`SceneTools` methods are ordinary C# methods returning the protocol's
+`CallToolResult`, which is why the tool tests need no client, transport, or process at
+all.
+
+## Known limits (v1)
+
+- **Read-only.** Nothing here edits the model; to change it, edit its source and call
+  `reload`. Parameter editing through `FeatureHistory` is the obvious next step.
+- One section plane per screenshot (the viewer supports up to four, including quarter
+  and octant cuts).
+- Named views only, no explicit yaw/pitch/distance camera.
+- The camera pose formulas mirror the viewer's internal `ViewCubeMath.PoseFor` and
+  `CameraMath.FrameDistance` (`StandardViews.cs`, locked by tests) because those are
+  internal to `EngrCAD.Viewer`. If they are ever made public, delete that file.
+- Results are JSON *text* content, not MCP structured content.

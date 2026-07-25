@@ -32,5 +32,7 @@
   href: assemblies.md
 - name: Viewer
   href: viewer.md
+- name: AI assistants (MCP)
+  href: mcp.md
 - name: LINQ spatial queries
   href: queries.md

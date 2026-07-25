@@ -9,6 +9,7 @@
     <Project Path="src/EngrCAD.Query/EngrCAD.Query.csproj" />
     <Project Path="src/EngrCAD.Modeling/EngrCAD.Modeling.csproj" />
     <Project Path="src/EngrCAD.Viewer/EngrCAD.Viewer.csproj" />
+    <Project Path="src/EngrCAD.Mcp/EngrCAD.Mcp.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/EngrCAD.Demo/EngrCAD.Demo.csproj" />
@@ -26,5 +27,7 @@
     <Project Path="tests/EngrCAD.Query.Tests/EngrCAD.Query.Tests.csproj" />
     <Project Path="tests/EngrCAD.Modeling.Tests/EngrCAD.Modeling.Tests.csproj" />
     <Project Path="tests/EngrCAD.Viewer.Tests/EngrCAD.Viewer.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Mcp.Tests/EngrCAD.Mcp.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Mcp.TestModel/EngrCAD.Mcp.TestModel.csproj" />
   </Folder>
 </Solution>

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Model Context Protocol server for EngrCAD model programs: EngrCadMcp.Run(args, factory) adds --mcp, exposing the program's scene to AI assistants over stdio (screenshot, list/describe parts, export, reload).</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- The official C# MCP SDK. .Core is the protocol + transports without the
+         Microsoft.Extensions.Hosting stack: this project is a library entry point, not
+         a generic host, so consumers inherit only what the protocol actually needs. -->
+    <PackageReference Include="ModelContextProtocol.Core" Version="1.4.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Mcp.Tests" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EngrCAD.Viewer\EngrCAD.Viewer.csproj" />
+  </ItemGroup>
+</Project>
