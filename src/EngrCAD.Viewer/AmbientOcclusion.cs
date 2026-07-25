@@ -108,14 +108,27 @@ internal static class AmbientOcclusion
     /// call this on the same worker thread that runs <c>Scene.PreMesh</c>, so the bake
     /// never lands on the render thread (a scene load or a hot reload would otherwise
     /// stall the first frame by the whole bake time).
+    /// <para>Parts are baked in parallel, like <c>Scene.PreMesh</c> and for the same
+    /// reason: a bake reads one part's mesh and writes one cache entry keyed by that
+    /// mesh, so parts do not interact. <see cref="Bake"/> is itself block-parallel over
+    /// vertex groups, so a single dense part still uses the whole machine — but a scene
+    /// of many medium parts (the common case) used to run them strictly one at a time.
+    /// The result is unchanged whatever the scheduling: <see cref="Bake"/> is a pure
+    /// deterministic function of the render mesh, and <see cref="ConditionalWeakTable"/>
+    /// is thread-safe (two threads racing on one shared mesh would compute the same
+    /// array anyway).</para>
     /// </summary>
     public static void Prime(IEnumerable<EngrCAD.Modeling.Part> parts)
     {
-        foreach (var part in parts)
+        var distinct = parts as IReadOnlyList<EngrCAD.Modeling.Part> ?? [.. parts];
+        ParallelFor.Blocks(0, distinct.Count, (start, end) =>
         {
-            var mesh = part.GetMesh();
-            For(mesh, RenderMesh.CreateFlat(mesh));
-        }
+            for (int i = start; i < end; i++)
+            {
+                var mesh = distinct[i].GetMesh();
+                For(mesh, RenderMesh.CreateFlat(mesh));
+            }
+        });
     }
 
     /// <summary>

@@ -59,6 +59,16 @@ Dark-themed layout around one shared GL viewport:
     magnitude (a 100k-triangle gyroid measured ~10 s), which is not worth a stall
     before the window appears. Both rules are pure functions of the mesh, so they
     cannot make the window and the headless render disagree.
+    `AmbientOcclusion.Prime` bakes the scene's distinct parts **in parallel**, like
+    `Scene.PreMesh` and for the same reason: a bake reads one part's mesh and writes
+    one cache entry keyed by that mesh, and `Bake` is a pure deterministic function of
+    the render mesh, so scheduling cannot change a single float. `Bake` is itself
+    block-parallel over vertex groups, so a dense part already used the whole machine
+    — the gain is on scenes of many *medium* parts, which used to run strictly one at a
+    time (measured on the demo scene: 8.9-10.2 s sequential vs 6.9-8.3 s parallel).
+    **AO is now the largest single cost of opening a window on a busy scene**; the next
+    lever, if it is ever needed, is showing the scene flat-lit and streaming the bakes
+    in, not making the bake less honest.
   - Two details keep vertex-resolution shading honest. Vertices are grouped by
     position **and smoothing group** (a 50-degree crease), so a hole rim's top-face
     copy stays bright while its bore-wall copy darkens — averaging the two used to drag
