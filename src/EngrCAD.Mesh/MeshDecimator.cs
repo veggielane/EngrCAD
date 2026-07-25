@@ -8,6 +8,13 @@ namespace EngrCAD.Mesh;
 /// quadric-optimal point) until the face budget is met, guarded by manifold link
 /// conditions and a normal-flip check. Boundary vertices are never collapsed, so open
 /// meshes keep their boundary exactly. Polygon meshes are triangulated first.
+/// <para>
+/// Note: this runs on its own indexed-face-set scratch state, not on
+/// <see cref="EditableMesh"/>. <see cref="EditableMesh.CollapseEdge"/> is the canonical
+/// guarded half-edge collapse (same link condition plus the boundary/tetrahedron
+/// cases); porting the decimator onto it would change traversal order and guard
+/// behavior, so it stays as-is until a measured comparison justifies the switch.
+/// </para>
 /// </summary>
 public static class MeshDecimator
 {
