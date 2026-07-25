@@ -5,6 +5,13 @@ using EngrCAD.Mesh;
 namespace EngrCAD.Interop;
 
 /// <summary>
+/// A boolean whose exact B-Rep result could not be closed into a two-manifold solid.
+/// Distinct from the generic failures so callers that own a fallback route (the
+/// <c>Shape</c> API's implicit lowering) can recognize it and say so.
+/// </summary>
+public sealed class BrepBooleanException(string message) : Exception(message);
+
+/// <summary>
 /// B-Rep boolean operations, orchestrating the whole pipeline: surface–surface
 /// intersection per face pair, seam-aligned face splitting on both solids (each side
 /// breaks its seam segments at the other side's crossings too, so tessellation welds),
@@ -13,23 +20,25 @@ namespace EngrCAD.Interop;
 /// B-Rep surfaces and curves, mesh-backed point classification.
 ///
 /// v1 contract: input solids must intersect transversally (no coplanar/tangent face
-/// pairs); inputs are consumed (their faces are split in place); the result is
-/// geometrically sealed and tessellates closed with exact volumes, but seam edges are
-/// not yet topologically unified between the two sides, so <see cref="BrepSolid.Validate"/>
-/// does not apply to boolean output.
+/// pairs); inputs are consumed (their faces are split in place). The result is sealed
+/// both geometrically and topologically (<see cref="TopologyEditor.SealSeams"/>), and
+/// every operation ENFORCES that before returning: a result that is not two-manifold
+/// throws <see cref="BrepBooleanException"/> rather than handing back a solid that
+/// tessellates open and exports an unprintable mesh.
 /// </summary>
 public static class BrepBoolean
 {
     public static BrepSolid Union(BrepSolid a, BrepSolid b) =>
-        Execute(a, b, keepAOutside: true, keepBOutside: true, reverseB: false);
+        Execute(a, b, "Union", keepAOutside: true, keepBOutside: true, reverseB: false);
 
     public static BrepSolid Intersection(BrepSolid a, BrepSolid b) =>
-        Execute(a, b, keepAOutside: false, keepBOutside: false, reverseB: false);
+        Execute(a, b, "Intersection", keepAOutside: false, keepBOutside: false, reverseB: false);
 
     public static BrepSolid Difference(BrepSolid a, BrepSolid b) =>
-        Execute(a, b, keepAOutside: true, keepBOutside: false, reverseB: true);
+        Execute(a, b, "Difference", keepAOutside: true, keepBOutside: false, reverseB: true);
 
-    private static BrepSolid Execute(BrepSolid a, BrepSolid b, bool keepAOutside, bool keepBOutside, bool reverseB)
+    private static BrepSolid Execute(
+        BrepSolid a, BrepSolid b, string operation, bool keepAOutside, bool keepBOutside, bool reverseB)
     {
         // Classification geometry is captured before any splitting mutates the inputs.
         var sdfA = new MeshSdf(BRepTessellator.Tessellate(a));
@@ -81,7 +90,7 @@ public static class BrepBoolean
                 shells.AddRange(reverseB ? b.Shells.Select(CloneReversedShell) : b.Shells);
             if (shells.Count == 0)
                 throw new InvalidOperationException("Boolean result is empty.");
-            return new BrepSolid(shells);
+            return Verified(new BrepSolid(shells), operation);
         }
 
         var kept = new List<BrepFace>();
@@ -100,7 +109,47 @@ public static class BrepBoolean
         if (kept.Count == 0)
             throw new InvalidOperationException("Boolean result is empty.");
         TopologyEditor.SealSeams(kept);
-        return new BrepSolid([new BrepShell(kept)]);
+        return Verified(new BrepSolid([new BrepShell(kept)]), operation);
+    }
+
+    /// <summary>
+    /// Final acceptance test: the assembled result must be two-manifold — every edge used
+    /// by exactly two coedges, every loop chaining end-to-start. An unclosed result is the
+    /// project's worst failure mode: it tessellates into an open mesh with no complaint,
+    /// exports an unprintable STL, and only surfaces when someone happens to call
+    /// <see cref="BrepSolid.Validate"/>. Silence is not an option here — a boolean the
+    /// exact kernel cannot close fails LOUDLY, naming the operation and where the crack is.
+    /// </summary>
+    private static BrepSolid Verified(BrepSolid result, string operation)
+    {
+        var uses = new Dictionary<BrepEdge, int>();
+        foreach (var coedge in result.Coedges)
+            uses[coedge.Edge] = uses.GetValueOrDefault(coedge.Edge) + 1;
+        var unpaired = uses.Where(entry => entry.Value != 2).Select(entry => entry.Key).ToList();
+        if (unpaired.Count > 0)
+        {
+            var sample = unpaired[0];
+            throw new BrepBooleanException(
+                $"B-Rep {operation} produced an unclosed solid: {unpaired.Count} of {uses.Count} edges are " +
+                $"used by {string.Join('/', unpaired.Select(e => uses[e]).Distinct().Order())} face(s) instead " +
+                $"of 2, so the result has cracks (one runs through {sample.Curve.PointAt(sample.Domain.Mid)}). " +
+                "The usual causes are coplanar or tangent face pairs — unsupported input for the v1 exact " +
+                "boolean — or intersection curves that do not close into loops. Returning this solid would " +
+                "tessellate into an open mesh with no error, so it fails here instead.");
+        }
+
+        foreach (var loop in result.Loops)
+        {
+            var coedges = loop.Coedges;
+            for (int i = 0; i < coedges.Count; i++)
+            {
+                if (!ReferenceEquals(coedges[i].EndVertex, coedges[(i + 1) % coedges.Count].StartVertex))
+                    throw new BrepBooleanException(
+                        $"B-Rep {operation} produced a face loop whose coedges do not chain end-to-start " +
+                        $"(near {coedges[i].EndVertex.Position}) — the assembled result is not a valid solid.");
+            }
+        }
+        return result;
     }
 
     private static IEnumerable<BrepFace> SplitAll(

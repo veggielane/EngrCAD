@@ -412,22 +412,41 @@ var style = new TextStyle { Align = TextAlign.Center };
 var embossed = plate | Shape.Text("ENGRCAD", font, 12, height: 1.2, top, style);
 var engraved = plate - Shape.Text("ENGRCAD", font, 12, height: 1.5, pocket, style);
 
-scene.Add(new Part("badge", Shape.From(engraved.ToImplicit())));    // see the caveat below
+scene.Add(new Part("badge", engraved));
 ```
 
-**Caveat, and it is the one thing to know about this feature.** `Shape.Text` on its own
-is Native and robust in every representation — a seven-letter word lowers to a valid
-multi-shell B-Rep and a closed mesh. But **booleans between lettering and a body are
-limited by the existing B-Rep boolean engine**: glyph side walls are sketch extrusions,
-and the marching tracer that cuts them against a face only closes its loops in simple
-cases. In practice one or two embossed glyphs come out clean; longer words, and *every*
-engraving (a subtraction whose tool pokes out of one face), fail. This is **not
-text-specific** — `Shape.Box(60, 20, 4) - Shape.Extrude(Sketch.Rectangle(10, 5), 1.5, pocket)`
-fails identically with no text involved, while a `Shape.Box` or `Sketch.Circle` tool is
-fine. Until that gap closes, do body∩text booleans **through the implicit route**, where
-the subtraction is exact: `Shape.From(shape.ToImplicit()).ToMesh(quality)` (raise
-`SdfResolution` for crisp lettering). For a purely visual plate, adding the body and the
-lettering as two `Part`s keeps both exact and skips the boolean entirely.
+**Engraving is B-Rep-Native.** A whole word subtracted from a body lowers to a valid
+single-shell solid whose volume is the plate minus the exact glyph section times the
+pocket depth — measured exact to machine precision on straight-sided glyphs, and limited
+only by chordal tessellation on curved ones. This is recent: glyph side walls are sketch
+extrusions, and until `SurfaceIntersection` grew an exact **bounded planar carrier** path
+(see the BRep README) they went through the marching tracer, which stopped short of each
+wall's ends. Every engraving was then either an open mesh or — worse — a closed,
+`Validate`-clean solid with the tool buried as an internal cavity and the wrong volume.
+
+**What still needs the implicit route.** Two configurations, both loud rather than
+silent now (`BrepBooleanException`, whose message names this workaround):
+
+- **Lettering that runs off an edge of the body.** A glyph straddling a side face makes a
+  cut chain that crosses the boundary part-way; `FaceSplitter` rejects it
+  ("Open splitting curves must start and end outside the face"). Keep the text inside the
+  face, or use the field.
+- **Flush embossing is not fused.** Text placed exactly on a face (`SketchPlane.On(face)`)
+  is a coplanar pair, so the union takes the disjoint fast path and the result is the body
+  and the glyphs as *touching* shells — closed, valid and exactly the right volume, but
+  not one shell. **Sink the lettering a fraction into the face** (place the sketch plane
+  0.1 mm below and add that to the height) and the pair is transversal, so the boolean
+  really fuses into one shell:
+
+```csharp
+var sunk = SketchPlane.At((0, 0, 1.9), Vector3d.UnitX, Vector3d.UnitY);   // face at z = 2
+var fused = plate | Shape.Text("ENGRCAD", font, 12, height: 1.3, sunk, style);   // one shell
+```
+
+The implicit route stays the general fallback and is exact as a field:
+`Shape.From(shape.ToImplicit()).ToMesh(quality)` (raise `SdfResolution` for crisp
+lettering). For a purely visual plate, adding the body and the lettering as two `Part`s
+skips the boolean entirely.
 
 ## The document model: Part, Assembly, Tab, Scene
 

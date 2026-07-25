@@ -99,28 +99,89 @@ public class ShapeTextTests
     public void Text_EmbossesOntoAFaceSelectedWithSketchPlaneOn()
     {
         // The documented embossing pattern: sketch on the face, union. No new operation
-        // is needed - SketchPlane.On + the existing boolean do the whole job. Kept to a
-        // single glyph on purpose: body-vs-lettering booleans are limited by the B-Rep
-        // engine's handling of sketch-extrusion tools (README caveat), so this locks in
-        // the simple case rather than pretending longer words work.
+        // is needed - SketchPlane.On + the existing boolean do the whole job. Lettering
+        // sitting FLUSH on the face is a coplanar pair, which the v1 boolean does not
+        // fuse: it takes the disjoint fast path and the result is the plate and the
+        // glyph as two touching shells. Closed, valid and exactly the right volume, but
+        // see Text_EmbossesAsOneShellWhenSunkIntoTheFace for a fused union.
         var plate = Shape.Box(40, 20, 4);                             // top face at z = 2
         var top = plate.ToBrep().PlanarFacesWithNormal(Vector3d.UnitZ).First();
 
         var embossed = plate | Shape.Text("I", Font, Size, height: 1, SketchPlane.On(top));
 
-        embossed.ToBrep().Validate();
+        var solid = embossed.ToBrep();
+        solid.Validate();
+        Assert.Equal(2, solid.Shells.Count);                          // touching, not fused
         var mesh = embossed.ToMesh();
         Assert.True(mesh.IsClosed);
         Assert.Equal(40 * 20 * 4 + BarArea * 1, mesh.Volume(), 6);
     }
 
     [Fact]
-    public void Text_EngravesThroughTheImplicitRoute()
+    public void Text_EmbossesAsOneShellWhenSunkIntoTheFace()
+    {
+        // Sink the lettering a fraction into the face and the pair is transversal, so
+        // the boolean really fuses: ONE shell, and the raised part is still exactly
+        // 1 mm of glyph section above the plate.
+        var plate = Shape.Box(40, 20, 4);                             // top face at z = 2
+        var sunk = SketchPlane.At((0, 0, 1.9), Vector3d.UnitX, Vector3d.UnitY);
+
+        var embossed = plate | Shape.Text("I", Font, Size, height: 1.1, sunk);
+
+        var solid = embossed.ToBrep();
+        solid.Validate();
+        Assert.Single(solid.Shells);
+        Assert.True(solid.SatisfiesEulerFormula());
+        var mesh = embossed.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(40 * 20 * 4 + BarArea * 1, mesh.Volume(), 6);
+    }
+
+    [Fact]
+    public void Text_EngravesNativelyInBRep()
     {
         // Engraving subtracts a text tool that overshoots the face (the same rule
-        // Shape.Drill follows so booleans never see coplanar faces). The subtraction is
-        // exact as a signed distance field, which is the route the README documents;
-        // the B-Rep route cannot do it yet (sketch-extrusion tools, not a text problem).
+        // Shape.Drill follows so booleans never see coplanar faces). This used to be
+        // silently WRONG: with no exact plane∩sketch-extrusion intersection the boolean
+        // found no curves at all, took the disjoint fast path, and buried the whole tool
+        // as an internal CAVITY — a closed, Validate-clean solid with the wrong volume,
+        // which no manifold check can catch. Only the analytic volume pins it.
+        var plate = Shape.Box(40, 20, 4);                             // z in [-2, 2]
+        var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+        var engraved = plate - Shape.Text("I", Font, Size, height: 1.5, pocket);
+
+        var solid = engraved.ToBrep();
+        solid.Validate();
+        Assert.Single(solid.Shells);                                  // a pocket, not a cavity
+        Assert.True(solid.SatisfiesEulerFormula());
+        var mesh = engraved.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(40 * 20 * 4 - BarArea * 1, mesh.Volume(), 9);    // exactly 1 mm deep
+    }
+
+    [Fact]
+    public void Text_EngravesAWholeWordWithCounters()
+    {
+        // Several glyphs in one boolean, one of them with a counter (the island inside
+        // 'O' has to survive as standing material). Straight-sided synthetic glyphs, so
+        // the volume is exact — no chordal allowance.
+        var plate = Shape.Box(40, 20, 4);
+        var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+        var engraved = plate - Shape.Text("IOI", Font, Size, height: 1.5, pocket);
+
+        var solid = engraved.ToBrep();
+        solid.Validate();
+        var mesh = engraved.ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(40 * 20 * 4 - (BarArea * 2 + RingArea) * 1, mesh.Volume(), 9);
+    }
+
+    [Fact]
+    public void Text_EngravesThroughTheImplicitRoute()
+    {
+        // The B-Rep route is exact (above); the implicit route is the fallback for the
+        // configurations it still refuses (coplanar tools, lettering running off an
+        // edge) and stays exact as a field.
         var plate = Shape.Box(40, 20, 4);                             // z in [-2, 2]
         var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
         var field = (plate - Shape.Text("I", Font, Size, height: 1.5, pocket)).ToImplicit();
@@ -133,8 +194,8 @@ public class ShapeTextTests
     [Fact]
     public void Text_EngravedBodyPolygonizesToAClosedSolid()
     {
-        // The workaround the README documents for the boolean gap, locked down: lower
-        // the engraved body to its exact field and polygonize THAT.
+        // The implicit fallback, locked down: lower the engraved body to its exact field
+        // and polygonize THAT.
         var plate = Shape.Box(40, 20, 4);
         var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
         var engraved = plate - Shape.Text("IO", Font, Size, height: 1.5, pocket);
@@ -151,8 +212,7 @@ public class ShapeTextTests
     [Fact]
     public void Text_LongerWordsStayValidOnTheirOwn()
     {
-        // Whole words are fine as standalone geometry - it is only booleans BETWEEN
-        // lettering and a body that the B-Rep engine cannot take yet.
+        // Whole words are fine as standalone geometry: one shell per closed contour.
         var shape = Shape.Text("IOCA IOC", Font, Size, height: 2);
 
         var solid = shape.ToBrep();

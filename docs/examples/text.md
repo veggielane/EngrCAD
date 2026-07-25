@@ -64,7 +64,38 @@ is future work.
 
 ## Engraving
 
-Raised lettering unioned onto a body works today. Cutting lettering *into* a body is a
-boolean between a body and many straight-edged sketch extrusions; see the Modeling
-README for the current state and the implicit-lowering workaround
-(`Shape.From(result.ToImplicit()).ToMesh(quality)`), which is exact and always available.
+Cutting lettering *into* a body is a plain subtraction, and it is exact — a whole word
+lowers to a single-shell B-Rep whose volume is the plate minus the glyph section times
+the pocket depth. Put the sketch plane at the pocket floor and let the tool overshoot
+the face, the same rule `Shape.Drill` follows so booleans never meet coplanar faces:
+
+```csharp run:text-engraved
+string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+var font = TrueTypeFont.Load(new[] { "arial.ttf", "segoeui.ttf", "verdana.ttf" }
+    .Select(name => Path.Combine(fonts, name)).First(File.Exists));
+var style = new TextStyle { Align = TextAlign.Center };
+
+var pocket = SketchPlane.At((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);   // face at z = 2
+var engraved = Shape.Box(70, 22, 4)
+             - Shape.Text("ENGRCAD", font, 12, height: 1.5, pocket, style);   // 1 mm deep
+
+// Exact: the plate minus the glyph section times the 1 mm depth. The only error is
+// the tessellator chording the curved glyph outlines.
+double section = TextOutlines.Sketches("ENGRCAD", font, 12).Sum(s => s.Area());
+var mesh = engraved.ToMesh();
+if (!mesh.IsClosed || Math.Abs(mesh.Volume() - (70 * 22 * 4 - section)) > 0.05)
+    throw new Exception($"engraving is off: {mesh.Volume()}");
+```
+
+Two things to know:
+
+- **Keep the lettering inside the face.** A glyph that runs off an edge makes a cut chain
+  crossing the boundary part-way, which the face splitter rejects — loudly.
+- **Flush embossing does not fuse.** Text placed exactly on a face is a coplanar pair, so
+  the union leaves the body and the glyphs as *touching* shells (right volume, several
+  shells). Sink the lettering a fraction into the face — sketch plane 0.1 mm below,
+  0.1 mm added to the height — and the boolean fuses into one shell.
+
+Where the exact route refuses, the error message names the fallback:
+`Shape.From(result.ToImplicit()).ToMesh(quality)`, which is exact as a field and always
+available (raise `SdfResolution` for crisp lettering).

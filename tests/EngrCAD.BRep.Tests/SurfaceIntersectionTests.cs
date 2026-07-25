@@ -268,4 +268,147 @@ public class SurfaceIntersectionTests
         Assert.Equal(0, start.Y, 12);
         Assert.True(start.X > 0, $"start {start} should sit on the +X generator half-plane");
     }
+
+    // ---- bounded planar carriers: extrusions of straight / arc generators ----
+
+    // A pocket-sized wall (an extruded profile segment) inside a plate-sized region: the
+    // region is 6× longer than the wall, so a region-clipped carrier line is obvious.
+    private static readonly Aabb PlateRegion = new((-31, -11, -3), (31, 11, 3));
+
+    private static ExtrudedSurface PocketWall(double y = -2.5) =>
+        new(new Line3d((-5, y, 1), (5, y, 1)), (0, 0, 1.5));
+
+    [Fact]
+    public void PlaneAcrossExtrudedLine_SectionSpansTheWholeGenerator()
+    {
+        // THE regression: a box's top plane cutting a sketch pocket's wall. The marching
+        // tracer stopped up to one march step short of each generator end, so the four
+        // walls' cuts never met at the pocket corners and the boolean left single-use
+        // edges (an open mesh, silently). The exact section must reach both ends.
+        var wall = PocketWall();
+        var top = new PlaneSurface((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(top, wall, PlateRegion));
+        Assert.Equal(0, curve.PointAt(curve.Domain.Start).DistanceTo((-5, -2.5, 2)), 12);
+        Assert.Equal(0, curve.PointAt(curve.Domain.End).DistanceTo((5, -2.5, 2)), 12);
+        Assert.IsType<Line3d>(curve.Underlying);
+        AssertOnPlane(curve, top, 1e-12);
+    }
+
+    [Fact]
+    public void PlaneAcrossExtrudedSegments_AdjacentSectionsShareCornersExactly()
+    {
+        // The welding invariant that lets a pocket outline close into a chain: the
+        // section is the generator TRANSLATED, so two profile segments sharing a corner
+        // hand over that corner BIT-FOR-BIT (no projection, no re-derivation).
+        var corner = new Vector3d(5, -2.5, 1);
+        var first = new ExtrudedSurface(new Line3d((-5, -2.5, 1), corner), (0, 0, 1.5));
+        var second = new ExtrudedSurface(new Line3d(corner, (5, 2.5, 1)), (0, 0, 1.5));
+        var top = new PlaneSurface((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+
+        var a = Assert.Single(SurfaceIntersection.Intersect(top, first, PlateRegion));
+        var b = Assert.Single(SurfaceIntersection.Intersect(top, second, PlateRegion));
+        var end = a.PointAt(a.Domain.End);
+        var start = b.PointAt(b.Domain.Start);
+        Assert.Equal(end.X, start.X);
+        Assert.Equal(end.Y, start.Y);
+        Assert.Equal(end.Z, start.Z);
+    }
+
+    [Fact]
+    public void PlaneAcrossExtrudedArc_SectionIsTheExactArc()
+    {
+        // Slot ends and rounded corners: the section path is generator-shape agnostic,
+        // so a rational arc stays an exact arc instead of a chorded tracer polyline.
+        var arc = NurbsCurve.Arc((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY, 2, 0, Math.PI);
+        var wall = new ExtrudedSurface(arc, (0, 0, 4));
+        var cut = new PlaneSurface((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(cut, wall, Region));
+        AssertOnPlane(curve, cut, 1e-12);
+        for (int i = 0; i <= 40; i++)
+        {
+            var p = curve.PointAt(curve.Domain.ParameterAt(i / 40.0));
+            Assert.Equal(2, new Vector3d(p.X, p.Y, 0).Length, 12); // exactly on the arc's radius
+        }
+        Assert.Equal(0, curve.PointAt(curve.Domain.Start).DistanceTo((2, 0, 1)), 12);
+        Assert.Equal(0, curve.PointAt(curve.Domain.End).DistanceTo((-2, 0, 1)), 12);
+    }
+
+    [Fact]
+    public void PlaneFlushWithAnExtrusionRim_ReportsNoSection()
+    {
+        // A plane through the extrusion's own start or end rim is the coplanar/tangent
+        // configuration booleans reject; splitting there would only make zero-extent
+        // slivers. Both rims and a plane that misses the extrusion give no curve.
+        var wall = PocketWall();
+        foreach (double z in (ReadOnlySpan<double>)[1.0, 2.5, 4.0])
+        {
+            var plane = new PlaneSurface((0, 0, z), Vector3d.UnitX, Vector3d.UnitY);
+            Assert.Empty(SurfaceIntersection.Intersect(plane, wall, PlateRegion));
+        }
+    }
+
+    [Fact]
+    public void AngledPlaneAcrossExtrudedLine_ClipsToTheGeneratorNotTheRegion()
+    {
+        // The bounded-patch path. An extrusion of a straight generator IS a plane, but a
+        // BOUNDED one: clipping the analytic line to the query region alone would return
+        // a 60-long line that slices clean across neighbouring pockets.
+        var wall = PocketWall();
+        var side = new PlaneSurface((1, 0, 0), Vector3d.UnitY, Vector3d.UnitZ); // x = 1
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(side, wall, PlateRegion));
+        var line = Assert.IsType<Line3d>(curve);
+        var (lo, hi) = line.Start.Z < line.End.Z ? (line.Start, line.End) : (line.End, line.Start);
+        Assert.Equal(0, lo.DistanceTo((1, -2.5, 1)), 12);   // the wall's bottom rim
+        Assert.Equal(0, hi.DistanceTo((1, -2.5, 2.5)), 12); // the wall's top rim
+    }
+
+    [Fact]
+    public void TwoExtrudedLines_ClipToBothPatches()
+    {
+        // Two straight-walled extrusions crossing: the shared vertical line is clipped
+        // to the overlap of both parallelograms (here the shorter wall's v-range).
+        var tall = new ExtrudedSurface(new Line3d((-5, 2, 0), (5, 2, 0)), (0, 0, 4));
+        var shortWall = new ExtrudedSurface(new Line3d((1, -6, 1), (1, 6, 1)), (0, 0, 2));
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(tall, shortWall, PlateRegion));
+        var line = Assert.IsType<Line3d>(curve);
+        var (lo, hi) = line.Start.Z < line.End.Z ? (line.Start, line.End) : (line.End, line.Start);
+        Assert.Equal(0, lo.DistanceTo((1, 2, 1)), 12);
+        Assert.Equal(0, hi.DistanceTo((1, 2, 3)), 12);
+    }
+
+    [Fact]
+    public void ExtrudedLinesOnParallelPlanes_NoCurve()
+    {
+        var a = new ExtrudedSurface(new Line3d((-5, 2, 0), (5, 2, 0)), (0, 0, 4));
+        var b = new ExtrudedSurface(new Line3d((-5, 3, 0), (5, 3, 0)), (0, 0, 4));
+        Assert.Empty(SurfaceIntersection.Intersect(a, b, PlateRegion));
+    }
+
+    [Fact]
+    public void ExtrudedLinesOnDisjointPatches_NoCurve()
+    {
+        // Carrier planes that cross, but parallelograms that never meet: the trap the
+        // unclipped promotion falls into (an unrelated pocket getting sliced).
+        var a = new ExtrudedSurface(new Line3d((-5, 2, 0), (5, 2, 0)), (0, 0, 4));
+        var b = new ExtrudedSurface(new Line3d((20, -6, 0), (20, 6, 0)), (0, 0, 4));
+        Assert.Empty(SurfaceIntersection.Intersect(a, b, PlateRegion));
+    }
+
+    [Fact]
+    public void ExtrudedCurvedGenerator_StillMarches()
+    {
+        // Only STRAIGHT generators become bounded planar patches; a genuinely curved one
+        // (that is not a promotable full circle) must keep the general path.
+        var arc = NurbsCurve.Arc((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY, 2, 0, Math.PI);
+        var wall = new ExtrudedSurface(arc, (0, 0, 4));
+        var side = new PlaneSurface((1, 0, 0), Vector3d.UnitY, Vector3d.UnitZ); // x = 1, not ⊥ the direction
+
+        var curves = SurfaceIntersection.Intersect(side, wall, Region);
+        Assert.NotEmpty(curves);
+        Assert.All(curves, c => Assert.IsType<PolylineCurve3d>(c));
+    }
 }

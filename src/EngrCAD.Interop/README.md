@@ -52,6 +52,26 @@ engines.
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See
   design.md §5. v1 handles transversal cases; inputs are consumed; output passes
   `Validate()` with correct genus and exact volumes.
+  - **The result is verified before it is returned.** Every operation checks that the
+    assembled solid is two-manifold (each edge used by exactly two coedges, every loop
+    chaining end-to-start) and throws `BrepBooleanException` otherwise, naming the
+    operation, counting the unpaired edges and locating one crack. An unclosed result is
+    the project's worst failure mode: it tessellates into an open mesh with no complaint
+    and exports an unprintable STL, and only surfaces if somebody thinks to call
+    `Validate()`. `ShapeCompiler` catches the exception and appends the route that does
+    work — `Shape.From(shape.ToImplicit()).ToMesh(quality)`. It deliberately does NOT
+    fall back automatically: that would make `Explain(Representation.Brep)` a lie (it
+    reported Native) and would quietly downgrade an exact model to a polygonized one.
+    Note the limit of the check — it catches *unclosed* results, not *wrong but closed*
+    ones (a tool buried as an internal cavity is perfectly manifold), so end-to-end tests
+    must still assert analytic volumes.
+  - **Straight-edged sketch extrusions (pockets, slots, polygons, engraved lettering)
+    are exact**, via `SurfaceIntersection`'s bounded planar carriers — see the BRep
+    README. Before that they were the headline silent failure: the marching tracer
+    stopped short of each wall's ends, the pocket outline never closed, and the boolean
+    returned single-use edges (open mesh, no error) or — when it found no curves at all —
+    buried the whole tool as an internal cavity, giving a closed `Validate`-clean solid
+    with the wrong volume.
   - **Cut-through-hole differences work**: a tool passing through an existing bore
     (e.g. a slot narrower than the bore) splits the bore wall into trimmed fragments,
     which tessellate via `TrimmedFaceTessellator`. Kernel work that enabled it:
