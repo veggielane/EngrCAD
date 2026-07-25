@@ -87,6 +87,19 @@ internal sealed class SceneHost
         };
         toolbar.Children.Add(viewStyle);
 
+        // Ambient occlusion (baked per part): on unless the host options say otherwise.
+        Viewport.AmbientOcclusion = EngrCad.CurrentOptions.AmbientOcclusion;
+        var occlusion = new ToggleButton
+        {
+            Content = "AO",
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsChecked = Viewport.AmbientOcclusion,
+        };
+        ToolTip.SetTip(occlusion, "Ambient occlusion - darken pockets, bores and crevices (baked per part)");
+        occlusion.IsCheckedChanged += (_, _) => Viewport.AmbientOcclusion = occlusion.IsChecked ?? true;
+        toolbar.Children.Add(occlusion);
+
         var section = new ToggleButton { Content = "Section", Padding = new Thickness(10, 4), FontSize = 12 };
         section.IsCheckedChanged += (_, _) => Viewport.SectionEnabled = section.IsChecked ?? false;
         toolbar.Children.Add(section);

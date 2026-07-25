@@ -63,21 +63,23 @@ public static class OffscreenRenderer
     public static byte[] Render(
         IReadOnlyList<Part> parts, int width, int height, CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
-        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null) =>
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
-            width, height, camera, furniture, style, sectionAxis, sectionOffset);
+            width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
     /// — assemblies flattened; instances of the same part share one uploaded mesh) and
     /// returns RGBA8 pixels, top row first. See
-    /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?)"/>.
+    /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool)"/>.
     /// </summary>
     public static byte[] Render(
         IReadOnlyList<PartInstance> instances, int width, int height,
         CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
-        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null)
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -90,7 +92,7 @@ public static class OffscreenRenderer
             ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var oversized = Draw(gl, instances, width * supersample, height * supersample, camera, furniture,
-            style, sectionAxis, sectionOffset, supersample);
+            style, sectionAxis, sectionOffset, ambientOcclusion, supersample);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -130,26 +132,30 @@ public static class OffscreenRenderer
     }
 
     /// <summary>Renders <paramref name="parts"/> to a PNG file. See
-    /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?)"/>.</summary>
+    /// <see cref="Render(IReadOnlyList{Part}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool)"/>.</summary>
     public static void RenderToImage(
         IReadOnlyList<Part> parts, string path, int width = 1280, int height = 800,
         CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
-        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null)
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
     {
-        var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset);
+        var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
+            ambientOcclusion);
         PngWriter.Write(path, pixels, width, height);
     }
 
     /// <summary>Renders posed part instances to a PNG file. See
-    /// <see cref="Render(IReadOnlyList{PartInstance}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?)"/>.</summary>
+    /// <see cref="Render(IReadOnlyList{PartInstance}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool)"/>.</summary>
     public static void RenderToImage(
         IReadOnlyList<PartInstance> instances, string path, int width = 1280, int height = 800,
         CameraState? camera = null, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
-        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null)
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
     {
-        var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset);
+        var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
+            ambientOcclusion);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -162,7 +168,7 @@ public static class OffscreenRenderer
 
     private static unsafe byte[] Draw(
         GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture,
-        ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, int supersample)
+        ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion, int supersample)
     {
         // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
         string header = ViewerShaders.Header(es: true);
@@ -188,6 +194,9 @@ public static class OffscreenRenderer
         gl.Viewport(0, 0, (uint)width, (uint)height);
         gl.ClearColor(0.11f, 0.12f, 0.14f, 1f);
         gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
+        // Meshes without a baked-occlusion buffer read this constant (the GL default
+        // would be 0 = fully occluded = black parts).
+        RenderGeometry.SetDefaultOcclusion(gl);
 
         // Background gradient: vertexless fullscreen triangle, no depth.
         uint bgVao = gl.GenVertexArray();
@@ -262,7 +271,11 @@ public static class OffscreenRenderer
                 if (mode != EffectiveMode.Wireframe)
                 {
                     var render = RenderMesh.CreateFlat(mesh);
-                    (vao, _, _) = RenderGeometry.UploadMesh(gl, render);
+                    // Baked per-vertex occlusion (cached per mesh, shared with the
+                    // window pass, deterministic) — the whole AO story is vertex data,
+                    // so both passes shade from identical floats.
+                    (vao, _, _, _) = RenderGeometry.UploadMesh(gl, render,
+                        ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null);
                     indexCount = render.Indices.Length;
                 }
                 uint edgeVao = 0;
@@ -321,6 +334,8 @@ public static class OffscreenRenderer
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uSectionEnabled"), sectionEnabledF);
         gl.Uniform3(gl.GetUniformLocation(meshProgram, "uSectionAxis"), (float)axis.X, (float)axis.Y, (float)axis.Z);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uSectionOffset"), sectionOffsetF);
+        gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
+            ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
         gl.Uniform1(uAlpha, 1f);
 
         // Section mode relies on face culling staying OFF (nothing here enables

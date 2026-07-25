@@ -25,7 +25,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uSectionEnabled, _uSectionAxis, _uSectionOffset, _uAlpha;
+    private int _uSectionEnabled, _uSectionAxis, _uSectionOffset, _uAlpha, _uAmbientOcclusion;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
     private int _uLineSectionEnabled, _uLineSectionAxis, _uLineSectionOffset;
@@ -42,9 +42,13 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // GPU buffers are shared between instances of the same Part (uploaded once per
     // distinct part); this list owns them for deletion — never delete via _meshes,
-    // which references the same ids once per instance.
-    private readonly List<(uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo, uint WireVao, uint WireVbo)>
-        _gpuBuffers = [];
+    // which references the same ids once per instance. The Part is kept so switching
+    // ambient occlusion on can backfill occlusion buffers without re-uploading geometry.
+    private readonly record struct PartBuffers(
+        Part Part, uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo,
+        uint WireVao, uint WireVbo, uint AoVbo);
+
+    private readonly List<PartBuffers> _gpuBuffers = [];
 
     private readonly object _sceneLock = new();
     private (IReadOnlyList<PartInstance> Instances, bool Frame)? _pending;
@@ -153,6 +157,10 @@ public sealed class ViewportControl : OpenGlControlBase
         _uSectionAxis = _gl.GetUniformLocation(_program, "uSectionAxis");
         _uSectionOffset = _gl.GetUniformLocation(_program, "uSectionOffset");
         _uAlpha = _gl.GetUniformLocation(_program, "uAlpha");
+        _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
+        // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
+        // the GL default for a disabled attribute is 0, which would shade parts black.
+        RenderGeometry.SetDefaultOcclusion(_gl);
 
         _lineProgram = CompileLineProgram(_gl);
         _uLineModel = _gl.GetUniformLocation(_lineProgram, "uModel");
@@ -185,7 +193,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly record struct SharedMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
-        uint WireVao, uint WireVbo, int WireVertexCount, PickData Pick);
+        uint WireVao, uint WireVbo, int WireVertexCount, PickData Pick, uint AoVbo);
 
     /// <summary>Uploads an instance list, replacing existing GPU resources. Each
     /// distinct part is prepared and uploaded once (cached display mesh → RenderMesh,
@@ -252,10 +260,14 @@ public sealed class ViewportControl : OpenGlControlBase
         // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
         var featureEdges = part.GetFeatureEdges();
         var wireEdges = WireframeEdges.Extract(mesh);
-        var (vao, vbo, ebo) = RenderGeometry.UploadMesh(gl, render);
+        // Baked per-vertex occlusion (cached per mesh, deterministic, identical to what
+        // the headless pass uploads) — only paid for when ambient occlusion is on; the
+        // toggle backfills it later otherwise.
+        var (vao, vbo, ebo, aoVbo) = RenderGeometry.UploadMesh(gl, render,
+            _ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null);
         var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
         var (wireVao, wireVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
-        _gpuBuffers.Add((vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo));
+        _gpuBuffers.Add(new PartBuffers(part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo));
 
         var boxes = new Aabb[render.TriangleCount];
         for (int t = 0; t < render.TriangleCount; t++)
@@ -270,7 +282,7 @@ public sealed class ViewportControl : OpenGlControlBase
         return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
             edgeVao, edgeVbo, featureEdges.Count * 2,
             wireVao, wireVbo, wireEdges.Count * 2,
-            new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)));
+            new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)), aoVbo);
     }
 
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
@@ -285,8 +297,32 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.DeleteVertexArray(b.EdgeVao);
             gl.DeleteBuffer(b.WireVbo);
             gl.DeleteVertexArray(b.WireVao);
+            if (b.AoVbo != 0)
+                gl.DeleteBuffer(b.AoVbo);
         }
         _gpuBuffers.Clear();
+    }
+
+    /// <summary>
+    /// Uploads the baked occlusion for parts that were uploaded while ambient occlusion
+    /// was off (the toggle turning on). Only the occlusion buffer is created — geometry,
+    /// edges and the pick BVH are untouched, so selection and hover survive the toggle —
+    /// and the bake itself is cached per mesh, so toggling back and forth is free after
+    /// the first time. GL context must be current (called from the render pass).
+    /// </summary>
+    private void BackfillOcclusion(GL gl)
+    {
+        for (int i = 0; i < _gpuBuffers.Count; i++)
+        {
+            var buffers = _gpuBuffers[i];
+            if (buffers.AoVbo != 0 || buffers.Vao == 0)
+                continue;
+            var mesh = buffers.Part.GetMesh();
+            uint aoVbo = RenderGeometry.UploadOcclusion(
+                gl, buffers.Vao, Viewer.AmbientOcclusion.For(mesh, RenderMesh.CreateFlat(mesh)));
+            _gpuBuffers[i] = buffers with { AoVbo = aoVbo };
+        }
+        gl.BindVertexArray(0);
     }
 
     /// <summary>Ground grid on z = 0 sized to the scene, plus RGB world axes.</summary>
@@ -354,6 +390,8 @@ public sealed class ViewportControl : OpenGlControlBase
         }
         if (update is { } u)
             ApplyInstances(gl, u.Instances, u.Frame);
+        if (_ambientOcclusion)
+            BackfillOcclusion(gl);   // no-op unless a part was uploaded with AO off
 
         // View-cube hook 1: a click on the cube armed a pose animation — advance the
         // orbit camera toward it and keep frames coming until it lands.
@@ -423,6 +461,7 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.Uniform1(_uSectionEnabled, _sectionEnabled ? 1f : 0f);
         gl.Uniform3(_uSectionAxis, (float)sectionAxis.X, (float)sectionAxis.Y, (float)sectionAxis.Z);
         gl.Uniform1(_uSectionOffset, (float)_sectionOffset);
+        gl.Uniform1(_uAmbientOcclusion, _ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
 
         // Section mode relies on face culling staying OFF (the GL default; nothing here
         // enables CullFace): clipping a closed solid exposes its interior, and the
@@ -1068,6 +1107,28 @@ public sealed class ViewportControl : OpenGlControlBase
         set
         {
             _viewStyle = value;
+            RequestNextFrameRendering();
+        }
+    }
+
+    private bool _ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault;
+
+    /// <summary>
+    /// Baked ambient occlusion: pockets, bores, ribs and fillet roots darken where the
+    /// part occludes itself (default <see cref="EngrCadOptions.AmbientOcclusionDefault"/>;
+    /// the toolbar's AO toggle and <see cref="EngrCadOptions.AmbientOcclusion"/> drive
+    /// it). The occlusion is baked per part on the CPU and uploaded as a vertex
+    /// attribute, so it costs nothing per frame and the headless pass shades from the
+    /// same numbers; switching it off reproduces the flat-lit look exactly. Turning it
+    /// on for the first time bakes the visible parts (cached afterwards) on the next
+    /// rendered frame; nothing else about the scene, selection, or camera changes.
+    /// </summary>
+    public bool AmbientOcclusion
+    {
+        get => _ambientOcclusion;
+        set
+        {
+            _ambientOcclusion = value;
             RequestNextFrameRendering();
         }
     }

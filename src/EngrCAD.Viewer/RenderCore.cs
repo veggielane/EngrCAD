@@ -147,20 +147,25 @@ internal static class ViewerShaders
     /// <summary>Version header for the GL profile in use (ES3 via ANGLE, or desktop 3.3).</summary>
     public static string Header(bool es) => es ? EsHeader : DesktopHeader;
 
-    /// <summary>Lit mesh vertex shader (position + normal, world-space lighting).</summary>
+    /// <summary>Lit mesh vertex shader (position + normal + baked occlusion, world-space
+    /// lighting). aOcclusion is attribute 2; a mesh uploaded without an occlusion buffer
+    /// leaves that array disabled and reads the constant 1.0 set at pass init.</summary>
     public const string MeshVertex = """
         in vec3 aPos;
         in vec3 aNormal;
+        in float aOcclusion;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
         out vec3 vNormal;
         out vec3 vWorldPos;
+        out float vOcclusion;
         void main()
         {
             vec4 world = uModel * vec4(aPos, 1.0);
             vWorldPos = world.xyz;
             vNormal = mat3(uModel) * aNormal;
+            vOcclusion = aOcclusion;
             gl_Position = uProj * uView * world;
         }
         """;
@@ -169,11 +174,14 @@ internal static class ViewerShaders
     /// Lit mesh fragment shader: directional light + specular, selection highlight
     /// (uHighlight), axis-aligned section plane (uSectionEnabled/uSectionAxis/
     /// uSectionOffset — clips where dot(world, axis) exceeds the offset; cut
-    /// interiors via gl_FrontFacing), translucency (uAlpha).
+    /// interiors via gl_FrontFacing), translucency (uAlpha), and baked ambient
+    /// occlusion (uAmbientOcclusion scales the per-vertex vOcclusion in; 0 = off and
+    /// reproduces the pre-AO look exactly, since the factor is then exactly 1.0).
     /// </summary>
     public const string MeshFragment = """
         in vec3 vNormal;
         in vec3 vWorldPos;
+        in float vOcclusion;
         uniform vec3 uColor;
         uniform vec3 uLightDir;
         uniform vec3 uEyePos;
@@ -182,6 +190,7 @@ internal static class ViewerShaders
         uniform vec3 uSectionAxis;
         uniform float uSectionOffset;
         uniform float uAlpha;
+        uniform float uAmbientOcclusion;
         out vec4 fragColor;
         void main()
         {
@@ -194,6 +203,8 @@ internal static class ViewerShaders
                     // Cut cue: interiors exposed by the section plane show their
                     // backfaces as a flat, darker warm tint (no lighting), the
                     // standard CAD hint that you are looking at cut material.
+                    // Baked occlusion is not applied here: it was baked for the
+                    // outward surface, and cut material is a flat fill by design.
                     // NOTE: shader comments must stay pure ASCII - ANGLE's GLES
                     // translator rejects the whole shader on non-ASCII bytes.
                     vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
@@ -207,7 +218,10 @@ internal static class ViewerShaders
             vec3 h = normalize(v - uLightDir);
             float specular = pow(max(dot(n, h), 0.0), 48.0) * 0.35;
             vec3 base = mix(uColor, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
-            vec3 c = base * (0.22 + 0.78 * diffuse) + vec3(specular);
+            // Occlusion darkens ambient and diffuse but not the specular highlight
+            // (a direct-light term); uAmbientOcclusion 0 leaves the factor exactly 1.
+            float ao = mix(1.0, vOcclusion, uAmbientOcclusion);
+            vec3 c = base * (0.22 + 0.78 * diffuse) * ao + vec3(specular);
             fragColor = vec4(c, uAlpha);
         }
         """;
@@ -308,8 +322,8 @@ internal static class ViewerShaders
 
     /// <summary>
     /// Compiles and links a program from full sources (header already prepended).
-    /// <paramref name="bindAttributes"/> pins aPos/aNormal to locations 0/1 (binding a
-    /// name the shader does not declare is legal and ignored).
+    /// <paramref name="bindAttributes"/> pins aPos/aNormal/aOcclusion to locations
+    /// 0/1/2 (binding a name the shader does not declare is legal and ignored).
     /// </summary>
     public static uint LinkProgram(GL gl, string vertexSource, string fragmentSource, bool bindAttributes)
     {
@@ -322,6 +336,7 @@ internal static class ViewerShaders
         {
             gl.BindAttribLocation(program, 0, "aPos");
             gl.BindAttribLocation(program, 1, "aNormal");
+            gl.BindAttribLocation(program, 2, "aOcclusion");
         }
         gl.LinkProgram(program);
         gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int linked);
@@ -490,9 +505,22 @@ internal static class RenderGeometry
         return (vao, vbo);
     }
 
+    /// <summary>
+    /// The occlusion value every mesh VAO reads when it has no baked-occlusion buffer:
+    /// attribute 2's array stays disabled, so the shader sees this context-wide
+    /// constant. MUST be set once per render pass before any mesh draw — the GL default
+    /// for a disabled attribute is (0, 0, 0, 1), which would shade every part black the
+    /// moment ambient occlusion is switched on.
+    /// </summary>
+    public static void SetDefaultOcclusion(GL gl) => gl.VertexAttrib1(2, 1f);
+
     /// <summary>Uploads a render mesh as interleaved position+normal with an index
-    /// buffer, matching the mesh program's attribute layout.</summary>
-    public static unsafe (uint Vao, uint Vbo, uint Ebo) UploadMesh(GL gl, RenderMesh mesh)
+    /// buffer, matching the mesh program's attribute layout. A non-null
+    /// <paramref name="occlusion"/> (one baked value per vertex) is uploaded into its
+    /// own buffer as attribute 2; otherwise that array stays disabled and the constant
+    /// from <see cref="SetDefaultOcclusion"/> applies.</summary>
+    public static unsafe (uint Vao, uint Vbo, uint Ebo, uint AoVbo) UploadMesh(
+        GL gl, RenderMesh mesh, float[]? occlusion = null)
     {
         var interleaved = new float[mesh.VertexCount * 6];
         for (int v = 0; v < mesh.VertexCount; v++)
@@ -517,7 +545,26 @@ internal static class RenderGeometry
         gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
         gl.EnableVertexAttribArray(1);
         gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        uint aoVbo = occlusion is null ? 0 : UploadOcclusion(gl, vao, occlusion);
         gl.BindVertexArray(0);
-        return (vao, vbo, ebo);
+        return (vao, vbo, ebo, aoVbo);
+    }
+
+    /// <summary>
+    /// Attaches (or replaces) a mesh VAO's baked-occlusion attribute buffer — one float
+    /// per vertex at attribute 2. Separate from the interleaved position/normal buffer
+    /// so switching ambient occlusion on at runtime only uploads the occlusion, never
+    /// re-uploads or rebuilds the geometry. Returns the new buffer id; leaves the VAO
+    /// bound (callers unbind).
+    /// </summary>
+    public static unsafe uint UploadOcclusion(GL gl, uint vao, float[] occlusion)
+    {
+        gl.BindVertexArray(vao);
+        uint aoVbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, aoVbo);
+        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, occlusion, BufferUsageARB.StaticDraw);
+        gl.EnableVertexAttribArray(2);
+        gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, sizeof(float), (void*)0);
+        return aoVbo;
     }
 }

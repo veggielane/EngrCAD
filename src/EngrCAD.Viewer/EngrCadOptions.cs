@@ -94,6 +94,23 @@ public sealed class EngrCadOptions
     /// exposed interiors shade as cut material (the viewport's Section toggle,
     /// headless). Null (the default) renders unsectioned.</summary>
     public double? SectionOffset { get; set; }
+
+    /// <summary>
+    /// The shipped default for ambient occlusion (window and headless): ON. Baked AO is
+    /// a one-off CPU cost at scene load and costs nothing per frame, and the crevice
+    /// shading it adds is what separates a CAD view from a flat-lit one.
+    /// </summary>
+    public const bool AmbientOcclusionDefault = true;
+
+    /// <summary>
+    /// Baked per-vertex ambient occlusion — pockets, bores, ribs and fillet roots
+    /// darken where the geometry occludes itself (default
+    /// <see cref="AmbientOcclusionDefault"/>). Applies to the viewport
+    /// (<see cref="ViewportControl.AmbientOcclusion"/>, which the toolbar's AO toggle
+    /// also drives) and to headless renders. Off reproduces the pre-AO look exactly and
+    /// skips the bake.
+    /// </summary>
+    public bool AmbientOcclusion { get; set; } = AmbientOcclusionDefault;
 }
 
 /// <summary>
@@ -186,6 +203,15 @@ public sealed class EngrCadBuilder
         return this;
     }
 
+    /// <summary>Enables or disables baked ambient occlusion for the viewport and for
+    /// headless renders (<c>--ao on|off</c> wins over this default). On by default —
+    /// see <see cref="EngrCadOptions.AmbientOcclusion"/>.</summary>
+    public EngrCadBuilder WithAmbientOcclusion(bool enabled = true)
+    {
+        Options.AmbientOcclusion = enabled;
+        return this;
+    }
+
     /// <summary>Standard main-method wrapper — <see cref="EngrCad.Run"/> with these
     /// options (no args → live, <c>--view</c>, <c>--export</c>, <c>--render</c>).</summary>
     public int Run(string[] args, Func<Scene> sceneFactory) =>
@@ -206,12 +232,14 @@ public sealed class EngrCadBuilder
     /// (<see cref="WithViewStyle"/>/<see cref="WithSection"/>) apply.</summary>
     public void RenderToImage(
         Scene scene, string path, CameraState? camera = null,
-        ViewStyle? style = null, SectionAxis? sectionAxis = null, double? sectionOffset = null)
+        ViewStyle? style = null, SectionAxis? sectionAxis = null, double? sectionOffset = null,
+        bool? ambientOcclusion = null)
     {
         scene.PreMesh(Options.Quality); // meshes cache, so the inner PreMesh is a no-op
         EngrCad.RenderToImage(scene, path, Options.RenderWidth, Options.RenderHeight, camera,
             style ?? Options.RenderStyle,
             sectionAxis ?? Options.SectionAxis,
-            sectionOffset ?? Options.SectionOffset);
+            sectionOffset ?? Options.SectionOffset,
+            ambientOcclusion ?? Options.AmbientOcclusion);
     }
 }
