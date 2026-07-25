@@ -498,26 +498,17 @@ stdout guarded, geometry evaluated lazily). Remaining:
   drawing (matrix buffer, one draw per part), tree expand/collapse, per-instance
   color/display-mode overrides, retro-assign palette colors when parts are added to an
   assembly after `Tab.Add`.
-- [ ] **Standard component library ("smart" components)** — a catalog of real
-  hardware — screws/bolts (ISO 4762 SHCS, 7380 button, 10642 csk…), nuts, washers,
-  thread inserts (Tappex Trisert already has pilot data in `StandardHoles`), dowel
-  pins, bearings — where each component is more than geometry: **placing it modifies
-  the host model and assembles itself**. A component carries (a) its own body (a
-  `Part`/`Shape`, ideally parametric per size), (b) a placement frame (`Frame3d` — a
-  point + direction on a face, or `SketchPlane.On(face)`), and (c) a **host
-  preparation operation**: the cut features it needs, applied to the target body when
-  placed — a thread insert drills its correct pilot bore, an SHCS drills clearance +
-  counterbore (`StandardHoles` already knows the dimensions), a dowel reams its hole.
-  Placement thus produces both a modified host and an assembly `Occurrence` of the
-  component at the frame — the SolidWorks "Smart Fastener" / Onshape derived-feature
-  idea, but in plain C#. Design notes: the preparation op is exactly a `Feature`
-  (parametric, regenerates, participates in `FeatureHistory` caching + suppression —
-  suppressing the insert removes its bore too); component sizes come from
-  datasheet-driven tables like `StandardHoles`/`StandardThreads` (flag
-  verify-against-datasheet like the Trisert precedent); assemblies (occurrences ✅
-  landed) and threads (✅ landed) are the prerequisites, both in place. Stretch: a screw placed
-  through two bodies prepares BOTH (clearance in the near body, tapped/insert bore in
-  the far one) — the full fastener stack.
+- [ ] **Standard component library — breadth and fidelity** (v1 landed:
+  `HardwareComponent` + `ComponentFeature` + `ComponentAssembly`; ISO 4762 SHCS, Tappex
+  Trisert, ISO 2338 dowel; the full two-body fastener stack). Follow-ups: more families
+  (ISO 7380 button, ISO 10642 csk, nuts, washers, bearings); higher body fidelity (hex
+  socket recesses, a modeled thread on the shank via `Shape.ExternalThread`,
+  knurled/flanged inserts, ISO 2338's crowned pin ends); and stacks that anchor into a
+  *placed component* — today `PlaceThrough` always cuts the screw's own tapped pilot in
+  the far body, so anchoring into an insert means placing the insert separately.
+- [ ] **Component BOM** — `ComponentAssembly.Placements` (→ `PlacedComponent`) is
+  already a parts list with designations and poses, so a BOM export is now a small step.
+  Pairs with the deferred assembly BOM item.
 - [ ] **Frame3d enabled next steps** — `FeatureContext.TopPlane` could become
   `SketchPlane.On(topFace)` (behavior decision: drill origins would move from world
   (0,0,z) to the face centroid); arbitrary section planes from a frame; `StepWriter`

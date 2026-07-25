@@ -428,6 +428,15 @@ Design decisions:
   onto its plane, or a sub-shape's feature edges) — never meshes — built on a
   background task, because the one rule the viewer cannot break is that lowering never
   runs on the UI or render thread.
+- **A smart component's local origin is its SEATING DATUM, not the host face.** That one
+  choice is what makes the hardware library composable: `SeatDepth` says how far below
+  the host's face the datum sits and `InsertedLength` how far the body reaches below it,
+  so a counterbored screw and a proud one are the *same geometry* at different poses
+  (one shared `Part`, many occurrences), and grip/engagement arithmetic for a two-body
+  stack is a single consistent system rather than per-seating special cases. The second
+  decision worth recording: the host preparation is a **`Feature`**, not a one-shot cut —
+  which is why suppressing a placement removes its bore as well as its occurrence, and
+  why a thickness change re-seats the fastener and re-cuts the hole.
 - **Text maps onto the sketch vocabulary exactly, which is why it is cheap.** TrueType
   `glyf` outlines are lines plus quadratic Béziers, and `Sketch` already has `LineTo`
   and `QuadraticTo` — so a glyph converts with no flattening and inherits everything a

@@ -30,6 +30,8 @@
   href: exports.md
 - name: Assemblies
   href: assemblies.md
+- name: Standard components
+  href: components.md
 - name: Viewer
   href: viewer.md
 - name: AI assistants (MCP)

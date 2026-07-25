@@ -199,11 +199,17 @@ public abstract class HardwareComponent
 
     /// <summary>The shared document-model part for this component — one part however
     /// many times it is placed, so it meshes once and every occurrence renders from the
-    /// same buffers.</summary>
+    /// same buffers.
+    /// <para>Hardware is marked <see cref="Part.ClippedBySection"/> = false: every
+    /// drafting standard draws bolts, screws, pins, keys and other solid fasteners
+    /// UNSECTIONED in a section view, because cutting a solid fastener lengthwise shows
+    /// nothing and only clutters the section. So a sectioned assembly shows the housing
+    /// cut open with its fasteners standing whole in their (sectioned) holes.</para>
+    /// </summary>
     public Part ToPart()
     {
         lock (_gate)
-            return _part ??= new Part(Designation, Body, Color);
+            return _part ??= new Part(Designation, Body, Color) { ClippedBySection = false };
     }
 
     /// <summary>The cut this component needs in the body it is installed into.</summary>
