@@ -49,26 +49,31 @@ Dark-themed layout around one shared GL viewport:
     with no FBO, no depth/normal prepass, and no blur that would resolve differently
     at the offscreen pass's 2x supersampled size. It also costs nothing per frame and
     survives section planes, translucency, edges and annotations untouched.
-  - *Cost*: a one-off CPU bake, cached per display mesh and run on the same worker
-    thread as `Scene.PreMesh` (so a scene load or hot reload never stalls the render
-    thread) — a few ms for a simple part, ~0.3 s for a busy multi-part tab at 48
-    segments/circle. Two deterministic guards bound it: a **ray budget** (2M rays per
-    bake) halves the per-vertex ray count on very high vertex counts, and meshes above
-    **80k triangles skip the bake entirely** — in lattice-like geometry every ray walks
-    a labyrinth instead of escaping and the per-ray cost climbs by an order of
-    magnitude (a 100k-triangle gyroid measured ~10 s), which is not worth a stall
-    before the window appears. Both rules are pure functions of the mesh, so they
-    cannot make the window and the headless render disagree.
-    `AmbientOcclusion.Prime` bakes the scene's distinct parts **in parallel**, like
-    `Scene.PreMesh` and for the same reason: a bake reads one part's mesh and writes
-    one cache entry keyed by that mesh, and `Bake` is a pure deterministic function of
-    the render mesh, so scheduling cannot change a single float. `Bake` is itself
-    block-parallel over vertex groups, so a dense part already used the whole machine
-    — the gain is on scenes of many *medium* parts, which used to run strictly one at a
-    time (measured on the demo scene: 8.9-10.2 s sequential vs 6.9-8.3 s parallel).
-    **AO is now the largest single cost of opening a window on a busy scene**; the next
-    lever, if it is ever needed, is showing the scene flat-lit and streaming the bakes
-    in, not making the bake less honest.
+  - *Cost, and why it **streams***: the bake is honest ray casting and it is not cheap —
+    measured on the demo scene at **12.3 s total**, of which the M8 stud is 3.0 s and
+    the tapped block 5.5 s — and it already saturates every core, so more parallelism
+    has nothing left to give. Nothing therefore waits for it. The window shows the
+    scene **immediately, flat-lit**, and each part's occlusion arrives as its own bake
+    finishes (`AmbientOcclusion.BakeInBackground`, **cheapest part first** so most of a
+    scene lights up in the first moments, with the whole job reported once in the status
+    bar). This is not a placeholder state: a mesh VAO with no occlusion buffer reads the
+    context constant 1.0, which is *exactly* the AO-off shading, so an unbaked part is
+    the correct flat-lit render of that part and the only thing the bake changes is that
+    crevices darken. The bake queue follows the **visible tab**, so a tab you never open
+    is never baked. Measured on the demo (Debug): time-to-window **27.1 s → 14.2 s**,
+    with the first tab's occlusion landing 0.2 s later and the threads tab's 5.7 s after
+    you switch to it. `TryGet` (a pure cache read) is the only lookup on the render
+    thread — a bake can never land there. Two deterministic guards bound the work
+    itself: a **ray budget** (2M rays per bake) halves the per-vertex ray count on very
+    high vertex counts, and meshes above **80k triangles skip the bake entirely** — in
+    lattice-like geometry every ray walks a labyrinth instead of escaping and the
+    per-ray cost climbs by an order of magnitude (a 100k-triangle gyroid measured
+    ~10 s). Both rules are pure functions of the mesh, so they cannot make the window
+    and the headless render disagree.
+  - *Headless is still eager*: `RenderToImage` bakes inline, because it is one-shot and
+    must be deterministic. The streamed and the inline paths produce the **same floats**
+    (same cache, same `Bake`), so window/offscreen parity holds — the window simply
+    reaches it a second or two after it opens.
   - Two details keep vertex-resolution shading honest. Vertices are grouped by
     position **and smoothing group** (a 50-degree crease), so a hole rim's top-face
     copy stays bright while its bore-wall copy darkens — averaging the two used to drag
@@ -124,6 +129,33 @@ Dark-themed layout around one shared GL viewport:
   discard rule (`dot(world, axis) > offset`) in one place, so the visible and the
   pickable surface cannot drift apart; the exposed cut face (exactly on the plane)
   stays pickable, matching the strict `>`.
+  **Up to four planes** can be active at once (`SectionPlane(Normal, Offset)` —
+  general normals; `SectionPlane.On(axis, offset)` builds the axis-aligned ones the
+  toolbar and CLI expose) combined by `SectionCombine`: **`Intersection`** clips only
+  where *every* plane excludes — two perpendicular planes give the classic **quarter
+  cut**, three an **octant** — while **`Union`** clips where *any* does, the
+  single-plane behavior generalized. With one plane the two rules coincide, so
+  single-plane output is unchanged. `SectionClip.Hides` carries the combine rule too,
+  since otherwise picking and rendering would disagree about which corner a quarter
+  cut removes.
+  **Arbitrary orientation**: `SectionPlane.On(Frame3d)` places a plane by a rigid frame
+  (origin on the plane, +Z at the clipped side) and `SectionPlane.Through(point,
+  normal)` by a point and a direction — so a cut can face anywhere, including *along a
+  face* (`BrepQueries.Frame(face)`) or a sketch plane. Nothing downstream needed
+  changing: the shaders, `SectionClip` and the isoline overlay have always taken a
+  general normal; only the toolbar's axis cycler is restricted to X/Y/Z, and hosts reach
+  past it with `ViewportControl.SectionPlanes` (or `RenderToImage(sectionPlanes:)`).
+  **Per-part opt-out**: `Part.ClippedBySection = false` makes a part render *and pick*
+  whole inside a cutaway. That is the drafting convention every standard shares —
+  shafts, bolts, nuts, washers, keys, pins and ribs are drawn unsectioned, because
+  cutting a solid fastener lengthwise shows nothing and only clutters the section — and
+  it gives assemblies the "cut the housing, keep the internals" view for free. It is
+  implemented as the shader's own master switch flipped per draw group
+  (`ViewportControl.SectionFor`, mirrored in the offscreen pass), with picking simply
+  not consulting `SectionClip` for such a part, so the clickable and the visible surface
+  stay the same one; an exempt part also contributes no isolines, having no cut face to
+  draw them on. With no section active the flag changes nothing at all (renders are
+  byte-identical), so design code can set it unconditionally.
 - **SDF isolines on the section plane** (automatic when available): when the section
   plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
   exists (`CanConvertTo(Implicit)`; lowered once and cached per part, never per
@@ -131,6 +163,10 @@ Dark-themed layout around one shared GL viewport:
   d = 0 contour is the exact surface cross-section; **cool blue** positive and
   **warm orange** negative families at d = ±k·spacing visualize the field itself —
   wall thickness at a glance (count the warm rings), blend and offset debugging.
+  The lowering is `Part.TryGetSdf` — cached **on the part**, beside the B-Rep lowering
+  `Part.TryGetSolid` caches, so toggling the section off and on, switching tabs, or
+  hiding a part no longer re-lowers (a bridged shape's implicit lowering can build a
+  `MeshSdf`, which is far too expensive to repeat).
   Spacing is 1-2-5-rounded from the contributing parts' bounds (shown in the status
   bar; a wall thinner than one spacing simply shows no interior ring). Extraction is
   `SdfContours` in EngrCAD.Interop (marching squares over one batch-`Evaluate` grid,
@@ -148,6 +184,19 @@ Dark-themed layout around one shared GL viewport:
   draw the same isolines through the same `SectionContourRenderer` (one-shot — the
   staleness caching only matters in the window), so headless cutaways match the
   viewport exactly.
+  With **several planes active** each plane gets its own contour set, clipped by its
+  **siblings** so it covers only the part of that plane which is actually an exposed
+  cut face. The rule lives in `SectionClip.Siblings`, next to `Hides`, and is stated
+  there as one sentence: a point on plane *i* is on the visible cut face iff the drawn
+  line survives the full clip rule *and* the material just past the plane does not
+  (`!Hides(p) && Hides(p + eps*n)`). That single sentence yields both modes — under
+  `Intersection` the siblings are applied **flipped** (the face is exposed only where
+  every other plane excludes), under `Union` unflipped (the face is exposed wherever
+  no other plane removes the point). Without it a quarter cut draws each plane's
+  contours across its full extent; the visible symptom is the positive family fanning
+  out past the silhouette on the half that is buried in material (the buried half
+  *inside* the silhouette is hidden by depth anyway, which is why the Union case and
+  the outside-the-silhouette bands are what the regression tests assert).
 - **View cube** (top-right of the viewport): the standard CAD orientation widget — a
   small labeled cube (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM) that always mirrors the
   orbit camera's rotation, so it doubles as a live orientation indicator. Clicking a
@@ -258,8 +307,18 @@ Dark-themed layout around one shared GL viewport:
   stalls and a second click is instant; a step that cannot be lowered reports in the
   status bar instead of throwing. Expansion state is keyed by occurrence path, so it
   survives tab switches and live reloads. Custom hosts drive the overlay directly via
-  `ViewportControl.SetConstructionPreview(segments, world)`. (Rollback bars,
-  suppress-from-tree, and `[Param]` editing are follow-ups.)
+  `ViewportControl.SetConstructionPreview(segments, world)`.
+  **Headless renders draw previews too** — `EngrCad.RenderToImage(..., preview:
+  new ConstructionPreviewRequest(part, node))` puts one row's rollback view into a
+  still image, through the same `PreviewLayer` the window uses, so the colour, the
+  always-on-top depth rule and the never-section-clipped rule cannot drift between the
+  two paths. A row identifies itself as *(part, node)* because a `ConstructionNode`
+  carries no back-reference to its part; that pairing also lets the build reuse the
+  part's cached solid for the root row. Building lowers geometry, so it happens on the
+  caller's thread before any GL exists (the headless mirror of the window's
+  background-task rule), and a row that cannot be previewed **throws** rather than
+  rendering a silently empty overlay — a docs page must not claim a preview it never
+  made. (Rollback bars, suppress-from-tree, and `[Param]` editing are follow-ups.)
 - **Per-part display modes** (`Part.DisplayMode`, default `Shaded`): design code sets
   it (`part.DisplayMode = DisplayMode.Translucent`) and the tree's per-row cycler
   changes it live; custom hosts drive `ViewportControl.SetDisplayMode(index, mode)`.

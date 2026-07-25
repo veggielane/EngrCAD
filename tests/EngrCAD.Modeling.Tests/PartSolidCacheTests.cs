@@ -133,6 +133,60 @@ public class PartSolidCacheTests
         Assert.Null(meshed.TryGetSolid());
     }
 
+    // ---- the implicit twin: TryGetSdf ----
+
+    [Fact]
+    public void SdfIsLoweredOnceAndCached()
+    {
+        // A blend has no B-Rep form but a native implicit one; like the solid it must
+        // be compiled once and shared (the viewer's isoline overlay asks per rebuild).
+        var part = new Part("blend", Shape.Box(2, 2, 2).SmoothUnion(Shape.Sphere(1.2), 0.4));
+        Assert.True(part.TryGetSdf(out var first, out string? error));
+        Assert.Null(error);
+        Assert.True(part.TryGetSdf(out var second, out _));
+        Assert.Same(first, second);
+    }
+
+    [Fact]
+    public void SdfPartsHandBackTheirOwnField()
+    {
+        var sdf = Sdf.Sphere(2);
+        Assert.True(new Part("ball", sdf).TryGetSdf(out var same, out _));
+        Assert.Same(sdf, same);
+    }
+
+    [Fact]
+    public void PartsWithoutAnImplicitRouteReportNoFieldAndNoError()
+    {
+        // A raw mesh or B-Rep part carries no distance field: no field, but also no
+        // failure — "nothing to show" must be distinguishable from "it went wrong".
+        Assert.False(new Part("mesh", MeshPrimitives.Box(1, 1, 1)).TryGetSdf(out var mesh, out string? meshError));
+        Assert.Null(mesh);
+        Assert.Null(meshError);
+
+        var solid = SolidFactory.MakeBox(new Aabb((0, 0, 0), (2, 2, 2)));
+        Assert.False(new Part("box", solid).TryGetSdf(out var brep, out string? brepError));
+        Assert.Null(brep);
+        Assert.Null(brepError);
+    }
+
+    [Fact]
+    public void AFailedSdfLoweringIsRememberedAsADiagnostic()
+    {
+        // An OPEN mesh behind Shape.From claims an implicit route (mesh -> implicit is
+        // bridged through MeshSdf) but throws on lowering. That must be a cached
+        // diagnostic, not an exception per caller and not a silent null.
+        var open = HalfEdgeMesh.Build([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [new[] { 0, 1, 2 }]);
+        var part = new Part("open", Shape.From(open));
+
+        Assert.False(part.TryGetSdf(out var sdf, out string? error));
+        Assert.Null(sdf);
+        Assert.NotNull(error);
+        Assert.Contains("'open'", error);
+        Assert.False(part.TryGetSdf(out _, out string? again));
+        Assert.Equal(error, again);
+    }
+
     [Fact]
     public void ConstructionPreviewsCanReuseAnAlreadyLoweredSolid()
     {

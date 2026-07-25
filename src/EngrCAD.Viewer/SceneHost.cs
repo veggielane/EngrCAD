@@ -394,15 +394,13 @@ internal sealed class SceneHost
     // ---- on-demand meshing callbacks (all on the UI thread) ----
 
     /// <summary>One part's worth of preparation, on the loader's worker thread: the
-    /// display mesh, feature edges and annotations, plus the ambient-occlusion bake the
-    /// eager path does in <see cref="EngrCad.ShowCore"/> — everything that must not
-    /// happen on the render thread.</summary>
-    private static void PrepareForDisplay(Part part, MeshQuality? quality, ProgressCancel? progress)
-    {
+    /// display mesh, feature edges and annotations — everything that must not happen on
+    /// the render thread. Ambient occlusion is deliberately NOT baked here: it streams
+    /// separately once the geometry is published (`ViewportControl.StartOcclusionBake`),
+    /// so a tab appears as soon as it is meshed and darkens a moment later rather than
+    /// making the progress bar wait for the most expensive step.</summary>
+    private static void PrepareForDisplay(Part part, MeshQuality? quality, ProgressCancel? progress) =>
         part.Prepare(quality, progress);
-        if (EngrCad.CurrentOptions.AmbientOcclusion)
-            AmbientOcclusion.Prime([part]);
-    }
 
     /// <summary>Geometry the loader has ready for the tab in front of the user: hand it
     /// to the viewport, which uploads it on the next frame. Batches arrive in tab order

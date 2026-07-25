@@ -211,6 +211,7 @@ public sealed class ViewportControl : OpenGlControlBase
         GL gl, IReadOnlyList<PartInstance> instances, bool frame, IReadOnlyList<bool>? visible)
     {
         DeleteMeshBuffers(gl);
+        List<Part> distinctParts;
         lock (_sceneLock)
         {
             _meshes.Clear();
@@ -246,6 +247,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 bounds = bounds.Union(worldBounds);
             }
 
+            distinctParts = [.. shared.Keys];
             RebuildGrid(gl, bounds);
             _sceneBounds = bounds;
             _sectionContours.Invalidate();   // new scene: cached SDF routes are stale
@@ -259,6 +261,10 @@ public sealed class ViewportControl : OpenGlControlBase
                 _distance = CameraMath.FrameDistance(bounds);
             }
         }
+
+        // Outside the scene lock (the bake job takes its own): the new scene is already
+        // drawable flat-lit, so its occlusion streams in behind the first frame.
+        StartOcclusionBake(distinctParts);
     }
 
     /// <summary>Uploads one distinct part's buffers and registers them for deletion.</summary>
@@ -271,11 +277,13 @@ public sealed class ViewportControl : OpenGlControlBase
         // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
         var featureEdges = part.GetFeatureEdges();
         var wireEdges = WireframeEdges.Extract(mesh);
-        // Baked per-vertex occlusion (cached per mesh, deterministic, identical to what
-        // the headless pass uploads) — only paid for when ambient occlusion is on; the
-        // toggle backfills it later otherwise.
+        // Baked per-vertex occlusion, but ONLY if it is already cached: TryGet never
+        // bakes, so this upload can never stall the render thread. An uncached part goes
+        // up without an occlusion buffer, which reads the constant 1.0 and is exactly the
+        // flat-lit shading; the background bake (StartOcclusionBake) then publishes its
+        // result and BackfillOcclusion attaches it on a later frame.
         var (vao, vbo, ebo, aoVbo) = RenderGeometry.UploadMesh(gl, render,
-            _ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null);
+            _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null);
         var (edgeVao, edgeVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
         var (wireVao, wireVbo) = RenderGeometry.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
         _gpuBuffers.Add(new PartBuffers(part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo));
@@ -315,25 +323,70 @@ public sealed class ViewportControl : OpenGlControlBase
     }
 
     /// <summary>
-    /// Uploads the baked occlusion for parts that were uploaded while ambient occlusion
-    /// was off (the toggle turning on). Only the occlusion buffer is created — geometry,
-    /// edges and the pick BVH are untouched, so selection and hover survive the toggle —
-    /// and the bake itself is cached per mesh, so toggling back and forth is free after
-    /// the first time. GL context must be current (called from the render pass).
+    /// Attaches occlusion buffers for parts that do not have one yet — the parts whose
+    /// background bake has just landed, and the parts uploaded while ambient occlusion
+    /// was off (the toggle turning on). Strictly non-blocking: a part whose bake is still
+    /// running is skipped and picked up on a later frame, so this can run every frame.
+    /// Only the occlusion buffer is created — geometry, edges and the pick BVH are
+    /// untouched, so selection and hover survive both the toggle and the streaming — and
+    /// the bake is cached per mesh, so toggling back and forth is free afterwards. GL
+    /// context must be current (called from the render pass).
     /// </summary>
     private void BackfillOcclusion(GL gl)
     {
+        bool attached = false;
         for (int i = 0; i < _gpuBuffers.Count; i++)
         {
             var buffers = _gpuBuffers[i];
             if (buffers.AoVbo != 0 || buffers.Vao == 0)
                 continue;
-            var mesh = buffers.Part.GetMesh();
-            uint aoVbo = RenderGeometry.UploadOcclusion(
-                gl, buffers.Vao, Viewer.AmbientOcclusion.For(mesh, RenderMesh.CreateFlat(mesh)));
-            _gpuBuffers[i] = buffers with { AoVbo = aoVbo };
+            if (Viewer.AmbientOcclusion.TryGet(buffers.Part.GetMesh()) is not { } occlusion)
+                continue;   // still baking — flat-lit for now, attached when it lands
+            _gpuBuffers[i] = buffers with { AoVbo = RenderGeometry.UploadOcclusion(gl, buffers.Vao, occlusion) };
+            attached = true;
         }
-        gl.BindVertexArray(0);
+        if (attached)
+            gl.BindVertexArray(0);
+    }
+
+    // The in-flight background occlusion bake, cancelled when the scene is replaced or
+    // ambient occlusion is switched off. Its own lock: ApplyInstances calls
+    // StartOcclusionBake after releasing _sceneLock, and the AmbientOcclusion setter
+    // takes _sceneLock first, so the two locks are always taken in the same order.
+    private readonly object _occlusionLock = new();
+    private CancellationTokenSource? _occlusionBake;
+
+    /// <summary>
+    /// Starts (or cancels) the background occlusion bake for the given distinct parts.
+    /// Each finished part requests a frame, where <see cref="BackfillOcclusion"/> attaches
+    /// it; the whole job reports once through the status overlay. Must NOT be called
+    /// while holding <see cref="_sceneLock"/>.
+    /// </summary>
+    private void StartOcclusionBake(IReadOnlyList<Part> parts)
+    {
+        lock (_occlusionLock)
+        {
+            _occlusionBake?.Cancel();
+            _occlusionBake?.Dispose();
+            _occlusionBake = null;
+            if (!_ambientOcclusion || parts.Count == 0)
+                return;
+            var cts = new CancellationTokenSource();
+            _occlusionBake = cts;
+            Viewer.AmbientOcclusion.BakeInBackground(
+                parts,
+                onPartBaked: () => Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering),
+                onFinished: (count, elapsed) => ShowStatus(
+                    $"ambient occlusion: {count} part(s) baked in {elapsed.TotalSeconds:F1} s"),
+                cts.Token);
+        }
+    }
+
+    /// <summary>The distinct parts currently uploaded (bake queue input).</summary>
+    private List<Part> DistinctParts()
+    {
+        lock (_sceneLock)
+            return [.. _instances.Select(i => i.Part).Distinct()];
     }
 
     /// <summary>Ground grid on z = 0 sized to the scene, plus RGB world axes.</summary>
@@ -360,6 +413,12 @@ public sealed class ViewportControl : OpenGlControlBase
 
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
+        lock (_occlusionLock)
+        {
+            _occlusionBake?.Cancel();
+            _occlusionBake?.Dispose();
+            _occlusionBake = null;
+        }
         if (_gl is null)
             return;
         DeleteMeshBuffers(_gl);
@@ -481,13 +540,17 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.Uniform1(_uAlpha, 1f);
         gl.Enable(EnableCap.PolygonOffsetFill);
         gl.PolygonOffset(1f, 1f);
+        bool anyPlanes = activePlanes.Count > 0;
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (!_visible[i])
                 continue;
             var em = EffectiveModeOf(i);
             if (em is EffectiveMode.Shaded or EffectiveMode.ShadedWithEdges)
+            {
+                SectionFor(_meshSection, gl, i, anyPlanes);
                 DrawFill(gl, i, matrix);
+            }
         }
         gl.Disable(EnableCap.PolygonOffsetFill);
 
@@ -495,12 +558,12 @@ public sealed class ViewportControl : OpenGlControlBase
         // full triangle wireframe for wireframe parts. Lines belong to the model, so
         // the section plane clips them consistently with the fills.
         gl.UseProgram(_lineProgram);
-        _lineSection.SetEnabled(gl, true);   // model lines clip with the fills
         bool anyPoints = false;
         for (int i = 0; i < _meshes.Count; i++)
         {
             if (!_visible[i])
                 continue;
+            SectionFor(_lineSection, gl, i, anyPlanes);   // model lines clip with their fill
             var m = _meshes[i];
             switch (EffectiveModeOf(i))
             {
@@ -536,6 +599,7 @@ public sealed class ViewportControl : OpenGlControlBase
             {
                 if (!_visible[i] || EffectiveModeOf(i) != EffectiveMode.Points)
                     continue;
+                SectionFor(_pointSection, gl, i, anyPlanes);
                 var m = _meshes[i];
                 CameraMath.WriteColumnMajor(m.Model, matrix);
                 gl.UniformMatrix4(_uPointModel, 1, false, matrix);
@@ -577,7 +641,10 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
             gl.DepthMask(false);
             for (int k = 0; k < translucentCount; k++)
+            {
+                SectionFor(_meshSection, gl, _translucentOrder[k], anyPlanes);
                 DrawFill(gl, _translucentOrder[k], matrix);
+            }
             gl.DepthMask(true);
             gl.Disable(EnableCap.Blend);
 
@@ -587,7 +654,10 @@ public sealed class ViewportControl : OpenGlControlBase
             for (int k = 0; k < translucentCount; k++)
             {
                 if (_meshes[_translucentOrder[k]].EdgeVertexCount > 0)
+                {
+                    SectionFor(_lineSection, gl, _translucentOrder[k], anyPlanes);
                     DrawFeatureEdges(gl, _translucentOrder[k], matrix);
+                }
             }
         }
         // Section-plane SDF isolines, after everything else so they read as an
@@ -879,6 +949,18 @@ public sealed class ViewportControl : OpenGlControlBase
                 color.B + (0.35f - color.B) * 0.35f)
             : color;
 
+    /// <summary>
+    /// The per-draw-group section switch, applied per PART: a part with
+    /// <see cref="Part.ClippedBySection"/> false draws whole inside a cutaway (the
+    /// drafting convention for fasteners and ribs). Turning the shader's master switch
+    /// off is exactly what "this part is not sectioned" means — the plane set stays
+    /// uploaded, so the next part clips again with no re-upload. Picking mirrors it by
+    /// not consulting <see cref="SectionClip"/> for such parts, which is what keeps the
+    /// clickable and the visible surface the same one.
+    /// </summary>
+    private void SectionFor(in SectionUniforms uniforms, GL gl, int index, bool anyPlanes) =>
+        uniforms.SetEnabled(gl, anyPlanes && _instances[index].Part.ClippedBySection);
+
     private unsafe void DrawFill(GL gl, int index, Span<float> matrix)
     {
         var m = _meshes[index];
@@ -997,8 +1079,11 @@ public sealed class ViewportControl : OpenGlControlBase
                     var world = _meshes[i].Model.TransformPoint(origin + direction * t);
                     // A surface the section plane clipped away is not there to click:
                     // skip it and keep looking, so the ray lands on the interior the
-                    // cut exposed rather than the removed shell.
-                    if (SectionClip.Hides(_sectionEnabled, world, _sectionPlanes, _sectionCombine))
+                    // cut exposed rather than the removed shell. A part exempted from
+                    // sectioning is never clipped, so it is never skipped either — the
+                    // CPU mirror of turning the shader's master switch off for it.
+                    if (_instances[i].Part.ClippedBySection
+                        && SectionClip.Hides(_sectionEnabled, world, _sectionPlanes, _sectionCombine))
                         continue;
                     bestT = t;
                     best = i;
@@ -1167,16 +1252,25 @@ public sealed class ViewportControl : OpenGlControlBase
     /// the toolbar's AO toggle and <see cref="EngrCadOptions.AmbientOcclusion"/> drive
     /// it). The occlusion is baked per part on the CPU and uploaded as a vertex
     /// attribute, so it costs nothing per frame and the headless pass shades from the
-    /// same numbers; switching it off reproduces the flat-lit look exactly. Turning it
-    /// on for the first time bakes the visible parts (cached afterwards) on the next
-    /// rendered frame; nothing else about the scene, selection, or camera changes.
+    /// same numbers; switching it off reproduces the flat-lit look exactly.
+    /// <para>The bake is NOT waited for: the scene draws immediately flat-lit and each
+    /// part darkens as its bake lands (cheapest first), so opening a window or turning
+    /// this on never stalls. Nothing else about the scene, selection, or camera changes
+    /// meanwhile, and the bake is cached per mesh, so toggling back and forth after the
+    /// first pass is instant.</para>
     /// </summary>
     public bool AmbientOcclusion
     {
         get => _ambientOcclusion;
         set
         {
+            if (_ambientOcclusion == value)
+                return;
             _ambientOcclusion = value;
+            // Switching on queues the missing bakes; switching off cancels the queue
+            // (StartOcclusionBake reads the new flag) and the shader stops mixing the
+            // attribute in, so the uploaded buffers just go unused.
+            StartOcclusionBake(DistinctParts());
             RequestNextFrameRendering();
         }
     }

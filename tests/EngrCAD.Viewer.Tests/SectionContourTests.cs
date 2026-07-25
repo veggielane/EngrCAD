@@ -18,11 +18,9 @@ public class SectionContourTests
     private const double RadiusTolerance = 1e-2;
 
     private static SectionContourGeometry BuildSingle(
-        Part part, Frame3d plane, bool visible = true, Matrix4d? world = null,
-        Dictionary<Part, Sdf?>? cache = null) =>
+        Part part, Frame3d plane, bool visible = true, Matrix4d? world = null) =>
         SectionContours.Build(
-            [new PartInstance(part, world ?? Matrix4d.Identity, part.Name)],
-            [visible], plane, cache ?? []);
+            [new PartInstance(part, world ?? Matrix4d.Identity, part.Name)], [visible], plane);
 
     [Fact]
     public void PlaneFrame_CardinalAxes_UseNaturalInPlaneAxes()
@@ -115,45 +113,46 @@ public class SectionContourTests
     public void Build_ShapePart_UsesTheImplicitLowering()
     {
         var part = new Part("sphere", Shape.Sphere(5));
-        var cache = new Dictionary<Part, Sdf?>();
-        var geometry = BuildSingle(part, SectionContours.PlaneFrame(Vector3d.UnitZ, 0), cache: cache);
+        var geometry = BuildSingle(part, SectionContours.PlaneFrame(Vector3d.UnitZ, 0));
 
         Assert.Equal(1, geometry.PartCount);
         Assert.True(geometry.ZeroVertices.Length > 0);
-        // The lowering happened once and is cached by part reference.
-        Assert.NotNull(cache[part]);
-        Assert.Same(cache[part], SectionContours.SdfRoute(part, cache));
+        // The lowering happened once and is cached ON THE PART (beside TryGetSolid's
+        // cached B-Rep), so it survives this renderer, tab switches and section toggles.
+        Assert.True(part.TryGetSdf(out var sdf, out _));
+        Assert.Same(sdf, SectionContours.SdfRoute(part));
     }
 
     [Fact]
-    public void SdfRoute_LoweringFailure_IsReportedOnce()
+    public void SdfRoute_LoweringFailure_IsDiagnosed()
     {
         // A Shape wrapping an OPEN mesh claims an implicit route (mesh -> implicit is
         // Bridged through MeshSdf) but the lowering throws (MeshSdf requires a closed
-        // mesh). The failure must surface through the report sink — otherwise the
-        // part is silently isoline-less — and the cached null keeps it to one report.
+        // mesh). The failure must surface through the report sink — otherwise the part
+        // is silently isoline-less — and the cached failure must stop it re-lowering.
         var open = EngrCAD.Mesh.HalfEdgeMesh.Build(
             [(0, 0, 0), (1, 0, 0), (0, 1, 0)],
             [new[] { 0, 1, 2 }]);
         var part = new Part("open", Shape.From(open));
-        var cache = new Dictionary<Part, Sdf?>();
         var reports = new List<string>();
 
-        Assert.Null(SectionContours.SdfRoute(part, cache, reports.Add));
+        Assert.Null(SectionContours.SdfRoute(part, (_, m) => reports.Add(m)));
         var message = Assert.Single(reports);
         Assert.Contains("'open'", message);
         Assert.Contains("lowering failed", message);
 
-        // Cached: the second query neither re-lowers nor re-reports.
-        Assert.Null(SectionContours.SdfRoute(part, cache, reports.Add));
-        Assert.Single(reports);
+        // The failure is cached on the Part, so a second query re-reports the SAME
+        // diagnostic without re-lowering (the renderer dedupes for the status bar).
+        Assert.False(part.TryGetSdf(out var sdf, out string? error));
+        Assert.Null(sdf);
+        Assert.NotNull(error);
 
         // And a whole Build over the part reports through the same sink without
-        // producing geometry (primed via a fresh cache to exercise the Build path).
+        // producing geometry.
         reports.Clear();
         var geometry = SectionContours.Build(
             [new PartInstance(part, Matrix4d.Identity, part.Name)],
-            [true], SectionContours.PlaneFrame(Vector3d.UnitZ, 0), [], reports.Add);
+            [true], SectionContours.PlaneFrame(Vector3d.UnitZ, 0), (_, m) => reports.Add(m));
         Assert.Equal(0, geometry.PartCount);
         Assert.Single(reports);
     }

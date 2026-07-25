@@ -318,30 +318,21 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
-- [ ] **SDF isolines on multi-plane cuts** (found while verifying the quarter cut) —
-  with several section planes active the isoline overlay appears to be drawn across
-  each plane's full extent rather than only over that plane's actual cut region: on a
-  quarter cut, contour fans extend into the removed quadrant and into empty space
-  beyond the part. Each plane's contours need clipping by the sibling planes (and by
-  the model silhouette) the way the fills already are. Confirm against
-  `SectionContourRenderer` before changing anything — the positive-distance family is
-  *meant* to extend outside the solid, so the fix is about sibling-plane clipping, not
-  about suppressing outside contours.
-- [ ] **Multi-section views** — several section planes active at once: two
-  perpendicular planes give the classic **quarter cut** (corner cutaway), three give
-  an octant view. Shader side: the single `dot(worldPos, uSectionAxis) >
-  uSectionOffset` discard becomes a small uniform array of plane equations with a
-  combine mode — **intersection of half-spaces** (discard when ALL planes exclude →
-  quarter cut, the CAD-standard look) vs union (discard when ANY excludes — today's
-  single-plane behavior generalized); cut-material shading and isolines then need
-  per-plane treatment (isolines drawn on each active plane's cut, clipped by the
-  others). UI: the Section toggle grows to a small panel or repeated axis chips
-  (enable/disable per plane, each with its own axis + offset + `[`/`]` focus);
-  `RenderToImage`/DocsGen fence options take a list. Offscreen/window parity from
-  day one via the shared shaders.
-- [ ] Section-plane follow-ups: arbitrary plane orientation from a `Frame3d` (the
-  shader already takes a general axis vector + offset; v1 restricts it to X/Y/Z),
-  per-part section opt-out, and picking that respects the cut.
+- [ ] **Section-isoline extraction still runs on the render thread** when the section
+  toggle is first enabled (marching squares plus the first `TryGetSdf` lowering). It
+  should stream the way ambient occlusion now does —
+  `AmbientOcclusion.BakeInBackground` is the precedent.
+- [ ] **`Part.ClippedBySection` has no UI** — a per-tree-row toggle beside the
+  display-mode cycler; likewise no toolbar affordance for oblique section planes (hosts
+  must set `ViewportControl.SectionPlanes` directly), and AO streaming reports only one
+  status line rather than per-part progress in the tree.
+- [ ] **DocsGen fence options cannot express the newer viewer features** — `render:`
+  understands only `section:<x|y|z>,<offset>`, so an oblique plane, a plane *list*, or a
+  construction preview cannot be captured in a docs page. The clean fix is to let a
+  snippet optionally define extra variables the way it already defines `Scene scene`
+  (e.g. `IReadOnlyList<SectionPlane> sectionPlanes`, `ConstructionPreviewRequest
+  preview`), which would unblock `section-oblique`, `section-unsectioned-fasteners` and
+  a construction-preview example page.
 - [ ] **3D-annotation (PMI) follow-ups** (v1 ✅ landed: `Annotation`/`LinearDimension`
   (point-to-point + `BetweenFaces` selectors)/`RadialDimension.OnEdge`/`LeaderNote`/
   `DatumLabel` + `HoleCallout`/`ThreadCallout` in Modeling; `StrokeFont` +
@@ -365,18 +356,22 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   click-to-pose with eased animation, hover highlight, drag-orbits) — rotate-snap
   dragging like commercial cubes; SceneHost toolbar buttons could delegate to
   `ViewCubeMath.PoseFor` for one pose source.
-- [ ] Silhouette-adaptive edge sampling — a fixed 96/circle undersamples very large
-  rims (the double/triple B-Rep lowering that used to sit here is fixed:
-  `Part.TryGetSolid()`).
+- [ ] **Chord-deviation tessellation for large parts** — investigated, and the obvious
+  premise was WRONG: a fixed 96 segments/circle for feature edges is scale-*free*
+  (relative sagitta 5.4e-4 at any radius) and a 400 mm flange's rim renders smooth at
+  whole-part framing. Zoomed onto a large rim, what actually shows is the **display
+  mesh** faceting at `SegmentsPerCircle`, with the exact edge overlay visibly
+  *detaching* from the fill it outlines — the edge is the accurate one, and raising its
+  count makes the detachment worse. The real fix is the existing **`TessellationQuality`**
+  item: one max-chord-deviation criterion driving the display mesh *and*
+  `BrepFeatureEdges` so they agree by construction. Camera-adaptive re-extraction on
+  zoom is the follow-on.
 - [ ] **Construction-tree follow-ups** (tree + per-node preview ✅ landed) — a
   **rollback bar** (drag a marker in the feature list; suppress below it),
   **suppress-from-tree**, and **`[Param]` editing** in the properties panel: all cheap
   now, since the rows already carry the `Feature`, its `Suppressed` flag and
-  `ParamInfo`. Also: construction previews don't render in headless `RenderToImage`
-  (the same parity gap isolines had), and a preview clears on live reload because node
-  references change — it could be restored by path.
-- [ ] Move `SectionContours`' per-part implicit lowering onto `Part` alongside
-  `TryGetSolid`, so the SDF lowering is cached the same way the B-Rep one now is.
+  `ParamInfo`. Also: a preview clears on live reload because node references change —
+  it could be restored by path.
 - [ ] **Construction tree in the viewer (Shape graph / features as tree rows)** — today
   the model tree lists parts and assembly occurrences; it should also expand a part
   into **how it was built**: for a `Shape`-backed part the operation graph (each node
@@ -400,7 +395,7 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     `Scene.PreMesh`, and previews should be cached per node (the B-Rep lowering cache
     item above serves this too). Sketches are pure 2D + a plane, so a display polyline
     is cheap and exact enough at screen resolution.
-- [ ] Ideas: ambient occlusion or matcap shading.
+- [ ] Idea: matcap shading (ambient occlusion landed).
 
 ## Blazor web viewer
 

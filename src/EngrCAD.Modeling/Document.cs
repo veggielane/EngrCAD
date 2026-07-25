@@ -67,6 +67,18 @@ public sealed class Part
     /// Viewers may also change it interactively (per-part cycler in the model tree).</summary>
     public DisplayMode DisplayMode { get; set; } = DisplayMode.Shaded;
 
+    /// <summary>
+    /// Whether a viewer's section planes cut this part (default true). Setting it false
+    /// makes the part render — and pick — whole inside a cutaway, which is the drafting
+    /// convention every standard shares: shafts, bolts, nuts, washers, keys, pins and
+    /// ribs are drawn UNSECTIONED in a section view, because cutting a solid fastener
+    /// lengthwise shows nothing and only clutters the section. It also gives assemblies
+    /// the "cut the housing, keep the internals" view for free. An exempt part is not
+    /// clipped, gets no cut-material shading, and contributes no section isolines (it
+    /// has no cut face to draw them on).
+    /// </summary>
+    public bool ClippedBySection { get; set; } = true;
+
     public Matrix4d Transform { get; set; } = Matrix4d.Identity;
 
     private readonly Lock _meshLock = new();
@@ -164,6 +176,53 @@ public sealed class Part
             _solid = null;
         }
         return _solid;
+    }
+
+    // ---- the distance field, lowered ONCE per part (the implicit twin of the above) ----
+    private Sdf? _sdf;
+    private bool _sdfLowered;
+    private string? _sdfError;
+
+    /// <summary>
+    /// This part's geometry as a signed distance field — the implicit counterpart of
+    /// <see cref="TryGetSolid"/>, and cached exactly the same way: an <see cref="Sdf"/>
+    /// part hands back its own field, a <see cref="Shape"/> with an implicit route is
+    /// lowered <b>at most once</b> (bridged lowerings can build a <c>MeshSdf</c>, which
+    /// is far too expensive to repeat), and everything else returns false. A lowering
+    /// that throws is remembered as a diagnostic rather than rethrown per caller, so a
+    /// consumer that cannot show the field says so once instead of crashing or retrying.
+    /// Consumers: the viewer's section-plane isoline overlay. Like <see cref="GetMesh"/>
+    /// this belongs off the render thread — <see cref="Scene.PreMesh"/> primes it.
+    /// </summary>
+    /// <param name="sdf">The field, or null when the part has no implicit route.</param>
+    /// <param name="error">Null unless a lowering was attempted and failed.</param>
+    /// <returns>True when <paramref name="sdf"/> is non-null.</returns>
+    public bool TryGetSdf(out Sdf? sdf, out string? error)
+    {
+        lock (_meshLock)
+        {
+            if (!_sdfLowered)
+            {
+                _sdfLowered = true;
+                try
+                {
+                    _sdf = Geometry switch
+                    {
+                        Sdf direct => direct,
+                        Shape shape when shape.CanConvertTo(TargetRep.Implicit) => shape.ToImplicit(),
+                        _ => null,
+                    };
+                }
+                catch (Exception e)
+                {
+                    _sdfError = $"Part '{Name}': implicit lowering failed ({e.GetType().Name}: {e.Message})";
+                    _sdf = null;
+                }
+            }
+            sdf = _sdf;
+            error = _sdfError;
+            return sdf is not null;
+        }
     }
 
     /// <summary>

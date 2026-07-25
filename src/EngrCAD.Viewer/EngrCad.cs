@@ -64,11 +64,12 @@ public static class EngrCad
         // Eager: the historical behavior — the whole document is meshed here, off the
         // render thread, and every tab is instant once the window appears.
         if (!options.LazyTabMeshing)
-        {
             scene.PreMesh(options.Quality); // tessellate here, not on the render thread
-            if (options.AmbientOcclusion)
-                AmbientOcclusion.Prime(scene.AllParts); // bake occlusion here too, same reason
-        }
+        // Ambient occlusion is deliberately NOT baked here either: it was measured at
+        // ~12 s on the demo scene and was the single largest cost of opening a window.
+        // The viewport shows the scene flat-lit immediately — which is exactly the AO-off
+        // render, not a placeholder — and streams each part's occlusion in as its
+        // background bake finishes (see AmbientOcclusion.BakeInBackground).
         InitialScene = scene;
         WindowTitle = options.Title;
         var userReady = options.OnViewportReady;
@@ -96,6 +97,9 @@ public static class EngrCad
     /// toggle. Throws <see cref="InvalidOperationException"/> when no GL context can
     /// be created; query <see cref="CanRenderToImage"/> first to skip gracefully on
     /// headless CI.
+    /// <para>A non-null <paramref name="preview"/> draws one construction-tree row over
+    /// the scene exactly as clicking it in the model tree does — the rollback view, in a
+    /// still image.</para>
     /// </summary>
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
@@ -103,12 +107,20 @@ public static class EngrCad
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
-        SectionCombine sectionCombine = SectionCombine.Intersection)
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        ConstructionPreviewRequest? preview = null)
     {
         scene.PreMesh(); // tessellate before touching GL
-        OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera,
+        var instances = scene.AllInstances.ToList();
+        // Building the preview lowers geometry, so it happens HERE, on the caller's
+        // thread, before the GL context exists — the headless mirror of the window's
+        // background-task rule.
+        var (segments, world) = preview is { } request
+            ? request.Build(instances, scene.ResolveQuality(CurrentOptions.Quality))
+            : (null, Matrix4d.Identity);
+        OffscreenRenderer.RenderToImage(instances, path, width, height, camera,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine);
+            sectionPlanes, sectionCombine, segments, world);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
@@ -312,14 +324,13 @@ public static class EngrCad
             {
                 var scene = factory();
                 if (!CurrentOptions.LazyTabMeshing)
-                {
                     scene.PreMesh(CurrentOptions.Quality); // heavy lifting stays on this worker thread
-                    if (CurrentOptions.AmbientOcclusion)
-                        AmbientOcclusion.Prime(scene.AllParts);   // ... including the AO bake
-                }
                 // Lazy: SetScene re-shows the CURRENT tab, whose (new) parts mesh on the
                 // loader's background task — the reload lands as fast as the tab in
-                // front of the user, and the tabs behind it stay unmeshed.
+                // front of the user, and the tabs behind it stay unmeshed. Occlusion is
+                // not baked here either: the reloaded scene appears flat-lit at once and
+                // darkens as the viewport's background bake catches up, which is what
+                // keeps a hot-reload edit feeling instant.
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => Host?.SetScene(scene));
                 string status = $"reloaded at {DateTime.Now:HH:mm:ss} — {scene.AllParts.Count()} part(s)";
                 viewport.ShowStatus(status);

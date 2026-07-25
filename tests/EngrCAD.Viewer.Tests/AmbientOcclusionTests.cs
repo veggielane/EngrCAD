@@ -121,6 +121,107 @@ public class AmbientOcclusionTests
         Assert.Equal(AmbientOcclusion.MinRays, AmbientOcclusion.RayCount(AmbientOcclusion.DefaultRays, 100_000_000));
     }
 
+    // ---- streaming: the window never waits for a bake ----
+
+    [Fact]
+    public void TryGet_NeverBakes_AndSeesWhatForProduced()
+    {
+        // The contract the render thread relies on: TryGet is a pure cache read, so an
+        // unbaked part is reported as "no occlusion yet" (draws flat-lit) rather than
+        // stalling the frame by however long the bake takes.
+        var mesh = new Part("p", Shape.Box(3, 3, 1) - Shape.Cylinder(0.5, 2)).GetMesh();
+        var render = RenderMesh.CreateFlat(mesh);
+        Assert.Null(AmbientOcclusion.TryGet(mesh));
+
+        var baked = AmbientOcclusion.For(mesh, render);
+        Assert.Same(baked, AmbientOcclusion.TryGet(mesh));
+    }
+
+    [Fact]
+    public async Task BakeInBackground_PublishesEveryPart_CheapestFirst()
+    {
+        // Three parts of clearly different triangle counts; the queue is ordered by cost
+        // so most of a scene gains its occlusion in the first moments.
+        var small = new Part("small", Shape.Box(2, 2, 2) - Shape.Box(1, 1, 1).Translate(0, 0, 1));
+        var medium = new Part("medium", Shape.Cylinder(1, 2) - Shape.Cylinder(0.4, 3));
+        var large = new Part("large", Shape.Sphere(1) - Shape.Cylinder(0.3, 3));
+        List<Part> parts = [large, small, medium];
+        foreach (var part in parts)
+            part.GetMesh();
+
+        var completed = new TaskCompletionSource<(int Count, TimeSpan Elapsed)>();
+        int callbacks = 0;
+        AmbientOcclusion.BakeInBackground(
+            parts, onPartBaked: () => Interlocked.Increment(ref callbacks),
+            onFinished: (count, elapsed) => completed.SetResult((count, elapsed)),
+            CancellationToken.None);
+
+        var (bakedCount, _) = await completed.Task.WaitAsync(TimeSpan.FromMinutes(2));
+        Assert.Equal(parts.Count, bakedCount);
+        Assert.Equal(parts.Count, callbacks);
+        foreach (var part in parts)
+            Assert.NotNull(AmbientOcclusion.TryGet(part.GetMesh()));
+
+        // Streamed results are the SAME data the blocking path produces — window and
+        // headless shading cannot diverge, they just arrive at different times.
+        var mesh = medium.GetMesh();
+        Assert.Equal(AmbientOcclusion.Bake(RenderMesh.CreateFlat(mesh)), AmbientOcclusion.TryGet(mesh));
+    }
+
+    [Fact]
+    public async Task BakeInBackground_AlreadyCachedParts_ReportNothing()
+    {
+        // A tab revisit or an AO toggle re-queues parts that are already baked; that must
+        // be free and must not post a status line claiming work was done.
+        var part = new Part("cached", Shape.Box(2, 2, 2) - Shape.Cylinder(0.3, 3));
+        var mesh = part.GetMesh();
+        AmbientOcclusion.For(mesh, RenderMesh.CreateFlat(mesh));
+
+        int reported = 0;
+        int callbacks = 0;
+        AmbientOcclusion.BakeInBackground(
+            [part], onPartBaked: () => Interlocked.Increment(ref callbacks),
+            onFinished: (_, _) => Interlocked.Increment(ref reported), CancellationToken.None);
+
+        // No completion callback fires, so just give the job time to run through.
+        await Task.Delay(300);
+        Assert.Equal(0, Volatile.Read(ref callbacks));
+        Assert.Equal(0, Volatile.Read(ref reported));
+    }
+
+    [Fact]
+    public async Task BakeInBackground_Cancellation_DropsTheRestOfTheQueue()
+    {
+        // A scene swap cancels the queue; whatever was already published stays cached
+        // (it is keyed by mesh, and a mesh's occlusion never goes stale).
+        var parts = new List<Part>();
+        for (int i = 0; i < 6; i++)
+            parts.Add(new Part($"p{i}", Shape.Box(2 + i * 0.1, 2, 2) - Shape.Cylinder(0.4, 3)));
+        foreach (var part in parts)
+            part.GetMesh();
+
+        using var cts = new CancellationTokenSource();
+        var first = new TaskCompletionSource();
+        int reported = 0;
+        AmbientOcclusion.BakeInBackground(
+            parts,
+            onPartBaked: () =>
+            {
+                // Runs ON the bake thread between parts, so cancelling here is seen at
+                // the very next loop iteration: exactly one part gets baked.
+                cts.Cancel();
+                first.TrySetResult();
+            },
+            onFinished: (_, _) => Interlocked.Increment(ref reported),
+            cts.Token);
+
+        await first.Task.WaitAsync(TimeSpan.FromMinutes(1));
+        await Task.Delay(300);
+        int cached = parts.Count(p => AmbientOcclusion.TryGet(p.GetMesh()) is not null);
+        Assert.Equal(1, cached);
+        Assert.Equal(0, Volatile.Read(ref reported));
+    }
+
     [Fact]
     public void EmptyMesh_BakesNothing()
     {

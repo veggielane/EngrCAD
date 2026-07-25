@@ -66,10 +66,11 @@ public static class OffscreenRenderer
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
-        SectionCombine sectionCombine = SectionCombine.Intersection) =>
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
             width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine);
+            sectionPlanes, sectionCombine, preview, previewWorld);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
@@ -84,7 +85,8 @@ public static class OffscreenRenderer
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
-        SectionCombine sectionCombine = SectionCombine.Intersection)
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -97,7 +99,8 @@ public static class OffscreenRenderer
             ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var oversized = Draw(gl, instances, width * supersample, height * supersample, camera, furniture,
-            style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample);
+            style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
+            preview, previewWorld);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -145,10 +148,11 @@ public static class OffscreenRenderer
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
-        SectionCombine sectionCombine = SectionCombine.Intersection)
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null)
     {
         var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -161,10 +165,11 @@ public static class OffscreenRenderer
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
-        SectionCombine sectionCombine = SectionCombine.Intersection)
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -173,12 +178,14 @@ public static class OffscreenRenderer
     /// <summary>One instance's draw data after mode resolution (buffers shared per part).</summary>
     private readonly record struct InstanceDraw(
         EffectiveMode Mode, uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-        uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter);
+        uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
+        bool SectionClipped);
 
     private static unsafe byte[] Draw(
         GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture,
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
-        IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample)
+        IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld)
     {
         // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
         string header = ViewerShaders.Header(es: true);
@@ -321,7 +328,8 @@ public static class OffscreenRenderer
             draws.Add(new InstanceDraw(
                 mode, shared.Vao, shared.IndexCount, shared.EdgeVao, shared.EdgeVertexCount,
                 shared.WireVao, shared.WireVertexCount, instance.World, part.Color ?? Palette.Steel,
-                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
+                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
+                section && part.ClippedBySection));
         }
 
         // Shaded fills, pushed back slightly so the edge overlay wins the depth test.
@@ -341,7 +349,8 @@ public static class OffscreenRenderer
         gl.Uniform3(uLightDir, (float)lightDir.X, (float)lightDir.Y, (float)lightDir.Z);
         gl.Uniform3(uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uHighlight"), 0f);  // no selection offscreen
-        new SectionUniforms(gl, meshProgram).Write(gl, planes, sectionCombine);
+        var meshSection = new SectionUniforms(gl, meshProgram);
+        meshSection.Write(gl, planes, sectionCombine);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
             ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
         gl.Uniform1(uAlpha, 1f);
@@ -355,6 +364,10 @@ public static class OffscreenRenderer
         {
             if (d.Mode is not (EffectiveMode.Shaded or EffectiveMode.ShadedWithEdges))
                 continue;
+            // Per-PART section switch (Part.ClippedBySection): a fastener or rib draws
+            // whole inside a cutaway, the drafting convention. Same rule, same place in
+            // the pass as the window's SectionFor.
+            meshSection.SetEnabled(gl, d.SectionClipped);
             CameraMath.WriteColumnMajor(d.Model, matrix);
             gl.UniformMatrix4(uModel, 1, false, matrix);
             gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
@@ -366,9 +379,9 @@ public static class OffscreenRenderer
         // Line overlay: feature edges for shaded-with-edges parts, full wireframe for
         // wireframe parts. Model lines are section-clipped consistently with fills.
         gl.UseProgram(lineProgram);
-        lineSection.SetEnabled(gl, section);   // model lines clip with the fills
         foreach (var d in draws)
         {
+            lineSection.SetEnabled(gl, d.SectionClipped);   // model lines clip with their fill
             switch (d.Mode)
             {
                 case EffectiveMode.ShadedWithEdges when d.EdgeVertexCount > 0:
@@ -401,11 +414,13 @@ public static class OffscreenRenderer
             CameraMath.WriteColumnMajor(proj, matrix);
             gl.UniformMatrix4(gl.GetUniformLocation(pointProgram, "uProj"), 1, false, matrix);
             gl.Uniform1(gl.GetUniformLocation(pointProgram, "uPointSize"), 4f * supersample);
-            new SectionUniforms(gl, pointProgram).Write(gl, planes, sectionCombine);
+            var pointSection = new SectionUniforms(gl, pointProgram);
+            pointSection.Write(gl, planes, sectionCombine);
             foreach (var d in draws)
             {
                 if (d.Mode != EffectiveMode.Points)
                     continue;
+                pointSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uPointModel, 1, false, matrix);
                 gl.Uniform3(uPointColor, d.Color.R, d.Color.G, d.Color.B);
@@ -442,6 +457,7 @@ public static class OffscreenRenderer
             for (int k = 0; k < translucentCount; k++)
             {
                 var d = draws[translucentOrder[k]];
+                meshSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uModel, 1, false, matrix);
                 gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
@@ -458,6 +474,7 @@ public static class OffscreenRenderer
                 var d = draws[translucentOrder[k]];
                 if (d.EdgeVertexCount == 0)
                     continue;
+                lineSection.SetEnabled(gl, d.SectionClipped);
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uLineModel, 1, false, matrix);
                 gl.BindVertexArray(d.EdgeVao);
@@ -491,6 +508,18 @@ public static class OffscreenRenderer
         AnnotationLayer.DrawOffscreen(gl, instances,
             AnnotationCamera.From(cam, orthographic: false, height, supersample),
             lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix);
+
+        // Construction-tree preview, in the same pass position as the window and through
+        // the SAME PreviewLayer — the layer owns the colour, the depth-off rule and the
+        // never-section-clipped rule, so headless previews cannot drift from the
+        // viewport's. One-shot: the layer is created, uploaded and drawn here, and its
+        // buffers die with the pbuffer context like everything else in this method.
+        if (preview is { Count: > 0 })
+        {
+            var layer = new PreviewLayer();
+            layer.Set(preview, previewWorld ?? Matrix4d.Identity);
+            layer.Draw(gl, lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix);
+        }
 
         gl.BindVertexArray(0);
         gl.Finish();

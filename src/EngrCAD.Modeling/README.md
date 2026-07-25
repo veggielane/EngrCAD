@@ -519,6 +519,15 @@ claiming a lowering it never produced. `Tab.PreMesh` therefore polls for cancell
 *between* parts: the part in flight finishes and its mesh stays cached (so returning to
 it costs nothing), which is the useful half of cancelling anyway.
 
+Two display flags travel with the part rather than with a viewer, so a design states
+its own intent: `Part.DisplayMode` (Shaded / Wireframe / Translucent) and
+`Part.ClippedBySection` (default true). Setting the latter false makes a viewer's
+section planes leave the part whole — the convention every drafting standard shares,
+that shafts, bolts, nuts, keys, pins and ribs are drawn **unsectioned** in a section
+view, because cutting a solid fastener lengthwise shows nothing and only clutters the
+section. It is the "cut the housing, keep the internals" switch for assemblies, and it
+has no effect at all when no section is active.
+
 **`Part.TryGetSolid()` lowers the part's exact B-Rep at most ONCE and caches it**
 (null when the part has no exact form — an SDF or mesh part, a Shape with no B-Rep
 route, or a lowering that failed). Everything that needs the solid takes it from
@@ -529,6 +538,16 @@ plate that was three ~9 s lowerings, and `Scene.PreMesh` of a heavy Shape scene 
 from **32.8 s to 10.1 s** once they shared one. `PreMesh` primes it off the render
 thread like the mesh; a lowering that fails is remembered, so the failure surfaces
 once (verbatim from `GetMesh`) instead of being retried per consumer.
+
+**`Part.TryGetSdf(out sdf, out error)` is its implicit twin**, cached the same way: an
+`Sdf` part hands back its own field, a `Shape` with an implicit route is lowered at
+most once, and everything else returns false with a null error — "nothing to show" and
+"it went wrong" stay distinguishable. A failed lowering becomes a cached *diagnostic*
+rather than an exception per caller, because its consumer (the viewer's section-plane
+isoline overlay) asks per rebuild and must degrade to a status message. This matters
+for the same reason as the B-Rep cache: a bridged shape's implicit lowering can build
+a `MeshSdf`. Deliberately NOT primed by `PreMesh` — only the section overlay needs it,
+and paying for it on every scene load would tax every user of the viewer.
 
 `Part.GetFeatureEdges(quality)` is the display **edge overlay**, cached the same
 way (and primed by `PreMesh`): parts with an exact solid sample their ACTUAL B-Rep

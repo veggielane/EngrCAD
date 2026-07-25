@@ -61,42 +61,24 @@ internal static class SectionContours
     }
 
     /// <summary>
-    /// The SDF route for a part, cached by part reference: SDF geometry directly,
-    /// Shapes through their implicit lowering (done once — lowering a bridged shape
-    /// can build a MeshSdf), everything else (raw B-Rep/mesh parts) null = no
-    /// isolines. A failed lowering caches null rather than throwing per rebuild, and
-    /// reports the failure once through <paramref name="report"/> (the status
-    /// overlay) so a silently isoline-less part is diagnosable.
+    /// The SDF route for a part: <see cref="Part.TryGetSdf"/>, which lowers a
+    /// <see cref="Shape"/> to an <see cref="Sdf"/> <b>at most once per part</b> and
+    /// caches the result (and any failure) beside the B-Rep lowering
+    /// <see cref="Part.TryGetSolid"/> caches. The cache therefore belongs to the
+    /// GEOMETRY, not to this renderer: a section toggled off and on, a tab revisit or a
+    /// visibility change no longer re-lowers, which matters because a bridged shape's
+    /// implicit lowering can build a MeshSdf. Parts with no implicit route (raw
+    /// B-Rep/mesh) simply get no isolines; a lowering that FAILED reports through
+    /// <paramref name="report"/> so a silently isoline-less part stays diagnosable (the
+    /// caller dedupes, since the failure itself is now cached for the part's lifetime).
     /// </summary>
-    public static Sdf? SdfRoute(Part part, Dictionary<Part, Sdf?> cache, Action<string>? report = null)
+    public static Sdf? SdfRoute(Part part, Action<Part, string>? report = null)
     {
-        if (cache.TryGetValue(part, out var cached))
-            return cached;
-        Sdf? sdf = part.Geometry switch
-        {
-            Sdf direct => direct,
-            Shape shape => TryLower(part, shape, report),
-            _ => null,
-        };
-        cache[part] = sdf;
-        return sdf;
-
-        static Sdf? TryLower(Part part, Shape shape, Action<string>? report)
-        {
-            try
-            {
-                return shape.CanConvertTo(TargetRep.Implicit) ? shape.ToImplicit() : null;
-            }
-            catch (Exception e)
-            {
-                // Reported once per part (the null is cached above); the part simply
-                // shows no isolines, which is otherwise indistinguishable from a
-                // deliberate no-implicit-route part.
-                report?.Invoke(
-                    $"section isolines: '{part.Name}' implicit lowering failed ({e.GetType().Name}: {e.Message})");
-                return null;
-            }
-        }
+        if (part.TryGetSdf(out var sdf, out string? error))
+            return sdf;
+        if (error is not null)
+            report?.Invoke(part, $"section isolines: {error}");
+        return null;
     }
 
     /// <summary>
@@ -114,15 +96,16 @@ internal static class SectionContours
     /// </summary>
     public static SectionContourGeometry Build(
         IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
-        in Frame3d plane, Dictionary<Part, Sdf?> cache, Action<string>? report = null)
+        in Frame3d plane, Action<Part, string>? report = null)
     {
         // Candidates: visible instances with an SDF route; their union bounds set the
-        // level spacing so all parts share one legend. This first pass primes the
-        // cache, so a lowering failure is reported exactly once per part.
+        // level spacing so all parts share one legend. This first pass performs (or
+        // reuses) each part's cached lowering, so failures surface here.
         var bounds = Aabb.Empty;
         for (int i = 0; i < instances.Count; i++)
         {
-            if (visible[i] && SdfRoute(instances[i].Part, cache, report) is not null)
+            if (visible[i] && instances[i].Part.ClippedBySection
+                && SdfRoute(instances[i].Part, report) is not null)
                 bounds = bounds.Union(instances[i].Bounds());
         }
         if (bounds.IsEmpty)
@@ -141,7 +124,10 @@ internal static class SectionContours
 
         for (int i = 0; i < instances.Count; i++)
         {
-            if (!visible[i] || SdfRoute(instances[i].Part, cache) is not { } sdf)
+            // A part exempt from sectioning has no cut face, so it has nothing to draw
+            // isolines on (Part.ClippedBySection).
+            if (!visible[i] || !instances[i].Part.ClippedBySection
+                || SdfRoute(instances[i].Part) is not { } sdf)
                 continue;
             var instance = instances[i];
             var world = instance.Bounds();
@@ -224,34 +210,39 @@ internal static class SectionContours
 /// </summary>
 internal sealed class SectionContourRenderer
 {
-    private readonly Dictionary<Part, Sdf?> _sdfCache = [];
+    // Parts whose implicit lowering failed and has already been reported. The failure
+    // itself is cached on the Part now, so without this set every rebuild would repeat
+    // the same status line.
+    private readonly HashSet<Part> _reportedFailures = [];
     private readonly List<SectionContourGeometry> _geometries = [];
     private readonly List<(uint ZeroVao, uint ZeroVbo, uint PositiveVao, uint PositiveVbo,
         uint NegativeVao, uint NegativeVbo)> _buffers = [];
     private bool _dirty = true;
     private readonly List<SectionPlane> _builtPlanes = [];
+    // Scratch for the per-plane sibling clip set, reused frame to frame (the render
+    // paths must not allocate per frame).
+    private readonly List<SectionPlane> _siblings = [];
     private bool[] _builtVisible = [];
     private int _builtVisibleCount;
     private int _reportedParts = -1;
 
-    /// <summary>Call when the instance list changes (scene swap/live reload): drops the
-    /// per-part SDF cache (parts are fresh objects after a reload) and forces a rebuild.</summary>
+    /// <summary>Call when the instance list changes (scene swap/live reload): forces a
+    /// rebuild. The SDF lowerings themselves are cached on the Parts and deliberately
+    /// NOT dropped — a reload brings fresh parts anyway, and an unchanged part keeps its
+    /// (possibly very expensive) field.</summary>
     public void Invalidate()
     {
         _dirty = true;
-        _sdfCache.Clear();
+        _reportedFailures.Clear();
     }
 
     /// <summary>
     /// Draws the isolines for every active section plane, rebuilding geometry and GPU
-    /// buffers first when stale. Each plane's contours are drawn with their OWN clip
-    /// rule so a quarter cut shows each cut face's isolines only where that face is
-    /// actually exposed: under <see cref="SectionCombine.Union"/> a plane's lines are
-    /// clipped where any other plane excludes; under
-    /// <see cref="SectionCombine.Intersection"/> (the quarter cut) they must instead be
-    /// clipped where the others do NOT exclude, which is the same rule applied to the
-    /// other planes FLIPPED. The plane comparisons for staleness are deliberate exact
-    /// equality — change detection, not geometry.
+    /// buffers first when stale. Each plane's contours are drawn clipped by its SIBLING
+    /// planes (<see cref="SectionClip.Siblings"/> — that method documents and owns the
+    /// rule), so a quarter cut shows each cut face's isolines only where that face is
+    /// actually exposed instead of across the plane's full extent. The plane comparisons
+    /// for staleness are deliberate exact equality — change detection, not geometry.
     /// </summary>
     public void Draw(
         GL gl, IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
@@ -270,7 +261,11 @@ internal sealed class SectionContourRenderer
                 var geometry = SectionContours.Build(
                     instances, visible,
                     SectionContours.PlaneFrame(plane.Normal.Normalized(), plane.Offset),
-                    _sdfCache, report);
+                    (part, message) =>
+                    {
+                        if (_reportedFailures.Add(part))
+                            report(message);
+                    });
                 _geometries.Add(geometry);
                 if (geometry.PartCount > most)
                 {
@@ -295,19 +290,13 @@ internal sealed class SectionContourRenderer
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(uModel, 1, false, matrix);
 
-        var others = new List<SectionPlane>();
         for (int i = 0; i < _geometries.Count; i++)
         {
             if (_geometries[i].PartCount == 0)
                 continue;
 
-            others.Clear();
-            for (int j = 0; j < planes.Count; j++)
-            {
-                if (j != i)
-                    others.Add(combine == SectionCombine.Union ? planes[j] : planes[j].Flipped());
-            }
-            section.Write(gl, others, SectionCombine.Union);
+            SectionClip.Siblings(planes, i, combine, _siblings);
+            section.Write(gl, _siblings, SectionCombine.Union);
 
             // d = 0 bright gold (the exact cross-section), positive levels cool,
             // negative (inside material) warm — draw signed families first so the

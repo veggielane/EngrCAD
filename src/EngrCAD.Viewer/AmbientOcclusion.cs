@@ -24,6 +24,20 @@ namespace EngrCAD.Viewer;
 // instances of a part share one bake and no part shadows another. Scene-wide AO
 // would have to be rebaked whenever anything moves and could not be shared between
 // instances; per-part self-occlusion carries the CAD-relevant signal.
+//
+// WHY IT STREAMS IN THE WINDOW: the bake is honest ray casting and it is not cheap
+// (measured on the demo scene: 12.3 s total, of which the M8 stud is 3.0 s and the
+// tapped block 5.5 s), and it already saturates every core, so more parallelism has
+// nothing left to give. Blocking the window on it made opening the demo feel broken.
+// Instead the window shows the scene IMMEDIATELY, flat-lit, and each part's occlusion
+// arrives as its bake finishes: a mesh VAO with no occlusion buffer reads the constant
+// 1.0 (RenderGeometry.SetDefaultOcclusion), which is EXACTLY the ambient-occlusion-off
+// shading, so an unbaked part is not a placeholder — it is the correct flat-lit render
+// of that part, and the only thing that changes when the bake lands is that crevices
+// darken. Cheapest part first, so most of a scene lights up in the first frames.
+// The headless pass still bakes inline: it is one-shot and must be deterministic, so
+// RenderToImage output is unchanged and window/offscreen parity holds once the window
+// has converged (a second or two).
 
 /// <summary>
 /// Per-vertex ambient-occlusion baking for the mesh shader's <c>aOcclusion</c>
@@ -104,31 +118,56 @@ internal static class AmbientOcclusion
         Cache.GetValue(source, _ => Bake(render));
 
     /// <summary>
-    /// Bakes and caches the occlusion of every distinct part up front. The entry points
-    /// call this on the same worker thread that runs <c>Scene.PreMesh</c>, so the bake
-    /// never lands on the render thread (a scene load or a hot reload would otherwise
-    /// stall the first frame by the whole bake time).
-    /// <para>Parts are baked in parallel, like <c>Scene.PreMesh</c> and for the same
-    /// reason: a bake reads one part's mesh and writes one cache entry keyed by that
-    /// mesh, so parts do not interact. <see cref="Bake"/> is itself block-parallel over
-    /// vertex groups, so a single dense part still uses the whole machine — but a scene
-    /// of many medium parts (the common case) used to run them strictly one at a time.
-    /// The result is unchanged whatever the scheduling: <see cref="Bake"/> is a pure
-    /// deterministic function of the render mesh, and <see cref="ConditionalWeakTable"/>
-    /// is thread-safe (two threads racing on one shared mesh would compute the same
-    /// array anyway).</para>
+    /// The cached bake for a mesh, or null if it has not been baked yet — the
+    /// NON-blocking lookup. The window uses this everywhere it touches GL, so a bake can
+    /// never land on the render thread; a null simply means the part draws flat-lit
+    /// until <see cref="BakeInBackground"/> publishes its result.
     /// </summary>
-    public static void Prime(IEnumerable<EngrCAD.Modeling.Part> parts)
+    public static float[]? TryGet(HalfEdgeMesh source) =>
+        Cache.TryGetValue(source, out var cached) ? cached : null;
+
+    /// <summary>
+    /// Bakes every part's occlusion on a background thread and publishes each result
+    /// into the shared cache as it finishes, calling <paramref name="onPartBaked"/> after
+    /// each one (the viewport repaints, and <see cref="TryGet"/> starts returning that
+    /// part's data). Parts are baked CHEAPEST FIRST — sorted by triangle count — so the
+    /// bulk of a scene gains its occlusion in the first moments and only the one or two
+    /// heavy parts trail; already-cached parts cost nothing and are not counted.
+    /// <paramref name="onFinished"/> reports how many parts were actually baked and how
+    /// long the job took (nothing is reported when everything was already cached).
+    /// Cancellation is checked between parts: <see cref="Bake"/> itself is one parallel
+    /// pass, and a scene swap only needs the REST of the queue dropped.
+    /// </summary>
+    public static void BakeInBackground(
+        IReadOnlyList<EngrCAD.Modeling.Part> parts, Action onPartBaked,
+        Action<int, TimeSpan>? onFinished, CancellationToken token)
     {
-        var distinct = parts as IReadOnlyList<EngrCAD.Modeling.Part> ?? [.. parts];
-        ParallelFor.Blocks(0, distinct.Count, (start, end) =>
+        ArgumentNullException.ThrowIfNull(parts);
+        ArgumentNullException.ThrowIfNull(onPartBaked);
+        if (parts.Count == 0)
+            return;
+
+        Task.Run(() =>
         {
-            for (int i = start; i < end; i++)
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            int baked = 0;
+            // GetMesh is cached (Scene.PreMesh primed it) and lock-protected, so reading
+            // it here is cheap and safe alongside the render thread; FaceCount orders the
+            // queue without building a RenderMesh for parts we may never reach.
+            foreach (var part in parts.OrderBy(p => p.GetMesh().FaceCount))
             {
-                var mesh = distinct[i].GetMesh();
+                if (token.IsCancellationRequested)
+                    return;
+                var mesh = part.GetMesh();
+                if (TryGet(mesh) is not null)
+                    continue;
                 For(mesh, RenderMesh.CreateFlat(mesh));
+                baked++;
+                onPartBaked();
             }
-        });
+            if (baked > 0 && !token.IsCancellationRequested)
+                onFinished?.Invoke(baked, started.Elapsed);
+        }, token);
     }
 
     /// <summary>
