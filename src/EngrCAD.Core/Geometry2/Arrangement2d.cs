@@ -15,9 +15,12 @@ namespace EngrCAD.Core.Geometry2;
 /// merged into one, and a rounded crossing may perturb an edge by up to the snap tolerance.
 /// Exactness therefore applies to the decisions, not the constructed coordinates.</para>
 ///
-/// <para>Insertion is O(existing edges) per segment (no acceleration structure yet — fine
-/// for sketch-scale inputs). The class is a construction-time structure and allocates
-/// freely; it is not a kernel hot path.</para>
+/// <para>Insertion narrows the edges it tests through a uniform hash grid over edge
+/// bounding boxes, so a k-segment build is no longer quadratic in exact predicate calls
+/// (see the broad-phase note by <c>CandidateEdges</c>). The grid changes which edges are
+/// LOOKED AT, never how any of them is decided — every event needs a shared point, hence
+/// overlapping boxes. The class is a construction-time structure and allocates freely; it
+/// is not a kernel hot path.</para>
 /// </summary>
 public sealed class Arrangement2d
 {
@@ -26,6 +29,26 @@ public sealed class Arrangement2d
     private readonly List<List<int>> _vertexEdges = [];
     private readonly Dictionary<(long X, long Y), List<int>> _grid = [];
     private readonly double _gridCell;
+
+    // ---- edge broad phase (see CandidateEdges) ----
+    private readonly Dictionary<(long X, long Y), List<int>> _edgeGrid = [];
+    private readonly List<int> _oversizedEdges = [];
+    private readonly List<int> _candidates = [];
+    private int[] _edgeStamp = [];
+    private int _stamp;
+    private double _edgeCell;          // 0 until the first build
+    private int _rebuildAt = MinIndexedEdges;
+
+    /// <summary>
+    /// Edge count below which no index is built at all. A short scan beats a hash lookup,
+    /// and sketch-scale arrangements (a rectangle and a pocket) never reach this — they
+    /// keep exactly the behavior and cost they had before the broad phase existed.
+    /// </summary>
+    private const int MinIndexedEdges = 256;
+
+    /// <summary>Floor on the cells a query may walk before falling back to a linear scan
+    /// (a tiny arrangement is faster to scan than to look up).</summary>
+    private const int MaxCellsPerEdge = 32;
 
     /// <summary>Vertices closer than this are merged; rounded intersection points may perturb edges by up to this distance.</summary>
     public double VertexSnapTolerance { get; }
@@ -126,6 +149,9 @@ public sealed class Arrangement2d
         if (aIdx < 0) aIdx = AddVertex(a);
         if (bIdx < 0) bIdx = AddVertex(b);
 
+        if (_edges.Count >= _rebuildAt)
+            RebuildEdgeIndex();
+
         // Scan existing edges with exact predicates; collect events before mutating.
         // splits: (position, existing vid or -1, whether the point also lies on [a,b]).
         var splits = new Dictionary<int, List<(double S, Vector2d Position, int Vid, bool OnAb)>>();
@@ -134,8 +160,10 @@ public sealed class Arrangement2d
         double abLen2 = abDir.LengthSquared;
 
         int edgeCount = _edges.Count;
-        for (int eid = 0; eid < edgeCount; eid++)
+        var scan = CandidateEdges(a, b, edgeCount);
+        for (int c = 0; c < scan.Count; c++)
         {
+            int eid = scan[c];
             var (xi, yi) = _edges[eid];
             if ((xi == aIdx && yi == bIdx) || (xi == bIdx && yi == aIdx))
                 continue;
@@ -311,6 +339,152 @@ public sealed class Arrangement2d
         _edges.Add((v0, v1));
         _vertexEdges[v0].Add(eid);
         _vertexEdges[v1].Add(eid);
+        IndexEdge(eid);
+    }
+
+    // ---- edge broad phase ----
+    //
+    // Insertion used to scan every existing edge, making a k-segment build O(k²) in exact
+    // predicate calls — which flattened circles reach quickly (Region2dBoolean feeds this
+    // hundreds of chords per loop). The scan is now restricted by a uniform hash grid over
+    // edge bounding boxes.
+    //
+    // This is a pure narrowing, NOT a change of decision: every event the scan can report
+    // — a proper crossing, a T-junction, a collinear overlap endpoint — requires a point
+    // shared by both segments, so it requires their bounding boxes to overlap. Boxes are
+    // padded by the vertex snap tolerance as well, so even a snapped coincidence stays in
+    // the candidate set. Every kept candidate is then decided by exactly the same exact
+    // predicates as before; the grid only removes edges that provably cannot interact.
+    //
+    // Three properties make the index cheap AND safe to maintain:
+    //
+    // 1. An edge no longer than one cell is stored in the SINGLE cell of its bounding-box
+    //    midpoint — one dictionary operation per edge, not one per covered cell. Its box
+    //    can then reach at most the eight neighbours of that cell, so a query expands its
+    //    own cell range by one ring before walking. (Bucketing every covered cell was
+    //    measured 5x more expensive to maintain than the scan it saved on dense inputs.)
+    // 2. Edges longer than a cell go into an always-scanned overflow list.
+    // 3. SplitEdge only ever SHRINKS an existing edge, so a stale entry still refers to a
+    //    box CONTAINED in the one it was filed under — over-approximation, never a miss —
+    //    and edges are never deleted. The far half gets its own entry.
+
+    private void IndexEdge(int eid)
+    {
+        if (_edgeCell <= 0)
+            return; // no index yet; the next Insert builds one
+        var (va, vb) = _edges[eid];
+        var p = _vertices[va];
+        var q = _vertices[vb];
+        // The snap-tolerance pad keeps a snapped coincidence inside the box, exactly as
+        // the query side pads.
+        double pad = VertexSnapTolerance;
+        double extent = Math.Max(Math.Abs(p.X - q.X), Math.Abs(p.Y - q.Y)) + 2 * pad;
+        if (!(extent <= _edgeCell))
+        {
+            _oversizedEdges.Add(eid); // also catches non-finite coordinates
+            return;
+        }
+        var key = (GridCoordinate(0.5 * (p.X + q.X) / _edgeCell),
+                   GridCoordinate(0.5 * (p.Y + q.Y) / _edgeCell));
+        if (!_edgeGrid.TryGetValue(key, out var bucket))
+            _edgeGrid[key] = bucket = [];
+        bucket.Add(eid);
+    }
+
+    /// <summary>
+    /// (Re)builds the edge grid, sizing cells from the CURRENT mean edge extent. Called
+    /// when the edge count has doubled, so the total rebuild cost across a build is O(E)
+    /// amortized while the cell size keeps tracking the geometry as splitting shortens it.
+    /// </summary>
+    private void RebuildEdgeIndex()
+    {
+        _edgeGrid.Clear();
+        _oversizedEdges.Clear();
+        _rebuildAt = Math.Max(MinIndexedEdges, _edges.Count * 2);
+
+        double total = 0;
+        foreach (var (va, vb) in _edges)
+        {
+            var p = _vertices[va];
+            var q = _vertices[vb];
+            total += Math.Max(Math.Abs(p.X - q.X), Math.Abs(p.Y - q.Y));
+        }
+        // Four mean extents per cell: comfortably above the typical edge (so few land in
+        // the always-scanned overflow list) while still separating distant geometry. Never
+        // below the snap tolerance, or a coincident-vertex cluster would demand its own cell.
+        double mean = _edges.Count > 0 ? total / _edges.Count : 0;
+        _edgeCell = Math.Max(4 * mean, VertexSnapTolerance);
+
+        for (int eid = 0; eid < _edges.Count; eid++)
+            IndexEdge(eid);
+    }
+
+    /// <summary>
+    /// Edge ids below <paramref name="edgeCount"/> that can overlap [a, b] — the cells
+    /// [a, b] covers plus one ring (a stored edge sits in its midpoint's cell and reaches
+    /// at most into the neighbours), plus the overflow list. Falls back to every edge when
+    /// no index exists yet or walking the cells would cost more than the scan it replaces.
+    /// </summary>
+    private List<int> CandidateEdges(in Vector2d a, in Vector2d b, int edgeCount)
+    {
+        _candidates.Clear();
+        if (_edgeCell <= 0 ||
+            !TryQueryCellRange(a, b, edgeCount, out long x0, out long y0, out long x1, out long y1))
+        {
+            for (int eid = 0; eid < edgeCount; eid++)
+                _candidates.Add(eid);
+            return _candidates;
+        }
+
+        if (_edgeStamp.Length < _edges.Count)
+            Array.Resize(ref _edgeStamp, Math.Max(_edges.Count, 2 * _edgeStamp.Length + 16));
+        int stamp = ++_stamp;
+
+        foreach (int eid in _oversizedEdges)
+        {
+            if (eid < edgeCount && _edgeStamp[eid] != stamp)
+            {
+                _edgeStamp[eid] = stamp;
+                _candidates.Add(eid);
+            }
+        }
+        for (long gx = x0; gx <= x1; gx++)
+        for (long gy = y0; gy <= y1; gy++)
+        {
+            if (!_edgeGrid.TryGetValue((gx, gy), out var bucket))
+                continue;
+            foreach (int eid in bucket)
+            {
+                if (eid < edgeCount && _edgeStamp[eid] != stamp)
+                {
+                    _edgeStamp[eid] = stamp;
+                    _candidates.Add(eid);
+                }
+            }
+        }
+        return _candidates;
+    }
+
+    /// <summary>
+    /// Cell range covering [a, b] padded by the snap tolerance and grown by the one-cell
+    /// ring stored edges can reach into; false when walking it would cost more than the
+    /// <paramref name="edgeCount"/>-long scan it replaces (or coordinates are not finite).
+    /// </summary>
+    private bool TryQueryCellRange(
+        in Vector2d a, in Vector2d b, long edgeCount,
+        out long x0, out long y0, out long x1, out long y1)
+    {
+        double pad = VertexSnapTolerance;
+        x0 = GridCoordinate((Math.Min(a.X, b.X) - pad) / _edgeCell) - 1;
+        x1 = GridCoordinate((Math.Max(a.X, b.X) + pad) / _edgeCell) + 1;
+        y0 = GridCoordinate((Math.Min(a.Y, b.Y) - pad) / _edgeCell) - 1;
+        y1 = GridCoordinate((Math.Max(a.Y, b.Y) + pad) / _edgeCell) + 1;
+        if (x1 < x0 || y1 < y0)
+            return false; // non-finite coordinates
+        long budget = Math.Max(MaxCellsPerEdge, edgeCount);
+        long columns = x1 - x0 + 1;
+        long rows = y1 - y0 + 1;
+        return columns <= budget && rows <= budget && columns * rows <= budget;
     }
 
     /// <summary>Splits edge <paramref name="eid"/> at existing vertex <paramref name="vid"/>; returns the id of the far half (vid → old B).</summary>
@@ -324,6 +498,9 @@ public sealed class Arrangement2d
         _edges.Add((vid, vb));
         _vertexEdges[vid].Add(newEid);
         _vertexEdges[vb].Add(newEid);
+        // eid's own index entries now over-approximate its shortened footprint, which is
+        // safe (extra candidates, never a miss); the far half needs its own entries.
+        IndexEdge(newEid);
         return newEid;
     }
 

@@ -129,7 +129,29 @@ concerns.
   the polygonizer determinism test).
 - **`ConvexHull2`** — 2D convex hull (Andrew's monotone chain, O(n log n)); returns CCW
   strictly-convex hull vertices or indices, degrading gracefully on coincident/collinear
-  input. The planar counterpart of the mesh engine's 3D quickhull.
+  input. The planar counterpart of the mesh engine's 3D quickhull. **The turn test is
+  `Predicates2d.Orient2dSign`, not a raw cross product**: a chain is a sequence of
+  orientation decisions that must be mutually consistent, and a naive determinant on
+  points spread over a wide exponent range (where coordinate differences stop being
+  exact) reports contradictory turns and pops vertices that belong to the hull —
+  measured on ~7% of near-collinear mixed-magnitude clouds, and locked by
+  `ConvexHull2Tests.NearCollinear_MixedMagnitudeSlivers_*`. Hull output is now verified
+  against BigInteger ground truth (`ExactReference`) rather than a tolerance: strictly
+  convex, enclosing every input point, exactly.
+- **`Arrangement2d` edge broad phase** — insertion used to test the new segment against
+  EVERY existing edge, so a k-segment build was quadratic in exact-predicate calls (the
+  workload `Region2dBoolean` feeds it: hundreds of chords per flattened loop). Edges are
+  now bucketed in a uniform hash grid — each edge in the single cell of its bounding-box
+  midpoint, cells sized at 4x the mean edge extent, rebuilt whenever the edge count
+  doubles; edges longer than a cell go in an always-scanned overflow list — and a query
+  walks the cells its own box covers plus one ring. Measured on a 30x30 line grid
+  (12 640 edges): **9.1% of the edge-tests the full scan performed**.
+  <br>Three properties keep it exact and cheap: an event needs a point shared by both
+  segments, hence overlapping boxes, so the grid only removes edges that *provably*
+  cannot interact (every survivor is decided by exactly the same predicates as before);
+  `SplitEdge` only ever SHRINKS an edge, so a stale entry refers to a box containing the
+  real one — over-approximation, never a miss; and nothing below `MinIndexedEdges` (256)
+  builds an index at all, so sketch-scale arrangements are untouched.
 - **Min-bounding fits** (`Fitting2d`, `Fitting3d`; g3: ContMinBox2/ContMinCircle2/
   ContOrientedBox3/OrthogonalPlaneFit3):
   - `Fitting2d.MinAreaBox` → `OrientedBox2d` — minimum-area oriented box via the
@@ -142,8 +164,16 @@ concerns.
     in-plane spread (largest) — a natural deterministic in-plane basis. Throws when
     the points don't determine a plane.
   - `Fitting3d.FitBox` → `OrientedBox3d` (a `Frame3d` + half extents) — PCA oriented
-    box, re-centered to the tightest box with the PCA axes (good-fit heuristic, not
-    the minimum-volume box).
+    box, re-centered to the tightest box with the PCA axes. **A heuristic, not the
+    minimum-volume box**, and not a small gap: PCA orients by how the points are
+    DISTRIBUTED, so sampling density changes the axes even when the shape does not.
+    The exact method is known and every piece of it exists except one — the
+    minimum-volume box has a face flush with a hull face (Freeman–Shapira), so it is
+    "hull → per hull face, project and take `Fitting2d.MinAreaBox`, pair with the
+    normal extent, keep the smallest" — but the 3D `ConvexHull` lives in EngrCAD.Mesh,
+    which references Core, so Core cannot call it and a second quickhull here would be
+    worse than the heuristic. Moving the hull into Core, or an overload taking a
+    caller-supplied hull, is the open decision (todo.md).
   - All built on an internal cyclic-Jacobi `SymmetricEigen3` (3×3 symmetric
     eigen-decomposition, unconditionally convergent).
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over

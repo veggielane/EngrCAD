@@ -236,4 +236,123 @@ public class Arrangement2dTests
         Assert.Single(cells[2].Holes);
         Assert.Equal(64.0, cells.Sum(c => c.Area), 12);
     }
+
+    // ---- edge broad phase ----
+    //
+    // Insertion narrows the edges it tests with a uniform grid over edge bounding boxes.
+    // The failure mode of a spatial index is a MISSED candidate — an intersection that is
+    // never found — so these tests check the arrangement's defining invariant directly
+    // (no two edges cross away from a shared vertex; no vertex sits strictly inside an
+    // edge) on inputs whose crossings are exactly representable, at sizes that force the
+    // index to build and rebuild.
+
+    /// <summary>
+    /// The arrangement's defining property, verified with exact predicates. Only valid on
+    /// inputs whose crossing points are exactly representable — otherwise the documented
+    /// snap-tolerance rounding may legitimately perturb an edge.
+    /// </summary>
+    private static void AssertNoUnresolvedCrossings(Arrangement2d arrangement)
+    {
+        int edges = arrangement.EdgeCount;
+        for (int i = 0; i < edges; i++)
+        {
+            var (ia, ib) = arrangement.EdgeAt(i);
+            var p = arrangement.VertexAt(ia);
+            var q = arrangement.VertexAt(ib);
+            for (int j = i + 1; j < edges; j++)
+            {
+                var (ja, jb) = arrangement.EdgeAt(j);
+                if (ia == ja || ia == jb || ib == ja || ib == jb)
+                    continue; // adjacent edges legitimately touch
+                var r = arrangement.VertexAt(ja);
+                var s = arrangement.VertexAt(jb);
+                bool straddles =
+                    Predicates2d.Orient2dSign(p, q, r) * Predicates2d.Orient2dSign(p, q, s) < 0 &&
+                    Predicates2d.Orient2dSign(r, s, p) * Predicates2d.Orient2dSign(r, s, q) < 0;
+                Assert.False(straddles, $"edges {i} and {j} cross without a shared vertex");
+            }
+        }
+
+        for (int i = 0; i < edges; i++)
+        {
+            var (ia, ib) = arrangement.EdgeAt(i);
+            var p = arrangement.VertexAt(ia);
+            var q = arrangement.VertexAt(ib);
+            for (int v = 0; v < arrangement.VertexCount; v++)
+            {
+                if (v == ia || v == ib)
+                    continue;
+                var x = arrangement.VertexAt(v);
+                if (Predicates2d.Orient2dSign(p, q, x) != 0)
+                    continue;
+                bool between = Math.Abs(q.X - p.X) >= Math.Abs(q.Y - p.Y)
+                    ? (p.X < q.X ? p.X < x.X && x.X < q.X : q.X < x.X && x.X < p.X)
+                    : (p.Y < q.Y ? p.Y < x.Y && x.Y < q.Y : q.Y < x.Y && x.Y < p.Y);
+                Assert.False(between, $"vertex {v} sits strictly inside edge {i} (unsplit T-junction)");
+            }
+        }
+    }
+
+    [Fact]
+    public void BroadPhase_DenseGrid_FindsEveryCrossing()
+    {
+        // 30 + 30 integer-coordinate lines: 900 crossings, ~1800 edges, so the index is
+        // built and rebuilt several times during the insert sequence. Cell count and area
+        // are known exactly.
+        const int n = 30;
+        var arrangement = new Arrangement2d();
+        for (int i = 0; i < n; i++)
+        {
+            arrangement.Insert((0, i), (n - 1, i));
+            arrangement.Insert((i, 0), (i, n - 1));
+        }
+
+        var cells = arrangement.ExtractCells();
+        Assert.Equal((n - 1) * (n - 1), cells.Count);
+        Assert.All(cells, c => Assert.Equal(1.0, c.Area, 12));
+        AssertNoUnresolvedCrossings(arrangement);
+    }
+
+    [Fact]
+    public void BroadPhase_SeparatedClusters_DoNotInterfere()
+    {
+        // Identical fine detail in two clusters a million units apart: the grid's cell
+        // size is driven by the (short) edges, so the clusters land in far-apart cells —
+        // the case where a naive fixed cell size either explodes or misses.
+        var arrangement = new Arrangement2d();
+        foreach (double offset in (ReadOnlySpan<double>)[0.0, 1e6])
+        {
+            for (int i = 0; i < 12; i++)
+            {
+                arrangement.Insert((offset, i * 0.25), (offset + 3, i * 0.25));
+                arrangement.Insert((offset + i * 0.25, 0), (offset + i * 0.25, 3));
+            }
+        }
+
+        var cells = arrangement.ExtractCells();
+        Assert.Equal(2 * 11 * 11, cells.Count);
+        Assert.All(cells, c => Assert.Equal(0.0625, c.Area, 12));
+        AssertNoUnresolvedCrossings(arrangement);
+    }
+
+    [Fact]
+    public void BroadPhase_OneLongSegmentAcrossManyShortOnes_StillSplitsEveryCrossing()
+    {
+        // A segment far longer than the grid cell goes into the always-scanned overflow
+        // list; it must still be split by all 60 rungs it crosses.
+        var arrangement = new Arrangement2d();
+        for (int i = 0; i < 60; i++)
+            arrangement.Insert((i, -1), (i, 1));
+        arrangement.Insert((-5, 0), (100, 0));
+
+        // The long segment is cut at every rung: 60 crossings plus its two free ends.
+        int onAxis = 0;
+        for (int v = 0; v < arrangement.VertexCount; v++)
+        {
+            if (arrangement.VertexAt(v).Y == 0)
+                onAxis++;
+        }
+        Assert.Equal(62, onAxis);
+        AssertNoUnresolvedCrossings(arrangement);
+    }
 }

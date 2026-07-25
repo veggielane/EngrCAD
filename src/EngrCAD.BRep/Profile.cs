@@ -13,9 +13,9 @@ namespace EngrCAD.BRep;
 public sealed class Profile
 {
     // Chain endpoints often come from independent constructions (arc ends, projected
-    // sketch points) carrying ~1e-7 error — looser than the 1e-9 weld tolerance on
-    // purpose; the solid factories rebuild junction vertices exactly.
-    private const double JoinTolerance = 1e-7;
+    // sketch points), so joining them is the ladder's seam tier — looser than the 1e-9
+    // weld tolerance on purpose; the solid factories rebuild junction vertices exactly.
+    private const double JoinTolerance = FaceGeometry.SeamTolerance;
 
     public IReadOnlyList<Curve3d> Segments { get; }
     public Vector3d Origin { get; }

@@ -644,27 +644,145 @@ public static class SurfaceIntersection
     private static Vector3d NormalOf(Surface s, in ParamDomain d, double u, double v) =>
         s.NormalAt(Wrap(u, d.U, d.PeriodicU), Wrap(v, d.V, d.PeriodicV));
 
-    private static bool Outside(double t, in Interval interval, bool periodic) =>
-        !periodic && (t < interval.Start - 1e-9 || t > interval.End + 1e-9);
+    /// <summary>
+    /// Every numeric constant of the marching tracer, in one place because they are a
+    /// SET, not independent knobs — the boolean pipeline's geometry depends on all of
+    /// them agreeing. The chain of reasoning that ties them together:
+    ///
+    /// <list type="bullet">
+    /// <item>The <b>march step</b> (region extent / <see cref="StepDivisor"/>) is the
+    /// unit everything spatial is measured in: seed deduplication, the branch-jump
+    /// rejection, the closed-loop test and the corrector's divergence bail are all
+    /// multiples of it, so changing the divisor rescales them all coherently.</item>
+    /// <item><see cref="SeedResolution"/> and <see cref="SeedSpacingFactor"/> must find
+    /// at least one seed on every branch: the sample spacing implied by the resolution
+    /// times the factor is the pairing radius, so loosening one means tightening the
+    /// other.</item>
+    /// <item>The Newton tolerances form a ladder that must stay ORDERED:
+    /// <see cref="NewtonResidual"/> (1e-10, the iteration's own convergence test) is
+    /// tighter than <see cref="SeedAcceptance"/> (1e-9, "this seed is on the curve"),
+    /// which is tighter than <see cref="CorrectorAcceptance"/> (1e-8, "this traced point
+    /// is on the curve"). Loosening the residual past an acceptance makes the
+    /// corresponding check unreachable; tightening an acceptance past the residual makes
+    /// converged iterations get rejected. Traced points are consumed as
+    /// <see cref="PolylineCurve3d"/> vertices and pulled back through
+    /// <see cref="FaceGeometry.InverseEvaluationTolerance"/> (1e-6), which is the ceiling
+    /// the corrector's acceptance has to clear.</item>
+    /// <item><see cref="PartialsStep"/> is a central-difference step, so the Jacobian it
+    /// builds is accurate to ~h² = 1e-14 — which is why the Newton residual cannot
+    /// usefully be tightened below 1e-10 and why <see cref="PivotFloor"/> sits at
+    /// 1e-14.</item>
+    /// <item><see cref="TangentDegeneracy"/> guards |n_a x n_b|: below it the surfaces
+    /// are tangent and the marching direction is undefined, so the trace stops rather
+    /// than wandering.</item>
+    /// </list>
+    ///
+    /// <para><b>Boolean-critical.</b> Tracer output feeds face splitting and
+    /// <c>BrepBoolean</c>; these values are the tuning that makes cross-drilled bores and
+    /// pierced spheres come out manifold. Change them as a set, with the whole suite plus
+    /// the DocsGen snippets as the regression net — never one literal at a time.</para>
+    /// </summary>
+    private readonly record struct TracerSettings
+    {
+        /// <summary>Samples per parameter direction when grid-seeding each surface.</summary>
+        public int SeedResolution { get; init; }
 
-    private sealed record MarchState(Surface A, ParamDomain Da, Surface B, ParamDomain Db, double Step);
+        /// <summary>Seed pairing radius as a multiple of the sample-cloud spacing.</summary>
+        public double SeedSpacingFactor { get; init; }
+
+        /// <summary>March step = region's longest extent / this.</summary>
+        public double StepDivisor { get; init; }
+
+        /// <summary>Squared multiple of the step within which a seed counts as already traced.</summary>
+        public double SeedDedupeStepsSquared { get; init; }
+
+        /// <summary>Hard cap on points per traced branch.</summary>
+        public int MaxSteps { get; init; }
+
+        /// <summary>Multiple of the step beyond which the corrector is deemed to have jumped branches.</summary>
+        public double BranchJumpSteps { get; init; }
+
+        /// <summary>Steps that must elapse before a return to the start counts as a closed loop.</summary>
+        public int MinStepsBeforeClosure { get; init; }
+
+        /// <summary>Damped Gauss-Newton iterations when refining a seed.</summary>
+        public int SeedIterations { get; init; }
+
+        /// <summary>Newton iterations per corrector step.</summary>
+        public int CorrectorIterations { get; init; }
+
+        /// <summary>Residual at which a Newton/Gauss-Newton iteration is converged.</summary>
+        public double NewtonResidual { get; init; }
+
+        /// <summary>Residual below which a non-converged seed is still accepted.</summary>
+        public double SeedAcceptance { get; init; }
+
+        /// <summary>Residual below which a non-converged corrector step is still accepted.</summary>
+        public double CorrectorAcceptance { get; init; }
+
+        /// <summary>Levenberg damping added to the normal equations' diagonal.</summary>
+        public double LevenbergDamping { get; init; }
+
+        /// <summary>Squared multiple of the step past which a corrector update is diverging.</summary>
+        public double DivergenceStepsSquared { get; init; }
+
+        /// <summary>Cross-product magnitude below which the two normals are parallel (tangential contact).</summary>
+        public double TangentDegeneracy { get; init; }
+
+        /// <summary>Parameter slack allowed outside a bounded domain before the trace stops.</summary>
+        public double DomainSlack { get; init; }
+
+        /// <summary>Pivot magnitude below which the 4x4 solve reports singularity.</summary>
+        public double PivotFloor { get; init; }
+
+        /// <summary>Central-difference step for surface partials: this, or this fraction of the domain length.</summary>
+        public double PartialsStep { get; init; }
+
+        public static TracerSettings Default => new()
+        {
+            SeedResolution = 24,
+            SeedSpacingFactor = 1.5,
+            StepDivisor = 150.0,
+            SeedDedupeStepsSquared = 4.0,
+            MaxSteps = 4000,
+            BranchJumpSteps = 3.0,
+            MinStepsBeforeClosure = 5,
+            SeedIterations = 12,
+            CorrectorIterations = 10,
+            NewtonResidual = 1e-10,
+            SeedAcceptance = 1e-9,
+            CorrectorAcceptance = 1e-8,
+            LevenbergDamping = 1e-10,
+            DivergenceStepsSquared = 100.0,
+            TangentDegeneracy = 1e-7,
+            DomainSlack = 1e-9,
+            PivotFloor = 1e-14,
+            PartialsStep = 1e-7,
+        };
+    }
+
+    private static bool Outside(double t, in Interval interval, bool periodic, double slack) =>
+        !periodic && (t < interval.Start - slack || t > interval.End + slack);
+
+    private sealed record MarchState(
+        Surface A, ParamDomain Da, Surface B, ParamDomain Db, double Step, TracerSettings Settings);
 
     private static List<Curve3d> March(Surface a, Surface b, in Aabb region)
     {
-        const int seedResolution = 24;
+        var settings = TracerSettings.Default;
         var da = GetParamDomain(a, region);
         var db = GetParamDomain(b, region);
-        double step = region.Size[region.LongestAxis] / 150.0;
-        var state = new MarchState(a, da, b, db, step);
+        double step = region.Size[region.LongestAxis] / settings.StepDivisor;
+        var state = new MarchState(a, da, b, db, step, settings);
 
-        var seeds = FindSeeds(state, seedResolution);
+        var seeds = FindSeeds(state, settings.SeedResolution);
         var curves = new List<Curve3d>();
         var traced = new List<Vector3d>();
 
         foreach (var seed in seeds)
         {
             var p = Eval(a, da, seed[0], seed[1]);
-            if (traced.Any(q => q.DistanceSquaredTo(p) < 4 * step * step))
+            if (traced.Any(q => q.DistanceSquaredTo(p) < settings.SeedDedupeStepsSquared * step * step))
                 continue;
 
             var forward = Trace(state, seed, +1, out bool closed);
@@ -722,7 +840,7 @@ public static class SurfaceIntersection
                 var pa = state.A.PointAt(ua, va);
                 if (!bvh.Nearest(pa, k => samplesB[k].P.DistanceTo(pa), out int nearest, out double distance))
                     continue;
-                if (distance > spacing * 1.5)
+                if (distance > spacing * state.Settings.SeedSpacingFactor)
                     continue;
 
                 double[] parameters = [ua, va, samplesB[nearest].U, samplesB[nearest].V];
@@ -736,16 +854,17 @@ public static class SurfaceIntersection
     /// <summary>Damped Gauss–Newton pulling a parameter 4-tuple onto S_a = S_b.</summary>
     private static bool RefineSeed(MarchState state, double[] parameters)
     {
-        for (int iteration = 0; iteration < 12; iteration++)
+        var settings = state.Settings;
+        for (int iteration = 0; iteration < settings.SeedIterations; iteration++)
         {
             var pa = Eval(state.A, state.Da, parameters[0], parameters[1]);
             var pb = Eval(state.B, state.Db, parameters[2], parameters[3]);
             var f = pa - pb;
-            if (f.Length < 1e-10)
+            if (f.Length < settings.NewtonResidual)
                 return true;
 
-            var (jau, jav) = Partials(state.A, state.Da, parameters[0], parameters[1]);
-            var (jbu, jbv) = Partials(state.B, state.Db, parameters[2], parameters[3]);
+            var (jau, jav) = Partials(state.A, state.Da, parameters[0], parameters[1], settings);
+            var (jbu, jbv) = Partials(state.B, state.Db, parameters[2], parameters[3], settings);
 
             // Normal equations (JᵀJ + λI)Δ = −JᵀF with J = [Ja | −Jb].
             Span<Vector3d> columns = [jau, jav, -jbu, -jbv];
@@ -755,20 +874,21 @@ public static class SurfaceIntersection
             {
                 for (int c = 0; c < 4; c++)
                     m[r, c] = columns[r].Dot(columns[c]);
-                m[r, r] += 1e-10;
+                m[r, r] += settings.LevenbergDamping;
                 rhs[r] = -columns[r].Dot(f);
             }
-            if (!Solve4(m, rhs, out var delta))
+            if (!Solve4(m, rhs, settings.PivotFloor, out var delta))
                 return false;
             for (int k = 0; k < 4; k++)
                 parameters[k] += delta[k];
         }
         return (Eval(state.A, state.Da, parameters[0], parameters[1]) -
-                Eval(state.B, state.Db, parameters[2], parameters[3])).Length < 1e-9;
+                Eval(state.B, state.Db, parameters[2], parameters[3])).Length < settings.SeedAcceptance;
     }
 
     private static List<Vector3d> Trace(MarchState state, double[] seed, int direction, out bool closed)
     {
+        var settings = state.Settings;
         closed = false;
         var parameters = (double[])seed.Clone();
         var points = new List<Vector3d>();
@@ -776,13 +896,13 @@ public static class SurfaceIntersection
         points.Add(start);
         Vector3d? previousTangent = null;
 
-        for (int step = 0; step < 4000; step++)
+        for (int step = 0; step < settings.MaxSteps; step++)
         {
             var p = Eval(state.A, state.Da, parameters[0], parameters[1]);
             var na = NormalOf(state.A, state.Da, parameters[0], parameters[1]);
             var nb = NormalOf(state.B, state.Db, parameters[2], parameters[3]);
             var cross = na.Cross(nb);
-            if (!cross.TryNormalize(new Tolerance(1e-7, 1e-7), out var tangent))
+            if (!cross.TryNormalize(new Tolerance(settings.TangentDegeneracy, settings.TangentDegeneracy), out var tangent))
                 break; // tangential contact: direction undefined
             if (previousTangent is { } prev && tangent.Dot(prev) < 0)
                 tangent = -tangent;
@@ -793,18 +913,18 @@ public static class SurfaceIntersection
             var target = p + tangent * state.Step;
             if (!Correct(state, parameters, target, tangent))
                 break;
-            if (Outside(parameters[0], state.Da.U, state.Da.PeriodicU) ||
-                Outside(parameters[1], state.Da.V, state.Da.PeriodicV) ||
-                Outside(parameters[2], state.Db.U, state.Db.PeriodicU) ||
-                Outside(parameters[3], state.Db.V, state.Db.PeriodicV))
+            if (Outside(parameters[0], state.Da.U, state.Da.PeriodicU, settings.DomainSlack) ||
+                Outside(parameters[1], state.Da.V, state.Da.PeriodicV, settings.DomainSlack) ||
+                Outside(parameters[2], state.Db.U, state.Db.PeriodicU, settings.DomainSlack) ||
+                Outside(parameters[3], state.Db.V, state.Db.PeriodicV, settings.DomainSlack))
                 break;
 
             var next = Eval(state.A, state.Da, parameters[0], parameters[1]);
-            if (next.DistanceTo(p) > 3 * state.Step)
+            if (next.DistanceTo(p) > settings.BranchJumpSteps * state.Step)
                 break; // corrector jumped to a different branch
 
             points.Add(next);
-            if (step > 5 && next.DistanceTo(start) < state.Step)
+            if (step > settings.MinStepsBeforeClosure && next.DistanceTo(start) < state.Step)
             {
                 closed = true;
                 break;
@@ -816,19 +936,20 @@ public static class SurfaceIntersection
     /// <summary>Newton step onto both surfaces, constrained to the plane through the predicted point.</summary>
     private static bool Correct(MarchState state, double[] parameters, in Vector3d target, in Vector3d tangent)
     {
+        var settings = state.Settings;
         var t = tangent;
         var goal = target;
-        for (int iteration = 0; iteration < 10; iteration++)
+        for (int iteration = 0; iteration < settings.CorrectorIterations; iteration++)
         {
             var pa = Eval(state.A, state.Da, parameters[0], parameters[1]);
             var pb = Eval(state.B, state.Db, parameters[2], parameters[3]);
             var f = pa - pb;
             double g = t.Dot(pa - goal);
-            if (f.Length < 1e-10 && Math.Abs(g) < 1e-10)
+            if (f.Length < settings.NewtonResidual && Math.Abs(g) < settings.NewtonResidual)
                 return true;
 
-            var (jau, jav) = Partials(state.A, state.Da, parameters[0], parameters[1]);
-            var (jbu, jbv) = Partials(state.B, state.Db, parameters[2], parameters[3]);
+            var (jau, jav) = Partials(state.A, state.Da, parameters[0], parameters[1], settings);
+            var (jbu, jbv) = Partials(state.B, state.Db, parameters[2], parameters[3], settings);
 
             var m = new double[4, 4]
             {
@@ -838,7 +959,7 @@ public static class SurfaceIntersection
                 { t.Dot(jau), t.Dot(jav), 0, 0 },
             };
             var rhs = new double[] { -f.X, -f.Y, -f.Z, -g };
-            if (!Solve4(m, rhs, out var delta))
+            if (!Solve4(m, rhs, settings.PivotFloor, out var delta))
                 return false;
 
             double magnitude = 0;
@@ -847,24 +968,25 @@ public static class SurfaceIntersection
                 parameters[k] += delta[k];
                 magnitude += delta[k] * delta[k];
             }
-            if (magnitude > 100 * state.Step * state.Step)
+            if (magnitude > settings.DivergenceStepsSquared * state.Step * state.Step)
                 return false; // diverging
         }
         return (Eval(state.A, state.Da, parameters[0], parameters[1]) -
-                Eval(state.B, state.Db, parameters[2], parameters[3])).Length < 1e-8;
+                Eval(state.B, state.Db, parameters[2], parameters[3])).Length < settings.CorrectorAcceptance;
     }
 
-    private static (Vector3d Du, Vector3d Dv) Partials(Surface s, in ParamDomain d, double u, double v)
+    private static (Vector3d Du, Vector3d Dv) Partials(
+        Surface s, in ParamDomain d, double u, double v, in TracerSettings settings)
     {
-        double hu = Math.Max(1e-7, d.U.Length * 1e-7);
-        double hv = Math.Max(1e-7, d.V.Length * 1e-7);
+        double hu = Math.Max(settings.PartialsStep, d.U.Length * settings.PartialsStep);
+        double hv = Math.Max(settings.PartialsStep, d.V.Length * settings.PartialsStep);
         var du = (Eval(s, d, u + hu, v) - Eval(s, d, u - hu, v)) / (2 * hu);
         var dv = (Eval(s, d, u, v + hv) - Eval(s, d, u, v - hv)) / (2 * hv);
         return (du, dv);
     }
 
     /// <summary>Gaussian elimination with partial pivoting for the 4×4 marching systems.</summary>
-    private static bool Solve4(double[,] m, double[] rhs, out double[] solution)
+    private static bool Solve4(double[,] m, double[] rhs, double pivotFloor, out double[] solution)
     {
         solution = new double[4];
         var a = (double[,])m.Clone();
@@ -878,7 +1000,7 @@ public static class SurfaceIntersection
                 if (Math.Abs(a[r, col]) > Math.Abs(a[pivot, col]))
                     pivot = r;
             }
-            if (Math.Abs(a[pivot, col]) < 1e-14)
+            if (Math.Abs(a[pivot, col]) < pivotFloor)
                 return false;
             if (pivot != col)
             {

@@ -227,4 +227,61 @@ public class SketchTests
         var halfDisc = Sketch.Start(-1, 0).ArcThrough(new(0, 1), new(1, 0)).Close();
         Assert.True(Math.Abs(halfDisc.Area() - Math.PI / 2) < 1e-9, $"area {halfDisc.Area()}");
     }
+
+    // ---- degeneracy guards are RELATIVE to the sketch's own scale ----
+    //
+    // Area is quadratic in scale and the circumcenter determinant is too, so an absolute
+    // floor is wrong in both directions at once: it rejects legitimate small profiles and
+    // waves through degenerate large ones. These four tests pin both directions.
+
+    [Fact]
+    public void DegenerateArea_MicronScaleProfile_IsAccepted()
+    {
+        // A 1 µm × 0.5 µm pocket (mm units) encloses 5e-13 — under the old absolute 1e-12
+        // floor this legitimate profile was rejected as "encloses no area".
+        var tiny = Sketch.Rectangle(1e-6, 0.5e-6);
+        Assert.True(Math.Abs(tiny.Area() - 5e-13) < 5e-13 * 1e-9, $"area {tiny.Area()}");
+    }
+
+    [Fact]
+    public void DegenerateArea_LargeScaleSliver_IsRejected()
+    {
+        // 1000 × 1e-10: encloses 1e-7, which the old absolute floor happily accepted even
+        // though the profile is 1e-13 of its own extent — a sliver no downstream operation
+        // can do anything sane with.
+        Assert.Throws<ArgumentException>(() => Sketch.Rectangle(1000, 1e-10));
+
+        // The same aspect ratio at unit scale is still rejected, as before.
+        Assert.Throws<ArgumentException>(() => Sketch.Rectangle(1, 1e-13));
+    }
+
+    [Fact]
+    public void ArcThrough_MicronScaleArc_IsNotMistakenForCollinear()
+    {
+        // The circumcenter determinant of these three points is 4e-13 — genuinely
+        // non-collinear (the middle point is 20% of the span off the chord), but under an
+        // absolute 1e-12 floor it read as collinear and threw.
+        var arc = Sketch.Start(0, 0).ArcThrough(new(0.5e-6, 0.2e-6), new(1e-6, 0)).Close();
+
+        // Circumcenter of (0,0), (0.5,0.2), (1,0) (in units of 1e-6) is (0.5, -0.525) by
+        // symmetry, so R = sqrt(0.25 + 0.525²) = 0.725. Closing back along the chord leaves
+        // the circular segment above it: area = R²(θ − sin θ)/2 with sin(θ/2) = 0.5/R.
+        double r = 0.725e-6;
+        double theta = 2 * Math.Asin(0.5e-6 / r);
+        double expected = 0.5 * r * r * (theta - Math.Sin(theta));
+        Assert.True(Math.Abs(arc.Area() - expected) < expected * 1e-9, $"area {arc.Area()} vs {expected}");
+    }
+
+    [Fact]
+    public void ArcThrough_CollinearAtAnyScale_StillThrows()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            Sketch.Start(0, 0).ArcThrough(new(0.5, 0.5), new(1, 1)));
+        Assert.Throws<ArgumentException>(() =>
+            Sketch.Start(0, 0).ArcThrough(new(0.5e-6, 0.5e-6), new(1e-6, 1e-6)));
+        // Large scale: the old absolute floor let this through and built a circle of radius
+        // ~1.25e15 from three points 1e-10 off a 1000-long line.
+        Assert.Throws<ArgumentException>(() =>
+            Sketch.Start(0, 0).ArcThrough(new(500, 1e-10), new(1000, 0)));
+    }
 }

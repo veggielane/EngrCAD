@@ -18,6 +18,21 @@ public static class FaceGeometry
     /// </summary>
     public const double InverseEvaluationTolerance = 1e-6;
 
+    /// <summary>
+    /// The epsilon ladder's <b>seam tier</b>: the distance at which geometry constructed
+    /// INDEPENDENTLY on the two sides of one shared curve may still be considered
+    /// coincident. Two independent constructions (a tracer polyline vs an analytic
+    /// carrier, a projected sketch point vs a rebuilt junction, a trimmed loop sample vs
+    /// the surface's natural grid) agree only to ~1e-7, so the 1e-9 absolute weld
+    /// tolerance would reject genuinely-shared geometry here. Two decades tighter than
+    /// <see cref="InverseEvaluationTolerance"/>, two decades looser than the weld tier.
+    /// <para><b>Boolean-critical</b>: <see cref="TopologyEditor.SealSeams"/> and the
+    /// tessellator's full-domain boundary match both key on this value. Geometry that is
+    /// built EXACTLY on both sides (tessellation welds, mandatory seam breaks, clone
+    /// dedupe) must stay on the 1e-9 weld tier — do not promote those sites here.</para>
+    /// </summary>
+    public const double SeamTolerance = 1e-7;
+
     /// <summary>The u-period of surfaces that close on themselves in u; 0 when aperiodic.</summary>
     public static double PeriodU(Surface surface) => surface switch
     {

@@ -127,6 +127,18 @@ operations. Depends only on `EngrCAD.Core`.
   polylines stop short of a bounded generator's rings and could never refine against
   face boundaries.
 
+  **The tracer's numeric constants live in one place**: the private
+  `SurfaceIntersection.TracerSettings` record struct (seed resolution and pairing radius,
+  march step divisor, seed/branch/closure step multiples, Newton iteration counts, the
+  1e-10 residual / 1e-9 seed-acceptance / 1e-8 corrector-acceptance ladder, Levenberg
+  damping, the 1e-7 tangential-contact guard, domain slack, the 1e-14 pivot floor and the
+  1e-7 central-difference step). They are a SET, not independent knobs — the march step is
+  the unit every spatial test is measured in, the acceptance ladder must stay ordered
+  (residual < seed acceptance < corrector acceptance < the 1e-6 pullback tolerance that
+  consumes traced vertices), and the central-difference step bounds how tight the residual
+  can usefully be. **Boolean-critical**: tune them together, with the whole suite and the
+  DocsGen snippets as the regression net.
+
   **Bounded planar carriers.** A sketch extrusion's walls are `ExtrudedSurface`s over the
   profile's individual segments, so a pocket wall is `ExtrudedSurface(line, dir)` —
   geometrically a plane, but a BOUNDED one (a parallelogram). Two paths handle them, both
@@ -227,6 +239,31 @@ operations. Depends only on `EngrCAD.Core`.
   untrimmed), and near-miss rejections emit a diagnostic instead of failing silently.
   Units: millimetres assumed; other declared length units produce a diagnostic, not
   scaling.
+
+### Named epsilon tiers
+
+The epsilon ladder documented in `CLAUDE.md` has two named B-Rep constants, both on
+`FaceGeometry`, both boolean-critical and both locked by
+`FaceGeometryTests.EpsilonLadder_NamedTiers_HoldTheirDocumentedValues`:
+
+- `FaceGeometry.SeamTolerance` (**1e-7, seam tier**) — the distance at which geometry
+  constructed *independently* on the two sides of one shared curve still counts as
+  coincident. Used by `TopologyEditor.SealSeams` (vertex unification + seam-edge
+  merging), `Profile`'s chain-join check, and Interop's `BRepTessellator`
+  full-domain boundary match. Geometry built EXACTLY on both sides (tessellation
+  welds, mandatory seam breaks, clone dedupe) stays on the 1e-9 weld tier — do not
+  promote those sites here.
+- `FaceGeometry.InverseEvaluationTolerance` (**1e-6, inverse-evaluation tier**) — every
+  `Surface.TryProjectPoint` pullback in BRep and Interop.
+
+`FaceSplitter.CrossingParameterDedupe` (1e-8) is a *curve-parameter*-space window, not
+model units: it merges crossings that name the same point (an endpoint hit reported by
+two adjacent boundary edges; a mandatory boolean break landing on a crossing the
+arrangement already found). The end-of-domain guards beside it scale by `Domain.Length`
+instead, because they must stay meaningful on arbitrarily reparameterized curves.
+
+The marching tracer's own constants are collected in `SurfaceIntersection.TracerSettings`
+— see the surface-intersection section above.
 
 Tessellation to meshes lives in `EngrCAD.Interop` (`BRepTessellator` +
 `TrimmedFaceTessellator` for faces whose loops don't cover the surface's grid domain).

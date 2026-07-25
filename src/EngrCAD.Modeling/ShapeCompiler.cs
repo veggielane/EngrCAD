@@ -800,6 +800,32 @@ internal static class ShapeCompiler
     }
 
     /// <summary>
+    /// Cosine threshold above which a planar face counts as parallel to a hole tool's flat
+    /// bottom. <b>The angle it encodes is 0.081° (1.4142e-3 rad = acos(1 − 1e-6))</b> —
+    /// worth writing down, because <c>1 − 1e-6</c> reads like a length tolerance and
+    /// invites someone to "tighten" it to 1e-9 for consistency with the weld tier, which
+    /// would actually narrow the guard to 0.0026° and let near-coplanar tools through into
+    /// a boolean that cannot handle them. The cosine is quadratically flat near parallel,
+    /// so the dot-product margin buys only its square root in angle.
+    /// <para>Deliberately NOT widened while naming it: this test only decides whether the
+    /// companion <see cref="CoplanarFaceDistance"/> check is meaningful, and for a face
+    /// that is genuinely tilted relative to the axis that check measures the axial gap to
+    /// an ARBITRARY point of the face's plane (whatever <c>IsPlanar</c> reports as the
+    /// origin), so it is ill-defined exactly in the band a wider angle would admit.
+    /// Widening needs its own coplanar-boolean evidence — see the backlog note.</para>
+    /// </summary>
+    private const double CoplanarFaceCosine = 1 - 1e-6;
+
+    /// <summary>
+    /// Distance within which the tool's flat bottom is treated as landing ON a face.
+    /// Absolute by design (unlike an angle it cannot be made scale-free): it is a
+    /// model-unit coincidence test against geometry the caller positioned in model units,
+    /// and it sits at the inverse-evaluation tier because <c>origin</c> comes from the
+    /// lowered solid's face geometry.
+    /// </summary>
+    private const double CoplanarFaceDistance = 1e-6;
+
+    /// <summary>
     /// Rejects a drill whose tool's flat bottom is coplanar with a planar face of the
     /// body: coplanar face pairs are unsupported boolean input (the v1 transversality
     /// contract), and without this guard the failure surfaces as a deep tessellation
@@ -814,7 +840,6 @@ internal static class ShapeCompiler
         var body = LowerBrep(drill.Child, m);
         var effective = m * drill.PlaneMatrix;
         var drillNormal = effective.TransformVector((0, 0, 1)).Normalized();
-        const double tolerance = 1e-6;
 
         foreach (var point in drill.Points)
         {
@@ -823,9 +848,9 @@ internal static class ShapeCompiler
             {
                 if (!face.IsPlanar(out var origin, out var normal))
                     continue;
-                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < 1 - 1e-6)
+                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < CoplanarFaceCosine)
                     continue;
-                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= tolerance)
+                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= CoplanarFaceDistance)
                     throw new ArgumentException(
                         $"Drill depth {drill.Depth:g6} puts the tool's flat bottom coplanar with a planar " +
                         $"face of the body (hole at {point}); increase depth so the tool clears the far " +
@@ -844,7 +869,6 @@ internal static class ShapeCompiler
     private static void ValidateThreadedHoleDepth(ThreadedHoleShape hole, BrepSolid body, in Matrix4d effective)
     {
         var drillNormal = effective.TransformVector((0, 0, 1)).Normalized();
-        const double tolerance = 1e-6;
         foreach (var point in hole.Points)
         {
             var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, -hole.Depth));
@@ -852,9 +876,9 @@ internal static class ShapeCompiler
             {
                 if (!face.IsPlanar(out var origin, out var normal))
                     continue;
-                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < 1 - 1e-6)
+                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < CoplanarFaceCosine)
                     continue;
-                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= tolerance)
+                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= CoplanarFaceDistance)
                     throw new ArgumentException(
                         $"Threaded-hole depth {hole.Depth:g6} puts the tool's flat bottom coplanar with a " +
                         $"planar face of the body (hole at {point}); increase depth so the tool clears the " +
