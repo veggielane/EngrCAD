@@ -115,6 +115,34 @@ public class StdioSessionTests
             Assert.Equal("2.0", (string?)Assert.IsType<JsonObject>(JsonNode.Parse(line))["jsonrpc"]);
     }
 
+    [Fact]
+    public void StdoutGuard_diverts_console_writes_to_stderr_and_restores_on_dispose()
+    {
+        // Lives in this collection so it never runs beside another test that touches
+        // the process-wide Console streams.
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        var captured = new StringWriter();
+        Console.SetError(captured);
+        try
+        {
+            using (var guard = StdoutGuard.Claim())
+            {
+                Assert.True(guard.ProtocolOutput.CanWrite);
+                Console.WriteLine("a model program printing while it builds");
+                Console.Write("and a partial line");
+            }
+            Assert.Contains("a model program printing while it builds", captured.ToString());
+            Assert.Contains("and a partial line", captured.ToString());
+            Assert.Same(previousOut, Console.Out);       // disposal restores the stream
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
+    }
+
     // ---- driving the child process ----
 
     private sealed record Session(List<string> StdoutLines, string Stderr, int ExitCode)

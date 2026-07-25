@@ -25,6 +25,11 @@ public sealed class SceneTools(SceneSession session)
 {
     private static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
+    /// <summary>One offscreen render at a time, process-wide. Parallel EGL pbuffer
+    /// creation is flaky (the reason the viewer's GL tests share an xUnit collection),
+    /// and an assistant can legitimately have two screenshot calls in flight.</summary>
+    private static readonly Lock RenderGate = new();
+
     /// <summary>The session these tools read; exposed for hosts that also serve the
     /// scene as a resource.</summary>
     public SceneSession Session { get; } = session;
@@ -259,8 +264,11 @@ public sealed class SceneTools(SceneSession session)
         byte[] png;
         try
         {
-            OffscreenRenderer.RenderToImage(instances, temporary, width, height, camera,
-                furniture: true, viewStyle, axis, offset, ambientOcclusion);
+            lock (RenderGate)
+            {
+                OffscreenRenderer.RenderToImage(instances, temporary, width, height, camera,
+                    furniture: true, viewStyle, axis, offset, ambientOcclusion);
+            }
             png = File.ReadAllBytes(temporary);
         }
         catch (Exception e)
@@ -508,7 +516,8 @@ public sealed class SceneTools(SceneSession session)
         {
             Session.PreMesh(instances);
             var camera = StandardViews.For("iso", instances, Session.Quality);
-            OffscreenRenderer.RenderToImage(instances, path, 1280, 800, camera);
+            lock (RenderGate)
+                OffscreenRenderer.RenderToImage(instances, path, 1280, 800, camera);
             return Ok(new JsonObject
             {
                 ["wrote"] = Path.GetFullPath(path),

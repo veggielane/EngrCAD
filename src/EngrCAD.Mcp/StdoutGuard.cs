@@ -46,17 +46,6 @@ public sealed class StdoutGuard : IDisposable
         return new StdoutGuard(protocolOutput, previousOut);
     }
 
-    /// <summary>Test seam: claims an arbitrary stream as the protocol channel while
-    /// applying the same <see cref="Console.Out"/> redirection, so the purity rule can
-    /// be exercised in-process.</summary>
-    public static StdoutGuard ClaimFor(Stream protocolOutput)
-    {
-        ArgumentNullException.ThrowIfNull(protocolOutput);
-        var previousOut = Console.Out;
-        Console.SetOut(Console.Error);
-        return new StdoutGuard(protocolOutput, previousOut);
-    }
-
     /// <summary>Restores the previous <see cref="Console.Out"/>. The protocol stream is
     /// deliberately NOT disposed — it belongs to the process's standard output.</summary>
     public void Dispose()
