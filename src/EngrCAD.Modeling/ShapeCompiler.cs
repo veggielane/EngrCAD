@@ -440,12 +440,27 @@ internal static class ShapeCompiler
             {
                 var a = LowerBrep(boolean.A, m);
                 var b = LowerBrep(boolean.B, m);
-                return boolean.Op switch
+                try
                 {
-                    BooleanOp.Union => BrepBoolean.Union(a, b),
-                    BooleanOp.Intersection => BrepBoolean.Intersection(a, b),
-                    _ => BrepBoolean.Difference(a, b),
-                };
+                    return boolean.Op switch
+                    {
+                        BooleanOp.Union => BrepBoolean.Union(a, b),
+                        BooleanOp.Intersection => BrepBoolean.Intersection(a, b),
+                        _ => BrepBoolean.Difference(a, b),
+                    };
+                }
+                catch (BrepBooleanException ex)
+                {
+                    // The exact route failed; hand the caller the approximate one rather
+                    // than silently taking it for them. Falling back automatically would
+                    // make Explain(Representation.Brep) lie (it reported Native) and would
+                    // quietly downgrade an exact model to a polygonized one.
+                    throw new InvalidOperationException(
+                        $"{ex.Message} Model this shape through the implicit representation instead — " +
+                        "Shape.From(shape.ToImplicit()).ToMesh(quality) — which handles coplanar and " +
+                        "tangent configurations, at the cost of an approximated (polygonized) surface.",
+                        ex);
+                }
             }
 
             case RimShape rim:
