@@ -37,6 +37,12 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   bit-identical-or-better comparison, like the PQ upgrade precedent).
 - [ ] `MeshExtrude.Faces` overload taking `MeshFaceSelection`; mutable in-place
   variants of fill/extrude once callers want them.
+- [ ] Wave-A review flags (all low) — `CollapseEdge` on a hypothetical isolated edge
+  throws instead of returning a result code (unreachable today; add the early guard);
+  `StlReader` `MemoryStream.ToArray()` doubles peak memory (use GetBuffer+length);
+  `FacePokeInfo` exposes a mutable `int[]` breaking record equality
+  (`IReadOnlyList`/`ImmutableArray`); `ObjReader` backslash-continuation is O(n²)
+  string concat for pathological files.
 
 ## Implicit engine (EngrCAD.Implicit)
 
