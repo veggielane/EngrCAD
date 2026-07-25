@@ -51,12 +51,15 @@ public class FilletCornerVolumeTests
         return Filleting.FilletRim(prism, top, radius);
     }
 
-    // The trimmed-band tessellation (ear clip + midpoint refinement) approximates the
-    // quarter cylinders from inside, so the mesh volume is a slight under-estimate; 3e-4
-    // relative is the measured envelope at these sample counts, three decades above the
-    // discrepancy any wrong corner geometry would produce (a mis-built corner is O(r³)
-    // per corner, ~1e-2 relative here).
-    private const double VolumeTolerance = 3e-4;
+    // The trimmed-band tessellation approximates the quarter cylinders from inside, so the
+    // mesh volume is a slight under-estimate; 5e-5 relative is the measured envelope at
+    // these sample counts (worst case ~2.2e-5), three decades above the discrepancy any
+    // wrong corner geometry would produce (a mis-built corner is O(r³) per corner, ~1e-2
+    // relative here). It was 3e-4 while mitered bands were ear-clipped: the clipper left
+    // long interior diagonals whose midpoint refinement stopped short wherever the
+    // monotone-decrease rule cut a cascade, so the facets sagged further inside than the
+    // chords alone would. Zipping the band's paired boundary chains removed that slack.
+    private const double VolumeTolerance = 5e-5;
 
     private static void AssertFilletedPrism(
         IReadOnlyList<Vector2d> polygon, double height, double radius, int expectedFaces, int curveSamples = 48)

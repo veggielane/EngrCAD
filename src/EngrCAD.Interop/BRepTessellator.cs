@@ -11,8 +11,14 @@ namespace EngrCAD.Interop;
 /// ear-clip in plane coordinates; cylinder bands and full-domain generated faces
 /// (extruded/revolved/swept) tessellate as parameter grids; trimmed faces on those
 /// surfaces — loops not covering the natural grid domain, e.g. fragments from
-/// <see cref="FaceSplitter.SplitByCurve"/> — go through
+/// <see cref="FaceSplitter.SplitByCurve"/> or a mitered rim-fillet band — go through
 /// <see cref="TrimmedFaceTessellator"/>. Trimmed NURBS faces are future work.
+///
+/// A trimmed face the trimmed path cannot handle REFUSES, naming the face, the sample
+/// counts and the reason. It used to fall through to the surface's natural grid, which
+/// covers the whole parameter rectangle rather than the trimmed face: not merely coarse
+/// but the wrong geometry, welding into an open mesh with no complaint — the same silent
+/// failure mode `BrepBoolean.Verified` exists to catch on the boolean side.
 /// </summary>
 public static class BRepTessellator
 {
@@ -38,9 +44,11 @@ public static class BRepTessellator
                     TessellateCylinderBand(face, edgePolylines, polygons);
                     break;
                 case CylinderSurface:
-                    if (!TrimmedFaceTessellator.TryTessellate(face, edgePolylines, segmentsPerCircle, curveSamples, polygons))
+                    if (!TrimmedFaceTessellator.TryTessellate(
+                            face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? cylinderFailure))
                         throw new NotSupportedException(
-                            "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops.");
+                            "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops. " +
+                            Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, cylinderFailure));
                     break;
                 case HelicalSurface helical:
                     TessellateHelicalBand(face, helical, edgePolylines, polygons);
@@ -51,11 +59,21 @@ public static class BRepTessellator
                     // Full-domain faces (the factories' and wrap-splitter's output) keep
                     // the grid path — its samples coincide with the shared edge polylines.
                     // Faces whose loops don't cover the domain go through the trimmed
-                    // path; if that cannot handle them (wrapping loops, failed inverse
-                    // evaluation), fall back to the grid as before.
-                    if (IsFullDomainFace(face, edgePolylines, uParams, vParams, closedU, closedV) ||
-                        !TrimmedFaceTessellator.TryTessellate(face, edgePolylines, segmentsPerCircle, curveSamples, polygons))
+                    // path, and a failure there REFUSES: the grid would cover the whole
+                    // parameter rectangle, which is not this face, so it would silently
+                    // hand back an open mesh (the worst failure mode this project has).
+                    if (IsFullDomainFace(face, edgePolylines, uParams, vParams, closedU, closedV))
+                    {
                         TessellateGrid(face.Surface, uParams, vParams, closedU, closedV, polygons);
+                    }
+                    else if (!TrimmedFaceTessellator.TryTessellate(
+                                 face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? failure))
+                    {
+                        throw new NotSupportedException(
+                            "A trimmed face could not be tessellated, and its surface's natural grid covers more " +
+                            "than the face, so falling back to it would produce an open mesh. " +
+                            Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, failure));
+                    }
                     break;
                 }
                 default:
@@ -77,6 +95,28 @@ public static class BRepTessellator
         // 1e-9 = Tolerance.Default.Linear: the absolute weld tolerance — geometry that
         // must weld is constructed exactly, so this must NOT be loosened to hide cracks.
         return MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
+    }
+
+    /// <summary>
+    /// Locates a face for a refusal message: its surface type, where it sits, how its
+    /// loops are shaped, the sample counts in force (the count is part of the story —
+    /// some failures only appear at high densities) and the tessellator's own reason.
+    /// </summary>
+    private static string Diagnose(
+        BrepFace face,
+        Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
+        int segmentsPerCircle,
+        int curveSamples,
+        string? failure)
+    {
+        var loops = face.Loops
+            .Select(l => $"{l.Coedges.Count} coedge(s)/{LoopPolyline(l, edgePolylines).Count} samples");
+        var anchor = face.Loops.Count > 0 && face.OuterLoop.Coedges.Count > 0
+            ? face.OuterLoop.Coedges[0].Edge.Curve.PointAt(face.OuterLoop.Coedges[0].Edge.Domain.Start).ToString()
+            : "unknown";
+        return $"Face: {face.Surface.GetType().Name}{(face.IsReversed ? " (reversed)" : "")} at {anchor}, " +
+            $"loops [{string.Join(", ", loops)}], at segmentsPerCircle={segmentsPerCircle}, " +
+            $"curveSamples={curveSamples}. Reason: {failure ?? "unknown"}.";
     }
 
     internal static List<Vector3d> SampleEdge(BrepEdge edge, int segmentsPerCircle, int curveSamples)

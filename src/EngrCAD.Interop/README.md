@@ -23,30 +23,85 @@ engines.
   edge polylines exactly; everything is welded (with seam zipping to repair T-junctions
   from earcut's collinear filtering).
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
-    fragments such as a bore wall cut through by a slot) go through
-    `TrimmedFaceTessellator`: loops pulled into (u, v), non-wrapping regions ear-clipped
-    by an exact-coordinate clipper (shortest-diagonal ears, on-edge points block, holes
-    bridged), band-like regions (loops winding the period — rings subdivided into arcs)
-    strip-zipped chain-to-chain or fanned to a pole, then oversized interior edges
-    midpoint-split to the natural grid density with new vertices on the exact surface.
-    Boundary vertices are always the exact shared edge samples, so seams weld at 1e-9.
-    Routing between grid and trimmed paths is a two-sided 3D match of loop samples
-    against the natural grid boundary — precisely the invariant grid welding needs.
-    Numerical lessons baked in: earcut's exact-collinear filtering would drop
+    fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
+    band) go through `TrimmedFaceTessellator`, which picks a path in this order:
+    1. **Strip zip** — a single-loop region whose boundary is a *band*: two chains
+       monotone in one surface parameter, joined at each end by a single **rung**. The
+       chains are already paired by construction, so the correct triangulation is the
+       same monotone merge walk the periodic-band path uses, minus the period closure.
+       The chain direction is the parameter carrying the natural sampling, so the rungs
+       lie across the ruled or coarser one (getting that backwards would fan a 2-sample
+       rung against a 25-sample chain). Guarded by a uv positive-area test on every
+       emitted triangle: a merge zip triangulates a monotone region only while neither
+       chain overhangs the other, and an overhang shows up as a fold.
+    2. **Band with holes** — two-ring bands carrying extra interior hole loops (a
+       cross-drilled bore wall) are cut open along a seam placed in the largest u-gap
+       left free by the holes, unrolled into a rectangle-with-holes, and ear-clipped;
+       the two seam chords are exact one-period translates with identical 3D endpoints,
+       so they weld to each other.
+    3. **Periodic band** — loops winding the period (rings subdivided into arcs) zip
+       chain-to-chain or fan to a pole.
+    4. **Ear clip** — everything else, by an exact-coordinate clipper (shortest-diagonal
+       ears, on-edge points block, holes bridged).
+
+    Oversized interior edges are then midpoint-split to the natural grid density with
+    new vertices on the exact surface. Boundary vertices are always the exact shared edge
+    samples, so seams weld at 1e-9. Routing between grid and trimmed paths is a two-sided
+    3D match of loop samples against the natural grid boundary — precisely the invariant
+    grid welding needs.
+
+    **Why the strip path exists, and why the ear clipper is the LAST resort.** Ear-clipping
+    a band is not merely wasteful, it is visibly wrong. The clipper's shortest-diagonal
+    rule eats the dense boundary chains first, and three consecutive samples of a smooth
+    boundary curve span a sliver whose normal is `T × K` — the curve's **binormal**, not
+    the surface's. Decomposed, `T × K = k_g·N + k_n·(T × N)`, so the sliver only agrees
+    with the surface where the boundary's **geodesic** curvature `k_g` dominates. A miter
+    ellipse meets the top of a fillet tangent to the flat face, where `k_g` passes through
+    zero: there the sliver's normal is perpendicular to the surface's and its sign is pure
+    rounding noise, so half the slivers face inward. Measured on
+    `Shape.Box(30, 20, 6).FilletEdges(2, topRim)`: **13 088 triangles, 808 of them
+    inverted** (worst facet-vs-surface normal agreement −0.22), rendering as a dark folded
+    lens at every mitered corner — now **280 with none** (worst agreement 0.99994).
+
+    The cost stopped being quadratic too, and that mattered more than it looked: the
+    clipper left long interior diagonals that refinement then subdivided, and the
+    monotone-decrease rule that keeps that cascade terminating cut it in unpredictable
+    places, so the ear-clipped mesh **did not converge**. Measured on the same box:
+    13 088 triangles at curveSamples 24, 147 744 at 96, 642 160 at 144, 904 928 at 176,
+    621 392 at 192 (not even monotonic), and refusal at 256; the volumes wandered —
+    3516.70, 3517.03, 3516.82, 3516.84, 3517.04 — against an analytic 3517.2274 they
+    never approached. The strip is linear in the sample count (280 → 552 → 1096 → 2184)
+    and converges quadratically from inside, so the mesh volume moved from −1.5e-4 to
+    −4.8e-5 of the analytic prism and keeps improving.
+
+    Other numerical lessons baked in: earcut's exact-collinear filtering would drop
     iso-parameter run vertices (uv-collinear is *not* 3D-collinear — an unzippable
     crack), jittering breeds zero-area folds that refine into non-manifold welds, and
     ~1e-9 inverse-evaluation jitter demands an epsilon blocking band plus midpoint→vertex
     snapping during refinement (the same band makes bridge visibility treat
     nearly-collinear contact as touching — exact-zero cross products miss it by an ulp).
-    Two-ring bands with extra interior hole loops (a cross-drilled bore wall) are cut
-    open along a seam placed in the largest u-gap left free by the holes, unrolled into
-    a rectangle-with-holes, and ear-clipped; the two seam chords are exact one-period
-    translates with identical 3D endpoints, so they weld to each other. Marching-tracer
-    polyline edges are sampled at their exact vertices (`PolylineCurve3d.VertexParameters`
-    — chordal midpoints sit off the surface and would fail inverse evaluation).
+    The strip's own epsilon — how flat a step must be to count as a rung — is the 1e-6
+    inverse-evaluation tier expressed **relatively**, `1e-6 × the loop's extent in that
+    parameter`: u and v carry no model units, so an absolute epsilon there would be
+    meaningless. Marching-tracer polyline edges are sampled at their exact vertices
+    (`PolylineCurve3d.VertexParameters` — chordal midpoints sit off the surface and would
+    fail inverse evaluation).
+
+    **A trimmed face that cannot be tessellated now refuses**, naming the surface type,
+    where it sits, its loop shapes, the sample counts in force and the reason (failed
+    pullback, unsupported winding, refinement that would not converge). It used to fall
+    back to the surface's natural grid, which covers the whole parameter rectangle rather
+    than the trimmed face — not merely coarse but the *wrong* geometry, welding into an
+    open mesh with no complaint. The sample counts belong in the message because some
+    failures only appear at high density: with the ear clipper, refinement on a filleted
+    box's bands gave up at `curveSamples = 256` (measured; the backlog note guessed 192,
+    where it still converged — after 900 k triangles) and the silent fallback handed back
+    an open mesh.
+
     Remaining gaps: pole-bounded single-chain bands with holes and |winding| > 1 loops
-    fall back to the grid path, and a hole straddling every possible seam (covering a
-    full period in u) is unsupported.
+    are refused (they used to fall back to the grid), a rung sampled at more than two
+    points falls to the ear clipper rather than being fanned, and a hole straddling every
+    possible seam (covering a full period in u) is unsupported.
 - **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
   (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See

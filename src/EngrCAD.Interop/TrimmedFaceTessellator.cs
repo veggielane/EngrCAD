@@ -23,9 +23,30 @@ namespace EngrCAD.Interop;
 /// This clipper keeps every vertex, never emits zero-area uv triangles, and treats points
 /// lying exactly on a candidate ear as blocking so no diagonal ever passes through a
 /// vertex.
+///
+/// It is also the LAST resort, not the first: a region whose loop is a BAND between two
+/// boundary chains monotone in one parameter (every mitered rim-fillet band, every
+/// partial cylinder or cone fragment) is zipped chain-to-chain instead — see
+/// <see cref="TriangulateStrip"/>. Ear-clipping such a region is not merely wasteful, it
+/// is WRONG to look at: the clipper's shortest-diagonal rule eats the dense boundary
+/// chains first, and three consecutive samples of a smooth boundary curve span a sliver
+/// whose normal is <c>T × K</c> — the curve's binormal — not the surface's. Where the
+/// boundary's geodesic curvature passes through zero (a miter ellipse at the top tangency
+/// of a fillet) that binormal is perpendicular to the surface normal and its sign is
+/// rounding noise, so half the slivers face inward. That is exactly the folded, dark
+/// "lens" the mitered fillet corners used to render as.
 /// </summary>
 internal static class TrimmedFaceTessellator
 {
+    /// <inheritdoc cref="TryTessellate(BrepFace, Dictionary{BrepEdge, List{Vector3d}}, int, int, List{IReadOnlyList{Vector3d}}, out string?)"/>
+    public static bool TryTessellate(
+        BrepFace face,
+        Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
+        int segmentsPerCircle,
+        int curveSamples,
+        List<IReadOnlyList<Vector3d>> polygons) =>
+        TryTessellate(face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out _);
+
     /// <summary>
     /// Attempts to tessellate a trimmed face, appending triangles to
     /// <paramref name="polygons"/> (counter-clockwise in uv, i.e. along the surface
@@ -35,14 +56,19 @@ internal static class TrimmedFaceTessellator
     /// with extra hole loops, |winding| &gt; 1), or clipping gets stuck on degenerate
     /// input. Two-ring bands with interior hole loops (e.g. a cross-drilled bore wall)
     /// are unrolled at a seam clear of the holes and ear-clipped with hole bridging.
+    /// <para><paramref name="failure"/> names the reason on a false return, so the caller
+    /// can refuse loudly instead of falling back to a grid that would silently produce an
+    /// open mesh.</para>
     /// </summary>
     public static bool TryTessellate(
         BrepFace face,
         Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
         int segmentsPerCircle,
         int curveSamples,
-        List<IReadOnlyList<Vector3d>> polygons)
+        List<IReadOnlyList<Vector3d>> polygons,
+        out string? failure)
     {
+        failure = null;
         var surface = face.Surface;
         double period = FaceGeometry.PeriodU(surface);
 
@@ -55,31 +81,44 @@ internal static class TrimmedFaceTessellator
         {
             var points = BRepTessellator.LoopPolyline(loop, edgePolylines);
             if (points.Count < 3)
+            {
+                failure = $"a loop has only {points.Count} sample(s)";
                 return false;
+            }
             var uv = new List<Vector2d>(points.Count);
             foreach (var p in points)
             {
                 if (!surface.TryProjectPoint(p, out var q, FaceGeometry.InverseEvaluationTolerance))
+                {
+                    failure = $"the loop point {p} does not pull back onto the face's surface";
                     return false;
+                }
                 if (period > 0 && uv.Count > 0)
                     q = new Vector2d(q.X + period * Math.Round((uv[^1].X - q.X) / period), q.Y);
                 uv.Add(q);
             }
             int winding = period > 0 ? (int)Math.Round((uv[^1].X - uv[0].X) / period) : 0;
             if (Math.Abs(winding) > 1)
+            {
+                failure = $"a loop winds the periodic direction {winding} times (only 0 or +-1 is supported)";
                 return false;
+            }
             loopUv.Add(uv);
             loopPoints.Add(points);
             windings.Add(winding);
         }
 
+        var (stepU, stepV) = NaturalSteps(surface, segmentsPerCircle, curveSamples);
         var uvAll = new List<Vector2d>();
         var pointsAll = new List<Vector3d>();
         var boundaryEdges = new HashSet<(int, int)>();
         List<(int A, int B, int C)>? triangles;
         if (windings.All(w => w == 0))
         {
-            triangles = TriangulateRegion(loopUv, loopPoints, period, uvAll, pointsAll, boundaryEdges);
+            // A band between two paired boundary chains zips; anything else ear-clips.
+            triangles =
+                TriangulateStrip(loopUv, loopPoints, stepU, stepV, uvAll, pointsAll, boundaryEdges)
+                ?? TriangulateRegion(loopUv, loopPoints, period, uvAll, pointsAll, boundaryEdges);
         }
         else if (windings.Any(w => w == 0))
         {
@@ -93,19 +132,243 @@ internal static class TrimmedFaceTessellator
             triangles = TriangulateBand(surface, period, loopUv, loopPoints, windings, uvAll, pointsAll, boundaryEdges);
         }
         if (triangles is null || triangles.Count == 0)
+        {
+            failure = "the loops' winding structure is unsupported, or triangulation stalled on degenerate input";
             return false;
+        }
 
         // 2. Refine oversized interior edges to the natural grid density so the surface
         //    keeps its curvature between distant boundary samples. A refinement that
         //    cannot converge must fail the whole face — emitting a partially refined
         //    set would break the no-touch-on-failure contract above.
-        var (stepU, stepV) = NaturalSteps(surface, segmentsPerCircle, curveSamples);
         if (!Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV))
+        {
+            failure = "curvature refinement did not converge";
             return false;
+        }
 
         foreach (var (a, b, c) in triangles)
             polygons.Add([pointsAll[a], pointsAll[b], pointsAll[c]]);
         return true;
+    }
+
+    // ---- non-wrapping bands: strip zipping between the paired boundary chains ----
+
+    /// <summary>
+    /// Triangulates a single-loop trimmed region whose boundary is a BAND: two chains
+    /// monotone in one surface parameter, joined at each end by a single rung. That is
+    /// the shape of every mitered rim-fillet band (two miter curves across a quarter
+    /// cylinder, closed by the top and bottom tangency lines) and of every partial
+    /// cylinder or cone fragment. The two chains are already paired by construction, so
+    /// the correct triangulation is a monotone zip — the same merge walk
+    /// <see cref="TriangulateBand"/> uses on periodic rings, minus the period closure.
+    /// <para>Returns null when the loop is not a band (more than one loop, more or fewer
+    /// than two rungs, a non-monotone chain, or a zip that would fold), leaving the
+    /// shared vertex arrays untouched so the caller can ear-clip instead.</para>
+    /// </summary>
+    private static List<(int A, int B, int C)>? TriangulateStrip(
+        List<List<Vector2d>> loopUv,
+        List<List<Vector3d>> loopPoints,
+        double stepU,
+        double stepV,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges)
+    {
+        if (loopUv.Count != 1)
+            return null;
+        var uv = loopUv[0];
+        int n = uv.Count;
+        if (n < 4)
+            return null;
+
+        // Walk the loop counter-clockwise so the run with INCREASING key is always the
+        // strip's first side: on a CCW loop the interior lies to the left of travel.
+        var order = new int[n];
+        bool alreadyCcw = FaceGeometry.LoopSignedArea(uv) > 0;
+        for (int i = 0; i < n; i++)
+            order[i] = alreadyCcw ? i : n - 1 - i;
+
+        // The chains run along the parameter that carries the natural sampling, so the
+        // rungs lie across the direction whose chords are already exact (an extrusion is
+        // ruled in v) or at least coarser. Getting this backwards would fan a 2-sample
+        // rung against a 25-sample chain.
+        bool uFirst = StepSpan(uv, alongU: true, stepU) >= StepSpan(uv, alongU: false, stepV);
+        foreach (bool alongU in (ReadOnlySpan<bool>)[uFirst, !uFirst])
+        {
+            if (TrySplitBand(uv, order, alongU, out var rising, out var falling) &&
+                ZipBand(uv, order, rising, falling, alongU) is { } local)
+            {
+                int start = uvAll.Count;
+                for (int i = 0; i < n; i++)
+                {
+                    uvAll.Add(uv[order[i]]);
+                    pointsAll.Add(loopPoints[0][order[i]]);
+                }
+                // Every loop chord is shared geometry: refinement must never split one.
+                for (int i = 0; i < n; i++)
+                    boundaryEdges.Add(EdgeKey(start + i, start + (i + 1) % n));
+                return [.. local.Select(t => (start + t.A, start + t.B, start + t.C))];
+            }
+        }
+        return null;
+    }
+
+    /// <summary>How many natural grid steps the loop spans in one parameter; zero where
+    /// the surface is ruled in that direction (an infinite step, chords exact).</summary>
+    private static double StepSpan(List<Vector2d> uv, bool alongU, double step)
+    {
+        if (!double.IsFinite(step) || step <= 0)
+            return 0;
+        double min = double.PositiveInfinity, max = double.NegativeInfinity;
+        foreach (var p in uv)
+        {
+            double key = alongU ? p.X : p.Y;
+            min = Math.Min(min, key);
+            max = Math.Max(max, key);
+        }
+        return (max - min) / step;
+    }
+
+    /// <summary>
+    /// Splits a CCW loop into the two chains of a band: a run of strictly rising key
+    /// steps and a run of strictly falling ones, separated by exactly two FLAT steps —
+    /// the rungs that close the band at each end. Vertex indices are loop positions in
+    /// <paramref name="order"/>, each chain including both of its rung vertices.
+    /// <para>Deliberately strict: a rung sampled at more than two points (a curved cross
+    /// edge) shows up as several flat steps and is refused rather than fanned, because
+    /// fanning collinear rung samples would emit the zero-area triangles this whole path
+    /// exists to avoid. Such a face ear-clips instead.</para>
+    /// </summary>
+    private static bool TrySplitBand(
+        List<Vector2d> uv, int[] order, bool alongU, out List<int> rising, out List<int> falling)
+    {
+        rising = [];
+        falling = [];
+        int n = order.Length;
+
+        double Key(int i)
+        {
+            var p = uv[order[i]];
+            return alongU ? p.X : p.Y;
+        }
+
+        double min = double.PositiveInfinity, max = double.NegativeInfinity;
+        for (int i = 0; i < n; i++)
+        {
+            min = Math.Min(min, Key(i));
+            max = Math.Max(max, Key(i));
+        }
+        double extent = max - min;
+        if (!(extent > 0))
+            return false;
+
+        // The 1e-6 inverse-evaluation tier expressed RELATIVELY, in parameter units: the
+        // two ends of a rung pull back to the same parameter to about that much, while a
+        // genuine chain step spans a natural grid step — orders of magnitude larger. An
+        // absolute epsilon here would be meaningless: u and v carry no model units.
+        double flat = FaceGeometry.InverseEvaluationTolerance * extent;
+
+        var signs = new int[n];
+        int rungs = 0;
+        for (int i = 0; i < n; i++)
+        {
+            double delta = Key((i + 1) % n) - Key(i);
+            signs[i] = delta > flat ? 1 : delta < -flat ? -1 : 0;
+            if (signs[i] == 0)
+                rungs++;
+        }
+        if (rungs != 2)
+            return false;
+
+        int first = Array.IndexOf(signs, 0);
+        int second = Array.LastIndexOf(signs, 0);
+        var between = Run(signs, first, second, n);
+        var around = Run(signs, second, first, n);
+        if (between is null || around is null || between.Value.Sign == around.Value.Sign)
+            return false;
+
+        var risingRun = between.Value.Sign > 0 ? between.Value : around.Value;
+        var fallingRun = between.Value.Sign > 0 ? around.Value : between.Value;
+        rising = Chain(risingRun, n);
+        falling = Chain(fallingRun, n);
+        return true;
+
+        // Steps strictly between two rung indices, all sharing one sign.
+        static (int Start, int Count, int Sign)? Run(int[] signs, int from, int to, int n)
+        {
+            int count = ((to - from) % n + n) % n - 1;
+            if (count <= 0)
+                return null;
+            int sign = signs[(from + 1) % n];
+            for (int k = 1; k < count; k++)
+            {
+                if (signs[(from + 1 + k) % n] != sign)
+                    return null;
+            }
+            return ((from + 1) % n, count, sign);
+        }
+
+        // A run of `Count` steps touches `Count + 1` vertices.
+        static List<int> Chain((int Start, int Count, int Sign) run, int n)
+        {
+            var chain = new List<int>(run.Count + 1);
+            for (int k = 0; k <= run.Count; k++)
+                chain.Add((run.Start + k) % n);
+            return chain;
+        }
+    }
+
+    /// <summary>
+    /// Zips the two chains into a triangle strip by a monotone merge walk, returning
+    /// loop-local triangles or null if any of them folds. The fold test is the whole
+    /// safety net: a merge zip is a valid triangulation of a monotone region only while
+    /// neither chain overhangs the other, and an overhang shows up as a non-positive uv
+    /// area. Rejecting there costs one ear-clipped face; accepting would emit inverted
+    /// geometry.
+    /// </summary>
+    private static List<(int A, int B, int C)>? ZipBand(
+        List<Vector2d> uv, int[] order, List<int> rising, List<int> falling, bool alongU)
+    {
+        // The rising run is the strip's first side and the falling run, reversed, its
+        // second: on a CCW loop that pairs them end for end (see TrySplitBand).
+        var bottom = rising;
+        var top = new List<int>(falling);
+        top.Reverse();
+
+        double Key(int i)
+        {
+            var p = uv[order[i]];
+            return alongU ? p.X : p.Y;
+        }
+
+        var triangles = new List<(int, int, int)>(bottom.Count + top.Count);
+        int a = 0, b = 0;
+        while (a < bottom.Count - 1 || b < top.Count - 1)
+        {
+            bool advanceBottom =
+                a < bottom.Count - 1 &&
+                (b >= top.Count - 1 || Key(bottom[a + 1]) <= Key(top[b + 1]));
+            if (advanceBottom)
+            {
+                triangles.Add((bottom[a], bottom[a + 1], top[b]));
+                a++;
+            }
+            else
+            {
+                triangles.Add((bottom[a], top[b + 1], top[b]));
+                b++;
+            }
+        }
+
+        foreach (var (x, y, z) in triangles)
+        {
+            // Exact-zero comparison on purpose: a fold or a zero-area rung triangle is a
+            // structural refusal, not a tolerance question.
+            if ((uv[order[y]] - uv[order[x]]).Cross(uv[order[z]] - uv[order[x]]) <= 0)
+                return null;
+        }
+        return triangles;
     }
 
     // ---- non-wrapping regions: exact ear clipping ----
