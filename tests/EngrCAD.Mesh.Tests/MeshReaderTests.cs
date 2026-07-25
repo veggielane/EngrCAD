@@ -379,6 +379,41 @@ public class MeshReaderTests
         Assert.Contains(result.Diagnostics.Warnings, w => w.Contains("face color"));
     }
 
+    [Fact]
+    public void Off_AbsurdHeaderCounts_AreDiagnosedWithoutHugeAllocation()
+    {
+        // Header-declared counts are untrusted: two billion declared vertices must not
+        // pre-allocate storage — parsing is bounded by the lines actually present.
+        const string text = """
+            OFF
+            2000000000 2000000000 0
+            0 0 0
+            """;
+        var result = OffReader.Read(new StringReader(text));
+
+        Assert.Empty(result.Faces);
+        Assert.Contains(result.Diagnostics.Warnings, w => w.Contains("declares 2000000000 vertices"));
+        Assert.Contains(result.Diagnostics.Warnings, w => w.Contains("declares 2000000000 faces"));
+    }
+
+    [Fact]
+    public void Obj_OutOfRangeIndices_AreSkippedAsBadFaces()
+    {
+        // "f 1 2 4" points past the vertex list; "f -4 2 3" resolves to index -1.
+        const string text = """
+            v 0 0 0
+            v 1 0 0
+            v 0 1 0
+            f 1 2 4
+            f -4 2 3
+            f 1 2 3
+            """;
+        var result = ObjReader.Read(new StringReader(text));
+
+        Assert.Single(result.Faces);
+        Assert.Contains(result.Diagnostics.Warnings, w => w.Contains("2 malformed or out-of-range 'f' lines"));
+    }
+
     // ---------- facade ----------
 
     [Fact]

@@ -76,7 +76,10 @@ public static class OffReader
             return MeshReadResult.Create([], [], warnings, 0);
         }
 
-        var rawPositions = new List<Vector3d>(vertexCount);
+        // Header-declared counts are untrusted input: clamp pre-allocation by the lines
+        // actually present so an absurd declared count cannot allocate gigabytes (the
+        // parse loops below are already bounded by lines.Count).
+        var rawPositions = new List<Vector3d>(Math.Min(vertexCount, lines.Count - cursor));
         int badVertices = 0, vertexExtras = 0;
         for (int i = 0; i < vertexCount && cursor < lines.Count; i++, cursor++)
         {
@@ -99,7 +102,7 @@ public static class OffReader
         if (rawPositions.Count < vertexCount)
             warnings.Add($"OFF declares {vertexCount} vertices but only {rawPositions.Count} lines were present.");
 
-        var rawFaces = new List<int[]>(faceCount);
+        var rawFaces = new List<int[]>(Math.Min(faceCount, lines.Count - cursor));
         int badFaces = 0, faceExtras = 0;
         for (int i = 0; i < faceCount && cursor < lines.Count; i++, cursor++)
         {

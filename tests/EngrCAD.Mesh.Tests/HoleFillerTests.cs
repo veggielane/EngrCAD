@@ -119,6 +119,41 @@ public class HoleFillerTests
         Assert.Equal(expected, filled.Volume(), 9);
     }
 
+    [Fact]
+    public void FillPlanar_RimWithExactlyCollinearVertex_ChordZipKeepsItWelded()
+    {
+        // Open 2x2x2 box whose +X wall is split so the top rim carries a vertex exactly
+        // collinear between two corners (the T-junction shape tessellation produces).
+        // Earcut filters exactly-collinear vertices; the ring-aware chord zip must
+        // re-expand the chord — otherwise the walls still referencing the midpoint are
+        // left with an unweldable crack and the result cannot close.
+        var positions = new List<Vector3d>
+        {
+            (0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0), // b0..b3
+            (0, 0, 2), (2, 0, 2), (2, 2, 2), (0, 2, 2), // t0..t3
+            (2, 1, 2),                                  // m: midpoint of the t1-t2 rim edge
+        };
+        var faces = new List<int[]>
+        {
+            new[] { 0, 3, 2, 1 }, // bottom, outward -Z
+            new[] { 0, 1, 5, 4 }, // y = 0 wall
+            new[] { 1, 2, 6, 8 }, // +X wall quad (b1, b2, t2, m)
+            new[] { 1, 8, 5 },    // +X wall triangle (b1, m, t1)
+            new[] { 2, 3, 7, 6 }, // y = 2 wall
+            new[] { 3, 0, 4, 7 }, // x = 0 wall
+        };
+        var open = HalfEdgeMesh.Build(positions, faces);
+        var loop = Assert.Single(open.BoundaryLoops());
+        Assert.Equal(5, loop.Count); // rim includes the collinear midpoint
+
+        var filled = HoleFiller.FillPlanar(open, loop);
+
+        filled.Validate();
+        Assert.True(filled.IsClosed);
+        Assert.Equal(9, filled.VertexCount); // the midpoint stayed referenced
+        Assert.Equal(8.0, filled.Volume(), 12);
+    }
+
     // ---- FillAll ----
 
     [Fact]

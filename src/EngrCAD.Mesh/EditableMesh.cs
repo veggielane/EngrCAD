@@ -614,9 +614,12 @@ public sealed partial class EditableMesh
     }
 
     // Bit-identity check for change journaling — deliberately bypasses Tolerance:
-    // change records restore state exactly, so "same value" means the same bits.
+    // change records restore state exactly, so "same value" means the same bits
+    // (unlike double.Equals, this distinguishes -0.0 from +0.0 and NaN payloads).
     private static bool ExactlyEqual(in Vector3d a, in Vector3d b) =>
-        a.X.Equals(b.X) && a.Y.Equals(b.Y) && a.Z.Equals(b.Z);
+        BitConverter.DoubleToInt64Bits(a.X) == BitConverter.DoubleToInt64Bits(b.X) &&
+        BitConverter.DoubleToInt64Bits(a.Y) == BitConverter.DoubleToInt64Bits(b.Y) &&
+        BitConverter.DoubleToInt64Bits(a.Z) == BitConverter.DoubleToInt64Bits(b.Z);
 
     // ---------------------------------------------------------------- allocation
 

@@ -108,6 +108,24 @@ public class EditableMeshChangeTests
         });
 
     [Fact]
+    public void SetPosition_MinusZero_IsAJournaledBitLevelChange()
+    {
+        // The journal's "same value" test is bit identity, not double.Equals: writing
+        // -0.0 over +0.0 is a real change and must record and revert exactly.
+        var mesh = EditableMesh.FromIndexed(
+            [(0.0, 0, 0), (1, 0, 0), (0, 1, 0)], [new[] { 0, 1, 2 }]);
+        var set = mesh.BeginChangeSet();
+        mesh.SetPosition(0, new Vector3d(-0.0, 0, 0));
+        mesh.EndChangeSet();
+
+        Assert.Single(set.Changes);
+        Assert.Equal(1, set.Changes[0].MutationCount);
+        Assert.Equal(BitConverter.DoubleToInt64Bits(-0.0), BitConverter.DoubleToInt64Bits(mesh.GetPosition(0).X));
+        set.Revert(mesh);
+        Assert.Equal(0L, BitConverter.DoubleToInt64Bits(mesh.GetPosition(0).X));
+    }
+
+    [Fact]
     public void ChangeSet_GroupsASessionAndRoundTripsAsAUnit()
     {
         var mesh = Sphere();
