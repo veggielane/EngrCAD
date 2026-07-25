@@ -107,6 +107,19 @@ Each engine uses the data structure its mathematics wants:
   more times are triangulated on their **Newell plane** (robust for near-degenerate
   polygons) before clipping — fanning from vertex 0 is only valid for star-shaped
   polygons and silently mis-clips otherwise.
+- **The exact (imprint) boolean uses Euler operators + flip recovery, not per-face CDT.**
+  `MeshMeshCut` finds intersection segments (BVH broad phase, Möller interval narrow
+  phase) and `MeshImprinter` cuts them into both meshes with `EditableMesh.SplitEdge`
+  (edge crossings), `PokeFace` (interior points), and constrained `FlipEdge` recovery
+  (Anglada). The reason for operators over per-face triangulation: a `SplitEdge` updates
+  **both** adjacent faces, so an intra-mesh T-junction cannot arise by construction,
+  and every step is guarded and journaled — a failed imprint reverts bit-identically
+  through `MeshChangeSet` instead of leaving a half-cut mesh. Classification is then
+  **per patch** (flood-fill across non-seam edges, one winding-number probe at the
+  largest triangle's centroid), because the intersection curve is an edge of both
+  meshes, so no patch straddles the other surface. It stays opt-in
+  (`BooleanMethod.Exact`) only because coplanar overlaps are rejected rather than
+  classified; BSP handles those, so the default cannot flip until they are.
 - **Winding-number classification** (`MeshWindingNumber`) gives robust inside/outside
   for non-watertight meshes: `WindingNumber` sums signed solid angles
   (Van Oosterom–Strackee) exactly, `FastWindingNumber` is the Barill/Jacobson order-2

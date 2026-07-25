@@ -13,17 +13,19 @@ Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-ident
 undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
 `MeshExtrude` (faces/thicken), selections + connected components. Remaining:
 
-- [ ] **Phase B: imprint boolean + editor-powered repairs** — the exact-intersection
-  boolean rewrite (`MeshMeshCut` + `MeshBoolean`: cut both meshes along exact
-  intersection segments via `Bvh.QueryOverlap` candidate pairs + triangle–triangle
-  segments, imprint with `EditableMesh.SplitEdge`, classify by `MeshWindingNumber`,
-  weld; `MeshChangeSet` gives transactional rollback of failed imprints; g3's honest
-  coplanar-case caveats apply). Plus the editor-dependent repairs: `MergeCoincidentEdges`
-  (crack closing = `MergeEdges` + spatial-hash search over coincident boundary pairs —
-  slots between MeshRepair's weld and orientation passes), `RegionOperator`
-  (extract-modify-reinsert as a change-set session; `MeshFaceSelection.ToMesh()` +
-  `BoundaryLoops()` are the extraction half), and `MeshRepair` gaining hole-fill
-  integration for a full `AutoRepair`.
+- [ ] **Coplanar-overlap classification for the exact boolean** — THE single blocker to
+  making `BooleanMethod.Exact` the default (it is otherwise a measured drop-in for the
+  whole suite; flipping it is then one constant in `MeshBoolean.cs`). Today coplanar
+  overlapping faces are rejected loudly, while BSP handles flush-stacked parts
+  correctly — and real designs union flush parts. Approach: imprint the overlap
+  boundary, then classify coincident patches by normal agreement (same direction: keep
+  one; opposite: drop both).
+- [ ] **Exact-boolean performance** is unmeasured — profile it (note `EditableMesh`
+  runs a full `Validate()` after every operator in DEBUG, so Debug timings are
+  pessimistic, O(n) per op), and thread `ProgressCancel` through `MeshMeshCut`.
+- [ ] **`RegionOperator`** — extract-modify-reinsert a submesh as a change-set session
+  (`MeshFaceSelection.ToMesh()` + `BoundaryLoops()` are the extraction half). The one
+  piece of mesh Phase B not reached.
 - [ ] **Isotropic remeshing with constraints** — `Remesher`/`RemesherPro` +
   `MeshConstraints` (fixed edges, no-flip, project-to-target) +
   `SharpEdgeReprojectionRemesh` for feature recovery; now buildable on
@@ -37,12 +39,6 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   bit-identical-or-better comparison, like the PQ upgrade precedent).
 - [ ] `MeshExtrude.Faces` overload taking `MeshFaceSelection`; mutable in-place
   variants of fill/extrude once callers want them.
-- [ ] Wave-A review flags (all low) — `CollapseEdge` on a hypothetical isolated edge
-  throws instead of returning a result code (unreachable today; add the early guard);
-  `StlReader` `MemoryStream.ToArray()` doubles peak memory (use GetBuffer+length);
-  `FacePokeInfo` exposes a mutable `int[]` breaking record equality
-  (`IReadOnlyList`/`ImmutableArray`); `ObjReader` backslash-continuation is O(n²)
-  string concat for pathological files.
 
 ## Implicit engine (EngrCAD.Implicit)
 
