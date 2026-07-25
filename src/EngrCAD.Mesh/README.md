@@ -229,6 +229,31 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   That is the right trade below ~32 queries — the hierarchy costs ~0.7 µs per triangle to
   build and an exact query ~20 ns per triangle — and it is a cost decision only:
   `FastWindingNumber` and `IsInside` fall through to the exact sum, so they stay correct.
+- **`MeshMassProperties` / `MassProperties` / `MassPropertyIntegrator`** — volume, surface
+  area, centre of mass and the inertia tensor of the solid a closed mesh bounds (OCCT's
+  `GProp_GProps`), with a `density` parameter so mass and moments come out in real units.
+  **Exact for any polyhedron**: each facet contributes the closed-form moments of the
+  tetrahedron it spans with a reference point (∫λ_aλ_b dV = V·(1+δ_ab)/20 in barycentric
+  coordinates), and those sum with no discretization error whatsoever — a box, a prism or a
+  tetrahedron agrees with the closed form to round-off. Faces may be n-gons: area comes from
+  Newell (right for concave faces, which a sum of fan-triangle areas is not) while the
+  moments come from the fan (which telescopes exactly whatever the polygon's shape), so the
+  results agree bit-for-bit with `SurfaceArea()` and `SignedVolume()`.
+  - `MassProperties` carries the <b>volume-weighted</b> second moment about the centroid,
+    S = ∫(r−c)(r−c)ᵀ dV, and derives the rest: `Inertia` = ρ·(tr(S)·Id − S), `InertiaAbout`
+    (parallel axis), `Principal()` (ascending moments + a right-handed `Frame3d` at the
+    centre of mass, by cyclic Jacobi), `WithDensity`, `Transformed` (similarity transforms
+    only — shear and non-uniform scale change the surface area in a way the properties alone
+    cannot express, so they are refused rather than fudged) and `Combine` (assemblies,
+    including mixed densities, whose result reports the bulk density).
+  - **Numerical lesson, worth the one subtraction it costs:** the divergence-theorem sum is
+    over terms of size |r|³ that cancel down to the volume, so a body far from the origin
+    loses digits catastrophically. Measured on a 10 mm cube posed at (1e6, 2e6, 3e6): the
+    origin-referenced sum is **6.5e-7** relative, the bounding-box-centre-referenced sum
+    **5.2e-12** — five orders of magnitude, and it worsens with (distance / size). Never
+    integrate moments about the world origin. (A test pins this, and it had to be built on a
+    *rotated* box: an axis-aligned one at a round offset has integer coordinates whose
+    products cancel exactly and hide the effect entirely.)
 - **`PolygonTriangulator`** — 2D triangulation with holes; a faithful port of mapbox
   earcut (minus z-order hashing).
 - **`HoleFiller`** — hole filling for open meshes, construct-new (g3 `SimpleHoleFiller` /
