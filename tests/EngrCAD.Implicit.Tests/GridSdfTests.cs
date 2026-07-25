@@ -32,11 +32,15 @@ public class GridSdfTests
             return inner.Evaluate(point);
         }
 
-        public override void Evaluate(ReadOnlySpan<Vector3d> points, Span<double> distances)
+        // Counts at EvaluateBatch, the seam EVERY batch goes through — the dense baker
+        // hands over interleaved points and the sparse one hands over deinterleaved
+        // coordinates, and both land here.
+        protected internal override void EvaluateBatch(
+            ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
         {
             Interlocked.Increment(ref _batchCalls);
-            Interlocked.Add(ref _batchPoints, points.Length);
-            inner.Evaluate(points, distances);
+            Interlocked.Add(ref _batchPoints, x.Length);
+            inner.EvaluateBatch(x, y, z, distances);
         }
 
         public override Aabb Bounds => inner.Bounds;
@@ -233,5 +237,97 @@ public class GridSdfTests
         int afterFirst = spy.BatchPoints;
         lazy.Evaluate((-1.85, -1.95, -1.88)); // same block: fully cached
         Assert.Equal(afterFirst, spy.BatchPoints);
+    }
+
+    // ---- sparse (two-level) block table ----
+
+    /// <summary>
+    /// The case that fails outright without a sparse grid: a domain whose dense sample
+    /// count overflows int addressing. The dense bake must say so and point at the way
+    /// out; the lazy grid must simply work, holding only the blocks a query reaches.
+    /// </summary>
+    [Fact]
+    public void ADomainTooLargeToBakeDensely_StillWorksLazily()
+    {
+        var region = new Aabb((-1000, -1000, -1000), (1000, 1000, 1000));
+        const double cell = 0.4; // 5001³ = 1.25e11 samples — 1 TB of doubles if dense
+
+        var dense = Assert.Throws<ArgumentException>(() => Sdf.Sphere(900).Sampled(region, cell));
+        Assert.Contains("lazy", dense.Message);
+
+        var lazy = Sdf.Sphere(900).Sampled(region, cell, lazy: true);
+        var grid = Assert.IsType<LazyGridSdf>(lazy);
+        Assert.Equal(0, grid.MaterializedBlocks);
+
+        // A handful of probes near the surface, spread far apart so they land in different
+        // super-blocks — the index has to be sparse at BOTH levels for this to be cheap.
+        foreach (var direction in new Vector3d[]
+                 { (1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1) })
+        {
+            Assert.Equal(0, lazy.Evaluate(direction * 900), 1);
+            Assert.True(lazy.Evaluate(direction * 500) < 0);
+            Assert.True(lazy.Evaluate(direction * 990) > 0);
+        }
+
+        // A trilinear read touches a cell's 8 corners, which can straddle two blocks per
+        // axis, so 18 probes can reach at most 8 blocks each. Even that ceiling is 1.2 MB
+        // of samples — where a FLAT block table for this grid would have cost 313³ = 30.7 M
+        // pointers (245 MB) before a single sample was evaluated.
+        Assert.InRange(grid.MaterializedBlocks, 1, 8 * 18);
+        Assert.InRange(grid.MaterializedBytes, 1, 8L * 18 * 4096 * sizeof(double));
+    }
+
+    /// <summary>
+    /// Values must not depend on the block table's shape. The table is flat while that is
+    /// free and grouped into super-blocks above a threshold; forcing the grouped path onto
+    /// a small grid (flatBlockLimit 0) lets both be compared against the dense bake to the
+    /// bit — the grouped path is otherwise only reachable on grids too big to bake.
+    /// </summary>
+    [Fact]
+    public void FlatAndGroupedBlockTables_AgreeWithTheDenseBake_BitForBit()
+    {
+        var field = Sdf.Torus(1, 0.35) | Sdf.Sphere(0.5).Translate((0.9, 0, 0.4));
+        var region = new Aabb((-1.7, -1.7, -0.9), (1.7, 1.7, 0.9));
+        const double h = 0.017; // 201x201x107 samples = 13x13x7 blocks
+
+        var dense = field.Sampled(region, h);
+        var flat = new LazyGridSdf(field, region, h, flatBlockLimit: int.MaxValue);
+        var grouped = new LazyGridSdf(field, region, h, flatBlockLimit: 0);
+        foreach (var p in ProbeGrid(region.Expanded(0.3), 13))
+        {
+            long expected = BitConverter.DoubleToInt64Bits(dense.Evaluate(p));
+            Assert.Equal(expected, BitConverter.DoubleToInt64Bits(flat.Evaluate(p)));
+            Assert.Equal(expected, BitConverter.DoubleToInt64Bits(grouped.Evaluate(p)));
+        }
+        Assert.Equal(flat.MaterializedBlocks, grouped.MaterializedBlocks);
+    }
+
+    /// <summary>Concurrent first touches of the same and of different blocks must publish
+    /// once and agree — the two-level table is lock-free at both levels.</summary>
+    [Fact]
+    public void ConcurrentEvaluation_IsConsistent()
+    {
+        var field = Sdf.Sphere(1.5);
+        var region = new Aabb((-2, -2, -2), (2, 2, 2));
+        var lazy = field.Sampled(region, 0.02, lazy: true); // 201³ samples, 13³ blocks
+        var probes = new List<Vector3d>();
+        for (int i = 0; i < 4096; i++)
+        {
+            double a = i * 0.0123, b = i * 0.0456;
+            probes.Add(new Vector3d(1.9 * Math.Cos(a) * Math.Sin(b), 1.9 * Math.Sin(a) * Math.Sin(b), 1.9 * Math.Cos(b)));
+        }
+
+        var sequential = probes.Select(p => lazy.Evaluate(p)).ToArray();
+        var fresh = field.Sampled(region, 0.02, lazy: true);
+        var parallel = new double[probes.Count];
+        Parallel.For(0, probes.Count, i => parallel[i] = fresh.Evaluate(probes[i]));
+
+        for (int i = 0; i < probes.Count; i++)
+        {
+            Assert.Equal(
+                BitConverter.DoubleToInt64Bits(sequential[i]), BitConverter.DoubleToInt64Bits(parallel[i]));
+        }
+        Assert.Equal(
+            ((LazyGridSdf)lazy).MaterializedBlocks, ((LazyGridSdf)fresh).MaterializedBlocks);
     }
 }

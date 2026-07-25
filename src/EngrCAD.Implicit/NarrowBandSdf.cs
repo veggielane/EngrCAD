@@ -112,6 +112,7 @@ internal sealed class NarrowBandSdf : SampledGridSdf
             throw new ArgumentOutOfRangeException(nameof(bandWidth), "Band width must be non-negative.");
 
         var frame = new GridFrame(region, cellSize);
+        frame.RequireDenseAddressable();
         int total = frame.Nx * frame.Ny * frame.Nz;
         var magnitudes = new double[total];
         var signs = new sbyte[total];

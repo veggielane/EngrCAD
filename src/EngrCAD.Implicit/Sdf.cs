@@ -63,6 +63,38 @@ public abstract class Sdf
     }
 
     /// <summary>
+    /// Batch evaluation from <em>already deinterleaved</em> coordinates — for bulk callers
+    /// that generate sample positions procedurally (grid sampling) rather than holding an
+    /// array of <see cref="Vector3d"/>. It skips the transpose that
+    /// <see cref="Evaluate(ReadOnlySpan{Vector3d}, Span{double})"/> performs, and it lets a
+    /// caller stream an arbitrarily long run through a fixed-size coordinate buffer instead
+    /// of materializing one point per sample: <c>Polygonize</c> saves 24 bytes per grid
+    /// corner that way.
+    /// <para>
+    /// Results are bit-for-bit identical to the interleaved overload (both drive the same
+    /// <see cref="EvaluateBatch"/> seam, chunked identically). Note that a node overriding
+    /// the interleaved overload to intercept whole batches does <em>not</em> intercept this
+    /// one — <see cref="EvaluateBatch"/> is the seam that always sees every batch.
+    /// </para>
+    /// </summary>
+    public void Evaluate(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        if (y.Length < x.Length || z.Length < x.Length || distances.Length < x.Length)
+            throw new ArgumentException("Coordinate and distance spans must be at least as long as x.");
+
+        // Chunked exactly like the interleaved entry, so operator temporaries stay cache
+        // resident no matter how long a run the caller streams through.
+        for (int start = 0; start < x.Length; start += SdfBatch.ChunkLength)
+        {
+            int length = Math.Min(SdfBatch.ChunkLength, x.Length - start);
+            EvaluateBatch(
+                x.Slice(start, length), y.Slice(start, length), z.Slice(start, length),
+                distances.Slice(start, length));
+        }
+    }
+
+    /// <summary>
     /// The SIMD seam: evaluate a batch given deinterleaved coordinates (all four spans
     /// share a length). Structure-of-arrays is the layout a lane-wise kernel needs — the
     /// interleaved <see cref="Vector3d"/> form the public API takes would cost a strided
@@ -241,9 +273,16 @@ public abstract class Sdf
     /// Bakes this field onto a uniform grid of cubic cells covering
     /// <paramref name="region"/> (rounded up to whole cells) and returns a node that
     /// evaluates it by trilinear interpolation — the standard acceleration for expensive
-    /// ASTs (mesh SDFs, deep CSG trees) queried many times over the same region. With
-    /// <paramref name="lazy"/> the grid is materialized in 16³-sample blocks on first
-    /// touch instead of up front (thread-safe; pays only for regions actually probed).
+    /// ASTs (mesh SDFs, deep CSG trees) queried many times over the same region.
+    /// <para>
+    /// With <paramref name="lazy"/> the grid becomes <b>sparse</b>: 16³-sample blocks are
+    /// materialized on first touch instead of up front (thread-safe; pays only for regions
+    /// actually probed), and the block table itself is two-level, so indexing a huge domain
+    /// costs kilobytes instead of the 8 bytes per never-touched block a flat table charges.
+    /// That is also the only overload that works past ~1290³ samples: a dense bake needs one
+    /// contiguous <c>double[]</c> and is capped by <see cref="int"/> addressing, whereas a
+    /// lazy grid over a 4096³ domain holds only the blocks a query actually reaches.
+    /// </para>
     /// <para>
     /// Distance fidelity: values are <em>approximate</em> — exact at grid sample points,
     /// trilinear between (error O(cellSize²) where the field is smooth, O(cellSize)

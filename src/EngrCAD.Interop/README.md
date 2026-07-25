@@ -10,12 +10,30 @@ engines.
   manifold Surface Nets (dual contouring): one vertex per *connected component of inside
   corners* per cell (plain one-vertex-per-cell produces non-manifold edges on thin
   sheets and saddles), one quad per interior sign-changing grid edge, wound outward.
-  Surfaces crossing the sampling region come out open there. Grid sampling runs in
-  parallel over i-slabs via `ParallelFor.Blocks` (each block fills and evaluates a
-  disjoint slice, so the mesh is bit-for-bit identical to a sequential run); the
-  topology passes stay sequential so output ordering never depends on scheduling. The
+  Surfaces crossing the sampling region come out open there. The
   optional `ProgressCancel` reports coarse progress and cancels cooperatively
   (throws `OperationCanceledException`, partial results discarded).
+  - **Sampling is deinterleaved and streamed.** The grid is never materialized as points:
+    coordinates are generated from the indices straight into pooled x/y/z scratch and fed
+    to `Sdf.Evaluate(x, y, z, distances)` — the SoA batch entry — so the round trip that
+    built a `Vector3d[]` corner array only for the AST root to transpose it back apart is
+    gone (24 bytes per corner, and one pass over the whole grid). Samples live in a
+    **sliding window of whole x-slabs** sized to a 64 MB budget, with cell vertices and the
+    three quad passes interleaved into the same walk, so peak memory scales with the
+    grid's cross-section rather than its volume: a 1024³ grid needs 16 MB of samples where
+    the dense array needed 8.6 GB. Below about resolution 200 the whole grid fits the
+    budget and the window IS the grid — the small-model path is unchanged.
+    Measured on the reference machine (win-arm64, Release, idle): res 96 **39.9 → 15.6 ms**
+    and 40.9 → 19.9 MB; res 256 **735.5 → 258.8 ms** and 562 → 145 MB; res 384
+    **1922.7 → 747.5 ms** and 1842 → 289 MB. See `SurfaceNetsBenchmark`.
+  - **Output is bit-for-bit independent of both the batching and the window.** Slabs are
+    sampled in parallel via `ParallelFor.Blocks` (every sample lands in its own slot), the
+    topology passes stay sequential, and quads are emitted into per-axis buckets keyed by
+    the loop variable that was outermost in the dense version's three emission passes, then
+    concatenated — which reproduces the dense face ordering exactly while letting the
+    passes run slab by slab. `SurfaceNetsSamplingTests` locks all of it against golden
+    bit-hashes of the pre-streaming output, against a wrapper that forces every batch back
+    through the scalar `Evaluate`, and across window sizes from "whole grid" to "two slabs".
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces
@@ -163,6 +181,21 @@ this project's conversions.)
   distance metric, not a closure (0 B measured over 100 k calls; locked by
   `MeshSdfTests.Evaluate_SteadyState_DoesNotAllocate`). The result is a first-class
   `Sdf` node composable with the whole implicit engine.
+  **Batches stay the scalar loop, deliberately.** `MeshSdf` does not override the batch
+  seam, and `MeshSdfBatchTests` pins that (batch equals scalar bit for bit, including on
+  the surface, where any seeded search breaks). The measurement behind the decision: a
+  narrow-band bake of a mesh field spends **74–85% of its wall clock inside these queries**,
+  so there is real headroom — but *seeding* the branch and bound with the previous coherent
+  sample's answer, which is provably result-identical and looks free, measured only
+  **1.12–1.20×** on the most coherent run available and a small net **loss** on scattered
+  probes. The reason is worth remembering: **a nearest-first branch and bound is already its
+  own seed** — descending the nearer child first reaches a tight bound in O(log n) node
+  tests, so a seed can only save part of the first descent. (A standalone prototype claimed
+  1.88×; its baseline went through a `Func` delegate per triangle while the seeded path
+  called the kernel directly. The gap was the delegate. Never benchmark an optimization
+  against a baseline you wrote differently.) The untried lever is a *packet* query — one
+  traversal per coherent block, collecting candidates for all its points at once — which
+  attacks the node-test cost rather than the initial bound.
   The sign source is opt-in via `new MeshSdf(mesh, MeshSignSource.WindingNumber)`, which
   drives the fast generalized winding number (`MeshWindingNumber` in EngrCAD.Mesh) instead
   of the pseudonormal — same partition on watertight meshes, but also accepts **open**
