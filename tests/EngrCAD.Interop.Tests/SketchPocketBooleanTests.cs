@@ -185,6 +185,53 @@ public class SketchPocketBooleanTests
     }
 
     [Fact]
+    public void ConcavePocket_TracesEveryCorner()
+    {
+        // Ten alternating corners: the arrangement has to trace a star, not a hull.
+        var star = Sketch.Polygon([.. Enumerable.Range(0, 10).Select(i =>
+        {
+            double r = i % 2 == 0 ? 5.0 : 2.0, a = Math.PI * i / 5;
+            return new Vector2d(r * Math.Cos(a), r * Math.Sin(a));
+        })]);
+        var pocket = Plate() - Shape.Extrude(star, 1.5, At(1));
+
+        var solid = pocket.ToBrep();
+        Assert.Equal(6 + 10 + 1, solid.Faces.Count()); // plate + 10 walls + floor
+        Assert.Equal(PlateVolume - star.Area() * 1, SoundVolume(pocket), 9);
+    }
+
+    [Fact]
+    public void SteppedPocket_SecondPocketInsideTheFirst()
+    {
+        var pocket = Plate()
+            - Shape.Extrude(Rect(16, 8), 1.5, At(1))     // 1 mm down, floor at z = 1
+            - Shape.Extrude(Rect(8, 4), 1.5, At(0));     // another 1 mm from that floor
+        Assert.Equal(PlateVolume - 16 * 8 * 1 - 8 * 4 * 1, SoundVolume(pocket), 9);
+    }
+
+    [Fact]
+    public void ShearedTool_SectionsExactlyToo()
+    {
+        // The section path's real precondition is that the GENERATOR lies in a plane
+        // parallel to the cutting plane — not that the plane is perpendicular to the
+        // extrude direction. An oblique prism proves it: the cut is still one exact
+        // translate of the generator, and Cavalieri says the volume is base × height.
+        // (BrepBoolean consumes its inputs, so the shape is rebuilt per lowering.)
+        Shape Sheared()
+        {
+            var square = Profile.FromPoints([(-5, -2.5, 1), (5, -2.5, 1), (5, 2.5, 1), (-5, 2.5, 1)]);
+            return Plate() - Shape.From(SolidFactory.Extrude(square, (0.6, 0.2, 1.5)));
+        }
+
+        var solid = Sheared().ToBrep();
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula());
+        var mesh = Sheared().ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(PlateVolume - 10 * 5 * 1, mesh.Volume(), 9);
+    }
+
+    [Fact]
     public void CrossedExtrusions_UnionIntersectionDifference_AllExact()
     {
         // Both operands straight-walled extrusions, transversal in z.
@@ -199,11 +246,18 @@ public class SketchPocketBooleanTests
     [Fact]
     public void PocketThenBore_CompoundFeaturesStayExact()
     {
-        // A drilled bore through a pocket floor: the pocket's exact walls must survive a
-        // second boolean whose curves are circles.
+        // A bore drilled through a pocket floor: the pocket's exact straight walls must
+        // survive a SECOND boolean whose intersection curves are circles.
+        // Shape.Cylinder is centred, so radius 1.5 × length 12 spans the whole plate;
+        // inside the pocket footprint it removes floor (z = 1) down to z = −2.
         var pocket = Plate() - Shape.Extrude(Rect(10, 5), 1.5, At(1));
-        var drilled = pocket - Shape.Cylinder(1.5, 12).Translate(0, 0, 0);
-        double bore = Math.PI * 1.5 * 1.5 * 3; // pocket floor z = 1 down to the plate's z = −2
-        Assert.Equal(PlateVolume - 50 - bore, SoundVolume(drilled, genus: 1), 2);
+        var drilled = pocket - Shape.Cylinder(1.5, 12);
+        double volume = SoundVolume(drilled, genus: 1);
+
+        // Only the bore is discretized: an n-gon inscribed in radius r under-removes
+        // r²(π − (n/2)·sin(2π/n)) per unit depth, ≈ 0.14 mm³ over 3 mm at 32 segments.
+        double exact = PlateVolume - 10 * 5 * 1 - Math.PI * 1.5 * 1.5 * 3;
+        double chordalDeficit = 2.25 * (Math.PI - 16 * Math.Sin(2 * Math.PI / 32)) * 3;
+        Assert.InRange(volume, exact, exact + 2 * chordalDeficit);
     }
 }
