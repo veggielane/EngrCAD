@@ -1,6 +1,8 @@
 using EngrCAD.BRep;
 using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
 using EngrCAD.Implicit;
+using EngrCAD.Interop;
 using EngrCAD.Mesh;
 
 namespace EngrCAD.Modeling;
@@ -69,6 +71,38 @@ public abstract class Shape
         if (height <= 0)
             throw new ArgumentOutOfRangeException(nameof(height));
         return new ConeShape(bottomRadius, topRadius, height);
+    }
+
+    /// <summary>
+    /// Rectangular wedge along +Z, centred at the origin — OCCT's
+    /// <c>BRepPrimAPI_MakeWedge</c>, and the remaining primitive OpenSCAD reaches for
+    /// <c>polyhedron</c> to build. The base at z = −height/2 is
+    /// <paramref name="sizeX"/> × <paramref name="sizeY"/>; the top at z = +height/2 keeps
+    /// the same y but is <paramref name="topX"/> wide, centred at
+    /// x = <paramref name="topOffsetX"/>. Native in all three representations.
+    ///
+    /// <para>The family it covers: <paramref name="topX"/> = 0 gives a sharp top edge (a
+    /// symmetric chisel), and moving that edge over one side with
+    /// <c>topOffsetX: ±sizeX/2</c> gives the classic RAMP — a right triangular prism.
+    /// A positive <paramref name="topX"/> gives a truncated wedge (a dovetail rail, a
+    /// draft-angled boss), and <c>topX: sizeX</c> with a nonzero offset gives a sheared
+    /// box. The taper is in x only; a solid tapering in BOTH directions is a loft, not a
+    /// wedge.</para>
+    /// </summary>
+    public static Shape Wedge(
+        double sizeX, double sizeY, double sizeZ, double topX = 0, double topOffsetX = 0)
+    {
+        if (sizeX <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeX));
+        if (sizeY <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeY));
+        if (sizeZ <= 0)
+            throw new ArgumentOutOfRangeException(nameof(sizeZ));
+        if (topX < 0)
+            throw new ArgumentOutOfRangeException(nameof(topX), "The top width cannot be negative.");
+        if (!double.IsFinite(topOffsetX))
+            throw new ArgumentOutOfRangeException(nameof(topOffsetX));
+        return new WedgeShape(sizeX, sizeY, sizeZ, topX, topOffsetX);
     }
 
     // ---- Modeling operations ----
@@ -576,6 +610,40 @@ public abstract class Shape
     public ConversionReport Explain(TargetRep target) => ShapeCompiler.Classify(this, target);
 
     public bool CanConvertTo(TargetRep target) => Explain(target).IsConvertible;
+
+    // ---- Planar views ----
+
+    /// <summary>
+    /// The cross-section through <paramref name="plane"/> as 2D regions in the plane's own
+    /// coordinates — OpenSCAD's <c>projection(cut = true)</c>, and the drawing-view section.
+    /// Cavities become holes automatically.
+    ///
+    /// <para>Exact geometry is used when the shape lowers to B-Rep (fidelity set by
+    /// <paramref name="chordTolerance"/> alone, so a bore rim is as smooth as asked for);
+    /// otherwise the section is taken from the display mesh at
+    /// <paramref name="quality"/>. Move the plane off any flush face or in-plane edge — a
+    /// section that runs along a face is an area, not a curve, and is refused.</para>
+    /// </summary>
+    public IReadOnlyList<Region2d> Section(
+        SketchPlane plane,
+        double chordTolerance = PlanarSection.DefaultChordTolerance,
+        MeshQuality? quality = null) =>
+        CanConvertTo(TargetRep.Brep)
+            ? PlanarSection.OfSolid(ToBrep(), plane.Frame, chordTolerance)
+            : PlanarSection.OfMesh(ToMesh(quality), plane.Frame);
+
+    /// <summary>
+    /// The OUTLINE the shape casts along <paramref name="plane"/>'s normal, as 2D regions
+    /// in the plane's coordinates — OpenSCAD's <c>projection(cut = false)</c>. A through
+    /// hole survives as a hole; a blind pocket or an internal cavity does not (there is
+    /// material in front of it).
+    ///
+    /// <para>Computed from the mesh at <paramref name="quality"/> — a silhouette is the
+    /// union of the projected faces, so its fidelity is the mesh's, and a finer mesh costs
+    /// more union work. See <see cref="PlanarSection.SilhouetteOfMesh"/> for the cost.</para>
+    /// </summary>
+    public IReadOnlyList<Region2d> Silhouette(SketchPlane plane, MeshQuality? quality = null) =>
+        PlanarSection.SilhouetteOfMesh(ToMesh(quality), plane.Frame);
 
     private void ThrowIfImpossible(TargetRep target)
     {

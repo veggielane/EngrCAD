@@ -32,6 +32,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Cylinder` | ✅ native (any affine — circle becomes ellipse) | ✅ native · 🔶 bridged if sheared | ✅ native |
 | `Torus` | ✅ native (rigid + uniform scale) · ❌ sheared | ✅ native · 🔶 bridged if sheared | ✅ / 🔶 |
 | `Cone` (`r1`, `r2`; 0 = apex) | ✅ native (rigid + uniform scale) · ❌ sheared (elliptic cone) | ✅ native · 🔶 bridged if sheared | ✅ / 🔶 |
+| `Wedge` (`topX`, `topOffsetX`) | ✅ native (any affine — it is an extrusion) | ✅ **native** (exact 2D SDF) · 🔶 bridged if sheared | ✅ native |
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
@@ -164,8 +165,25 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   region.)
 - `Union` / `Intersect` / `Subtract` on sketches (and on `Region2d`) run Core's
   arrangement-based `Region2dBoolean`.
+- **`sketch.Offset(delta, join, miterLimit, chordTolerance)`** grows (positive) or shrinks
+  (negative) the sketch by a constant distance — OpenSCAD's `offset()`, and the geometry
+  behind clearance fits, wall shells, pocket stock and cutter compensation. `OffsetJoin`
+  is `Round` (arcs), `Miter` (sharp, cut back past the miter limit) or `Chamfer` (bevel).
+  Straight-edged input is EXACT under miter/chamfer. An inward offset may split the
+  sketch into several regions or consume it entirely, so the result is always a list —
+  no inverted loops, because Core's `Region2dOffset` offsets by UNIONING one primitive
+  per edge and per corner rather than chasing edges.
 - `Profile.FromRegion(region, frame)` (BRep) returns the `(outer, holes)` pair the
   solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`.
+- **`shape.Section(plane, chordTolerance)`** goes the other way — a 3D body back to 2D
+  regions in the plane's own coordinates (`projection(cut = true)`, the drawing-view
+  section). Exact geometry when the shape lowers to B-Rep, otherwise from the display
+  mesh; cavities become holes automatically. Move the plane off any flush face or
+  in-plane edge: a section running along a face is an area, not a curve, and is refused.
+- **`shape.Silhouette(plane, quality)`** is the OUTLINE the shape casts along the plane's
+  normal (`projection(cut = false)`) — a through hole survives as a hole, a blind pocket
+  does not. Always from the mesh (a silhouette is the union of the projected faces), so
+  fidelity and cost both follow the mesh quality; see the Interop README for the numbers.
 
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,

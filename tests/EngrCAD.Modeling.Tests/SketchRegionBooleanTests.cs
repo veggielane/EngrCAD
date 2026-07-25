@@ -213,6 +213,70 @@ public class SketchRegionBooleanTests
         Assert.Equal((200.0 - 3 * 4) * 3, BRepTessellator.Tessellate(solid).Volume(), 9);
     }
 
+    // ---- offsetting ----
+
+    [Fact]
+    public void OffsettingARectangleOutward_IsExactUnderMiterJoins()
+    {
+        // Straight edges and 90-degree corners: no flattening enters at all.
+        var grown = Assert.Single(Sketch.Rectangle(20, 10).Offset(1.5, OffsetJoin.Miter));
+
+        Assert.Equal(23.0 * 13.0, grown.Area, 9);
+        Assert.Equal(4, grown.Outer.Count);
+    }
+
+    [Fact]
+    public void OffsettingACircleOutward_LandsJustInsidePiTimesRadiusPlusDeltaSquared()
+    {
+        const double radius = 5, delta = 1.5, tolerance = 1e-3;
+        var grown = Assert.Single(Sketch.Circle(radius).Offset(delta, OffsetJoin.Round, chordTolerance: tolerance));
+
+        // Both the circle and the corner arcs are inscribed, so the answer brackets exactly:
+        // above the disk of radius (r + delta − tolerance), below the true offset disk.
+        double exact = Math.PI * (radius + delta) * (radius + delta);
+        Assert.InRange(grown.Area,
+            Math.PI * (radius + delta - tolerance) * (radius + delta - tolerance), exact);
+    }
+
+    [Fact]
+    public void OffsettingAPlateWithBoltHolesInward_GrowsEveryHole()
+    {
+        // The shell/clearance case: one outer boundary, four holes, all offset at once.
+        var plate = Sketch.Rectangle(40, 20)
+            .WithHole(Sketch.Circle(new Vector2d(-12, -5), 2))
+            .WithHole(Sketch.Circle(new Vector2d(12, -5), 2))
+            .WithHole(Sketch.Circle(new Vector2d(-12, 5), 2))
+            .WithHole(Sketch.Circle(new Vector2d(12, 5), 2));
+
+        var shrunk = Assert.Single(plate.Offset(-1, OffsetJoin.Miter));
+
+        Assert.Equal(4, shrunk.Holes.Count);
+        // Boundary 38x18 exactly (straight, mitred); each hole grows from r=2 to r=3, and
+        // both circles are inscribed polygons, so the hole area is bracketed by the chord
+        // tolerance rather than exact.
+        Assert.InRange(shrunk.Area,
+            38 * 18 - 4 * Math.PI * 3 * 3, 38 * 18 - 4 * Math.PI * (3 - 1e-3) * (3 - 1e-3));
+    }
+
+    [Fact]
+    public void AnOffsetRegionExtrudesToASolid()
+    {
+        // The point of offsetting: the result is ordinary region input for the factories.
+        var gasket = Sketch.RoundedRectangle(30, 16, 3).Offset(2, OffsetJoin.Round)[0];
+        var (outer, holes) = Profile.FromRegion(gasket, SketchPlane.XY.Frame);
+
+        Assert.Empty(holes);
+        var solid = SolidFactory.Extrude(outer, Vector3d.UnitZ * 4);
+        solid.Validate();
+        Assert.Equal(gasket.Area * 4, BRepTessellator.Tessellate(solid).Volume(), 6);
+    }
+
+    [Fact]
+    public void OffsettingARibInwardPastItsHalfWidth_LeavesNothing()
+    {
+        Assert.Empty(Sketch.Rectangle(40, 2).Offset(-1.5));
+    }
+
     [Fact]
     public void RegionsPlaceOntoAnyPlane()
     {

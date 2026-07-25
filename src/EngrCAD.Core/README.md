@@ -40,7 +40,11 @@ concerns.
   coordinates rounded). `ExtractCells()` walks every directed edge with the
   tightest-turn (clockwise-next-from-reverse) rule — exact angular comparisons — and
   returns `ArrangementCell2d`s: CCW outer loop, CW hole loops (disconnected island
-  components, assigned to the smallest strictly-larger containing cell), net `Area`;
+  components, assigned to the smallest strictly-larger containing cell **from a different
+  connected component** — a loop reachable from the cell's own loop would have been traced
+  as part of it, so same-component nesting is structurally impossible; that rule is what
+  stops a lone convex cell from adopting its own reversed perimeter as a hole when the two
+  shoelace sums differ by an ULP), net `Area`;
   the unbounded face and zero-area spur loops are dropped, dangling edges appear as
   doubled-back slits. This is the same loop-tracing dance `FaceSplitter.SplitByCurve`
   performs in UV parameter space (which additionally handles periodic wrap and stays
@@ -83,6 +87,35 @@ concerns.
   edge with the largest clearance. No triangulation, no shrink factor, no epsilon; and since
   the cell boundary contains every operand edge, the sample can never sit on A's or B's
   boundary, so `Contains`'s closed-set convention never has to decide a tie.
+  **`UnionAll(regions)`** unions MANY regions as a **balanced tree** rather than a linear
+  fold: one arrangement is O(E²) in its total input, and a linear accumulate arranges every
+  operand against the whole running union, whereas halving recursively keeps most
+  arrangements small and lets each merge discard its children's interior edges before
+  climbing. Union is associative, so the answer is identical — only the cost changes. Feed
+  spatially sorted input when you have it.
+- **`Geometry2.Region2dOffset`** — polygon offsetting (`Offset(region|regions, delta, join,
+  miterLimit, arcTolerance)`), i.e. OpenSCAD's `offset(r=…)` / `offset(delta=…, chamfer=…)`
+  and the geometry behind shells, pockets, clearances and cutter compensation. **The
+  algorithm is a union, not an edge chase**: an outward offset by d is exactly
+  `R ∪ (⋃ edge slabs) ∪ (⋃ corner joins)` — a point outside R but within d of it is nearest
+  either to an edge interior (so it lies in that edge's slab, the rectangle swept d along the
+  outward normal) or to a vertex (so it lies in that vertex's corner primitive) — and every
+  primitive is a small convex polygon handed to `Region2dBoolean.UnionAll`. That is why
+  offsetting had to wait for the arrangement-based boolean, and it is why **self-intersection
+  is a non-issue**: there is no loop to invert, so an inward offset that eats through a neck
+  simply returns two regions, or none. `OffsetJoin.Round` builds inscribed polygonal arcs
+  (vertices exactly on the true offset circle, sagitta ≤ `arcTolerance`, so results sit just
+  inside the true Minkowski sum — the same one-sided contract as `Sketch.ToRegions`
+  flattening); `Miter` extends the two offset edges to their intersection, falling back to
+  `Chamfer` past `miterLimit` (default 2, Clipper's); `Chamfer` bevels straight across.
+  Straight-edge geometry is EXACT under every style — a mitered square is the larger square
+  with four corners, not eight, which needs the miter apex computed from `sum.LengthSquared`
+  and never from `sum.Length` squared (√2² is 2.0000000000000004, enough to tilt the apex a
+  few ULPs off both offset edge lines so the collinear T-junctions stop collapsing).
+  **Inward offsets are outward offsets of the complement** — `B \ dilate(B \ R, d)` with B =
+  R's bounds grown by 3d — so there is no second algorithm and no special case for necks,
+  islands, or holes merging. Cost is the union's: measured ~30 ms for a 16-gon and ~260 ms
+  for a 512-gon outward round offset.
 - **`Spatial.Bvh`** — static bounding volume hierarchy (median split on the longest
   centroid axis, flat node array, allocation-free stack traversal). Queries (all
   zero-allocation per query, results appended to caller-provided lists):

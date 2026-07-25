@@ -115,6 +115,87 @@ this project's conversions.)
   degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
   and still requires a closed mesh.
 
+## Planar cross-sections (`PlanarSection`)
+
+`projection(cut = true)`: the cross-section of a solid through a plane, as 2D
+`Region2d`s in the plane's own coordinates. Nesting is re-derived by
+`Region2d.FromLoops`, so a bore inside a plate becomes a hole without anyone declaring it.
+
+- **`PlanarSection.OfMesh(mesh, plane)`** — `MeshPlaneCut`'s ordered boundary loops
+  projected into the plane. Fidelity is the mesh's; a plane that misses the mesh returns
+  an empty list rather than throwing.
+- **`PlanarSection.OfSolid(solid, plane, chordTolerance)`** — the exact route:
+  `SurfaceIntersection` per face, trimmed to the face, chained into loops. Fidelity is set
+  by `chordTolerance` alone rather than by whatever tessellation the display uses, so a
+  bore rim is as smooth as asked for; curved sections are INSCRIBED polygons (the same
+  one-sided contract as `Sketch.ToRegions`), straight sections exact.
+
+Three things make the B-Rep route close reliably:
+
+1. **Edge crossings are the loop-assembly key.** A section curve leaves a face exactly
+   where the plane crosses one of the face's EDGES, and that edge is shared with the
+   neighbouring face — so the crossings are solved once per edge, by bisection on the
+   edge's own exact curve, and both faces use the *same* point. Runs are then chained by
+   node INDEX, not by welding two independently computed endpoints (which would be the
+   1e-7 seam tier at best, with drift). The endpoints are the node POSITIONS, never the
+   curve re-evaluated at the searched parameter — a ternary search leaves ~5e-11 residual,
+   enough to stop a box's section corner being exactly a corner.
+2. **Keep/drop probes sit at a piece's MIDPOINT**, never at an end (which is on the trim
+   boundary, where containment is a tie) — the same rule `BrepBoolean` learned.
+3. **Containment is decided by a TWO-sided v-ray parity.** Both directions agree for a
+   properly closed trim (a vertical line crosses a closed loop an even number of times).
+   They disagree exactly on a POLE-BOUNDED face, where one side of the domain is a point
+   rather than a rim: a sphere's northern hemisphere has its only rim BELOW the cut, so
+   `FaceGeometry.Contains`'s one-sided upward ray sees no crossing and calls the probe
+   outside — which returned an empty section for every sphere. When the two disagree the
+   probe is between the rim and the pole, hence inside.
+
+Degenerate placements are refused with guidance rather than answered plausibly: a plane
+**flush with a planar face** (the section there is an area, not a curve) and a plane
+**containing a whole edge** (a sphere cut exactly at its equator — the section runs along
+two faces' shared boundary, where every probe is a tie).
+
+### Silhouettes (`PlanarSection.SilhouetteOfMesh`)
+
+`projection(cut = false)`: the outline a body casts along the plane's normal. A through
+hole survives as a hole; a blind pocket or an internal cavity does not. Every face's
+projection is a region and the silhouette is their union — three things make that
+affordable, and the ordering matters far more than the face count:
+
+1. **Back faces are dropped first**, halving the input. EXACT for a closed mesh and only
+   for a closed mesh: a ray along the normal leaves the solid through a front-facing face,
+   so the front-facing projections already cover the whole outline. An open mesh keeps
+   every face, because that argument does not hold.
+2. **Faces are Morton-sorted by projected centroid**, so the fold merges neighbours first
+   and intermediate boundaries stay simple. Merging face 1 with face 900 produces two
+   disjoint regions and no cancellation at all.
+3. **The fold is `Region2dBoolean.UnionAll`'s balanced tree.**
+
+Measured on a torus tessellated at 64 segments (3072 front-facing faces): Morton-sorted
+balanced tree **67 ms**, unsorted balanced tree **2.4 s** (36×), linear accumulate
+**259 s** (3800×). A 128-segment sphere (12k front-facing faces) takes ~240 ms. Mesh
+fidelity is the knob — the union is exact for whatever mesh it is given.
+
+**Projected coordinates are quantized to 1e-12 of the outline's extent** before the union
+(`PlanarSection.SilhouetteGrid`, the scale-free tier — never an absolute weld tolerance),
+and this is load-bearing. Two mesh vertices on the same feature line — a torus's latitude
+ring, a cylinder's rim — are only equal to within ULPS once projected, since each was
+evaluated independently. Two edges that should be collinear then sit ~2e-16 apart: far too
+small for the arrangement to see as a T-junction, far too large to ignore. The sliver cell
+left between them is one ULP thick, so its interior sample rounds back onto its own
+boundary, and the union's answer starts to depend on the merge order (measured: a
+16-segment torus viewed side-on came out 60.42 unsorted and 59.33 Morton-sorted, the truth
+being 60.42) — a 64-segment one threw "boundary tracing hit a dead end" outright. Snapping
+to a grid ~4500 ULPs wide collapses those pairs to identical doubles, the arrangement
+dedupes them as coincident edges, and no sliver is ever built. It is nine orders below the
+chord tolerance a polygonal region carries anyway.
+
+**Known limitation**: in near-tangent views (a torus seen side-on, where every quad is
+almost edge-on) the 2D boolean can still leave a **pinhole** of ~1e-7 of the outline area.
+Areas are correct to 6 significant figures and order-independent; only the hole COUNT is
+unreliable there, so filter holes by area if that matters. The residual cause is cell
+classification in `Region2dBoolean` at near-tangency, not the silhouette.
+
 ## Planar iso-contours (`SdfContours`)
 
 `SdfContours.OnPlane(sdf, origin, uSide, vSide, uSamples, vSamples, levels)` samples an

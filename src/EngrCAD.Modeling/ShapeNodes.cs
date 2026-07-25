@@ -46,6 +46,64 @@ internal sealed class ConeShape(double bottomRadius, double topRadius, double he
     internal override string Describe() => $"Cone(r1={bottomRadius:g4}, r2={topRadius:g4}, h={height:g4})";
 }
 
+/// <summary>
+/// Rectangular wedge / prismoid (OCCT's <c>BRepPrimAPI_MakeWedge</c>): a box whose top
+/// face is narrowed in x and optionally shifted along it. It IS an extrusion — the XZ
+/// cross-section is a trapezoid (a triangle when the top collapses), swept along y — so it
+/// lowers by expanding to a sketch extrusion rather than by a fourth code path per target.
+/// The node exists so the construction tree and <c>Explain</c> call it a wedge.
+/// </summary>
+internal sealed class WedgeShape : Shape
+{
+    public double SizeX { get; }
+    public double SizeY { get; }
+    public double SizeZ { get; }
+    public double TopX { get; }
+    public double TopOffsetX { get; }
+
+    public WedgeShape(double sizeX, double sizeY, double sizeZ, double topX, double topOffsetX)
+    {
+        SizeX = sizeX;
+        SizeY = sizeY;
+        SizeZ = sizeZ;
+        TopX = topX;
+        TopOffsetX = topOffsetX;
+    }
+
+    /// <summary>
+    /// The equivalent sketch extrusion. The sketch plane's x is world Z and its y is world
+    /// X (that order makes the plane normal +Y, so the extrusion grows the way the sketch
+    /// plane faces), and it sits at y = −sizeY/2 so the result is centred like every other
+    /// primitive. The trapezoid is wound counter-clockwise in sketch coordinates.
+    /// </summary>
+    public Shape Expanded => _expanded ??= Build();
+
+    private Shape? _expanded;
+
+    private Shape Build()
+    {
+        double halfX = SizeX / 2, halfZ = SizeZ / 2, halfTop = TopX / 2;
+        // Exact-zero test: a zero top width is a sharp edge, i.e. a triangle, not a
+        // trapezoid with two coincident corners (which would be a degenerate loop).
+        var corners = TopX == 0
+            ? new List<Vector2d>
+            {
+                new(-halfZ, -halfX), new(halfZ, TopOffsetX), new(-halfZ, halfX),
+            }
+            : [
+                new(-halfZ, -halfX),
+                new(halfZ, TopOffsetX - halfTop),
+                new(halfZ, TopOffsetX + halfTop),
+                new(-halfZ, halfX),
+            ];
+        var plane = SketchPlane.At((0, -SizeY / 2, 0), Vector3d.UnitZ, Vector3d.UnitX);
+        return Extrude(Sketch.Polygon(corners), SizeY, plane);
+    }
+
+    internal override string Describe() =>
+        $"Wedge({SizeX:g4}×{SizeY:g4}×{SizeZ:g4}, topX={TopX:g4}, offset={TopOffsetX:g4})";
+}
+
 internal sealed class ExtrudeShape : Shape
 {
     public Profile? Profile { get; }
