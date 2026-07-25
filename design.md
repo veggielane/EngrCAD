@@ -692,6 +692,39 @@ for `in`-parameters being illegal in expression trees.
 - **STEP assemblies share products the way the display path shares parts.** Reference
   identity on the solid gives one PRODUCT and N occurrences; posing the geometry and
   writing it N times would throw away the structure the format exists to carry.
+- **Extract, don't copy - the second time.** `RenderCore.cs` was created because the
+  window and offscreen passes had drifted (the offscreen pass gained a scene-scaled
+  frustum the window never got). A Blazor WebAssembly front end faces the identical
+  temptation and *cannot* resolve it the same way: it cannot reference `EngrCAD.Viewer`
+  without Avalonia and desktop Silk.NET. So the pure half became `EngrCAD.Viewer.Core`.
+  The alternative - a WebGL2 client with its own copy of the shaders and camera math -
+  is precisely the failure mode the file exists to prevent, and JavaScript would not
+  have caught the drift.
+- **The GL boundary is the extraction seam, and it is sharp.** Every type either takes a
+  `GL` or does not; there was no third category to argue about. The seam's one cost is
+  two forced class renames (linking and uploading split out of `ViewerShaders` and
+  `RenderGeometry`), because a C# class cannot span assemblies.
+- **Assembly name is not namespace, deliberately.** `EngrCAD.Viewer.Core` publishes types
+  in namespace `EngrCAD.Viewer`. Nothing in .NET requires a namespace to live in one
+  assembly, and `SectionPlane`/`ViewStyle` are public API with call sites in options,
+  MCP, docs and tests. An assembly boundary is a packaging decision; a namespace is API.
+  Renaming would have been a breaking change bought with zero user value.
+- **A refactor of render code needs a PIXEL oracle, not just tests.** A shader or
+  camera-math change survives all 1966 unit tests and still changes what users see. The
+  DocsGen corpus - 50 rendered PNGs, byte-compared via `git status` - is the oracle that
+  actually constrains this class of change, and it is what the extraction was verified
+  against.
+- **The web viewer puts no policy in JavaScript.** `engrcad-gl.js` owns the GL context,
+  uploads what it is given and issues the draws it is told to; shader source, camera
+  framing, section clipping and draw order all stay in .NET, shared with the desktop, and
+  arrive as a plain frame description. The test of this rule is simple: if a question
+  about what the scene *looks like* can be answered by reading the JavaScript, the rule
+  has been broken.
+- **WASM is a performance tier, not a port.** The kernel compiles unmodified and returns
+  identical geometry; what changes is speed, and only by a constant: measured 19.9x
+  slower than native interpreted, 4.9x with AOT. That makes "web viewer" a deployment
+  decision (AOT costs 1.9x the download) rather than an engineering fork, which is the
+  whole reason the kernel was kept free of UI dependencies by mandate.
 - **Surface Nets streams the grid in a window of x-slabs.** The dense sampler's *memory*
   was the wall on resolution, not its speed. Cells only ever need value slabs i and i+1
   and cell maps for i−1 and i, so the whole algorithm fits a sliding window; sizing that

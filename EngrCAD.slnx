@@ -10,11 +10,13 @@
     <Project Path="src/EngrCAD.Modeling/EngrCAD.Modeling.csproj" />
     <Project Path="src/EngrCAD.Viewer.Core/EngrCAD.Viewer.Core.csproj" />
     <Project Path="src/EngrCAD.Viewer/EngrCAD.Viewer.csproj" />
+    <Project Path="src/EngrCAD.Web/EngrCAD.Web.csproj" />
     <Project Path="src/EngrCAD.Mcp/EngrCAD.Mcp.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/EngrCAD.Demo/EngrCAD.Demo.csproj" />
     <Project Path="samples/EngrCAD.LiveDemo/EngrCAD.LiveDemo.csproj" />
+    <Project Path="samples/EngrCAD.WebDemo/EngrCAD.WebDemo.csproj" />
   </Folder>
   <Folder Name="/tools/">
     <Project Path="tools/EngrCAD.DocsGen/EngrCAD.DocsGen.csproj" />

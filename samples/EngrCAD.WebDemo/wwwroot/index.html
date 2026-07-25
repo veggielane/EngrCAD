@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EngrCAD &mdash; web viewer</title>
+    <base href="/" />
+    <link rel="preload" id="webassembly" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <style>
+        /* Hand-written rather than a CSS framework on purpose: payload is one of the two
+           risks this prototype exists to measure, and the template's bootstrap was
+           2.4 MB of it (mostly source maps). */
+        :root { color-scheme: dark; }
+        body {
+            margin: 0; background: #1d1f24; color: #dde1e6;
+            font: 15px/1.55 "Segoe UI", system-ui, sans-serif;
+        }
+        .app { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.5rem; }
+        h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 .4rem; }
+        header p, footer p { color: #9aa0aa; margin: 0 0 1.6rem; }
+        .controls { display: grid; gap: .9rem; margin-bottom: 1.6rem; }
+        .controls label { display: grid; grid-template-columns: 7rem 1fr 6rem; align-items: center; gap: .8rem; }
+        .controls input { width: 100%; }
+        .value { color: #9aa0aa; font-variant-numeric: tabular-nums; }
+        table.stats { border-collapse: collapse; width: 100%; }
+        table.stats th { text-align: left; font-weight: 500; color: #9aa0aa; padding: .28rem 0; }
+        table.stats td { text-align: right; font-variant-numeric: tabular-nums; padding: .28rem 0; }
+        tr.spacer td { padding: .4rem 0; }
+        tr.total th, tr.total td { border-top: 1px solid #3a3d45; color: #dde1e6; font-weight: 600; }
+        .error { background: #2b1f1f; color: #e07b6b; padding: .9rem; border-radius: 4px; white-space: pre-wrap; }
+        .busy { color: #9aa0aa; }
+        footer { margin-top: 2rem; border-top: 1px solid #2a2d33; padding-top: 1rem; }
+        #blazor-error-ui { display: none; position: fixed; bottom: 0; width: 100%;
+            background: #b03a2e; color: #fff; padding: .6rem 1rem; }
+    </style>
+    <!-- REQUIRED. The build fingerprints every framework asset and rewrites this import
+         map to point at the hashed names; without it dotnet.js resolves its siblings by
+         their unhashed names and the boot 404s with no visible error. -->
+    <script type="importmap"></script>
+</head>
+
+<body>
+    <div id="app">
+        <div class="app"><p class="busy">Loading the kernel&hellip;</p></div>
+    </div>
+
+    <div id="blazor-error-ui">
+        Something went wrong. <a href="." class="reload">Reload</a>
+    </div>
+    <script src="_framework/blazor.webassembly#[.{fingerprint}].js"></script>
+</body>
+
+</html>

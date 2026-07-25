@@ -506,29 +506,52 @@ browser. Opens the door to sharing designs by URL, embedding live models in the 
 site, and eventually a hosted modeling experience. The kernel is pure .NET with no
 UI dependencies, which makes this unusually feasible.
 
-- [ ] **Architecture decision first** — two viable shapes, prototype before committing:
-  - **Blazor WebAssembly, kernel in the browser**: the whole kernel (Core/Mesh/
-    Implicit/BRep/Interop/Modeling — all UI-free by mandate) compiles to WASM; models
-    tessellate client-side; rendering via WebGL2 from .NET (JS interop to a thin
-    canvas/WebGL wrapper, or a library like `Blazor.Extensions.Canvas`/three.js
-    interop). Zero server; static hosting (could live on the GitHub Pages site).
-    Risks to prototype: WASM perf of the kernel's hot paths (no SIMD intrinsics
-    guarantees in WASM today — measure booleans/tessellation on a real model), payload
-    size, `ArrayPool`/`stackalloc` behavior under WASM.
-  - **Blazor Server (or hybrid)**: kernel runs server-side, viewer streams meshes to
-    the browser (SignalR); thin WebGL client renders `RenderMesh` buffers. Better for
-    heavy models; needs hosting.
-- [ ] **Shared render model** — extract the viewer's scene-to-buffers layer so desktop
-  and web consume the same thing: `RenderMesh` + part color/transform/display-mode is
-  already the seam (`RenderCore.cs` proved the shared-core pattern for shaders/camera;
-  a `ViewerModel` abstraction over Scene→render-instances would serve Avalonia, the
-  offscreen renderer, AND the web client). GLSL ES shaders port near-verbatim to
-  WebGL2 (same ASCII-only rule).
+- [x] **Architecture decided and prototyped: Blazor WebAssembly, kernel in the
+  browser.** `src/EngrCAD.Web` (Razor component library) + `samples/EngrCAD.WebDemo`.
+  The three risks the decision hung on are now measured, not guessed:
+  - **The kernel compiles to WASM unmodified and returns identical geometry** — a flange
+    with a 6-hole bolt circle and a filleted rim gave 1 560 triangles, closed, volume
+    41 573.0 in headless Edge, matching the desktop run. No WASM-specific code path,
+    and no `ArrayPool`/`stackalloc`/`Vector<double>` trouble.
+  - **Speed is a constant factor, not a wall**: desktop 81.3 ms total; WASM without AOT
+    1 619.8 ms (19.9×); WASM with AOT 401.6 ms (4.9×).
+  - **Payload**: 2.4 MB brotli, or 4.6 MB with AOT. All eight EngrCAD assemblies are
+    1.17 MB uncompressed — the download is the .NET runtime, so trimming our own code
+    would win almost nothing.
+- [ ] **Decide AOT per deployment** — it buys 4× for 1.9× the download (`wasm-tools` +
+  `-p:RunAOTCompilation=true`). Interactive editing wants it; a docs page drawing one
+  static model probably does not. Needs a measured page-load number (time to first
+  render) before choosing a default, since the current numbers are compute-only.
+- [ ] **Scene-to-frame layer** — `WebGlContext` can compile programs, upload meshes/lines
+  and draw a `FrameDescription`, and `EngrCAD.Viewer.Core` supplies the shaders, camera
+  and section rule. Missing is the piece that turns a `Scene` into draw calls (the same
+  job `ViewportControl` does for the desktop). That is the `ViewerModel` abstraction the
+  shared-render-model item below describes — build it once, for both.
+- [ ] **The orbit-camera component** — pointer/wheel handling in Blazor over
+  `CameraMath`, matching the desktop bindings (drag orbit, shift+drag pan, ctrl+drag or
+  wheel zoom).
+- [x] **Shared render model, step 1** — the UI-free half of `RenderCore.cs` is now
+  `src/EngrCAD.Viewer.Core` (no Avalonia, no Silk.NET; a scratch blazorwasm app builds
+  and publishes against it). `ViewStyle`, `SectionPlane`/`SectionAxis`/`SectionCombine`/
+  `SectionClip`, `RenderModes`/`EffectiveMode`, `ViewerShaders`, `CameraMath` and
+  `RenderGeometry`'s pure half are public there, namespace unchanged. Verified by the
+  50 docs PNGs being byte-identical, which is the oracle that actually constrains a
+  render refactor.
+- [ ] **Shared render model, step 2** — the next tranche of pure-but-still-in-Viewer code
+  the web client will want: `TabMeshLoader` (already Avalonia-free and headlessly
+  unit-tested — the cleanest move), `ViewCubeMath` and `StrokeFont` (interleaved with GL
+  drawing inside `ViewCube.cs`), `AnnotationGeometry` (same, inside `AnnotationLayer.cs`),
+  `HoverThrottle`. Then the `ViewerModel` abstraction over Scene→render-instances that
+  would serve Avalonia, offscreen AND the web client.
+- [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
+  written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
+  shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —
+  an API change, not a move.
 - [ ] **Feature parity ladder** (build in this order): orbit/pan/zoom camera + shaded
   mesh rendering → part colors + feature edges → tab strip + model tree + visibility →
   picking (ray-cast server/client-side against the existing per-part BVH) → display
   modes + section planes (same fragment-discard technique in WebGL) → properties
-  panel. Reuse the camera math from `CameraMath` (it's already extracted).
+  panel. Reuse the camera math from `CameraMath` (public in `EngrCAD.Viewer.Core`).
 - [ ] **Docs-site embedding** — the payoff synergy: DocsGen examples could emit an
   interactive WASM viewer block per example instead of (or alongside) static PNGs —
   spin-the-model documentation, all statically hosted on the existing GitHub Pages
@@ -552,9 +575,11 @@ stdout guarded, geometry evaluated lazily). Remaining:
   content (`UseStructuredContent` + output schemas) would let clients consume them
   without parsing.
 - [ ] **Delete `src/EngrCAD.Mcp/StandardViews.cs`** — it mirrors `ViewCubeMath.PoseFor`
-  and `CameraMath.FrameDistance` because both are `internal`, which is a live parity
-  risk (two copies of the pose maths). Make them public, or expose an
-  `EngrCad.StandardCamera(instances, view)` helper, and delete the duplicate.
+  and `CameraMath.FrameDistance`, two copies of the pose maths. **Half the blocker is
+  gone**: `CameraMath` is public in `EngrCAD.Viewer.Core` as of the render-model
+  extraction, so the `FrameDistance` copy can go today. `ViewCubeMath` is still internal
+  to `EngrCAD.Viewer` — move it to Viewer.Core with the other pure math (it is on the
+  step-2 list above) and delete the duplicate outright.
 - [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting — the
   protocol was driven by hand and via the SDK's own client — and the no-GL error path on
   a GPU-less machine.

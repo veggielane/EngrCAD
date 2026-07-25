@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <PropertyGroup>
+    <!-- TargetFramework / Nullable / ImplicitUsings / LangVersion come from
+         Directory.Build.props, like every other project here. -->
+    <IsPackable>false</IsPackable>
+    <OverrideHtmlAssetPlaceholders>true</OverrideHtmlAssetPlaceholders>
+    <!-- Static hosting under a repo subpath (GitHub Pages) needs a rewritable base
+         path; kept explicit so the docs deployment can set it. -->
+    <StaticWebAssetBasePath Condition="'$(StaticWebAssetBasePath)' == ''">/</StaticWebAssetBasePath>
+    <!-- No ICU: the kernel parses and formats with InvariantCulture throughout, and the
+         globalization data was 2.6 MB of the first measured payload. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" Version="10.0.10" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="10.0.10" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\EngrCAD.Web\EngrCAD.Web.csproj" />
+  </ItemGroup>
+
+</Project>

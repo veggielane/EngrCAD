@@ -1,0 +1,196 @@
+@using System.Diagnostics
+@using EngrCAD.Mesh
+
+<div class="app">
+    <header>
+        <h1>EngrCAD in the browser</h1>
+        <p>
+            The whole geometry kernel &mdash; B-Rep, implicit and mesh &mdash; compiled to
+            WebAssembly. Nothing below is precomputed: the model is built, lowered to an
+            exact B-Rep and tessellated in this tab.
+        </p>
+    </header>
+
+    <section class="controls">
+        <label>
+            Bolt circle
+            <input type="range" min="3" max="12" step="1" value="@_holes"
+                   @onchange="OnHolesChanged" />
+            <span class="value">@_holes holes</span>
+        </label>
+        <label>
+            Rim fillet
+            <input type="range" min="0" max="4" step="0.5" value="@_fillet"
+                   @onchange="OnFilletChanged" />
+            <span class="value">@_fillet.ToString("0.0") mm</span>
+        </label>
+    </section>
+
+    @if (_error is not null)
+    {
+        <pre class="error">@_error</pre>
+    }
+    else if (_result is null)
+    {
+        <p class="busy">Building&hellip;</p>
+    }
+    else
+    {
+        <table class="stats">
+            <tbody>
+                <tr><th>Triangles</th><td>@_result.Triangles.ToString("N0")</td></tr>
+                <tr><th>Vertices</th><td>@_result.Vertices.ToString("N0")</td></tr>
+                <tr><th>Closed</th><td>@(_result.Closed ? "yes" : "NO")</td></tr>
+                <tr><th>Volume</th><td>@_result.Volume.ToString("N1") mm&sup3;</td></tr>
+                <tr class="spacer"><td colspan="2"></td></tr>
+                <tr><th>Build graph</th><td>@_result.BuildMs.ToString("N0") ms</td></tr>
+                <tr><th>Lower to B-Rep</th><td>@_result.LowerMs.ToString("N0") ms</td></tr>
+                <tr><th>Tessellate</th><td>@_result.MeshMs.ToString("N0") ms</td></tr>
+                <tr class="total"><th>Total</th><td>@_result.TotalMs.ToString("N0") ms</td></tr>
+            </tbody>
+        </table>
+    }
+
+    <footer>
+        <p>
+            Rendering is next: the WebGL2 client compiles the <em>same</em> shader sources
+            the desktop viewer uses, so the two cannot drift apart.
+        </p>
+    </footer>
+</div>
+
+@inject IJSRuntime JS
+@implements IDisposable
+
+@code {
+    private int _holes = 6;
+    private double _fillet = 2;
+    private BuildResult? _result;
+    private string? _error;
+
+    private sealed record BuildResult(
+        int Triangles, int Vertices, bool Closed, double Volume,
+        double BuildMs, double LowerMs, double MeshMs)
+    {
+        public double TotalMs => BuildMs + LowerMs + MeshMs;
+    }
+
+    protected override void OnInitialized() => Rebuild();
+
+    /// <summary>
+    /// Headless self-check. Loading this page with <c>?report</c> re-runs the build a
+    /// few times and beacons the timings back to the server, whose access log the
+    /// harness reads. It exists because in-page timing is otherwise unreadable from
+    /// automation: <c>--dump-dom</c> fires at load, so the browser must be given
+    /// <c>--virtual-time-budget</c> to reach the end of the work — and under virtual time
+    /// the clock does not advance during a synchronous computation, so every measurement
+    /// reads 0 ms. A beacon is measured under REAL time and needs no DOM dump at all.
+    /// </summary>
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        var url = await JS.InvokeAsync<string>("eval", "location.search");
+        if (!url.Contains("report", StringComparison.Ordinal))
+            return;
+
+        // Best of five: the first pass pays JIT/AOT warm-up and first-touch page faults,
+        // which is exactly the "single warm-up is meaningless" lesson from the desktop
+        // benchmarks, and it applies at least as strongly here.
+        var best = double.PositiveInfinity;
+        BuildResult? sample = null;
+        for (int i = 0; i < 5; i++)
+        {
+            Rebuild();
+            if (_result is null)
+                break;
+            if (_result.TotalMs < best)
+            {
+                best = _result.TotalMs;
+                sample = _result;
+            }
+        }
+
+        string query = sample is null
+            ? $"/report?error={Uri.EscapeDataString(_error ?? "no result")}"
+            : $"/report?best={best:F1}&build={sample.BuildMs:F1}&lower={sample.LowerMs:F1}"
+              + $"&mesh={sample.MeshMs:F1}&tris={sample.Triangles}&closed={sample.Closed}";
+        await JS.InvokeVoidAsync("fetch", query);
+    }
+
+    public void Dispose() { }
+
+    private void OnHolesChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out int holes))
+        {
+            _holes = holes;
+            Rebuild();
+        }
+    }
+
+    private void OnFilletChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), out double fillet))
+        {
+            _fillet = fillet;
+            Rebuild();
+        }
+    }
+
+    private void Rebuild()
+    {
+        _error = null;
+        _result = null;
+
+        try
+        {
+            // Wall clock via Stopwatch. Under WASM that is the browser's clock, whose
+            // resolution every engine deliberately coarsens as a Spectre mitigation --
+            // so these numbers are honest to a few milliseconds and no better.
+            var t0 = Stopwatch.GetTimestamp();
+            var shape = BuildFlange(_holes, _fillet);
+            var t1 = Stopwatch.GetTimestamp();
+
+            _ = shape.ToBrep();          // the exact lowering, cached for the mesh below
+            var t2 = Stopwatch.GetTimestamp();
+
+            var mesh = shape.ToMesh();
+            var t3 = Stopwatch.GetTimestamp();
+
+            _result = new BuildResult(
+                mesh.FaceCount, mesh.VertexCount, mesh.IsClosed, mesh.Volume(),
+                Ms(t0, t1), Ms(t1, t2), Ms(t2, t3));
+        }
+        catch (Exception e)
+        {
+            // A kernel refusal is a real answer, not a crash: show it rather than
+            // leaving the page blank.
+            _error = $"{e.GetType().Name}: {e.Message}";
+        }
+    }
+
+    private static double Ms(long from, long to) =>
+        (to - from) * 1000.0 / Stopwatch.Frequency;
+
+    /// <summary>A flange with a bolt circle and a filleted rim. Between them these
+    /// exercise the boolean, face-splitting and trimmed-tessellation paths that dominate
+    /// kernel time, so the timings mean something.</summary>
+    private static Shape BuildFlange(int holes, double fillet)
+    {
+        var points = new List<Vector2d>(holes);
+        for (int i = 0; i < holes; i++)
+        {
+            double angle = 2 * Math.PI * i / holes;
+            points.Add(new Vector2d(28 * Math.Cos(angle), 28 * Math.Sin(angle)));
+        }
+
+        var body = Shape.Cylinder(40, 10) - Shape.Cylinder(14, 30);   // bored disc
+        var top = SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
+        var drilled = body.Drill(StandardHoles.Clearance(6), points, depth: 14, top);
+
+        return fillet > 0
+            ? drilled.Fillet(fillet, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
+            : drilled;
+    }
+}
