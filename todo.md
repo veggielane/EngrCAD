@@ -46,13 +46,15 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   (two-level), `HBitArray` (hierarchical bit array for sparse iteration). Storage
   substrate for large SDF domains that our dense Surface Nets sampling can't handle;
   `LazyGridSdf`'s 16³-block cache is the natural seam to build on.
-- [ ] **Narrow-band mesh SDF** — `MeshSignedDistanceGrid` (exact narrow band + fast
-  sweeping outward, sign by ray parity) and `CachingMeshSDF` (lazy per-cell, pairs with
-  continuation meshing). Much faster than our per-query BVH `MeshSdf` when many
-  evaluations hit the same region.
-- [ ] **SIMD batch evaluation** — the roadmap's standing perf rock:
-  `System.Runtime.Intrinsics` through the batch `Evaluate(ReadOnlySpan…)` seam
-  (primitives and n-ary operators first; the seam was designed for exactly this).
+- [ ] **Mesh-specific narrow band** (the generic `Sdf.NarrowBand` ✅ landed) — triangle
+  rasterization into the band plus closest-triangle propagation would beat the generic
+  octree culling for meshes specifically. Belongs in Interop next to `MeshSdf`.
+- [ ] **Feed Surface Nets deinterleaved coordinates** (Interop) — now that batch
+  evaluation is vectorized, sampling is a *minority* of `Polygonize`'s cost (it gained
+  only 1.25× where bakes gained 3×), and it still builds a full-size `Vector3d[]` corner
+  array that the root immediately transposes back apart.
+- [ ] **Vectorize `SketchRegion.SignedDistance`** (Modeling) — now the scalar bottleneck
+  under `Sdf.ExtrudedRegion`/`RevolvedRegion`, which the SIMD work left untouched.
 
 ## Interop / meshing (EngrCAD.Interop)
 

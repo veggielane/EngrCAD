@@ -164,8 +164,28 @@ Each engine uses the data structure its mathematics wants:
   guarantees containment by baking `Bounds.Expanded(cellSize)`). A `LazyGridSdf` variant
   bakes 16³ blocks on demand (lock-free, first-publish-wins) and is the seam for the
   still-open sparse-grid and narrow-band work.
-- Batch `Evaluate(ReadOnlySpan<Vector3d>, Span<double>)` is the future SIMD seam; the
-  scalar loop is the current default implementation.
+- **Batch evaluation is SIMD, and the layout decision is "transpose once at the root".**
+  A lane-wise kernel wants x's contiguous; the public signature hands over interleaved
+  `Vector3d` (right for callers, who all hold AoS arrays). So the base `Evaluate`
+  deinterleaves into pooled scratch once at the AST root and drives an internal SoA seam
+  that operators forward unchanged to their children — the transpose is paid once per
+  batch, not once per node. Kernels use `Vector<double>` rather than per-ISA intrinsics
+  so one kernel serves NEON/AVX2/AVX-512. The contract is **bit-for-bit equality with
+  the scalar path** (same terms, same association order, scalar tail), which is what
+  makes a fast path safe to enable unconditionally; transcendental-using nodes (gyroid,
+  exponential falloff) are deliberately left scalar because no vector transcendental
+  reproduces `Math.Sin`/`Math.Exp` exactly, and a silently divergent fast path is worse
+  than no fast path.
+- **Narrow-band grids** evaluate the field only near its surface and fill the rest by a
+  distance transform. Two properties of *this* engine make it simpler than g3's
+  mesh-specific version: the octree culling test is sound because distance is
+  1-Lipschitz and an `Sdf`'s magnitude is a lower bound on the true distance (the
+  engine's own contract), and no ray-parity signing pass is needed at all because an
+  `Sdf` is sign-exact — which is also why it accelerates any expensive field rather than
+  only meshes. The fill is a two-scan chamfer (causal + anti-causal = complete, no
+  iteration to convergence), and the deliberate trade is an **over-estimating** outward
+  magnitude (~13% worst case) rather than Borgefors-optimized accuracy, so the invariant
+  "never reports nearer than the truth" holds.
 
 ## 5. B-Rep engine
 
