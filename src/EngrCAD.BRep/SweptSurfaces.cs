@@ -19,6 +19,84 @@ public sealed class ExtrudedSurface(Curve3d generator, Vector3d direction) : Sur
 
     public override Vector3d NormalAt(double u, double v) =>
         generator.TangentAt(u).Cross(direction).Normalized();
+
+    /// <summary>
+    /// Inverse evaluation reduced to ONE dimension. P(u, v) = C(u) + v·direction, so the
+    /// component of (P − point) along the direction is whatever v makes it — only the
+    /// perpendicular component constrains u. Solving Q(C(u) − point) = 0 (Q = the
+    /// projector that removes the direction component) then gives v in closed form.
+    ///
+    /// The base class instead scans a 17x17 (u, v) grid and Gauss–Newtons in 2D, which
+    /// re-evaluates the SAME generator point once per v column: 289 curve evaluations
+    /// where 17 carry all the information. Inverse evaluation is the inner loop of every
+    /// face pullback (<see cref="FaceGeometry.PullLoops"/>, <c>Contains</c>, splitting,
+    /// trimmed tessellation), so this is the hot leaf of B-Rep booleans on
+    /// extrusion-heavy tools — sketch pockets and engraved text, whose every profile
+    /// segment is its own extruded face.
+    ///
+    /// Robustness is not traded away: the seed scan uses the base class's own u
+    /// resolution, ranked by the exactly-optimal v instead of a quantized one, and the
+    /// refinement runs on the true 1D manifold of the problem with the generator's exact
+    /// <see cref="Curve3d.DerivativeAt"/> rather than a damped 2D step. As in the base,
+    /// a point that cannot be brought within <paramref name="tolerance"/> returns false.
+    /// </summary>
+    public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
+    {
+        double directionLengthSquared = direction.LengthSquared;
+        // Exact-zero guard: a collapsed extrusion has no v axis to solve for, so the
+        // generic grid search is the only meaningful answer.
+        if (directionLengthSquared <= 0)
+            return base.TryProjectPoint(point, out uv, tolerance);
+
+        // Static local functions: no closure allocation on this very hot path.
+        static Vector3d Perpendicular(in Vector3d v, in Vector3d axis, double axisLengthSquared) =>
+            v - axis * (v.Dot(axis) / axisLengthSquared);
+
+        var target = point;
+        var domain = generator.Domain;
+        bool periodic = generator.IsClosed;
+        double period = domain.Length;
+
+        const int seeds = 16; // the base class's u resolution
+        double best = double.PositiveInfinity, parameter = domain.Start;
+        for (int i = 0; i <= seeds; i++)
+        {
+            double u = domain.ParameterAt((double)i / seeds);
+            double squared = Perpendicular(generator.PointAt(u) - target, direction, directionLengthSquared)
+                .LengthSquared;
+            if (squared < best)
+            {
+                best = squared;
+                parameter = u;
+            }
+        }
+
+        for (int iteration = 0; iteration < 25; iteration++)
+        {
+            var residual = Perpendicular(generator.PointAt(parameter) - target, direction, directionLengthSquared);
+            if (residual.Length < tolerance)
+                break;
+            var slope = Perpendicular(generator.DerivativeAt(parameter), direction, directionLengthSquared);
+            double denominator = slope.LengthSquared;
+            // Degenerate-Jacobian guard (generator tangent parallel to the extrude
+            // direction): a scale-free near-underflow test, not a model tolerance.
+            if (denominator < 1e-30)
+                break;
+            double next = FoldIntoDomain(parameter - slope.Dot(residual) / denominator, domain, periodic);
+            // Stall guard at relative machine precision — the step has stopped moving,
+            // so further iterations cannot improve the residual.
+            if (Math.Abs(next - parameter) <= period * 1e-15)
+            {
+                parameter = next;
+                break;
+            }
+            parameter = next;
+        }
+
+        double along = (target - generator.PointAt(parameter)).Dot(direction) / directionLengthSquared;
+        uv = new Vector2d(parameter, Interval.Unit.Clamp(along));
+        return (PointAt(uv.X, uv.Y) - target).Length < tolerance;
+    }
 }
 
 /// <summary>
@@ -56,6 +134,102 @@ public sealed class RevolvedSurface : Surface
     {
         var rotation = Quaterniond.FromAxisAngle(AxisDirection, u);
         return AxisOrigin + rotation.Rotate(Generator.PointAt(v) - AxisOrigin);
+    }
+
+    /// <summary>
+    /// Inverse evaluation reduced to ONE dimension, the mirror of
+    /// <see cref="ExtrudedSurface.TryProjectPoint"/>. A revolve is the generator's
+    /// (radius, axial) profile rotated about the axis: u is the point's azimuth —
+    /// available in closed form once v is known — so only the profile match constrains
+    /// v. Solving the 2-residual (r(v) − r, z(v) − z) by 1D Gauss–Newton with the
+    /// generator's exact derivative replaces the base class's 17x17 (u, v) grid scan,
+    /// which re-evaluates the same generator point once per angle column. This is the
+    /// hot leaf of drilled-hole booleans, whose tools are revolved sketches.
+    ///
+    /// The azimuth is measured from the generator's own radial direction, so the
+    /// returned u is phase-consistent with <see cref="PointAt"/> by construction. Points
+    /// on the axis (poles), where the azimuth is undefined, defer to the base class.
+    /// </summary>
+    public override bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
+    {
+        var axis = AxisDirection; // normalized at construction
+        var offset = point - AxisOrigin;
+        double height = offset.Dot(axis);
+        var radial = offset - axis * height;
+        double radius = radial.Length;
+        if (radius <= tolerance)
+            return base.TryProjectPoint(point, out uv, tolerance); // on the axis: no azimuth
+
+        var domain = Generator.Domain;
+        bool periodic = Generator.IsClosed;
+        double period = domain.Length;
+
+        // The generator's (radius, axial) profile and its exact derivatives. Static so
+        // this very hot path allocates no closure.
+        static (double R, double Z, double DR, double DZ) Profile(
+            Curve3d generator, in Vector3d axisOrigin, in Vector3d axis, double v)
+        {
+            var q = generator.PointAt(v) - axisOrigin;
+            double z = q.Dot(axis);
+            var r = q - axis * z;
+            double length = r.Length;
+            var slope = generator.DerivativeAt(v);
+            double dz = slope.Dot(axis);
+            var dr = slope - axis * dz;
+            // On the axis the radius is not differentiable; report a zero radial slope so
+            // the Gauss–Newton step falls back to the axial residual alone.
+            return (length, z, length > 0 ? r.Dot(dr) / length : 0, dz);
+        }
+
+        const int seeds = 16; // the base class's v resolution
+        double best = double.PositiveInfinity, parameter = domain.Start;
+        for (int i = 0; i <= seeds; i++)
+        {
+            double v = domain.ParameterAt((double)i / seeds);
+            var (r, z, _, _) = Profile(Generator, AxisOrigin, axis, v);
+            double squared = (r - radius) * (r - radius) + (z - height) * (z - height);
+            if (squared < best)
+            {
+                best = squared;
+                parameter = v;
+            }
+        }
+
+        for (int iteration = 0; iteration < 25; iteration++)
+        {
+            var (r, z, dr, dz) = Profile(Generator, AxisOrigin, axis, parameter);
+            double fr = r - radius, fz = z - height;
+            if (Math.Sqrt(fr * fr + fz * fz) < tolerance)
+                break;
+            double denominator = dr * dr + dz * dz;
+            // Degenerate-Jacobian guard: a scale-free near-underflow test.
+            if (denominator < 1e-30)
+                break;
+            double next = FoldIntoDomain(parameter - (dr * fr + dz * fz) / denominator, domain, periodic);
+            // Stall guard at relative machine precision.
+            if (Math.Abs(next - parameter) <= period * 1e-15)
+            {
+                parameter = next;
+                break;
+            }
+            parameter = next;
+        }
+
+        // Azimuth from the generator point at the solved v to the query point.
+        var generatorOffset = Generator.PointAt(parameter) - AxisOrigin;
+        var generatorRadial = generatorOffset - axis * generatorOffset.Dot(axis);
+        if (generatorRadial.LengthSquared <= 0)
+            return base.TryProjectPoint(point, out uv, tolerance); // generator on the axis here
+        double angle = Math.Atan2(generatorRadial.Cross(radial).Dot(axis), generatorRadial.Dot(radial));
+        if (angle < 0)
+            angle += 2 * Math.PI;
+        // A partial revolve's domain is [0, Angle]; an angle just past 2π - epsilon is
+        // nearer 0 than the far end, so offer both branches before clamping.
+        if (!IsFullTurn && angle > Angle && 2 * Math.PI - angle < angle - Angle)
+            angle -= 2 * Math.PI;
+
+        uv = new Vector2d(DomainU.Clamp(angle), parameter);
+        return (PointAt(uv.X, uv.Y) - point).Length < tolerance;
     }
 }
 

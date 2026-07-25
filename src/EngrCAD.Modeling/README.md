@@ -470,6 +470,23 @@ via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 tessellate on the render thread. Part names are unique per tab. `Part` is
 deliberately a leaf — tabs and assemblies are the containers.
 
+**`PreMesh` primes parts in parallel** (`ParallelFor.Blocks` over the distinct-part
+list). Parts are independent by construction: every cache a part fills — the lowered
+solid, the display mesh, the feature edges, resolved annotations — lives on that part
+behind that part's own lock, and lowering a `Shape` graph *builds* fresh geometry
+rather than mutating the graph, so nothing about the output depends on scheduling.
+Scene wall time therefore drops to the SLOWEST part rather than the sum: the demo
+scene's 25 distinct parts measured **6.1 s sequential → 3.6 s** on 8 cores, where one
+drilled plate alone is 2.3 s of that. Failures stay deterministic too — each part's
+exception goes into its own slot and the first failure *in scene order* is rethrown
+with its original stack, so a broken part still reports exactly what the sequential
+pass reported instead of a scheduling-dependent `AggregateException`. (One caveat
+worth knowing: `Shape.From(brepSolid)` used as a **boolean operand** hands the raw
+solid straight to `BrepBoolean`, which consumes its inputs — so two parts sharing one
+source solid *through a boolean* were already unsafe to lower twice, sequentially or
+not. Wrapping a solid as a whole part, or as anything other than a boolean operand,
+is fine.)
+
 **Preparing on demand.** A host that does not want to mesh the whole document before
 showing anything has three finer entry points, all idempotent and all safe off the
 render thread (the viewer meshes a tab when it is first *viewed*, on a background

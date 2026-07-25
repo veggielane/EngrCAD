@@ -29,6 +29,22 @@ public abstract class Surface
     /// The 1e-8 default suits exact overrides; pullback of traced/sampled geometry passes
     /// the looser <see cref="FaceGeometry.InverseEvaluationTolerance"/> explicitly.
     /// </summary>
+    /// <summary>
+    /// Brings a refinement iterate back into a generator's parameter domain: clamped for
+    /// an open generator, wrapped for a closed one (where the domain ends are the same
+    /// point, so clamping would pin the solve at a seam it should walk across).
+    /// </summary>
+    private protected static double FoldIntoDomain(double t, in Interval domain, bool periodic)
+    {
+        if (!periodic)
+            return domain.Clamp(t);
+        double period = domain.Length;
+        double local = (t - domain.Start) % period;
+        if (local < 0)
+            local += period;
+        return domain.Start + local;
+    }
+
     public virtual bool TryProjectPoint(in Vector3d point, out Vector2d uv, double tolerance = 1e-8)
     {
         uv = default;
