@@ -31,6 +31,19 @@ public static class MeshReader
                 $"Unsupported mesh format '{e}'. Supported extensions: .stl, .obj, .off."),
         };
 
+    /// <summary>
+    /// Import convenience: read the file, then run the <see cref="MeshRepair"/>
+    /// pipeline on the soup — crack welding, degenerate/duplicate removal, consistent
+    /// outward orientation, T-junction zipping — returning the repaired manifold mesh
+    /// and a report of what was done. Runs even when the file read clean, so
+    /// inward-wound but manifold imports come back outward. Throws
+    /// <see cref="InvalidOperationException"/> when the file's defects need
+    /// topological surgery beyond repair v1 (see <see cref="MeshRepair"/>).
+    /// </summary>
+    public static (HalfEdgeMesh Mesh, MeshRepairReport Report) ReadAndRepair(
+        string path, MeshRepairOptions? options = null) =>
+        MeshRepair.Clean(ReadFile(path), options); // read welds exactly (1e-9); repair applies the crack weld
+
     private static string Normalize(string extension) =>
         (extension.StartsWith('.') ? extension : "." + extension).ToLowerInvariant();
 }

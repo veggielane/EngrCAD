@@ -86,3 +86,26 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   summary. Note binary STL is float32-quantized: coincident vertices are
   bit-identical (default weld is exact), and cracks below one float ulp cannot exist,
   so repair-time crack welding on STL needs tolerances at or above ~1e-7·|coordinate|.
+- **`MeshRepair`** — repair pipeline v1 for dirty soups (construct-new; inputs never
+  mutated): crack welding at `MeshRepairOptions.WeldTolerance` (default = the 1e-7
+  seam tier — cracks are independently authored geometry on two sides of a seam) →
+  degenerate-face removal (triangle minimum altitude / polygon Newell-area-vs-perimeter
+  below the weld distance = numerically weldable noise) → duplicate-face removal
+  (canonical vertex cycle, either winding; must precede orientation — duplicates
+  overload edges past two uses and would block the flood) → orientation
+  (per-component BFS flood crossing only clean two-use edges, then an outward vote:
+  **signed volume for closed components** — the winding integral in closed form —
+  and **generalized winding-number probes for open ones**, probing both sides of the
+  largest faces and deciding by the sign wherever |w| ≥ 0.25; a single
+  behind-the-normal probe is provably blind to inward-wound sheets, since the
+  winding is ~0 on the exterior side under either orientation) → T-junction seam
+  zip (`MeshWelder`'s pass) → manifold `Build`. `Clean(...)` overloads take a
+  `MeshReadResult`, an existing `HalfEdgeMesh` (polygons preserved — also useful to
+  right an inside-out but manifold import), or a raw soup, and return the repaired
+  mesh + a `MeshRepairReport` (vertices merged, duplicates/degenerates removed,
+  components, faces rewound, components flipped, T-junction insertions, closedness,
+  notes). Defects needing topological surgery (fins, hole filling) still fail the
+  final `Build` — loudly, with post-repair edge diagnostics — until the Euler
+  operators land. Known v1 limitation: nested cavity shells are oriented outward
+  like everything else. `MeshReader.ReadAndRepair(path, options?)` is the one-call
+  import path (read welds exactly at 1e-9; repair applies the crack weld).
