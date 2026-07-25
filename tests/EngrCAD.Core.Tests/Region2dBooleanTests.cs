@@ -282,6 +282,67 @@ public class Region2dBooleanTests
         Assert.True(overlaps > 100, $"expected mostly-overlapping random pairs, got {overlaps}");
     }
 
+    // ---- UnionAll: same answer as one big arrangement, different fold shape ----
+
+    [Fact]
+    public void UnionAll_OfATilingOfSquares_IsTheWholeRectangle()
+    {
+        // 8x5 unit squares laid edge to edge: every interior edge must disappear.
+        var tiles = new List<Region2d>();
+        for (int x = 0; x < 8; x++)
+        for (int y = 0; y < 5; y++)
+            tiles.Add(Box(x, y, x + 1, y + 1));
+
+        var result = Region2dBoolean.UnionAll(tiles);
+
+        var sheet = Assert.Single(result);
+        Assert.Equal(40.0, sheet.Area, 12);
+        Assert.Equal(4, sheet.Outer.Count);   // collinear T-junctions are dropped exactly
+        Assert.Empty(sheet.Holes);
+        AssertCanonical(result);
+    }
+
+    [Fact]
+    public void UnionAll_MatchesTheSingleArrangementAnswerOnOverlappingInput()
+    {
+        var random = new Random(20250725);
+        var regions = new List<Region2d>();
+        for (int i = 0; i < 24; i++)
+            regions.Add(RandomHullRegion(random));
+
+        var tree = Region2dBoolean.UnionAll(regions);
+        var flat = Region2dBoolean.Union(regions, []);
+
+        Assert.Equal(flat.Count, tree.Count);
+        Assert.Equal(TotalArea(flat), TotalArea(tree), 9);
+        AssertCanonical(tree);
+    }
+
+    [Fact]
+    public void UnionAll_OfDisjointRegions_KeepsEveryOne()
+    {
+        var ring = new List<Region2d>();
+        for (int i = 0; i < 9; i++)
+        {
+            double angle = 2 * Math.PI * i / 9;
+            double cx = 10 * Math.Cos(angle), cy = 10 * Math.Sin(angle);
+            ring.Add(Box(cx - 1, cy - 1, cx + 1, cy + 1));
+        }
+
+        var result = Region2dBoolean.UnionAll(ring);
+
+        Assert.Equal(9, result.Count);
+        Assert.Equal(9 * 4.0, TotalArea(result), 9);
+    }
+
+    [Fact]
+    public void UnionAll_OfNothingOrOne_IsTrivial()
+    {
+        Assert.Empty(Region2dBoolean.UnionAll([]));
+        var square = Box(0, 0, 3, 3);
+        Assert.Same(square, Assert.Single(Region2dBoolean.UnionAll([square])));
+    }
+
     private static Region2d RandomHullRegion(Random random)
     {
         // Convex hulls of random point clouds are simple polygons by construction; the

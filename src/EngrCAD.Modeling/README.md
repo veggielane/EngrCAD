@@ -151,6 +151,14 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   region.)
 - `Union` / `Intersect` / `Subtract` on sketches (and on `Region2d`) run Core's
   arrangement-based `Region2dBoolean`.
+- **`sketch.Offset(delta, join, miterLimit, chordTolerance)`** grows (positive) or shrinks
+  (negative) the sketch by a constant distance — OpenSCAD's `offset()`, and the geometry
+  behind clearance fits, wall shells, pocket stock and cutter compensation. `OffsetJoin`
+  is `Round` (arcs), `Miter` (sharp, cut back past the miter limit) or `Chamfer` (bevel).
+  Straight-edged input is EXACT under miter/chamfer. An inward offset may split the
+  sketch into several regions or consume it entirely, so the result is always a list —
+  no inverted loops, because Core's `Region2dOffset` offsets by UNIONING one primitive
+  per edge and per corner rather than chasing edges.
 - `Profile.FromRegion(region, frame)` (BRep) returns the `(outer, holes)` pair the
   solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`.
 

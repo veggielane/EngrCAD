@@ -76,6 +76,42 @@ public static class Region2dBoolean
         IReadOnlyList<Region2d> a, IReadOnlyList<Region2d> b, double snapTolerance = DefaultSnapTolerance) =>
         Combine(a, b, Op.Difference, snapTolerance);
 
+    /// <summary>
+    /// Union of MANY regions, folded as a <b>balanced tree</b> rather than a linear
+    /// accumulate — the shape of the fold is what makes bulk unions affordable.
+    ///
+    /// <para>One <see cref="Arrangement2d"/> costs O(E²) (every inserted segment is scanned
+    /// against every existing edge), so a single arrangement holding all N operands is
+    /// quadratic in the TOTAL input size. A linear fold is no better: the accumulator keeps
+    /// growing, so operand k is arranged against the whole union of the first k. Halving
+    /// recursively instead means most arrangements are small, and each merge first discards
+    /// the interior edges of its two children — so overlapping input (projected triangles,
+    /// offset primitives) collapses as it climbs. Union is associative, so the result is
+    /// identical either way; only the cost changes.</para>
+    ///
+    /// <para>Feed spatially sorted input when you have it (see <c>PlanarSection</c>'s
+    /// silhouette): neighbours merged first is what keeps the intermediate boundaries
+    /// simple.</para>
+    /// </summary>
+    public static IReadOnlyList<Region2d> UnionAll(
+        IReadOnlyList<Region2d> regions, double snapTolerance = DefaultSnapTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(regions);
+        return regions.Count == 0 ? [] : UnionRange(regions, 0, regions.Count, snapTolerance);
+    }
+
+    private static IReadOnlyList<Region2d> UnionRange(
+        IReadOnlyList<Region2d> regions, int start, int end, double snapTolerance)
+    {
+        if (end - start == 1)
+            return [regions[start]];
+        int middle = start + (end - start) / 2;
+        return Combine(
+            UnionRange(regions, start, middle, snapTolerance),
+            UnionRange(regions, middle, end, snapTolerance),
+            Op.Union, snapTolerance);
+    }
+
     // ---- the machine ----
 
     private static IReadOnlyList<Region2d> Combine(

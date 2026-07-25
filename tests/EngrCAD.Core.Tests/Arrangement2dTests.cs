@@ -236,4 +236,26 @@ public class Arrangement2dTests
         Assert.Single(cells[2].Holes);
         Assert.Equal(64.0, cells.Sum(c => c.Area), 12);
     }
+
+    [Fact]
+    public void LoneCellWhoseReversedPerimeterRoundsSmaller_KeepsItsWholeArea()
+    {
+        // Regression: this kite's outer walk and its reverse have shoelace areas that differ
+        // by one ULP (the anchored fan sums the same triangles in a different order), and
+        // every vertex of one loop is a vertex of the other, so the containment probe sat
+        // exactly ON the cell boundary. The negative loop -- the unbounded face -- was
+        // therefore adopted as the cell's own hole and cancelled it to ~1e-16.
+        // Loops of the same connected component can never nest, which is now the rule.
+        var arrangement = new Arrangement2d();
+        arrangement.InsertPolyline([
+            new Vector2d(-9.1848509936051479E-16, -5),
+            new Vector2d(-0.57402514854763564, -6.38581929876693),
+            new Vector2d(-1.2111442151154569E-15, -6.6235883004385911),
+            new Vector2d(0.57402514854763331, -6.38581929876693),
+        ], closed: true);
+
+        var cell = Assert.Single(arrangement.ExtractCells());
+        Assert.Empty(cell.Holes);
+        Assert.Equal(0.9319805153394637, cell.Area, 12);
+    }
 }
