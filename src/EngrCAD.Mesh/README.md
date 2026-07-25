@@ -62,6 +62,25 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   thresholds at ½. Construction triangulates and indexes once; the mesh may be open.
 - **`PolygonTriangulator`** — 2D triangulation with holes; a faithful port of mapbox
   earcut (minus z-order hashing).
+- **`HoleFiller`** — hole filling for open meshes, construct-new (g3 `SimpleHoleFiller` /
+  `PlanarHoleFiller` / `AutoHoleFill` dispatch). Boundary half-edges are wound opposite
+  their interior twins, so fill faces that follow the boundary walk order supply exactly
+  the free directed edges and `Build` welds them manifold. `FillSimple(mesh, loop)` —
+  centroid-vertex triangle fan (single triangle for 3-loops); refuses large wildly
+  non-planar loops (plane deviation above a fixed fraction of the loop extent — a
+  scale-free shape guard, not a tolerance) where a fan would self-intersect.
+  `FillPlanar(mesh, loop[s])` — best-fit plane (`Fitting3d.FitPlane` → `Frame3d`),
+  project, ear-clip via `PolygonTriangulator`, map back; multiple loops sharing one plane
+  become polygon-with-holes fills (after projection, CCW loops are outers and CW loops are
+  holes — walk orientation encodes nesting intrinsically; each hole goes to its smallest
+  containing outer), which handles the annular case `MeshPlaneCut` refuses to cap.
+  Earcut-dropped exactly-collinear vertices are re-expanded by a ring-aware chord zip
+  (hole bridges are never chords). `FillAll(mesh, options)` dispatches per hole and
+  reports a `HoleFillOutcome` per boundary loop: planar where the loop fits a plane
+  within `PlanarityTolerance` (absolute, default weld 1e-9 — exact cut/tessellation rims
+  qualify, curved rims miss by their sagitta), grouped by common plane; else simple under
+  `MaxSimpleFillVertices`; else `Skipped` with the reason. The smoothed / minimal-surface
+  fill tiers of g3's `AutoHoleFill` are future work.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping.
 - **`RenderMesh`** — flat (per-face) or smooth (per-vertex) triangle extraction for GPUs.
