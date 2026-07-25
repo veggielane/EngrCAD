@@ -114,6 +114,15 @@ Dark-themed layout around one shared GL viewport:
   discard rule (`dot(world, axis) > offset`) in one place, so the visible and the
   pickable surface cannot drift apart; the exposed cut face (exactly on the plane)
   stays pickable, matching the strict `>`.
+  **Up to four planes** can be active at once (`SectionPlane(Normal, Offset)` —
+  general normals; `SectionPlane.On(axis, offset)` builds the axis-aligned ones the
+  toolbar and CLI expose) combined by `SectionCombine`: **`Intersection`** clips only
+  where *every* plane excludes — two perpendicular planes give the classic **quarter
+  cut**, three an **octant** — while **`Union`** clips where *any* does, the
+  single-plane behavior generalized. With one plane the two rules coincide, so
+  single-plane output is unchanged. `SectionClip.Hides` carries the combine rule too,
+  since otherwise picking and rendering would disagree about which corner a quarter
+  cut removes.
 - **SDF isolines on the section plane** (automatic when available): when the section
   plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
   exists (`CanConvertTo(Implicit)`; lowered once and cached per part, never per
@@ -138,6 +147,19 @@ Dark-themed layout around one shared GL viewport:
   draw the same isolines through the same `SectionContourRenderer` (one-shot — the
   staleness caching only matters in the window), so headless cutaways match the
   viewport exactly.
+  With **several planes active** each plane gets its own contour set, clipped by its
+  **siblings** so it covers only the part of that plane which is actually an exposed
+  cut face. The rule lives in `SectionClip.Siblings`, next to `Hides`, and is stated
+  there as one sentence: a point on plane *i* is on the visible cut face iff the drawn
+  line survives the full clip rule *and* the material just past the plane does not
+  (`!Hides(p) && Hides(p + eps*n)`). That single sentence yields both modes — under
+  `Intersection` the siblings are applied **flipped** (the face is exposed only where
+  every other plane excludes), under `Union` unflipped (the face is exposed wherever
+  no other plane removes the point). Without it a quarter cut draws each plane's
+  contours across its full extent; the visible symptom is the positive family fanning
+  out past the silhouette on the half that is buried in material (the buried half
+  *inside* the silhouette is hidden by depth anyway, which is why the Union case and
+  the outside-the-silhouette bands are what the regression tests assert).
 - **View cube** (top-right of the viewport): the standard CAD orientation widget — a
   small labeled cube (FRONT/BACK/LEFT/RIGHT/TOP/BOTTOM) that always mirrors the
   orbit camera's rotation, so it doubles as a live orientation indicator. Clicking a

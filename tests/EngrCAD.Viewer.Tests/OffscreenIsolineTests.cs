@@ -47,6 +47,47 @@ public class OffscreenIsolineTests
         OffscreenRenderer.Render(parts, W, H, camera: null, furniture: false,
             ViewStyle.ShadedWithEdges, axis, offset);
 
+    /// <summary>
+    /// Face-on at the y = 0 plane (eye on +Y, screen up = +Z, screen right = -X), so
+    /// that plane's isolines project true-shape and their vertical extent maps directly
+    /// to world z. Distance 8 with the 45-degree vertical FOV puts the 4 x 2 x 2 box's
+    /// z = +/-1 faces about 36 rows either side of the centre row.
+    /// </summary>
+    private static readonly CameraState FaceOnY = new(Math.PI / 2, 0, 8, (0, 0, 0));
+
+    private static byte[] RenderPlanes(
+        IReadOnlyList<Part> parts, IReadOnlyList<SectionPlane> planes,
+        SectionCombine combine = SectionCombine.Intersection) =>
+        OffscreenRenderer.Render(parts, W, H, FaceOnY, furniture: false,
+            ViewStyle.ShadedWithEdges, SectionAxis.Z, sectionOffset: null,
+            ambientOcclusion: false, planes, combine);
+
+    /// <summary>
+    /// Contour pixels of the two WARM families — the gold zero contour (1.0, 0.90, 0.45)
+    /// and the negative inside-material family (0.92, 0.55, 0.32) — in rows
+    /// [<paramref name="from"/>, <paramref name="to"/>). Both families live ON the
+    /// section plane, which is what this rule is about; the cool positive family is
+    /// deliberately excluded because a lit fill can be bluish too. Measured references
+    /// for the thresholds (default steel part, this camera): cut material is
+    /// (124, 104, 95) so r - b = 29, lit steel is (92, 114, 141) so r - b is negative,
+    /// background (44, 49, 59) likewise. Even a 40% blend of the orange family with the
+    /// cut material lands at r - b near 78, so both thresholds keep real margin.
+    /// </summary>
+    private static int WarmContourPixels(byte[] rgba, int from, int to)
+    {
+        int count = 0;
+        for (int row = from; row < to; row++)
+        {
+            for (int x = 0; x < W; x++)
+            {
+                int p = (row * W + x) * 4;
+                if (rgba[p] - rgba[p + 2] > 45 && rgba[p] > 130)
+                    count++;
+            }
+        }
+        return count;
+    }
+
     private static int Different(byte[] a, byte[] b, int threshold = 20)
     {
         int count = 0;
@@ -131,5 +172,101 @@ public class OffscreenIsolineTests
             "X-section isolines missing against the mesh twin");
         Assert.True(Different(cutY, Render(mesh, SectionAxis.Y, 0.0)) > 100,
             "Y-section isolines missing against the mesh twin");
+    }
+
+    // ---- multi-plane cuts: each plane's isolines stay on its own exposed cut face ----
+
+    // The centre row +/- a small guard: the OTHER plane of these two-plane cuts is
+    // edge-on to this camera, so its own contours land on the centre row and must not be
+    // counted for either half.
+    private const int UpperEnd = H / 2 - 6;     // rows [0, 114) are strictly z > 0
+    private const int LowerStart = H / 2 + 6;   // rows [126, 240) are strictly z < 0
+
+    // Bands strictly OUTSIDE the body's silhouette (the 4 x 2 x 2 box covers rows ~85 to
+    // ~156 at this camera): the only thing that can appear there is the padded positive
+    // contour family, with nothing to occlude it. This is where a missing sibling clip
+    // shows up under Intersection — inside the silhouette the buried half of the cut
+    // face is hidden by the solid material in front of it anyway, so the "contour fans
+    // into empty space beyond the part" symptom is the honest detector.
+    private const int AboveBodyStart = 35, AboveBodyEnd = 78;
+    private const int BelowBodyStart = 162, BelowBodyEnd = 205;
+
+    /// <summary>Pixels of the COOL positive (outside-the-body) contour family. The dark
+    /// background is (44, 49, 59) and the cut material is warm, so a blue-leaning bright
+    /// pixel outside the silhouette can only be a positive contour.</summary>
+    private static int CoolContourPixels(byte[] rgba, int from, int to)
+    {
+        int count = 0;
+        for (int row = from; row < to; row++)
+        {
+            for (int x = 0; x < W; x++)
+            {
+                int p = (row * W + x) * 4;
+                if (rgba[p + 2] - rgba[p] > 30 && rgba[p + 2] > 75)
+                    count++;
+            }
+        }
+        return count;
+    }
+
+    // A leaked half of the cut face is hundreds of pixels (the reference render measures
+    // ~750 warm per half and ~500 cool per outside band), so anything under this is
+    // rasterization jitter at the guard band.
+    private const int Leak = 20;
+
+    [SkippableFact]
+    public void QuarterCut_IsolinesOnlyCoverEachPlanesExposedCutFace()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+        var shape = ShapeParts();
+
+        // Reference: with the y = 0 plane alone the whole cross-section is exposed, so
+        // its contours appear above AND below z = 0 (symmetric box, symmetric counts).
+        var single = RenderPlanes(shape, [SectionPlane.On(SectionAxis.Y, 0)]);
+        int singleUpper = WarmContourPixels(single, 0, UpperEnd);
+        int singleLower = WarmContourPixels(single, LowerStart, H);
+        Assert.True(singleUpper > 200, $"single-plane isolines missing above z = 0 ({singleUpper})");
+        Assert.True(singleLower > 200, $"single-plane isolines missing below z = 0 ({singleLower})");
+        Assert.True(CoolContourPixels(single, AboveBodyStart, AboveBodyEnd) > 200);
+        Assert.True(CoolContourPixels(single, BelowBodyStart, BelowBodyEnd) > 200);
+
+        // Quarter cut z > 0 AND y > 0: the y = 0 face is exposed only where the z plane
+        // also excludes, i.e. z > 0. Below the z plane that face is buried in solid
+        // material, and its contours must be gone.
+        var quarter = RenderPlanes(shape,
+            [SectionPlane.On(SectionAxis.Z, 0), SectionPlane.On(SectionAxis.Y, 0)]);
+        int exposed = WarmContourPixels(quarter, 0, UpperEnd);
+        int buried = WarmContourPixels(quarter, LowerStart, H);
+        Assert.True(exposed > 200, $"the exposed half of the cut face lost its isolines ({exposed})");
+        Assert.True(buried < Leak,
+            $"isolines drawn on the half of the cut face buried in material ({buried} px)");
+
+        // The reported symptom, asserted directly: the positive family still fans out
+        // past the silhouette on the EXPOSED side and must be gone on the buried one.
+        int fanAbove = CoolContourPixels(quarter, AboveBodyStart, AboveBodyEnd);
+        int fanBelow = CoolContourPixels(quarter, BelowBodyStart, BelowBodyEnd);
+        Assert.True(fanAbove > 200, $"the exposed side lost its outside-the-body levels ({fanAbove})");
+        Assert.True(fanBelow < Leak, $"contour fans reach into the buried side ({fanBelow} px)");
+    }
+
+    [SkippableFact]
+    public void UnionCut_IsolinesCoverTheOppositeHalfOfTheQuarterCut()
+    {
+        Skip.If(SkipReason is not null, SkipReason);
+        var shape = ShapeParts();
+
+        // Union keeps only what EVERY plane keeps (z < 0 and y < 0), so the y = 0 face
+        // is exposed on the opposite half from the quarter cut. Getting this backwards
+        // is the exact failure the sibling rule exists to prevent, and it is invisible
+        // in any single-plane render.
+        var union = RenderPlanes(shape,
+            [SectionPlane.On(SectionAxis.Z, 0), SectionPlane.On(SectionAxis.Y, 0)],
+            SectionCombine.Union);
+        int removed = WarmContourPixels(union, 0, UpperEnd);
+        int kept = WarmContourPixels(union, LowerStart, H);
+        Assert.True(removed < Leak, $"isolines drawn over the removed half ({removed} px)");
+        Assert.True(kept > 200, $"the kept quadrant's cut face lost its isolines ({kept})");
+        Assert.True(CoolContourPixels(union, AboveBodyStart, AboveBodyEnd) < Leak);
+        Assert.True(CoolContourPixels(union, BelowBodyStart, BelowBodyEnd) > 200);
     }
 }

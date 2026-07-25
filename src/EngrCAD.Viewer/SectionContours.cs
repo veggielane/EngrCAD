@@ -230,6 +230,9 @@ internal sealed class SectionContourRenderer
         uint NegativeVao, uint NegativeVbo)> _buffers = [];
     private bool _dirty = true;
     private readonly List<SectionPlane> _builtPlanes = [];
+    // Scratch for the per-plane sibling clip set, reused frame to frame (the render
+    // paths must not allocate per frame).
+    private readonly List<SectionPlane> _siblings = [];
     private bool[] _builtVisible = [];
     private int _builtVisibleCount;
     private int _reportedParts = -1;
@@ -244,14 +247,11 @@ internal sealed class SectionContourRenderer
 
     /// <summary>
     /// Draws the isolines for every active section plane, rebuilding geometry and GPU
-    /// buffers first when stale. Each plane's contours are drawn with their OWN clip
-    /// rule so a quarter cut shows each cut face's isolines only where that face is
-    /// actually exposed: under <see cref="SectionCombine.Union"/> a plane's lines are
-    /// clipped where any other plane excludes; under
-    /// <see cref="SectionCombine.Intersection"/> (the quarter cut) they must instead be
-    /// clipped where the others do NOT exclude, which is the same rule applied to the
-    /// other planes FLIPPED. The plane comparisons for staleness are deliberate exact
-    /// equality — change detection, not geometry.
+    /// buffers first when stale. Each plane's contours are drawn clipped by its SIBLING
+    /// planes (<see cref="SectionClip.Siblings"/> — that method documents and owns the
+    /// rule), so a quarter cut shows each cut face's isolines only where that face is
+    /// actually exposed instead of across the plane's full extent. The plane comparisons
+    /// for staleness are deliberate exact equality — change detection, not geometry.
     /// </summary>
     public void Draw(
         GL gl, IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
@@ -295,19 +295,13 @@ internal sealed class SectionContourRenderer
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(uModel, 1, false, matrix);
 
-        var others = new List<SectionPlane>();
         for (int i = 0; i < _geometries.Count; i++)
         {
             if (_geometries[i].PartCount == 0)
                 continue;
 
-            others.Clear();
-            for (int j = 0; j < planes.Count; j++)
-            {
-                if (j != i)
-                    others.Add(combine == SectionCombine.Union ? planes[j] : planes[j].Flipped());
-            }
-            section.Write(gl, others, SectionCombine.Union);
+            SectionClip.Siblings(planes, i, combine, _siblings);
+            section.Write(gl, _siblings, SectionCombine.Union);
 
             // d = 0 bright gold (the exact cross-section), positive levels cool,
             // negative (inside material) warm — draw signed families first so the
