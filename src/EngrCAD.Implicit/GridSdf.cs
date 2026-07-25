@@ -49,10 +49,23 @@ internal readonly struct GridFrame
             SampleCount(size.Y, cellSize),
             SampleCount(size.Z, cellSize));
 
-        long total = Samples.ComponentProduct;
-        if (total > int.MaxValue)
+    }
+
+    /// <summary>
+    /// Total sample count as a <see cref="long"/> — a fine grid over a large region
+    /// overflows <see cref="int"/> long before it overflows this, and the sparse lazy grid
+    /// is designed to work up there. Only bakers that need one contiguous value array are
+    /// bounded by <see cref="int"/>; they call <see cref="RequireDenseAddressable"/>.
+    /// </summary>
+    public long TotalSamples => (long)Nx * Ny * Nz;
+
+    /// <summary>Guards the dense bakers, whose values live in a single <c>double[]</c>.</summary>
+    public void RequireDenseAddressable()
+    {
+        if (TotalSamples > int.MaxValue)
             throw new ArgumentException(
-                $"Grid would need {total} samples; increase the cell size or shrink the region.");
+                $"Grid would need {TotalSamples} samples; increase the cell size, shrink the region, " +
+                "or use a lazy grid (Sampled(..., lazy: true)), which materializes only the blocks touched.");
     }
 
     private static int SampleCount(double extent, double cellSize)
@@ -158,6 +171,7 @@ internal sealed class GridSdf : SampledGridSdf
     public static GridSdf Bake(Sdf source, in Aabb region, double cellSize)
     {
         var frameLocal = new GridFrame(region, cellSize);
+        frameLocal.RequireDenseAddressable();
         var values = new double[frameLocal.Nx * frameLocal.Ny * frameLocal.Nz];
         // Parallel over k-slabs: each block owns a contiguous slice of the value array
         // and every sample is computed from its (i, j, k) alone, so the bake is
@@ -189,35 +203,114 @@ internal sealed class GridSdf : SampledGridSdf
 }
 
 /// <summary>
-/// Lazily baked grid: samples live in 16³-sample blocks materialized on first touch,
-/// each filled with a single batch <see cref="Sdf.Evaluate(ReadOnlySpan{Vector3d},
-/// Span{double})"/> call. Queries that never visit a region never pay for it — the
-/// right choice when only part of the domain is probed (e.g. localized booleans).
-/// Thread-safe for concurrent evaluation: block values are deterministic, so racing
-/// fills produce identical arrays and first-publish wins without locking.
+/// Lazily baked <em>sparse</em> grid: samples live in 16³-sample blocks materialized on
+/// first touch, each filled with a single deinterleaved batch
+/// <see cref="Sdf.Evaluate(ReadOnlySpan{double}, ReadOnlySpan{double},
+/// ReadOnlySpan{double}, Span{double})"/> call. Queries that never visit a region never
+/// pay for it — the right choice when only part of the domain is probed (localized
+/// booleans), or when the interesting part of a huge domain is a thin shell around a
+/// surface.
+/// <para>
+/// <b>The block table is flat while that is free and two-level once it is not, and that is
+/// what makes large domains possible at all.</b> A flat array of block pointers costs
+/// 8 bytes per block <em>whether or not the block is ever touched</em>. Up to a 1024³
+/// grid that is 2 MB — cheaper than any indirection saved, so the flat table stays, and
+/// existing models keep exactly the lookup they had. A 4096³ grid is 256³ blocks, i.e.
+/// 134 MB of pointers allocated up front to index a surface that may occupy well under 1%
+/// of them — and its dense value array (550 GB) cannot be allocated at all. Above the
+/// threshold, blocks are grouped into 16³-block super-blocks whose slot tables are
+/// allocated on first touch: those 134 MB become a 32 KB top-level array plus 32 KB per
+/// super-block actually visited.
+/// </para>
+/// <para>
+/// (geometry3Sharp's <c>BiGrid3</c> is the same two-level idea, but its own implementation
+/// is an unfinished stub with no value API, and its <c>DSparseGrid3</c> sibling hashes
+/// <c>Vector3i</c> keys into a plain <c>Dictionary</c> with no thread-safety story,
+/// allocate-on-read defaults and bounds that never shrink. The idea is adopted; the code is
+/// not. Two dense array indices also beat hashing on the hot path — and this repo has a
+/// standing lesson about packing structured 3D keys into hashed integers.)
+/// </para>
+/// <para>
+/// Thread-safe for concurrent evaluation at both levels: block values are deterministic,
+/// so racing fills produce identical arrays, first publish wins by
+/// <see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/> and the loser's array is
+/// dropped. No locks anywhere.
+/// </para>
 /// </summary>
 internal sealed class LazyGridSdf : SampledGridSdf
 {
     private const int BlockSize = 16; // samples per axis per block (16³ = 4096 per batch)
+    private const int SuperSize = 16; // blocks per axis per super-block (16³ slots = 32 KB)
+    private const int SuperSlots = SuperSize * SuperSize * SuperSize;
+
+    /// <summary>
+    /// Blocks a flat pointer table is allowed to cover: 64³ blocks is a 1024³-sample grid
+    /// and 2 MB of pointers, which is not worth an extra indirection to avoid. Past it the
+    /// flat table would be the dominant cost of merely *constructing* the grid.
+    /// </summary>
+    private const int FlatBlockLimit = 64 * 64 * 64;
 
     private readonly Sdf _source;
     private readonly int _nbx, _nby, _nbz; // block counts per axis
-    private readonly double[]?[] _blocks;
+    private readonly int _nsx, _nsy;       // super-block counts (x, y); z is implied
+    private readonly double[]?[]? _flat;   // small grids: one slot per block
+    private readonly double[]?[]?[]? _super; // large grids: slot tables per super-block
+    private int _materialized;
 
-    public LazyGridSdf(Sdf source, in Aabb region, double cellSize)
+    /// <param name="flatBlockLimit">
+    /// Test seam: the block count above which the table groups. Production always uses
+    /// <see cref="FlatBlockLimit"/>; a test passes 0 to force the grouped path onto a grid
+    /// small enough to compare against a dense bake, which is how the two paths are held
+    /// bit-for-bit equal.
+    /// </param>
+    public LazyGridSdf(Sdf source, in Aabb region, double cellSize, int flatBlockLimit = FlatBlockLimit)
         : base(new GridFrame(region, cellSize))
     {
         _source = source;
         _nbx = (Frame.Nx + BlockSize - 1) / BlockSize;
         _nby = (Frame.Ny + BlockSize - 1) / BlockSize;
         _nbz = (Frame.Nz + BlockSize - 1) / BlockSize;
-        _blocks = new double[_nbx * _nby * _nbz][];
+
+        long blocks = (long)_nbx * _nby * _nbz;
+        if (blocks <= flatBlockLimit)
+        {
+            _flat = new double[blocks][];
+            return;
+        }
+
+        _nsx = (_nbx + SuperSize - 1) / SuperSize;
+        _nsy = (_nby + SuperSize - 1) / SuperSize;
+        int nsz = (_nbz + SuperSize - 1) / SuperSize;
+        long groups = (long)_nsx * _nsy * nsz;
+        if (groups > Array.MaxLength)
+            throw new ArgumentException(
+                $"Grid would need {groups} block groups to index; increase the cell size or shrink the region.");
+        _super = new double[]?[]?[groups];
     }
+
+    /// <summary>Blocks filled so far — the diagnostic that says how much of the domain was
+    /// actually paid for. Grows as queries reach new regions.</summary>
+    public int MaterializedBlocks => Volatile.Read(ref _materialized);
+
+    /// <summary>Bytes of sample storage currently held. Counts blocks only; the two-level
+    /// index is negligible by construction, which is the whole point of it.</summary>
+    public long MaterializedBytes =>
+        (long)MaterializedBlocks * BlockSize * BlockSize * BlockSize * sizeof(double);
 
     private protected override double Sample(int i, int j, int k)
     {
         int bi = i / BlockSize, bj = j / BlockSize, bk = k / BlockSize;
-        var block = _blocks[(bk * _nby + bj) * _nbx + bi] ?? Materialize(bi, bj, bk);
+        double[]? block;
+        if (_flat is not null)
+        {
+            block = _flat[(bk * _nby + bj) * _nbx + bi];
+        }
+        else
+        {
+            var slots = _super![(bk / SuperSize * _nsy + bj / SuperSize) * _nsx + bi / SuperSize];
+            block = slots?[(bk % SuperSize * SuperSize + bj % SuperSize) * SuperSize + bi % SuperSize];
+        }
+        block ??= Materialize(bi, bj, bk);
         int sx = Math.Min(BlockSize, Frame.Nx - bi * BlockSize);
         int sy = Math.Min(BlockSize, Frame.Ny - bj * BlockSize);
         return block[((k - bk * BlockSize) * sy + (j - bj * BlockSize)) * sx + (i - bi * BlockSize)];
@@ -231,22 +324,56 @@ internal sealed class LazyGridSdf : SampledGridSdf
         int sz = Math.Min(BlockSize, Frame.Nz - k0);
         int count = sx * sy * sz;
         var values = new double[count];
-        var rented = ArrayPool<Vector3d>.Shared.Rent(count);
+        var rented = ArrayPool<double>.Shared.Rent(count * 3);
         try
         {
-            var points = rented.AsSpan(0, count);
+            var xs = rented.AsSpan(0, count);
+            var ys = rented.AsSpan(count, count);
+            var zs = rented.AsSpan(count * 2, count);
             int n = 0;
             for (int k = k0; k < k0 + sz; k++)
                 for (int j = j0; j < j0 + sy; j++)
                     for (int i = i0; i < i0 + sx; i++)
-                        points[n++] = Frame.SamplePosition(i, j, k);
-            _source.Evaluate(points, values);
+                    {
+                        var p = Frame.SamplePosition(i, j, k);
+                        xs[n] = p.X;
+                        ys[n] = p.Y;
+                        zs[n++] = p.Z;
+                    }
+            _source.Evaluate(xs, ys, zs, values);
         }
         finally
         {
-            ArrayPool<Vector3d>.Shared.Return(rented);
+            ArrayPool<double>.Shared.Return(rented);
         }
-        int slot = (bk * _nby + bj) * _nbx + bi;
-        return Interlocked.CompareExchange(ref _blocks[slot], values, null) ?? values;
+
+        double[]?[] slots;
+        int slot;
+        if (_flat is not null)
+        {
+            slots = _flat;
+            slot = (bk * _nby + bj) * _nbx + bi;
+        }
+        else
+        {
+            slots = Slots((bk / SuperSize * _nsy + bj / SuperSize) * _nsx + bi / SuperSize);
+            slot = (bk % SuperSize * SuperSize + bj % SuperSize) * SuperSize + bi % SuperSize;
+        }
+
+        var winner = Interlocked.CompareExchange(ref slots[slot], values, null);
+        if (winner is not null)
+            return winner;
+        Interlocked.Increment(ref _materialized);
+        return values;
+    }
+
+    /// <summary>Slot table of a super-block, published on first touch (loser's table dropped).</summary>
+    private double[]?[] Slots(int group)
+    {
+        var existing = _super![group];
+        if (existing is not null)
+            return existing;
+        var created = new double[]?[SuperSlots];
+        return Interlocked.CompareExchange(ref _super[group], created, null) ?? created;
     }
 }

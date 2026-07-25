@@ -273,9 +273,16 @@ public abstract class Sdf
     /// Bakes this field onto a uniform grid of cubic cells covering
     /// <paramref name="region"/> (rounded up to whole cells) and returns a node that
     /// evaluates it by trilinear interpolation — the standard acceleration for expensive
-    /// ASTs (mesh SDFs, deep CSG trees) queried many times over the same region. With
-    /// <paramref name="lazy"/> the grid is materialized in 16³-sample blocks on first
-    /// touch instead of up front (thread-safe; pays only for regions actually probed).
+    /// ASTs (mesh SDFs, deep CSG trees) queried many times over the same region.
+    /// <para>
+    /// With <paramref name="lazy"/> the grid becomes <b>sparse</b>: 16³-sample blocks are
+    /// materialized on first touch instead of up front (thread-safe; pays only for regions
+    /// actually probed), and the block table itself is two-level, so indexing a huge domain
+    /// costs kilobytes instead of the 8 bytes per never-touched block a flat table charges.
+    /// That is also the only overload that works past ~1290³ samples: a dense bake needs one
+    /// contiguous <c>double[]</c> and is capped by <see cref="int"/> addressing, whereas a
+    /// lazy grid over a 4096³ domain holds only the blocks a query actually reaches.
+    /// </para>
     /// <para>
     /// Distance fidelity: values are <em>approximate</em> — exact at grid sample points,
     /// trilinear between (error O(cellSize²) where the field is smooth, O(cellSize)

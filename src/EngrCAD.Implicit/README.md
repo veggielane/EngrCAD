@@ -40,7 +40,8 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   so the bake is bit-for-bit deterministic) and evaluate by trilinear interpolation —
   the standard acceleration for expensive ASTs like `MeshSdf`. Pass `lazy: true` (g3's
   `CachingGridImplicit3d`) to materialize 16³-sample blocks on first touch instead of
-  up front (thread-safe, deterministic first-publish-wins).
+  up front (thread-safe, deterministic first-publish-wins) — see
+  [Sparse lazy grids](#sparse-lazy-grids) for how large a domain that reaches.
 - **Narrow-band grids** (`NarrowBand(cellSize[, region][, bandWidth])`, `NarrowBandSdf.cs`,
   g3's `MeshSignedDistanceGrid`): evaluate the source **only near its surface** and fill
   the rest by a distance transform — see [Narrow-band grids](#narrow-band-grids).
@@ -137,8 +138,46 @@ Two honest caveats. A bare sphere at the *root* of the AST is slower: its kernel
 flops, so at two lanes the transpose costs more than SIMD saves (on 4- or 8-lane hardware
 this inverts). And `Polygonize` gains far less than its sampling does — the sampling pass
 is now a minority of its cost, the rest being the topology passes and the full-size
-`Vector3d[]` corner array; feeding Surface Nets deinterleaved coordinates directly is the
-obvious follow-up, on the Interop side.
+`Vector3d[]` corner array. (That corner array is gone: `Polygonize` now generates
+coordinates from the grid indices straight into the deinterleaved
+`Evaluate(x, y, z, distances)` entry and streams the grid in a window of x-slabs — see the
+Interop README.)
+
+## Sparse lazy grids
+
+`Sampled(region, cellSize, lazy: true)` is the sparse variant: 16³-sample blocks are filled
+on first touch and never otherwise, so a query pattern that only visits part of the domain
+only pays for that part. Two things make it work on domains a dense bake cannot reach:
+
+- **A dense bake is capped by `int` addressing** — its values are one contiguous `double[]`,
+  so about 1290³ samples is the wall, and `RequireDenseAddressable` says so and names the
+  lazy overload as the way out. A lazy grid has no such cap.
+- **The block table is flat while that is free and grouped once it is not.** A flat array of
+  block pointers costs 8 bytes per block *whether or not the block is ever touched*. Up to a
+  1024³ grid that is 2 MB, cheaper than the indirection it would save, so the flat table
+  stays and existing models keep exactly the lookup they had (measured 6.2–6.9 Mpts/s before
+  and after). A 4096³ grid is 256³ blocks — 134 MB of pointers up front to index a surface
+  that may occupy well under 1% of them. Above the threshold, blocks group into 16³-block
+  super-blocks whose slot tables are allocated on first touch: those 134 MB become a 32 KB
+  top array plus 32 KB per super-block visited. Both levels publish lock-free by
+  `Interlocked.CompareExchange`; block values are deterministic, so a racing fill just loses
+  and is dropped.
+
+Measured (`SparseGridBenchmark`; `MeshSdf` over 47 724 triangles, 40 000 probes in a shell
+around the surface): at a 0.01 cell (20.3 M samples) a dense bake is 18 816 ms and 156.5 MB
+against 8 976 ms and 28.9 MB sparse; at a 0.0012 cell (11.7 G samples, 87 GB of doubles) the
+dense bake **throws** and the sparse grid answers 2 000 probes in 80.6 MB. Honest caveat: at
+a coarse cell the shell reaches most of the grid anyway, and then the sparse grid buys memory
+and nothing else — it is a *localized-query* acceleration, not a faster bake.
+
+geometry3Sharp has both halves of this (`DSparseGrid3` block-hashed, `BiGrid3` two-level) and
+neither was worth porting: `BiGrid3` is an unfinished stub with no value API and no in-repo
+consumer, and `DSparseGrid3` hashes `Vector3i` keys into a plain `Dictionary` with no
+thread-safety story, allocate-on-read defaults and bounds that never shrink after a free.
+`HBitArray`, the third class the backlog named, ships with a bug its own author flagged in a
+comment (clearing one bit clears its parent summary bits unconditionally, so sparse iteration
+can silently skip live siblings) — and we have no use for it: the block table *is* the
+occupancy index, and nothing here iterates allocated blocks.
 
 ## Narrow-band grids
 
