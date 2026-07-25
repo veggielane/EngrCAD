@@ -69,28 +69,36 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 
 ## Core (EngrCAD.Core)
 
-- [ ] **Tolerance follow-ups from the audit** (audit ✅ complete — ~200 sites reviewed,
-  13 call sites routed through the new `FaceGeometry.InverseEvaluationTolerance`
-  const, ~60 justified in place, epsilon ladder documented in CLAUDE.md; these
-  flagged items were report-only because changing them alters behavior):
-  named seam-scale constants (`SealSeams` 1e-7, boundary-match 1e-7, the 1e-8
-  curve-parameter dedupe cluster — mechanical bit-identical consts); `ConvexHull2`'s
-  raw cross-product turn test → `Predicates2d.Orient2dSign` (with new degenerate
-  tests); a `TracerSettings` struct collecting `SurfaceIntersection`'s marching
-  constants (1e-10/1e-8/1e-7/1e-14 family — boolean-critical, tune together);
-  BSP `Csg.Epsilon` 1e-9 and `MeshWelder` 1e-7 absolutes → extent-scaled (boolean
-  seam re-testing required); `Sketch` 1e-12 area/length guards → extent-relative;
-  `ShapeCompiler` coplanarity dot 1−1e-6 → explicit angular tolerance.
-- [ ] **Core follow-ups from the parity/utils wave** — intersection-segment queries on
-  top of `Bvh.QueryOverlap` candidate pairs (the triangle–triangle segment layer
-  belongs to EngrCAD.Mesh — part of the imprint-boolean item); arrangement insertion
-  acceleration (segment BVH/grid instead of the O(E) scan); consider routing
-  `FaceSplitter`'s planar non-periodic tracing through `Arrangement2d` (deferred —
-  boolean-critical); minimum-volume 3D OBB (PCA `FitBox` is a heuristic); thread
-  `ProgressCancel` through more long ops (mesh booleans, BRepTessellator,
-  MeshSdf/winding builds); parallelize more batch kernels via `ParallelFor` (feeds
-  the SIMD big rock); optionally migrate `MeshWindingNumber` onto `Bvh`'s now-exposed
-  per-node ranges.
+- [ ] **Remaining tolerance follow-ups** (named seam constants, `ConvexHull2` →
+  `Orient2dSign`, `TracerSettings`, and the scale-relative `Sketch` guards ✅ all
+  landed): **BSP `Csg.Epsilon` 1e-9 and `MeshWelder`'s 1e-7 absolutes → extent-scaled**
+  — deferred while the exact boolean's coplanar handling is in flight, since re-tuning
+  BSP's seam epsilons underneath that would confound both; boolean seam re-testing
+  required when it happens.
+- [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
+  (`CoplanarFaceCosine`, 0.081° = acos(1 − 1e-6)) but deliberately not widened: a dot
+  of unit vectors is already scale-free, so the quadratic-scale argument does not apply.
+  The real issue found while testing it: the companion `CoplanarFaceDistance` check
+  measures the axial gap to an **arbitrary point of a tilted face's plane** (whatever
+  `IsPlanar` reports as origin), so it is ill-defined precisely in the band a wider
+  angle would admit. Needs coplanar-boolean evidence before touching.
+- [ ] **Minimum-volume 3D OBB — blocked on a layering decision.** The exact method
+  (Freeman–Shapira: the min-volume box has a face flush with a hull face, so project per
+  hull face and take `Fitting2d.MinAreaBox`) needs a 3D convex hull, but `ConvexHull`
+  lives in EngrCAD.Mesh, which *references* Core — so `Fitting3d` cannot call it, and a
+  second quickhull in Core would be worse than today's PCA heuristic. Decide: move
+  `ConvexHull` into Core, or add `Fitting3d.MinVolumeBox(hullVertices, hullTriangles)`
+  taking a caller-supplied hull. The algorithm is spelled out in `FitBox`'s doc comment.
+- [ ] **Core follow-ups** — thread `ProgressCancel` through `BRepTessellator` and
+  `MeshSdf`/winding builds (unstarted); `Region2dBoolean`'s O(E²) interior-sample
+  clearance scans still want the same index the arrangement broad phase now has
+  (**re-benchmark the arrangement speedup on a quiet machine** — the measured
+  candidate-pair reduction is a solid 9.1% of the full scan, but wall-clock numbers
+  were taken with several agents building concurrently and disagreed by 3×);
+  intersection-segment queries over `Bvh.QueryOverlap` pairs (the triangle–triangle
+  layer belongs to EngrCAD.Mesh); routing `FaceSplitter`'s planar tracing through
+  `Arrangement2d` (deferred — boolean-critical); optionally migrate
+  `MeshWindingNumber` onto `Bvh`'s per-node ranges.
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
