@@ -427,6 +427,57 @@ UI dependencies, which makes this unusually feasible.
 - [ ] **Out of scope until later**: editing/sketching in the browser, collaboration,
   server-side model storage. This is a *viewer* first.
 
+## MCP server / remote control of the viewer
+
+Expose EngrCAD to AI assistants over the **Model Context Protocol**: an MCP server whose
+tools query a model, drive the viewer, and — the key one — **return rendered images**, so
+an assistant can actually *see* the geometry it is reasoning about. This formalizes a
+loop this project already runs by hand: build a scene, render it, look at the picture,
+decide what to change. `EngrCad.RenderToImage` was built for exactly that, and the MCP
+surface is largely a protocol wrapper over public API that already exists, which makes
+it cheap relative to its value.
+
+- [ ] **Decide the topology.** Three shapes, and they are not exclusive — (a) is the
+  cheapest useful thing and (b) is what Chris asked for:
+  - **(a) Headless server, no viewer required** — the MCP process builds/loads scenes
+    and renders through `OffscreenRenderer`. Works in CI and over SSH, no GUI, no RPC
+    hop. Almost entirely existing API; the natural v1.
+  - **(b) RPC into a *running* viewer** — drive the live window: change the view, toggle
+    sections, select parts, grab the framebuffer. Needs a small transport (a **named
+    pipe** or a loopback socket carrying JSON-RPC) exposed by `EngrCAD.Viewer` behind an
+    opt-in flag (`EngrCadOptions.WithRemoteControl(...)` / `--rpc`), with the MCP server
+    as a separate process bridging to it.
+  - **(c) Viewer hosts MCP directly** over the HTTP+SSE transport on loopback — removes
+    the bridge hop, but puts a web server inside the GUI app; only worth it if (b)'s
+    extra process proves annoying. (stdio, the usual MCP transport, does not fit a
+    windowed app, which is why (b)/(c) differ from (a).)
+- [ ] **Tool surface** (start small, grow): `screenshot` (returns an MCP *image* —
+  parameters for camera/standard view, view style, section planes, size; falls back to
+  the offscreen renderer when no window is attached), `list_tabs` / `list_parts` /
+  `describe_part` (kind, faces, closed, volume, area, bounds — the properties panel's
+  data, plus the **construction tree**, which is already a serializable
+  label+kind+path structure), `set_view` / `fit` / `set_section` / `set_display_mode` /
+  `set_view_style`, `select_part` / `get_selection`, `measure`, and `export`
+  (STEP/STL/OBJ/PNG). Resources: the scene as a structured document.
+- [ ] **Non-negotiable constraints** (the viewer's existing rules, which an RPC layer is
+  very good at violating): every mutation must marshal onto the Avalonia UI thread
+  (`Dispatcher.UIThread.Post`) — the thread-safe seams are `ViewportControl.SetParts` /
+  `SetInstances` and the `Status` callback; **GL only inside the render pass**, so a
+  screenshot request must ride the existing `SaveScreenshot` capture-on-next-frame path
+  rather than touching GL from the RPC thread; and meshing stays off the UI thread as
+  always.
+- [ ] **Security**: loopback-only, **off by default**, opt-in flag, and consider a token —
+  this endpoint can load models and write files, so it is a local attack surface and
+  should never be on implicitly.
+- [ ] **Packaging**: a `tools/EngrCAD.Mcp` (or packable `src/`) project. Use the official
+  C# MCP SDK rather than hand-rolling JSON-RPC — a dependency is fine outside the kernel
+  projects (precedent: DocsGen takes Roslyn), and the kernel-stays-dependency-free rule
+  is unaffected.
+- [ ] **Payoff worth calling out**: agents and tests currently verify viewer work by
+  writing a scratch program, rendering a PNG and reading it. With (a) that becomes a
+  single tool call, and the same surface doubles as a *user-facing* feature — "show me
+  the bracket from the top with a section at z = 5" answered with a picture.
+
 ## App layer / infrastructure
 
 - [ ] **Parametric features follow-ups** (`FeatureHistory` landed) — persistent
