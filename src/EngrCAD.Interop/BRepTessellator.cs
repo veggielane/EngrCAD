@@ -16,18 +16,50 @@ namespace EngrCAD.Interop;
 /// </summary>
 public static class BRepTessellator
 {
-    public static HalfEdgeMesh Tessellate(BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24)
+    /// <summary>
+    /// Tessellates a B-Rep solid into a welded triangle mesh.
+    /// </summary>
+    /// <param name="progress">
+    /// Optional progress + cooperative cancellation, polled at EDGE and FACE boundaries —
+    /// the coarse checkpoints, since a single trimmed face is one indivisible ear-clipping
+    /// job. Cancellation throws <see cref="OperationCanceledException"/> and no partial
+    /// mesh is returned.
+    /// <para><b>Never pass a cancellable progress from inside a cached lowering.</b> This
+    /// is safe to cancel because its own result is thrown away wholesale; the rule the
+    /// document model learned the hard way is that abandoning work whose result is CACHED
+    /// (a <c>Shape</c>'s lowered <c>BrepSolid</c>) leaves the cache claiming a lowering it
+    /// never produced. Tessellating an already-cached solid is downstream of that, so it
+    /// may observe the token; the lowering that produced the solid may not.</para>
+    /// </param>
+    public static HalfEdgeMesh Tessellate(
+        BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24,
+        ProgressCancel? progress = null)
     {
         if (segmentsPerCircle < 3) throw new ArgumentOutOfRangeException(nameof(segmentsPerCircle));
         if (curveSamples < 2) throw new ArgumentOutOfRangeException(nameof(curveSamples));
 
+        // Coarse phase weights, honest rather than precise: sampling every edge, then the
+        // faces (much the larger share — trimmed faces ear-clip and refine), then one
+        // indivisible weld of the whole polygon soup.
+        const double EdgePhase = 0.15;
+        const double FacePhase = 0.75;
+
         var edgePolylines = new Dictionary<BrepEdge, List<Vector3d>>();
+        int edgeCount = solid.Edges.Count();
+        int edgesDone = 0;
         foreach (var edge in solid.Edges)
+        {
+            progress?.ThrowIfCancelled();
             edgePolylines[edge] = SampleEdge(edge, segmentsPerCircle, curveSamples);
+            progress?.Report(EdgePhase * ++edgesDone / Math.Max(1, edgeCount));
+        }
 
         var polygons = new List<IReadOnlyList<Vector3d>>();
+        int faceCount = solid.Faces.Count();
+        int facesDone = 0;
         foreach (var face in solid.Faces)
         {
+            progress?.ThrowIfCancelled();
             int firstPolygon = polygons.Count;
             switch (face.Surface)
             {
@@ -69,14 +101,18 @@ public static class BRepTessellator
                 for (int i = firstPolygon; i < polygons.Count; i++)
                     polygons[i] = [.. polygons[i].Reverse()];
             }
+            progress?.Report(EdgePhase + FacePhase * ++facesDone / Math.Max(1, faceCount));
         }
 
+        progress?.ThrowIfCancelled();
         // Zip seams: cap triangulation may merge exactly-collinear boundary runs (earcut
         // filters them), leaving T-junctions against the finer neighboring faces; zipping
         // reinserts the missing vertices so the mesh closes.
         // 1e-9 = Tolerance.Default.Linear: the absolute weld tolerance — geometry that
         // must weld is constructed exactly, so this must NOT be loosened to hide cracks.
-        return MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
+        var mesh = MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
+        progress?.Report(1);
+        return mesh;
     }
 
     internal static List<Vector3d> SampleEdge(BrepEdge edge, int segmentsPerCircle, int curveSamples)

@@ -16,7 +16,7 @@ engines.
   topology passes stay sequential so output ordering never depends on scheduling. The
   optional `ProgressCancel` reports coarse progress and cancels cooperatively
   (throws `OperationCanceledException`, partial results discarded).
-- **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
+- **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress?)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
@@ -30,6 +30,15 @@ engines.
     strip-zipped chain-to-chain or fanned to a pole, then oversized interior edges
     midpoint-split to the natural grid density with new vertices on the exact surface.
     Boundary vertices are always the exact shared edge samples, so seams weld at 1e-9.
+  - **Progress + cancellation** (`ProgressCancel? progress = null`, free when absent) is
+    polled at **edge and face boundaries** — the coarse checkpoints, since one trimmed face
+    is an indivisible ear-clipping job — and cancellation throws rather than returning a
+    partial mesh. It is safe to cancel here precisely because the tessellation's own result
+    is discarded wholesale; the rule the document model learned the hard way is that
+    abandoning work whose result is **cached** (a `Shape`'s lowered `BrepSolid`) leaves the
+    cache claiming a lowering it never produced, so **never pass a cancellable progress
+    from inside a lowering**. Tessellating an already-cached solid is downstream of the
+    lowering and may observe the token.
     Routing between grid and trimmed paths is a two-sided 3D match of loop samples
     against the natural grid boundary — precisely the invariant grid welding needs.
     Numerical lessons baked in: earcut's exact-collinear filtering would drop
@@ -114,6 +123,12 @@ this project's conversions.)
   (non-watertight) meshes, where the distance is still to the existing surface and the sign
   degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
   and still requires a closed mesh.
+  **`MeshSdf` construction deliberately takes no `ProgressCancel`** — measured, then
+  declined: on a 32 040-triangle mesh the pseudonormal constructor is 21.8 ms and the
+  winding-number hierarchy 29.2 ms (8 cores). Cancellation in the viewer is granular to a
+  whole part, which takes seconds, so checkpoints inside a 20 ms constructor buy nothing
+  and would have to be threaded through call sites that sit *inside* cached lowerings —
+  exactly where a token must not reach.
 
 ## Planar iso-contours (`SdfContours`)
 
