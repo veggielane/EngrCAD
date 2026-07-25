@@ -124,6 +124,33 @@ public sealed class EngrCadOptions
     /// skips the bake.
     /// </summary>
     public bool AmbientOcclusion { get; set; } = AmbientOcclusionDefault;
+
+    /// <summary>
+    /// The shipped default for on-demand tab meshing: ON. A document's tabs are meshed
+    /// when they are first VIEWED, so the window opens immediately instead of waiting
+    /// for tabs the user may never open (measured on the demo scene: 54 s to a window,
+    /// down to under 2 s).
+    /// </summary>
+    public const bool LazyTabMeshingDefault = true;
+
+    /// <summary>
+    /// Mesh each tab when it is first shown, on a background task with a progress bar,
+    /// instead of meshing the whole scene before the window opens (default
+    /// <see cref="LazyTabMeshingDefault"/> = on). Meshes are cached per part, so a tab
+    /// is meshed once however often it is revisited.
+    /// <para><b>The escape hatch:</b> set this false (or
+    /// <see cref="EngrCadBuilder.WithLazyTabMeshing"/>(false), or <c>--mesh all</c> on
+    /// the command line) to restore the eager behavior — <c>Scene.PreMesh</c> for the
+    /// whole document before the first frame, no progress UI, every tab instant once
+    /// the window appears.</para>
+    /// <para>Headless paths are unaffected: <c>--export</c>, <c>--render</c> and
+    /// <see cref="EngrCad.RenderToImage"/> mesh exactly what they need, eagerly. A
+    /// custom host that drives <see cref="ViewportControl.SetParts"/> itself must
+    /// prepare its parts off the render thread (<c>Part.Prepare</c>/<c>Tab.PreMesh</c>/
+    /// <c>Scene.PreMesh</c>) — the contract <see cref="ViewportControl.SetInstances"/>
+    /// always documented — or set this false.</para>
+    /// </summary>
+    public bool LazyTabMeshing { get; set; } = LazyTabMeshingDefault;
 }
 
 /// <summary>
@@ -244,6 +271,18 @@ public sealed class EngrCadBuilder
     public EngrCadBuilder WithAmbientOcclusion(bool enabled = true)
     {
         Options.AmbientOcclusion = enabled;
+        return this;
+    }
+
+    /// <summary>
+    /// Meshes each tab when it is first viewed (the default) rather than meshing the
+    /// whole document before the window opens; pass <c>false</c> for the eager
+    /// behavior. <c>--mesh lazy|all</c> wins over this default. See
+    /// <see cref="EngrCadOptions.LazyTabMeshing"/>.
+    /// </summary>
+    public EngrCadBuilder WithLazyTabMeshing(bool enabled = true)
+    {
+        Options.LazyTabMeshing = enabled;
         return this;
     }
 

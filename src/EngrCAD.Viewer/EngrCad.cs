@@ -59,9 +59,16 @@ public static class EngrCad
     internal static void ShowCore(Scene scene, EngrCadOptions options, Action<ViewportControl>? hostReady = null)
     {
         CurrentOptions = options;
-        scene.PreMesh(options.Quality); // tessellate here, not on the render thread
-        if (options.AmbientOcclusion)
-            AmbientOcclusion.Prime(scene.AllParts); // bake occlusion here too, same reason
+        // Lazy (the default): the window opens now and each tab meshes on a background
+        // task when it is first shown (SceneHost's TabMeshLoader), with a progress bar.
+        // Eager: the historical behavior — the whole document is meshed here, off the
+        // render thread, and every tab is instant once the window appears.
+        if (!options.LazyTabMeshing)
+        {
+            scene.PreMesh(options.Quality); // tessellate here, not on the render thread
+            if (options.AmbientOcclusion)
+                AmbientOcclusion.Prime(scene.AllParts); // bake occlusion here too, same reason
+        }
         InitialScene = scene;
         WindowTitle = options.Title;
         var userReady = options.OnViewportReady;
@@ -169,7 +176,8 @@ public static class EngrCad
     /// explicitly non-default) and <c>--section x|y|z &lt;offset&gt;</c> (an
     /// axis-aligned section plane, e.g. <c>--section z 6</c>); both default to the
     /// configured <see cref="EngrCadOptions.RenderStyle"/>/<see cref="EngrCadOptions.SectionOffset"/>.
-    /// Returns a process exit code.
+    /// The windowed modes honor <c>--mesh lazy|all</c> (see
+    /// <see cref="EngrCadOptions.LazyTabMeshing"/>). Returns a process exit code.
     /// </summary>
     public static int Run(string[] args, Func<Scene> sceneFactory, string title = "EngrCAD") =>
         RunCore(args, sceneFactory, new EngrCadOptions { Title = title });
@@ -229,6 +237,18 @@ public static class EngrCad
                 return 2;
             }
             options.AmbientOcclusion = ao;
+        }
+
+        int meshIndex = Array.IndexOf(args, "--mesh");
+        if (meshIndex >= 0)
+        {
+            if (meshIndex + 1 >= args.Length || !TryParseMeshMode(args[meshIndex + 1], out bool lazy))
+            {
+                log.Error("--mesh requires lazy (mesh each tab when it is first shown) or all"
+                        + " (mesh the whole document before the window opens)");
+                return 2;
+            }
+            options.LazyTabMeshing = lazy;
         }
 
         int exportIndex = Array.IndexOf(args, "--export");
@@ -291,9 +311,15 @@ public static class EngrCad
             try
             {
                 var scene = factory();
-                scene.PreMesh(CurrentOptions.Quality); // heavy lifting stays on this worker thread
-                if (CurrentOptions.AmbientOcclusion)
-                    AmbientOcclusion.Prime(scene.AllParts);   // ... including the AO bake
+                if (!CurrentOptions.LazyTabMeshing)
+                {
+                    scene.PreMesh(CurrentOptions.Quality); // heavy lifting stays on this worker thread
+                    if (CurrentOptions.AmbientOcclusion)
+                        AmbientOcclusion.Prime(scene.AllParts);   // ... including the AO bake
+                }
+                // Lazy: SetScene re-shows the CURRENT tab, whose (new) parts mesh on the
+                // loader's background task — the reload lands as fast as the tab in
+                // front of the user, and the tabs behind it stay unmeshed.
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => Host?.SetScene(scene));
                 string status = $"reloaded at {DateTime.Now:HH:mm:ss} — {scene.AllParts.Count()} part(s)";
                 viewport.ShowStatus(status);
@@ -402,6 +428,18 @@ public static class EngrCad
             case "on" or "true" or "1": enabled = true; return true;
             case "off" or "false" or "0": enabled = false; return true;
             default: enabled = false; return false;
+        }
+    }
+
+    /// <summary>Parses a <c>--mesh</c> value: <c>lazy</c> (per tab, on demand) or
+    /// <c>all</c> (the whole document up front).</summary>
+    private static bool TryParseMeshMode(string value, out bool lazy)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "lazy" or "tab" or "ondemand" or "on-demand": lazy = true; return true;
+            case "all" or "eager" or "up-front": lazy = false; return true;
+            default: lazy = false; return false;
         }
     }
 
