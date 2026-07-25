@@ -35,6 +35,9 @@ negative inside, zero on the surface, positive outside. Depends only on `EngrCAD
   the standard acceleration for expensive ASTs like `MeshSdf`. Pass `lazy: true` (g3's
   `CachingGridImplicit3d`) to materialize 16³-sample blocks on first touch instead of
   up front (thread-safe, deterministic first-publish-wins).
+- **Narrow-band grids** (`NarrowBand(cellSize[, region][, bandWidth])`, `NarrowBandSdf.cs`,
+  g3's `MeshSignedDistanceGrid`): evaluate the source **only near its surface** and fill
+  the rest by a distance transform — see [Narrow-band grids](#narrow-band-grids).
 - **N-ary operators** (`NaryOperators.cs`, g3 `ImplicitNaryUnion3d`/`ImplicitBlend3d`
   spirit): static `Sdf.Union(...)` / `Sdf.Intersection(...)` evaluate min/max over any
   number of children in one flat loop (each child evaluated once per query — no nested
@@ -116,6 +119,54 @@ this inverts). And `Polygonize` gains far less than its sampling does — the sa
 is now a minority of its cost, the rest being the topology passes and the full-size
 `Vector3d[]` corner array; feeding Surface Nets deinterleaved coordinates directly is the
 obvious follow-up, on the Interop side.
+
+## Narrow-band grids
+
+`sdf.NarrowBand(cellSize, bandWidth)` bakes a grid that pays for source evaluations only
+near the surface. It is this project's answer to g3's `MeshSignedDistanceGrid` ("exact
+distances in a narrow band, then extend outward by sweeping"), generalized off meshes:
+
+- **Finding the band** — recursive octant subdivision down to 4³-sample leaves. Each node
+  is probed once at its centre; if `|d(centre)| − circumradius > bandWidth` the whole node
+  is provably clear of the band (the true distance is 1-Lipschitz and the field's magnitude
+  is a lower bound on it), so it is stamped with the sign of `d(centre)` and skipped.
+  Surviving leaves are evaluated in full through the batch/SIMD seam. g3 instead rasterizes
+  triangle bounding boxes and signs the grid by ray-crossing parity; we need neither,
+  because an `Sdf` is sign-exact by contract — which also means this accelerates *any*
+  expensive field, `MeshSdf` included.
+- **Filling the rest** — a chamfer distance transform over the 26-neighbour mask with true
+  Euclidean step lengths ⟨1, √2, √3⟩. One causal raster scan plus one anti-causal scan is
+  the *complete* chamfer distance, so unlike eikonal fast sweeping there is nothing to
+  iterate to convergence.
+- **Leaf size is THE knob**: a surviving leaf is evaluated whole, so the exactly-evaluated
+  shell is `2·(bandWidth + leaf circumradius)` thick and the circumradius is √3·(n−1)/2
+  cells — 6.1 cells at n = 8 but 2.6 at n = 4, which nearly halves the shell. Hence 4.
+
+Fidelity, stated honestly: inside the band the values are the source's own, so the
+reconstruction is exactly a dense bake there — and since the zero level set lies inside the
+band, meshing and inside/outside classification are unaffected. Outside the band the sign
+is still exact at every sample, but the magnitude is a chamfer approximation. It is a
+provable **over**-estimate (each far sample is min(exact band value + chamfer path), and
+the true distance is 1-Lipschitz) by up to ~13% — Borgefors' anisotropy bound for this
+mask; the measured worst case on a sphere is 1.112×. Borgefors-optimized weights would cut
+that to ~1.4% but forfeit the over-estimate invariant, which is worth more than the last
+decimal of a far-field value. Don't use a narrow-band grid as a sphere-tracing lower bound,
+and don't offset it by more than the band width.
+
+**When it pays.** The saving is in source evaluations; the outward fill still touches every
+sample twice at ~60 ns each and raster scans don't parallelize. Measured against a dense
+`Sampled` bake of the same grid:
+
+| source | cell | dense bake | narrow band | |
+| --- | --- | --- | --- | --- |
+| `MeshSdf` (sphere, 8k faces) | 0.35 | 785 ms | 93 ms | **8.4×** |
+| `MeshSdf` (sphere, 8k faces) | 0.18 | 2997 ms | 269 ms | **11.1×** |
+| bracket CSG (analytic) | 0.25 | 100 ms | 315 ms | 0.3× |
+| primitive union (analytic) | 0.12 | 23 ms | 215 ms | 0.1× |
+
+So: reach for it for mesh-backed and otherwise expensive fields — and note the ratio
+*improves* with resolution, because the shell thickness scales with the cell size while
+the region does not. For a cheap analytic tree it is a pessimization; use `Sampled`.
 
 **Benchmark timing lesson**: tiered JIT promotes these inner batch methods only after
 tens of invocations plus a background compile. A single warm-up call measured tier-0 code

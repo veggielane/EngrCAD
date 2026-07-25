@@ -259,6 +259,53 @@ public abstract class Sdf
     public Sdf Sampled(in Aabb region, double cellSize, bool lazy = false) =>
         lazy ? new LazyGridSdf(this, region, cellSize) : GridSdf.Bake(this, region, cellSize);
 
+    /// <summary>
+    /// Bakes a <em>narrow-band</em> grid over this node's own <see cref="Bounds"/>
+    /// (expanded by the band plus one cell so the band stays interior). See
+    /// <see cref="NarrowBand(in Aabb, double, double)"/> for the fidelity contract.
+    /// Requires finite bounds.
+    /// </summary>
+    public Sdf NarrowBand(double cellSize, double bandWidth = 0)
+    {
+        if (bandWidth < 0)
+            throw new ArgumentOutOfRangeException(nameof(bandWidth), "Band width must be non-negative.");
+        double band = bandWidth > 0 ? bandWidth : 2 * cellSize;
+        var bounds = Bounds;
+        if (!IsFinite(bounds))
+            throw new InvalidOperationException(
+                "NarrowBand() over the node's own bounds requires finite Bounds; pass an explicit region for unbounded fields.");
+        return NarrowBand(bounds.Expanded(band + cellSize), cellSize, band);
+    }
+
+    /// <summary>
+    /// Like <see cref="Sampled(in Aabb, double, bool)"/>, but evaluates this field only
+    /// <em>near its surface</em>: samples within <paramref name="bandWidth"/> of the zero
+    /// level set get the exact value, and the rest of the grid is filled by a distance
+    /// transform seeded from that band. Source evaluations then scale with the surface's
+    /// area rather than the region's volume, which is what makes fine grids affordable for
+    /// <em>expensive</em> fields — measured 8–11× faster than a dense bake of a
+    /// <c>MeshSdf</c>. It is the wrong tool for a cheap field: the outward fill costs about
+    /// 60 ns per sample and does not parallelize, so baking an analytic CSG tree this way
+    /// is several times <em>slower</em> than <see cref="Sampled(in Aabb, double, bool)"/>.
+    /// A <paramref name="bandWidth"/> of 0 means two cells.
+    /// <para>
+    /// Fidelity: identical to a dense bake inside the band (and the zero level set is
+    /// inside the band, so meshing and inside/outside classification are unaffected);
+    /// outside it the sign stays exact at every sample but the magnitude becomes a chamfer
+    /// approximation that over-estimates the true distance by up to ~13%. Do not use it
+    /// as a sphere-tracing bound or offset it by more than the band width. See
+    /// <see cref="NarrowBandSdf"/> for the full contract, including the precondition that
+    /// this field's magnitude be a lower bound on its true distance (the engine's field
+    /// contract).
+    /// </para>
+    /// </summary>
+    public Sdf NarrowBand(in Aabb region, double cellSize, double bandWidth = 0)
+    {
+        if (bandWidth < 0)
+            throw new ArgumentOutOfRangeException(nameof(bandWidth), "Band width must be non-negative.");
+        return NarrowBandSdf.Bake(this, region, cellSize, bandWidth > 0 ? bandWidth : 2 * cellSize);
+    }
+
     public static Sdf operator |(Sdf a, Sdf b) => a.Union(b);
     public static Sdf operator &(Sdf a, Sdf b) => a.Intersect(b);
     public static Sdf operator -(Sdf a, Sdf b) => a.Subtract(b);
