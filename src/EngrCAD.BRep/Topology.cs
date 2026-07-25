@@ -151,6 +151,69 @@ public sealed class BrepSolid
     public IEnumerable<BrepVertex> Vertices =>
         Edges.SelectMany(e => new[] { e.StartVertex, e.EndVertex }).Distinct();
 
+    /// <summary>
+    /// A fresh, independent copy of the whole topology graph — new vertices, edges,
+    /// coedges, loops, faces and shells, in the same order, with the same senses and
+    /// <see cref="BrepFace.IsReversed"/> flags.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// GEOMETRY IS SHARED, NOT COPIED. Curves and surfaces are immutable once
+    /// constructed — trimming produces new <c>CurveSegment</c>s rather than editing the
+    /// carrier — so sharing them is both correct and what makes a clone cheap. Only the
+    /// topology is mutable: coedges get re-parented, edge use-lists are rewritten, and
+    /// vertices are unified during seam sealing.
+    /// </para>
+    /// <para>
+    /// This exists because B-Rep booleans CONSUME their inputs (the v1 contract in
+    /// design.md §5). Any caller that hands the same solid to a boolean twice — a
+    /// <c>Shape</c> graph lowered for a second representation, a re-render after a cache
+    /// drop, two designs derived from one imported body — must clone first. The damage is
+    /// silent otherwise: the counts survive, so the solid still looks intact, but the
+    /// coedge back-pointers belong to the first boolean's faces and the second result is
+    /// closed, valid-looking and WRONG.
+    /// </para>
+    /// </remarks>
+    public BrepSolid Clone()
+    {
+        var vertices = new Dictionary<BrepVertex, BrepVertex>();
+        var edges = new Dictionary<BrepEdge, BrepEdge>();
+
+        BrepVertex CloneVertex(BrepVertex vertex)
+        {
+            if (!vertices.TryGetValue(vertex, out var copy))
+                vertices[vertex] = copy = new BrepVertex(vertex.Position);
+            return copy;
+        }
+
+        BrepEdge CloneEdge(BrepEdge edge)
+        {
+            if (!edges.TryGetValue(edge, out var copy))
+            {
+                // A closed edge's start and end are the SAME vertex object; the
+                // dictionary preserves that identity, which IsClosedEdge depends on.
+                edges[edge] = copy = new BrepEdge(
+                    edge.Curve, edge.Domain, CloneVertex(edge.StartVertex), CloneVertex(edge.EndVertex));
+            }
+            return copy;
+        }
+
+        var shells = new List<BrepShell>(Shells.Count);
+        foreach (var shell in Shells)
+        {
+            var faces = new List<BrepFace>(shell.Faces.Count);
+            foreach (var face in shell.Faces)
+            {
+                var loops = new List<BrepLoop>(face.Loops.Count);
+                foreach (var loop in face.Loops)
+                    loops.Add(new BrepLoop([.. loop.Coedges.Select(c => new BrepCoedge(CloneEdge(c.Edge), c.SameSense))]));
+                faces.Add(new BrepFace(face.Surface, loops, face.IsReversed));
+            }
+            shells.Add(new BrepShell(faces));
+        }
+        return new BrepSolid(shells);
+    }
+
     /// <summary>Structural checks: loop closure and two-manifold edge use. Throws with details.</summary>
     public void Validate()
     {

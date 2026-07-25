@@ -491,8 +491,20 @@ internal static class ShapeCompiler
 
             case DrillShape drill:
             {
-                ValidateDrillDepth(drill, m);
-                return LowerBrep(drill.Expanded, m);
+                // Lower the BODY ONCE. The expansion is `((child − tool₀) − tool₁) …`, so
+                // handing it to LowerBrep would lower the child a second time — on top of
+                // the lowering the coplanarity validation already needed. On a drill whose
+                // child is itself a drilled/filleted body that doubles the whole cost.
+                if (!TryPeelDrillTools(drill, out var tools))
+                {
+                    ValidateDrillDepth(drill, m);
+                    return LowerBrep(drill.Expanded, m);
+                }
+                var body = LowerBrep(drill.Child, m);
+                ValidateDrillDepth(drill, body, m);
+                foreach (var tool in tools)
+                    body = BrepBoolean.Difference(body, LowerBrep(tool, m));
+                return body;
             }
 
             // Exact-zero user-parameter gate (matches the Explain classification above):
@@ -593,8 +605,15 @@ internal static class ShapeCompiler
             case TransformShape t:
                 return LowerBrep(t.Child, m * t.Matrix);
 
+            // CLONE at the source boundary. B-Rep booleans consume their inputs, and the
+            // wrapped solid belongs to the caller and may be lowered any number of times
+            // (a second representation, a re-render, two designs off one imported body).
+            // Handing over the raw object poisons it silently: the counts survive, so the
+            // solid still looks intact, but its coedges now belong to the first boolean's
+            // faces and the next lowering is closed, Validate-clean and WRONG. Geometry is
+            // shared by the clone, so this costs topology allocation only.
             case SourceShape { Geometry: BrepSolid solid } when IsIdentity(m):
-                return solid;
+                return solid.Clone();
 
             default:
                 throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
@@ -836,6 +855,32 @@ internal static class ShapeCompiler
     private const double CoplanarFaceDistance = 1e-6;
 
     /// <summary>
+    /// Recovers the per-point tool shapes from a drill's expansion, which
+    /// <see cref="Shape.Drill"/> builds as the difference chain
+    /// <c>((child − tool₀) − tool₁) …</c>. Returns false — and the caller falls back to
+    /// lowering the expansion whole — if the chain is not that exact shape, so a future
+    /// change to how the expansion is assembled degrades to the old behaviour instead of
+    /// producing wrong geometry.
+    /// </summary>
+    private static bool TryPeelDrillTools(DrillShape drill, out List<Shape> tools)
+    {
+        tools = [];
+        var node = drill.Expanded;
+        while (!ReferenceEquals(node, drill.Child))
+        {
+            if (node is not BooleanShape { Op: BooleanOp.Difference } difference)
+            {
+                tools.Clear();
+                return false;
+            }
+            tools.Add(difference.B);
+            node = difference.A;
+        }
+        tools.Reverse(); // the chain is built outermost-last
+        return true;
+    }
+
+    /// <summary>
     /// Rejects a drill whose tool's flat bottom is coplanar with a planar face of the
     /// body: coplanar face pairs are unsupported boolean input (the v1 transversality
     /// contract), and without this guard the failure surfaces as a deep tessellation
@@ -847,7 +892,15 @@ internal static class ShapeCompiler
     {
         if (!CanBrep(drill.Child, m))
             return; // the expansion will produce its own conversion report
-        var body = LowerBrep(drill.Child, m);
+        ValidateDrillDepth(drill, LowerBrep(drill.Child, m), m);
+    }
+
+    /// <summary>
+    /// The same check against an ALREADY LOWERED body — the form the drill lowering uses,
+    /// so validation and the subtraction share one lowering instead of paying for two.
+    /// </summary>
+    private static void ValidateDrillDepth(DrillShape drill, BrepSolid body, in Matrix4d m)
+    {
         var effective = m * drill.PlaneMatrix;
         var drillNormal = effective.TransformVector((0, 0, 1)).Normalized();
 

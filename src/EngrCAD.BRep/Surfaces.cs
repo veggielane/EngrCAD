@@ -265,12 +265,12 @@ public sealed class NurbsSurface : Surface
     {
         u = DomainU.Clamp(u);
         v = DomainV.Clamp(v);
-        int spanU = NurbsBasis.FindSpan(u, DegreeU, ControlPoints.GetLength(0), KnotsU);
-        int spanV = NurbsBasis.FindSpan(v, DegreeV, ControlPoints.GetLength(1), KnotsV);
+        int spanU = BSplineBasis.FindSpan(u, DegreeU, ControlPoints.GetLength(0), KnotsU);
+        int spanV = BSplineBasis.FindSpan(v, DegreeV, ControlPoints.GetLength(1), KnotsV);
         Span<double> basisU = stackalloc double[DegreeU + 1];
         Span<double> basisV = stackalloc double[DegreeV + 1];
-        NurbsBasis.Evaluate(spanU, u, DegreeU, KnotsU, basisU);
-        NurbsBasis.Evaluate(spanV, v, DegreeV, KnotsV, basisV);
+        BSplineBasis.Evaluate(spanU, u, DegreeU, KnotsU, basisU);
+        BSplineBasis.Evaluate(spanV, v, DegreeV, KnotsV, basisV);
 
         var numerator = Vector3d.Zero;
         double denominator = 0;

@@ -245,15 +245,87 @@ internal sealed class RimShape(
 /// is coplanar with a planar body face is degenerate boolean input that would otherwise
 /// fail deep inside tessellation.
 /// </summary>
-internal sealed class DrillShape(
-    Shape child, Shape expanded, IReadOnlyList<Vector2d> points, double depth, Matrix4d planeMatrix) : Shape
+internal sealed class DrillShape : Shape
 {
-    public Shape Child => child;
-    public Shape Expanded => expanded;
-    public IReadOnlyList<Vector2d> Points => points;
-    public double Depth => depth;
-    public Matrix4d PlaneMatrix => planeMatrix;
-    internal override string Describe() => $"Drill({points.Count} holes)";
+    public Shape Child { get; }
+    public Shape Expanded { get; }
+    public IReadOnlyList<Vector2d> Points { get; }
+    public double Depth { get; }
+    public Matrix4d PlaneMatrix { get; }
+
+    /// <summary>The tool's diameter where it meets the drilled face (cbore/csk included).</summary>
+    public double SurfaceDiameter { get; }
+
+    public DrillShape(
+        Shape child, Shape expanded, IReadOnlyList<Vector2d> points, double depth,
+        Matrix4d planeMatrix, double surfaceDiameter)
+    {
+        Child = child;
+        Expanded = expanded;
+        Points = points;
+        Depth = depth;
+        PlaneMatrix = planeMatrix;
+        SurfaceDiameter = surfaceDiameter;
+        ValidateAgainstEarlierDrills();
+    }
+
+    internal override string Describe() => $"Drill({Points.Count} holes)";
+
+    /// <summary>
+    /// Cross-validates this drill's holes against every EARLIER drill placed on the same
+    /// plane. <see cref="Shape.Drill"/> already rejects overlapping or tangent holes
+    /// WITHIN one call, but two calls — the normal way to mix clearance holes with
+    /// counterbores — could still place tools that touch, which is the same degenerate
+    /// boolean input and fails just as deep inside tessellation.
+    /// </summary>
+    /// <remarks>
+    /// Only drills sharing a placement plane are compared, and the walk stops at the
+    /// first non-drill node. Two drills on DIFFERENT planes can still produce
+    /// intersecting tools (opposing bores on the two faces of a plate, for instance);
+    /// deciding that in general is a tool-vs-tool solid intersection test, not a 2D
+    /// centre-distance test, and is deliberately left out rather than half-done.
+    /// </remarks>
+    private void ValidateAgainstEarlierDrills()
+    {
+        // Same absolute 1e-9 weld-tier guard the within-call check uses: these are
+        // distances between exactly-constructed tool axes.
+        const double tolerance = 1e-9;
+        for (var node = Child; node is DrillShape earlier; node = earlier.Child)
+        {
+            if (!SamePlane(earlier.PlaneMatrix, PlaneMatrix))
+                continue;
+            double limit = (SurfaceDiameter + earlier.SurfaceDiameter) / 2;
+            foreach (var mine in Points)
+            {
+                foreach (var theirs in earlier.Points)
+                {
+                    if (mine.DistanceTo(theirs) <= limit + tolerance)
+                        throw new ArgumentException(
+                            $"The hole at {mine} (surface diameter {SurfaceDiameter:g6}) overlaps or is " +
+                            $"tangent to a hole at {theirs} (surface diameter {earlier.SurfaceDiameter:g6}) " +
+                            $"drilled by an earlier Drill call on the same plane; centers must be more than " +
+                            $"{limit:g6} apart.");
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Do two placement matrices describe the same plane and the same 2D coordinate
+    /// system? Compared by mapping the frame's own probe points rather than by walking
+    /// matrix entries, so the test is in model units and uses the weld tier.
+    /// </summary>
+    private static readonly Vector3d[] PlaneProbes = [new(0, 0, 0), new(1, 0, 0), new(0, 1, 0)];
+
+    private static bool SamePlane(in Matrix4d a, in Matrix4d b)
+    {
+        foreach (var probe in PlaneProbes)
+        {
+            if (!a.TransformPoint(probe).AreEqual(b.TransformPoint(probe), Tolerance.Default))
+                return false;
+        }
+        return true;
+    }
 }
 
 /// <summary>

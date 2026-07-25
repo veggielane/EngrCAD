@@ -52,6 +52,54 @@ operations. Depends only on `EngrCAD.Core`.
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
   solve (two points degrade to a degree-1 chord); closed curves use periodic knots with
   wrapped control points, so the seam is C2 by construction (cyclic system solved densely).
+- **2D curves** (`Curve2d`): `Line2d`, `Arc2d`, `BezierCurve2d`, `NurbsCurve2d` — the
+  sketch-plane siblings of the 3D family. Two deliberate divergences from `Curve3d`:
+  `DerivativeAt`/`SecondDerivativeAt` are **abstract**, because every 2D curve here is
+  analytic and there must be no finite-difference fallback for a new type to inherit by
+  accident; and `Arc2d` carries a **signed** `SweepAngle`, so orientation is intrinsic to
+  the data rather than a separate flag plus a reverse-and-hope repair (the g3 shape).
+  `Arc2d.FromPointAndTangent(start, tangent, end)` is the biarc construction primitive and
+  degenerates to a `Line2d` on a RELATIVE straightness test (sagitta against chord — a
+  dimensionless sine, so it behaves the same at micron and kilometre scale).
+  `NurbsCurve2d` shares the basis via **`BSplineBasis`** (now public: the A2.1/A2.2/A2.3
+  algorithms depend only on knots and degree, so `NurbsCurve`, `NurbsCurve2d` and
+  `NurbsSurface` all use the one copy), and `NurbsCurve2d.InterpolatePoints` DELEGATES to
+  the 3D interpolation on z = 0 rather than forking the collocation solve — every
+  operation on the z component is 0·m, 0 − 0 or 0/d, so the control points come back with
+  z exactly zero. Arc length is `Curve2d.ArcLength` (adaptive Simpson with Richardson
+  extrapolation, tolerance RELATIVE to the chord) and its inverse `ParameterAtLength`
+  (safeguarded Newton on L(t) − s = 0 with a bisection bracket — a ROOT solve, never a
+  minimization, which stalls at √ε); `ArcLengthTable2d` caches a monotone table for
+  resampling loops. `Curve2d.DistanceTo`/`NearestPoint` are closed-form on `Line2d` and
+  `Arc2d` and sample-plus-Newton elsewhere — and because every candidate is a real point
+  ON the curve, the generic path can only ever OVER-estimate, which is the safe direction
+  for a fitting error metric.
+- **Biarc fitting** (`BiArcFit`, `BiArc2d`, `BiArcChain2d`/`BiArcChain3d`): two
+  tangent-continuous arcs through a point+tangent pair, plus tolerance-driven chains
+  through a polyline and a 3D wrapper that turns a PLANAR traced polyline into exact
+  `Line3d` + rational-arc `NurbsCurve` pieces (STEP-exportable, far lighter than a
+  polyline edge). Three things worth knowing:
+  - **Adoption is opt-in and the deviation is always reported.** Nothing in the kernel
+    fits biarcs implicitly — `SurfaceIntersection` still returns `PolylineCurve3d` — and
+    `BiArcChain*.MaxDeviation` is the largest distance from an INPUT SAMPLE to the fit
+    (for 3D, √(in-plane² + out-of-plane²), so it includes the flattening). It measures the
+    given points only and says nothing about the true curve between them; that is a
+    property of the sampling, not of the fit. A non-planar polyline is REFUSED
+    (`BiArcFitStatus.NotPlanar`) rather than silently flattened.
+  - **The free parameter is computed in the stable form** `d = |v|² / (√disc + v·t)`
+    rather than `(√disc − v·t)/denom`. Algebraically identical, but it stays accurate as
+    `denom = 2 − 2·t₁·t₂` approaches zero AND reduces exactly to the equal-tangent case at
+    denom = 0 — so the reference implementation's epsilon test on the squared quantity
+    `|t₁+t₂|² ≈ 4` (which picks a branch at an arbitrary angular threshold of √ε)
+    disappears entirely, along with the broken semicircle branch behind it.
+  - **The endpoints are exact and the round-off goes to the joint.** The second arc is
+    built backwards from the end point and reversed, so both data points and both end
+    tangents are reproduced to ~1 ulp of the radius and all the construction error lands
+    on the interior junction — where nothing has to weld. Chained fits therefore hand
+    their shared data points over at round-off, not at the fit tolerance. Tangents at
+    polyline samples come from the circle through each point and its neighbours (exact for
+    circular and straight data, which marched intersection curves usually are), with a
+    relative area test falling back to the chord.
 - **Surfaces** (`Surface`): `PlaneSurface`, `CylinderSurface`, `SphereSurface`,
   tensor-product `NurbsSurface`, and the generated surfaces `ExtrudedSurface`,
   `RevolvedSurface` (partial or full angle), `SweptSurface` (rotation-minimizing frames
@@ -77,7 +125,8 @@ operations. Depends only on `EngrCAD.Core`.
   closed-form `TryProjectPoint` (the point's angle fixes u up to whole turns, the axial
   coordinate solves v linearly; in-range v preferred so steep generators can't alias
   onto the neighboring turn; dz = 0 helicoid ramps solve v from the radius).
-  **Inverse evaluation on swept surfaces is a ONE-dimensional solve.** The base
+  **Inverse evaluation on swept surfaces is a ONE-dimensional solve** — on ALL THREE of
+  them, though the third gets there differently. The base
   `Surface.TryProjectPoint` scans a 17×17 (u, v) grid and Gauss–Newtons in 2D, but a
   translational or rotational sweep has one free parameter too many: for
   `ExtrudedSurface`, P = C(u) + v·direction, so v is whatever the direction component
@@ -94,10 +143,40 @@ operations. Depends only on `EngrCAD.Core`.
   test suite from 4m16s to 44s. Both fall back to the base implementation only where
   the reduction genuinely does not apply (a collapsed extrusion direction, a point on a
   revolve's axis where the azimuth is undefined).
+  `SweptSurface` gets there by a DIFFERENT structural fact, because its
+  rotation-minimizing frame varies along the path so no parameter is available in closed
+  form. What is true is that every surface point at path parameter v lies in the frame's
+  own plane there (the profile's component along the start tangent is discarded by
+  construction), so `f(v) = (p − Path(v))·Tangent(v) = 0` is a scalar equation in v
+  ALONE — the foot-of-perpendicular condition — and once v is known the point's local
+  (x, y) offset in that frame fixes u by matching the generator, again in 1D. Two
+  decoupled solves, neither involving the other's unknown. f is not monotone on a curving
+  path, so its roots are BRACKETED by a 16-sample scan and refined by safeguarded
+  bisection (the bracket guarantees convergence, not the seed), the path's two ends are
+  always candidates (a point beyond an end cap has no interior root), and every candidate
+  is scored on the true 3D residual. The profile offsets do not depend on v at all, so the
+  whole u seed table is built once — 17 curve evaluations against the base class's 289,
+  which additionally recomputes a full `Frame(v)` per sample. **Measured 3.9× (curved
+  profile segment) and 5.2× (full-circle tube profile) per projection**, against the
+  unmodified base implementation reached through a wrapper forwarding the same
+  `PointAt` — same geometry, same queries, only the algorithm differs.
+  Correctness improved as well: the override accepted 400/400 round-trip queries on both
+  surfaces where the base accepted 392 and 266. See the seed-resolution note under
+  `SweptSurface.SolveGeneratorParameter` for why refinement starts from every local
+  minimum *and its neighbours* — a sliver profile hides two branches inside one seed
+  interval, and single-seed refinement silently returns the mirrored parameter.
+  `NurbsSurface` still uses the base grid, legitimately: no such reduction exists.
 - **Topology**: `BrepSolid → BrepShell → BrepFace → BrepLoop → BrepCoedge → BrepEdge →
   BrepVertex`. Faces are built so surface normals point outward and loops run CCW around
   them (first loop outer, rest holes). `Validate()` checks loop chaining and two-manifold
   edge use; `SatisfiesEulerFormula(genus)` checks V − E + F − (L − F) − 2(S − G) = 0.
+  **`BrepSolid.Clone()`** deep-copies the topology graph and SHARES the geometry (curves
+  and surfaces are immutable once constructed, so only topology needs copying). It exists
+  because booleans CONSUME their inputs — `SplitEdge` patches every loop using an edge and
+  `SealSeams` re-parents coedges and unifies vertices — so any caller handing one solid to
+  two booleans must clone first. The damage is silent otherwise: face/edge/vertex counts
+  survive, so the solid still looks intact, and the second boolean either throws deep
+  inside face tracing or returns a closed, `Validate`-clean, WRONG result.
 - **`Profile`** — planar closed chain of curve segments (or one closed curve) used by the
   modeling operations; winding is auto-corrected per operation.
   `Profile.FromRegion(region, frame?)` places a Core `Geometry2.Region2d`

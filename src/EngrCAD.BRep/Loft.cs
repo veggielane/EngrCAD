@@ -192,9 +192,9 @@ public sealed class LoftedSurface : Surface
             }
         }
 
-        int span = NurbsBasis.FindSpan(v, Degree, m, _knots);
+        int span = BSplineBasis.FindSpan(v, Degree, m, _knots);
         Span<double> basis = stackalloc double[Degree + 1];
-        NurbsBasis.Evaluate(span, v, Degree, _knots, basis);
+        BSplineBasis.Evaluate(span, v, Degree, _knots, basis);
         alpha.Clear();
         for (int i = 0; i <= Degree; i++)
         {
@@ -208,9 +208,9 @@ public sealed class LoftedSurface : Surface
     {
         int m = _sections.Length;
         int stride = Degree + 1;
-        int span = NurbsBasis.FindSpan(v, Degree, m, _knots);
+        int span = BSplineBasis.FindSpan(v, Degree, m, _knots);
         Span<double> ders = stackalloc double[2 * stride];
-        NurbsBasis.EvaluateDerivatives(span, v, Degree, _knots, 1, ders);
+        BSplineBasis.EvaluateDerivatives(span, v, Degree, _knots, 1, ders);
 
         alpha.Clear();
         derivative.Clear();
@@ -306,8 +306,8 @@ public sealed class LoftedSurface : Surface
         Span<double> basis = stackalloc double[degree + 1];
         for (int k = 0; k < m; k++)
         {
-            int span = NurbsBasis.FindSpan(parameters[k], degree, m, knots);
-            NurbsBasis.Evaluate(span, parameters[k], degree, knots, basis);
+            int span = BSplineBasis.FindSpan(parameters[k], degree, m, knots);
+            BSplineBasis.Evaluate(span, parameters[k], degree, knots, basis);
             for (int i = 0; i <= degree; i++)
                 a[k * m + span - degree + i] += basis[i];
             inverse[k * m + k] = 1;

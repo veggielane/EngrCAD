@@ -141,4 +141,128 @@ public class SweptSurfaceProjectionTests
             Assert.True(surface.PointAt(uv.X, uv.Y).AreEqual(point, new Tolerance(1e-8, 1e-8)));
         }
     }
+
+    // ------------------------------------------------------------- SweptSurface
+
+    /// <summary>A curving sweep spine, the shape a pipe elbow or a swept tube follows.</summary>
+    private static NurbsCurve CurvedPath() => NurbsCurve.InterpolatePoints(
+    [
+        (0, 0, 0),
+        (4, 1.5, 0.5),
+        (8, 1.0, 2.0),
+        (11, -2.0, 3.0),
+    ]);
+
+    /// <summary>
+    /// The SAME swept surface reached through the UNMODIFIED
+    /// <see cref="Surface.TryProjectPoint"/>: it overrides only the abstract members and
+    /// forwards them, so any difference is the projection algorithm and nothing else.
+    /// </summary>
+    private sealed class GenericProjection(SweptSurface inner) : Surface
+    {
+        public override Interval DomainU => inner.DomainU;
+        public override Interval DomainV => inner.DomainV;
+        public override Vector3d PointAt(double u, double v) => inner.PointAt(u, v);
+        public override Vector3d NormalAt(double u, double v) => inner.NormalAt(u, v);
+    }
+
+    [Fact]
+    public void Swept_RoundTripsEveryParameterPair()
+    {
+        var surface = new SweptSurface(GlyphLikeArc(), CurvedPath(), Vector3d.UnitX);
+
+        var rng = new Random(31);
+        for (int i = 0; i < 60; i++)
+        {
+            double u = surface.DomainU.ParameterAt(rng.NextDouble());
+            double v = surface.DomainV.ParameterAt(rng.NextDouble());
+            var point = surface.PointAt(u, v);
+            Assert.True(surface.TryProjectPoint(point, out var uv, 1e-9), $"u={u} v={v}");
+            Assert.True(surface.PointAt(uv.X, uv.Y).AreEqual(point, new Tolerance(1e-9, 1e-9)));
+            Assert.Equal(u, uv.X, 7);
+            Assert.Equal(v, uv.Y, 7);
+        }
+    }
+
+    [Fact]
+    public void Swept_TubeProfileDoesNotReturnTheMirroredParameter()
+    {
+        // Regression lock. A closed circular profile whose plane nearly contains the
+        // path's start tangent projects into the start frame as a SLIVER: its two sides
+        // sit closer together than one seed interval, so a single-seed 1D refinement
+        // converges to the mirrored generator parameter and the projection silently
+        // returns a point tens of millimetres away. (The generic grid search has the same
+        // 17-sample u resolution and fails these too — see the companion test.)
+        var surface = new SweptSurface(
+            new Circle3d(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY, 1.0), CurvedPath(), Vector3d.UnitX);
+
+        var rng = new Random(20260725);
+        for (int i = 0; i < 200; i++)
+        {
+            double u = surface.DomainU.ParameterAt(rng.NextDouble());
+            double v = surface.DomainV.ParameterAt(rng.NextDouble());
+            var point = surface.PointAt(u, v);
+            Assert.True(surface.TryProjectPoint(point, out var uv, 1e-6), $"u={u} v={v}");
+            Assert.True(surface.PointAt(uv.X, uv.Y).AreEqual(point, new Tolerance(1e-6, 1e-6)),
+                $"u={u} v={v} came back as {uv}");
+        }
+    }
+
+    [Fact]
+    public void Swept_NeverDoesWorseThanTheGenericGridSearch()
+    {
+        // Wherever the base implementation succeeds, the override must succeed and land
+        // on the same surface point — and it is allowed to succeed where the base does
+        // not, which on a swept tube it does for a third of all queries.
+        foreach (var surface in new[]
+        {
+            new SweptSurface(GlyphLikeArc(), CurvedPath(), Vector3d.UnitX),
+            new SweptSurface(new Circle3d(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY, 1.0),
+                CurvedPath(), Vector3d.UnitX),
+        })
+        {
+            var generic = new GenericProjection(surface);
+            var rng = new Random(5);
+            for (int i = 0; i < 120; i++)
+            {
+                double u = surface.DomainU.ParameterAt(rng.NextDouble());
+                double v = surface.DomainV.ParameterAt(rng.NextDouble());
+                var point = surface.PointAt(u, v);
+                bool baseline = generic.TryProjectPoint(point, out var genericUv, 1e-6);
+                bool improved = surface.TryProjectPoint(point, out var fastUv, 1e-6);
+                if (baseline)
+                {
+                    Assert.True(improved, $"the override rejected a point the base accepted (u={u} v={v})");
+                    Assert.True(surface.PointAt(fastUv.X, fastUv.Y)
+                        .AreEqual(surface.PointAt(genericUv.X, genericUv.Y), new Tolerance(2e-6, 2e-6)));
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void Swept_RejectsPointsOffTheSurface()
+    {
+        var surface = new SweptSurface(GlyphLikeArc(), CurvedPath(), Vector3d.UnitX);
+
+        // Off the wall along its own normal.
+        var onSurface = surface.PointAt(0.5, 0.5);
+        Assert.False(surface.TryProjectPoint(onSurface + surface.NormalAt(0.5, 0.5) * 0.5, out _, 1e-9));
+        // Well past both ends of the path.
+        Assert.False(surface.TryProjectPoint(surface.PointAt(0.5, 0) - new Vector3d(3, 0, 0), out _, 1e-9));
+        Assert.False(surface.TryProjectPoint(surface.PointAt(0.5, 1) + new Vector3d(3, 0, 0), out _, 1e-9));
+    }
+
+    [Fact]
+    public void Swept_StraightPathBehavesLikeAnExtrusion()
+    {
+        // A straight path makes the RMF frame constant, so the sweep IS an extrusion and
+        // the projection must be exact, not merely converged.
+        var surface = new SweptSurface(
+            new Line3d((0, 1, 0), (0, 1, 3)), new Line3d(Vector3d.Zero, (10, 0, 0)), Vector3d.UnitZ);
+
+        Assert.True(surface.TryProjectPoint(surface.PointAt(0.25, 0.75), out var uv, 1e-12));
+        Assert.Equal(0.25, uv.X, 10);
+        Assert.Equal(0.75, uv.Y, 10);
+    }
 }
