@@ -1,3 +1,5 @@
+using System.Numerics;
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 
 namespace EngrCAD.Implicit;
@@ -88,6 +90,20 @@ internal sealed class NaryUnionSdf(Sdf[] children) : Sdf
             return b;
         }
     }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        children[0].EvaluateBatch(x, y, z, distances);
+        if (children.Length == 1)
+            return;
+        using var other = new BatchScratch(distances.Length);
+        for (int i = 1; i < children.Length; i++)
+        {
+            children[i].EvaluateBatch(x, y, z, other.Span);
+            SdfBatch.Min(distances, other.Span);
+        }
+    }
 }
 
 /// <summary>
@@ -112,6 +128,20 @@ internal sealed class NaryIntersectionSdf(Sdf[] children) : Sdf
             for (int i = 1; i < children.Length; i++)
                 b = b.Intersection(children[i].Bounds);
             return b;
+        }
+    }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        children[0].EvaluateBatch(x, y, z, distances);
+        if (children.Length == 1)
+            return;
+        using var other = new BatchScratch(distances.Length);
+        for (int i = 1; i < children.Length; i++)
+        {
+            children[i].EvaluateBatch(x, y, z, other.Span);
+            SdfBatch.Max(distances, other.Span);
         }
     }
 }
@@ -158,6 +188,20 @@ internal sealed class NarySmoothUnionSdf(Sdf[] children, double k) : Sdf
             return b.Expanded(Math.Max(k, 0) * Math.Max(1, 0.25 * (children.Length - 1)));
         }
     }
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        children[0].EvaluateBatch(x, y, z, distances);
+        if (children.Length == 1)
+            return;
+        using var other = new BatchScratch(distances.Length);
+        for (int i = 1; i < children.Length; i++)
+        {
+            children[i].EvaluateBatch(x, y, z, other.Span);
+            SdfBatch.SmoothMin(distances, other.Span, k);
+        }
+    }
 }
 
 /// <summary>
@@ -189,4 +233,55 @@ internal sealed class FalloffBlendSdf(Sdf a, Sdf b, double blendDistance, Fallof
 
     // The bump is at most blendDistance anywhere.
     public override Aabb Bounds => a.Bounds.Union(b.Bounds).Expanded(blendDistance);
+
+    protected internal override void EvaluateBatch(
+        ReadOnlySpan<double> x, ReadOnlySpan<double> y, ReadOnlySpan<double> z, Span<double> distances)
+    {
+        a.EvaluateBatch(x, y, z, distances);
+        using var other = new BatchScratch(distances.Length);
+        b.EvaluateBatch(x, y, z, other.Span);
+        Combine(distances, other.Span);
+    }
+
+    /// <summary>
+    /// Folds the two operand fields in place. Only the polynomial <see cref="Falloff.Wyvill"/>
+    /// kernel vectorizes; <see cref="Falloff.Exponential"/> needs <see cref="Math.Exp"/>,
+    /// which has no bit-identical vector counterpart, so it takes the scalar loop (both
+    /// operands were still evaluated in batch, which is where the time goes).
+    /// </summary>
+    private void Combine(Span<double> fa, ReadOnlySpan<double> fb)
+    {
+        int n = fa.Length;
+        int i = 0;
+        if (kernel == Falloff.Wyvill && SdfBatch.Accelerated)
+        {
+            int w = Vector<double>.Count;
+            var vd = new Vector<double>(blendDistance);
+            ref double ar = ref MemoryMarshal.GetReference(fa);
+            ref double br = ref MemoryMarshal.GetReference(fb);
+            for (; i <= n - w; i += w)
+            {
+                var va = Vector.LoadUnsafe(ref ar, (nuint)i);
+                var vb = Vector.LoadUnsafe(ref br, (nuint)i);
+                var bump = vd * Wyvill(Vector.Abs(va) / vd) * Wyvill(Vector.Abs(vb) / vd);
+                (Vector.Min(va, vb) - bump).StoreUnsafe(ref ar, (nuint)i);
+            }
+        }
+        for (; i < n; i++)
+        {
+            double bump = blendDistance
+                * FalloffKernels.Evaluate(kernel, Math.Abs(fa[i]) / blendDistance)
+                * FalloffKernels.Evaluate(kernel, Math.Abs(fb[i]) / blendDistance);
+            fa[i] = Math.Min(fa[i], fb[i]) - bump;
+        }
+    }
+
+    /// <summary>Lane-wise (1 − t²)³ with compact support — mirrors
+    /// <see cref="FalloffKernels.Evaluate"/>'s Wyvill branch term for term.</summary>
+    private static Vector<double> Wyvill(Vector<double> t)
+    {
+        var one = Vector<double>.One;
+        var s = one - t * t;
+        return Vector.ConditionalSelect(Vector.GreaterThanOrEqual(t, one), Vector<double>.Zero, s * s * s);
+    }
 }
