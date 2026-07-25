@@ -1,8 +1,51 @@
 using EngrCAD.Core;
+using EngrCAD.Modeling;
 using GL = Silk.NET.OpenGL.GL;
 using Silk.NET.OpenGL;
 
 namespace EngrCAD.Viewer;
+
+/// <summary>
+/// One construction-tree row to draw over a <see cref="EngrCad.RenderToImage"/> render —
+/// the still-image form of clicking that row in the model tree, and the reason headless
+/// output has the same overlays the window does. The row is identified by the
+/// <see cref="Part"/> it belongs to plus the <see cref="ConstructionNode"/> itself
+/// (a node carries no back-reference to its part), which also lets the build reuse the
+/// part's cached solid for the root row instead of lowering it a second time.
+/// </summary>
+/// <param name="Part">The part the row belongs to (<c>Part.ConstructionTree()</c>).</param>
+/// <param name="Node">The row: the whole part, a sub-operation, or a sketch.</param>
+public readonly record struct ConstructionPreviewRequest(Part Part, ConstructionNode Node)
+{
+    /// <summary>
+    /// Builds the row's line geometry and the world matrix to pose it by. Lowers
+    /// geometry, so callers run it before touching GL (headless) or on a background task
+    /// (the window). A row that cannot be previewed throws rather than rendering a
+    /// silently empty overlay — a docs snippet asking for a broken preview must fail.
+    /// </summary>
+    internal (IReadOnlyList<(Vector3d A, Vector3d B)>? Segments, Matrix4d World) Build(
+        IReadOnlyList<PartInstance> instances, MeshQuality? quality)
+    {
+        ArgumentNullException.ThrowIfNull(Part);
+        ArgumentNullException.ThrowIfNull(Node);
+        var world = Part.Transform;
+        foreach (var instance in instances)
+        {
+            if (ReferenceEquals(instance.Part, Part))
+            {
+                world = instance.World;
+                break;
+            }
+        }
+
+        // The root row IS the part's own geometry, which PreMesh already lowered.
+        var known = ReferenceEquals(Node.Target, Part.Geometry) ? Part.TryGetSolid() : null;
+        var preview = ConstructionPreview.Build(Node, quality, known);
+        if (preview.Error is { } error)
+            throw new InvalidOperationException(error);
+        return (preview.Segments, world);
+    }
+}
 
 // Construction-tree preview overlay: the line geometry of ONE selected construction
 // row — a sketch drawn on its plane, or the feature edges of an intermediate

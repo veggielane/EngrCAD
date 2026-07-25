@@ -481,6 +481,16 @@ from **32.8 s to 10.1 s** once they shared one. `PreMesh` primes it off the rend
 thread like the mesh; a lowering that fails is remembered, so the failure surfaces
 once (verbatim from `GetMesh`) instead of being retried per consumer.
 
+**`Part.TryGetSdf(out sdf, out error)` is its implicit twin**, cached the same way: an
+`Sdf` part hands back its own field, a `Shape` with an implicit route is lowered at
+most once, and everything else returns false with a null error — "nothing to show" and
+"it went wrong" stay distinguishable. A failed lowering becomes a cached *diagnostic*
+rather than an exception per caller, because its consumer (the viewer's section-plane
+isoline overlay) asks per rebuild and must degrade to a status message. This matters
+for the same reason as the B-Rep cache: a bridged shape's implicit lowering can build
+a `MeshSdf`. Deliberately NOT primed by `PreMesh` — only the section overlay needs it,
+and paying for it on every scene load would tax every user of the viewer.
+
 `Part.GetFeatureEdges(quality)` is the display **edge overlay**, cached the same
 way (and primed by `PreMesh`): parts with an exact solid sample their ACTUAL B-Rep
 edges at display resolution (`BrepFeatureEdges` in Interop, at least 96 segments per

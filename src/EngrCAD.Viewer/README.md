@@ -145,6 +145,10 @@ Dark-themed layout around one shared GL viewport:
   d = 0 contour is the exact surface cross-section; **cool blue** positive and
   **warm orange** negative families at d = ±k·spacing visualize the field itself —
   wall thickness at a glance (count the warm rings), blend and offset debugging.
+  The lowering is `Part.TryGetSdf` — cached **on the part**, beside the B-Rep lowering
+  `Part.TryGetSolid` caches, so toggling the section off and on, switching tabs, or
+  hiding a part no longer re-lowers (a bridged shape's implicit lowering can build a
+  `MeshSdf`, which is far too expensive to repeat).
   Spacing is 1-2-5-rounded from the contributing parts' bounds (shown in the status
   bar; a wall thinner than one spacing simply shows no interior ring). Extraction is
   `SdfContours` in EngrCAD.Interop (marching squares over one batch-`Evaluate` grid,
@@ -285,8 +289,18 @@ Dark-themed layout around one shared GL viewport:
   stalls and a second click is instant; a step that cannot be lowered reports in the
   status bar instead of throwing. Expansion state is keyed by occurrence path, so it
   survives tab switches and live reloads. Custom hosts drive the overlay directly via
-  `ViewportControl.SetConstructionPreview(segments, world)`. (Rollback bars,
-  suppress-from-tree, and `[Param]` editing are follow-ups.)
+  `ViewportControl.SetConstructionPreview(segments, world)`.
+  **Headless renders draw previews too** — `EngrCad.RenderToImage(..., preview:
+  new ConstructionPreviewRequest(part, node))` puts one row's rollback view into a
+  still image, through the same `PreviewLayer` the window uses, so the colour, the
+  always-on-top depth rule and the never-section-clipped rule cannot drift between the
+  two paths. A row identifies itself as *(part, node)* because a `ConstructionNode`
+  carries no back-reference to its part; that pairing also lets the build reuse the
+  part's cached solid for the root row. Building lowers geometry, so it happens on the
+  caller's thread before any GL exists (the headless mirror of the window's
+  background-task rule), and a row that cannot be previewed **throws** rather than
+  rendering a silently empty overlay — a docs page must not claim a preview it never
+  made. (Rollback bars, suppress-from-tree, and `[Param]` editing are follow-ups.)
 - **Per-part display modes** (`Part.DisplayMode`, default `Shaded`): design code sets
   it (`part.DisplayMode = DisplayMode.Translucent`) and the tree's per-row cycler
   changes it live; custom hosts drive `ViewportControl.SetDisplayMode(index, mode)`.

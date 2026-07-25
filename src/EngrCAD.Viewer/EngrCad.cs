@@ -91,6 +91,9 @@ public static class EngrCad
     /// toggle. Throws <see cref="InvalidOperationException"/> when no GL context can
     /// be created; query <see cref="CanRenderToImage"/> first to skip gracefully on
     /// headless CI.
+    /// <para>A non-null <paramref name="preview"/> draws one construction-tree row over
+    /// the scene exactly as clicking it in the model tree does — the rollback view, in a
+    /// still image.</para>
     /// </summary>
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
@@ -98,12 +101,20 @@ public static class EngrCad
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
-        SectionCombine sectionCombine = SectionCombine.Intersection)
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        ConstructionPreviewRequest? preview = null)
     {
         scene.PreMesh(); // tessellate before touching GL
-        OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera,
+        var instances = scene.AllInstances.ToList();
+        // Building the preview lowers geometry, so it happens HERE, on the caller's
+        // thread, before the GL context exists — the headless mirror of the window's
+        // background-task rule.
+        var (segments, world) = preview is { } request
+            ? request.Build(instances, scene.ResolveQuality(CurrentOptions.Quality))
+            : (null, Matrix4d.Identity);
+        OffscreenRenderer.RenderToImage(instances, path, width, height, camera,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine);
+            sectionPlanes, sectionCombine, segments, world);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
