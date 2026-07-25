@@ -115,6 +115,42 @@ this project's conversions.)
   degrades gracefully near holes. The default (`MeshSignSource.Pseudonormal`) is unchanged
   and still requires a closed mesh.
 
+## Mass properties (`BrepMassProperties`)
+
+`BrepMassProperties.Compute(solid, density, options)` gives a `BrepSolid`'s volume, surface
+area, centre of mass and inertia tensor (OCCT's `BRepGProp`), returning the same
+`MassProperties` type `EngrCAD.Mesh` defines — because the route is **tessellate-then-sum**,
+deliberately:
+
+- The alternative, Gauss quadrature over each exact surface, needs the trimmed parameter
+  domain scanned against the trimming curves (OCCT's `GProp_Domain`). This kernel's faces
+  are trimmed by pulled-back polylines whose parameter-space boundary is itself approximate
+  for marching-tracer edges, so quadrature over that domain would not be exact either — it
+  would only hide its error behind a more impressive-looking integral. Tessellating keeps
+  the error in one place, measurable, and buyable.
+- **Planar-faced solids come out exact.** Triangulating a planar polygon covers it exactly,
+  so the divergence-theorem sum is an identity, not a tolerance claim: a box, a prism, an
+  extruded sketch or a drilled plate's flats agree with the closed form to round-off, and
+  the answer does not change with the tessellation setting at all.
+- **Curved faces converge as O(h²)**, always under-estimating (the tessellation is
+  inscribed) — the ≈ 2π²/3n² chord deficit of an inscribed n-gon, measured at 1.6e-3
+  relative for a cylinder at n = 64 and 4.0e-4 at n = 128. Because that is a clean O(h²)
+  series, `Extrapolate` (**on by default**) integrates at n and 2n and Richardson-cancels
+  it. Measured relative volume error at the default n = 64: cylinder 1.6e-3 → **1.9e-7**,
+  sphere 2.2e-3 → **4.8e-7**, torus 2.0e-3 → **3.7e-7**, and a *drilled plate* — a boolean
+  result whose bore wall is a trimmed face — 1.1e-4 → **1.4e-8**. It costs a second
+  tessellation at double density, and it is a no-op on planar-faced solids (both densities
+  tessellate identically, so (4P₂ − P₁)/3 returns P). Turn it off for geometry whose
+  tessellation error is not smooth in h: a face that takes the trimmed path at one density
+  and the grid fallback at the other jumps rather than converges, and extrapolation
+  amplifies a jump by 4/3 instead of cancelling it.
+
+So: **exact for planar-faced solids, ~1e-7 relative for curved ones out of the box.**
+
+`ShapeHealing` (EngrCAD.BRep) has its geometric acceptance tests here
+(`ShapeHealingIntegrationTests`), since confirming that a repaired face soup measures as the
+same body — and tessellates closed — needs both projects.
+
 ## Planar iso-contours (`SdfContours`)
 
 `SdfContours.OnPlane(sdf, origin, uSide, vSide, uSamples, vSamples, levels)` samples an
