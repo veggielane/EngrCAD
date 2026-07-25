@@ -59,9 +59,6 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 - [ ] **Continuation ("surface-following") meshing** — `MarchingCubesPro` only evaluates
   cells near the surface it discovers, instead of the full grid our Surface Nets
   samples. Big win for high resolutions; adapt the idea to Surface Nets.
-- [ ] **Mesh IO: STL + OBJ read** — g3's `STLReader/Writer` (binary+ASCII),
-  `OBJReader/Writer`, `StandardMeshReader/Writer` dispatch facade. We write STL/OBJ;
-  reading + the repair pipeline = import path for real-world meshes.
 - [ ] **Trimmed-face tessellation remaining gaps** — pole bands with holes and
   |winding| > 1 fall back to grid (renders, ignores holes); refinement quality
   upgrade: Rivara-with-boundary-constraints instead of the monotone-decrease rule's
@@ -106,15 +103,18 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   trimmed helical faces (today only axis-perpendicular plane cuts of threads work,
   others fail loudly); (d) left-hand threads (negative pitch / mirrored lowering);
   (e) fine-pitch series, thread runout, cosmetic-thread annotation.
-- [ ] **2D sketch engine** — combine g3-style `Polygon2d`/`GeneralPolygon2d`
-  (polygon-with-holes containment), `PlanarComplex` (nested loop hierarchy),
-  `Arrangement2d` + `GraphCells2d` (regions from crossing sketch curves), and
-  `PolySimplification2`. This is the missing front door: sketch → regions → `Profile`s
-  for extrude/revolve/sweep, with automatic hole detection.
+- [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
+  polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
+  `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`): **exact curved 2D
+  booleans** (arcs and béziers carried through the arrangement as curves instead of
+  being flattened at a chord tolerance — today everything built from a region inherits
+  that flattening), `PolySimplification2`-style Douglas–Peucker simplification (only
+  the exact-collinear pass landed), and `Region2d` self-intersection validation (a
+  loop is checked against other loops but not against itself, so a self-intersecting
+  outer loop produces garbage silently).
 - [ ] **2D sketch constraint solver** — sketching landed geometry-only by design; the
   Onshape-style layer on top is constraints (coincident/tangent/parallel/dimensions)
-  solved variationally. Also future: elliptical arcs, sketch offset/thicken,
-  sketch-on-face (face → SketchPlane query).
+  solved variationally. Also future: elliptical arcs, sketch offset/thicken.
 - [ ] **Biarc fitting** — `BiArcFit2` (two tangent-continuous arcs through
   point+tangent pairs). Converts our marched intersection polylines into exact-ish
   arc/line B-Rep curves — better STEP output and lighter seam edges.
@@ -431,19 +431,28 @@ UI dependencies, which makes this unusually feasible.
 
 ## MCP server / remote control of the viewer
 
-Expose EngrCAD to AI assistants over the **Model Context Protocol**: an MCP server whose
-tools query a model, drive the viewer, and — the key one — **return rendered images**, so
-an assistant can actually *see* the geometry it is reasoning about. This formalizes a
-loop this project already runs by hand: build a scene, render it, look at the picture,
-decide what to change. `EngrCad.RenderToImage` was built for exactly that, and the MCP
-surface is largely a protocol wrapper over public API that already exists, which makes
-it cheap relative to its value.
+The **headless server ✅ landed** (`src/EngrCAD.Mcp`: `EngrCadMcp.Run` + `--mcp` over
+stdio — list/describe/screenshot/export/reload, PNG returned as an MCP image block,
+stdout guarded, geometry evaluated lazily). Remaining:
 
-- [ ] **Decide the topology.** Three shapes, and they are not exclusive — (a) is the
-  cheapest useful thing and (b) is what Chris asked for:
-  - **(a) Headless server, no viewer required** — the MCP process builds/loads scenes
-    and renders through `OffscreenRenderer`. Works in CI and over SSH, no GUI, no RPC
-    hop. Almost entirely existing API; the natural v1.
+- [ ] **Write tools** — the v1 boundary is deliberately read-only; the natural next step
+  is editing `[Param]` values through `FeatureHistory` and regenerating, so an assistant
+  can *drive* a parametric model rather than only inspect it.
+- [ ] **`screenshot` takes only one section plane** — the viewer now does up to four with
+  quarter/octant combine, so plumb `SectionPlane[]` + `SectionCombine` through. Also: no
+  explicit camera (named views only), and `export` to `.png` is hardcoded 1280×800.
+- [ ] **Structured content** — results are JSON *text* blocks today; MCP structured
+  content (`UseStructuredContent` + output schemas) would let clients consume them
+  without parsing.
+- [ ] **Delete `src/EngrCAD.Mcp/StandardViews.cs`** — it mirrors `ViewCubeMath.PoseFor`
+  and `CameraMath.FrameDistance` because both are `internal`, which is a live parity
+  risk (two copies of the pose maths). Make them public, or expose an
+  `EngrCad.StandardCamera(instances, view)` helper, and delete the duplicate.
+- [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting — the
+  protocol was driven by hand and via the SDK's own client — and the no-GL error path on
+  a GPU-less machine.
+- [ ] **Live-viewer RPC** (the option (b)/(c) work, still open) — drive a *running*
+  window rather than rendering headlessly:
   - **(b) RPC into a *running* viewer** — drive the live window: change the view, toggle
     sections, select parts, grab the framebuffer. Needs a small transport (a **named
     pipe** or a loopback socket carrying JSON-RPC) exposed by `EngrCAD.Viewer` behind an
@@ -453,14 +462,9 @@ it cheap relative to its value.
     the bridge hop, but puts a web server inside the GUI app; only worth it if (b)'s
     extra process proves annoying. (stdio, the usual MCP transport, does not fit a
     windowed app, which is why (b)/(c) differ from (a).)
-- [ ] **Tool surface** (start small, grow): `screenshot` (returns an MCP *image* —
-  parameters for camera/standard view, view style, section planes, size; falls back to
-  the offscreen renderer when no window is attached), `list_tabs` / `list_parts` /
-  `describe_part` (kind, faces, closed, volume, area, bounds — the properties panel's
-  data, plus the **construction tree**, which is already a serializable
-  label+kind+path structure), `set_view` / `fit` / `set_section` / `set_display_mode` /
-  `set_view_style`, `select_part` / `get_selection`, `measure`, and `export`
-  (STEP/STL/OBJ/PNG). Resources: the scene as a structured document.
+  Tools a *live* viewer adds beyond today's read-only set: `set_view`/`fit`,
+  `set_section`, `set_display_mode`/`set_view_style`, `select_part`/`get_selection`,
+  and `measure`.
 - [ ] **Non-negotiable constraints** (the viewer's existing rules, which an RPC layer is
   very good at violating): every mutation must marshal onto the Avalonia UI thread
   (`Dispatcher.UIThread.Post`) — the thread-safe seams are `ViewportControl.SetParts` /
@@ -471,14 +475,8 @@ it cheap relative to its value.
 - [ ] **Security**: loopback-only, **off by default**, opt-in flag, and consider a token —
   this endpoint can load models and write files, so it is a local attack surface and
   should never be on implicitly.
-- [ ] **Packaging**: a `tools/EngrCAD.Mcp` (or packable `src/`) project. Use the official
-  C# MCP SDK rather than hand-rolling JSON-RPC — a dependency is fine outside the kernel
-  projects (precedent: DocsGen takes Roslyn), and the kernel-stays-dependency-free rule
-  is unaffected.
-- [ ] **Payoff worth calling out**: agents and tests currently verify viewer work by
-  writing a scratch program, rendering a PNG and reading it. With (a) that becomes a
-  single tool call, and the same surface doubles as a *user-facing* feature — "show me
-  the bracket from the top with a section at z = 5" answered with a picture.
+  (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
+  `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
 
 ## App layer / infrastructure
 

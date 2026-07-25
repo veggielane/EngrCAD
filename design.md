@@ -623,6 +623,18 @@ for `in`-parameters being illegal in expression trees.
   - The **measure tool** is interactive dimensioning, not a separate feature: two
     surface picks (the existing raycast, now returning the hit point) build a
     transient point-to-point `LinearDimension` through the same layer.
+- **A protocol dependency lives in its own package.** `EngrCAD.Mcp` is separate from
+  `EngrCAD.Viewer` for the same reason the viewer is separate from the `EngrCAD`
+  meta-package: someone who wants a window should not inherit an MCP stack, and someone
+  who wants the kernel should inherit neither. It also keeps `EngrCad.Run` untouched —
+  `EngrCadMcp.Run` intercepts `--mcp` and delegates everything else.
+- **The stdout-guard pattern for any stdio protocol surface.** Over stdio, stdout *is*
+  the protocol channel, and a single stray `Console.WriteLine` corrupts every session.
+  The rule: capture the raw stdout handle for protocol frames, repoint `Console.Out` at
+  stderr, and only *then* run user code (here the scene factory) — a design program that
+  logs while it builds is otherwise fatal, and that ordering is the whole trick. The
+  limit is honest and documented: code that opens the standard-output handle itself, or
+  writes to fd 1 natively, is beyond reach.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level
