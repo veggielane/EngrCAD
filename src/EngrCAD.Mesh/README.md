@@ -81,6 +81,19 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   qualify, curved rims miss by their sagitta), grouped by common plane; else simple under
   `MaxSimpleFillVertices`; else `Skipped` with the reason. The smoothed / minimal-surface
   fill tiers of g3's `AutoHoleFill` are future work.
+- **`MeshExtrude`** — construct-new extrusion ops (g3 `MeshExtrudeFaces` /
+  `MeshExtrudeMesh`). `Faces(mesh, faceIndices, offsetVector | distance)` pulls a face
+  patch off the mesh: patch vertices shared with the rest (or on the open mesh boundary)
+  are duplicated at the offset position, interior patch vertices move in place, and each
+  patch-boundary half-edge a→b gains the wall quad [a, b, b′, a′] — exactly the two
+  directed edges freed by moving the patch, so winding is correct by construction and
+  closed meshes stay closed (multiple disjoint regions each get their own walls; input
+  face indices survive, walls appended). The distance form offsets along area-weighted
+  patch-only vertex normals. `Thicken(mesh, thickness)` turns a surface into a solid
+  shell — the direct-mesh complement of SDF `Shell`: the input stays as the front skin,
+  a reversed copy offsets <i>against</i> the vertex normals (material behind the
+  surface), and each boundary loop is stitched with a quad band; open surfaces become
+  closed slabs/shells, closed meshes become hollow two-shell solids.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping.
 - **`RenderMesh`** — flat (per-face) or smooth (per-vertex) triangle extraction for GPUs.
