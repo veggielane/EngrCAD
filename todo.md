@@ -282,6 +282,15 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
+- [ ] **SDF isolines on multi-plane cuts** (found while verifying the quarter cut) —
+  with several section planes active the isoline overlay appears to be drawn across
+  each plane's full extent rather than only over that plane's actual cut region: on a
+  quarter cut, contour fans extend into the removed quadrant and into empty space
+  beyond the part. Each plane's contours need clipping by the sibling planes (and by
+  the model silhouette) the way the fills already are. Confirm against
+  `SectionContourRenderer` before changing anything — the positive-distance family is
+  *meant* to extend outside the solid, so the fix is about sibling-plane clipping, not
+  about suppressing outside contours.
 - [ ] **Multi-section views** — several section planes active at once: two
   perpendicular planes give the classic **quarter cut** (corner cutaway), three give
   an octant view. Shader side: the single `dot(worldPos, uSectionAxis) >
