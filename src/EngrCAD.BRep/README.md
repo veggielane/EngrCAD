@@ -152,6 +152,25 @@ operations. Depends only on `EngrCAD.Core`.
     Euler–Poincaré 0 at genus 0. Exact volume for ANY length:
     L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
 
+- **`Draft`** — draft angles (OCCT `BRepOffsetAPI_DraftAngle`), the moulding/casting taper:
+  `Draft.Apply(solid, neutralOrigin, pullDirection, angle, faceSelector?)` (or the
+  `neutralFace` overload, which pulls *into* the solid so drafting about a box's bottom face
+  narrows it going up). Each selected face's plane is **rotated about its neutral line** —
+  where it meets the neutral plane — by exactly `angle` toward the pull direction, and every
+  corner is then the exact algebraic intersection of three planes: the rotated normal is
+  `n·cos θ + p̂⊥·sin θ` (p̂⊥ = the pull direction's component in the face plane), and the
+  anchor slides along that same in-plane direction onto the neutral plane, so it lies on the
+  neutral line the rotation fixes. Nothing is offset, projected or fitted — a drafted box is
+  exactly a frustum, geometry ON the neutral plane provably does not move (it is the parting
+  line), and drafting twice by θ/2 equals drafting once by θ. Faces the selector does not
+  name keep their planes exactly; their corners still move, because the drafted neighbours
+  they meet did. The rebuild uses `PlaneSurface` faces (not a ruled loft), so the result
+  stays selectable by the same `BrepQueries` vocabulary and STEP-exportable.
+  v1 handles **planar-faced prisms** — two caps perpendicular to the pull direction,
+  single-loop caps, four-sided planar sides — and rejects everything else loudly: curved
+  faces, caps with holes, selecting a cap, and a taper large enough to fold the profile
+  (checked by winding *and* per-edge direction against the original loop, since a signed
+  area alone can stay positive while one edge has already reversed).
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
   common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
@@ -284,6 +303,8 @@ close back on the first section, guide curves / spine, and the "pipe shell with 
 law" generalization (a section scaled and twisted along a spine — which is a loft whose
 sections are generated rather than given, so it lands on `LoftedSurface` once a law
 evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept surfaces).
+Draft gaps: curved faces (the general face-offset-and-reintersect), caps with holes,
+per-face angles in one call, and drafting about a non-planar neutral surface.
 `HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have
