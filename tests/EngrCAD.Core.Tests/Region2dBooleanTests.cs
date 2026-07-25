@@ -187,6 +187,68 @@ public class Region2dBooleanTests
         Assert.Equal(TotalArea(Region2dBoolean.Difference(a, b)), TotalArea(a.Subtract(b)), 12);
     }
 
+    [Fact]
+    public void OperandsTouchingAtASinglePoint_TraceIntoSeparateLoops()
+    {
+        // A pinch vertex: the boundary walk must pair the four directed edges meeting there
+        // so each kept square gets its own loop instead of one figure-eight.
+        var union = Region2dBoolean.Union(Box(0, 0, 2, 2), Box(2, 2, 5, 5))
+            .OrderBy(r => r.Area).ToList();
+
+        Assert.Equal(2, union.Count);
+        Assert.Equal(4.0, union[0].Area, 12);
+        Assert.Equal(9.0, union[1].Area, 12);
+        Assert.Equal(4, union[0].Outer.Count);
+        Assert.Equal(4, union[1].Outer.Count);
+    }
+
+    [Fact]
+    public void PluggingAHoleExactly_MakesItDisappear()
+    {
+        var plate = new Region2d(
+            [new Vector2d(0, 0), new(10, 0), new(10, 10), new(0, 10)],
+            [[new Vector2d(3, 3), new(3, 7), new(7, 7), new(7, 3)]]);
+        var plug = Box(3, 3, 7, 7);
+
+        // Every edge of the hole now has kept cells on both sides, so the hole loop is
+        // interior and vanishes; the collinear T-junctions it left behind go too.
+        var region = Assert.Single(Region2dBoolean.Union(plate, plug));
+        Assert.Equal(100.0, region.Area, 12);
+        Assert.Empty(region.Holes);
+        Assert.Equal(4, region.Outer.Count);
+        Assert.True(region.Contains(new Vector2d(5, 5)));
+
+        // And intersecting the plate with its own plug leaves nothing but the shared edges.
+        Assert.Empty(Region2dBoolean.Intersection(plate, plug));
+    }
+
+    [Fact]
+    public void ToolTouchingTheBoundaryFromOutside_LeavesTheOperandAlone()
+    {
+        // The cutter's left edge is exactly the plate's right edge: a coincident edge with
+        // kept material on one side only, so it survives as boundary and nothing is removed.
+        var difference = Assert.Single(Region2dBoolean.Difference(Box(0, 0, 4, 4), Box(4, 0, 8, 4)));
+        Assert.Equal(16.0, difference.Area, 12);
+        Assert.Equal(4, difference.Outer.Count);
+
+        Assert.Empty(Region2dBoolean.Intersection(Box(0, 0, 4, 4), Box(4, 0, 8, 4)));
+        Assert.Equal(32.0, TotalArea(Region2dBoolean.Union(Box(0, 0, 4, 4), Box(4, 0, 8, 4))), 12);
+    }
+
+    [Fact]
+    public void OperandsFarFromTheOrigin_AreDecidedJustAsExactly()
+    {
+        // 1e6 offsets: the parity/orientation decisions are exact predicates, so nothing
+        // about the classification degrades — only the coordinates carry magnitude.
+        const double offset = 1e6;
+        var a = Box(offset, offset, offset + 4, offset + 4);
+        var b = Box(offset + 2, offset + 2, offset + 6, offset + 6);
+
+        Assert.Equal(28.0, TotalArea(Region2dBoolean.Union(a, b)), 6);
+        Assert.Equal(4.0, TotalArea(Region2dBoolean.Intersection(a, b)), 6);
+        Assert.Equal(12.0, TotalArea(Region2dBoolean.Difference(a, b)), 6);
+    }
+
     // ---- fuzz: the inclusion-exclusion identity over random polygon pairs ----
 
     [Fact]
