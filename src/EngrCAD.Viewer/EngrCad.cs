@@ -60,6 +60,8 @@ public static class EngrCad
     {
         CurrentOptions = options;
         scene.PreMesh(options.Quality); // tessellate here, not on the render thread
+        if (options.AmbientOcclusion)
+            AmbientOcclusion.Prime(scene.AllParts); // bake occlusion here too, same reason
         InitialScene = scene;
         WindowTitle = options.Title;
         var userReady = options.OnViewportReady;
@@ -91,11 +93,15 @@ public static class EngrCad
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
         ViewStyle style = ViewStyle.ShadedWithEdges,
-        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null)
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection)
     {
         scene.PreMesh(); // tessellate before touching GL
         OffscreenRenderer.RenderToImage([.. scene.AllInstances], path, width, height, camera,
-            furniture: true, style, sectionAxis, sectionOffset);
+            furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
+            sectionPlanes, sectionCombine);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
@@ -188,16 +194,41 @@ public static class EngrCad
         int sectionIndex = Array.IndexOf(args, "--section");
         if (sectionIndex >= 0)
         {
-            if (sectionIndex + 2 >= args.Length
-                || !TryParseAxis(args[sectionIndex + 1], out var sectionAxis)
-                || !double.TryParse(args[sectionIndex + 2], NumberStyles.Float,
-                        CultureInfo.InvariantCulture, out double sectionOffset))
+            // One or more axis/offset pairs: "--section z 6" is the single cut,
+            // "--section x 0 y 0" the quarter cut, three pairs an octant.
+            var planes = new List<SectionPlane>();
+            int at = sectionIndex + 1;
+            while (at + 1 < args.Length
+                   && TryParseAxis(args[at], out var axis)
+                   && double.TryParse(args[at + 1], NumberStyles.Float,
+                           CultureInfo.InvariantCulture, out double offset))
             {
-                log.Error("--section requires an axis (x, y, or z) and a numeric offset, e.g. --section z 6");
+                planes.Add(SectionPlane.On(axis, offset));
+                if (planes.Count == 1)
+                {
+                    options.SectionAxis = axis;
+                    options.SectionOffset = offset;
+                }
+                at += 2;
+            }
+            if (planes.Count == 0)
+            {
+                log.Error("--section requires an axis (x, y, or z) and a numeric offset, e.g. --section z 6"
+                        + " (repeat the pair for a quarter or octant cut: --section x 0 y 0)");
                 return 2;
             }
-            options.SectionAxis = sectionAxis;
-            options.SectionOffset = sectionOffset;
+            options.SectionPlanes = planes.Count > 1 ? planes : null;
+        }
+
+        int aoIndex = Array.IndexOf(args, "--ao");
+        if (aoIndex >= 0)
+        {
+            if (aoIndex + 1 >= args.Length || !TryParseSwitch(args[aoIndex + 1], out bool ao))
+            {
+                log.Error("--ao requires on or off");
+                return 2;
+            }
+            options.AmbientOcclusion = ao;
         }
 
         int exportIndex = Array.IndexOf(args, "--export");
@@ -261,6 +292,8 @@ public static class EngrCad
             {
                 var scene = factory();
                 scene.PreMesh(CurrentOptions.Quality); // heavy lifting stays on this worker thread
+                if (CurrentOptions.AmbientOcclusion)
+                    AmbientOcclusion.Prime(scene.AllParts);   // ... including the AO bake
                 Avalonia.Threading.Dispatcher.UIThread.Post(() => Host?.SetScene(scene));
                 string status = $"reloaded at {DateTime.Now:HH:mm:ss} — {scene.AllParts.Count()} part(s)";
                 viewport.ShowStatus(status);
@@ -342,7 +375,8 @@ public static class EngrCad
         }
         scene.PreMesh(options.Quality); // meshes cache, so RenderToImage's PreMesh is a no-op
         RenderToImage(scene, path, options.RenderWidth, options.RenderHeight, camera: null,
-            options.RenderStyle, options.SectionAxis, options.SectionOffset);
+            options.RenderStyle, options.SectionAxis, options.SectionOffset, options.AmbientOcclusion,
+            options.SectionPlanes, options.SectionCombine);
         log.Info($"wrote {path} ({scene.AllParts.Count()} part(s))");
         return 0;
     }
@@ -357,6 +391,17 @@ public static class EngrCad
             case "shaded": style = ViewStyle.Shaded; return true;
             case "shaded-edges": style = ViewStyle.ShadedWithEdges; return true;
             default: style = default; return false;
+        }
+    }
+
+    /// <summary>Parses an on/off switch value (<c>--ao</c>).</summary>
+    private static bool TryParseSwitch(string value, out bool enabled)
+    {
+        switch (value.ToLowerInvariant())
+        {
+            case "on" or "true" or "1": enabled = true; return true;
+            case "off" or "false" or "0": enabled = false; return true;
+            default: enabled = false; return false;
         }
     }
 

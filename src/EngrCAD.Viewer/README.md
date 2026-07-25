@@ -28,9 +28,53 @@ Dark-themed layout around one shared GL viewport:
   source), a
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
-  a **Section** toggle with an **X/Y/Z axis cycler** button beside it (see below),
-  an **Annot** toggle (3D annotations, on by default — see below), and a
-  **Measure** toggle (interactive dimensioning — see below).
+  an **AO** toggle (ambient occlusion, on by default — see below), a **Section**
+  toggle with an **X/Y/Z axis cycler** button beside it (see below), an **Annot**
+  toggle (3D annotations, on by default — see below), and a **Measure** toggle
+  (interactive dimensioning — see below).
+- **Ambient occlusion** (`ViewportControl.AmbientOcclusion`, the toolbar **AO**
+  toggle, `EngrCadOptions.AmbientOcclusion` / `.WithAmbientOcclusion(...)` /
+  `--ao on|off`; **on by default**): pockets, blind holes, rib roots and the contact
+  ring where one feature meets another go darker, which is the depth cue a single
+  directional light cannot give. It is **baked, not screen-space**
+  (`AmbientOcclusion.cs`): for each display-mesh vertex a deterministic
+  cosine-weighted hemisphere of 16 rays is cast against the part's own triangles
+  (`Bvh` + Moller-Trumbore, its own *bounded* traversal — `Bvh.Query(ray, …)` walks an
+  infinite ray and is far too slow here), hits attenuate linearly to nothing at 15% of
+  the mesh diagonal, and the open-sky fraction becomes the `aOcclusion` vertex
+  attribute that the mesh shader multiplies into ambient + diffuse (never into the
+  specular, and never into section cut material, which is a flat fill by design).
+  - *Why baked*: the AO is vertex **data**, so the window and the headless pass upload
+    identical floats and shade with the identical shader — parity by construction,
+    with no FBO, no depth/normal prepass, and no blur that would resolve differently
+    at the offscreen pass's 2x supersampled size. It also costs nothing per frame and
+    survives section planes, translucency, edges and annotations untouched.
+  - *Cost*: a one-off CPU bake, cached per display mesh and run on the same worker
+    thread as `Scene.PreMesh` (so a scene load or hot reload never stalls the render
+    thread) — a few ms for a simple part, ~0.3 s for a busy multi-part tab at 48
+    segments/circle. Two deterministic guards bound it: a **ray budget** (2M rays per
+    bake) halves the per-vertex ray count on very high vertex counts, and meshes above
+    **80k triangles skip the bake entirely** — in lattice-like geometry every ray walks
+    a labyrinth instead of escaping and the per-ray cost climbs by an order of
+    magnitude (a 100k-triangle gyroid measured ~10 s), which is not worth a stall
+    before the window appears. Both rules are pure functions of the mesh, so they
+    cannot make the window and the headless render disagree.
+  - Two details keep vertex-resolution shading honest. Vertices are grouped by
+    position **and smoothing group** (a 50-degree crease), so a hole rim's top-face
+    copy stays bright while its bore-wall copy darkens — averaging the two used to drag
+    the whole surrounding face down and paint its triangulation across it as streaks —
+    and ray origins are lifted along the direction that leaves *every* incident face,
+    because a concave corner's own normal runs parallel to the neighbouring wall and
+    would leave the origin exactly in its plane, where the wall that physically blocks
+    half the hemisphere registers as no occlusion at all. The shader then mixes the
+    result in at **half strength** (`AmbientOcclusion.Strength`) so whatever
+    interpolation remains stays below the noise of the shading.
+  - *Limitation (v1)*: occlusion is **per part, in its own space** — instances share
+    one bake and no part shadows another — and its resolution is the display mesh's,
+    so a plain **through-bore** (a two-row band whose only vertices sit at the open
+    rims) barely darkens, while pockets and blind holes do. Turning AO off reproduces
+    the previous flat-lit look exactly (the shader factor becomes exactly 1.0), and a
+    convex part renders bit-identically either way (nothing can occlude it).
 - **Global view style** (`ViewportControl.ViewStyle`, the toolbar dropdown): the
   classic CAD display-style selector — **Points / Wireframe / Shaded / Shaded +
   Edges** — applied to the whole viewport. Precedence rule (one place:
@@ -300,13 +344,14 @@ return EngrCad.Configure()
     .WithRenderSize(1920, 1080)                                // --render image size
     .WithViewStyle(ViewStyle.Shaded)                           // --render view style
     .WithSection(SectionAxis.Z, 6)                             // --render section plane
+    .WithAmbientOcclusion(false)                               // baked AO (on by default)
     .WithLog(msg => logger.LogInformation("{Message}", msg))   // status/error seam
     .Run(args, BuildScene);
 ```
 
 The builder accumulates an **`EngrCadOptions`** POCO (`Title`, `Quality`,
-`RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`, `Log`,
-`OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
+`RenderWidth`/`RenderHeight`, `RenderStyle`, `SectionAxis`/`SectionOffset`,
+`AmbientOcclusion`, `Log`, `OnViewportReady`) and its terminal methods (`Run`, `Show`, `ShowLive`,
 `RenderToImage`) mirror the static `EngrCad` entry points with those options
 applied. The plain `EngrCad.Run/Show/ShowLive` overloads are unchanged and remain
 the simple path.
@@ -359,7 +404,9 @@ EngrCad.RenderToImage(scene, "cut.png",                                     // r
     sectionAxis: SectionAxis.X, sectionOffset: 0.0);
 ```
 
-Headless renders honor everything the window draws — **per-part display modes**
+Headless renders honor everything the window draws — **baked ambient occlusion**
+(`ambientOcclusion:`, on by default, from the identical per-vertex bake the window
+uploads), **per-part display modes**
 (wireframe, translucent with the same shared back-to-front ordering and opaque
 silhouette edges), the **global `ViewStyle`** with the same precedence rule,
 **axis-aligned section planes** (`sectionAxis` + `sectionOffset`; enabled when the
@@ -374,12 +421,13 @@ and `style:<name>` options for exactly this).
 
 `EngrCad.Run` exposes it as a switch too: `--render out.png` renders and exits, no
 window (alongside `--view` and `--export`), with `--render-style
-points|wireframe|shaded|shaded-edges` and `--section x|y|z <offset>` (e.g.
-`--section z 6`) selecting the view style and section plane — CLI switches win over
-the builder's `WithViewStyle`/`WithSection` defaults, and invalid values are usage
-errors (exit 2). `EngrCadBuilder.RenderToImage` mirrors the static overload's
-optional `style`/`sectionAxis`/`sectionOffset` parameters, falling back to the
-accumulated options when omitted. Check `EngrCad.CanRenderToImage` first to skip
+points|wireframe|shaded|shaded-edges`, `--section x|y|z <offset>` (e.g.
+`--section z 6`), and `--ao on|off` selecting the view style, section plane, and
+ambient occlusion — CLI switches win over the builder's
+`WithViewStyle`/`WithSection`/`WithAmbientOcclusion` defaults, and invalid values are
+usage errors (exit 2). `EngrCadBuilder.RenderToImage` mirrors the static overload's
+optional `style`/`sectionAxis`/`sectionOffset`/`ambientOcclusion` parameters, falling
+back to the accumulated options when omitted. Check `EngrCad.CanRenderToImage` first to skip
 gracefully on machines with no GPU/ANGLE.
 
 - **No window, no Avalonia lifetime.** `OffscreenRenderer` renders into an offscreen

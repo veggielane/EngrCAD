@@ -55,15 +55,54 @@ public enum SectionAxis
 }
 
 /// <summary>Extensions for <see cref="SectionAxis"/> shared by both render passes.</summary>
-internal static class SectionAxisExtensions
+public static class SectionAxisExtensions
 {
-    /// <summary>The world-space unit vector of the axis (what uSectionAxis carries).</summary>
+    /// <summary>The world-space unit vector of the axis (the plane's normal).</summary>
     public static Vector3d Direction(this SectionAxis axis) => axis switch
     {
         SectionAxis.X => Vector3d.UnitX,
         SectionAxis.Y => Vector3d.UnitY,
         _ => Vector3d.UnitZ,
     };
+}
+
+/// <summary>
+/// One section (clip) plane: geometry with <c>dot(world, Normal) &gt; Offset</c> is
+/// <em>excluded</em> by this plane. Several planes at once make the classic CAD
+/// cutaways — two perpendicular planes a quarter cut, three an octant — combined by
+/// <see cref="SectionCombine"/>. The normal is a general direction (the shaders have
+/// always taken one); <see cref="On(SectionAxis, double)"/> builds the axis-aligned
+/// planes the toolbar and CLI expose.
+/// </summary>
+/// <param name="Normal">Plane normal, pointing at the clipped side. Need not be unit
+/// length, but <paramref name="Offset"/> is measured in its units.</param>
+/// <param name="Offset">Plane position: the value of <c>dot(world, Normal)</c> on it.</param>
+public readonly record struct SectionPlane(Vector3d Normal, double Offset)
+{
+    /// <summary>An axis-aligned plane perpendicular to <paramref name="axis"/>.</summary>
+    public static SectionPlane On(SectionAxis axis, double offset) => new(axis.Direction(), offset);
+
+    /// <summary>The same plane with the kept and clipped sides swapped.</summary>
+    public SectionPlane Flipped() => new(-Normal, -Offset);
+}
+
+/// <summary>
+/// How several <see cref="SectionPlane"/>s combine into one cut.
+/// </summary>
+public enum SectionCombine
+{
+    /// <summary>
+    /// Clip only where EVERY plane excludes — the CAD-standard cutaway: two
+    /// perpendicular planes remove the quarter where both exclude, three remove an
+    /// octant. The default.
+    /// </summary>
+    Intersection,
+
+    /// <summary>
+    /// Clip where ANY plane excludes — the single-plane behavior generalized; each
+    /// plane cuts independently, so the model keeps only what every plane keeps.
+    /// </summary>
+    Union,
 }
 
 /// <summary>How one instance actually renders after combining the global
@@ -147,53 +186,99 @@ internal static class ViewerShaders
     /// <summary>Version header for the GL profile in use (ES3 via ANGLE, or desktop 3.3).</summary>
     public static string Header(bool es) => es ? EsHeader : DesktopHeader;
 
-    /// <summary>Lit mesh vertex shader (position + normal, world-space lighting).</summary>
+    /// <summary>Maximum simultaneous section planes (a plane per world axis is the
+    /// deepest cut that means anything; the uniform array is sized to it).</summary>
+    public const int MaxSectionPlanes = 4;
+
+    /// <summary>
+    /// The section-plane uniforms and clip rule, prepended verbatim to every fragment
+    /// shader that clips (mesh, line, point) so all three cannot disagree.
+    /// uSectionEnabled is the master switch a pass flips per draw group (scene
+    /// furniture never clips); uSectionPlanes carries xyz = normal, w = offset for
+    /// uSectionCount planes; uSectionUnion picks the combine rule — 0 clips only where
+    /// EVERY plane excludes (the quarter/octant cutaway), 1 where ANY does. With one
+    /// plane the two rules coincide, which is why single-plane output is unchanged.
+    /// </summary>
+    public const string SectionClip = """
+        uniform float uSectionEnabled;
+        uniform int uSectionCount;
+        uniform vec4 uSectionPlanes[4];
+        uniform float uSectionUnion;
+        bool sectionClipped(vec3 worldPos)
+        {
+            if (uSectionEnabled < 0.5 || uSectionCount <= 0)
+                return false;
+            bool any = false;
+            bool all = true;
+            // Constant loop bound with an early break: the safe pattern for the GLES
+            // translator, which is happiest when the trip count is statically known.
+            for (int i = 0; i < 4; i++)
+            {
+                if (i >= uSectionCount)
+                    break;
+                bool excluded = dot(worldPos, uSectionPlanes[i].xyz) > uSectionPlanes[i].w;
+                any = any || excluded;
+                all = all && excluded;
+            }
+            return uSectionUnion > 0.5 ? any : all;
+        }
+
+        """;
+
+    /// <summary>Lit mesh vertex shader (position + normal + baked occlusion, world-space
+    /// lighting). aOcclusion is attribute 2; a mesh uploaded without an occlusion buffer
+    /// leaves that array disabled and reads the constant 1.0 set at pass init.</summary>
     public const string MeshVertex = """
         in vec3 aPos;
         in vec3 aNormal;
+        in float aOcclusion;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
         out vec3 vNormal;
         out vec3 vWorldPos;
+        out float vOcclusion;
         void main()
         {
             vec4 world = uModel * vec4(aPos, 1.0);
             vWorldPos = world.xyz;
             vNormal = mat3(uModel) * aNormal;
+            vOcclusion = aOcclusion;
             gl_Position = uProj * uView * world;
         }
         """;
 
     /// <summary>
     /// Lit mesh fragment shader: directional light + specular, selection highlight
-    /// (uHighlight), axis-aligned section plane (uSectionEnabled/uSectionAxis/
-    /// uSectionOffset — clips where dot(world, axis) exceeds the offset; cut
-    /// interiors via gl_FrontFacing), translucency (uAlpha).
+    /// (uHighlight), section planes (the shared <see cref="SectionClip"/> rule; cut
+    /// interiors via gl_FrontFacing), translucency (uAlpha), and baked ambient
+    /// occlusion (uAmbientOcclusion scales the per-vertex vOcclusion in; 0 = off and
+    /// reproduces the pre-AO look exactly, since the factor is then exactly 1.0).
     /// </summary>
-    public const string MeshFragment = """
+    public const string MeshFragment = SectionClip + """
         in vec3 vNormal;
         in vec3 vWorldPos;
+        in float vOcclusion;
         uniform vec3 uColor;
         uniform vec3 uLightDir;
         uniform vec3 uEyePos;
         uniform float uHighlight;
-        uniform float uSectionEnabled;
-        uniform vec3 uSectionAxis;
-        uniform float uSectionOffset;
         uniform float uAlpha;
+        uniform float uAmbientOcclusion;
         out vec4 fragColor;
         void main()
         {
             if (uSectionEnabled > 0.5)
             {
-                if (dot(vWorldPos, uSectionAxis) > uSectionOffset)
+                if (sectionClipped(vWorldPos))
                     discard;
                 if (!gl_FrontFacing)
                 {
                     // Cut cue: interiors exposed by the section plane show their
                     // backfaces as a flat, darker warm tint (no lighting), the
                     // standard CAD hint that you are looking at cut material.
+                    // Baked occlusion is not applied here: it was baked for the
+                    // outward surface, and cut material is a flat fill by design.
                     // NOTE: shader comments must stay pure ASCII - ANGLE's GLES
                     // translator rejects the whole shader on non-ASCII bytes.
                     vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
@@ -207,7 +292,10 @@ internal static class ViewerShaders
             vec3 h = normalize(v - uLightDir);
             float specular = pow(max(dot(n, h), 0.0), 48.0) * 0.35;
             vec3 base = mix(uColor, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
-            vec3 c = base * (0.22 + 0.78 * diffuse) + vec3(specular);
+            // Occlusion darkens ambient and diffuse but not the specular highlight
+            // (a direct-light term); uAmbientOcclusion 0 leaves the factor exactly 1.
+            float ao = mix(1.0, vOcclusion, uAmbientOcclusion);
+            vec3 c = base * (0.22 + 0.78 * diffuse) * ao + vec3(specular);
             fragColor = vec4(c, uAlpha);
         }
         """;
@@ -228,17 +316,14 @@ internal static class ViewerShaders
         """;
 
     /// <summary>Flat-color line fragment shader; lines that belong to the model are
-    /// clipped by the section plane consistently with the fills.</summary>
-    public const string LineFragment = """
+    /// clipped by the section planes consistently with the fills.</summary>
+    public const string LineFragment = SectionClip + """
         in vec3 vWorldPos;
         uniform vec3 uColor;
-        uniform float uSectionEnabled;
-        uniform vec3 uSectionAxis;
-        uniform float uSectionOffset;
         out vec4 fragColor;
         void main()
         {
-            if (uSectionEnabled > 0.5 && dot(vWorldPos, uSectionAxis) > uSectionOffset)
+            if (sectionClipped(vWorldPos))
                 discard;
             fragColor = vec4(uColor, 1.0);
         }
@@ -264,16 +349,13 @@ internal static class ViewerShaders
 
     /// <summary>Point-sprite fragment shader: round dots (square sprites trimmed via
     /// gl_PointCoord), section-clipped consistently with the model.</summary>
-    public const string PointFragment = """
+    public const string PointFragment = SectionClip + """
         in vec3 vWorldPos;
         uniform vec3 uColor;
-        uniform float uSectionEnabled;
-        uniform vec3 uSectionAxis;
-        uniform float uSectionOffset;
         out vec4 fragColor;
         void main()
         {
-            if (uSectionEnabled > 0.5 && dot(vWorldPos, uSectionAxis) > uSectionOffset)
+            if (sectionClipped(vWorldPos))
                 discard;
             vec2 d = gl_PointCoord - vec2(0.5);
             if (dot(d, d) > 0.25)
@@ -308,8 +390,8 @@ internal static class ViewerShaders
 
     /// <summary>
     /// Compiles and links a program from full sources (header already prepended).
-    /// <paramref name="bindAttributes"/> pins aPos/aNormal to locations 0/1 (binding a
-    /// name the shader does not declare is legal and ignored).
+    /// <paramref name="bindAttributes"/> pins aPos/aNormal/aOcclusion to locations
+    /// 0/1/2 (binding a name the shader does not declare is legal and ignored).
     /// </summary>
     public static uint LinkProgram(GL gl, string vertexSource, string fragmentSource, bool bindAttributes)
     {
@@ -322,6 +404,7 @@ internal static class ViewerShaders
         {
             gl.BindAttribLocation(program, 0, "aPos");
             gl.BindAttribLocation(program, 1, "aNormal");
+            gl.BindAttribLocation(program, 2, "aOcclusion");
         }
         gl.LinkProgram(program);
         gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int linked);
@@ -344,6 +427,45 @@ internal static class ViewerShaders
             throw new InvalidOperationException($"{type} compile failed: {gl.GetShaderInfoLog(shader)}");
         return shader;
     }
+}
+
+/// <summary>
+/// The section-plane uniforms of one program, and the single place either render pass
+/// writes them — so the window and the headless pass cannot clip differently.
+/// </summary>
+internal readonly struct SectionUniforms(GL gl, uint program)
+{
+    private readonly int _enabled = gl.GetUniformLocation(program, "uSectionEnabled");
+    private readonly int _count = gl.GetUniformLocation(program, "uSectionCount");
+    private readonly int _planes = gl.GetUniformLocation(program, "uSectionPlanes");
+    private readonly int _union = gl.GetUniformLocation(program, "uSectionUnion");
+
+    /// <summary>Uploads the plane set and combine rule (program must be current).
+    /// Pass an empty list to disable clipping for the following draws — that is how
+    /// scene furniture (grid, axes) and the view cube stay uncut.</summary>
+    public void Write(GL gl, IReadOnlyList<SectionPlane> planes, SectionCombine combine)
+    {
+        int count = Math.Min(planes.Count, ViewerShaders.MaxSectionPlanes);
+        gl.Uniform1(_enabled, count > 0 ? 1f : 0f);
+        gl.Uniform1(_count, count);
+        gl.Uniform1(_union, combine == SectionCombine.Union ? 1f : 0f);
+        if (count == 0)
+            return;
+        Span<float> packed = stackalloc float[ViewerShaders.MaxSectionPlanes * 4];
+        for (int i = 0; i < count; i++)
+        {
+            var plane = planes[i];
+            packed[i * 4] = (float)plane.Normal.X;
+            packed[i * 4 + 1] = (float)plane.Normal.Y;
+            packed[i * 4 + 2] = (float)plane.Normal.Z;
+            packed[i * 4 + 3] = (float)plane.Offset;
+        }
+        gl.Uniform4(_planes, (uint)count, packed[..(count * 4)]);
+    }
+
+    /// <summary>Turns clipping off for the following draws without touching the plane
+    /// set (the per-draw-group switch: furniture off, model on).</summary>
+    public void SetEnabled(GL gl, bool enabled) => gl.Uniform1(_enabled, enabled ? 1f : 0f);
 }
 
 /// <summary>
@@ -490,9 +612,22 @@ internal static class RenderGeometry
         return (vao, vbo);
     }
 
+    /// <summary>
+    /// The occlusion value every mesh VAO reads when it has no baked-occlusion buffer:
+    /// attribute 2's array stays disabled, so the shader sees this context-wide
+    /// constant. MUST be set once per render pass before any mesh draw — the GL default
+    /// for a disabled attribute is (0, 0, 0, 1), which would shade every part black the
+    /// moment ambient occlusion is switched on.
+    /// </summary>
+    public static void SetDefaultOcclusion(GL gl) => gl.VertexAttrib1(2, 1f);
+
     /// <summary>Uploads a render mesh as interleaved position+normal with an index
-    /// buffer, matching the mesh program's attribute layout.</summary>
-    public static unsafe (uint Vao, uint Vbo, uint Ebo) UploadMesh(GL gl, RenderMesh mesh)
+    /// buffer, matching the mesh program's attribute layout. A non-null
+    /// <paramref name="occlusion"/> (one baked value per vertex) is uploaded into its
+    /// own buffer as attribute 2; otherwise that array stays disabled and the constant
+    /// from <see cref="SetDefaultOcclusion"/> applies.</summary>
+    public static unsafe (uint Vao, uint Vbo, uint Ebo, uint AoVbo) UploadMesh(
+        GL gl, RenderMesh mesh, float[]? occlusion = null)
     {
         var interleaved = new float[mesh.VertexCount * 6];
         for (int v = 0; v < mesh.VertexCount; v++)
@@ -517,7 +652,26 @@ internal static class RenderGeometry
         gl.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)0);
         gl.EnableVertexAttribArray(1);
         gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
+        uint aoVbo = occlusion is null ? 0 : UploadOcclusion(gl, vao, occlusion);
         gl.BindVertexArray(0);
-        return (vao, vbo, ebo);
+        return (vao, vbo, ebo, aoVbo);
+    }
+
+    /// <summary>
+    /// Attaches (or replaces) a mesh VAO's baked-occlusion attribute buffer — one float
+    /// per vertex at attribute 2. Separate from the interleaved position/normal buffer
+    /// so switching ambient occlusion on at runtime only uploads the occlusion, never
+    /// re-uploads or rebuilds the geometry. Returns the new buffer id; leaves the VAO
+    /// bound (callers unbind).
+    /// </summary>
+    public static unsafe uint UploadOcclusion(GL gl, uint vao, float[] occlusion)
+    {
+        gl.BindVertexArray(vao);
+        uint aoVbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, aoVbo);
+        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, occlusion, BufferUsageARB.StaticDraw);
+        gl.EnableVertexAttribArray(2);
+        gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, sizeof(float), (void*)0);
+        return aoVbo;
     }
 }

@@ -225,16 +225,14 @@ internal static class SectionContours
 internal sealed class SectionContourRenderer
 {
     private readonly Dictionary<Part, Sdf?> _sdfCache = [];
-    private SectionContourGeometry _geometry = SectionContourGeometry.Empty;
+    private readonly List<SectionContourGeometry> _geometries = [];
+    private readonly List<(uint ZeroVao, uint ZeroVbo, uint PositiveVao, uint PositiveVbo,
+        uint NegativeVao, uint NegativeVbo)> _buffers = [];
     private bool _dirty = true;
-    private Vector3d _builtAxis;
-    private double _builtOffset = double.NaN;
+    private readonly List<SectionPlane> _builtPlanes = [];
     private bool[] _builtVisible = [];
     private int _builtVisibleCount;
     private int _reportedParts = -1;
-
-    private bool _uploaded;
-    private uint _zeroVao, _zeroVbo, _positiveVao, _positiveVbo, _negativeVao, _negativeVbo;
 
     /// <summary>Call when the instance list changes (scene swap/live reload): drops the
     /// per-part SDF cache (parts are fresh objects after a reload) and forces a rebuild.</summary>
@@ -245,68 +243,107 @@ internal sealed class SectionContourRenderer
     }
 
     /// <summary>
-    /// Draws the isolines for the current section plane, rebuilding geometry and GPU
-    /// buffers first when stale. The plane arrives as its clip rule (axis, offset);
-    /// the caller passes the line program and its uModel/uColor locations (view/proj
-    /// uniforms are already set for the frame). The axis/offset comparisons for
-    /// staleness are deliberate exact equality — change detection, not geometry (and
-    /// the axis must be part of the key: switching axes can leave the offset
-    /// numerically identical, e.g. 0 for an origin-centered scene).
+    /// Draws the isolines for every active section plane, rebuilding geometry and GPU
+    /// buffers first when stale. Each plane's contours are drawn with their OWN clip
+    /// rule so a quarter cut shows each cut face's isolines only where that face is
+    /// actually exposed: under <see cref="SectionCombine.Union"/> a plane's lines are
+    /// clipped where any other plane excludes; under
+    /// <see cref="SectionCombine.Intersection"/> (the quarter cut) they must instead be
+    /// clipped where the others do NOT exclude, which is the same rule applied to the
+    /// other planes FLIPPED. The plane comparisons for staleness are deliberate exact
+    /// equality — change detection, not geometry.
     /// </summary>
     public void Draw(
         GL gl, IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
-        in Vector3d axis, double offset,
-        uint lineProgram, int uModel, int uColor, Span<float> matrix, Action<string> report)
+        IReadOnlyList<SectionPlane> planes, SectionCombine combine,
+        uint lineProgram, int uModel, int uColor, in SectionUniforms section,
+        Span<float> matrix, Action<string> report)
     {
-        if (NeedsRebuild(axis, offset, visible))
+        if (NeedsRebuild(planes, visible))
         {
-            _geometry = SectionContours.Build(
-                instances, visible, SectionContours.PlaneFrame(axis, offset), _sdfCache, report);
+            Release(gl);
+            _geometries.Clear();
+            int most = 0;
+            double spacing = 0;
+            foreach (var plane in planes)
+            {
+                var geometry = SectionContours.Build(
+                    instances, visible,
+                    SectionContours.PlaneFrame(plane.Normal.Normalized(), plane.Offset),
+                    _sdfCache, report);
+                _geometries.Add(geometry);
+                if (geometry.PartCount > most)
+                {
+                    most = geometry.PartCount;
+                    spacing = geometry.Spacing;
+                }
+            }
             _dirty = false;
-            _builtAxis = axis;
-            _builtOffset = offset;
+            _builtPlanes.Clear();
+            _builtPlanes.AddRange(planes);
             SnapshotVisibility(visible);
             Upload(gl);
-            if (_geometry.PartCount != _reportedParts)
+            if (most != _reportedParts)
             {
-                _reportedParts = _geometry.PartCount;
-                if (_geometry.PartCount > 0)
-                    report($"section isolines: {_geometry.PartCount} part(s), spacing {_geometry.Spacing:G3}");
+                _reportedParts = most;
+                if (most > 0)
+                    report($"section isolines: {most} part(s), spacing {spacing:G3}");
             }
         }
-        if (_geometry.PartCount == 0)
-            return;
 
         gl.UseProgram(lineProgram);
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
         gl.UniformMatrix4(uModel, 1, false, matrix);
 
-        // d = 0 bright gold (the exact cross-section), positive levels cool,
-        // negative (inside material) warm — draw signed families first so the
-        // zero contour wins any overdraw.
-        DrawBatch(gl, _positiveVao, _geometry.PositiveVertices.Length / 3, uColor, 0.42f, 0.66f, 0.90f);
-        DrawBatch(gl, _negativeVao, _geometry.NegativeVertices.Length / 3, uColor, 0.92f, 0.55f, 0.32f);
-        DrawBatch(gl, _zeroVao, _geometry.ZeroVertices.Length / 3, uColor, 1.00f, 0.90f, 0.45f);
+        var others = new List<SectionPlane>();
+        for (int i = 0; i < _geometries.Count; i++)
+        {
+            if (_geometries[i].PartCount == 0)
+                continue;
+
+            others.Clear();
+            for (int j = 0; j < planes.Count; j++)
+            {
+                if (j != i)
+                    others.Add(combine == SectionCombine.Union ? planes[j] : planes[j].Flipped());
+            }
+            section.Write(gl, others, SectionCombine.Union);
+
+            // d = 0 bright gold (the exact cross-section), positive levels cool,
+            // negative (inside material) warm — draw signed families first so the
+            // zero contour wins any overdraw.
+            var buffers = _buffers[i];
+            var geometry = _geometries[i];
+            DrawBatch(gl, buffers.PositiveVao, geometry.PositiveVertices.Length / 3, uColor, 0.42f, 0.66f, 0.90f);
+            DrawBatch(gl, buffers.NegativeVao, geometry.NegativeVertices.Length / 3, uColor, 0.92f, 0.55f, 0.32f);
+            DrawBatch(gl, buffers.ZeroVao, geometry.ZeroVertices.Length / 3, uColor, 1.00f, 0.90f, 0.45f);
+        }
     }
 
     /// <summary>Deletes the GPU buffers (viewport deinit; GL context current).</summary>
     public void Release(GL gl)
     {
-        if (!_uploaded)
-            return;
-        gl.DeleteBuffer(_zeroVbo);
-        gl.DeleteVertexArray(_zeroVao);
-        gl.DeleteBuffer(_positiveVbo);
-        gl.DeleteVertexArray(_positiveVao);
-        gl.DeleteBuffer(_negativeVbo);
-        gl.DeleteVertexArray(_negativeVao);
-        _uploaded = false;
+        foreach (var b in _buffers)
+        {
+            gl.DeleteBuffer(b.ZeroVbo);
+            gl.DeleteVertexArray(b.ZeroVao);
+            gl.DeleteBuffer(b.PositiveVbo);
+            gl.DeleteVertexArray(b.PositiveVao);
+            gl.DeleteBuffer(b.NegativeVbo);
+            gl.DeleteVertexArray(b.NegativeVao);
+        }
+        _buffers.Clear();
     }
 
-    private bool NeedsRebuild(in Vector3d axis, double offset, IReadOnlyList<bool> visible)
+    private bool NeedsRebuild(IReadOnlyList<SectionPlane> planes, IReadOnlyList<bool> visible)
     {
-        if (_dirty || axis != _builtAxis || offset != _builtOffset || visible.Count != _builtVisibleCount)
+        if (_dirty || planes.Count != _builtPlanes.Count || visible.Count != _builtVisibleCount)
             return true;
+        for (int i = 0; i < planes.Count; i++)
+        {
+            if (planes[i] != _builtPlanes[i])
+                return true;
+        }
         for (int i = 0; i < visible.Count; i++)
         {
             if (visible[i] != _builtVisible[i])
@@ -327,12 +364,18 @@ internal sealed class SectionContourRenderer
     private void Upload(GL gl)
     {
         Release(gl);
-        if (_geometry.PartCount == 0)
-            return;
-        (_zeroVao, _zeroVbo) = RenderGeometry.UploadLines(gl, _geometry.ZeroVertices);
-        (_positiveVao, _positiveVbo) = RenderGeometry.UploadLines(gl, _geometry.PositiveVertices);
-        (_negativeVao, _negativeVbo) = RenderGeometry.UploadLines(gl, _geometry.NegativeVertices);
-        _uploaded = true;
+        foreach (var geometry in _geometries)
+        {
+            if (geometry.PartCount == 0)
+            {
+                _buffers.Add(default);
+                continue;
+            }
+            var (zeroVao, zeroVbo) = RenderGeometry.UploadLines(gl, geometry.ZeroVertices);
+            var (positiveVao, positiveVbo) = RenderGeometry.UploadLines(gl, geometry.PositiveVertices);
+            var (negativeVao, negativeVbo) = RenderGeometry.UploadLines(gl, geometry.NegativeVertices);
+            _buffers.Add((zeroVao, zeroVbo, positiveVao, positiveVbo, negativeVao, negativeVbo));
+        }
     }
 
     private static void DrawBatch(GL gl, uint vao, int vertexCount, int uColor, float r, float g, float b)

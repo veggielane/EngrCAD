@@ -94,6 +94,36 @@ public sealed class EngrCadOptions
     /// exposed interiors shade as cut material (the viewport's Section toggle,
     /// headless). Null (the default) renders unsectioned.</summary>
     public double? SectionOffset { get; set; }
+
+    /// <summary>
+    /// Several section planes for headless renders — two perpendicular planes are the
+    /// classic quarter cut, three an octant. When set it wins over
+    /// <see cref="SectionAxis"/>/<see cref="SectionOffset"/>; null (the default) keeps
+    /// the single-plane behavior.
+    /// </summary>
+    public IReadOnlyList<SectionPlane>? SectionPlanes { get; set; }
+
+    /// <summary>How <see cref="SectionPlanes"/> combine (default
+    /// <see cref="Viewer.SectionCombine.Intersection"/> — the quarter/octant cutaway).
+    /// Irrelevant with a single plane.</summary>
+    public SectionCombine SectionCombine { get; set; } = SectionCombine.Intersection;
+
+    /// <summary>
+    /// The shipped default for ambient occlusion (window and headless): ON. Baked AO is
+    /// a one-off CPU cost at scene load and costs nothing per frame, and the crevice
+    /// shading it adds is what separates a CAD view from a flat-lit one.
+    /// </summary>
+    public const bool AmbientOcclusionDefault = true;
+
+    /// <summary>
+    /// Baked per-vertex ambient occlusion — pockets, bores, ribs and fillet roots
+    /// darken where the geometry occludes itself (default
+    /// <see cref="AmbientOcclusionDefault"/>). Applies to the viewport
+    /// (<see cref="ViewportControl.AmbientOcclusion"/>, which the toolbar's AO toggle
+    /// also drives) and to headless renders. Off reproduces the pre-AO look exactly and
+    /// skips the bake.
+    /// </summary>
+    public bool AmbientOcclusion { get; set; } = AmbientOcclusionDefault;
 }
 
 /// <summary>
@@ -183,6 +213,37 @@ public sealed class EngrCadBuilder
     {
         Options.SectionAxis = axis;
         Options.SectionOffset = offset;
+        Options.SectionPlanes = null;
+        return this;
+    }
+
+    /// <summary>Enables several section planes at once for headless renders — two
+    /// perpendicular planes give the quarter cut, three an octant. The combine rule
+    /// defaults to <see cref="SectionCombine.Intersection"/> (the CAD cutaway);
+    /// <c>--section</c> with several axis/offset pairs is the CLI equivalent and wins
+    /// over this default.</summary>
+    public EngrCadBuilder WithSection(params SectionPlane[] planes) =>
+        WithSection(SectionCombine.Intersection, planes);
+
+    /// <summary>Several section planes with an explicit combine rule — see
+    /// <see cref="WithSection(SectionPlane[])"/>.</summary>
+    public EngrCadBuilder WithSection(SectionCombine combine, params SectionPlane[] planes)
+    {
+        ArgumentNullException.ThrowIfNull(planes);
+        if (planes.Length == 0)
+            throw new ArgumentException("At least one section plane is required.", nameof(planes));
+        Options.SectionPlanes = planes;
+        Options.SectionCombine = combine;
+        Options.SectionOffset ??= planes[0].Offset;   // keeps "sectioning is on" readable
+        return this;
+    }
+
+    /// <summary>Enables or disables baked ambient occlusion for the viewport and for
+    /// headless renders (<c>--ao on|off</c> wins over this default). On by default —
+    /// see <see cref="EngrCadOptions.AmbientOcclusion"/>.</summary>
+    public EngrCadBuilder WithAmbientOcclusion(bool enabled = true)
+    {
+        Options.AmbientOcclusion = enabled;
         return this;
     }
 
@@ -206,12 +267,16 @@ public sealed class EngrCadBuilder
     /// (<see cref="WithViewStyle"/>/<see cref="WithSection"/>) apply.</summary>
     public void RenderToImage(
         Scene scene, string path, CameraState? camera = null,
-        ViewStyle? style = null, SectionAxis? sectionAxis = null, double? sectionOffset = null)
+        ViewStyle? style = null, SectionAxis? sectionAxis = null, double? sectionOffset = null,
+        bool? ambientOcclusion = null, IReadOnlyList<SectionPlane>? sectionPlanes = null)
     {
         scene.PreMesh(Options.Quality); // meshes cache, so the inner PreMesh is a no-op
         EngrCad.RenderToImage(scene, path, Options.RenderWidth, Options.RenderHeight, camera,
             style ?? Options.RenderStyle,
             sectionAxis ?? Options.SectionAxis,
-            sectionOffset ?? Options.SectionOffset);
+            sectionOffset ?? Options.SectionOffset,
+            ambientOcclusion ?? Options.AmbientOcclusion,
+            sectionPlanes ?? Options.SectionPlanes,
+            Options.SectionCombine);
     }
 }
