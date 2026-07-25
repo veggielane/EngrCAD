@@ -104,6 +104,57 @@ public class FilletCornerVolumeTests
         AssertFilletedPrism(ell, height: 1, radius: 0.2, expectedFaces: 14);
     }
 
+    /// <summary>
+    /// Steiner's formula for the convex opening (K ⊖ B_r) ⊕ B_r: with K the eroded body,
+    /// V = V₀ + A₀·r + (r²/2)·Σ ℓₑ·θₑ + (4π/3)·r³ — the last term because the exterior
+    /// solid angles of the spherical corner patches sum to a whole sphere, so a filleted
+    /// box's eight octants are exactly one ball.
+    /// </summary>
+    private static double AnalyticRoundedBox(double w, double d, double h, double r)
+    {
+        double a = w - 2 * r, b = d - 2 * r, c = h - 2 * r;
+        return a * b * c                                     // eroded box
+            + r * 2 * (a * b + a * c + b * c)                // 6 slabs
+            + Math.PI * r * r * (a + b + c)                  // 12 quarter cylinders
+            + 4.0 / 3 * Math.PI * r * r * r;                 // 8 octants = one ball
+    }
+
+    [Fact]
+    public void WholeSolidFillet_MatchesSteinersFormula()
+    {
+        double w = 4, d = 3, h = 2, r = 0.4;
+        var rounded = Filleting.FilletAllEdges(
+            SolidFactory.MakeBox(new Aabb((0, 0, 0), (w, d, h))), r);
+        rounded.Validate();
+
+        var mesh = BRepTessellator.Tessellate(rounded, 64, 64);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        Assert.Equal(2, mesh.EulerCharacteristic);
+
+        double expected = AnalyticRoundedBox(w, d, h, r);
+        Assert.True(Math.Abs(mesh.Volume() - expected) / expected < 1e-4,
+            $"rounded box volume {mesh.Volume()} vs Steiner {expected}");
+    }
+
+    [Fact]
+    public void WholeSolidFillet_ConvergesQuadratically()
+    {
+        // Every face is on the natural grid path (the bands and corner patches are
+        // full-domain by construction), so the facets converge cleanly from inside —
+        // halving the chord length must quarter the deficit.
+        double w = 4, d = 3, h = 2, r = 0.4;
+        var rounded = Filleting.FilletAllEdges(
+            SolidFactory.MakeBox(new Aabb((0, 0, 0), (w, d, h))), r);
+        double expected = AnalyticRoundedBox(w, d, h, r);
+
+        double coarse = expected - BRepTessellator.Tessellate(rounded, 32, 32).Volume();
+        double fine = expected - BRepTessellator.Tessellate(rounded, 64, 64).Volume();
+        Assert.True(coarse > 0 && fine > 0, "inscribed facets stay inside the exact solid");
+        double ratio = coarse / fine;
+        Assert.True(ratio is > 3.5 and < 4.5, $"second-order convergence expected, got a ratio of {ratio}");
+    }
+
     [Fact]
     public void FilletConvergesTowardTheAnalyticVolumeFromInside()
     {

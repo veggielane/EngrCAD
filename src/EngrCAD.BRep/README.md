@@ -240,6 +240,38 @@ operations. Depends only on `EngrCAD.Core`.
     analytic through the offset-polygon law
     `V = A₀·h − P₀·r²(1 − π/4) + (Σ tan(θᵢ/2))·r³(5/3 − π/2)` — signed turns, so reflex
     corners are covered by the same formula.
+  - **Whole-solid filleting** (`FilletAllEdges`) is the OTHER classic corner: three blended
+    edges meeting at a vertex, which is where the spherical patch belongs. It is built as
+    the exact morphological opening (K ⊖ B_r) ⊕ B_r — for a convex polyhedron, erode every
+    face plane inward by r, then dilate — so it needs no booleans and nothing to seal:
+    every face keeps its own plane with a shrunk boundary, every edge becomes a cylindrical
+    band about the ERODED edge line, and every vertex becomes a spherical patch on the
+    ERODED vertex, bounded by great-circle arcs. Each curve is created once and handed to
+    both of its faces, so senses follow mechanically and the result is manifold by
+    construction (a box gives 6 + 12 + 8 = 26 faces, 48 edges, 24 vertices). Every face is
+    FULL-DOMAIN, so it all tessellates on the natural grid and the volume converges
+    quadratically onto Steiner's formula
+    `V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³` — the last term because the eight octants
+    are exactly one ball. Refused loudly: concave edges (an opening cannot round them),
+    vertices of valence ≠ 3, and corners where no incident face is perpendicular to the
+    other two. That last restriction is what keeps the patch an exact surface of
+    revolution — the spherical triangle is then the lune between two meridians of that
+    face's normal, closed by an equatorial great circle — and it holds for every box, every
+    convex prism, and every sheared box. A general trihedral corner's spherical triangle
+    has no exact revolved form, and there is no other tessellable surface type for it.
+    <br/>All the corner arcs are `CurveSegment` over `Circle3d`, never rational NURBS arcs:
+    the patch is a surface of revolution sampled at even ANGLES, so an arc parameterized
+    any other way samples to different points and the patch stops welding to its band.
+    <br/>Known gap: `StepWriter` exports these solids correctly (a STEP
+    `SURFACE_OF_REVOLUTION` is unbounded by definition and the face boundary trims it), but
+    `StepReader` cannot re-trim a CLOSED generator when the swept angle came from rails —
+    the corner patches' meridian boundaries are circles through the axis, which no rim rule
+    recognizes — so a re-imported rounded solid meshes non-manifold. The reader now emits a
+    diagnostic saying exactly that instead of failing silently. Second known gap:
+    `BrepBoolean` cannot yet cut a whole-solid fillet (a fragment's re-surfaced sub-band
+    loses the corner arcs from its domain); the solid itself is sound — every loop point
+    projects inside its own face's domain, which is a locked test — so this is a boolean
+    limitation, not a construction one. Mitered RIM fillets do cut correctly.
   - **Selection** — by face (`FilletRim`/`ChamferRim`) or by EDGE (`FilletEdges`/
     `ChamferEdges`, and `RimFacesFor` which resolves a selection into the rim features
     that reproduce it). A complete planar face rim resolves; a partial run does not, and is
@@ -298,8 +330,9 @@ two spiral cuts) and take the same path.
 
 Coplanar/tangent boolean cases,
 NURBS surface export. Filleting gaps, all refused loudly rather than approximated:
-**spherical corner patches** where three blended edges meet at a convex vertex (filleting
-every edge of a solid), **partial edge runs** (a band that stops mid-rim needs a
+**spherical corner patches on non-perpendicular trihedral vertices** (`FilletAllEdges`
+covers the perpendicular ones — boxes, convex prisms — which is where an exact surface of
+revolution exists), **partial edge runs** (a band that stops mid-rim needs a
 termination surface — cliff, setback or vertex blend — that this engine does not build),
 **sharp corners at arc rim edges** (torus ∩ cylinder is not a conic), and
 **variable-radius fillets**: the band itself would be exact — a linear radius law between

@@ -96,6 +96,34 @@ public static class Filleting
     }
 
     /// <summary>
+    /// Fillets EVERY edge of a convex polyhedron at once — the case whose vertices need
+    /// spherical corner patches, and the one <see cref="FilletEdges"/> refuses.
+    /// <para>The construction is the morphological opening (K ⊖ B_r) ⊕ B_r, which for a
+    /// convex polyhedron is exact and needs no booleans: erode by moving every face plane
+    /// inward by r, then dilate. Each face keeps its own plane and gains a shrunk
+    /// boundary; each edge becomes a cylindrical band of radius r about the ERODED edge
+    /// line (the intersection of its two shifted planes); each vertex becomes a spherical
+    /// patch of radius r centred on the ERODED vertex (the intersection of its three
+    /// shifted planes), bounded by great-circle arcs. Every boundary curve is shared by
+    /// exactly two of those faces by construction, so nothing has to be intersected,
+    /// classified or sealed.</para>
+    /// <para>Restrictions, all checked and refused loudly: the solid must be a convex
+    /// polyhedron (planar hole-free faces, straight edges, every edge convex) with
+    /// three-valent vertices, and at each vertex one of the three faces must be
+    /// perpendicular to the other two. That last one is what makes the corner patch an
+    /// exact surface of revolution — the spherical triangle is then the lune between two
+    /// meridians of that face's normal, closed by an equatorial great circle — and it
+    /// holds for every box and every convex prism. A general trihedral corner's spherical
+    /// triangle has no exact revolved form.</para>
+    /// </summary>
+    public static BrepSolid FilletAllEdges(BrepSolid solid, double radius)
+    {
+        if (radius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        return ConvexOpening.Apply(solid, radius);
+    }
+
+    /// <summary>
     /// Resolves an edge selection into the planar faces whose complete outer rims it
     /// covers — the unit rim surgery operates on, and therefore the unit an edge-set
     /// fillet or chamfer can honour exactly. A run of edges bounding one planar face
@@ -107,11 +135,10 @@ public static class Filleting
     /// terminate the band somewhere, and every exact termination (a cliff, a setback, a
     /// vertex blend) is a different surface. A rim is the case whose corners all close on
     /// exact conics — the miter ellipses — with nothing left dangling.</para>
-    /// <para>Filleting EVERY edge of a convex solid is the other classic case and is
-    /// deliberately NOT accepted here: three blended edges meeting at a vertex need a
-    /// spherical corner patch, which only closes when the vertex's third edge is blended
-    /// too — a different construction from rim surgery, and one this engine does not build
-    /// yet.</para>
+    /// <para>Filleting EVERY edge of a solid is the other classic case and is deliberately
+    /// NOT accepted here: three blended edges meeting at a vertex need a spherical corner
+    /// patch, which only closes when the vertex's third edge is blended too. That is a
+    /// different construction from rim surgery — see <see cref="FilletAllEdges"/>.</para>
     /// </summary>
     public static IReadOnlyList<BrepFace> RimFacesFor(BrepSolid solid, IEnumerable<BrepEdge> edges)
     {
@@ -139,12 +166,267 @@ public static class Filleting
                     $"{stranded.Curve.PointAt(stranded.Domain.End)} is not part of a fully selected planar " +
                     "face rim. Edge fillets and chamfers are exact for complete rims (every edge bounding " +
                     "one planar face, or a lone closed circular rim); select the rest of that face's rim, " +
-                    "or use the face-based overload.");
+                    "or use the face-based overload. To blend every edge of a convex solid " +
+                    "(the case whose vertices need spherical corner patches), use FilletAllEdges.");
             }
             targets.Add(face);
             remaining.RemoveAll(e => face.OuterLoop.Coedges.Any(c => ReferenceEquals(c.Edge, e)));
         }
         return targets;
+    }
+
+    /// <summary>
+    /// Whole-solid filleting of a convex polyhedron as the exact morphological opening.
+    /// Nothing here is surgery: the output is built from scratch, and every shared curve
+    /// is created ONCE and handed to both of its faces, so senses follow mechanically and
+    /// the result is manifold by construction rather than by sealing.
+    /// </summary>
+    private static class ConvexOpening
+    {
+        public static BrepSolid Apply(BrepSolid solid, double radius)
+        {
+            var planes = ValidateAndPlanes(solid);
+            var incidence = VertexIncidence(solid);
+
+            // Eroded vertices: the three shifted planes' meeting point. Every eroded EDGE
+            // line then joins the two eroded vertices at its ends (each lies on both of
+            // the edge's shifted planes), so band axes need no separate solve.
+            var eroded = new Dictionary<BrepVertex, Vector3d>();
+            foreach (var (vertex, faces) in incidence)
+                eroded[vertex] = ErodedVertex(vertex, faces, planes, radius);
+
+            // One new vertex per (original vertex, incident face): where that face's
+            // tangent lines and the corner sphere meet.
+            var corners = new Dictionary<(BrepVertex, BrepFace), BrepVertex>();
+            foreach (var (vertex, faces) in incidence)
+            {
+                foreach (var face in faces)
+                    corners[(vertex, face)] = new BrepVertex(eroded[vertex] + planes[face].Normal * radius);
+            }
+
+            var straightEdges = new Dictionary<(BrepEdge, BrepFace), BrepEdge>();
+            var sphereArcs = new Dictionary<BrepVertex, List<BrepCoedge>>();
+            foreach (var vertex in incidence.Keys)
+                sphereArcs[vertex] = [];
+
+            var bands = new List<BrepFace>();
+            foreach (var edge in solid.Edges)
+            {
+                // Orient the edge by the first use: face F walks a → b, face G walks b → a.
+                var useF = edge.Uses[0];
+                var faceF = useF.Loop.Face;
+                var faceG = edge.Uses[1].Loop.Face;
+                var a = useF.StartVertex;
+                var b = useF.EndVertex;
+
+                var centreA = eroded[a];
+                var centreB = eroded[b];
+                var axis = centreB - centreA;
+                if (axis.Dot(b.Position - a.Position) <= 0 || axis.Length <= Tolerance.Default.Linear)
+                    throw new ArgumentOutOfRangeException(nameof(radius),
+                        $"The fillet radius consumes the edge from {a.Position} to {b.Position}.");
+
+                var normalF = planes[faceF].Normal;
+                var normalG = planes[faceG].Normal;
+                // The corner circle lives in the plane spanned by the two face normals,
+                // built on normalF so u = 0 is the F tangency: the SAME frame the band's
+                // generator uses, which is what makes the two ends' arcs weld with it.
+                double sweep = Math.Atan2(normalF.Cross(normalG).Dot(axis.Normalized()), normalF.Dot(normalG));
+                var inPlane = (normalG - normalF * normalF.Dot(normalG)).Normalized();
+                if (sweep < 0)
+                {
+                    // The circle's own sense must run F → G; flip the frame, not the span.
+                    sweep = -sweep;
+                    inPlane = -inPlane;
+                }
+
+                var arcA = CornerArc(centreA, normalF, inPlane, radius, sweep,
+                    corners[(a, faceF)], corners[(a, faceG)]);
+                var arcB = CornerArc(centreB, normalF, inPlane, radius, sweep,
+                    corners[(b, faceF)], corners[(b, faceG)]);
+                sphereArcs[a].Add(new BrepCoedge(arcA, false));
+                sphereArcs[b].Add(new BrepCoedge(arcB, true));
+
+                var lineF = Straight(corners[(a, faceF)], corners[(b, faceF)]);
+                var lineG = Straight(corners[(b, faceG)], corners[(a, faceG)]);
+                straightEdges[(edge, faceF)] = lineF;
+                straightEdges[(edge, faceG)] = lineG;
+
+                // Band loop, CCW about the outward normal: down F's tangent line, around
+                // the corner at a, back along G's tangent line, around the corner at b.
+                bands.Add(new BrepFace(
+                    new ExtrudedSurface(arcA.Curve, axis),
+                    [new BrepLoop([
+                        new BrepCoedge(lineF, false),
+                        new BrepCoedge(arcA, true),
+                        new BrepCoedge(lineG, false),
+                        new BrepCoedge(arcB, false),
+                    ])]));
+            }
+
+            var shrunk = new List<BrepFace>();
+            foreach (var face in solid.Faces)
+            {
+                var coedges = face.OuterLoop.Coedges
+                    .Select(c => new BrepCoedge(straightEdges[(c.Edge, face)],
+                        ReferenceEquals(straightEdges[(c.Edge, face)].StartVertex, corners[(c.StartVertex, face)])))
+                    .ToList();
+                shrunk.Add(new BrepFace(face.Surface, [new BrepLoop(coedges)]));
+            }
+
+            var spheres = incidence.Keys
+                .Select(vertex => CornerPatch(vertex, incidence[vertex], planes, eroded[vertex], radius, sphereArcs[vertex]))
+                .ToList();
+
+            return new BrepSolid([new BrepShell([.. shrunk, .. bands, .. spheres])]);
+        }
+
+        private static BrepEdge Straight(BrepVertex from, BrepVertex to) =>
+            new(new Line3d(from.Position, to.Position), Interval.Unit, from, to);
+
+        /// <summary>
+        /// The great-circle arc a band's end shares with a corner patch. Its parameter IS
+        /// the angle (a <see cref="Circle3d"/> under a <see cref="CurveSegment"/>), which
+        /// is load-bearing: the corner patch is a surface of revolution sampled at even
+        /// ANGLES, so an arc parameterized any other way (a rational NURBS arc, say)
+        /// would sample to different points and the patch would not weld to the band.
+        /// </summary>
+        private static BrepEdge CornerArc(
+            in Vector3d centre, in Vector3d xDirection, in Vector3d yDirection, double radius, double sweep,
+            BrepVertex from, BrepVertex to) =>
+            new(new CurveSegment(new Circle3d(centre, xDirection, yDirection, radius), 0, sweep),
+                Interval.Unit, from, to);
+
+        /// <summary>
+        /// The spherical corner patch: the lune between the meridians of the two faces
+        /// perpendicular to the third, closed by the equatorial arc between them. The
+        /// generator runs equator → pole so that ∂u × ∂v points out of the solid.
+        /// </summary>
+        private static BrepFace CornerPatch(
+            BrepVertex vertex, IReadOnlyList<BrepFace> faces,
+            Dictionary<BrepFace, (Vector3d Origin, Vector3d Normal)> planes,
+            in Vector3d centre, double radius, List<BrepCoedge> arcs)
+        {
+            var normals = faces.Select(f => planes[f].Normal).ToList();
+            int poleIndex = -1;
+            for (int i = 0; i < 3 && poleIndex < 0; i++)
+            {
+                if (Math.Abs(normals[i].Dot(normals[(i + 1) % 3])) < 1e-9 &&
+                    Math.Abs(normals[i].Dot(normals[(i + 2) % 3])) < 1e-9)
+                    poleIndex = i;
+            }
+            if (poleIndex < 0)
+                throw new NotSupportedException(
+                    $"The corner at {vertex.Position} has no face perpendicular to its two neighbours, so its " +
+                    "spherical patch is a general spherical triangle with no exact surface of revolution. " +
+                    "Fillet the rims that do close exactly instead.");
+
+            var pole = normals[poleIndex];
+            var first = normals[(poleIndex + 1) % 3];
+            var second = normals[(poleIndex + 2) % 3];
+            double sweep = Math.Atan2(first.Cross(second).Dot(pole), first.Dot(second));
+            if (sweep < 0)
+            {
+                (first, second) = (second, first);
+                sweep = -sweep;
+            }
+
+            // Equator → pole, so the revolve's ∂u × ∂v is outward; the parameter is the
+            // angle, matching the band arcs' sampling.
+            var generator = new CurveSegment(
+                new Circle3d(centre, first, pole, radius), 0, Math.PI / 2);
+            var surface = new RevolvedSurface(generator, centre, pole, sweep);
+
+            return new BrepFace(surface, [new BrepLoop(Chain(arcs, vertex))]);
+        }
+
+        /// <summary>Orders the corner's arcs end-to-start. Each arc's SENSE is already
+        /// forced by the band that shares it, so a chain that closes is the only possible
+        /// loop — and its winding is then correct by the same construction.</summary>
+        private static IReadOnlyList<BrepCoedge> Chain(List<BrepCoedge> arcs, BrepVertex vertex)
+        {
+            var ordered = new List<BrepCoedge> { arcs[0] };
+            var remaining = arcs.Skip(1).ToList();
+            while (remaining.Count > 0)
+            {
+                var tail = ordered[^1].EndVertex;
+                int next = remaining.FindIndex(c => ReferenceEquals(c.StartVertex, tail));
+                if (next < 0)
+                    throw new InvalidOperationException(
+                        $"The corner patch at {vertex.Position} does not chain — its incident bands disagree.");
+                ordered.Add(remaining[next]);
+                remaining.RemoveAt(next);
+            }
+            if (!ReferenceEquals(ordered[^1].EndVertex, ordered[0].StartVertex))
+                throw new InvalidOperationException($"The corner patch at {vertex.Position} does not close.");
+            return ordered;
+        }
+
+        private static Dictionary<BrepFace, (Vector3d Origin, Vector3d Normal)> ValidateAndPlanes(BrepSolid solid)
+        {
+            var planes = new Dictionary<BrepFace, (Vector3d, Vector3d)>();
+            foreach (var face in solid.Faces)
+            {
+                if (face.IsReversed || face.Loops.Count != 1 || !face.IsPlanar(out var origin, out var normal))
+                    throw new NotSupportedException(
+                        "Filleting every edge needs a convex polyhedron: all faces planar, hole-free and " +
+                        "forward-oriented.");
+                planes[face] = (origin, normal.Normalized());
+            }
+            foreach (var edge in solid.Edges)
+            {
+                if (edge.Uses.Count != 2 || edge.Curve.Underlying is not Line3d)
+                    throw new NotSupportedException("Filleting every edge needs straight, two-manifold edges.");
+                if (!solid.IsConvex(edge))
+                    throw new NotSupportedException(
+                        $"The edge from {edge.Curve.PointAt(edge.Domain.Start)} to " +
+                        $"{edge.Curve.PointAt(edge.Domain.End)} is not convex; whole-solid filleting is the " +
+                        "convex opening, which cannot round a concave edge.");
+            }
+            return planes;
+        }
+
+        private static Dictionary<BrepVertex, List<BrepFace>> VertexIncidence(BrepSolid solid)
+        {
+            var incidence = new Dictionary<BrepVertex, List<BrepFace>>();
+            foreach (var face in solid.Faces)
+            {
+                foreach (var coedge in face.OuterLoop.Coedges)
+                {
+                    if (!incidence.TryGetValue(coedge.StartVertex, out var faces))
+                        incidence[coedge.StartVertex] = faces = [];
+                    faces.Add(face);
+                }
+            }
+            foreach (var (vertex, faces) in incidence)
+            {
+                if (faces.Count != 3)
+                    throw new NotSupportedException(
+                        $"The vertex at {vertex.Position} joins {faces.Count} faces; whole-solid filleting " +
+                        "handles three-valent vertices (one spherical patch bounded by three arcs).");
+            }
+            return incidence;
+        }
+
+        /// <summary>Where a vertex's three face planes meet after each is shifted inward
+        /// by the radius — the corner sphere's centre.</summary>
+        private static Vector3d ErodedVertex(
+            BrepVertex vertex, IReadOnlyList<BrepFace> faces,
+            Dictionary<BrepFace, (Vector3d Origin, Vector3d Normal)> planes, double radius)
+        {
+            var (o0, n0) = planes[faces[0]];
+            var (o1, n1) = planes[faces[1]];
+            var (o2, n2) = planes[faces[2]];
+            double d0 = n0.Dot(o0) - radius, d1 = n1.Dot(o1) - radius, d2 = n2.Dot(o2) - radius;
+
+            // Cramer over the 3x3 normal matrix; the determinant is the normals' scalar
+            // triple product, so this is a scale-free degeneracy test on unit vectors.
+            double determinant = n0.Dot(n1.Cross(n2));
+            if (Math.Abs(determinant) < 1e-12)
+                throw new NotSupportedException(
+                    $"The three faces at {vertex.Position} are nearly coplanar, so the corner has no centre.");
+            return (n1.Cross(n2) * d0 + n2.Cross(n0) * d1 + n0.Cross(n1) * d2) / determinant;
+        }
     }
 
     /// <summary>

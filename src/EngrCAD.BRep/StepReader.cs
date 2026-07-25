@@ -655,6 +655,20 @@ public static class StepReader
                 }
             }
 
+            // A partial revolution whose generator is a CLOSED curve and whose boundary
+            // offered no rim to trim against: the rails fixed the swept angle, but the
+            // generator still spans its whole period, so the face's domain covers far more
+            // surface than the face. Tessellation is domain-driven, so that silently
+            // produces a non-manifold mesh — say so instead. (Spherical corner patches
+            // from whole-solid filleting are the case: their meridian boundaries are
+            // circles through the axis, which no rim rule recognizes.)
+            if (angle is not null && rims.Count == 0 && generator.IsClosed)
+            {
+                Note("A surface of revolution swept through a partial angle kept a closed, untrimmed " +
+                     "generator: no rim circle bounded it, so its parameter domain covers more than the " +
+                     "face. Meshing this face will not be manifold.");
+            }
+
             return new RevolvedSurface(trimmed, origin, axis, angle ?? 2 * Math.PI);
         }
 
