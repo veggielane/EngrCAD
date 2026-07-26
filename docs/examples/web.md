@@ -2,9 +2,10 @@
 
 Every other page on this site shows a model rendered ahead of time and committed as a
 PNG. This one doesn't. The panel below is the **actual geometry kernel** — B-Rep,
-implicit and mesh — compiled to WebAssembly and running in your tab. Move a slider and
-the model is rebuilt from scratch: a boolean, six drilled holes and a rim fillet,
-lowered to an exact B-Rep and tessellated, right here.
+implicit and mesh — compiled to WebAssembly and running in your tab, drawing through
+WebGL2. Drag to orbit, shift+drag to pan, scroll to zoom. Move a slider and the model is
+rebuilt from scratch: a boolean, six drilled holes and a rim fillet, lowered to an exact
+B-Rep, tessellated and rendered, right here.
 
 <!-- docfx warns "InvalidFileLink" on the two ../live/ links below, and that is EXPECTED:
      the target is the Blazor app, which .github/workflows/docs.yml publishes into
@@ -110,6 +111,19 @@ Geometry crosses the boundary as `byte[]`, because Blazor marshals that as a bin
 array while `float[]` would go through JSON. That packing step is also the single
 place doubles narrow to the float32 the GPU wants.
 
+The camera is not forked either: the viewport's pointer handlers call the same
+`CameraMath.DragOrbit` / `DragPan` / `DragZoom` / `WheelZoom` the desktop viewport calls,
+so there is one answer to what dragging 100 pixels does and it is tested once. The only
+legitimate difference is unit conversion — a DOM wheel event reports roughly 100 pixels
+per notch and counts *down* as positive, the opposite of the desktop toolkit — which is a
+browser fact, normalized at the edge, leaving the feel decision in shared code.
+
+**A frame is a value.** `ViewportFrame.Build(...)` is the browser's counterpart to the
+desktop's render callback and the offscreen renderer's draw — but it is a *pure
+function*, so unlike either of those it can be asserted directly rather than compared by
+eye. That is the point: those two drifted in the first place precisely because looking at
+pixels was the only way to compare them.
+
 ## Running it yourself
 
 ```
@@ -134,8 +148,10 @@ rebuild and no repository name compiled into it.
 
 ## Status
 
-Kernel-in-the-browser and the WebGL2 interop layer are in place; the demo above is the
-kernel, not yet the viewer. Still to build: the scene-to-frame layer, the orbit camera,
-feature edges, model tree, picking and section planes — the parity ladder is in
-`todo.md`. The [Viewer](viewer.md) page describes what the desktop client already does,
-which is the target.
+The viewport draws: shaded geometry with per-part colours, feature edges, the ground grid
+and axes, an orbit camera, per-part display modes (shaded / wireframe / translucent) and
+the global view style — all through the same shaders, the same `CameraMath`, and the same
+mode-precedence rule the desktop window and the headless renderer use. Still to build: the
+model tree and tab strip, picking, section planes and their isolines, the view cube, and
+annotations — the parity ladder is in `todo.md`. The [Viewer](viewer.md) page describes
+what the desktop client already does, which is the target.

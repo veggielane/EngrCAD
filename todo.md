@@ -255,6 +255,140 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   `DijkstraGraphDistance` (approximate geodesics). Enables engraving/wrapping features.
 - [ ] **ICP registration** — `MeshICP` for aligning imported scans to models.
 
+## Mechanisms (kinematics)
+
+Motion, not forces — assemblies that *move*. The substrate already exists: `MateSolver`
+constrains occurrence poses with Levenberg–Marquardt over an **analytic** Jacobian and
+already reports remaining DOF from a rank-revealing diagonally pivoted Cholesky of JᵀJ.
+That report is the whole insight — **a fully-constrained assembly is static, and a
+mechanism is the same mate system with DOF > 0, driven.** None of this needs a second
+solver; it needs a vocabulary on top of one that works, plus a continuation loop around
+it.
+
+- [ ] **Joints as a vocabulary over mates** — `Revolute` (1 DOF), `Prismatic` (1),
+  `Cylindrical` (2), `Spherical` (3), `Planar` (3), `Screw` (1, coupled
+  rotation/translation), `Fixed` (0). Each is a named combination of existing
+  `Concentric`/`Planar`/`Coincident`/`Angle` mates with a known nominal DOF, built from
+  the same `BrepQueries` selectors so a joint survives regeneration exactly as a mate
+  does. Joints become the user's language; mates stay the implementation. Assert each
+  joint's nominal DOF against what the solver measures at construction — that check is
+  nearly free and catches a wrong joint definition immediately.
+- [ ] **Drivers and the swept solve** — a driver pins one joint variable and consumes one
+  DOF, so `SolveAt(t)` is the existing mate solve with the driven variable fixed. **The
+  load-bearing detail is continuation**: seed each step from the PREVIOUS converged pose,
+  never from the assembled pose, or the solver changes branch mid-sweep (a four-bar flips
+  elbow-up to elbow-down and the motion tears). Adapt step size to the residual, and
+  report the parameter at which a sweep fails rather than stopping quietly.
+- [ ] **Singular configurations must be named, not stumbled into** — at a toggle point
+  the Jacobian loses rank and the mechanism can branch or lock. The mate solver already
+  knows this shape: it detects and names an `Angle`/`Perpendicular` mate whose directions
+  start exactly parallel, because d/dθ cos θ = 0 there and no first-order step exists. A
+  mechanism passing through dead centre is that same defect in motion — reuse the
+  diagnosis: report the parameter, name the joint, refuse to guess a branch.
+- [ ] **Velocities and accelerations are nearly free** — the analytic Jacobian is already
+  assembled, so joint velocities follow from solving J·q̇ = −∂C/∂t against the driver
+  column, and accelerations from one more solve carrying the J̇·q̇ term. Finite
+  differencing sampled poses is the obvious shortcut and the wrong one, for exactly the
+  reason the mate solver rejected finite-difference Jacobians: it caps accuracy near
+  1e-8, an order worse than the weld tier.
+- [ ] **Higher pairs: gears, belts, cams** — a gear ratio is a scalar coupling between
+  two joint variables (θ₂ = ∓(N₁/N₂)·θ₁), not a geometric mate; belts and chains are the
+  same equation with a pitch radius; a cam is a coupling defined by a profile curve, and
+  the sketch engine's `SketchRegion` distances are already exact so the follower
+  displacement can be too. All three slot into the residual vector beside the geometric
+  mates and need no new solver machinery.
+- [ ] **Joint limits** — min/max stops on revolute and prismatic joints. A sweep that
+  drives a joint past its stop should name it, in the refuse-loudly style the rest of the
+  solver already uses.
+- [ ] **Motion study** — sample the driver, produce poses per frame. This is one of the
+  three drivers feeding the Animation section below; see it for the timeline, the
+  pose-only rule and export.
+- [ ] **Interference over the sweep** — the engineering payoff. Per-step clash detection
+  between moving bodies on the existing per-part BVHs (`Bvh.QueryOverlap` is already the
+  exact boolean's broad phase), reporting the parameter range and the offending pair;
+  exact contact via `BrepBoolean.Intersection` volume only for pairs the broad phase
+  flags, since that is orders of magnitude dearer. **Swept volumes** are the natural
+  follow-on and a genuine `Shape` operation — cheap implicitly (min over sampled poses of
+  the transformed SDF, which is what the implicit engine is *for*), and hard enough in
+  B-Rep that it should probably stay Bridged.
+- [ ] **Grübler/Kutzbach as a cross-check, not a source of truth** — the mobility formula
+  predicts DOF from joint counts; the solver measures actual rank. **Disagreement is
+  informative rather than an error**: overconstrained-but-mobile linkages (Bennett,
+  Sarrus) are precisely where the formula lies and the rank is right. Report both, and
+  say which is which.
+- [ ] **Deliberately out of scope here**: forces, masses, friction, contact dynamics.
+  That is multibody *dynamics* and belongs with Simulation below — mechanisms answer
+  "where does it go", not "what does it take". Mass properties already exist
+  (`MeshMassProperties`/`BrepMassProperties` return inertia tensors about the centre of
+  mass), so dynamics has its inputs waiting whenever it comes.
+
+## Animation and motion export
+
+Three different things want to animate — a **mechanism** driven through its range, an
+**assembly** moving between assembled and exploded, and the **camera** — and they are the
+same problem, because all three are pure functions of one parameter that move *poses and
+the camera only*.
+
+**That is the load-bearing rule: an animation must not touch geometry.** The exploded
+view already proved the property this depends on — instance count and order are
+independent of the parameter — which is what lets `SetInstancePoses` animate with
+matrices alone, no GPU buffer touched, and lets picking keep working because `HitTest`
+already reads the per-instance model matrix. Anything that re-meshes per frame is a
+different and far more expensive feature (that is the `$t` time-parameterized-model item
+in the OpenSCAD section, and it should stay separate).
+
+- [ ] **A timeline over the three drivers** — one `Animation` abstraction: a duration, an
+  easing, and a set of *tracks*, where a track is anything that maps t ∈ [0,1] to poses or
+  a camera. v1 tracks: **mechanism** (a joint driver, from the Mechanisms section above),
+  **component position** (explode factor 0→1, which already exists as
+  `Occurrence.ExplodeOffset` + `Flatten(factor)`), and **camera**. Keep the evaluation a
+  pure function of t — that is what makes scrubbing, reversing, exporting and headless
+  rendering the same code path rather than four.
+- [ ] **Component-position tracks beyond a single factor** — today explode is one global
+  scalar. Real assembly instructions want **per-occurrence timing** (fasteners back out
+  first, then the cover, then the sub-assembly), i.e. a start/end window per occurrence
+  along the shared timeline, and ideally motion along the *explode path* rather than
+  straight-line lerp once the explode-path renderer lands (that item is under Assemblies
+  follow-ups). Sequenced explode is the actual deliverable behind "assembly animation".
+- [ ] **Camera tracks** — turntable (orbit about Z at fixed pitch, the default anyone
+  wants first), keyframed poses with smooth interpolation, and a path fly-through. Three
+  things already exist and must be reused rather than re-derived: `CameraState` +
+  `CameraMath` (now shared by desktop and web), the view cube's **250 ms smoothstep
+  shortest-yaw-path** move — which is exactly the interpolation primitive, and note the
+  shortest-path detail, because interpolating yaw naively sends the camera the long way
+  round — and for a fly-through, a `Curve3d` with the rotation-minimizing frames
+  `SweptSurface` already uses, so a camera path is literally a sweep path.
+- [ ] **Playback UI** — play/pause/scrub/loop beside the existing explode slider, driving
+  the same `SetInstancePoses` route. The web viewport gets it for free if the timeline
+  stays a pure function of t, which is a reason to keep it UI-free in `Viewer.Core`
+  rather than in the Avalonia layer.
+- [ ] **Animated export — APNG first, GIF second, WebP only with a dependency.** The
+  frame loop itself is trivial (`RenderToImage` per t, already parameterized by camera,
+  style, section and explode); the format is the real decision, and the honest ranking for
+  this codebase is:
+  - **APNG** is nearly free and should be first: `PngWriter` is already dependency-free,
+    and animation is three extra chunk types (`acTL`/`fcTL`/`fdAT`) over the encoder that
+    exists. Lossless, full colour, alpha — which matters because a shaded CAD render is
+    mostly smooth gradients.
+  - **GIF** is what people ask for and what pastes everywhere, but it is 256 colours with
+    no alpha, so a shaded render with a background gradient and AO **will band visibly**
+    without dithering, and dithering fights the clean look. Doable dependency-free (LZW
+    plus median-cut or octree quantization); just do not expect it to look like the PNGs.
+    A flat-shaded or wireframe style GIFs far better than a shaded one — worth saying in
+    the docs rather than letting people discover it.
+  - **WebP** needs a VP8/VP8L encoder, which is not something to hand-roll; it means
+    taking a dependency (libwebp or a managed port). Worth it only if the payload
+    difference matters for the docs site.
+  - **Always also emit a PNG frame sequence**, since that is the zero-risk escape hatch
+    into ffmpeg for MP4/WebM, which no dependency-free path reaches.
+- [ ] **Animated docs examples** — the payoff. DocsGen already renders a PNG per
+  `render:` fence and already accepts an `explode:` option, so a `turntable:` or
+  `animate:` option producing an APNG per example is a small step and makes every
+  example page spinnable without shipping the WASM runtime per page. Cross-reference the
+  docs-embedding item under the Blazor web viewer, which solves the same problem the
+  expensive way (live kernel) — animation is the cheap way, and the two are complementary
+  rather than alternatives.
+
 ## Simulation
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
@@ -343,7 +477,10 @@ export — is recorded in CLAUDE.md):
   deflection-based `BRepMesh` criterion)
 - [ ] Debug modifiers (`#`/`%`/`!`/`*`) — per-body display flags (ghost/isolate/hide;
   highlight exists via selection)
-- [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame
+- [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
+  is the *expensive* cousin of the Animation section above and deliberately separate:
+  that one moves poses and the camera only, which is why it can animate with matrices
+  alone; this one changes geometry, so every frame pays a full lower + tessellate.
 - [ ] model-validation report (volumes, bounds, manifoldness per body) in the viewer —
   the `assert/echo` analog
 - [ ] export 3MF / AMF (zip+XML; 3MF is the modern printing format), OFF
@@ -459,6 +596,78 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] Hidden-line removal (HLR) projections for 2D drawings
 - [ ] OCAF-style document framework: undo/redo, attributes, persistence
 
+## build123d / CadQuery parity (open items)
+
+Both are **OCCT front ends**, so unlike the OpenSCAD and OCCT sections above this one is
+almost entirely about **API design, not kernel capability** — their contribution is how a
+model is *expressed*, and the underlying operations are ones we largely have. Read them
+for ergonomics, and copy capability rather than syntax: CadQuery's stringly-typed
+selectors (`">Z"`, `"|Z and >Y"`) are the part to learn from and *not* imitate, because
+`BrepQueries` + LINQ gives the same power type-safely. build123d's `ShapeList`
+(`.sort_by(Axis.Z)`, `.filter_by(GeomType.PLANE)`, `.group_by(...)`) is much closer to
+where this project already points.
+
+- [ ] **The selection vocabulary is the real gap, and it is LINQ-shaped.** We have
+  `BrepQueries` (`IsPlanar`/`IsCylindrical`/`IsCircular`/`Length`/`Bounds`/`IsConvex`,
+  adjacency, `PlanarFacesWithNormal`, `RimEdges`, `ConvexEdges`) and lambda selectors.
+  What both libraries have and we do not is the **ordering/grouping layer** on top:
+  sort faces along an axis and take the extreme one, group by coplanarity or by distance
+  along a direction and take the *n*-th group, filter by surface type, take the largest
+  by area or the *n*-th by radius. As extension methods over `IEnumerable<BrepFace>` /
+  `IEnumerable<BrepEdge>` that is small, idiomatic C#, and it is exactly the
+  "LINQ-native geometry querying" this project claims as a design goal — the spatial
+  `IQueryable` provider already exists for the *positional* half.
+- [ ] **Location / workplane algebra as first-class values** — `Locations`,
+  `GridLocations`, `PolarLocations`, `HexLocations` (build123d) and
+  `pushPoints`/`rarray`/`polarArray`/`eachpoint` (CadQuery) all express "place this
+  feature at these N poses" as data an operation consumes. We have the pieces —
+  `Frame3d`, `SketchPlane.On(face)`, `PatternLinear`/`PatternCircular`, and `Drill`
+  already takes a point list — but no shared *location-list* abstraction that every
+  operation accepts. Unifying that would make `Drill`, patterns and component placement
+  one idea instead of three.
+- [ ] **Extrude `until` NEXT / LAST** — extrude or cut until the next face or the last
+  face of the existing body, instead of a fixed distance. Both libraries have it, it is
+  one of the most-used real modelling conveniences, and it is genuinely missing here.
+  Implementable as a ray cast from the profile against the target body (the per-part BVH
+  and `MeshSdf` are both already available) to find the stop distance, then the ordinary
+  extrude — so the work is the *robustness* of choosing the face, not new geometry.
+- [ ] **Builder-style authoring alongside the algebra** — `Shape` is already
+  algebra-mode (`box - cylinder`, which is build123d's second API almost exactly), so
+  the gap is the *builder* form: a scoped context that accumulates operations with an
+  add/subtract/intersect mode, so a sketch can be built from several pieces and consumed
+  without naming every intermediate. Worth prototyping against a real model before
+  committing — C# `using` scopes and object initializers are not Python context
+  managers, and a bad transliteration would be worse than the current fluent style.
+- [ ] **Joints** — build123d's `RigidJoint`/`RevoluteJoint`/`LinearJoint`/
+  `CylindricalJoint`/`BallJoint` with `connect_to` is the *same idea* as the Mechanisms
+  section above, and is worth reading before designing ours: it is a shipped, used
+  vocabulary for exactly the "joints as a layer over constraints" design proposed there.
+  Note the difference in ambition, though — theirs positions parts, ours needs to *drive*
+  them through a range, which is why the DOF reporting and continuation solve matter.
+- [ ] **2D sketch constraint solver** — CadQuery's `Sketch.constrain(...)/.solve()`.
+  Already an open item in this backlog under sketching; noting it here because CadQuery
+  is a concrete reference implementation to study rather than designing from scratch.
+- [ ] **Drafting / dimensions** — build123d's `drafting` module (`Draft`,
+  `DimensionLine`, `ExtensionLine`, `TechnicalDrawing`). We have 3D PMI annotations
+  landed (`LinearDimension`, `RadialDimension`, `LeaderNote`, `DatumLabel` with
+  auto-measuring selectors), so this is mostly a **2D drawing sheet** gap: dimensions
+  laid out on a projected view rather than in model space. Pairs with the HLR item in the
+  OCCT section — HLR gives the view, drafting gives the annotation on it.
+- [ ] **Exporter breadth** — between them: SVG and DXF with layers and line types
+  (visible/hidden), 3MF, glTF, VTK, VRML, AMF. DXF/SVG and 3MF are already open items
+  elsewhere in this file; the specific thing worth taking from build123d's `ExportSVG`/
+  `ExportDXF` is **line-type and layer control driven by edge classification** (visible
+  vs hidden vs section), which is what makes an exported drawing usable rather than a
+  flat soup of curves.
+- [ ] **`pack`** — build123d's arrange-parts-on-a-build-plate helper (2D bin packing of
+  part footprints). Small, self-contained, and immediately useful for 3D-print export of
+  a multi-part assembly; `Shape.Silhouette` already produces the footprint it needs.
+- [ ] **Deliberately NOT taking**: string selectors (type-unsafe, and LINQ is strictly
+  better in C#), Python-style implicit "pending" state carried between builder calls
+  (hard to reason about and worse without context managers), and the `Workplane` stack's
+  history/rollback semantics (our `FeatureHistory` already covers regeneration properly
+  and with typed parameters).
+
 ## Viewer
 
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
@@ -557,14 +766,18 @@ UI dependencies, which makes this unusually feasible.
   would close the gap — windows runners have Edge — but it can flake, and a flaky check
   blocking docs deploys is its own cost. The verification recipe is in
   `src/EngrCAD.Web/README.md`.
-- [ ] **Scene-to-frame layer** — `WebGlContext` can compile programs, upload meshes/lines
-  and draw a `FrameDescription`, and `EngrCAD.Viewer.Core` supplies the shaders, camera
-  and section rule. Missing is the piece that turns a `Scene` into draw calls (the same
-  job `ViewportControl` does for the desktop). That is the `ViewerModel` abstraction the
-  shared-render-model item below describes — build it once, for both.
-- [ ] **The orbit-camera component** — pointer/wheel handling in Blazor over
-  `CameraMath`, matching the desktop bindings (drag orbit, shift+drag pan, ctrl+drag or
-  wheel zoom).
+- [x] **Scene-to-frame layer** — `ViewportFrame.Build(...)` is a **pure function** from
+  instances + camera to a `FrameDescription`, which is what lets draw order, clear
+  colour, furniture ranges and per-instance matrices be asserted as values instead of
+  compared by eye (`EngrCAD.Web.Tests`). The window and offscreen passes drifted
+  precisely because pixels were the only way to compare them.
+- [x] **The orbit-camera component** — `EngrCadViewport.razor`'s pointer/wheel handlers
+  call `CameraMath.DragOrbit`/`DragPan`/`DragZoom`/`WheelZoom`, which were moved OUT of
+  `ViewportControl` into `EngrCAD.Viewer.Core` (along with `CameraState`,
+  `PitchLimit`, `KeyStep`) so both front ends share one implementation; the desktop now
+  delegates, every constant preserved verbatim and locked by `OrbitCameraTests`.
+  Verified drawing by canvas readback: 33 912 lit pixels, and 111 481 changed after an
+  orbit. Headless WebGL2 works under `--disable-gpu`, which had been an open risk.
 - [x] **Shared render model, step 1** — the UI-free half of `RenderCore.cs` is now
   `src/EngrCAD.Viewer.Core` (no Avalonia, no Silk.NET; a scratch blazorwasm app builds
   and publishes against it). `ViewStyle`, `SectionPlane`/`SectionAxis`/`SectionCombine`/
@@ -576,17 +789,24 @@ UI dependencies, which makes this unusually feasible.
   the web client will want: `TabMeshLoader` (already Avalonia-free and headlessly
   unit-tested — the cleanest move), `ViewCubeMath` and `StrokeFont` (interleaved with GL
   drawing inside `ViewCube.cs`), `AnnotationGeometry` (same, inside `AnnotationLayer.cs`),
-  `HoverThrottle`. Then the `ViewerModel` abstraction over Scene→render-instances that
+  `HoverThrottle`. (`WireframeEdges` ✅ moved with the display-modes rung — forced, because its walk order decides uploaded vertex order.) Then the `ViewerModel` abstraction over Scene→render-instances that
   would serve Avalonia, offscreen AND the web client.
 - [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
   written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
   shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —
   an API change, not a move.
-- [ ] **Feature parity ladder** (build in this order): orbit/pan/zoom camera + shaded
-  mesh rendering → part colors + feature edges → tab strip + model tree + visibility →
-  picking (ray-cast server/client-side against the existing per-part BVH) → display
-  modes + section planes (same fragment-discard technique in WebGL) → properties
-  panel. Reuse the camera math from `CameraMath` (public in `EngrCAD.Viewer.Core`).
+- [ ] **Feature parity ladder** (build in this order): ~~orbit/pan/zoom camera + shaded
+  mesh rendering~~ ✅ → ~~feature edges~~ ✅ → ~~display modes + the global view style~~ ✅
+  → tab strip + model tree + visibility → picking (ray-cast client-side against the
+  existing per-part BVH) → section planes (same fragment-discard technique in WebGL) +
+  their SDF isolines → view cube → annotations → properties panel. Reuse the camera math
+  from `CameraMath` (public in `EngrCAD.Viewer.Core`) — the orbit input bindings and
+  `WireframeEdges` now live there too, so a new front end never re-types them.
+  **Prerequisite for the section rung**: `setUniform` in `engrcad-gl.js` has no `int`
+  path — the interop marshals every JSON number through `uniform1f`, which GL rejects on
+  an int, so `uSectionCount` is currently *deliberately never sent* (a test asserts the
+  absence; the clip rule short-circuits on `uSectionEnabled` and an unset int uniform is
+  already 0). Add the int path before wiring sections, not after.
 - [ ] **Docs-site embedding, the general form** — one page embeds the demo today
   (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
   viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
@@ -660,6 +880,10 @@ stdout guarded, geometry evaluated lazily). Remaining:
   (v1 constrains one level; a sub-assembly is one rigid body), mate
   persistence/serialization alongside `SaveParameters`, and an **explode-path renderer**
   (the dashed leader lines drafting standards draw between an exploded part and its seat).
+  Note that **mates ACROSS assembly levels is a prerequisite for most real mechanisms** —
+  a linkage whose members are sub-assemblies cannot be jointed at all while a
+  sub-assembly is one rigid body — so that item and the Mechanisms section above should
+  be scheduled together.
 - [ ] **Standard component library — breadth and fidelity** (v1 landed:
   `HardwareComponent` + `ComponentFeature` + `ComponentAssembly`; ISO 4762 SHCS, Tappex
   Trisert, ISO 2338 dowel; the full two-body fastener stack). Follow-ups: more families

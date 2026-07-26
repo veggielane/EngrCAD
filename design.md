@@ -753,6 +753,49 @@ for `in`-parameters being illegal in expression trees.
   slower than native interpreted, 4.3x with AOT. That makes "web viewer" a deployment
   decision (AOT is 4.4x faster for 2.4x the download) rather than an engineering fork,
   which is the whole reason the kernel was kept free of UI dependencies by mandate.
+- **A feature-edge overlay DARKENS - "more lit pixels" is the wrong oracle.** The
+  intuitive assertion for ShadedWithEdges versus Shaded is that it lights *more* pixels,
+  and it is backwards: the overlay is near-black drawn *over* lit fill, so it lights
+  fewer (measured 35 183 against 35 980). An assertion in that direction fails on correct
+  code, which is the worst kind of test. The invariant that actually holds - and holds on
+  both front ends, so it doubles as a parity check - is **darkened pixels > 0 and
+  brightened pixels == 0**. Count the *direction of change* against the same scene without
+  edges, never an absolute brightness total.
+- **A pixel classifier has to survive the blend it is looking through.** Proving that a
+  translucent part reveals the part behind it means classifying "did the hidden part show
+  through", and the obvious classifier - count pixels where red exceeds blue, for a warm
+  part behind a cool one - collapses under alpha: at 0.4 alpha beneath steel (blue 0.84),
+  a `Palette.Coral` part lands at r - b = +8, indistinguishable from noise, and the reveal
+  measured 1 478 pixels instead of 21 083. Pick the hidden part's colour so the classifier
+  still separates *after* blending (amber, not coral), and trust **the ratio to the opaque
+  case** rather than any absolute count.
+- **Two render paths can disagree on line measures and both be right.** Comparing the
+  browser client against `OffscreenRenderer`, fills, points and translucency agreed within
+  2-10%, while wireframe did not (26 228 against 19 980). The cause is not the geometry:
+  the offscreen pass renders at 2x and box-downsamples, so a 1-pixel line contributes
+  about a quarter of a final pixel and falls below an absolute brightness threshold, where
+  the browser draws 1-pixel lines at final resolution. Same primitives, different
+  reconstruction filter. Resist "fixing" it by widening lines on one side - that trades a
+  measurable, explainable difference for an invisible divergence in what is drawn.
+- **A frame should be a VALUE, because that is what makes two render paths comparable.**
+  The window pass and the offscreen pass drifted apart in the first place for one reason:
+  each built its draws imperatively inside its own callback, so the only way to compare
+  them was to look at pixels. `ViewportFrame.Build(instances, camera, bounds, aspect,
+  furniture)` is the browser's counterpart and is a *pure function*, so draw order, clear
+  colour, furniture ranges, per-instance matrices and the neutral shader state are all
+  asserted directly as values. Extracting shared shaders and camera maths stopped the
+  drift; making the frame a value is what makes drift *visible* without a screenshot.
+- **Fills do not cull, and that will look like a bug until the section rung lands.** Both
+  desktop passes leave face culling off deliberately: a section plane exposes a solid's
+  interior as *backfaces*, which the shared fragment shader shades as cut material via
+  `gl_FrontFacing`. Enabling culling looks completely fine today and silently breaks
+  sectioning later - exactly the kind of change that is impossible to attribute months
+  afterwards, which is why it is asserted by a test rather than left as a comment.
+- **`uSectionCount` must never be sent from the browser client.** It is an `int` uniform,
+  and the JS interop marshals every JSON number through `uniform1f`, which GL rejects on
+  an int. The clip rule short-circuits on `uSectionEnabled` and an unset int uniform is
+  already 0, so the neutral state must say *nothing* about it. A test asserts the
+  absence, because "we do not set this" is otherwise invisible.
 - **A published Blazor app is path-portable for the price of one tag.** Every asset
   reference the build emits is already relative - `./_framework/...` in the rewritten
   import map, `_framework/...` in the script tag - so `<base href>` is the *entire*
