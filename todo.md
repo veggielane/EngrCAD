@@ -86,9 +86,20 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
     positive-area guard.
   - A band whose two chains **meet at a point** (a rung of zero steps) falls back; the
     merge walk needs a shared-apex start case.
-  - **Bands with interior hole loops** still ear-clip (`TriangulateBandWithHoles`). The
-    slivers there run along hole rims, whose geodesic curvature is generally nonzero, so
-    this is not currently visible — but it is the same defect waiting.
+  - ~~**Bands with interior hole loops** still ear-clip (`TriangulateBandWithHoles`)~~
+    ✅ **done** — and it *was* visible: the cross-drilled bore wall in
+    `docs/examples/images/section-oblique.png` rendered as a crumpled fan. This entry
+    called it "the same defect waiting", which was right, but the mechanism was worse than
+    predicted: the ear clipper is **structurally forced** into a fan there, because both
+    ring loops pull back to a bit-identical v so `IsEar` rejects every corner along both
+    chains. `ZipSlabs`/`SweepMonotone` now decompose the unrolled band into u-monotone
+    slabs; the ear clipper stays as the fallback. Bore wall at 128 spc: 12 164 triangles /
+    worst dot 0.0198 → 416 / 0.99981, and the volume converges quadratically instead of
+    stalling.
+  - **Tier 4 `TriangulateRegion` still ear-clips**, so a non-wrapping region with an
+    exactly uv-collinear boundary run would hit the identical forced fan. Nothing in the
+    suite or the docs exercises it, so the slab sweep was deliberately not widened to it —
+    but the mechanism is now understood, and this is where it would resurface.
 - [ ] **Trimmed-face refusals are now loud — find out what they refuse.** Two documented
   gaps used to fall back to the grid silently and now throw: pole-bounded single-chain
   bands with holes, and |winding| > 1 loops. Nothing in the suite or the docs hits them,
@@ -100,6 +111,11 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
   tolerance — because orientation was never checked. `MiteredBandTessellationTests`'
   `FoldReport` helper generalizes to any solid: run it over the whole B-Rep corpus
   (drilled plates, cross-drills, threads, lofts, shells) as one parameterized test.
+  **Assert the worst normal dot, NOT the fold count** — the cross-drilled bore had zero
+  inverted triangles before *and* after its fix, while carrying an 88.9° sliver (dot
+  0.0198), so a count-based assertion would have passed the broken mesh. Pair it with a
+  convergence check: excess volume should fall ~4× per doubling, and the bore's stalling
+  ratios (3.29 → 1.39 → 1.19) are what a non-converging triangulation looks like.
 - [ ] **Refinement quality upgrade** — Rivara-with-boundary-constraints instead of the
   monotone-decrease rule's worst-sliver tradeoff; no Delaunay flips. Lower priority now
   that the base triangulation carries the accuracy rather than the refinement. Also
@@ -513,15 +529,34 @@ UI dependencies, which makes this unusually feasible.
     with a 6-hole bolt circle and a filleted rim gave 1 560 triangles, closed, volume
     41 573.0 in headless Edge, matching the desktop run. No WASM-specific code path,
     and no `ArrayPool`/`stackalloc`/`Vector<double>` trouble.
-  - **Speed is a constant factor, not a wall**: desktop 81.3 ms total; WASM without AOT
-    1 619.8 ms (19.9×); WASM with AOT 401.6 ms (4.9×).
-  - **Payload**: 2.4 MB brotli, or 4.6 MB with AOT. All eight EngrCAD assemblies are
-    1.17 MB uncompressed — the download is the .NET runtime, so trimming our own code
-    would win almost nothing.
-- [ ] **Decide AOT per deployment** — it buys 4× for 1.9× the download (`wasm-tools` +
-  `-p:RunAOTCompilation=true`). Interactive editing wants it; a docs page drawing one
-  static model probably does not. Needs a measured page-load number (time to first
-  render) before choosing a default, since the current numbers are compute-only.
+  - **Speed is a constant factor, not a wall**: desktop 88.7 ms total; WASM without AOT
+    1 677.3 ms (18.9×); WASM with AOT 385.2 ms (4.3×). All three from clean publishes,
+    interleaved into one measurement window.
+  - **Payload**: 1.9 MB brotli, or 4.6 MB with AOT. All nine EngrCAD assemblies are
+    1.14 MB uncompressed / 0.41 MB brotli, so our own code is about a fifth of the
+    download and the runtime is the rest.
+- [x] **Docs site hosts the live demo** — `docs/examples/web.md` embeds it in an iframe
+  and `.github/workflows/docs.yml` publishes the app into `_site/live/`. The app is
+  **path-portable**: `<base href="./" />` plus the already-relative asset references the
+  build emits mean no `StaticWebAssetBasePath`, no post-publish rewrite and no repository
+  name in the artifact. `?embed` strips the page furniture for the iframe. The page's
+  headline geometry (1 560 triangles, closed, 41 573.0 mm³) is pinned by a `run:` snippet
+  so the docs build fails if the kernel ever disagrees with what the page claims.
+- [ ] **AOT for the docs deployment is deliberately OFF, and worth revisiting** — it is
+  4.4× faster for 2.4× the download. Declined for now because AOT compilation adds
+  minutes to every docs deploy and the embedded demo rebuilds only on slider release;
+  revisit once the WebGL viewer lands and the page becomes something you orbit rather
+  than something you rebuild. Still missing a **time-to-first-render** number —
+  everything measured so far is compute-only, and the 4.6 MB download is exactly the part
+  that number would price.
+- [ ] **A published-artifact smoke test would be worth having.** An incremental publish
+  can ship a runtime that disagrees with the assemblies: it builds clean, runs ~1.6×
+  slow, then aborts with `MONO interpreter: NIY encountered in ...:.cctor ()`. A clean
+  publish fixes it and CI is immune (fresh checkout), so the workflow only asserts
+  `index.html` exists. A headless-browser check that the published app actually *computes*
+  would close the gap — windows runners have Edge — but it can flake, and a flaky check
+  blocking docs deploys is its own cost. The verification recipe is in
+  `src/EngrCAD.Web/README.md`.
 - [ ] **Scene-to-frame layer** — `WebGlContext` can compile programs, upload meshes/lines
   and draw a `FrameDescription`, and `EngrCAD.Viewer.Core` supplies the shaders, camera
   and section rule. Missing is the piece that turns a `Scene` into draw calls (the same
@@ -552,10 +587,12 @@ UI dependencies, which makes this unusually feasible.
   picking (ray-cast server/client-side against the existing per-part BVH) → display
   modes + section planes (same fragment-discard technique in WebGL) → properties
   panel. Reuse the camera math from `CameraMath` (public in `EngrCAD.Viewer.Core`).
-- [ ] **Docs-site embedding** — the payoff synergy: DocsGen examples could emit an
-  interactive WASM viewer block per example instead of (or alongside) static PNGs —
-  spin-the-model documentation, all statically hosted on the existing GitHub Pages
-  deployment.
+- [ ] **Docs-site embedding, the general form** — one page embeds the demo today
+  (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
+  viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
+  documentation, all statically hosted on the existing GitHub Pages deployment. Needs the
+  scene-to-frame layer first, plus a way to ship one runtime shared by every embed rather
+  than a 1.9 MB payload per page.
 - [ ] **Out of scope until later**: editing/sketching in the browser, collaboration,
   server-side model storage. This is a *viewer* first.
 
