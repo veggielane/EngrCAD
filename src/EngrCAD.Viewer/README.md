@@ -694,7 +694,10 @@ gracefully on machines with no GPU/ANGLE.
   with a simple directional-light shader.
 - **Camera** (laptop-friendly): drag orbits, Shift+drag pans, Ctrl+drag or scroll zooms;
   right/middle-drag also pans. Keyboard works everywhere: arrows orbit, +/−
-  (or PageUp/Down) zoom, WASD pans. Z is up.
+  (or PageUp/Down) zoom, WASD pans. Z is up. The handlers here only *classify* the
+  gesture — every pose change goes through `CameraMath` (EngrCAD.Viewer.Core), which the
+  Blazor viewport calls too, so there is one implementation of what a drag does and the
+  two front ends cannot come to feel different.
 - **Input plumbing**: all pointer/keyboard handlers are registered on the *window* with
   `handledEventsToo` — control-level handlers proved fragile (gesture recognizers and
   hit-testing over the GL surface starved the viewport of events, breaking trackpads).

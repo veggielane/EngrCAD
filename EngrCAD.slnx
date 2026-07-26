@@ -30,6 +30,7 @@
     <Project Path="tests/EngrCAD.Query.Tests/EngrCAD.Query.Tests.csproj" />
     <Project Path="tests/EngrCAD.Modeling.Tests/EngrCAD.Modeling.Tests.csproj" />
     <Project Path="tests/EngrCAD.Viewer.Tests/EngrCAD.Viewer.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Web.Tests/EngrCAD.Web.Tests.csproj" />
     <Project Path="tests/EngrCAD.Mcp.Tests/EngrCAD.Mcp.Tests.csproj" />
     <Project Path="tests/EngrCAD.Mcp.TestModel/EngrCAD.Mcp.TestModel.csproj" />
   </Folder>

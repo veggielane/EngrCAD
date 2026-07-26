@@ -24,6 +24,44 @@ The same rule applies to camera framing, section clipping and draw order: those 
 live in .NET, in code shared with the desktop, and reach JavaScript as a plain
 `FrameDescription`. `engrcad-gl.js` contains no policy.
 
+The test is blunt: **if a question about what the scene looks like can be answered by
+reading the JavaScript, the rule is broken.** When a frame needs something new, it
+becomes data on `FrameDescription`/`DrawCall`, never a branch in the module — which is
+why the background gradient's fullscreen triangle arrives as `Geometry = null, Count = 3`
+rather than as a `if (isBackground)` in JS.
+
+## `ViewportFrame`: a frame is a value
+
+`ViewportFrame.Build(instances, camera, bounds, aspect, furniture)` is the browser's
+counterpart to `ViewportControl.OnOpenGlRender` and `OffscreenRenderer.Draw` — and it is
+a **pure function**, so unlike either of them it can be asserted directly. That is not a
+stylistic preference: those two drifted precisely because the only way to compare them
+was to look at pixels. `EngrCAD.Web.Tests` pins the draw order, the clear colour, the
+furniture ranges, the per-instance matrices, and the neutral shader state as values.
+
+Two decisions there are load-bearing and easy to "fix" wrongly:
+
+- **Fills do not cull.** Both desktop passes leave face culling off, because a section
+  plane exposes a solid's interior as *backfaces*, which the shared fragment shader
+  shades as cut material via `gl_FrontFacing`. Culling would look fine today and break
+  the section rung silently.
+- **`uSectionCount` is never sent.** It is an `int` uniform, and the interop marshals
+  every JSON number through `uniform1f`, which GL rejects on an int. The clip rule
+  short-circuits on `uSectionEnabled` and an unset int uniform is already 0, so the
+  neutral state must say nothing about it. A test asserts the absence.
+
+## The camera is not forked either
+
+`EngrCadViewport`'s pointer handlers call `CameraMath.DragOrbit`/`DragPan`/`DragZoom`/
+`WheelZoom` — the same functions `ViewportControl` calls, moved into
+`EngrCAD.Viewer.Core` for exactly this reason. There is one answer to what dragging 100
+pixels does, and it is tested once.
+
+The one legitimate difference is unit conversion: a DOM wheel event reports roughly 100
+pixels per notch and counts *down* as positive, the opposite of the desktop toolkit's
+convention. That is a browser fact, so `WheelNotches` normalizes it in the component and
+the feel decision behind it stays in `CameraMath`.
+
 ## Geometry crosses the boundary as bytes
 
 Blazor marshals `byte[]` as a binary array; `float[]` goes through JSON. For a mesh of a
@@ -96,9 +134,47 @@ and no repository name baked into the artifact. `.github/workflows/docs.yml` doe
 `?embed` drops the page heading and footer for that iframe; `?report` runs the timing
 self-check described above.
 
+## Proving it drew, headlessly
+
+**A black canvas throws nothing**, so "no errors in the console" is not evidence that
+anything rendered. `WebGlContext.CapturePixelsAsync` re-draws the last frame and reads it
+back (the context has no `preserveDrawingBuffer`, so a separate interop call would find
+the buffer already gone), and `CapturedPixels.CountBrighterThan` turns it into a number
+.NET can assert. The demo's `?report` beacon carries that number out.
+
+Headless Edge **does** have WebGL2 even with `--disable-gpu`: it falls back to ANGLE over
+the D3D11 WARP renderer (`ANGLE (Microsoft, Microsoft Basic Render Driver, Direct3D11)`),
+and `readPixels` works. Measured on the demo's flange at a 736x420 drawing buffer:
+**33 961 pixels brighter than 90/255** (the background gradient tops out at 46 and the
+ground grid at 74, so everything above that is lit geometry), and **115 081 pixels change**
+when the camera is orbited through `CameraMath.DragOrbit` — a viewport that drew once and
+then ignored the camera would pass the first check and fail the second. Rendered
+side-by-side against `OffscreenRenderer` at the same size, camera and view style, the two
+images agree; the desktop one is smoother only because it supersamples 2x.
+
+Two traps in that loop, both already paid for: `--dump-dom` needs `--virtual-time-budget`
+to reach the end of the work, and **under virtual time the clock does not advance during
+synchronous computation**, so every in-page *timing* reads 0 ms (pixel counts are fine —
+they are not clocks). And synthetic input: unlike the desktop toolkit, Blazor **does**
+receive `dispatchEvent`-ed `PointerEvent`s, which is verifiable without pixels because
+the handler's state reaches the DOM — the canvas cursor switches to `grabbing` on
+`pointerdown` and back on `pointerup`.
+
 ## Status
 
-Kernel-in-the-browser and the WebGL2 interop layer are in place, and the kernel half is
-live on the docs site. Still to build: the scene-to-frame layer, the orbit camera
-component, feature edges, model tree, picking and section planes. The parity ladder is
-in `todo.md`.
+Kernel-in-the-browser, the WebGL2 interop layer, the scene-to-frame layer and the orbit
+camera are in place, and the demo draws real geometry. Still to build: feature edges,
+per-part display modes and the global view style, model tree, picking, section planes and
+their isolines, the view cube, and annotations. The parity ladder is in `todo.md`.
+
+Notes for whoever takes the next rung:
+
+- `RenderModes.Resolve` and `SectionClip` are already shared and waiting; the frame
+  builder deliberately does **not** half-apply them, because a mode resolved and then
+  ignored looks like support and is not. Every instance currently draws shaded.
+- There is no ambient-occlusion bake in the browser. `uAmbientOcclusion` is 0, which
+  makes the factor exactly 1.0 and *is* the AO-off shading rather than an approximation
+  of it — the same property that lets the desktop stream bakes in behind a live scene.
+- Frame-constant uniforms ride on `FrameDescription.Shared` so they travel once instead
+  of once per instance. For a scene of any size that is most of the interop payload, and
+  it is the first place to look if a large assembly feels heavy during a drag.

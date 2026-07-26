@@ -38,6 +38,11 @@ export function createContext(canvas) {
         programs: new Map(),
         meshes: new Map(),
         lines: new Map(),
+        // An attributeless VAO for draws that generate their own vertices from
+        // gl_VertexID (the background gradient), and the last frame drawn, which is what
+        // capture() re-runs. Neither is a decision about what a frame looks like.
+        emptyVao: gl.createVertexArray(),
+        lastFrame: null,
     });
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
@@ -51,7 +56,18 @@ export function disposeContext(id) {
     for (const mesh of ctx.meshes.values()) releaseMesh(ctx.gl, mesh);
     for (const line of ctx.lines.values()) releaseLines(ctx.gl, line);
     for (const program of ctx.programs.values()) ctx.gl.deleteProgram(program.handle);
+    ctx.gl.deleteVertexArray(ctx.emptyVao);
     contexts.delete(id);
+}
+
+/**
+ * Routes subsequent pointer events for `pointerId` to the canvas until the button is
+ * released, so a drag that leaves the element keeps orbiting -- the browser's answer to
+ * the desktop viewer's window-level handlers. Failures are ignored: a pointer that has
+ * already been released cannot be captured, and that is not an error worth surfacing.
+ */
+export function capturePointer(canvas, pointerId) {
+    try { canvas.setPointerCapture(pointerId); } catch { /* pointer already gone */ }
 }
 
 function require(id) {
@@ -220,6 +236,38 @@ export function releaseGeometry(id, key) {
  */
 export function render(id, frame) {
     const ctx = require(id);
+    ctx.lastFrame = frame;
+    drawFrame(ctx, frame);
+}
+
+/**
+ * Re-draws the last frame and reads the pixels back as RGBA rows, BOTTOM row first (raw
+ * glReadPixels order -- flipping is the caller's business, like every other decision).
+ *
+ * The re-draw is not redundant: the context is created without preserveDrawingBuffer, so
+ * the buffer C# last asked for is gone by the time a separate interop call arrives. This
+ * is the browser's equivalent of the desktop viewer's SaveScreenshot, and it is what lets
+ * a headless run PROVE that pixels were drawn rather than infer it from a quiet log.
+ */
+export function capture(id) {
+    const ctx = require(id);
+    if (!ctx.lastFrame) throw new Error('Nothing has been rendered yet.');
+    drawFrame(ctx, ctx.lastFrame);
+    const gl = ctx.gl;
+    const width = gl.drawingBufferWidth;
+    const height = gl.drawingBufferHeight;
+    const pixels = new Uint8Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    return pixels;
+}
+
+/** The drawing buffer's size in device pixels (capture() returns rows of this width). */
+export function drawingBufferSize(id) {
+    const gl = require(id).gl;
+    return [gl.drawingBufferWidth, gl.drawingBufferHeight];
+}
+
+function drawFrame(ctx, frame) {
     const gl = ctx.gl;
 
     resize(ctx);
@@ -232,11 +280,16 @@ export function render(id, frame) {
         if (!program) throw new Error(`No program '${call.program}'`);
         gl.useProgram(program.handle);
 
+        // Frame-constant uniforms first, then the call's own -- the call wins on a clash.
+        for (const [name, value] of Object.entries(frame.shared ?? {})) {
+            setUniform(ctx, program, name, value);
+        }
         for (const [name, value] of Object.entries(call.uniforms ?? {})) {
             setUniform(ctx, program, name, value);
         }
 
         gl.depthMask(call.depthWrite !== false);
+        if (call.depthTest === false) gl.disable(gl.DEPTH_TEST); else gl.enable(gl.DEPTH_TEST);
         if (call.blend) {
             gl.enable(gl.BLEND);
             gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -251,6 +304,15 @@ export function render(id, frame) {
             gl.disable(gl.POLYGON_OFFSET_FILL);
         }
 
+        // No geometry key: the shader generates its own vertices from gl_VertexID (the
+        // background gradient's fullscreen triangle). The count comes from C# like
+        // everything else.
+        if (!call.geometry) {
+            gl.bindVertexArray(ctx.emptyVao);
+            gl.drawArrays(gl.TRIANGLES, 0, call.count ?? 3);
+            continue;
+        }
+
         const mesh = ctx.meshes.get(call.geometry);
         if (mesh) {
             gl.bindVertexArray(mesh.vao);
@@ -263,8 +325,10 @@ export function render(id, frame) {
         }
         const line = ctx.lines.get(call.geometry);
         if (line) {
+            // first/count let one buffer serve several draws: the three world axes are
+            // consecutive vertex pairs in a single upload, coloured separately.
             gl.bindVertexArray(line.vao);
-            gl.drawArrays(gl.LINES, 0, line.vertexCount);
+            gl.drawArrays(gl.LINES, call.first ?? 0, call.count ?? line.vertexCount);
             continue;
         }
         throw new Error(`No geometry '${call.geometry}'`);

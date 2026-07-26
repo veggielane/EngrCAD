@@ -1,0 +1,429 @@
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<div class="engrcad-viewport @Class"
+     style="position:relative; width:@Width; height:@Height; overflow:hidden; background:#1c1e22; @Style">
+    <canvas @ref="_canvas"
+            style="width:100%; height:100%; display:block; touch-action:none; cursor:@(_dragging ? "grabbing" : "grab")"
+            @onpointerdown="OnPointerDown"
+            @onpointermove="OnPointerMove"
+            @onpointerup="OnPointerUp"
+            @onpointercancel="OnPointerUp"
+            @onwheel="OnWheel"
+            @onwheel:preventDefault="true"
+            @oncontextmenu:preventDefault="true"></canvas>
+
+    @if (_message is not null)
+    {
+        <div style="position:absolute; left:0; right:0; bottom:0; padding:.45rem .7rem;
+                    font:13px/1.4 'Segoe UI', system-ui, sans-serif; color:@(_failed ? "#e07b6b" : "#9aa0aa");
+                    background:rgba(17,19,22,.82); pointer-events:none; white-space:pre-wrap">@_message</div>
+    }
+</div>
+
+@code {
+    // The browser front end of the viewport: it owns the canvas, the WebGL2 context and
+    // the pointer bindings, and NOTHING about what a frame looks like. Every such
+    // decision is made by ViewportFrame (this assembly, unit-tested) out of the shared
+    // render core in EngrCAD.Viewer.Core -- the same shaders and camera maths the desktop
+    // window and the offscreen renderer use.
+    //
+    // The desktop's ViewportControl is the structural model: upload each distinct Part
+    // once and draw its instances with their own matrices, auto-frame the first scene,
+    // and redraw on demand rather than on a clock.
+
+    /// <summary>The scene to draw; assemblies are flattened to instances.</summary>
+    [Parameter] public Scene? Scene { get; set; }
+
+    /// <summary>Loose parts, each drawn at its own transform.</summary>
+    [Parameter] public IReadOnlyList<Part>? Parts { get; set; }
+
+    /// <summary>Already-posed instances (<c>Tab.Instances()</c>, <c>Assembly.Flatten()</c>).</summary>
+    [Parameter] public IReadOnlyList<PartInstance>? Instances { get; set; }
+
+    /// <summary>Draw the ground grid and world axes (on, as in the desktop viewer).</summary>
+    [Parameter] public bool Furniture { get; set; } = true;
+
+    /// <summary>CSS size of the viewport element.</summary>
+    [Parameter] public string Width { get; set; } = "100%";
+
+    /// <inheritdoc cref="Width"/>
+    [Parameter] public string Height { get; set; } = "480px";
+
+    /// <summary>Extra classes and inline style for the wrapper element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <inheritdoc cref="Class"/>
+    [Parameter] public string? Style { get; set; }
+
+    /// <summary>Progress and failure messages, as the desktop status bar reports them.</summary>
+    [Parameter] public EventCallback<string> OnStatus { get; set; }
+
+    /// <summary>Raised once the whole scene has been meshed, uploaded and drawn — the
+    /// only point at which <see cref="CapturePixelsAsync"/> sees a finished frame.</summary>
+    [Parameter] public EventCallback OnRendered { get; set; }
+
+    private ElementReference _canvas;
+    private WebGlContext? _gl;
+
+    private readonly List<ViewportInstance> _drawn = [];
+    private readonly Dictionary<Part, string> _keys = [];   // Part has reference identity
+    private ViewportFurniture? _furniture;
+    private double _gridSpacing;
+    private Aabb _bounds = Aabb.Empty;
+
+    private CameraState _camera = ViewportFrame.DefaultCamera(Aabb.Empty);
+    private bool _userMovedCamera;
+
+    private object? _loadedFrom;
+    private bool _showingFurniture = true;
+    private int _generation;
+    private bool _rendering;
+    private bool _dirty;
+    private bool _dragging;
+    private double _lastX, _lastY;
+    private string? _message;
+    private bool _failed;
+
+    /// <summary>The current orbit pose.</summary>
+    public CameraState Camera => _camera;
+
+    /// <summary>
+    /// Moves the camera and draws. Async rather than a settable property because the draw
+    /// is: a caller that set a pose and immediately read the canvas back would read the
+    /// frame BEFORE the move, which is exactly the kind of quietly wrong result a
+    /// self-check exists to catch. Setting a pose also stops first-scene auto-framing, so
+    /// a host that chooses a view keeps it across a scene change.
+    /// </summary>
+    public Task SetCameraAsync(CameraState camera)
+    {
+        ArgumentNullException.ThrowIfNull(camera);
+        _camera = CameraMath.Clamped(camera, _bounds);
+        _userMovedCamera = true;
+        return PumpAsync();
+    }
+
+    /// <summary>Frames the whole scene, as the toolbar's Fit does.</summary>
+    public Task FitAsync()
+    {
+        _camera = ViewportFrame.DefaultCamera(_bounds);
+        _userMovedCamera = false;
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Re-draws and reads the pixels back — the browser's screenshot, and the only honest
+    /// way to assert that something was drawn (a black canvas raises no error).
+    /// </summary>
+    public ValueTask<CapturedPixels> CapturePixelsAsync() =>
+        _gl is null
+            ? throw new InvalidOperationException("The viewport has no GL context yet.")
+            : _gl.CapturePixelsAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _gl = await WebGlContext.CreateAsync(JS, new ElementReferenceLike(_canvas));
+                // ES3 headers: WebGL2 IS OpenGL ES 3.0, which is why the desktop shader
+                // sources compile here unchanged.
+                string header = ViewerShaders.Header(es: true);
+                await _gl.CreateProgramAsync(ViewportFrame.MeshProgram,
+                    header + ViewerShaders.MeshVertex, header + ViewerShaders.MeshFragment);
+                await _gl.CreateProgramAsync(ViewportFrame.LineProgram,
+                    header + ViewerShaders.LineVertex, header + ViewerShaders.LineFragment);
+                await _gl.CreateProgramAsync(ViewportFrame.BackgroundProgram,
+                    header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment,
+                    bindAttributes: false);
+            }
+            catch (WebGlUnavailableException e)
+            {
+                await FailAsync($"WebGL2 is unavailable: {e.Message}");
+                return;
+            }
+            catch (JSException e)
+            {
+                await FailAsync($"The viewport could not start: {e.Message}");
+                return;
+            }
+        }
+
+        if (_gl is not null && (!ReferenceEquals(Source, _loadedFrom) || _showingFurniture != Furniture))
+        {
+            _loadedFrom = Source;
+            _showingFurniture = Furniture;
+            await LoadAsync();
+        }
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Refuse loudly rather than silently picking one: a host that set two of these
+        // meant something by both, and quietly drawing the first is the wrong scene shown
+        // with no complaint.
+        int supplied = (Scene is null ? 0 : 1) + (Parts is null ? 0 : 1) + (Instances is null ? 0 : 1);
+        if (supplied > 1)
+            throw new InvalidOperationException(
+                "Set exactly one of Scene, Parts or Instances on EngrCadViewport.");
+    }
+
+    /// <summary>Whichever parameter supplied the scene — the identity a reload keys on.</summary>
+    private object? Source => (object?)Scene ?? (object?)Instances ?? Parts;
+
+    private IReadOnlyList<PartInstance> ResolveInstances()
+    {
+        if (Instances is not null)
+            return Instances;
+        if (Scene is not null)
+            return [.. Scene.AllInstances];
+        if (Parts is not null)
+            return [.. Parts.Select(p => new PartInstance(p, p.Transform, p.Name))];
+        return [];
+    }
+
+    /// <summary>
+    /// Meshes and uploads the scene, publishing a growing prefix so the viewport is
+    /// orbitable while the rest computes.
+    ///
+    /// <para>WebAssembly is single-threaded: <c>Part.GetMesh</c> is the kernel's
+    /// tessellation, hundreds of milliseconds for a real part, and running the whole
+    /// scene in one go would freeze the tab with nothing on screen. Yielding with
+    /// <c>Task.Delay(1)</c> — not <c>Task.Yield()</c>, which posts straight back onto the
+    /// same loop and need not paint — lets the pending status reach the DOM first, and
+    /// drawing after each part turns the wait into visible progress. It is the same
+    /// growing-prefix idea as the desktop's TabMeshLoader, minus the threading it does
+    /// not have.</para>
+    /// </summary>
+    private async Task LoadAsync()
+    {
+        var gl = _gl;
+        if (gl is null)
+            return;
+
+        // The generation token is re-checked after EVERY await that precedes a mutation,
+        // not just once per part: a slider moved mid-load starts a second pass, and a
+        // stale one that resumed between its upload and its bookkeeping would file a key
+        // the new pass has already released.
+        int generation = ++_generation;
+        foreach (string key in _keys.Values)
+            await gl.ReleaseGeometryAsync(key);
+        _keys.Clear();
+        _drawn.Clear();
+        _bounds = Aabb.Empty;
+        _gridSpacing = 0;
+        _failed = false;
+
+        var instances = ResolveInstances();
+        for (int i = 0; i < instances.Count; i++)
+        {
+            var instance = instances[i];
+            var part = instance.Part;
+            if (!_keys.TryGetValue(part, out string? key))
+            {
+                await ReportAsync($"Meshing {part.Name} ({i + 1} of {instances.Count})...");
+                await Task.Delay(1);
+                if (generation != _generation)
+                    return;
+                try
+                {
+                    var render = RenderMesh.CreateFlat(part.GetMesh());
+                    key = $"part{_keys.Count}";
+                    await gl.UploadMeshAsync(key, render.Positions, render.Normals, render.Indices);
+                }
+                catch (Exception e)
+                {
+                    // A part that throws is NAMED and skipped, never swallowed: the rest
+                    // of the scene still loads and the reason stays on screen.
+                    await FailAsync($"{part.Name}: {e.GetType().Name}: {e.Message}");
+                    continue;
+                }
+                if (generation != _generation)
+                    return;
+                _keys[part] = key;
+            }
+
+            var worldBounds = instance.Bounds();
+            _drawn.Add(new ViewportInstance(
+                key, instance.World, part.Color ?? Palette.Steel,
+                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
+            _bounds = _bounds.Union(worldBounds);
+
+            if (!_userMovedCamera)
+                _camera = ViewportFrame.DefaultCamera(_bounds);
+            await RebuildFurnitureAsync(gl);
+            if (generation != _generation)
+                return;
+            await PumpAsync();
+        }
+
+        if (!_failed)
+            await ReportAsync(null);
+        if (OnRendered.HasDelegate)
+            await OnRendered.InvokeAsync();
+    }
+
+    /// <summary>
+    /// The ground grid's 1-2-5 spacing is derived from the scene bounds, so it is rebuilt
+    /// when they grow — the desktop's RebuildGrid rule. Publishing a growing prefix means
+    /// the bounds grow once per part, but the *spacing* changes far less often, so the
+    /// upload is keyed on the spacing rather than on the bounds.
+    /// </summary>
+    private async Task RebuildFurnitureAsync(WebGlContext gl)
+    {
+        if (!Furniture)
+        {
+            _furniture = null;
+            return;
+        }
+        double spacing = RenderGeometry.NiceStep((_bounds.IsEmpty ? 10 : _bounds.Size.Length) / 10);
+        if (spacing == _gridSpacing)
+            return;
+        _gridSpacing = spacing;
+
+        var (grid, axes) = RenderGeometry.BuildGridAndAxes(_bounds);
+        await gl.UploadLineVerticesAsync("@grid", grid);
+        await gl.UploadLineVerticesAsync("@axes", axes);
+        _furniture = new ViewportFurniture("@grid", grid.Length / 3, "@axes");
+    }
+
+    // ---- drawing ----
+    //
+    // On demand, like the desktop viewport: a frame is drawn when something changed, not
+    // on a clock. Redraw requests that arrive while one is in flight coalesce into a
+    // single follow-up, so a fast drag cannot queue a backlog of stale frames.
+
+    private async Task PumpAsync()
+    {
+        if (_rendering)
+        {
+            _dirty = true;
+            return;
+        }
+        _rendering = true;
+        try
+        {
+            do
+            {
+                _dirty = false;
+                await DrawAsync();
+            }
+            while (_dirty);
+        }
+        finally
+        {
+            _rendering = false;
+        }
+    }
+
+    private async Task DrawAsync()
+    {
+        var gl = _gl;
+        if (gl is null)
+            return;
+        try
+        {
+            // Asked per frame rather than cached: it is one direct call into the module,
+            // and it makes a window resize just work instead of needing a ResizeObserver.
+            var (width, height) = await gl.ViewportSizeAsync();
+            if (width <= 0 || height <= 0)
+                return;   // not laid out yet; the next request will find a real size
+            await gl.RenderAsync(ViewportFrame.Build(
+                _drawn, _camera, _bounds, width / height, _furniture));
+        }
+        catch (JSDisconnectedException)
+        {
+            // The page is going away; there is nothing to draw on.
+        }
+        catch (JSException e)
+        {
+            await FailAsync($"Render failed: {e.Message}");
+        }
+    }
+
+    // ---- input ----
+    //
+    // The bindings match the desktop exactly because they ARE the desktop's: plain drag
+    // orbits, shift (or right/middle) drag pans, ctrl+drag and the wheel zoom, and every
+    // one of them is a call into CameraMath.
+
+    private async Task OnPointerDown(PointerEventArgs e)
+    {
+        _dragging = true;
+        _lastX = e.ClientX;
+        _lastY = e.ClientY;
+        // Capture, so a drag that leaves the canvas keeps orbiting. The desktop viewer
+        // solves the same problem by handling input at the window level.
+        if (_gl is not null)
+            await _gl.CapturePointerAsync(new ElementReferenceLike(_canvas), e.PointerId);
+    }
+
+    private Task OnPointerMove(PointerEventArgs e)
+    {
+        if (!_dragging || e.Buttons == 0)
+            return Task.CompletedTask;
+
+        double dx = e.ClientX - _lastX;
+        double dy = e.ClientY - _lastY;
+        _lastX = e.ClientX;
+        _lastY = e.ClientY;
+
+        // Buttons is a bitmask: 1 primary, 2 secondary, 4 middle.
+        bool pan = (e.Buttons & 6) != 0 || ((e.Buttons & 1) != 0 && e.ShiftKey);
+        bool zoom = (e.Buttons & 1) != 0 && e.CtrlKey;
+
+        _camera = pan ? CameraMath.DragPan(_camera, dx, dy)
+            : zoom ? CameraMath.DragZoom(_camera, dy, _bounds)
+            : CameraMath.DragOrbit(_camera, dx, dy);
+        _userMovedCamera = true;
+        return PumpAsync();
+    }
+
+    private void OnPointerUp(PointerEventArgs e) => _dragging = false;
+
+    private Task OnWheel(WheelEventArgs e)
+    {
+        _camera = CameraMath.WheelZoom(_camera, WheelNotches(e), _bounds);
+        _userMovedCamera = true;
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Browser wheel deltas in the units CameraMath expects: notches, positive toward the
+    /// viewer. A DOM wheel event reports roughly 100 pixels per notch and counts DOWN as
+    /// positive, the opposite of the desktop toolkit's convention, so this is the one
+    /// place the two front ends legitimately differ — it is a browser fact, not a feel
+    /// decision, and the feel decision behind it stays in CameraMath.WheelZoom.
+    /// </summary>
+    private static double WheelNotches(WheelEventArgs e) => e.DeltaMode switch
+    {
+        1 => -e.DeltaY / 3.0,     // DOM_DELTA_LINE
+        2 => -e.DeltaY,           // DOM_DELTA_PAGE
+        _ => -e.DeltaY / 100.0,   // DOM_DELTA_PIXEL
+    };
+
+    // ---- status ----
+
+    private async Task ReportAsync(string? message)
+    {
+        _message = message;
+        StateHasChanged();   // OnAfterRender does not re-render on its own
+        if (message is not null && OnStatus.HasDelegate)
+            await OnStatus.InvokeAsync(message);
+    }
+
+    private async Task FailAsync(string message)
+    {
+        _failed = true;
+        await ReportAsync(message);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _generation++;   // any load still in flight stops at its next checkpoint
+        if (_gl is not null)
+            await _gl.DisposeAsync();
+        _gl = null;
+    }
+}

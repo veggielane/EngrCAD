@@ -55,8 +55,10 @@ internal static class ViewCubeMath
     public const double Band = 0.55;
 
     /// <summary>Pitch clamp shared with the orbit camera (0.01 shy of the poles keeps
-    /// LookAt's up vector non-degenerate).</summary>
-    public const double PitchLimit = Math.PI / 2 - 0.01;
+    /// LookAt's up vector non-degenerate). Defined by <see cref="CameraMath.PitchLimit"/>
+    /// rather than repeated: the cube's poses and the orbit clamp must be the same number,
+    /// or snapping to Top would be undone by the very next clamp.</summary>
+    public const double PitchLimit = CameraMath.PitchLimit;
 
     /// <summary>
     /// Maps a control-space point (DIPs, y down) into the cube region's normalized
