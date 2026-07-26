@@ -350,7 +350,8 @@ Dark-themed layout around one shared GL viewport:
   - *Shaded* — lit fill with the feature-edge overlay (the normal CAD look).
   - *Wireframe* — every mesh edge drawn as a line, no fill, in the part's color
     (selection turns it gold). Reuses the line program over the half-edge mesh's
-    edges (`WireframeEdges`).
+    edges (`WireframeEdges`, which now lives in `EngrCAD.Viewer.Core` — it has no GL
+    in it, and the browser front end draws the same segments in the same order).
   - *Translucent* — alpha-blended fill (α ≈ 0.4) so you can see through to interior
     geometry, with the feature edges drawn opaque on top for a readable silhouette.
     Draw ordering (v1, honest limitations): opaque and shaded parts draw first, then

@@ -44,6 +44,16 @@
     /// <summary>Draw the ground grid and world axes (on, as in the desktop viewer).</summary>
     [Parameter] public bool Furniture { get; set; } = true;
 
+    /// <summary>
+    /// Global view style, as the desktop toolbar's dropdown sets it. A part whose
+    /// <c>Part.DisplayMode</c> is explicitly non-default overrides it for that part;
+    /// the precedence rule is <c>RenderModes.Resolve</c> and is not restated here.
+    /// <para>Changing it redraws without re-uploading anything: every part's fills,
+    /// feature edges and wire edges are all on the GPU already, which is what makes the
+    /// switch instant.</para>
+    /// </summary>
+    [Parameter] public ViewStyle ViewStyle { get; set; } = ViewStyle.ShadedWithEdges;
+
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
@@ -66,8 +76,17 @@
     private ElementReference _canvas;
     private WebGlContext? _gl;
 
+    /// <summary>The three geometry keys one distinct part is uploaded under. All three
+    /// are filled in whatever the current style, so switching style is a redraw rather
+    /// than a re-upload — the desktop's UploadShared makes the same trade.</summary>
+    private readonly record struct PartKeys(
+        string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices);
+
     private readonly List<ViewportInstance> _drawn = [];
-    private readonly Dictionary<Part, string> _keys = [];   // Part has reference identity
+    // Parallel to _drawn: the part each entry came from, so a DisplayMode changed on the
+    // model can be picked up without re-meshing or re-uploading anything.
+    private readonly List<Part> _drawnParts = [];
+    private readonly Dictionary<Part, PartKeys> _keys = [];   // Part has reference identity
     private ViewportFurniture? _furniture;
     private double _gridSpacing;
     private Aabb _bounds = Aabb.Empty;
@@ -77,6 +96,7 @@
 
     private object? _loadedFrom;
     private bool _showingFurniture = true;
+    private ViewStyle _shownStyle = ViewStyle.ShadedWithEdges;
     private int _generation;
     private bool _rendering;
     private bool _dirty;
@@ -100,6 +120,35 @@
         ArgumentNullException.ThrowIfNull(camera);
         _camera = CameraMath.Clamped(camera, _bounds);
         _userMovedCamera = true;
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Applies a global view style and draws, for the same reason
+    /// <see cref="SetCameraAsync"/> is a method: a caller that set the style and
+    /// immediately read the canvas back would read the frame drawn in the OLD style.
+    /// No upload happens — every part's fills, feature edges and wire edges are already
+    /// on the GPU.
+    /// <para>A host that also binds <see cref="ViewStyle"/> should update its own field
+    /// alongside this call, so the next parameter flow supplies the same value.</para>
+    /// </summary>
+    public Task SetViewStyleAsync(ViewStyle style)
+    {
+        ViewStyle = style;
+        _shownStyle = style;
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Re-reads every drawn part's <c>DisplayMode</c> and draws. A display mode is a
+    /// property of the model, not a parameter of this component, so changing one is
+    /// invisible until something asks — and asking is cheap: the mode decides which
+    /// already-uploaded buffers a frame references, never what is uploaded.
+    /// </summary>
+    public Task RefreshDisplayModesAsync()
+    {
+        for (int i = 0; i < _drawn.Count && i < _drawnParts.Count; i++)
+            _drawn[i] = _drawn[i] with { Mode = _drawnParts[i].DisplayMode };
         return PumpAsync();
     }
 
@@ -134,6 +183,12 @@
                     header + ViewerShaders.MeshVertex, header + ViewerShaders.MeshFragment);
                 await _gl.CreateProgramAsync(ViewportFrame.LineProgram,
                     header + ViewerShaders.LineVertex, header + ViewerShaders.LineFragment);
+                // gl_PointSize needs GL_PROGRAM_POINT_SIZE enabled on desktop GL. WebGL2
+                // IS OpenGL ES 3.0, where that cap does not exist and point size is
+                // always taken from the shader, so the shared source ports unchanged and
+                // there is nothing to enable here.
+                await _gl.CreateProgramAsync(ViewportFrame.PointProgram,
+                    header + ViewerShaders.PointVertex, header + ViewerShaders.PointFragment);
                 await _gl.CreateProgramAsync(ViewportFrame.BackgroundProgram,
                     header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment,
                     bindAttributes: false);
@@ -150,11 +205,22 @@
             }
         }
 
-        if (_gl is not null && (!ReferenceEquals(Source, _loadedFrom) || _showingFurniture != Furniture))
+        if (_gl is null)
+            return;
+
+        if (!ReferenceEquals(Source, _loadedFrom) || _showingFurniture != Furniture)
         {
             _loadedFrom = Source;
             _showingFurniture = Furniture;
+            _shownStyle = ViewStyle;
             await LoadAsync();
+        }
+        else if (_shownStyle != ViewStyle)
+        {
+            // A style change needs no upload — every part's fills, feature edges and wire
+            // edges are already on the GPU — so it is a redraw and nothing more.
+            _shownStyle = ViewStyle;
+            await PumpAsync();
         }
     }
 
@@ -207,10 +273,17 @@
         // stale one that resumed between its upload and its bookkeeping would file a key
         // the new pass has already released.
         int generation = ++_generation;
-        foreach (string key in _keys.Values)
-            await gl.ReleaseGeometryAsync(key);
+        foreach (var keys in _keys.Values)
+        {
+            await gl.ReleaseGeometryAsync(keys.Mesh);
+            if (keys.Edges is not null)
+                await gl.ReleaseGeometryAsync(keys.Edges);
+            if (keys.Wire is not null)
+                await gl.ReleaseGeometryAsync(keys.Wire);
+        }
         _keys.Clear();
         _drawn.Clear();
+        _drawnParts.Clear();
         _bounds = Aabb.Empty;
         _gridSpacing = 0;
         _failed = false;
@@ -220,7 +293,7 @@
         {
             var instance = instances[i];
             var part = instance.Part;
-            if (!_keys.TryGetValue(part, out string? key))
+            if (!_keys.TryGetValue(part, out var keys))
             {
                 await ReportAsync($"Meshing {part.Name} ({i + 1} of {instances.Count})...");
                 await Task.Delay(1);
@@ -228,9 +301,7 @@
                     return;
                 try
                 {
-                    var render = RenderMesh.CreateFlat(part.GetMesh());
-                    key = $"part{_keys.Count}";
-                    await gl.UploadMeshAsync(key, render.Positions, render.Normals, render.Indices);
+                    keys = await UploadPartAsync(gl, part, _keys.Count);
                 }
                 catch (Exception e)
                 {
@@ -241,13 +312,16 @@
                 }
                 if (generation != _generation)
                     return;
-                _keys[part] = key;
+                _keys[part] = keys;
             }
 
             var worldBounds = instance.Bounds();
             _drawn.Add(new ViewportInstance(
-                key, instance.World, part.Color ?? Palette.Steel,
-                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
+                keys.Mesh, instance.World, part.Color ?? Palette.Steel,
+                worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
+                part.DisplayMode,
+                keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices));
+            _drawnParts.Add(part);
             _bounds = _bounds.Union(worldBounds);
 
             if (!_userMovedCamera)
@@ -262,6 +336,49 @@
             await ReportAsync(null);
         if (OnRendered.HasDelegate)
             await OnRendered.InvokeAsync();
+    }
+
+    /// <summary>
+    /// Uploads one distinct part's three buffers: the display mesh, its feature edges and
+    /// every mesh edge.
+    ///
+    /// <para><b>All three go up whatever the current style</b>, mirroring the desktop
+    /// window's <c>UploadShared</c> — the global style is a dropdown, and a viewport that
+    /// re-meshed and re-uploaded to switch it would stall on every change. (The one-shot
+    /// offscreen pass uploads only what its mode needs, because it has no dropdown.)</para>
+    ///
+    /// <para>Feature edges come from <c>Part.GetFeatureEdges</c>, which for a B-Rep-backed
+    /// part reads the ACTUAL B-Rep edges sampled at display resolution rather than mesh
+    /// dihedrals, so a bore rim stays a smooth circle however coarse the tessellation.
+    /// Nothing about that is re-derived here; it rides the same cached lowering
+    /// <c>GetMesh</c> already paid for.</para>
+    /// </summary>
+    private static async Task<PartKeys> UploadPartAsync(WebGlContext gl, Part part, int index)
+    {
+        var mesh = part.GetMesh();
+        var render = RenderMesh.CreateFlat(mesh);
+        string meshKey = $"part{index}";
+        await gl.UploadMeshAsync(meshKey, render.Positions, render.Normals, render.Indices);
+
+        string? edgeKey = null;
+        var featureEdges = part.GetFeatureEdges();
+        if (featureEdges.Count > 0)
+        {
+            edgeKey = $"part{index}.edges";
+            // Packed by the shared RenderGeometry.SegmentVertices, so the browser uploads
+            // the same floats in the same order as both desktop passes.
+            await gl.UploadLineVerticesAsync(edgeKey, RenderGeometry.SegmentVertices(featureEdges));
+        }
+
+        string? wireKey = null;
+        var wireEdges = WireframeEdges.Extract(mesh);
+        if (wireEdges.Count > 0)
+        {
+            wireKey = $"part{index}.wire";
+            await gl.UploadLineVerticesAsync(wireKey, RenderGeometry.SegmentVertices(wireEdges));
+        }
+
+        return new PartKeys(meshKey, edgeKey, featureEdges.Count * 2, wireKey, wireEdges.Count * 2);
     }
 
     /// <summary>
@@ -326,11 +443,11 @@
         {
             // Asked per frame rather than cached: it is one direct call into the module,
             // and it makes a window resize just work instead of needing a ResizeObserver.
-            var (width, height) = await gl.ViewportSizeAsync();
+            var (width, height, pixelScale) = await gl.ViewportSizeAsync();
             if (width <= 0 || height <= 0)
                 return;   // not laid out yet; the next request will find a real size
             await gl.RenderAsync(ViewportFrame.Build(
-                _drawn, _camera, _bounds, width / height, _furniture));
+                _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale));
         }
         catch (JSDisconnectedException)
         {
