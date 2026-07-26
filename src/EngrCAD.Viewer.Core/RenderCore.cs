@@ -203,6 +203,53 @@ public static class RenderModes
 }
 
 /// <summary>
+/// Selection and hover highlighting, in one place: ONE shader knob does both states,
+/// and line-drawn parts (wireframe, points) blend their own colour instead because they
+/// have no fill for <c>uHighlight</c> to act on.
+/// <para>
+/// Shared because a second front end that re-typed "selection is gold" would be a second
+/// definition of what selection LOOKS like — and the two would drift the first time
+/// either was tuned. The browser client reads these values into its frame description;
+/// the desktop passes them as uniforms.
+/// </para>
+/// </summary>
+public static class Highlight
+{
+    /// <summary>Selection gold, the one colour selection is drawn in (fills blend
+    /// toward it in the shader, lines and points are drawn in it outright).</summary>
+    public static readonly (float R, float G, float B) Selection = (1.0f, 0.85f, 0.35f);
+
+    /// <summary>The <c>uHighlight</c> value for the selected instance.</summary>
+    public const float Selected = 1f;
+
+    /// <summary>The <c>uHighlight</c> value for the hovered instance — the fainter
+    /// pre-selection tint. A hovered SELECTED instance shows selection only.</summary>
+    public const float Hovered = 0.35f;
+
+    /// <summary>The <c>uHighlight</c> uniform for one instance, given the current
+    /// selection and hover (−1 for none).</summary>
+    public static float Strength(int index, int selected, int hovered) =>
+        index >= 0 && index == selected ? Selected
+        : index >= 0 && index == hovered ? Hovered
+        : 0f;
+
+    /// <summary>
+    /// Line/point colour for one instance: selection gold wins outright, hover blends
+    /// the part's own colour <see cref="Hovered"/> of the way toward it, and anything
+    /// else keeps its colour. Wireframe and point parts have no fill, so this is the
+    /// only place their highlight can appear.
+    /// </summary>
+    public static (float R, float G, float B) LineColor(
+        int index, int selected, int hovered, (float R, float G, float B) color) =>
+        index >= 0 && index == selected ? Selection
+        : index >= 0 && index == hovered
+            ? (color.R + (Selection.R - color.R) * Hovered,
+               color.G + (Selection.G - color.G) * Hovered,
+               color.B + (Selection.B - color.B) * Hovered)
+            : color;
+}
+
+/// <summary>
 /// GLSL sources shared by the window and offscreen passes.
 /// There is ONE shader set: the mesh shader carries every feature the viewport needs
 /// (selection highlight, section plane, translucency); a pass that wants none of them
