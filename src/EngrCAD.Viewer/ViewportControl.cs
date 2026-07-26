@@ -12,8 +12,9 @@ using Silk.NET.OpenGL;
 
 namespace EngrCAD.Viewer;
 
-/// <summary>Orbit camera pose, snapshotable for persistence across process restarts.</summary>
-public sealed record CameraState(double Yaw, double Pitch, double Distance, Vector3d Target);
+// CameraState moved to EngrCAD.Viewer.Core (same namespace, so nothing here changed):
+// it is the argument every front end hands to CameraMath, and the browser client cannot
+// reference this assembly.
 
 /// <summary>
 /// OpenGL viewport rendering kernel meshes with an orbit camera.
@@ -218,10 +219,11 @@ public sealed class ViewportControl : OpenGlControlBase
         get => new(_yaw, _pitch, _distance, _target);
         set
         {
-            _yaw = value.Yaw;
-            _pitch = Math.Clamp(value.Pitch, -ViewCubeMath.PitchLimit, ViewCubeMath.PitchLimit);
-            _distance = Math.Clamp(value.Distance, 0.5, CameraMath.MaxOrbitDistance(_sceneBounds));
-            _target = value.Target;
+            var clamped = CameraMath.Clamped(value, _sceneBounds);
+            _yaw = clamped.Yaw;
+            _pitch = clamped.Pitch;
+            _distance = clamped.Distance;
+            _target = clamped.Target;
             lock (_sceneLock)
             {
                 // An explicit pose wins over any auto-framing still queued.
@@ -1673,17 +1675,17 @@ public sealed class ViewportControl : OpenGlControlBase
 
         if (pan)
         {
-            Pan(delta.X, delta.Y);
+            Move(CameraMath.DragPan(Camera, delta.X, delta.Y));
             Report("pan (drag)");
         }
         else if (zoom)
         {
-            Zoom(Math.Pow(1.006, delta.Y));
+            Move(CameraMath.DragZoom(Camera, delta.Y, _sceneBounds));
             Report("zoom (drag)");
         }
         else if (point.Properties.IsLeftButtonPressed)
         {
-            Orbit(-delta.X * 0.01, delta.Y * 0.01);
+            Move(CameraMath.DragOrbit(Camera, delta.X, delta.Y));
             Report("orbit (drag)");
         }
         else
@@ -1736,13 +1738,13 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         // Trackpad two-finger scrolls arrive as many small fractional deltas.
         double delta = e.Delta.Y != 0 ? e.Delta.Y : e.Delta.X;
-        Zoom(Math.Pow(0.88, delta));
+        Move(CameraMath.WheelZoom(Camera, delta, _sceneBounds));
         Report($"wheel Δ{delta:F2}");
     }
 
     private void HandleKey(KeyEventArgs e)
     {
-        const double step = 0.07;
+        const double step = CameraMath.KeyStep;
         switch (e.Key)
         {
             case Key.Left: Orbit(step, 0); break;
@@ -1766,27 +1768,27 @@ public sealed class ViewportControl : OpenGlControlBase
         Report($"key {e.Key}");
     }
 
-    private void Orbit(double yawDelta, double pitchDelta)
+    // Every camera move goes through CameraMath (EngrCAD.Viewer.Core), which is what the
+    // Blazor client calls too — the two front ends cannot feel different, because there
+    // is only one implementation of what a drag does.
+
+    private void Orbit(double yawDelta, double pitchDelta) =>
+        Move(CameraMath.Orbit(Camera, yawDelta, pitchDelta));
+
+    private void Zoom(double factor) =>
+        Move(CameraMath.Zoom(Camera, factor, _sceneBounds));
+
+    private void Pan(double dx, double dy) =>
+        Move(CameraMath.Pan(Camera, dx, dy));
+
+    /// <summary>Adopts an already-legal pose and asks for a frame (the pose setter's
+    /// clamping and auto-frame suppression are for externally supplied poses).</summary>
+    private void Move(CameraState next)
     {
-        _yaw += yawDelta;
-        _pitch = Math.Clamp(_pitch + pitchDelta, -ViewCubeMath.PitchLimit, ViewCubeMath.PitchLimit);
+        _yaw = next.Yaw;
+        _pitch = next.Pitch;
+        _distance = next.Distance;
+        _target = next.Target;
         RequestNextFrameRendering();
     }
-
-    private void Zoom(double factor)
-    {
-        _distance = Math.Clamp(_distance * factor, 0.5, CameraMath.MaxOrbitDistance(_sceneBounds));
-        RequestNextFrameRendering();
-    }
-
-    private void Pan(double dx, double dy)
-    {
-        var eyeDir = new Vector3d(Math.Cos(_pitch) * Math.Cos(_yaw), Math.Cos(_pitch) * Math.Sin(_yaw), Math.Sin(_pitch));
-        var right = eyeDir.Cross(Vector3d.UnitZ).Normalized();
-        var up = right.Cross(eyeDir); // eyeDir points from target toward eye, so this is screen-up
-        double scale = _distance * 0.0018;
-        _target += right * (dx * scale) + up * (dy * scale);
-        RequestNextFrameRendering();
-    }
-
 }

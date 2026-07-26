@@ -44,7 +44,8 @@ prevent. Hence: extract, don't copy.
 | `SectionClip` | `Hides` — the shaders' clip rule restated on the CPU, so picking and hover cannot disagree with the render about which corner a quarter cut removed. `Siblings` — the clip set for anything drawn ON a cut face (the SDF isolines). |
 | `EffectiveMode`, `RenderModes` | `Resolve(style, displayMode)` is the one precedence rule (explicit non-default part mode wins; default-Shaded parts follow the global style); `SortBackToFront` orders the translucent pass. |
 | `ViewerShaders` | The GLSL sources and `MaxSectionPlanes`. `Header(es)` emits either `#version 300 es` or `#version 330 core` — **WebGL2 wants the ES3 one**, which is why the ES header was already there. |
-| `CameraMath` | Orbit `Eye`, `LookAt`, `Perspective`/`Orthographic`, the scene-scaled `FrustumPlanes`, `FrameDistance`, `MaxOrbitDistance`, and `WriteColumnMajor` (the column-major `float[16]` GL expects). |
+| `CameraState` | The orbit pose (yaw, pitch, distance, target) every front end hands to `CameraMath`. Here rather than in `EngrCAD.Viewer` because the browser client cannot reference that assembly, and a second copy of the pose type is the first step to a second copy of the orbit maths. The namespace is unchanged, so existing call sites were untouched by the move. |
+| `CameraMath` | Orbit `Eye`, `LookAt`, `Perspective`/`Orthographic`, the scene-scaled `FrustumPlanes`, `FrameDistance`, `MaxOrbitDistance`, `WriteColumnMajor` (the column-major `float[16]` GL expects) — **and the orbit camera's state transitions**: `Clamped`, `Orbit`, `Zoom`, `Pan`, the input bindings `DragOrbit`/`DragPan`/`DragZoom`/`WheelZoom`/`KeyStep`, and `PitchLimit` (which `ViewCubeMath.PitchLimit` now *is*, so a snap to Top cannot be undone by the very next clamp). |
 | `RenderGeometry` | `BuildGridAndAxes` (adaptive 1-2-5 ground grid + RGB axes), `NiceStep`, `SegmentVertices` (line segments -> the xyz vertex array the line program draws). |
 
 ## What is deliberately NOT here
@@ -62,7 +63,10 @@ They are pure too, and a browser front end will want them — but they were not 
 ## The rule that survives the split
 
 **Never fork shader or camera code between front ends.** Evolve the look here and it
-lands in the window, in headless renders and in the browser at once. And the hard-won
+lands in the window, in headless renders and in the browser at once. That now includes
+how a drag *feels*: `ViewportControl`'s `Orbit`/`Zoom`/`Pan` and the Blazor viewport's
+pointer handlers both call the transitions above, so there is exactly one answer to what
+dragging 100 pixels does. And the hard-won
 corollary, restated where the sources live: **GLSL source strings must stay pure ASCII**
 — one em dash in a shader comment made ANGLE's translator reject the whole shader, the
 compile exception aborted `OnOpenGlInit` before the other programs were built, and the

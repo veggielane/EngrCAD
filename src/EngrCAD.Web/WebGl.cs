@@ -17,8 +17,19 @@ public sealed class DrawCall
     /// <summary>Program name, as passed to <see cref="WebGlContext.CreateProgramAsync"/>.</summary>
     [JsonPropertyName("program")] public required string Program { get; init; }
 
-    /// <summary>Geometry key, as passed to one of the upload methods.</summary>
-    [JsonPropertyName("geometry")] public required string Geometry { get; init; }
+    /// <summary>Geometry key, as passed to one of the upload methods. Null draws
+    /// <see cref="Count"/> attributeless vertices instead — what the background
+    /// gradient's fullscreen triangle needs, since it builds its own corners from
+    /// <c>gl_VertexID</c> and reads no buffer.</summary>
+    [JsonPropertyName("geometry")] public string? Geometry { get; init; }
+
+    /// <summary>First vertex, for line geometry (default 0). One buffer can serve
+    /// several draws — the three world axes are consecutive pairs in one upload.</summary>
+    [JsonPropertyName("first")] public int? First { get; init; }
+
+    /// <summary>Vertex count for array draws (default: the whole uploaded buffer, or 3
+    /// for an attributeless draw). Ignored by indexed mesh draws.</summary>
+    [JsonPropertyName("count")] public int? Count { get; init; }
 
     /// <summary>Uniform values: float, bool, or a float array (2/3/4 = vector,
     /// 16 = column-major matrix). Names not present in the linked program are ignored,
@@ -34,6 +45,10 @@ public sealed class DrawCall
 
     [JsonPropertyName("depthWrite")] public bool DepthWrite { get; init; } = true;
 
+    /// <summary>Depth testing (default on). The background gradient turns it off so it
+    /// fills the frame regardless of what is already in the depth buffer.</summary>
+    [JsonPropertyName("depthTest")] public bool DepthTest { get; init; } = true;
+
     [JsonPropertyName("cull")] public bool Cull { get; init; } = true;
 
     /// <summary>Polygon offset (factor, units) — the fills-behind-edges trick the
@@ -45,6 +60,12 @@ public sealed class DrawCall
 public sealed class FrameDescription
 {
     [JsonPropertyName("clear")] public required float[] Clear { get; init; }
+
+    /// <summary>Uniforms applied before every draw call's own — the view and projection
+    /// matrices, the light, and anything else constant for the frame. They travel once
+    /// rather than once per instance, which for a scene of any size is most of the
+    /// interop payload.</summary>
+    [JsonPropertyName("shared")] public Dictionary<string, object>? Shared { get; init; }
 
     [JsonPropertyName("draws")] public required IReadOnlyList<DrawCall> Draws { get; init; }
 }
@@ -132,6 +153,32 @@ public sealed class WebGlContext : IAsyncDisposable
             occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray());
     }
 
+    /// <summary>
+    /// Uploads a <c>RenderMesh</c>'s already-float32 arrays under <paramref name="key"/>
+    /// — the form <c>RenderMesh.CreateFlat</c> produces and the desktop's
+    /// <c>RenderUploads.UploadMesh</c> consumes, so a display mesh crosses without being
+    /// widened to doubles and narrowed again.
+    /// </summary>
+    public ValueTask UploadMeshAsync(
+        string key,
+        ReadOnlySpan<float> positions,
+        ReadOnlySpan<float> normals,
+        ReadOnlySpan<uint> indices,
+        ReadOnlySpan<float> occlusion = default)
+    {
+        if (positions.Length != normals.Length)
+            throw new ArgumentException(
+                $"positions ({positions.Length}) and normals ({normals.Length}) must be the same length.",
+                nameof(normals));
+
+        return _module.InvokeVoidAsync(
+            "uploadMesh", _id, key,
+            MemoryMarshal.AsBytes(positions).ToArray(),
+            MemoryMarshal.AsBytes(normals).ToArray(),
+            MemoryMarshal.AsBytes(indices).ToArray(),
+            occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray());
+    }
+
     /// <summary>Uploads a line list (feature edges, wireframe, grid, axes) under
     /// <paramref name="key"/>: consecutive pairs of endpoints.</summary>
     public ValueTask UploadLinesAsync(string key, IReadOnlyList<(Vector3d A, Vector3d B)> segments)
@@ -166,6 +213,25 @@ public sealed class WebGlContext : IAsyncDisposable
         ArgumentNullException.ThrowIfNull(frame);
         return _module.InvokeVoidAsync("render", _id, frame);
     }
+
+    /// <summary>
+    /// Re-draws the last frame and reads it back as RGBA rows, <b>bottom row first</b>
+    /// (raw <c>glReadPixels</c> order). The browser counterpart of the desktop viewer's
+    /// screenshot, and the reason a headless run can PROVE it drew something: a black
+    /// canvas raises no error, so "no errors in the log" is not evidence.
+    /// </summary>
+    public async ValueTask<CapturedPixels> CapturePixelsAsync()
+    {
+        var size = await _module.InvokeAsync<int[]>("drawingBufferSize", _id);
+        var pixels = await _module.InvokeAsync<byte[]>("capture", _id);
+        return new CapturedPixels(size[0], size[1], pixels);
+    }
+
+    /// <summary>Routes a drag's pointer events to the canvas until release, so a drag
+    /// that leaves the element keeps orbiting — the browser's answer to the desktop
+    /// viewer's window-level input handlers.</summary>
+    public ValueTask CapturePointerAsync(ElementReferenceLike canvas, long pointerId) =>
+        _module.InvokeVoidAsync("capturePointer", canvas.Value, pointerId);
 
     /// <summary>The canvas size in device-independent pixels — the camera's aspect
     /// ratio and pick-ray unprojection both need it, and only the browser knows it.</summary>
@@ -207,6 +273,32 @@ public sealed class WebGlContext : IAsyncDisposable
         {
             // The circuit or page is already gone; there is nothing left to release.
         }
+    }
+}
+
+/// <summary>
+/// A read-back frame: RGBA rows, <b>bottom row first</b>, at the drawing buffer's device
+/// resolution (CSS size times the device pixel ratio, so it need not match the element).
+/// </summary>
+public readonly record struct CapturedPixels(int Width, int Height, byte[] Rgba)
+{
+    /// <summary>
+    /// How many pixels are brighter than <paramref name="threshold"/> in every channel —
+    /// the "did the lit model actually draw?" oracle, and the reason it is a *brightness*
+    /// test rather than a difference from one colour: the viewport's background is a
+    /// gradient (topping out at 46/255) and its ground grid is dim (74/255), so anything
+    /// above about 90 is geometry under the directional light. Answered in .NET, because
+    /// a black canvas raises no error and a quiet console proves nothing.
+    /// </summary>
+    public int CountBrighterThan(byte threshold)
+    {
+        int count = 0;
+        for (int i = 0; i + 3 < Rgba.Length; i += 4)
+        {
+            if (Rgba[i] > threshold && Rgba[i + 1] > threshold && Rgba[i + 2] > threshold)
+                count++;
+        }
+        return count;
     }
 }
 

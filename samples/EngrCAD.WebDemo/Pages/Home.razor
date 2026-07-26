@@ -1,5 +1,7 @@
 @using System.Diagnostics
 @using EngrCAD.Mesh
+@using EngrCAD.Viewer
+@using EngrCAD.Web
 
 <div class="app @(_embed ? "embed" : null)">
     @if (!_embed)
@@ -8,11 +10,15 @@
             <h1>EngrCAD in the browser</h1>
             <p>
                 The whole geometry kernel &mdash; B-Rep, implicit and mesh &mdash; compiled to
-                WebAssembly. Nothing below is precomputed: the model is built, lowered to an
-                exact B-Rep and tessellated in this tab.
+                WebAssembly, drawn by WebGL2. Nothing below is precomputed: the model is built,
+                lowered to an exact B-Rep, tessellated and rendered in this tab. Drag to orbit,
+                shift+drag to pan, scroll to zoom.
             </p>
         </header>
     }
+
+    <EngrCadViewport @ref="_viewport" Scene="_scene" Height="420px" Class="viewport"
+                     OnRendered="OnViewportRendered" />
 
     <section class="controls">
         <label>
@@ -58,8 +64,10 @@
     {
         <footer>
             <p>
-                Rendering is next: the WebGL2 client compiles the <em>same</em> shader sources
-                the desktop viewer uses, so the two cannot drift apart.
+                The viewport compiles the <em>same</em> shader sources the desktop viewer and
+                the headless renderer compile, and moves the camera through the same
+                <code>CameraMath</code>, so the three cannot drift apart. Feature edges, the
+                model tree, picking and section planes are the rungs after this one.
             </p>
         </footer>
     }
@@ -77,12 +85,16 @@
     private double _fillet = 2;
     private BuildResult? _result;
     private string? _error;
+    private Scene? _scene;
 
     // ?embed drops the page furniture so the docs site can put this in an iframe without
     // the heading and closing note appearing twice. ?report is the timing self-check below.
     private bool _embed;
     private bool _report;
     private string? _beacon;
+
+    private EngrCadViewport? _viewport;
+    private bool _pixelsChecked;
 
     private sealed record BuildResult(
         int Triangles, int Vertices, bool Closed, double Volume,
@@ -107,18 +119,47 @@
     /// placeholder for the whole ~1.7 s with no sign that the page is alive. Rendering
     /// the controls and a "Building..." line first costs nothing and makes the wait legible.
     /// </summary>
-    protected override async Task OnAfterRenderAsync(bool firstRender)
+    protected override Task OnAfterRenderAsync(bool firstRender) =>
+        firstRender ? RebuildAsync() : Task.CompletedTask;
+
+    /// <summary>
+    /// The <c>?report</c> self-check runs from here rather than after the page's own first
+    /// render, because the interesting question now includes <em>did anything draw</em> —
+    /// and only the viewport knows when its scene has finished meshing, uploading and
+    /// drawing. Reading the canvas back and counting lit pixels is the only honest answer:
+    /// a black canvas throws nothing, so an error-free console proves precisely nothing.
+    /// </summary>
+    private async Task OnViewportRendered()
     {
-        if (!firstRender)
+        if (!_report || _pixelsChecked)
             return;
-        await RebuildAsync();
-        if (_report)
+        _pixelsChecked = true;
+
+        int lit = 0, moved = 0;
+        string buffer = "none";
+        try
         {
-            _beacon = Measure();
-            // OnAfterRender deliberately does NOT re-render (that would loop), so the
-            // beacon element only reaches the DOM if we ask for the repaint ourselves.
-            StateHasChanged();
+            var shot = await _viewport!.CapturePixelsAsync();
+            // Above the background gradient (max 46/255) and the ground grid (74/255):
+            // anything this bright is lit geometry.
+            lit = shot.CountBrighterThan(90);
+            buffer = $"{shot.Width}x{shot.Height}";
+
+            // Then orbit through the same CameraMath call a drag makes and re-read the
+            // canvas: a viewport that draws once but ignores the camera would pass the
+            // check above and fail this one.
+            await _viewport.SetCameraAsync(CameraMath.DragOrbit(_viewport.Camera, 220, 60));
+            moved = Differences(shot, await _viewport.CapturePixelsAsync());
         }
+        catch (Exception e)
+        {
+            buffer = $"{e.GetType().Name}";
+        }
+
+        _beacon = Measure(lit, buffer, moved);
+        // OnAfterRender deliberately does NOT re-render (that would loop), so the beacon
+        // element only reaches the DOM if we ask for the repaint ourselves.
+        StateHasChanged();
     }
 
     /// <summary>
@@ -155,7 +196,21 @@
     /// numbers it was carrying are exactly what nobody has yet.
     /// </para>
     /// </summary>
-    private string Measure()
+    /// <summary>Pixels whose red channel differs between two captures of the same size.</summary>
+    private static int Differences(CapturedPixels before, CapturedPixels after)
+    {
+        if (before.Width != after.Width || before.Height != after.Height)
+            return -1;
+        int count = 0;
+        for (int i = 0; i + 3 < before.Rgba.Length; i += 4)
+        {
+            if (before.Rgba[i] != after.Rgba[i])
+                count++;
+        }
+        return count;
+    }
+
+    private string Measure(int litPixels, string buffer, int movedPixels)
     {
         // Best of five: the first pass pays JIT/AOT warm-up and first-touch page faults,
         // which is exactly the "single warm-up is meaningless" lesson from the desktop
@@ -175,9 +230,10 @@
         }
 
         return sample is null
-            ? $"/report?error={Uri.EscapeDataString(_error ?? "no result")}"
+            ? $"/report?error={Uri.EscapeDataString(_error ?? "no result")}&lit={litPixels}"
             : $"/report?best={best:F1}&build={sample.BuildMs:F1}&lower={sample.LowerMs:F1}"
-              + $"&mesh={sample.MeshMs:F1}&tris={sample.Triangles}&closed={sample.Closed}";
+              + $"&mesh={sample.MeshMs:F1}&tris={sample.Triangles}&closed={sample.Closed}"
+              + $"&lit={litPixels}&buffer={buffer}&moved={movedPixels}";
     }
 
     private async Task OnHolesChanged(ChangeEventArgs e)
@@ -215,8 +271,15 @@
             _ = shape.ToBrep();          // the exact lowering, cached for the mesh below
             var t2 = Stopwatch.GetTimestamp();
 
-            var mesh = shape.ToMesh();
+            // Through a Part, so the viewport draws the very geometry these numbers
+            // describe: Part.GetMesh caches the display mesh the renderer then uploads.
+            var part = new Part("Flange", shape, Palette.Steel);
+            var mesh = part.GetMesh();
             var t3 = Stopwatch.GetTimestamp();
+
+            var scene = new Scene();
+            scene.Add(part);
+            _scene = scene;
 
             _result = new BuildResult(
                 mesh.FaceCount, mesh.VertexCount, mesh.IsClosed, mesh.Volume(),

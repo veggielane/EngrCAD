@@ -432,17 +432,38 @@ public static class ViewerShaders
         """;
 }
 
+/// <summary>Orbit camera pose, snapshotable for persistence across process restarts.
+/// <para>
+/// Here rather than in EngrCAD.Viewer because it is the argument every front end passes
+/// to <see cref="CameraMath"/> — the browser client cannot reference the desktop
+/// assembly, and a second copy of the pose type is the first step to a second copy of
+/// the orbit maths. The namespace is unchanged, so existing call sites are untouched.
+/// </para></summary>
+public sealed record CameraState(double Yaw, double Pitch, double Distance, Vector3d Target);
+
 /// <summary>
 /// Camera and projection math shared by both render paths (rendering-only; kernel math
 /// stays in EngrCAD.Core). Column-vector convention, Z up.
 /// <para>
 /// Public because every front end needs the same framing: a browser client that
 /// recomputed its own orbit eye, frustum or matrix packing would drift from the desktop
-/// viewer exactly as the offscreen pass once did.
+/// viewer exactly as the offscreen pass once did. That extends past the matrices to the
+/// <b>input bindings</b> — <see cref="DragOrbit"/>, <see cref="DragPan"/>,
+/// <see cref="DragZoom"/>, <see cref="WheelZoom"/> hold the pixels-to-radians constants
+/// a viewport feels through, and a second front end that re-typed them would feel
+/// subtly different for no reason anyone could later reconstruct.
 /// </para>
 /// </summary>
 public static class CameraMath
 {
+    /// <summary>
+    /// How far the orbit camera may pitch: just short of straight up/down, which keeps
+    /// the <see cref="LookAt"/> up-vector non-degenerate. <c>ViewCubeMath.PitchLimit</c>
+    /// is this value (the cube's poses and the orbit clamp must agree, or a snap to Top
+    /// would be undone by the very next clamp).
+    /// </summary>
+    public const double PitchLimit = Math.PI / 2 - 0.01;
+
     /// <summary>Eye position of the orbit camera.</summary>
     public static Vector3d Eye(double yaw, double pitch, double distance, in Vector3d target) =>
         target + new Vector3d(
@@ -503,6 +524,72 @@ public static class CameraMath
     /// </summary>
     public static double MaxOrbitDistance(in Aabb sceneBounds) =>
         Math.Max(120.0, sceneBounds.IsEmpty ? 0 : sceneBounds.Size.Length * 6);
+
+    // ---- orbit camera transitions ----
+    //
+    // Pure state -> state functions so every front end moves the camera the same way.
+    // The desktop viewport and the Blazor client both call these; nothing about how a
+    // drag feels lives in a front end.
+
+    /// <summary>The pose with pitch and distance forced into their legal ranges — the
+    /// rule any externally supplied <see cref="CameraState"/> passes through.</summary>
+    public static CameraState Clamped(CameraState camera, in Aabb sceneBounds) => camera with
+    {
+        Pitch = Math.Clamp(camera.Pitch, -PitchLimit, PitchLimit),
+        Distance = Math.Clamp(camera.Distance, 0.5, MaxOrbitDistance(sceneBounds)),
+    };
+
+    /// <summary>Rotates about the target by the given radians (yaw free, pitch clamped).</summary>
+    public static CameraState Orbit(CameraState camera, double yawDelta, double pitchDelta) => camera with
+    {
+        Yaw = camera.Yaw + yawDelta,
+        Pitch = Math.Clamp(camera.Pitch + pitchDelta, -PitchLimit, PitchLimit),
+    };
+
+    /// <summary>Scales the orbit distance, clamped to the scene's zoom range.</summary>
+    public static CameraState Zoom(CameraState camera, double factor, in Aabb sceneBounds) => camera with
+    {
+        Distance = Math.Clamp(camera.Distance * factor, 0.5, MaxOrbitDistance(sceneBounds)),
+    };
+
+    /// <summary>
+    /// Slides the target in the screen plane by <paramref name="dx"/>/<paramref name="dy"/>
+    /// pixels. Screen-right and screen-up are derived from the pose, and the world
+    /// distance per pixel scales with the orbit distance so panning feels the same
+    /// however far out you are.
+    /// </summary>
+    public static CameraState Pan(CameraState camera, double dx, double dy)
+    {
+        var eyeDir = new Vector3d(
+            Math.Cos(camera.Pitch) * Math.Cos(camera.Yaw),
+            Math.Cos(camera.Pitch) * Math.Sin(camera.Yaw),
+            Math.Sin(camera.Pitch));
+        var right = eyeDir.Cross(Vector3d.UnitZ).Normalized();
+        var up = right.Cross(eyeDir);   // eyeDir points from target toward eye, so this is screen-up
+        double scale = camera.Distance * 0.0018;
+        return camera with { Target = camera.Target + right * (dx * scale) + up * (dy * scale) };
+    }
+
+    /// <summary>Plain drag: orbit. Dragging right turns the model right, so yaw takes
+    /// the negated horizontal travel.</summary>
+    public static CameraState DragOrbit(CameraState camera, double dx, double dy) =>
+        Orbit(camera, -dx * 0.01, dy * 0.01);
+
+    /// <summary>Shift+drag (or right/middle drag): pan.</summary>
+    public static CameraState DragPan(CameraState camera, double dx, double dy) =>
+        Pan(camera, dx, dy);
+
+    /// <summary>Ctrl+drag: zoom, dragging down to zoom out.</summary>
+    public static CameraState DragZoom(CameraState camera, double dy, in Aabb sceneBounds) =>
+        Zoom(camera, Math.Pow(1.006, dy), sceneBounds);
+
+    /// <summary>Wheel or trackpad scroll: zoom. Trackpads deliver many small fractional
+    /// deltas, which the exponential handles smoothly.</summary>
+    public static CameraState WheelZoom(CameraState camera, double delta, in Aabb sceneBounds) =>
+        Zoom(camera, Math.Pow(0.88, delta), sceneBounds);
+
+    /// <summary>Keyboard orbit/zoom step (arrow keys, +/-).</summary>
+    public const double KeyStep = 0.07;
 
     /// <summary>Writes a Matrix4d as the column-major float[16] OpenGL expects.</summary>
     public static void WriteColumnMajor(in Matrix4d m, Span<float> dst)
