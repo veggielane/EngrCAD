@@ -56,9 +56,20 @@ engines.
        chain overhangs the other, and an overhang shows up as a fold.
     2. **Band with holes** — two-ring bands carrying extra interior hole loops (a
        cross-drilled bore wall) are cut open along a seam placed in the largest u-gap
-       left free by the holes, unrolled into a rectangle-with-holes, and ear-clipped;
-       the two seam chords are exact one-period translates with identical 3D endpoints,
-       so they weld to each other.
+       left free by the holes and unrolled into a rectangle-with-holes; the two seam
+       chords are exact one-period translates with identical 3D endpoints, so they weld
+       to each other. The unrolled region is then **slab-swept**: each hole is split at
+       its extreme-u vertices into a lower and an upper u-monotone chain, cutting the
+       band into a run of u-monotone slabs (free slab, below-hole slab, above-hole slab,
+       free slab, …) that are triangulated by the textbook **stack sweep for monotone
+       polygons**. The cut at a hole's leftmost vertex `L` is the two-segment chord
+       `bottom[k] → L → top[j]` (k, j the last ring samples at or before `u(L)`), whose
+       halves are shared *verbatim* by the slabs on both sides — watertight by index,
+       never by tolerance — and no vertex is invented, because the ring polylines are
+       shared edge geometry and inserting a sample into one would crack the neighbouring
+       cap. A global uv-area identity (outer ring less the holes) is the closing guard,
+       since the per-slab tests cannot see a gap or an overlap between slabs. Ear
+       clipping remains the fallback for holes that do not decompose this way.
     3. **Periodic band** — loops winding the period (rings subdivided into arcs) zip
        chain-to-chain or fan to a pole.
     4. **Ear clip** — everything else, by an exact-coordinate clipper (shortest-diagonal
@@ -93,6 +104,32 @@ engines.
     never approached. The strip is linear in the sample count (280 → 552 → 1096 → 2184)
     and converges quadratically from inside, so the mesh volume moved from −1.5e-4 to
     −4.8e-5 of the analytic prism and keeps improving.
+
+    **The band-with-holes case is the same defect in its purest form, and it is not the
+    shortest-diagonal rule's fault at all — it is forced.** Both ring chains of a band lie
+    at a constant v (an extruded surface's rings are its v-domain ends, and the pullbacks
+    are *bit-identical*), so consecutive ring samples are EXACTLY collinear in uv and the
+    clipper refuses those corners as zero-area ears. The only clippable ears in the
+    unrolled rectangle are its own four corners, so the clipper can only **fan**, and
+    refinement then bisects the fan chords into slivers. Measured on the docs'
+    oblique-section housing (`Box(44,44,30) − Cyl(r13) − Cyl(r5)·RotY(π/2)`) at
+    segmentsPerCircle 128: the bore wall went from **12 164 triangles at a worst
+    facet-vs-surface normal agreement of 0.0198** (an 88.9° sliver — no triangle was
+    strictly inverted, which is why a fold *count* alone would have missed it) to **416
+    triangles at 0.99981**, and the whole mesh from 13 480 triangles to 1 732. Volume
+    excess over the analytic 40 699.916 at segmentsPerCircle 32/64/128/256 was
+    61.19 / 18.60 / 13.40 / 11.25 — ratios 3.29, then **1.39, then 1.19**, stalling near 11
+    — against 76.20 / 21.49 / 5.97 / 1.82 now, i.e. ratios 3.55, 3.60, 3.27. The
+    independent implicit route (`ToImplicit()` + Surface Nets at resolution 256) lands at
+    −3.79 of the same analytic value, so the two code paths bracket it.
+
+    Two things the merge walk of path 1 could NOT have done here, worth keeping: a merge
+    pairs the chains by u, so where one chain carries many samples between two of the
+    other's — a drilled breakout curve against a coarse ring — it fans them from a single
+    far vertex, and the moment that stretch turns back on itself (the breakout's right-hand
+    end) consecutive fan triangles invert. The **stack sweep pops only at convex turns**, so
+    it is correct on any monotone slab, and on the free slabs it reproduces exactly the
+    natural grid's zigzag.
 
     Other numerical lessons baked in: earcut's exact-collinear filtering would drop
 
