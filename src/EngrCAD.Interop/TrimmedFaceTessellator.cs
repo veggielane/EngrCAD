@@ -610,11 +610,22 @@ internal static class TrimmedFaceTessellator
     /// bore wall crossed by a smaller drill): the band is cut open along a seam placed
     /// in the largest u-gap left free by the holes, unrolling it into a simple
     /// rectangle-like outer polygon (bottom chain + reversed top chain, each with its
-    /// closure duplicate), which is then ear-clipped with the holes bridged in. The two
-    /// seam chords are exact uv-translates by one period with identical 3D endpoints, so
-    /// they weld to each other; both are marked as boundary so refinement never splits
-    /// the welded pair inconsistently. Pole-bounded single-chain bands with holes are
-    /// not supported (returns null — the caller falls back).
+    /// closure duplicate). The unrolled region is then <see cref="ZipSlabs">slab-swept</see>
+    /// if the holes decompose it into u-monotone sub-bands, and only otherwise ear-clipped
+    /// with the holes bridged in. The two seam chords are exact uv-translates by one
+    /// period with identical 3D endpoints, so they weld to each other; both are marked as
+    /// boundary so refinement never splits the welded pair inconsistently. Pole-bounded
+    /// single-chain bands with holes are not supported (returns null — the caller
+    /// falls back).
+    /// <para>The sweep is tried FIRST because ear clipping an unrolled band is
+    /// structurally unable to do better than a fan here: both ring chains lie at a
+    /// constant v (an extruded surface's rings are its v-domain ends, so consecutive
+    /// samples are EXACTLY collinear in uv), and <see cref="IsEar"/> refuses exactly
+    /// straight corners because they would be zero-area. The only clippable ears are
+    /// therefore the unrolled rectangle's own four corners, so the clipper fans the whole
+    /// band from a corner; <see cref="Refine"/> then bisects those long fan triangles into
+    /// slivers whose normals are the boundary's binormal rather than the surface's — the
+    /// crumpled bore wall a cross-drilled housing used to render as.</para>
     /// </summary>
     private static List<(int A, int B, int C)>? TriangulateBandWithHoles(
         double period,
@@ -686,10 +697,275 @@ internal static class TrimmedFaceTessellator
             rings.Add(ring);
         }
 
-        var triangles = EarClip(uvAll, rings);
+        // Both paths consume exactly these vertices and boundary edges, so the sweep may
+        // be attempted and abandoned without disturbing the fallback.
+        var triangles = ZipSlabs(uvAll, bottom, top, rings) ?? EarClip(uvAll, rings);
         if (triangles is null)
             return null;
         return AllVerticesUsed(triangles, uvAll.Count) ? triangles : null;
+    }
+
+    /// <summary>
+    /// Triangulates an unrolled band carrying interior hole loops WITHOUT ear clipping it:
+    /// each hole is split at its extreme-u vertices into a lower and an upper u-monotone
+    /// chain, which cuts the band into a run of u-monotone slabs — free slab, below-hole
+    /// slab, above-hole slab, free slab, … — each triangulated by
+    /// <see cref="SweepMonotone"/>. Away from the holes that reproduces the natural grid's
+    /// zigzag: one column per ring sample, never a chord across many.
+    /// <para>The cut at a hole's leftmost vertex L is the two-segment chord
+    /// <c>bottom[k] → L → top[j]</c>, where k and j are the last ring samples at or before
+    /// u(L); its halves are shared verbatim by the slabs on both sides (the free slab
+    /// takes <c>bottom[k] → L</c> as its lower chain's last edge and <c>L → top[j]</c> as
+    /// its closing rung, the below-hole slab takes the first as its opening rung and the
+    /// above-hole slab the second), so the pieces are watertight by INDEX, never by
+    /// tolerance. No new vertex is invented: the ring polylines are shared edge geometry
+    /// and inserting a sample into one would crack the neighbouring cap face.</para>
+    /// <para>Returns null — leaving the caller to ear-clip — whenever the decomposition
+    /// does not exist: a hole whose two chains are not u-monotone, or holes crowding the
+    /// ring samples so that a slab would be empty. The final guard is a global one: the
+    /// emitted uv area must match the outer ring's less the holes', which neither a gap
+    /// nor an overlap can satisfy.</para>
+    /// </summary>
+    private static List<(int A, int B, int C)>? ZipSlabs(
+        List<Vector2d> uvAll, List<int> bottom, List<int> top, List<List<int>> rings)
+    {
+        double U(int i) => uvAll[i].X;
+
+        // Split every hole ring at its extreme-u vertices into two chains running L → R.
+        var holes = new List<(List<int> Lower, List<int> Upper)>(rings.Count - 1);
+        foreach (var ring in rings.Skip(1))
+        {
+            if (ring.Count < 3)
+                return null;
+            int lo = 0, hi = 0;
+            for (int i = 1; i < ring.Count; i++)
+            {
+                if (U(ring[i]) < U(ring[lo])) lo = i;
+                if (U(ring[i]) > U(ring[hi])) hi = i;
+            }
+            // Exact comparison on purpose: a hole with no u-extent has no cut to make,
+            // which is a structural refusal rather than a tolerance question.
+            if (U(ring[lo]) >= U(ring[hi]))
+                return null;
+
+            var forward = WalkRing(ring, lo, hi, +1);
+            var backward = WalkRing(ring, lo, hi, -1);
+            if (!NonDecreasingU(uvAll, forward) || !NonDecreasingU(uvAll, backward))
+                return null;
+            holes.Add(forward.Average(i => uvAll[i].Y) <= backward.Average(i => uvAll[i].Y)
+                ? (forward, backward)
+                : (backward, forward));
+        }
+        holes.Sort((a, b) => U(a.Lower[0]).CompareTo(U(b.Lower[0])));
+
+        var triangles = new List<(int A, int B, int C)>();
+        int bAt = 0, tAt = 0;   // first ring sample not yet consumed
+        int carried = -1;       // the previous cut's hole vertex, riding on the lower chain
+        foreach (var (lower, upper) in holes)
+        {
+            int left = lower[0], right = lower[^1];
+            int bLeft = LastAtOrBefore(uvAll, bottom, U(left), bAt);
+            int tLeft = LastAtOrBefore(uvAll, top, U(left), tAt);
+            int bRight = FirstAtOrAfter(uvAll, bottom, U(right), bLeft);
+            int tRight = FirstAtOrAfter(uvAll, top, U(right), tLeft);
+            if (bLeft < bAt || tLeft < tAt || bRight < 0 || tRight < 0)
+                return null; // a slab would be empty — the holes crowd the ring samples
+
+            // Free slab up to this hole. BOTH cut vertices ride on its lower chain and
+            // neither on its upper one, so the free slab's two rungs are exactly the cuts'
+            // upper halves and its lower chain's end edges are exactly their lower halves
+            // — which is what makes every piece share whole segments with its neighbours.
+            if (!SweepMonotone(triangles, uvAll,
+                    Slice(bottom, bAt, bLeft, carried, left),
+                    Slice(top, tAt, tLeft, -1, -1)))
+                return null;
+            // The hole splits its own slab in two.
+            if (!SweepMonotone(triangles, uvAll, Slice(bottom, bLeft, bRight, -1, -1), lower) ||
+                !SweepMonotone(triangles, uvAll, upper, Slice(top, tLeft, tRight, -1, -1)))
+                return null;
+
+            bAt = bRight;
+            tAt = tRight;
+            carried = right;
+        }
+        // Free slab from the last hole to the seam.
+        if (!SweepMonotone(triangles, uvAll,
+                Slice(bottom, bAt, bottom.Count - 1, carried, -1),
+                Slice(top, tAt, top.Count - 1, -1, -1)))
+            return null;
+
+        // Global closure: a gap or an overlap cannot survive an area comparison, and the
+        // sweep's own guards cannot see either (they are local to one slab). Relative,
+        // because uv carries no model units; 1e-9 is decades above the round-off of
+        // summing a few thousand shoelace terms and decades below any real defect.
+        double target = Math.Abs(RingArea(uvAll, rings[0]));
+        foreach (var ring in rings.Skip(1))
+            target -= Math.Abs(RingArea(uvAll, ring));
+        double sum = 0;
+        foreach (var (a, b, c) in triangles)
+            sum += (uvAll[b] - uvAll[a]).Cross(uvAll[c] - uvAll[a]) / 2;
+        return Math.Abs(sum - target) <= 1e-9 * target ? triangles : null;
+
+        static List<int> WalkRing(List<int> ring, int from, int to, int step)
+        {
+            var chain = new List<int>();
+            for (int i = from; ; i = (i + step + ring.Count) % ring.Count)
+            {
+                chain.Add(ring[i]);
+                if (i == to)
+                    return chain;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Triangulates one slab — a u-monotone polygon given as its lower and upper chains,
+    /// both running left to right and sharing no vertex — by the textbook stack sweep for
+    /// monotone polygons, appending CCW triangles. False when the slab is degenerate.
+    /// <para>The merge walk <see cref="ZipBand"/> uses is NOT enough here, and that is the
+    /// whole reason this method exists: a merge pairs the chains by u, so wherever one
+    /// chain carries many samples between two of the other's — a drilled breakout curve
+    /// against a coarse ring — it fans them all from one far vertex, and as soon as that
+    /// stretch turns back on itself (a breakout's right-hand end, where the curve climbs
+    /// steeply) consecutive fan triangles invert. The stack sweep pops only at convex
+    /// turns, so it is correct on ANY monotone slab; on the free slabs (both chains at a
+    /// constant v, sampled at the same u's) it emits exactly the natural grid's zigzag.
+    /// </para>
+    /// </summary>
+    private static bool SweepMonotone(
+        List<(int A, int B, int C)> triangles, List<Vector2d> uv, List<int> lower, List<int> upper)
+    {
+        if (lower.Count + upper.Count < 3 || lower.Count == 0 || upper.Count == 0)
+            return false;
+
+        // Merge the chains by u; a tie keeps the lower chain's vertex first, so a vertical
+        // rung is swept bottom to top.
+        var order = new List<(int Index, bool Lower)>(lower.Count + upper.Count);
+        for (int i = 0, j = 0; i < lower.Count || j < upper.Count;)
+        {
+            bool takeLower = j >= upper.Count ||
+                (i < lower.Count && uv[lower[i]].X <= uv[upper[j]].X);
+            order.Add(takeLower ? (lower[i++], true) : (upper[j++], false));
+        }
+
+        var stack = new List<(int Index, bool Lower)> { order[0], order[1] };
+        for (int k = 2; k < order.Count; k++)
+        {
+            var v = order[k];
+            // The rightmost vertex closes the funnel: it sees every vertex left on the
+            // stack, whichever chain they came from.
+            if (k == order.Count - 1 || v.Lower != stack[^1].Lower)
+            {
+                for (int s = stack.Count - 1; s > 0; s--)
+                {
+                    if (!AddOriented(triangles, uv, v.Index, stack[s].Index, stack[s - 1].Index))
+                        return false;
+                }
+                var previous = order[k - 1];
+                stack.Clear();
+                stack.Add(previous);
+                stack.Add(v);
+                continue;
+            }
+
+            var last = stack[^1];
+            stack.RemoveAt(stack.Count - 1);
+            while (stack.Count > 0 && TurnsIntoInterior(uv, stack[^1].Index, last.Index, v.Index, v.Lower))
+            {
+                if (!AddOriented(triangles, uv, stack[^1].Index, last.Index, v.Index))
+                    return false;
+                last = stack[^1];
+                stack.RemoveAt(stack.Count - 1);
+            }
+            stack.Add(last);
+            stack.Add(v);
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Whether the diagonal closing (<paramref name="a"/>, <paramref name="b"/>,
+    /// <paramref name="c"/>) lies inside the slab: a left turn below the interior (lower
+    /// chain) and a right turn above it (upper chain). Exactly collinear is deliberately
+    /// NOT a turn — a ring's samples are exactly collinear in uv, and popping there would
+    /// emit the zero-area triangles this whole file exists to avoid.
+    /// </summary>
+    private static bool TurnsIntoInterior(List<Vector2d> uv, int a, int b, int c, bool lower)
+    {
+        double cross = (uv[b] - uv[a]).Cross(uv[c] - uv[a]);
+        return lower ? cross > 0 : cross < 0;
+    }
+
+    /// <summary>
+    /// Appends a triangle wound CCW in uv, taking the winding from its own signed area.
+    /// The sweep proves the slab is covered exactly once, so each triangle's orientation
+    /// is determinate and reading it off the sign is equivalent to — and shorter than —
+    /// case-splitting on which chain the apex came from. Exactly zero area is refused: the
+    /// sweep never produces one from valid input, so it means the chains crossed.
+    /// </summary>
+    private static bool AddOriented(
+        List<(int A, int B, int C)> triangles, List<Vector2d> uv, int a, int b, int c)
+    {
+        double cross = (uv[b] - uv[a]).Cross(uv[c] - uv[a]);
+        if (cross == 0)
+            return false;
+        triangles.Add(cross > 0 ? (a, b, c) : (a, c, b));
+        return true;
+    }
+
+    /// <summary>
+    /// Chain entries <paramref name="from"/>..<paramref name="to"/> inclusive, optionally
+    /// bracketed by a <paramref name="prefix"/> and a <paramref name="suffix"/> vertex
+    /// (−1 for neither) — the hole vertices a cut hangs off.
+    /// </summary>
+    private static List<int> Slice(List<int> chain, int from, int to, int prefix, int suffix)
+    {
+        var slice = new List<int>(to - from + 3);
+        if (prefix >= 0)
+            slice.Add(prefix);
+        for (int i = from; i <= to; i++)
+            slice.Add(chain[i]);
+        if (suffix >= 0)
+            slice.Add(suffix);
+        return slice;
+    }
+
+    /// <summary>Last index in [<paramref name="from"/>, end] whose u is ≤ <paramref name="u"/>; <paramref name="from"/>−1 if none.</summary>
+    private static int LastAtOrBefore(List<Vector2d> uv, List<int> chain, double u, int from)
+    {
+        int at = from - 1;
+        for (int i = from; i < chain.Count && uv[chain[i]].X <= u; i++)
+            at = i;
+        return at;
+    }
+
+    /// <summary>First index in [<paramref name="from"/>, end] whose u is ≥ <paramref name="u"/>; −1 if none.</summary>
+    private static int FirstAtOrAfter(List<Vector2d> uv, List<int> chain, double u, int from)
+    {
+        for (int i = Math.Max(from, 0); i < chain.Count; i++)
+        {
+            if (uv[chain[i]].X >= u)
+                return i;
+        }
+        return -1;
+    }
+
+    private static bool NonDecreasingU(List<Vector2d> uv, List<int> chain)
+    {
+        for (int i = 0; i + 1 < chain.Count; i++)
+        {
+            if (uv[chain[i + 1]].X < uv[chain[i]].X)
+                return false;
+        }
+        return true;
+    }
+
+    private static double RingArea(List<Vector2d> uv, List<int> ring)
+    {
+        double area = 0;
+        for (int i = 0; i < ring.Count; i++)
+            area += uv[ring[i]].Cross(uv[ring[(i + 1) % ring.Count]]);
+        return area / 2;
     }
 
     /// <summary>
