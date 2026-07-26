@@ -1,15 +1,18 @@
 @using System.Diagnostics
 @using EngrCAD.Mesh
 
-<div class="app">
-    <header>
-        <h1>EngrCAD in the browser</h1>
-        <p>
-            The whole geometry kernel &mdash; B-Rep, implicit and mesh &mdash; compiled to
-            WebAssembly. Nothing below is precomputed: the model is built, lowered to an
-            exact B-Rep and tessellated in this tab.
-        </p>
-    </header>
+<div class="app @(_embed ? "embed" : null)">
+    @if (!_embed)
+    {
+        <header>
+            <h1>EngrCAD in the browser</h1>
+            <p>
+                The whole geometry kernel &mdash; B-Rep, implicit and mesh &mdash; compiled to
+                WebAssembly. Nothing below is precomputed: the model is built, lowered to an
+                exact B-Rep and tessellated in this tab.
+            </p>
+        </header>
+    }
 
     <section class="controls">
         <label>
@@ -51,22 +54,35 @@
         </table>
     }
 
-    <footer>
-        <p>
-            Rendering is next: the WebGL2 client compiles the <em>same</em> shader sources
-            the desktop viewer uses, so the two cannot drift apart.
-        </p>
-    </footer>
+    @if (!_embed)
+    {
+        <footer>
+            <p>
+                Rendering is next: the WebGL2 client compiles the <em>same</em> shader sources
+                the desktop viewer uses, so the two cannot drift apart.
+            </p>
+        </footer>
+    }
+
+    @if (_beacon is not null)
+    {
+        <img src="@_beacon" alt="" width="1" height="1" style="position:absolute; opacity:0" />
+    }
 </div>
 
-@inject IJSRuntime JS
-@implements IDisposable
+@inject NavigationManager Nav
 
 @code {
     private int _holes = 6;
     private double _fillet = 2;
     private BuildResult? _result;
     private string? _error;
+
+    // ?embed drops the page furniture so the docs site can put this in an iframe without
+    // the heading and closing note appearing twice. ?report is the timing self-check below.
+    private bool _embed;
+    private bool _report;
+    private string? _beacon;
 
     private sealed record BuildResult(
         int Triangles, int Vertices, bool Closed, double Volume,
@@ -75,25 +91,72 @@
         public double TotalMs => BuildMs + LowerMs + MeshMs;
     }
 
-    protected override void OnInitialized() => Rebuild();
+    protected override void OnInitialized()
+    {
+        // NavigationManager, not a JS round trip: the query is known before the first
+        // render, so ?embed takes effect without a flash of the full-page layout.
+        var query = new Uri(Nav.Uri).Query;
+        _embed = query.Contains("embed", StringComparison.Ordinal);
+        _report = query.Contains("report", StringComparison.Ordinal);
+    }
 
     /// <summary>
-    /// Headless self-check. Loading this page with <c>?report</c> re-runs the build a
-    /// few times and beacons the timings back to the server, whose access log the
-    /// harness reads. It exists because in-page timing is otherwise unreadable from
-    /// automation: <c>--dump-dom</c> fires at load, so the browser must be given
-    /// <c>--virtual-time-budget</c> to reach the end of the work — and under virtual time
-    /// the clock does not advance during a synchronous computation, so every measurement
-    /// reads 0 ms. A beacon is measured under REAL time and needs no DOM dump at all.
+    /// The first build runs AFTER the first render, deliberately. WebAssembly is
+    /// single-threaded: a build started in <c>OnInitialized</c> blocks the browser before
+    /// it has painted anything, so the visitor sits on the static "Loading the kernel"
+    /// placeholder for the whole ~1.7 s with no sign that the page is alive. Rendering
+    /// the controls and a "Building..." line first costs nothing and makes the wait legible.
     /// </summary>
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
         if (!firstRender)
             return;
-        var url = await JS.InvokeAsync<string>("eval", "location.search");
-        if (!url.Contains("report", StringComparison.Ordinal))
-            return;
+        await RebuildAsync();
+        if (_report)
+        {
+            _beacon = Measure();
+            // OnAfterRender deliberately does NOT re-render (that would loop), so the
+            // beacon element only reaches the DOM if we ask for the repaint ourselves.
+            StateHasChanged();
+        }
+    }
 
+    /// <summary>
+    /// Repaints in the pending state, yields long enough for the browser to actually draw
+    /// it, then builds. <c>Task.Delay(1)</c> rather than <c>Task.Yield()</c>: yielding
+    /// posts the continuation straight back onto the same loop, which need not paint first.
+    /// </summary>
+    private async Task RebuildAsync()
+    {
+        _result = null;
+        _error = null;
+        StateHasChanged();
+        await Task.Delay(1);
+        Rebuild();
+        StateHasChanged();
+    }
+
+    /// <summary>
+    /// Headless self-check. Loading this page with <c>?report</c> re-runs the build a few
+    /// times and returns a URL carrying the timings, which the page then requests as a 1x1
+    /// image so the static server's access log records them.
+    /// <para>
+    /// It exists because in-page timing is otherwise unreadable from automation:
+    /// <c>--dump-dom</c> fires at load, so the browser must be given
+    /// <c>--virtual-time-budget</c> to reach the end of the work — and under virtual time
+    /// the clock does not advance during a synchronous computation, so every measurement in
+    /// the DOM reads 0 ms. A beacon is measured under REAL time and needs no DOM dump.
+    /// </para>
+    /// <para>
+    /// An <c>&lt;img&gt;</c> rather than <c>fetch</c> through JS interop, deliberately: a
+    /// beacon must not be able to fail. <c>IJSRuntime.InvokeVoidAsync("fetch", url)</c>
+    /// marshals the JS <c>Response</c> back across the interop boundary and throws when it
+    /// cannot, which loses the measurement AND trips Blazor's error UI — silently, since the
+    /// numbers it was carrying are exactly what nobody has yet.
+    /// </para>
+    /// </summary>
+    private string Measure()
+    {
         // Best of five: the first pass pays JIT/AOT warm-up and first-touch page faults,
         // which is exactly the "single warm-up is meaningless" lesson from the desktop
         // benchmarks, and it applies at least as strongly here.
@@ -111,30 +174,27 @@
             }
         }
 
-        string query = sample is null
+        return sample is null
             ? $"/report?error={Uri.EscapeDataString(_error ?? "no result")}"
             : $"/report?best={best:F1}&build={sample.BuildMs:F1}&lower={sample.LowerMs:F1}"
               + $"&mesh={sample.MeshMs:F1}&tris={sample.Triangles}&closed={sample.Closed}";
-        await JS.InvokeVoidAsync("fetch", query);
     }
 
-    public void Dispose() { }
-
-    private void OnHolesChanged(ChangeEventArgs e)
+    private async Task OnHolesChanged(ChangeEventArgs e)
     {
         if (int.TryParse(e.Value?.ToString(), out int holes))
         {
             _holes = holes;
-            Rebuild();
+            await RebuildAsync();
         }
     }
 
-    private void OnFilletChanged(ChangeEventArgs e)
+    private async Task OnFilletChanged(ChangeEventArgs e)
     {
         if (double.TryParse(e.Value?.ToString(), out double fillet))
         {
             _fillet = fillet;
-            Rebuild();
+            await RebuildAsync();
         }
     }
 

@@ -5,7 +5,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>EngrCAD &mdash; web viewer</title>
-    <base href="/" />
+    <!-- RELATIVE on purpose. Every other path the build emits is already relative
+         ("./_framework/..." in the import map, "_framework/..." in the script tag), so
+         this one tag is the whole difference between an app pinned to the site root and
+         one that runs from any directory. The docs site serves it from /EngrCAD/live/,
+         which would otherwise mean hardcoding the repository name into the publish. -->
+    <base href="./" />
     <link rel="preload" id="webassembly" />
     <link rel="icon" type="image/png" href="favicon.png" />
     <style>
@@ -18,6 +23,9 @@
             font: 15px/1.55 "Segoe UI", system-ui, sans-serif;
         }
         .app { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1.5rem; }
+        /* ?embed: the docs page supplies the heading and the prose, so only the
+           interactive part remains and it should sit tight against the iframe. */
+        .app.embed { padding: 1.25rem 1.5rem; }
         h1 { font-size: 1.6rem; font-weight: 600; margin: 0 0 .4rem; }
         header p, footer p { color: #9aa0aa; margin: 0 0 1.6rem; }
         .controls { display: grid; gap: .9rem; margin-bottom: 1.6rem; }
