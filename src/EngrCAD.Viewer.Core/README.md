@@ -49,6 +49,22 @@ prevent. Hence: extract, don't copy.
 | `CameraMath` | Orbit `Eye`, `LookAt`, `Perspective`/`Orthographic`, the scene-scaled `FrustumPlanes`, `FrameDistance`, `MaxOrbitDistance`, `WriteColumnMajor` (the column-major `float[16]` GL expects) — **and the orbit camera's state transitions**: `Clamped`, `Orbit`, `Zoom`, `Pan`, the input bindings `DragOrbit`/`DragPan`/`DragZoom`/`WheelZoom`/`KeyStep`, and `PitchLimit` (which `ViewCubeMath.PitchLimit` now *is*, so a snap to Top cannot be undone by the very next clamp). |
 | `RenderGeometry` | `BuildGridAndAxes` (adaptive 1-2-5 ground grid + RGB axes), `NiceStep`, `SegmentVertices` (line segments -> the xyz vertex array the line program draws). |
 | `WireframeEdges` | `Extract(mesh)` — every unique mesh edge as a segment pair, for the wireframe display mode. Moved here from `EngrCAD.Viewer` when the browser front end needed it: it has no GL in it, and **the walk order decides the vertex order in the uploaded buffer**, so two copies would not even upload the same bytes. |
+| `Highlight` | Selection gold and the hover strength, in one place: `Strength(index, selected, hovered)` is the `uHighlight` uniform, `LineColor(...)` is what a wireframe or point part gets instead (it has no fill for `uHighlight` to act on). A second front end that re-typed "selection is gold" would be a second definition of what selection *looks like*. |
+| `PickMesh`, `PickInstance`, `PickResult`, `ScenePick` | Click picking and hover: unproject a pixel to a world ray (`TryRay`), test it against each visible instance's triangle BVH with Möller–Trumbore, keep the nearest hit the section planes do not remove. `PickMesh` is built per distinct part and shared by its instances (the ray goes into the instance's local space, never the mesh into world space), exactly as the GPU buffers are. |
+| `HoverThrottle` | The 4-pixel travel threshold the hover raycast re-picks on. Moved out of `ViewCube.cs` for the same reason `CameraMath`'s drag constants live here: how responsive hover feels is a product decision, not a per-front-end one. |
+
+### Why picking is here and not in each front end
+
+A picker that re-derives its own ray unprojection will disagree with the camera the frame
+was drawn with, and the disagreement is invisible until someone clicks near an edge — the
+same failure `CameraMath` exists to prevent, one layer up. `ViewportControl.HitTest` and
+the Blazor viewport's pick are both three lines around `ScenePick.Nearest`.
+
+**Section awareness is built in rather than bolted on.** `ScenePick` takes the plane set
+and applies `SectionClip.Hides`, so a surface the cut removed cannot be picked through and
+a part with `ClippedBySection` false is never skipped. A front end with no section planes
+passes none and pays nothing — which is exactly the state the browser client is in today,
+one rung before it grows them.
 
 ## What is deliberately NOT here
 

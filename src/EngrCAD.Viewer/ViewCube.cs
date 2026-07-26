@@ -7,9 +7,10 @@ namespace EngrCAD.Viewer;
 
 // The view cube: the standard CAD orientation widget in the viewport's top-right.
 // Everything cube-related lives in this file — pure pose/hit math (ViewCubeMath,
-// unit-tested without GL), the camera animation (ViewCubeAnimation), the GL
-// widget itself (ViewCube), and the small HoverThrottle helper the viewport's
-// model-hover highlight shares. ViewportControl only calls four hooks: Step
+// unit-tested without GL), the camera animation (ViewCubeAnimation) and the GL
+// widget itself (ViewCube). The HoverThrottle helper that used to live here moved
+// to EngrCAD.Viewer.Core when the browser client needed the same hover feel.
+// ViewportControl only calls four hooks: Step
 // (animation, before the camera matrices are built), Draw (end of the render
 // pass), HandleClick (pointer pre-check before scene picking), and UpdateHover
 // (pointer-move pre-check for the hover highlight).
@@ -539,37 +540,4 @@ internal sealed class ViewCube
         var origin = center + right * (-rawWidth * scale / 2) + up * (-scale / 2);
         StrokeFont.AppendText(segments, word, origin, right, up, scale);
     }
-}
-
-/// <summary>
-/// Distance-based sampling throttle for the viewport's model-hover highlight: the
-/// hover raycast re-runs only when the pointer has traveled at least the threshold
-/// since the last sample, so slow jitter costs nothing and fast sweeps still track.
-/// Pure state machine — unit-tested without UI.
-/// </summary>
-internal struct HoverThrottle(double thresholdDips)
-{
-    private readonly double _thresholdSquared = thresholdDips * thresholdDips;
-    private double _lastX, _lastY;
-    private bool _hasSample;
-
-    /// <summary>True when the position is far enough from the last accepted sample
-    /// (or no sample exists); accepting records the position.</summary>
-    public bool ShouldSample(double x, double y)
-    {
-        if (_hasSample)
-        {
-            double dx = x - _lastX, dy = y - _lastY;
-            if (dx * dx + dy * dy < _thresholdSquared)
-                return false;
-        }
-        _lastX = x;
-        _lastY = y;
-        _hasSample = true;
-        return true;
-    }
-
-    /// <summary>Forgets the last sample so the next move re-picks immediately
-    /// (drag ended, scene changed).</summary>
-    public void Reset() => _hasSample = false;
 }

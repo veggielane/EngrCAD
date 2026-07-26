@@ -1,0 +1,274 @@
+<div class="engrcad-scene @Class" style="@Frame">
+    @if (Tabs.Count > 1)
+    {
+        <div style="display:flex; gap:2px; padding:4px 6px 0; background:#191b1f; border-bottom:1px solid #2a2d33">
+            @for (int i = 0; i < Tabs.Count; i++)
+            {
+                int index = i;
+                bool active = index == _tabIndex;
+                <button type="button" @onclick="() => ShowTabAsync(index)"
+                        style="@TabStyle(active)">@Tabs[index].Name</button>
+            }
+        </div>
+    }
+
+    <div style="display:flex; flex:1 1 auto; min-height:0">
+        @if (ShowTree)
+        {
+            <div style="width:@TreeWidth; flex:0 0 auto; overflow:auto; background:#191b1f;
+                        border-right:1px solid #2a2d33; font:12px/1.5 'Segoe UI', system-ui, sans-serif">
+                @foreach (var row in _tree.Rows)
+                {
+                    var current = row;
+                    <div style="@RowStyle(current)">
+                        <input type="checkbox" checked="@(!_hidden.Contains(current.Key))"
+                               title="@(current.Kind == SceneTreeRowKind.Assembly
+                                        ? "Show/hide the whole assembly" : "Show/hide this part")"
+                               @onchange="e => ToggleAsync(current, e)"
+                               style="margin:0 6px 0 0; accent-color:#6f8fb5" />
+                        <span @onclick="() => SelectRowAsync(current)"
+                              style="@LabelStyle(current)">@current.Label</span>
+                        @if (current.Failure is { } failure)
+                        {
+                            <span title="@failure" style="margin-left:6px; color:#e07b6b">failed</span>
+                        }
+                    </div>
+                }
+            </div>
+        }
+
+        <div style="flex:1 1 auto; min-width:0; position:relative">
+            <EngrCadViewport @ref="_viewport"
+                             Scene="Scene" TabIndex="_tabIndex"
+                             Furniture="Furniture" ViewStyle="ViewStyle" Picking="Picking"
+                             Width="100%" Height="100%"
+                             SelectionChanged="OnViewportSelectionChanged"
+                             PartFailed="OnPartFailed"
+                             OnStatus="OnViewportStatus"
+                             OnRendered="OnViewportRendered" />
+        </div>
+    </div>
+
+    @if (ShowStatus)
+    {
+        <div style="flex:0 0 auto; padding:3px 8px; background:#191b1f; border-top:1px solid #2a2d33;
+                    font:12px/1.6 'Segoe UI', system-ui, sans-serif; color:#8d939d;
+                    white-space:nowrap; overflow:hidden; text-overflow:ellipsis">@_status</div>
+    }
+</div>
+
+@code {
+    // The browser's counterpart of the desktop SceneHost: the chrome around the one GL
+    // viewport -- tab strip, model tree, status line -- and nothing that decides what a
+    // frame looks like. The split is the desktop's, for the desktop's reason: the
+    // viewport owns GL and the camera, the host owns the document's structure.
+    //
+    // Everything here that could be got wrong quietly is a value first: the tree and its
+    // row-to-instance mapping are SceneTree (pure, unit-tested against Tab.Instances
+    // itself), and effective visibility is a function of the tree and the set of
+    // unchecked rows. This file only binds them to elements.
+
+    /// <summary>The document to show. Tabs appear as a strip and are meshed the first
+    /// time each is viewed.</summary>
+    [Parameter] public Scene? Scene { get; set; }
+
+    /// <summary>Global view style, passed through to the viewport.</summary>
+    [Parameter] public ViewStyle ViewStyle { get; set; } = ViewStyle.ShadedWithEdges;
+
+    /// <summary>Draw the ground grid and world axes.</summary>
+    [Parameter] public bool Furniture { get; set; } = true;
+
+    /// <summary>Click picking and hover in the viewport.</summary>
+    [Parameter] public bool Picking { get; set; } = true;
+
+    /// <summary>Show the model tree beside the viewport.</summary>
+    [Parameter] public bool ShowTree { get; set; } = true;
+
+    /// <summary>Show the status line under the viewport.</summary>
+    [Parameter] public bool ShowStatus { get; set; } = true;
+
+    /// <summary>CSS width of the tree column.</summary>
+    [Parameter] public string TreeWidth { get; set; } = "190px";
+
+    /// <inheritdoc cref="EngrCadViewport.Width"/>
+    [Parameter] public string Width { get; set; } = "100%";
+
+    /// <inheritdoc cref="EngrCadViewport.Height"/>
+    [Parameter] public string Height { get; set; } = "480px";
+
+    /// <summary>Extra classes and inline style for the wrapper element.</summary>
+    [Parameter] public string? Class { get; set; }
+
+    /// <inheritdoc cref="Class"/>
+    [Parameter] public string? Style { get; set; }
+
+    /// <summary>Raised when the selection changes, from EITHER side (a viewport click or
+    /// a tree click) — the single event a host should listen to, since the two are kept
+    /// in step here.</summary>
+    [Parameter] public EventCallback<SceneTreeRow?> SelectionChanged { get; set; }
+
+    /// <summary>Raised once the current tab has finished meshing, uploading and drawing.</summary>
+    [Parameter] public EventCallback OnRendered { get; set; }
+
+    private EngrCadViewport? _viewport;
+    private SceneTree _tree = SceneTree.Empty;
+    private readonly HashSet<string> _hidden = [];
+    private readonly Dictionary<Part, string> _failed = [];
+    private int _tabIndex;
+    private int _selectedRow = -1;
+    private string _status = "";
+    private Scene? _builtFrom;
+    private int _builtTab = -1;
+
+    /// <summary>The GL viewport, for hosts that drive the camera, capture pixels or pick
+    /// directly.</summary>
+    public EngrCadViewport? Viewport => _viewport;
+
+    /// <summary>The current tab's tree, as a value.</summary>
+    public SceneTree Tree => _tree;
+
+    /// <summary>The selected row, or null.</summary>
+    public SceneTreeRow? Selection =>
+        _selectedRow >= 0 && _selectedRow < _tree.Rows.Count ? _tree.Rows[_selectedRow] : null;
+
+    /// <summary>Which tab is showing.</summary>
+    public int TabIndex => _tabIndex;
+
+    private IReadOnlyList<Tab> Tabs => Scene?.Tabs ?? [];
+
+    private string Frame =>
+        $"display:flex; flex-direction:column; width:{Width}; height:{Height}; "
+        + $"background:#1c1e22; color:#c9ced6; overflow:hidden; {Style}";
+
+    protected override void OnParametersSet()
+    {
+        // A rebuilt scene (a slider moved, a live edit) is a new object, so the tree is
+        // rebuilt from it. The hidden set survives by KEY, which is why it is keyed on
+        // the occurrence path rather than on a row index.
+        if (ReferenceEquals(Scene, _builtFrom) && _tabIndex == _builtTab)
+            return;
+        if (!ReferenceEquals(Scene, _builtFrom))
+            _failed.Clear();
+        _builtFrom = Scene;
+        _builtTab = _tabIndex;
+        RebuildTree();
+    }
+
+    private void RebuildTree()
+    {
+        _tree = Tabs.Count > 0 && _tabIndex >= 0 && _tabIndex < Tabs.Count
+            ? SceneTree.Build(Tabs[_tabIndex], _failed)
+            : SceneTree.Empty;
+        _selectedRow = -1;
+    }
+
+    /// <summary>
+    /// Shows a tab. The viewport reloads because its <c>TabIndex</c> changed; parts it has
+    /// already uploaded are kept, so a tab visited before comes back with no meshing and
+    /// no GPU work at all. Public so a host (or a self-check) can drive the strip.
+    /// </summary>
+    public async Task ShowTabAsync(int index)
+    {
+        if (index == _tabIndex || index < 0 || index >= Tabs.Count)
+            return;
+        _tabIndex = index;
+        _builtTab = index;
+        RebuildTree();
+        _status = $"tab '{Tabs[index].Name}'";
+        StateHasChanged();
+        await NotifySelectionAsync();
+    }
+
+    // ---- visibility ----
+
+    private async Task ToggleAsync(SceneTreeRow row, ChangeEventArgs e)
+    {
+        bool shown = e.Value is bool value ? value : true;
+        if (shown)
+            _hidden.Remove(row.Key);
+        else
+            _hidden.Add(row.Key);
+        await ApplyVisibilityAsync();
+        _status = $"{(shown ? "show" : "hide")} '{row.Path}'";
+    }
+
+    /// <summary>Pushes the whole per-instance vector rather than one index: unchecking an
+    /// assembly changes every instance under it, and effective visibility is own AND
+    /// ancestors, so there is no single index to push.</summary>
+    private Task ApplyVisibilityAsync() =>
+        _viewport is null ? Task.CompletedTask
+            : _viewport.SetVisibilityAsync(_tree.EffectiveVisibility(_hidden));
+
+    // ---- selection sync ----
+
+    private async Task SelectRowAsync(SceneTreeRow row)
+    {
+        _selectedRow = _selectedRow == row.Index ? -1 : row.Index;
+        // An assembly header selects nothing in the viewport (it has no instance); the
+        // row still highlights, which is what a user means by clicking a group.
+        int instance = _selectedRow < 0 ? -1 : row.InstanceIndex;
+        if (_viewport is not null)
+            await _viewport.SelectAsync(instance);
+        _status = _selectedRow < 0 ? "selected nothing" : $"selected '{row.Path}'";
+        await NotifySelectionAsync();
+    }
+
+    private async Task OnViewportSelectionChanged(int instance)
+    {
+        _selectedRow = _tree.RowForInstance(instance);
+        _status = _selectedRow >= 0 ? $"picked '{_tree.Rows[_selectedRow].Path}'" : "picked nothing";
+        StateHasChanged();
+        await NotifySelectionAsync();
+    }
+
+    private Task NotifySelectionAsync() =>
+        SelectionChanged.HasDelegate ? SelectionChanged.InvokeAsync(Selection) : Task.CompletedTask;
+
+    // ---- viewport events ----
+
+    private void OnViewportStatus(string message) => _status = message;
+
+    private async Task OnPartFailed((Part Part, string Message) failure)
+    {
+        // A failed part has no instance, so every row after it would address the wrong
+        // one: rebuild the tree with the failure recorded, which re-derives the indices.
+        _failed[failure.Part] = failure.Message;
+        RebuildTree();
+        StateHasChanged();
+        await NotifySelectionAsync();
+    }
+
+    private async Task OnViewportRendered()
+    {
+        // The viewport clears visibility and selection on a load, and publishes a growing
+        // prefix while it works — so the remembered hidden rows are re-applied once the
+        // tab is complete rather than against a partial instance list.
+        await ApplyVisibilityAsync();
+        // The viewport only raises OnStatus for messages, never for the null that clears
+        // one, so a finished tab must say so here or the last "Meshing ..." line stays on
+        // screen for good — which reads as a load that never ended.
+        int count = _viewport?.InstanceCount ?? 0;
+        _status = _failed.Count > 0
+            ? $"{_tree.TabName}: {count} shown, {_failed.Count} failed"
+            : $"{_tree.TabName}: {count} part{(count == 1 ? "" : "s")}";
+        StateHasChanged();
+        if (OnRendered.HasDelegate)
+            await OnRendered.InvokeAsync();
+    }
+
+    // ---- styling ----
+
+    private static string TabStyle(bool active) =>
+        "padding:5px 12px; border:1px solid #2a2d33; border-bottom:none; cursor:pointer; "
+        + "font:12px/1.4 'Segoe UI', system-ui, sans-serif; border-radius:4px 4px 0 0; "
+        + (active ? "background:#22252b; color:#e6e9ee;" : "background:#191b1f; color:#8d939d;");
+
+    private string RowStyle(SceneTreeRow row) =>
+        $"display:flex; align-items:center; padding:2px 6px 2px {6 + row.Depth * 14}px; "
+        + (row.Index == _selectedRow ? "background:#2f343d;" : "");
+
+    private string LabelStyle(SceneTreeRow row) =>
+        "cursor:pointer; user-select:none; "
+        + (row.Kind == SceneTreeRowKind.Assembly ? "font-weight:600; color:#9aa0aa;" : "")
+        + (row.Index == _selectedRow ? "color:#ffd95e;" : "");
+}

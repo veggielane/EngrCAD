@@ -12,16 +12,18 @@
                 The whole geometry kernel &mdash; B-Rep, implicit and mesh &mdash; compiled to
                 WebAssembly, drawn by WebGL2. Nothing below is precomputed: the model is built,
                 lowered to an exact B-Rep, tessellated and rendered in this tab. Drag to orbit,
-                shift+drag to pan, scroll to zoom.
+                shift+drag to pan, scroll to zoom, click to select.
             </p>
         </header>
     }
 
-    @* Furniture off under ?report so the self-check measures the MODEL only: the ground
-       grid and the red +X axis would otherwise sit inside the warm/steel pixel classes
-       the check counts, and a constant that large hides the effect being measured. *@
-    <EngrCadViewport @ref="_viewport" Scene="_scene" Height="420px" Class="viewport"
-                     ViewStyle="_style" Furniture="@(!_report)" OnRendered="OnViewportRendered" />
+    @* The tree and the status line are dropped under ?report so the self-check measures
+       the largest canvas it can; the pixel checks below are relationships between states
+       of the same canvas, so its exact size does not matter to them. *@
+    <EngrCadSceneView @ref="_view" Scene="_scene" Height="460px" Class="viewport"
+                      ViewStyle="_style" Furniture="@(!_report)"
+                      ShowTree="@(!_report)" ShowStatus="@(!_report)"
+                      OnRendered="OnViewportRendered" />
 
     <section class="controls">
         <label>
@@ -87,10 +89,12 @@
             <p>
                 The viewport compiles the <em>same</em> shader sources the desktop viewer and
                 the headless renderer compile, moves the camera through the same
-                <code>CameraMath</code>, and resolves the view style against each part's own
-                display mode through the same <code>RenderModes.Resolve</code>, so the three
-                cannot drift apart. Set the flange translucent to see the hub it sits on.
-                The model tree, picking and section planes are the rungs after this one.
+                <code>CameraMath</code>, resolves the view style against each part's own
+                display mode through the same <code>RenderModes.Resolve</code>, and answers a
+                click through the same <code>ScenePick</code> &mdash; so the three cannot drift
+                apart. Try the <em>Assembly</em> tab: it shows the same two parts nested twice,
+                and switching to it meshes and uploads nothing, because both parts are already
+                on the GPU. Section planes and the view cube are the rungs after this one.
             </p>
         </footer>
     }
@@ -112,6 +116,7 @@
     private string? _error;
     private Scene? _scene;
     private Part? _flange;
+    private Part? _backplate;
 
     // ?embed drops the page furniture so the docs site can put this in an iframe without
     // the heading and closing note appearing twice. ?report is the timing self-check below.
@@ -119,7 +124,9 @@
     private bool _report;
     private string? _beacon;
 
-    private EngrCadViewport? _viewport;
+    private EngrCadSceneView? _view;
+    private int _initialTab;
+    private EngrCadViewport? Viewport => _view?.Viewport;
     private bool _pixelsChecked;
 
     private sealed record BuildResult(
@@ -136,6 +143,12 @@
         var query = new Uri(Nav.Uri).Query;
         _embed = query.Contains("embed", StringComparison.Ordinal);
         _report = query.Contains("report", StringComparison.Ordinal);
+        // ?tab=N deep-links a tab. It exists so a headless run can screenshot the
+        // Assembly tab's tree: without a real click there is no other way in, and a
+        // feature nothing can reach is a feature nothing checks.
+        int at = query.IndexOf("tab=", StringComparison.Ordinal);
+        if (at >= 0 && int.TryParse(query.AsSpan(at + 4, 1), out int tab))
+            _initialTab = tab;
     }
 
     /// <summary>
@@ -145,8 +158,14 @@
     /// placeholder for the whole ~1.7 s with no sign that the page is alive. Rendering
     /// the controls and a "Building..." line first costs nothing and makes the wait legible.
     /// </summary>
-    protected override Task OnAfterRenderAsync(bool firstRender) =>
-        firstRender ? RebuildAsync() : Task.CompletedTask;
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+        await RebuildAsync();
+        if (_initialTab > 0 && _view is not null)
+            await _view.ShowTabAsync(_initialTab);
+    }
 
     /// <summary>
     /// The <c>?report</c> self-check runs from here rather than after the page's own first
@@ -155,11 +174,13 @@
     /// drawing. Reading the canvas back and counting lit pixels is the only honest answer:
     /// a black canvas throws nothing, so an error-free console proves precisely nothing.
     ///
-    /// <para>It now walks every render mode and reports a pixel count for each, because a
-    /// single count proves one mode drew something and says nothing about whether the
-    /// modes DIFFER. The classifiers are deliberately the ones
-    /// <c>ViewStyleRenderTests</c> uses against <c>OffscreenRenderer</c>, so the two front
-    /// ends' numbers can be put side by side rather than merely both being non-zero.</para>
+    /// <para>It walks every render mode, because a single count proves one mode drew
+    /// something and says nothing about whether the modes DIFFER; the classifiers are
+    /// deliberately the ones <c>ViewStyleRenderTests</c> uses against
+    /// <c>OffscreenRenderer</c>, so the two front ends' numbers can be put side by side.
+    /// It then checks picking, visibility and the selection highlight the same way — as
+    /// RELATIONSHIPS between states of the same canvas, which is what survives a change of
+    /// window size, and for picking against a second, independent fact.</para>
     /// </summary>
     private async Task OnViewportRendered()
     {
@@ -201,23 +222,27 @@
             // is opaque. It is the only warm-coloured thing in the scene (furniture is off
             // under ?report), so warm pixels appearing IS the part behind showing through.
             Trace("capture translucency");
-            await _viewport!.SetViewStyleAsync(ViewStyle.ShadedWithEdges);
-            counts["warmOpaque"] = Warm(await _viewport.CapturePixelsAsync());
+            await Viewport!.SetViewStyleAsync(ViewStyle.ShadedWithEdges);
+            counts["warmOpaque"] = Warm(await Viewport.CapturePixelsAsync());
             _flange!.DisplayMode = DisplayMode.Translucent;
-            await _viewport.RefreshDisplayModesAsync();
-            var glass = await _viewport.CapturePixelsAsync();
+            await Viewport.RefreshDisplayModesAsync();
+            var glass = await Viewport.CapturePixelsAsync();
             counts["warmGlass"] = Warm(glass);
             counts["steelGlass"] = Steel(glass);
             _flange.DisplayMode = DisplayMode.Shaded;
-            await _viewport.RefreshDisplayModesAsync();
+            await Viewport.RefreshDisplayModesAsync();
+
+            await CheckPickingAsync(counts);
+            await CheckVisibilityAndHighlightAsync(counts);
+            await CheckTabSwitchAsync(counts);
 
             // Then orbit through the same CameraMath call a drag makes and re-read the
             // canvas: a viewport that draws once but ignores the camera would pass every
             // check above and fail this one.
             Trace("orbit");
-            var before = await _viewport.CapturePixelsAsync();
-            await _viewport.SetCameraAsync(CameraMath.DragOrbit(_viewport.Camera, 220, 60));
-            counts["moved"] = Differences(before, await _viewport.CapturePixelsAsync());
+            var before = await Viewport.CapturePixelsAsync();
+            await Viewport.SetCameraAsync(CameraMath.DragOrbit(Viewport.Camera, 220, 60));
+            counts["moved"] = Differences(before, await Viewport.CapturePixelsAsync());
         }
         catch (Exception e)
         {
@@ -232,6 +257,164 @@
         StateHasChanged();
     }
 
+    /// <summary>
+    /// Picking, proved against the RASTERIZER rather than against itself.
+    ///
+    /// <para>The two parts are distinguishable by colour — the flange is bluish steel, the
+    /// backplate amber — so the canvas already knows which part covers which pixel. Find a
+    /// pixel of each class, pick there, and the answer must agree. A picker that always
+    /// returned the first part, or one whose ray was flipped in y, passes "something was
+    /// picked" and fails this.</para>
+    ///
+    /// <para>Then a second, independent fact per hit: the reported world point must lie
+    /// inside the picked part's own world bounds. The bounds come from the kernel's
+    /// geometry, not from the BVH the ray was traced against.</para>
+    /// </summary>
+    private async Task CheckPickingAsync(Dictionary<string, int> counts)
+    {
+        Trace("pick");
+        var shot = await Viewport!.CapturePixelsAsync();
+        var (cssWidth, cssHeight, scale) = await Viewport.ViewportSizeAsync();
+
+        // Instance order in the Model tab is Tab.Instances() order: flange, then backplate.
+        counts["pickSteel"] = await PickIndexAt(shot, cssHeight, scale, IsSteel);
+        counts["pickWarm"] = await PickIndexAt(shot, cssHeight, scale, IsWarm);
+        // The top-left corner is background in every pose this scene is framed at.
+        counts["pickEmpty"] = (await Viewport.PickAtAsync(2, 2)).Index;
+
+        counts["pickOnFlange"] = await PickOnSurface(shot, cssHeight, scale, IsSteel, _flange!);
+        counts["pickOnBackplate"] = await PickOnSurface(shot, cssHeight, scale, IsWarm, _backplate!);
+        _ = cssWidth;
+    }
+
+    /// <summary>Which instance the picker reports under the first pixel matching
+    /// <paramref name="classify"/>, or −2 when the capture contains no such pixel (which
+    /// would make the check vacuous rather than passing).</summary>
+    private async Task<int> PickIndexAt(
+        CapturedPixels shot, double cssHeight, double scale, Func<byte, byte, byte, bool> classify)
+    {
+        if (!TryFind(shot, cssHeight, scale, classify, out double x, out double y))
+            return -2;
+        return (await Viewport!.PickAtAsync(x, y)).Index;
+    }
+
+    /// <summary>1 when the picked world point lies inside <paramref name="part"/>'s own
+    /// world bounds, 0 when it does not, −2 when no such pixel was found.</summary>
+    private async Task<int> PickOnSurface(
+        CapturedPixels shot, double cssHeight, double scale,
+        Func<byte, byte, byte, bool> classify, Part part)
+    {
+        if (!TryFind(shot, cssHeight, scale, classify, out double x, out double y))
+            return -2;
+        var hit = await Viewport!.PickAtAsync(x, y);
+        if (!hit.Hit)
+            return 0;
+        // Grown by a hair: the hit is ON the surface, so an exact-bounds test is a
+        // knife-edge comparison against float32 vertex coordinates.
+        var bounds = part.Bounds().Expanded(1e-6);
+        return bounds.Contains(hit.World) ? 1 : 0;
+    }
+
+    /// <summary>
+    /// The first captured pixel matching a classifier, converted to a click position.
+    /// Two conversions, both easy to get wrong and both proved by the pick agreeing:
+    /// <c>readPixels</c> returns rows BOTTOM-first, and the canvas is measured in device
+    /// pixels while a pointer event is in CSS pixels.
+    /// </summary>
+    private static bool TryFind(
+        CapturedPixels shot, double cssHeight, double scale,
+        Func<byte, byte, byte, bool> classify, out double x, out double y)
+    {
+        x = y = 0;
+        for (int i = 0; i + 3 < shot.Rgba.Length; i += 4)
+        {
+            if (!classify(shot.Rgba[i], shot.Rgba[i + 1], shot.Rgba[i + 2]))
+                continue;
+            int pixel = i / 4;
+            int px = pixel % shot.Width;
+            int py = pixel / shot.Width;
+            x = (px + 0.5) / scale;
+            y = cssHeight - (py + 0.5) / scale;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Visibility and the highlight, as relationships between states of one canvas.
+    ///
+    /// <para>Hiding the flange must remove pixels; selecting it must change them WITHOUT
+    /// changing the silhouette — which is why "body" (any channel bright) is counted
+    /// separately from "steel" (bright and bluish). Selection blends the fill 55% toward
+    /// gold, which takes it out of the steel class while leaving it bright, so the two
+    /// counts moving in opposite directions is the signature of a highlight rather than
+    /// of a re-render.</para>
+    /// </summary>
+    private async Task CheckVisibilityAndHighlightAsync(Dictionary<string, int> counts)
+    {
+        Trace("visibility");
+        var plain = await Viewport!.CapturePixelsAsync();
+        counts["bodyPlain"] = Body(plain);
+        counts["steelPlain"] = Steel(plain);
+
+        await Viewport.SetVisibleAsync(0, false);              // hide the flange
+        var hiddenFlange = await Viewport.CapturePixelsAsync();
+        counts["bodyFlangeHidden"] = Body(hiddenFlange);
+        counts["steelFlangeHidden"] = Steel(hiddenFlange);
+        await Viewport.SetVisibleAsync(1, false);              // hide the backplate too
+        counts["bodyAllHidden"] = Body(await Viewport.CapturePixelsAsync());
+        await Viewport.SetVisibilityAsync([true, true]);
+        counts["bodyRestored"] = Body(await Viewport.CapturePixelsAsync());
+
+        Trace("highlight");
+        await Viewport.SelectAsync(0);
+        var selected = await Viewport.CapturePixelsAsync();
+        counts["bodySelected"] = Body(selected);
+        counts["steelSelected"] = Steel(selected);
+        counts["selectionChanged"] = Differences(plain, selected);
+
+        await Viewport.SelectAsync(-1);
+        await Viewport.HoverAtAsync(0, 0);   // reset, then hover the flange
+        var (_, cssHeight, scale) = await Viewport.ViewportSizeAsync();
+        if (TryFind(plain, cssHeight, scale, IsSteel, out double hx, out double hy))
+        {
+            await Viewport.HoverAtAsync(hx, hy);
+            var hovered = await Viewport.CapturePixelsAsync();
+            counts["bodyHovered"] = Body(hovered);
+            counts["hoverChanged"] = Differences(plain, hovered);
+            // FAINTER, measured rather than asserted. Both states change nearly every
+            // pixel of the flange by at least a rounding step, so a plain difference
+            // count cannot tell them apart; a threshold can. Selection blends the fill
+            // 55% toward gold (red +63/255), hover 0.35 of that (red +22/255), so
+            // counting pixels shifted by more than 40 separates them by construction.
+            counts["selectShifted"] = Shifted(plain, selected, 40);
+            counts["hoverShifted"] = Shifted(plain, hovered, 40);
+            await Viewport.HoverAtAsync(0, 0);
+        }
+        await Viewport.SelectAsync(-1);
+    }
+
+    /// <summary>
+    /// Switching tabs, timed. The Assembly tab places the SAME two parts four times, so
+    /// nothing needs meshing or uploading — the elapsed time is the evidence for that,
+    /// since a re-mesh of this flange costs the better part of a second. −1 means the
+    /// switch never completed, which must not read as a fast one.
+    /// </summary>
+    private async Task CheckTabSwitchAsync(Dictionary<string, int> counts)
+    {
+        Trace("tab switch");
+        var clock = Stopwatch.StartNew();
+        await _view!.ShowTabAsync(1);
+        for (int i = 0; i < 200 && Viewport!.InstanceCount != 4; i++)
+            await Task.Delay(10);
+        counts["tabSwitchMs"] = Viewport!.InstanceCount == 4 ? (int)clock.ElapsedMilliseconds : -1;
+        counts["assemblyInstances"] = Viewport.InstanceCount;
+        counts["bodyAssembly"] = Body(await Viewport.CapturePixelsAsync());
+        await _view.ShowTabAsync(0);
+        for (int i = 0; i < 200 && Viewport.InstanceCount != 2; i++)
+            await Task.Delay(10);
+    }
+
     /// <summary>Blazor WASM routes Console.WriteLine to the browser console, which a
     /// headless run captures with --enable-logging=stderr. That is the only way to see
     /// WHERE a self-check stopped: the beacon reports the end, and a check that never
@@ -243,8 +426,8 @@
     /// caller that set it and immediately captured would read the PREVIOUS frame.</summary>
     private async Task<CapturedPixels> CaptureAsync(ViewStyle style)
     {
-        await _viewport!.SetViewStyleAsync(style);
-        return await _viewport.CapturePixelsAsync();
+        await Viewport!.SetViewStyleAsync(style);
+        return await Viewport.CapturePixelsAsync();
     }
 
     // The pixel classifiers, transcribed from ViewStyleRenderTests so the browser's
@@ -253,14 +436,26 @@
     /// <summary>Clearly bright steel — fills or full-intensity lines, bright and bluish.
     /// Used comparatively, never to tell a fill from a line: wireframe lines are steel
     /// coloured too.</summary>
-    private static int Steel(CapturedPixels shot) =>
-        Count(shot, (r, g, b) => r > 80 && b > 110 && b >= r);
+    private static int Steel(CapturedPixels shot) => Count(shot, IsSteel);
+
+    /// <inheritdoc cref="Steel"/>
+    private static bool IsSteel(byte r, byte g, byte b) => r > 80 && b > 110 && b >= r;
 
     /// <summary>Warm pixels (red clearly above blue) — the Coral hub. The steel flange and
     /// the background gradient are both bluish, and furniture is off under ?report, so
     /// nothing else in the frame can produce one.</summary>
-    private static int Warm(CapturedPixels shot) =>
-        Count(shot, (r, g, b) => r > b + 15);
+    private static int Warm(CapturedPixels shot) => Count(shot, IsWarm);
+
+    /// <inheritdoc cref="Warm"/>
+    private static bool IsWarm(byte r, byte g, byte b) => r > b + 15;
+
+    /// <summary>Anything lit in ANY channel — the model's silhouette, whatever colour it
+    /// is currently drawn in. The background gradient tops out at 46/255 and furniture is
+    /// off under ?report, so this class is exactly "model". It is separate from
+    /// <see cref="Steel"/> precisely so a colour change and a shape change can be told
+    /// apart: selection must move the first and not the second.</summary>
+    private static int Body(CapturedPixels shot) =>
+        Count(shot, (r, g, b) => r > 90 || g > 90 || b > 90);
 
     /// <summary>Pixels where <paramref name="a"/> is darker than <paramref name="b"/> in
     /// green by more than anti-aliasing noise — how many pixels an overlay darkened.</summary>
@@ -272,6 +467,21 @@
         for (int i = 0; i + 3 < a.Rgba.Length; i += 4)
         {
             if (b.Rgba[i + 1] - a.Rgba[i + 1] > 18)
+                count++;
+        }
+        return count;
+    }
+
+    /// <summary>Pixels whose red channel moved by more than <paramref name="by"/> — a
+    /// MAGNITUDE measure, where <see cref="Differences"/> counts any change at all.</summary>
+    private static int Shifted(CapturedPixels before, CapturedPixels after, int by)
+    {
+        if (before.Width != after.Width || before.Height != after.Height)
+            return -1;
+        int count = 0;
+        for (int i = 0; i + 3 < before.Rgba.Length; i += 4)
+        {
+            if (Math.Abs(before.Rgba[i] - after.Rgba[i]) > by)
                 count++;
         }
         return count;
@@ -379,24 +589,25 @@
 
     private async Task OnStyleChanged(ChangeEventArgs e)
     {
-        if (Enum.TryParse<ViewStyle>(e.Value?.ToString(), out var style))
+        if (Enum.TryParse<ViewStyle>(e.Value?.ToString(), out var style) && Viewport is not null)
         {
             // Both: the field so the next parameter flow supplies the same value, and the
             // viewport so the redraw happens now rather than on the next render cycle.
             _style = style;
-            await _viewport!.SetViewStyleAsync(style);
+            await Viewport.SetViewStyleAsync(style);
         }
     }
 
     private async Task OnFlangeModeChanged(ChangeEventArgs e)
     {
-        if (Enum.TryParse<DisplayMode>(e.Value?.ToString(), out var mode) && _flange is not null)
+        if (Enum.TryParse<DisplayMode>(e.Value?.ToString(), out var mode)
+            && _flange is not null && Viewport is not null)
         {
             _flangeMode = mode;
             // The mode lives on the PART, not on the viewport — so this is a model edit
             // followed by "pick it up", and it re-uploads nothing.
             _flange.DisplayMode = mode;
-            await _viewport!.RefreshDisplayModesAsync();
+            await Viewport.RefreshDisplayModesAsync();
         }
     }
 
@@ -442,7 +653,8 @@
             var t3 = Stopwatch.GetTimestamp();
 
             var scene = new Scene();
-            scene.Add(part);
+            var model = scene.AddTab("Model");
+            model.Add(part);
             // The backing plate the flange bolts to, built AFTER the clock stops: it is a
             // plain cylinder and timing it would only dilute the numbers above, which
             // exist to measure the boolean / face-splitting / trimmed-tessellation paths.
@@ -452,10 +664,25 @@
             // measures. Amber rather than a palette colour because the check classifies it
             // by hue: at 0.4 alpha under steel, Coral lands at r-b = +8 and is
             // indistinguishable from noise, where this lands at +69.
-            scene.Add(new Part(
-                "Backplate", Shape.Cylinder(34, 4).Translate(0, 0, -7), new PartColor(0.94f, 0.44f, 0.16f)));
+            var backplate = new Part(
+                "Backplate", Shape.Cylinder(34, 4).Translate(0, 0, -7), new PartColor(0.94f, 0.44f, 0.16f));
+            model.Add(backplate);
+
+            // A second tab, so the tab strip and the tree have a hierarchy to show. It
+            // places the SAME two Part objects, which is the point worth noticing:
+            // switching to it meshes nothing and uploads nothing, because uploads are
+            // keyed by part reference and survive the tab switch.
+            var stack = new Assembly("stack");
+            stack.Add(part);
+            stack.Add(backplate);
+            var rig = new Assembly("rig");
+            rig.Add(stack);
+            rig.Add(stack, Frame3d.FromOrthonormal((110, 0, 0), Vector3d.UnitX, Vector3d.UnitY));
+            scene.AddTab("Assembly").Add(rig);
+
             _scene = scene;
             _flange = part;
+            _backplate = backplate;
 
             _result = new BuildResult(
                 mesh.FaceCount, mesh.VertexCount, mesh.IsClosed, mesh.Volume(),

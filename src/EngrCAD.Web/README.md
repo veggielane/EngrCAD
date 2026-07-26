@@ -6,6 +6,14 @@ loads the geometry kernel, builds the model client-side, and draws it.
 
 `samples/EngrCAD.WebDemo` is the host app.
 
+Two components:
+
+- **`EngrCadViewport`** — the WebGL2 canvas. Owns the GL context, the camera and the
+  pointer bindings, and nothing about what a frame looks like.
+- **`EngrCadSceneView`** — the chrome around it: tab strip, model tree with visibility,
+  status line. The desktop split, for the desktop reason (`ViewportControl` owns GL;
+  `SceneHost` owns the document's structure).
+
 ## The one rule this library exists to keep
 
 **No GLSL lives in JavaScript.** `wwwroot/engrcad-gl.js` owns the GL context, uploads the
@@ -32,14 +40,24 @@ rather than as a `if (isBackground)` in JS.
 
 ## `ViewportFrame`: a frame is a value
 
-`ViewportFrame.Build(instances, camera, bounds, aspect, furniture, style, pixelScale)` is
-the browser's counterpart to `ViewportControl.OnOpenGlRender` and
+`ViewportFrame.Build(instances, camera, bounds, aspect, furniture, style, pixelScale,
+selected, hovered)` is the browser's counterpart to `ViewportControl.OnOpenGlRender` and
 `OffscreenRenderer.Draw` — and it is a **pure function**, so unlike either of them it can
 be asserted directly. That is not a stylistic preference: those two drifted precisely
 because the only way to compare them was to look at pixels. `EngrCAD.Web.Tests` pins the
 draw order, the clear colour, the furniture ranges, the per-instance matrices, the
 per-mode passes, the translucent sort, the blend and depth-mask state, and the neutral
 shader state — all as values.
+
+**Visibility, selection and hover are arguments to it**, not state it reaches for.
+`ViewportInstance.Visible` decides whether an instance contributes draws; `selected` and
+`hovered` decide what the draws it does contribute are told. So "hiding a part removes
+its edge overlay too" and "selecting one tints its fill and golds its edges without
+moving the silhouette" are assertions over a returned value.
+
+The one property everything downstream leans on: **a hidden instance keeps its index.**
+The tree, the selection, and the pick list all address instances by the same number, so a
+checkbox can never make one of them point at different geometry from another.
 
 Three decisions there are load-bearing and easy to "fix" wrongly:
 
@@ -90,6 +108,95 @@ Three things worth knowing:
   does need scaling: `gl_PointSize` is measured in *framebuffer* pixels, so
   `ViewportFrame` multiplies by the device pixel ratio exactly as the window multiplies
   by its DPI scaling and the offscreen pass by its supersample factor.
+
+## Tabs, the tree, and what they share with the desktop
+
+`Scene` groups parts into named `Tab`s, and the viewport shows **one at a time** — the
+desktop's model, and the reason a tab is meshed when it is first *viewed* rather than up
+front. `EngrCadSceneView` renders the strip; `EngrCadViewport.TabIndex` selects.
+
+The tree itself is a value: **`SceneTree.Build(tab, failed)`** walks the tab exactly the
+way `Tab.Instances()` does (loose parts first, then each assembly depth-first) and hands
+back indented-flat rows carrying the occurrence path, the depth, the enclosing assembly
+rows, and the **instance index the viewport draws that occurrence at**. That last number
+is the whole point, and it is tested against `Tab.Instances()` itself rather than against
+a second hand-written walk.
+
+Three rules it keeps, all the desktop's:
+
+- **Effective visibility is own AND every ancestor.** Unchecking an assembly hides its
+  subtree without touching the children's own state, so re-checking restores exactly what
+  was showing. `EffectiveVisibility(hidden)` returns the `bool[]` the viewport consumes,
+  indexed by instance.
+- **Unchecked rows are remembered by key, not by index** (`Kind:path`), because the tree
+  is rebuilt whenever a part fails or a tab is revisited.
+- **A part that failed to mesh takes no instance index and does not advance the counter.**
+  It has no instance in the viewport, so every row after it would otherwise address the
+  wrong geometry — silently hiding, selecting and highlighting the wrong part. The
+  viewport raises `PartFailed` for exactly this reason: the host must rebuild rather than
+  keep indices that moved.
+
+**Uploads survive a tab switch.** They are keyed by `Part` *reference*, and a load
+releases only the parts the new tab does not use — so a part shown in two tabs is
+uploaded once and a revisit costs no GPU work at all. Measured in the demo below: 19 ms
+to switch to a tab placing the same two parts four times, against ~1 670 ms to build the
+model in the first place.
+
+### `TabMeshLoader` was NOT moved to `Viewer.Core`, and the reason is not Avalonia
+
+The desktop's `TabMeshLoader` is genuinely Avalonia-free and headlessly unit-tested, so
+moving it looks obvious. It is the wrong call: it is **thread-model**-bound, not UI-bound.
+Its whole shape — `Task.Run` for the work, a `post` delegate back to the UI thread, a
+`Volatile` generation token read across threads — assumes two threads. WebAssembly has
+one. `Task.Run` there runs the loop to completion on the same thread with no chance to
+paint, which loses the growing-prefix property the class exists for, and the interleaved
+uploads are `await`ed JS interop calls that cannot happen inside a synchronous worker at
+all.
+
+So the browser keeps its own loader inside `EngrCadViewport.LoadAsync`, with the same
+three rules and cooperative yielding in place of the threading:
+
+- publish a **growing prefix**, so the viewport is orbitable while the rest computes;
+- re-check a **generation token after every await** that precedes a mutation, so a slider
+  moved mid-load cannot let a stale pass file a key the new one released;
+- **name a part that throws** rather than swallowing it — it is dropped, reported through
+  `PartFailed`, and the rest of the tab still loads.
+
+`Task.Delay(1)`, not `Task.Yield()`: yielding posts the continuation straight back onto
+the same loop, which need not paint first.
+
+## Picking, and selection sync
+
+Picking is **client-side** — the kernel is in the browser, so a click is a local BVH
+raycast, never a round trip — and the maths is `ScenePick` in `EngrCAD.Viewer.Core`, the
+same call `ViewportControl.HitTest` makes. It is deliberately **not** in
+`engrcad-gl.js`: a ray unprojected in JavaScript is exactly the kind of thing that
+silently disagrees with the camera the frame was drawn with, and the disagreement is
+invisible until someone clicks near an edge.
+
+`PickMesh.Build` runs beside each part's upload over the *same* `RenderMesh`, so a click
+lands on the triangle that was drawn. Instances share the mesh and the BVH and carry only
+their own matrix, exactly as the GPU buffers do.
+
+The surface mirrors the desktop's: `Selected`, `SelectAsync(index)` (programmatic — does
+**not** raise `SelectionChanged`, so a tree click cannot echo back into the tree),
+`SetVisibleAsync`/`SetVisibilityAsync`, `FitAsync`, `PickAtAsync(x, y)` (pick without
+selecting), `HoverAtAsync(x, y)`, and the `SelectionChanged` callback which means "the
+user clicked in the viewport". Click-vs-drag uses the desktop's threshold: a release
+within 4 pixels of the press picks, anything farther was a drag.
+
+Hover fell out of the pick path cheaply and is in: pointer moves re-pick through
+`HoverThrottle` (4 pixels of travel, also moved to `Viewer.Core`), and a frame is redrawn
+only when the hovered index actually changes.
+
+**One forward dependency, designed in rather than deferred.** Section planes are the next
+rung, and on the desktop picking honours them — `SectionClip.Hides` holds the shaders'
+discard rule in one place so a click cannot select through a cut-away corner. `ScenePick`
+already takes the plane set and each `PickInstance` already carries the part's
+`ClippedBySection`, so turning sections on here is passing three more arguments, not
+writing a second clip rule. The desktop path proves it works today
+(`ScenePickTests` picks through a sectioned box and lands on the interior the cut
+exposed).
 
 ## The camera is not forked either
 
@@ -172,8 +279,10 @@ it straight into `_site/live/` with no `StaticWebAssetBasePath`, no post-publish
 and no repository name baked into the artifact. `.github/workflows/docs.yml` does it;
 `docs/examples/web.md` embeds the result.
 
-`?embed` drops the page heading and footer for that iframe; `?report` runs the timing
-self-check described above.
+`?embed` drops the page heading and footer for that iframe; `?report` runs the timing and
+pixel self-check described above; `?tab=N` deep-links a tab, which exists so a headless
+run can screenshot the Assembly tab's tree — without a real click there is no other way
+in, and a feature nothing can reach is a feature nothing checks.
 
 ## Proving it drew, headlessly
 
@@ -187,29 +296,75 @@ Headless Edge **does** have WebGL2 even with `--disable-gpu`: it falls back to A
 the D3D11 WARP renderer (`ANGLE (Microsoft, Microsoft Basic Render Driver, Direct3D11)`),
 and `readPixels` works.
 
+### Picking, visibility and the highlight, proved with pixels
+
+The self-check does not ask the picker whether it picked. The two parts are
+distinguishable by colour — steel flange, amber backplate — so **the rasterizer already
+knows which part covers which pixel**: find a pixel of each class in the read-back frame,
+pick there, and the answers must agree. A picker that always returned the first part, or
+one whose ray was flipped in y, passes "something was picked" and fails this. Each hit is
+then checked against a *second, independent* fact: the reported world point must lie
+inside that part's own world bounds, which come from the kernel's geometry rather than
+from the BVH the ray was traced against.
+
+| | measured | means |
+| --- | --- | --- |
+| `pickSteel` | **0** | a steel pixel picks the flange (instance 0) |
+| `pickWarm` | **1** | an amber pixel picks the backplate (instance 1) |
+| `pickEmpty` | **-1** | a background pixel picks nothing |
+| `pickOnFlange` / `pickOnBackplate` | **1** / **1** | the hit point lies inside the picked part's bounds |
+
+Visibility and the highlight are the same idea — relationships between states of one
+canvas, which is what survives a change of window size. "body" counts any bright channel
+(the model's silhouette, whatever colour it is drawn in); "steel" counts bright *and*
+bluish. Selection blends the fill 55% toward gold, so it must move the second and not the
+first:
+
+| | plain | flange hidden | both hidden | restored | flange selected | flange hovered |
+| --- | --- | --- | --- | --- | --- | --- |
+| body | 38 314 | **24 922** | **0** | **38 314** | 39 610 | 37 908 |
+| steel | 36 410 | **0** | 0 | 36 410 | **0** | 36 410 |
+
+Read across: hiding the flange removes 35% of the model's pixels and *all* of the steel
+(it is the only steel part); hiding both leaves nothing; restoring gives back exactly the
+original count. Selecting the flange takes it entirely out of the steel class while
+leaving the silhouette alone — the +1 296 body pixels are the feature-edge overlay turning
+gold, which agrees with the 1 445 pixels the same overlay was measured *darkening* two
+rows up.
+
+Hover had to be measured rather than asserted. Both states change nearly every flange
+pixel by at least a rounding step, so a plain difference count cannot tell them apart; a
+*threshold* can. Selection shifts red by 63/255 and hover by 22/255, so counting pixels
+shifted by more than 40 gives **36 648 for selection and 0 for hover** — faint, by
+construction and by measurement.
+
+What this does *not* cover: the synthetic pointer event itself. The checks drive
+`PickAtAsync`/`SelectAsync`/`HoverAtAsync`, which is everything except the few lines that
+translate a `PointerEventArgs` into those calls.
+
 ### Per mode, against the desktop as the reference
 
 A single pixel count proves one mode drew something and says nothing about whether the
-modes *differ*, so the `?report` check now walks every mode and reports a count for each,
+modes *differ*, so the `?report` check walks every mode and reports a count for each,
 using the **same classifiers `ViewStyleRenderTests` runs against `OffscreenRenderer`** —
 which makes the desktop the reference rather than a second opinion. Demo scene (steel
 flange over an amber backplate), furniture off, ambient occlusion off both sides, a
-673x420 drawing buffer, WARP:
+693x427 drawing buffer, WARP, both sides framed by `ViewportFrame.DefaultCamera`:
 
 | | WebGL2 (browser) | `OffscreenRenderer` | |
 | --- | --- | --- | --- |
-| lit (all channels > 90) | 33 377 | 33 944 | |
-| bright steel, Shaded | 35 980 | 36 043 | |
-| bright steel, ShadedWithEdges | 35 183 | 35 692 | |
-| pixels the edge overlay *darkened* | 1 410 | 554 | line width, see below |
+| lit (all channels > 90) | 34 529 | 35 141 | |
+| bright steel, Shaded | 37 197 | 37 282 | |
+| bright steel, ShadedWithEdges | 36 410 | 36 929 | |
+| pixels the edge overlay *darkened* | 1 445 | 551 | line width, see below |
 | pixels it *brightened* | **0** | **0** | an overlay must only darken |
-| bright steel, Wireframe | 26 228 | 19 980 | line width |
-| bright steel, Points | 5 306 | 5 714 | |
-| warm pixels, flange opaque | 403 | 449 | backplate seen down the bore |
-| warm pixels, flange translucent | **20 045** | **21 085** | 49.7x / 47.0x |
-| bright steel, flange translucent | 220 | 238 | a 0.4 blend leaves the class |
+| bright steel, Wireframe | 27 012 | 20 652 | line width |
+| bright steel, Points | 5 347 | 5 803 | |
+| warm pixels, flange opaque | 410 | 467 | backplate seen down the bore |
+| warm pixels, flange translucent | **20 746** | **21 777** | 50.6x / 46.6x |
+| bright steel, flange translucent | 233 | 251 | a 0.4 blend leaves the class |
 
-Fills, points and translucency agree within 2-10%. The two rows that differ more are both
+Fills, points and translucency agree within 2-8%. The two rows that differ more are both
 **line** measures, and both have the same cause: the desktop renders at 2x and
 box-downsamples, so a 1-pixel line contributes a quarter of a final pixel and falls below
 an absolute brightness threshold, while the browser draws 1-pixel lines at final
@@ -218,15 +373,20 @@ drawn.
 
 The relationships hold identically on both: shaded > wireframe > points; the edge overlay
 darkens and never brightens; a translucent part drops out of the bright-fill class and
-lets what is behind it through. And **61 425 pixels change** when the camera is orbited
+lets what is behind it through. And **63 474 pixels change** when the camera is orbited
 through `CameraMath.DragOrbit` — a viewport that drew once and then ignored the camera
 would pass every check above and fail that one.
+
+(The buffer is 693x427 rather than the 673x420 of the previous rung because the demo now
+wraps the canvas in `EngrCadSceneView`'s chrome. Both columns above were re-measured at
+the new size; a table whose two halves came from different framings would compare
+nothing.)
 
 One measurement lesson from building this: the classifier has to survive the blend. At
 0.4 alpha under steel (whose blue is 0.84) a `Palette.Coral` part behind the flange
 arrives at `r - b = +8`, indistinguishable from noise, and the reveal measured 1 478
-pixels instead of 21 083. The hidden part is amber for that reason, and the number to
-trust is the *ratio* to the opaque case, not the absolute.
+pixels instead of the ~21 000 the amber part gives. The hidden part is amber for that
+reason, and the number to trust is the *ratio* to the opaque case, not the absolute.
 
 ### Traps in the headless loop
 
@@ -249,27 +409,39 @@ Four, all paid for:
 Synthetic input: unlike the desktop toolkit, Blazor **does** receive `dispatchEvent`-ed
 `PointerEvent`s, which is verifiable without pixels because the handler's state reaches
 the DOM — the canvas cursor switches to `grabbing` on `pointerdown` and back on
-`pointerup`.
+`pointerup`. The pick, hover and selection APIs are public for the same reason the
+desktop's `HoverAt`/`ViewCubeClick` are: a state only reachable through a real pointer
+event is a state nothing checks.
 
 ## Status
 
 Kernel-in-the-browser, the WebGL2 interop layer, the scene-to-frame layer, the orbit
-camera, feature edges, per-part display modes and the global view style are in place, and
-the demo draws real geometry with a style and a mode selector. Still to build: model
-tree, picking, section planes and their isolines, the view cube, and annotations. The
-parity ladder is in `todo.md`.
+camera, feature edges, per-part display modes, the global view style, the tab strip, the
+model tree with subtree visibility, client-side picking, two-way selection sync and the
+hover highlight are in place. Still to build: section planes and their isolines, the view
+cube, construction-tree rows and their rollback previews, the properties panel, and
+annotations. The parity ladder is in `todo.md`.
 
 Notes for whoever takes the next rung:
 
 - `SectionClip` is already shared and waiting; the frame builder deliberately does **not**
   half-apply it, because a mode resolved and then ignored looks like support and is not.
-  `uSectionEnabled` is 0 in every frame today.
+  `uSectionEnabled` is 0 in every frame today. **Picking is the part that is already
+  ready**: `ScenePick.Nearest` takes the plane set and each `PickInstance` carries the
+  part's `ClippedBySection`, so the section rung has to pass three arguments in
+  `EngrCadViewport.PickAt` and add the uniforms to `ViewportFrame.Build` — not write a
+  second clip rule.
+- **Do not move `TabMeshLoader` into `Viewer.Core`** for this client's benefit; see the
+  section above. It is Avalonia-free but thread-model-bound, and the browser needs the
+  opposite shape.
 - There is no ambient-occlusion bake in the browser. `uAmbientOcclusion` is 0, which
   makes the factor exactly 1.0 and *is* the AO-off shading rather than an approximation
   of it — the same property that lets the desktop stream bakes in behind a live scene.
 - Frame-constant uniforms ride on `FrameDescription.Shared` so they travel once instead
   of once per instance. For a scene of any size that is most of the interop payload, and
   it is the first place to look if a large assembly feels heavy during a drag.
-- Every part uploads its mesh, feature edges *and* wire edges. If a very large assembly
-  ever makes that memory matter, upload lazily per mode — do not go back to
-  upload-what-the-current-style-needs, which puts a re-upload behind a dropdown.
+- Every part uploads its mesh, feature edges *and* wire edges, and builds a pick BVH over
+  the same `RenderMesh`. If a very large assembly ever makes that memory matter, upload
+  lazily per mode — do not go back to upload-what-the-current-style-needs, which puts a
+  re-upload behind a dropdown. The BVH is not optional: without it a click is a linear
+  scan of every triangle in the scene.

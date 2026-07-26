@@ -71,17 +71,25 @@ public sealed class ViewportControl : OpenGlControlBase
     private Point _pressPointer;
     private int _selected = -1;
     private int _hovered = -1;                          // hover highlight (see UpdateHover)
-    private HoverThrottle _hoverThrottle = new(4.0);    // re-pick every 4+ DIPs of travel
+    private HoverThrottle _hoverThrottle = new(HoverThrottle.DefaultThreshold);
 
     private readonly record struct GpuMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
         uint WireVao, uint WireVbo, int WireVertexCount, Vector3d WorldCenter);
 
-    /// <summary>CPU-side pick data per object: triangles plus a BVH over them, in object space.</summary>
-    private sealed record PickData(RenderMesh Mesh, EngrCAD.Core.Spatial.Bvh Bvh);
+    // CPU-side pick data per object: triangles plus a BVH over them, in object space
+    // (PickMesh, EngrCAD.Viewer.Core — the browser client raycasts through the same
+    // type and the same ScenePick, so the two front ends cannot answer a click
+    // differently).
+    private readonly List<PickMesh> _pickData = [];
 
-    private readonly List<PickData> _pickData = [];
+    // Refilled per pick from the parallel instance/visibility lists rather than kept in
+    // sync with them: visibility, the section state and the instance list all change
+    // independently, and a cached candidate list is one more thing that can be stale
+    // when a click arrives. Reused so hover (which re-picks every 4 DIPs) allocates
+    // nothing.
+    private readonly List<PickInstance> _pickInstances = [];
 
     // Reusable scratch for the translucent back-to-front sort (no per-frame allocation).
     private int[] _translucentOrder = [];
@@ -280,7 +288,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly record struct SharedMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
-        uint WireVao, uint WireVbo, int WireVertexCount, PickData Pick, uint AoVbo);
+        uint WireVao, uint WireVbo, int WireVertexCount, PickMesh Pick, uint AoVbo);
 
     /// <summary>Uploads an instance list, replacing existing GPU resources. Each
     /// distinct part is prepared and uploaded once (cached display mesh → RenderMesh,
@@ -367,20 +375,10 @@ public sealed class ViewportControl : OpenGlControlBase
         var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
         _gpuBuffers.Add(new PartBuffers(part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo));
 
-        var boxes = new Aabb[render.TriangleCount];
-        for (int t = 0; t < render.TriangleCount; t++)
-        {
-            boxes[t] = Aabb.FromPoints(
-            [
-                PickVertex(render, render.Indices[t * 3]),
-                PickVertex(render, render.Indices[t * 3 + 1]),
-                PickVertex(render, render.Indices[t * 3 + 2]),
-            ]);
-        }
         return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
             edgeVao, edgeVbo, featureEdges.Count * 2,
             wireVao, wireVbo, wireEdges.Count * 2,
-            new PickData(render, EngrCAD.Core.Spatial.Bvh.Build(boxes)), aoVbo);
+            PickMesh.Build(render), aoVbo);
     }
 
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
@@ -484,11 +482,6 @@ public sealed class ViewportControl : OpenGlControlBase
         (_gridVao, _gridVbo) = RenderUploads.UploadLines(gl, gridVertices);
         (_axesVao, _axesVbo) = RenderUploads.UploadLines(gl, axesVertices);
     }
-
-    private static Vector3d PickVertex(RenderMesh mesh, uint index) => new(
-        mesh.Positions[index * 3],
-        mesh.Positions[index * 3 + 1],
-        mesh.Positions[index * 3 + 2]);
 
     protected override void OnOpenGlDeinit(GlInterface gl)
     {
@@ -1029,13 +1022,10 @@ public sealed class ViewportControl : OpenGlControlBase
     }
 
     /// <summary>Line/point color for a part: selection gold wins, hover blends the
-    /// part color 35% toward it, otherwise the part's own color.</summary>
+    /// part color toward it. The rule itself is <see cref="Highlight.LineColor"/> in
+    /// EngrCAD.Viewer.Core, shared with the browser client.</summary>
     private (float R, float G, float B) HighlightedColor(int index, (float R, float G, float B) color) =>
-        index == _selected ? (1.0f, 0.85f, 0.35f)
-        : index == _hovered
-            ? (color.R + (1.0f - color.R) * 0.35f, color.G + (0.85f - color.G) * 0.35f,
-                color.B + (0.35f - color.B) * 0.35f)
-            : color;
+        Highlight.LineColor(index, _selected, _hovered, color);
 
     /// <summary>
     /// The per-draw-group section switch, applied per PART: a part with
@@ -1056,8 +1046,9 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.UniformMatrix4(_uModel, 1, false, matrix);
         gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
         // One shader knob for both states: 1.0 = selection gold, 0.35 = the fainter
-        // hover tint; a hovered selected part just shows selection.
-        gl.Uniform1(_uHighlight, index == _selected ? 1f : index == _hovered ? 0.35f : 0f);
+        // hover tint; a hovered selected part just shows selection (Highlight.Strength,
+        // shared with the browser client so both mean the same thing by "selected").
+        gl.Uniform1(_uHighlight, Highlight.Strength(index, _selected, _hovered));
         gl.BindVertexArray(m.Vao);
         gl.DrawElements(PrimitiveType.Triangles, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
     }
@@ -1068,7 +1059,7 @@ public sealed class ViewportControl : OpenGlControlBase
         CameraMath.WriteColumnMajor(m.Model, matrix);
         gl.UniformMatrix4(_uLineModel, 1, false, matrix);
         if (index == _selected)
-            gl.Uniform3(_uLineColor, 1.0f, 0.85f, 0.35f);
+            gl.Uniform3(_uLineColor, Highlight.Selection.R, Highlight.Selection.G, Highlight.Selection.B);
         else
             gl.Uniform3(_uLineColor, 0.09f, 0.10f, 0.11f);
         gl.BindVertexArray(m.EdgeVao);
@@ -1125,61 +1116,25 @@ public sealed class ViewportControl : OpenGlControlBase
     /// point (the measure tool's pick).</summary>
     private int HitTest(Point pixel, out Vector3d worldPoint)
     {
-        worldPoint = default;
         double width = Math.Max(1, Bounds.Width);
         double height = Math.Max(1, Bounds.Height);
         var eye = CameraMath.Eye(_yaw, _pitch, _distance, _target);
         var viewProjection = ProjectionMatrix(width / height)
                            * CameraMath.LookAt(eye, _target, Vector3d.UnitZ);
-        if (!viewProjection.TryInvert(out var unproject))
-            return -1;
 
-        double ndcX = 2 * pixel.X / width - 1;
-        double ndcY = 1 - 2 * pixel.Y / height;
-        var nearPoint = unproject.TransformPoint((ndcX, ndcY, -1));
-        var farPoint = unproject.TransformPoint((ndcX, ndcY, 1));
-
-        int best = -1;
-        double bestT = double.PositiveInfinity;
-        var hits = _hitScratch;
+        // Refilled per pick rather than cached: see _pickInstances.
+        _pickInstances.Clear();
         for (int i = 0; i < _pickData.Count; i++)
         {
-            if (!_visible[i])
-                continue;
-            if (!_meshes[i].Model.TryInvert(out var toLocal))
-                continue;
-            var origin = toLocal.TransformPoint(nearPoint);
-            var direction = toLocal.TransformPoint(farPoint) - origin;
-            var ray = new Ray3d(origin, direction);
-
-            hits.Clear();
-            _pickData[i].Bvh.Query(ray, hits);
-            foreach (int triangle in hits)
-            {
-                var mesh = _pickData[i].Mesh;
-                var a = PickVertex(mesh, mesh.Indices[triangle * 3]);
-                var b = PickVertex(mesh, mesh.Indices[triangle * 3 + 1]);
-                var c = PickVertex(mesh, mesh.Indices[triangle * 3 + 2]);
-                if (RayTriangle(ray, a, b, c, out double t) && t < bestT)
-                {
-                    // World-space hit point (local ray back through the instance's
-                    // model matrix): the measure tool's pick, and the section test.
-                    var world = _meshes[i].Model.TransformPoint(origin + direction * t);
-                    // A surface the section plane clipped away is not there to click:
-                    // skip it and keep looking, so the ray lands on the interior the
-                    // cut exposed rather than the removed shell. A part exempted from
-                    // sectioning is never clipped, so it is never skipped either — the
-                    // CPU mirror of turning the shader's master switch off for it.
-                    if (_instances[i].Part.ClippedBySection
-                        && SectionClip.Hides(_sectionEnabled, world, _sectionPlanes, _sectionCombine))
-                        continue;
-                    bestT = t;
-                    best = i;
-                    worldPoint = world;
-                }
-            }
+            _pickInstances.Add(new PickInstance(
+                _pickData[i], _meshes[i].Model, _visible[i], _instances[i].Part.ClippedBySection));
         }
-        return best;
+
+        var hit = ScenePick.Nearest(
+            pixel.X, pixel.Y, width, height, viewProjection, _pickInstances,
+            _sectionEnabled, _sectionPlanes, _sectionCombine, _hitScratch);
+        worldPoint = hit.World;
+        return hit.Index;
     }
 
     /// <summary>Raised when a click changes the selection (−1 = nothing); UI thread.</summary>
@@ -1592,33 +1547,6 @@ public sealed class ViewportControl : OpenGlControlBase
         return _orthographic
             ? CameraMath.Orthographic(_distance * Math.Tan(Math.PI / 8), aspect, near, far)
             : CameraMath.Perspective(Math.PI / 4, aspect, near, far);
-    }
-
-    /// <summary>Möller–Trumbore; t is in units of the (unnormalized) ray direction.</summary>
-    private static bool RayTriangle(in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
-    {
-        t = 0;
-        var e1 = b - a;
-        var e2 = c - a;
-        var p = ray.Direction.Cross(e2);
-        double determinant = e1.Dot(p);
-        // Round-off-scale parallel-ray guard (picking robustness, not model geometry:
-        // a missed edge-on triangle costs a click, never a weld).
-        if (Math.Abs(determinant) < 1e-15)
-            return false;
-        double inverse = 1.0 / determinant;
-        var s = ray.Origin - a;
-        double u = s.Dot(p) * inverse;
-        if (u < 0 || u > 1)
-            return false;
-        var q = s.Cross(e1);
-        double v = ray.Direction.Dot(q) * inverse;
-        if (v < 0 || u + v > 1)
-            return false;
-        t = e2.Dot(q) * inverse;
-        // Minimum hit distance (direction-length units): rejects self-hits at the ray
-        // origin; a UI-picking threshold, not a kernel tolerance.
-        return t > 1e-9;
     }
 
     // Shader sources live in ViewerShaders (RenderCore.cs), shared verbatim with the

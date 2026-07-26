@@ -4,11 +4,12 @@
 <div class="engrcad-viewport @Class"
      style="position:relative; width:@Width; height:@Height; overflow:hidden; background:#1c1e22; @Style">
     <canvas @ref="_canvas"
-            style="width:100%; height:100%; display:block; touch-action:none; cursor:@(_dragging ? "grabbing" : "grab")"
+            style="width:100%; height:100%; display:block; touch-action:none; cursor:@Cursor"
             @onpointerdown="OnPointerDown"
             @onpointermove="OnPointerMove"
             @onpointerup="OnPointerUp"
-            @onpointercancel="OnPointerUp"
+            @onpointercancel="OnPointerCancel"
+            @onpointerleave="OnPointerLeave"
             @onwheel="OnWheel"
             @onwheel:preventDefault="true"
             @oncontextmenu:preventDefault="true"></canvas>
@@ -25,21 +26,30 @@
     // The browser front end of the viewport: it owns the canvas, the WebGL2 context and
     // the pointer bindings, and NOTHING about what a frame looks like. Every such
     // decision is made by ViewportFrame (this assembly, unit-tested) out of the shared
-    // render core in EngrCAD.Viewer.Core -- the same shaders and camera maths the desktop
-    // window and the offscreen renderer use.
+    // render core in EngrCAD.Viewer.Core -- the same shaders, camera maths, mode
+    // precedence, highlight rule and pick maths the desktop window uses.
     //
     // The desktop's ViewportControl is the structural model: upload each distinct Part
     // once and draw its instances with their own matrices, auto-frame the first scene,
     // and redraw on demand rather than on a clock.
 
-    /// <summary>The scene to draw; assemblies are flattened to instances.</summary>
+    /// <summary>The scene to draw. Tabs are shown ONE AT A TIME, as in the desktop
+    /// viewer — <see cref="TabIndex"/> chooses which, and a tab is meshed the first time
+    /// it is viewed rather than up front.</summary>
     [Parameter] public Scene? Scene { get; set; }
+
+    /// <summary>One tab's contents, when a host drives the tab strip itself.</summary>
+    [Parameter] public Tab? Tab { get; set; }
 
     /// <summary>Loose parts, each drawn at its own transform.</summary>
     [Parameter] public IReadOnlyList<Part>? Parts { get; set; }
 
     /// <summary>Already-posed instances (<c>Tab.Instances()</c>, <c>Assembly.Flatten()</c>).</summary>
     [Parameter] public IReadOnlyList<PartInstance>? Instances { get; set; }
+
+    /// <summary>Which of <see cref="Scene"/>'s tabs to show. Switching tabs re-uses every
+    /// upload a part already has, so revisiting one is instant.</summary>
+    [Parameter] public int TabIndex { get; set; }
 
     /// <summary>Draw the ground grid and world axes (on, as in the desktop viewer).</summary>
     [Parameter] public bool Furniture { get; set; } = true;
@@ -53,6 +63,10 @@
     /// switch instant.</para>
     /// </summary>
     [Parameter] public ViewStyle ViewStyle { get; set; } = ViewStyle.ShadedWithEdges;
+
+    /// <summary>Click picking and the hover highlight (on). Turning it off leaves drags
+    /// working and stops the raycast entirely.</summary>
+    [Parameter] public bool Picking { get; set; } = true;
 
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
@@ -73,20 +87,41 @@
     /// only point at which <see cref="CapturePixelsAsync"/> sees a finished frame.</summary>
     [Parameter] public EventCallback OnRendered { get; set; }
 
+    /// <summary>Raised when a CLICK changes the selection (−1 = nothing), never when a
+    /// host calls <see cref="SelectAsync"/> — the desktop's <c>SelectionChanged</c> rule,
+    /// and what keeps tree-to-viewport sync from echoing back into a loop.</summary>
+    [Parameter] public EventCallback<int> SelectionChanged { get; set; }
+
+    /// <summary>Raised when a part fails to mesh, with the part and the reason. A failed
+    /// part is dropped from the instance list, so a host's tree must be told rather than
+    /// left addressing indices that moved.</summary>
+    [Parameter] public EventCallback<(Part Part, string Message)> PartFailed { get; set; }
+
     private ElementReference _canvas;
     private WebGlContext? _gl;
 
-    /// <summary>The three geometry keys one distinct part is uploaded under. All three
-    /// are filled in whatever the current style, so switching style is a redraw rather
-    /// than a re-upload — the desktop's UploadShared makes the same trade.</summary>
-    private readonly record struct PartKeys(
-        string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices);
+    /// <summary>The three geometry keys one distinct part is uploaded under, plus the
+    /// pick BVH over its display mesh. All three uploads happen whatever the current
+    /// style, so switching style is a redraw rather than a re-upload — the desktop's
+    /// UploadShared makes the same trade.</summary>
+    private sealed record PartKeys(
+        string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick);
 
     private readonly List<ViewportInstance> _drawn = [];
-    // Parallel to _drawn: the part each entry came from, so a DisplayMode changed on the
-    // model can be picked up without re-meshing or re-uploading anything.
+    // Parallel to _drawn: the part and pose each entry came from. The parts let a
+    // DisplayMode changed on the model be picked up without re-meshing; the pick
+    // instances are what ScenePick raycasts.
     private readonly List<Part> _drawnParts = [];
-    private readonly Dictionary<Part, PartKeys> _keys = [];   // Part has reference identity
+    private readonly List<PickInstance> _pick = [];
+    private readonly List<int> _pickScratch = [];
+
+    // Uploads are keyed by Part REFERENCE and survive tab switches: a part shown in two
+    // tabs is uploaded once, and revisiting a tab re-draws with no GPU work at all. Keys
+    // therefore need a counter of their own rather than the dictionary's count, which
+    // would repeat a key after a release.
+    private readonly Dictionary<Part, PartKeys> _keys = [];
+    private int _nextKey;
+
     private ViewportFurniture? _furniture;
     private double _gridSpacing;
     private Aabb _bounds = Aabb.Empty;
@@ -101,12 +136,30 @@
     private bool _rendering;
     private bool _dirty;
     private bool _dragging;
+    private bool _moved;
     private double _lastX, _lastY;
+    private double _pressX, _pressY;
     private string? _message;
     private bool _failed;
 
+    private int _selected = -1;
+    private int _hovered = -1;
+    private HoverThrottle _hoverThrottle = new(HoverThrottle.DefaultThreshold);
+
     /// <summary>The current orbit pose.</summary>
     public CameraState Camera => _camera;
+
+    /// <summary>Index of the selected instance, −1 for none.</summary>
+    public int Selected => _selected;
+
+    /// <summary>Index of the hovered instance, −1 for none.</summary>
+    public int Hovered => _hovered;
+
+    /// <summary>How many instances the viewport is currently showing (a growing prefix
+    /// while a tab loads).</summary>
+    public int InstanceCount => _drawn.Count;
+
+    private string Cursor => _dragging ? "grabbing" : _hovered >= 0 ? "pointer" : "grab";
 
     /// <summary>
     /// Moves the camera and draws. Async rather than a settable property because the draw
@@ -152,6 +205,57 @@
         return PumpAsync();
     }
 
+    /// <summary>
+    /// Sets the selection programmatically (a tree click) and draws. Does NOT raise
+    /// <see cref="SelectionChanged"/> — that event means "the user clicked in the
+    /// viewport", and raising it here would echo a tree selection straight back into the
+    /// tree. The desktop's <c>Select</c> draws the same line.
+    /// </summary>
+    public Task SelectAsync(int index)
+    {
+        int wanted = index >= 0 && index < _drawn.Count ? index : -1;
+        if (wanted == _selected)
+            return Task.CompletedTask;
+        _selected = wanted;
+        return PumpAsync();
+    }
+
+    /// <summary>Shows or hides one instance and draws. Hidden instances keep their index
+    /// (so nothing downstream shifts) and are not pickable.</summary>
+    public Task SetVisibleAsync(int index, bool visible)
+    {
+        if (index < 0 || index >= _drawn.Count || _drawn[index].Visible == visible)
+            return Task.CompletedTask;
+        _drawn[index] = _drawn[index] with { Visible = visible };
+        _pick[index] = _pick[index] with { Visible = visible };
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Applies a whole visibility vector at once — what a model tree produces
+    /// (<see cref="SceneTree.EffectiveVisibility"/>), where one checkbox can change many
+    /// instances. Entries past the instance list are ignored, so a host may push a vector
+    /// for the whole tab while the viewport is still showing a growing prefix.
+    /// </summary>
+    public Task SetVisibilityAsync(IReadOnlyList<bool> visible)
+    {
+        ArgumentNullException.ThrowIfNull(visible);
+        bool changed = false;
+        for (int i = 0; i < _drawn.Count && i < visible.Count; i++)
+        {
+            if (_drawn[i].Visible == visible[i])
+                continue;
+            _drawn[i] = _drawn[i] with { Visible = visible[i] };
+            _pick[i] = _pick[i] with { Visible = visible[i] };
+            changed = true;
+        }
+        return changed ? PumpAsync() : Task.CompletedTask;
+    }
+
+    /// <summary>Whether an instance is currently shown.</summary>
+    public bool IsVisible(int index) =>
+        index >= 0 && index < _drawn.Count && _drawn[index].Visible;
+
     /// <summary>Frames the whole scene, as the toolbar's Fit does.</summary>
     public Task FitAsync()
     {
@@ -159,6 +263,35 @@
         _userMovedCamera = false;
         return PumpAsync();
     }
+
+    /// <summary>
+    /// Runs one pick at a viewport-space position (CSS pixels from the canvas's top-left)
+    /// and returns what was under it, WITHOUT changing the selection. Public because it is
+    /// how a test or a host asks the question directly — and because a pick that reports
+    /// its world point can be checked against something other than itself.
+    /// </summary>
+    public async ValueTask<PickResult> PickAtAsync(double x, double y)
+    {
+        if (_gl is null)
+            return PickResult.None;
+        var (width, height, _) = await _gl.ViewportSizeAsync();
+        return PickAt(x, y, width, height);
+    }
+
+    /// <summary>
+    /// Runs one hover update at a viewport-space position — the exact path a pointer move
+    /// takes. Public for the reason the desktop's <c>HoverAt</c> is: hover state is
+    /// otherwise only reachable through real pointer events, and a feature that can only
+    /// be exercised by hand is a feature nothing checks.
+    /// </summary>
+    public Task HoverAtAsync(double x, double y) => UpdateHoverAsync(x, y);
+
+    /// <summary>The canvas's CSS size and the device pixels per CSS pixel — browser facts
+    /// a host needs to turn a captured pixel back into a click position.</summary>
+    public ValueTask<(double Width, double Height, double PixelScale)> ViewportSizeAsync() =>
+        _gl is null
+            ? throw new InvalidOperationException("The viewport has no GL context yet.")
+            : _gl.ViewportSizeAsync();
 
     /// <summary>
     /// Re-draws and reads the pixels back — the browser's screenshot, and the only honest
@@ -208,9 +341,9 @@
         if (_gl is null)
             return;
 
-        if (!ReferenceEquals(Source, _loadedFrom) || _showingFurniture != Furniture)
+        if (!ReferenceEquals(Content, _loadedFrom) || _showingFurniture != Furniture)
         {
-            _loadedFrom = Source;
+            _loadedFrom = Content;
             _showingFurniture = Furniture;
             _shownStyle = ViewStyle;
             await LoadAsync();
@@ -229,38 +362,55 @@
         // Refuse loudly rather than silently picking one: a host that set two of these
         // meant something by both, and quietly drawing the first is the wrong scene shown
         // with no complaint.
-        int supplied = (Scene is null ? 0 : 1) + (Parts is null ? 0 : 1) + (Instances is null ? 0 : 1);
+        int supplied = (Scene is null ? 0 : 1) + (Tab is null ? 0 : 1)
+                     + (Parts is null ? 0 : 1) + (Instances is null ? 0 : 1);
         if (supplied > 1)
             throw new InvalidOperationException(
-                "Set exactly one of Scene, Parts or Instances on EngrCadViewport.");
+                "Set exactly one of Scene, Tab, Parts or Instances on EngrCadViewport.");
     }
 
-    /// <summary>Whichever parameter supplied the scene — the identity a reload keys on.</summary>
-    private object? Source => (object?)Scene ?? (object?)Instances ?? Parts;
+    /// <summary>The tab a Scene is currently showing (clamped), or null.</summary>
+    public Tab? CurrentTab =>
+        Tab ?? (Scene is { Tabs.Count: > 0 } scene
+            ? scene.Tabs[Math.Clamp(TabIndex, 0, scene.Tabs.Count - 1)]
+            : null);
+
+    /// <summary>
+    /// What is being shown, as an identity a reload keys on. For a Scene that is the
+    /// CURRENT TAB, not the scene: switching tabs must reload, and switching back must
+    /// find every part already uploaded (which it does — <see cref="_keys"/> is keyed by
+    /// part reference and survives).
+    /// </summary>
+    private object? Content =>
+        (object?)CurrentTab ?? (object?)Instances ?? Parts;
 
     private IReadOnlyList<PartInstance> ResolveInstances()
     {
         if (Instances is not null)
             return Instances;
-        if (Scene is not null)
-            return [.. Scene.AllInstances];
+        if (CurrentTab is { } tab)
+            return tab.Instances();
         if (Parts is not null)
             return [.. Parts.Select(p => new PartInstance(p, p.Transform, p.Name))];
         return [];
     }
 
     /// <summary>
-    /// Meshes and uploads the scene, publishing a growing prefix so the viewport is
+    /// Meshes and uploads the current tab, publishing a growing prefix so the viewport is
     /// orbitable while the rest computes.
     ///
-    /// <para>WebAssembly is single-threaded: <c>Part.GetMesh</c> is the kernel's
-    /// tessellation, hundreds of milliseconds for a real part, and running the whole
-    /// scene in one go would freeze the tab with nothing on screen. Yielding with
-    /// <c>Task.Delay(1)</c> — not <c>Task.Yield()</c>, which posts straight back onto the
-    /// same loop and need not paint — lets the pending status reach the DOM first, and
-    /// drawing after each part turns the wait into visible progress. It is the same
-    /// growing-prefix idea as the desktop's TabMeshLoader, minus the threading it does
-    /// not have.</para>
+    /// <para><b>WebAssembly is single-threaded</b>, which is why this is not the desktop's
+    /// <c>TabMeshLoader</c>. That class does its work on a thread-pool task and posts
+    /// results back to the UI thread; here there is one thread, and the uploads it must
+    /// interleave are awaited JS interop calls. So the same three rules are kept —
+    /// publish a growing prefix, re-check a generation token after every await, name a
+    /// part that throws rather than swallowing it — with cooperative yielding in place of
+    /// the threading. <c>Task.Delay(1)</c>, not <c>Task.Yield()</c>, which posts straight
+    /// back onto the same loop and need not paint.</para>
+    ///
+    /// <para><b>Uploads survive the switch.</b> Only parts no longer shown are released,
+    /// so a tab revisit re-draws with no GPU work and a part placed in two tabs is
+    /// uploaded once — the browser's version of "revisiting a tab is instant".</para>
     /// </summary>
     private async Task LoadAsync()
     {
@@ -273,22 +423,31 @@
         // stale one that resumed between its upload and its bookkeeping would file a key
         // the new pass has already released.
         int generation = ++_generation;
-        foreach (var keys in _keys.Values)
+
+        var instances = ResolveInstances();
+        var wanted = new HashSet<Part>(instances.Select(i => i.Part));
+        foreach (var (part, keys) in _keys.Where(e => !wanted.Contains(e.Key)).ToList())
         {
             await gl.ReleaseGeometryAsync(keys.Mesh);
             if (keys.Edges is not null)
                 await gl.ReleaseGeometryAsync(keys.Edges);
             if (keys.Wire is not null)
                 await gl.ReleaseGeometryAsync(keys.Wire);
+            if (generation != _generation)
+                return;
+            _keys.Remove(part);
         }
-        _keys.Clear();
+
         _drawn.Clear();
         _drawnParts.Clear();
+        _pick.Clear();
         _bounds = Aabb.Empty;
         _gridSpacing = 0;
         _failed = false;
+        _selected = -1;
+        _hovered = -1;
+        _hoverThrottle.Reset();
 
-        var instances = ResolveInstances();
         for (int i = 0; i < instances.Count; i++)
         {
             var instance = instances[i];
@@ -301,13 +460,16 @@
                     return;
                 try
                 {
-                    keys = await UploadPartAsync(gl, part, _keys.Count);
+                    keys = await UploadPartAsync(gl, part, _nextKey++);
                 }
                 catch (Exception e)
                 {
                     // A part that throws is NAMED and skipped, never swallowed: the rest
-                    // of the scene still loads and the reason stays on screen.
+                    // of the scene still loads and the reason stays on screen. The host is
+                    // told too, because its tree indexes instances and this part has none.
                     await FailAsync($"{part.Name}: {e.GetType().Name}: {e.Message}");
+                    if (PartFailed.HasDelegate)
+                        await PartFailed.InvokeAsync((part, $"{e.GetType().Name}: {e.Message}"));
                     continue;
                 }
                 if (generation != _generation)
@@ -322,6 +484,10 @@
                 part.DisplayMode,
                 keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices));
             _drawnParts.Add(part);
+            // ClippedBySection is carried now even though sections are a later rung: it is
+            // a property of the PART, and reading it here means the pick list is already
+            // correct when the section planes arrive.
+            _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
             _bounds = _bounds.Union(worldBounds);
 
             if (!_userMovedCamera)
@@ -339,8 +505,8 @@
     }
 
     /// <summary>
-    /// Uploads one distinct part's three buffers: the display mesh, its feature edges and
-    /// every mesh edge.
+    /// Uploads one distinct part's three buffers — the display mesh, its feature edges and
+    /// every mesh edge — and builds the triangle BVH picking raycasts against.
     ///
     /// <para><b>All three go up whatever the current style</b>, mirroring the desktop
     /// window's <c>UploadShared</c> — the global style is a dropdown, and a viewport that
@@ -352,6 +518,10 @@
     /// dihedrals, so a bore rim stays a smooth circle however coarse the tessellation.
     /// Nothing about that is re-derived here; it rides the same cached lowering
     /// <c>GetMesh</c> already paid for.</para>
+    ///
+    /// <para>The pick BVH is built over the same <c>RenderMesh</c> that is uploaded, so a
+    /// click lands on the triangle that was drawn rather than on a differently
+    /// tessellated stand-in.</para>
     /// </summary>
     private static async Task<PartKeys> UploadPartAsync(WebGlContext gl, Part part, int index)
     {
@@ -378,7 +548,9 @@
             await gl.UploadLineVerticesAsync(wireKey, RenderGeometry.SegmentVertices(wireEdges));
         }
 
-        return new PartKeys(meshKey, edgeKey, featureEdges.Count * 2, wireKey, wireEdges.Count * 2);
+        return new PartKeys(
+            meshKey, edgeKey, featureEdges.Count * 2, wireKey, wireEdges.Count * 2,
+            PickMesh.Build(render));
     }
 
     /// <summary>
@@ -446,8 +618,10 @@
             var (width, height, pixelScale) = await gl.ViewportSizeAsync();
             if (width <= 0 || height <= 0)
                 return;   // not laid out yet; the next request will find a real size
+            _lastSize = (width, height);
             await gl.RenderAsync(ViewportFrame.Build(
-                _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale));
+                _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
+                _selected, _hovered));
         }
         catch (JSDisconnectedException)
         {
@@ -459,6 +633,64 @@
         }
     }
 
+    // ---- picking ----
+    //
+    // Client-side: the kernel is in the browser, so a pick is a local BVH raycast and
+    // never a round trip. The maths is ScenePick in EngrCAD.Viewer.Core -- the same call
+    // the desktop viewport makes -- and deliberately NOT in engrcad-gl.js: a ray
+    // unprojected in JavaScript is exactly the kind of thing that silently disagrees with
+    // the camera the frame was drawn with.
+
+    /// <summary>The canvas size the last frame was drawn at, so a pick can reuse it
+    /// instead of asking the browser again mid-gesture.</summary>
+    private (double Width, double Height) _lastSize = (1, 1);
+
+    private PickResult PickAt(double x, double y, double width, double height)
+    {
+        var eye = CameraMath.Eye(_camera.Yaw, _camera.Pitch, _camera.Distance, _camera.Target);
+        var (near, far) = CameraMath.FrustumPlanes(_camera.Distance, _bounds);
+        var viewProjection = CameraMath.Perspective(Math.PI / 4, width / height, near, far)
+                           * CameraMath.LookAt(eye, _camera.Target, Vector3d.UnitZ);
+        // No section planes yet (that rung is next), but ScenePick already takes them and
+        // _pick already carries each part's ClippedBySection, so turning sections on here
+        // is passing three more arguments rather than writing a second clip rule.
+        return ScenePick.Nearest(
+            x, y, width, height, viewProjection, _pick, scratch: _pickScratch);
+    }
+
+    /// <summary>A click: select what is under it, or clear the selection by clicking it
+    /// again (the desktop's rule) or by clicking nothing.</summary>
+    private async Task PickAndSelectAsync(double x, double y)
+    {
+        var (width, height) = _lastSize;
+        int hit = PickAt(x, y, width, height).Index;
+        int wanted = hit == _selected ? -1 : hit;   // clicking the selection clears it
+        if (wanted != _selected)
+        {
+            _selected = wanted;
+            await PumpAsync();
+        }
+        if (SelectionChanged.HasDelegate)
+            await SelectionChanged.InvokeAsync(_selected);
+    }
+
+    private async Task UpdateHoverAsync(double x, double y)
+    {
+        if (!_hoverThrottle.ShouldSample(x, y))
+            return;
+        var (width, height) = _lastSize;
+        await SetHoveredAsync(PickAt(x, y, width, height).Index);
+    }
+
+    private Task SetHoveredAsync(int index)
+    {
+        if (index == _hovered)
+            return Task.CompletedTask;
+        _hovered = index;
+        StateHasChanged();   // the cursor is bound to the hover state
+        return PumpAsync();
+    }
+
     // ---- input ----
     //
     // The bindings match the desktop exactly because they ARE the desktop's: plain drag
@@ -468,8 +700,11 @@
     private async Task OnPointerDown(PointerEventArgs e)
     {
         _dragging = true;
-        _lastX = e.ClientX;
-        _lastY = e.ClientY;
+        _moved = false;
+        _lastX = _pressX = e.OffsetX;
+        _lastY = _pressY = e.OffsetY;
+        await SetHoveredAsync(-1);   // a press ends hover, as it does on the desktop
+        _hoverThrottle.Reset();
         // Capture, so a drag that leaves the canvas keeps orbiting. The desktop viewer
         // solves the same problem by handling input at the window level.
         if (_gl is not null)
@@ -479,12 +714,13 @@
     private Task OnPointerMove(PointerEventArgs e)
     {
         if (!_dragging || e.Buttons == 0)
-            return Task.CompletedTask;
+            return Picking ? UpdateHoverAsync(e.OffsetX, e.OffsetY) : Task.CompletedTask;
 
-        double dx = e.ClientX - _lastX;
-        double dy = e.ClientY - _lastY;
-        _lastX = e.ClientX;
-        _lastY = e.ClientY;
+        double dx = e.OffsetX - _lastX;
+        double dy = e.OffsetY - _lastY;
+        _lastX = e.OffsetX;
+        _lastY = e.OffsetY;
+        _moved |= Travelled(e.OffsetX - _pressX, e.OffsetY - _pressY);
 
         // Buttons is a bitmask: 1 primary, 2 secondary, 4 middle.
         bool pan = (e.Buttons & 6) != 0 || ((e.Buttons & 1) != 0 && e.ShiftKey);
@@ -497,7 +733,26 @@
         return PumpAsync();
     }
 
-    private void OnPointerUp(PointerEventArgs e) => _dragging = false;
+    private async Task OnPointerUp(PointerEventArgs e)
+    {
+        bool wasDragging = _dragging;
+        _dragging = false;
+        // Click-vs-drag discrimination, the desktop's rule and its threshold: a release
+        // within 4 pixels of the press is a click that picks; anything farther was an
+        // orbit/pan/zoom drag. Reusing HoverThrottle's distance is deliberate — the two
+        // answer the same question about what counts as pointer travel.
+        if (wasDragging && Picking && !_moved && !Travelled(e.OffsetX - _pressX, e.OffsetY - _pressY))
+            await PickAndSelectAsync(e.OffsetX, e.OffsetY);
+        _hoverThrottle.Reset();   // the next move re-picks immediately
+    }
+
+    private void OnPointerCancel(PointerEventArgs e) => _dragging = false;
+
+    private Task OnPointerLeave(PointerEventArgs e) =>
+        _dragging ? Task.CompletedTask : SetHoveredAsync(-1);
+
+    private static bool Travelled(double dx, double dy) =>
+        dx * dx + dy * dy >= HoverThrottle.DefaultThreshold * HoverThrottle.DefaultThreshold;
 
     private Task OnWheel(WheelEventArgs e)
     {

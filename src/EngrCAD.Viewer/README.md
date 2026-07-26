@@ -41,7 +41,10 @@ EngrCad.Show(scene, "My design");   // blocks until the window closes
 ```
 
 Multi-tab scenes get a tab strip; each tab remembers its own camera (auto-framed on
-first visit). Picking reports part names in the title bar.
+first visit). Picking reports part names in the title bar; the raycast itself is
+`ScenePick` in **EngrCAD.Viewer.Core**, so `HitTest` here is three lines of adapting
+the parallel instance/visibility lists into `PickInstance`s and the browser client
+answers a click with the same maths.
 
 ## The CAD chrome
 
@@ -262,9 +265,13 @@ Dark-themed layout around one shared GL viewport:
   One shader knob does both states: `uHighlight` at 1.0 is the selection gold,
   at 0.35 the hover tint; a hovered *selected* part just shows selection.
   Wireframe-mode parts blend their line color toward the highlight instead.
-  Implementation: the existing pick raycast (per-part BVH + Möller–Trumbore) re-runs
-  on pointer move, **throttled** to every 4+ DIPs of travel (`HoverThrottle` in
-  `ViewCube.cs`, unit-tested); redraws happen only when the hovered index actually
+  Those three values are `Highlight` in **EngrCAD.Viewer.Core**, shared with the
+  browser client, so the two front ends cannot disagree about what selection looks
+  like.
+  Implementation: the existing pick raycast (`ScenePick`, also in Viewer.Core —
+  per-part BVH + Möller–Trumbore over an unprojected ray) re-runs
+  on pointer move, **throttled** to every 4+ DIPs of travel (`HoverThrottle`, moved
+  to Viewer.Core with the pick maths); redraws happen only when the hovered index actually
   changes, and hover clears when a drag/press starts or the pointer leaves the
   viewport or enters the cube region. Hover shares the pick raycast, so it honors the
   section plane exactly as clicking does.
