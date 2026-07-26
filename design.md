@@ -231,6 +231,34 @@ Each engine uses the data structure its mathematics wants:
   B-spline trims, and revolve trims recovered by bisection on the exact (radius, axial)
   profile residuals — root solving, never distance minimization, which stalls at
   √ε ≈ 1e-8, past the 1e-9 weld tolerance.
+- **The exactly-collinear boundary run forces the ear clipper into a fan, and that is
+  the normal case rather than a pathology.** A cross-drilled bore wall is a periodic band
+  with two hole loops, so it routes to the band-with-holes tier and gets ear-clipped -
+  but both ring loops of an `ExtrudedSurface` pull back to a *bit-identical* v (measured:
+  distinct v bits = 1, 32 of 32 uv triples exactly collinear), so `IsEar`'s `<= 0`
+  rejects every corner along both chains and only the unrolled rectangle's four corners
+  are ever clippable. The result is a fan, and `Refine` then bisects its long chords into
+  slivers. **No change to the shortest-diagonal metric could have helped** - the defect is
+  structural, not a scoring problem. The existing merge walk was not the answer either: it
+  pairs chains by u, so a dense breakout curve against a coarse ring is fanned from one
+  far vertex and inverts where the curve turns back (measured uv cross -5.9e-4). The fix
+  is a **slab sweep** - split each hole at its extreme-u vertices into two u-monotone
+  chains, cutting the band into u-monotone slabs for the textbook stack sweep, sharing cut
+  halves verbatim so watertightness is by index and no vertex is invented, with a global
+  uv-area identity as the closing guard. It returns null and defers to the ear clipper
+  whenever it cannot prove the decomposition, so it cannot be worse than what it replaces.
+- **A fold COUNT is not a quality metric; the worst normal dot is.** This defect rendered
+  as a visibly crumpled fan and had **zero** strictly-inverted triangles - before *and*
+  after. What was wrong was a worst facet-vs-surface dot of 0.0198, an 88.9 degree sliver,
+  which any inversion count calls clean. Nor is a count a convergence test: volume excess
+  over the analytic value ran 61.19 / 18.60 / 13.40 / 11.25 at 32/64/128/256 segments per
+  circle - ratios 3.29, then **1.39, 1.19** - stalling near 11 and never converging, where
+  after the fix it runs 76.20 / 21.49 / 5.97 / 1.82 at ratios 3.55 / 3.60 / 3.27, the
+  quadratic convergence the strip path is supposed to give. Independent check: the
+  implicit route (Surface Nets at resolution 256) lands 3.79 *below* the same analytic
+  value, so the two representations bracket it. This is the companion to the
+  centroid-versus-vertex rule: pick a metric that can *see* the defect, then prove it
+  converges.
 - **Trimmed-face tessellation ear-clips exact coordinates — earcut is banned for
   pulled-back loops.** `PolygonTriangulator` filters exactly-collinear vertices, and
   iso-parameter boundary runs are exactly collinear in uv while NOT collinear in 3D:
@@ -721,10 +749,58 @@ for `in`-parameters being illegal in expression trees.
   about what the scene *looks like* can be answered by reading the JavaScript, the rule
   has been broken.
 - **WASM is a performance tier, not a port.** The kernel compiles unmodified and returns
-  identical geometry; what changes is speed, and only by a constant: measured 19.9x
-  slower than native interpreted, 4.9x with AOT. That makes "web viewer" a deployment
-  decision (AOT costs 1.9x the download) rather than an engineering fork, which is the
-  whole reason the kernel was kept free of UI dependencies by mandate.
+  identical geometry; what changes is speed, and only by a constant: measured 18.9x
+  slower than native interpreted, 4.3x with AOT. That makes "web viewer" a deployment
+  decision (AOT is 4.4x faster for 2.4x the download) rather than an engineering fork,
+  which is the whole reason the kernel was kept free of UI dependencies by mandate.
+- **A published Blazor app is path-portable for the price of one tag.** Every asset
+  reference the build emits is already relative - `./_framework/...` in the rewritten
+  import map, `_framework/...` in the script tag - so `<base href>` is the *entire*
+  difference between an app pinned to a site root and one that runs from any directory.
+  Making it `./` is what lets the docs site serve the demo from `/EngrCAD/live/` with no
+  `StaticWebAssetBasePath`, no post-publish rewrite step, and no repository name compiled
+  into the artifact. Verified by publishing once and loading it from a subdirectory: zero
+  404s, and the geometry identical to the root-hosted run.
+- **A measurement beacon must not be able to fail.** The demo's `?report` timings were
+  sent with `IJSRuntime.InvokeVoidAsync("fetch", url)`, which marshals the JS `Response`
+  back across the interop boundary and throws when it cannot. That loses the measurement
+  *and* trips Blazor's error UI - and it fails silently in the way that matters, because
+  the thing it was carrying is the one number nobody has yet. A 1x1 `<img>` whose `src`
+  is the beacon URL has no marshalling step and therefore no failure mode; the static
+  server's access log records it either way.
+- **An incremental Blazor WASM publish can silently ship a BROKEN runtime.** Publishing
+  repeatedly into the same output without clearing `obj`/`bin` produced an app that was
+  first merely slow (1 677 ms -> 2 765 ms on identical source, a 1.6x regression) and
+  then aborted outright with `MONO interpreter: NIY encountered in method
+  EngrCAD.Core.Vector2d:.cctor ()` plus an interpreter assertion - a static constructor
+  containing nothing but four `static readonly` struct fields, so the named method is a
+  red herring. The publish reports success at every step; nothing in the build log hints
+  at it. The cause is the native relink being skipped or mismatched, leaving assemblies
+  and runtime disagreeing. **Delete `obj`, `bin` and the output directory before any
+  publish you intend to measure or deploy.** CI is safe by construction (fresh checkout
+  into an empty workspace), so this is a local-iteration hazard - which is worse, because
+  local iteration is where the numbers come from.
+- **A number that moves when the source did not is an ARTIFACT story, not a machine
+  story.** The above nearly put a wrong table on a public docs page: the no-AOT row was
+  re-measured at 2 765 ms against a recorded 1 619.8 ms, and because this laptop genuinely
+  does swing 2x, "stale measurement" was the comfortable explanation and the docs were
+  duly "corrected". Two things should have stopped it sooner. The desktop and AOT rows
+  reproduced *closely* while only one row moved - interference does not select a single
+  row. And the demo's beacon had quietly stopped firing, which was read as a harness quirk
+  when it was the crash. **Re-verify the artifact before believing the number**: a clean
+  rebuild put the row back at 1 677 ms, confirming the original table. The rule is to
+  rebuild from clean and reproduce a *disagreement* before publishing a correction, since
+  a correction is far more expensive to unwind than a re-measurement.
+- **Re-measure in ONE session, or you have not measured a ratio.** This machine
+  (win-arm64 laptop) returned 88.7 ms and 185.7 ms from runs of the same
+  Release binary on the same model - a 2.1x spread from thermal and background load
+  alone. A desktop figure from one sitting divided by a WASM figure from another is
+  therefore not a ratio, it is noise with units. The rule that follows: quote
+  best-of-N for each side, taken back to back with the machine otherwise idle, and
+  re-take the whole table whenever any row is re-taken. This is the same family as the
+  JIT-tiering lesson (a single warm-up measured the same code at 1.4x slower and 0.84x
+  faster on different runs) - the estimator has to be robust to interference, because
+  interference is the normal condition.
 - **Surface Nets streams the grid in a window of x-slabs.** The dense sampler's *memory*
   was the wall on resolution, not its speed. Cells only ever need value slabs i and i+1
   and cell maps for i−1 and i, so the whole algorithm fits a sliding window; sizing that
