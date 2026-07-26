@@ -76,6 +76,7 @@
     private bool _userMovedCamera;
 
     private object? _loadedFrom;
+    private bool _showingFurniture = true;
     private int _generation;
     private bool _rendering;
     private bool _dirty;
@@ -149,11 +150,23 @@
             }
         }
 
-        if (_gl is not null && !ReferenceEquals(Source, _loadedFrom))
+        if (_gl is not null && (!ReferenceEquals(Source, _loadedFrom) || _showingFurniture != Furniture))
         {
             _loadedFrom = Source;
+            _showingFurniture = Furniture;
             await LoadAsync();
         }
+    }
+
+    protected override void OnParametersSet()
+    {
+        // Refuse loudly rather than silently picking one: a host that set two of these
+        // meant something by both, and quietly drawing the first is the wrong scene shown
+        // with no complaint.
+        int supplied = (Scene is null ? 0 : 1) + (Parts is null ? 0 : 1) + (Instances is null ? 0 : 1);
+        if (supplied > 1)
+            throw new InvalidOperationException(
+                "Set exactly one of Scene, Parts or Instances on EngrCadViewport.");
     }
 
     /// <summary>Whichever parameter supplied the scene — the identity a reload keys on.</summary>
