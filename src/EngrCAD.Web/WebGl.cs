@@ -233,12 +233,19 @@ public sealed class WebGlContext : IAsyncDisposable
     public ValueTask CapturePointerAsync(ElementReferenceLike canvas, long pointerId) =>
         _module.InvokeVoidAsync("capturePointer", canvas.Value, pointerId);
 
-    /// <summary>The canvas size in device-independent pixels — the camera's aspect
-    /// ratio and pick-ray unprojection both need it, and only the browser knows it.</summary>
-    public async ValueTask<(double Width, double Height)> ViewportSizeAsync()
+    /// <summary>
+    /// The canvas size in device-independent pixels, plus the device pixels per CSS pixel
+    /// the drawing buffer is sized at. The camera's aspect ratio and pick-ray
+    /// unprojection need the size; the pixel scale is what keeps a point sprite the same
+    /// apparent size on a high-DPI display (the sprite is sized in the framebuffer, so it
+    /// must follow the framebuffer's resolution — the desktop window multiplies by its
+    /// DPI scaling and the offscreen pass by its supersample factor for the same reason).
+    /// All three are browser facts, which is why they are asked for rather than assumed.
+    /// </summary>
+    public async ValueTask<(double Width, double Height, double PixelScale)> ViewportSizeAsync()
     {
         var size = await _module.InvokeAsync<double[]>("viewportSize", _id);
-        return (size[0], size[1]);
+        return (size[0], size[1], size[2]);
     }
 
     /// <summary>float32 x/y/z triples as raw bytes — one pass, one allocation.

@@ -365,9 +365,14 @@ function resize(ctx) {
     gl.viewport(0, 0, canvas.width, canvas.height);
 }
 
-/** The canvas's CSS size in device-independent pixels -- C# needs it for the camera's
- *  aspect ratio and for pick-ray unprojection. */
+/**
+ * The canvas's CSS size in device-independent pixels, plus the device-pixel ratio the
+ * drawing buffer is sized at -- C# needs the size for the camera's aspect ratio and for
+ * pick-ray unprojection, and the ratio to size point sprites, which are measured in
+ * framebuffer pixels. All three are facts only the browser has; what is DONE with them
+ * stays in .NET.
+ */
 export function viewportSize(id) {
     const ctx = require(id);
-    return [ctx.canvas.clientWidth, ctx.canvas.clientHeight];
+    return [ctx.canvas.clientWidth, ctx.canvas.clientHeight, window.devicePixelRatio || 1];
 }

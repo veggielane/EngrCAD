@@ -3,7 +3,8 @@
 The **UI-free render model**: everything both EngrCAD render paths agree on that does
 not touch a GL binding. No Avalonia, no Silk.NET, no `System.Drawing` — this assembly
 must load in a WebAssembly client, so its only references are `EngrCAD.Core` (math
-structs) and `EngrCAD.Modeling` (`DisplayMode`).
+structs), `EngrCAD.Mesh` (the half-edge walk `WireframeEdges` does) and
+`EngrCAD.Modeling` (`DisplayMode`).
 
 ## The namespace is `EngrCAD.Viewer` on purpose — do NOT "tidy" it
 
@@ -47,6 +48,7 @@ prevent. Hence: extract, don't copy.
 | `CameraState` | The orbit pose (yaw, pitch, distance, target) every front end hands to `CameraMath`. Here rather than in `EngrCAD.Viewer` because the browser client cannot reference that assembly, and a second copy of the pose type is the first step to a second copy of the orbit maths. The namespace is unchanged, so existing call sites were untouched by the move. |
 | `CameraMath` | Orbit `Eye`, `LookAt`, `Perspective`/`Orthographic`, the scene-scaled `FrustumPlanes`, `FrameDistance`, `MaxOrbitDistance`, `WriteColumnMajor` (the column-major `float[16]` GL expects) — **and the orbit camera's state transitions**: `Clamped`, `Orbit`, `Zoom`, `Pan`, the input bindings `DragOrbit`/`DragPan`/`DragZoom`/`WheelZoom`/`KeyStep`, and `PitchLimit` (which `ViewCubeMath.PitchLimit` now *is*, so a snap to Top cannot be undone by the very next clamp). |
 | `RenderGeometry` | `BuildGridAndAxes` (adaptive 1-2-5 ground grid + RGB axes), `NiceStep`, `SegmentVertices` (line segments -> the xyz vertex array the line program draws). |
+| `WireframeEdges` | `Extract(mesh)` — every unique mesh edge as a segment pair, for the wireframe display mode. Moved here from `EngrCAD.Viewer` when the browser front end needed it: it has no GL in it, and **the walk order decides the vertex order in the uploaded buffer**, so two copies would not even upload the same bytes. |
 
 ## What is deliberately NOT here
 

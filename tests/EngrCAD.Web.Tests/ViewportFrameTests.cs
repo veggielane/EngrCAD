@@ -184,7 +184,10 @@ public class ViewportFrameTests
     public void EveryProgramNamedIsOneTheViewportCompiles()
     {
         string[] compiled =
-            [ViewportFrame.MeshProgram, ViewportFrame.LineProgram, ViewportFrame.BackgroundProgram];
+        [
+            ViewportFrame.MeshProgram, ViewportFrame.LineProgram,
+            ViewportFrame.PointProgram, ViewportFrame.BackgroundProgram,
+        ];
         var frame = Build([Instance("a", (0, 0, 0))], new ViewportFurniture("@grid", 12, "@axes"));
 
         Assert.All(frame.Draws, call => Assert.Contains(call.Program, compiled));

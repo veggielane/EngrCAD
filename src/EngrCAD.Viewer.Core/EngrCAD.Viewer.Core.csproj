@@ -6,10 +6,12 @@
     <RootNamespace>EngrCAD.Viewer</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Core for the math structs, Modeling for DisplayMode (RenderModes.Resolve's
-         precedence rule is stated in terms of it). NOTHING that touches a GL binding:
-         this assembly must stay loadable in a WebAssembly client. -->
+    <!-- Core for the math structs, Mesh for the half-edge walk WireframeEdges does, and
+         Modeling for DisplayMode (RenderModes.Resolve's precedence rule is stated in
+         terms of it). NOTHING that touches a GL binding: this assembly must stay
+         loadable in a WebAssembly client. -->
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
+    <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
     <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
   </ItemGroup>
 </Project>

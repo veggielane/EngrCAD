@@ -17,8 +17,11 @@
         </header>
     }
 
+    @* Furniture off under ?report so the self-check measures the MODEL only: the ground
+       grid and the red +X axis would otherwise sit inside the warm/steel pixel classes
+       the check counts, and a constant that large hides the effect being measured. *@
     <EngrCadViewport @ref="_viewport" Scene="_scene" Height="420px" Class="viewport"
-                     OnRendered="OnViewportRendered" />
+                     ViewStyle="_style" Furniture="@(!_report)" OnRendered="OnViewportRendered" />
 
     <section class="controls">
         <label>
@@ -32,6 +35,24 @@
             <input type="range" min="0" max="4" step="0.5" value="@_fillet"
                    @onchange="OnFilletChanged" />
             <span class="value">@_fillet.ToString("0.0") mm</span>
+        </label>
+        <label>
+            View style
+            <select value="@_style" @onchange="OnStyleChanged">
+                @foreach (var style in Enum.GetValues<ViewStyle>())
+                {
+                    <option value="@style">@Spaced(style.ToString())</option>
+                }
+            </select>
+        </label>
+        <label>
+            Flange
+            <select value="@_flangeMode" @onchange="OnFlangeModeChanged">
+                @foreach (var mode in Enum.GetValues<DisplayMode>())
+                {
+                    <option value="@mode">@mode</option>
+                }
+            </select>
         </label>
     </section>
 
@@ -65,9 +86,11 @@
         <footer>
             <p>
                 The viewport compiles the <em>same</em> shader sources the desktop viewer and
-                the headless renderer compile, and moves the camera through the same
-                <code>CameraMath</code>, so the three cannot drift apart. Feature edges, the
-                model tree, picking and section planes are the rungs after this one.
+                the headless renderer compile, moves the camera through the same
+                <code>CameraMath</code>, and resolves the view style against each part's own
+                display mode through the same <code>RenderModes.Resolve</code>, so the three
+                cannot drift apart. Set the flange translucent to see the hub it sits on.
+                The model tree, picking and section planes are the rungs after this one.
             </p>
         </footer>
     }
@@ -83,9 +106,12 @@
 @code {
     private int _holes = 6;
     private double _fillet = 2;
+    private ViewStyle _style = ViewStyle.ShadedWithEdges;
+    private DisplayMode _flangeMode = DisplayMode.Shaded;
     private BuildResult? _result;
     private string? _error;
     private Scene? _scene;
+    private Part? _flange;
 
     // ?embed drops the page furniture so the docs site can put this in an iframe without
     // the heading and closing note appearing twice. ?report is the timing self-check below.
@@ -128,38 +154,152 @@
     /// and only the viewport knows when its scene has finished meshing, uploading and
     /// drawing. Reading the canvas back and counting lit pixels is the only honest answer:
     /// a black canvas throws nothing, so an error-free console proves precisely nothing.
+    ///
+    /// <para>It now walks every render mode and reports a pixel count for each, because a
+    /// single count proves one mode drew something and says nothing about whether the
+    /// modes DIFFER. The classifiers are deliberately the ones
+    /// <c>ViewStyleRenderTests</c> uses against <c>OffscreenRenderer</c>, so the two front
+    /// ends' numbers can be put side by side rather than merely both being non-zero.</para>
     /// </summary>
     private async Task OnViewportRendered()
     {
-        if (!_report || _pixelsChecked)
+        // _flange is the guard that matters: the viewport reports a finished load for the
+        // EMPTY scene it starts with (Furniture is off under ?report, and a furniture
+        // change is a reload), and a check that ran then would measure a blank canvas
+        // and set _pixelsChecked so the real one never ran.
+        if (!_report || _pixelsChecked || _flange is null)
             return;
         _pixelsChecked = true;
 
-        int lit = 0, moved = 0;
+        var counts = new Dictionary<string, int>();
         string buffer = "none";
         try
         {
-            var shot = await _viewport!.CapturePixelsAsync();
-            // Above the background gradient (max 46/255) and the ground grid (74/255):
-            // anything this bright is lit geometry.
-            lit = shot.CountBrighterThan(90);
-            buffer = $"{shot.Width}x{shot.Height}";
+            Trace("capture edges");
+            var edges = await CaptureAsync(ViewStyle.ShadedWithEdges);
+            buffer = $"{edges.Width}x{edges.Height}";
+            // Above the background gradient (max 46/255): anything this bright is lit
+            // geometry. Kept from the previous rung so the numbers stay comparable.
+            counts["lit"] = edges.CountBrighterThan(90);
+
+            Trace("capture shaded");
+            var shaded = await CaptureAsync(ViewStyle.Shaded);
+            counts["steelEdges"] = Steel(edges);
+            counts["steelShaded"] = Steel(shaded);
+            // The edge overlay is near-black over the same fill, so it must DARKEN pixels
+            // and brighten almost none. Suppressing edges adding pixels would mean the two
+            // styles differ in fill footprint, which they must not.
+            counts["darkened"] = Darkened(edges, shaded);
+            counts["brightened"] = Darkened(shaded, edges);
+
+            Trace("capture wire");
+            counts["steelWire"] = Steel(await CaptureAsync(ViewStyle.Wireframe));
+            Trace("capture points");
+            counts["steelPoints"] = Steel(await CaptureAsync(ViewStyle.Points));
+
+            // Translucency: the hub sits under the flange and is hidden while the flange
+            // is opaque. It is the only warm-coloured thing in the scene (furniture is off
+            // under ?report), so warm pixels appearing IS the part behind showing through.
+            Trace("capture translucency");
+            await _viewport!.SetViewStyleAsync(ViewStyle.ShadedWithEdges);
+            counts["warmOpaque"] = Warm(await _viewport.CapturePixelsAsync());
+            _flange!.DisplayMode = DisplayMode.Translucent;
+            await _viewport.RefreshDisplayModesAsync();
+            var glass = await _viewport.CapturePixelsAsync();
+            counts["warmGlass"] = Warm(glass);
+            counts["steelGlass"] = Steel(glass);
+            _flange.DisplayMode = DisplayMode.Shaded;
+            await _viewport.RefreshDisplayModesAsync();
 
             // Then orbit through the same CameraMath call a drag makes and re-read the
-            // canvas: a viewport that draws once but ignores the camera would pass the
+            // canvas: a viewport that draws once but ignores the camera would pass every
             // check above and fail this one.
+            Trace("orbit");
+            var before = await _viewport.CapturePixelsAsync();
             await _viewport.SetCameraAsync(CameraMath.DragOrbit(_viewport.Camera, 220, 60));
-            moved = Differences(shot, await _viewport.CapturePixelsAsync());
+            counts["moved"] = Differences(before, await _viewport.CapturePixelsAsync());
         }
         catch (Exception e)
         {
-            buffer = $"{e.GetType().Name}";
+            buffer = $"{e.GetType().Name}:{e.Message}";
         }
 
-        _beacon = Measure(lit, buffer, moved);
+        Trace("measure");
+        _beacon = Measure(counts, buffer);
+        Trace("beacon " + _beacon);
         // OnAfterRender deliberately does NOT re-render (that would loop), so the beacon
         // element only reaches the DOM if we ask for the repaint ourselves.
         StateHasChanged();
+    }
+
+    /// <summary>Blazor WASM routes Console.WriteLine to the browser console, which a
+    /// headless run captures with --enable-logging=stderr. That is the only way to see
+    /// WHERE a self-check stopped: the beacon reports the end, and a check that never
+    /// reaches its end reports nothing at all.</summary>
+    private static void Trace(string stage) => Console.WriteLine($"[engrcad-report] {stage}");
+
+    /// <summary>Applies a view style and reads the canvas back. The style is applied
+    /// through the viewport's own async setter for the reason that setter exists: a
+    /// caller that set it and immediately captured would read the PREVIOUS frame.</summary>
+    private async Task<CapturedPixels> CaptureAsync(ViewStyle style)
+    {
+        await _viewport!.SetViewStyleAsync(style);
+        return await _viewport.CapturePixelsAsync();
+    }
+
+    // The pixel classifiers, transcribed from ViewStyleRenderTests so the browser's
+    // numbers and the offscreen renderer's are the same measurement.
+
+    /// <summary>Clearly bright steel — fills or full-intensity lines, bright and bluish.
+    /// Used comparatively, never to tell a fill from a line: wireframe lines are steel
+    /// coloured too.</summary>
+    private static int Steel(CapturedPixels shot) =>
+        Count(shot, (r, g, b) => r > 80 && b > 110 && b >= r);
+
+    /// <summary>Warm pixels (red clearly above blue) — the Coral hub. The steel flange and
+    /// the background gradient are both bluish, and furniture is off under ?report, so
+    /// nothing else in the frame can produce one.</summary>
+    private static int Warm(CapturedPixels shot) =>
+        Count(shot, (r, g, b) => r > b + 15);
+
+    /// <summary>Pixels where <paramref name="a"/> is darker than <paramref name="b"/> in
+    /// green by more than anti-aliasing noise — how many pixels an overlay darkened.</summary>
+    private static int Darkened(CapturedPixels a, CapturedPixels b)
+    {
+        if (a.Width != b.Width || a.Height != b.Height)
+            return -1;
+        int count = 0;
+        for (int i = 0; i + 3 < a.Rgba.Length; i += 4)
+        {
+            if (b.Rgba[i + 1] - a.Rgba[i + 1] > 18)
+                count++;
+        }
+        return count;
+    }
+
+    private static int Count(CapturedPixels shot, Func<byte, byte, byte, bool> predicate)
+    {
+        int count = 0;
+        for (int i = 0; i + 3 < shot.Rgba.Length; i += 4)
+        {
+            if (predicate(shot.Rgba[i], shot.Rgba[i + 1], shot.Rgba[i + 2]))
+                count++;
+        }
+        return count;
+    }
+
+    /// <summary>"ShadedWithEdges" as "Shaded with edges", for the dropdown.</summary>
+    private static string Spaced(string name)
+    {
+        var text = new System.Text.StringBuilder(name.Length + 4);
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(name[i]))
+                text.Append(' ').Append(char.ToLowerInvariant(name[i]));
+            else
+                text.Append(name[i]);
+        }
+        return text.ToString();
     }
 
     /// <summary>
@@ -210,7 +350,7 @@
         return count;
     }
 
-    private string Measure(int litPixels, string buffer, int movedPixels)
+    private string Measure(Dictionary<string, int> counts, string buffer)
     {
         // Best of five: the first pass pays JIT/AOT warm-up and first-touch page faults,
         // which is exactly the "single warm-up is meaningless" lesson from the desktop
@@ -229,11 +369,35 @@
             }
         }
 
+        string pixels = string.Join("&", counts.Select(c => $"{c.Key}={c.Value}"));
         return sample is null
-            ? $"/report?error={Uri.EscapeDataString(_error ?? "no result")}&lit={litPixels}"
+            ? $"/report?error={Uri.EscapeDataString(_error ?? "no result")}&{pixels}"
             : $"/report?best={best:F1}&build={sample.BuildMs:F1}&lower={sample.LowerMs:F1}"
               + $"&mesh={sample.MeshMs:F1}&tris={sample.Triangles}&closed={sample.Closed}"
-              + $"&lit={litPixels}&buffer={buffer}&moved={movedPixels}";
+              + $"&buffer={buffer}&{pixels}";
+    }
+
+    private async Task OnStyleChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<ViewStyle>(e.Value?.ToString(), out var style))
+        {
+            // Both: the field so the next parameter flow supplies the same value, and the
+            // viewport so the redraw happens now rather than on the next render cycle.
+            _style = style;
+            await _viewport!.SetViewStyleAsync(style);
+        }
+    }
+
+    private async Task OnFlangeModeChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<DisplayMode>(e.Value?.ToString(), out var mode) && _flange is not null)
+        {
+            _flangeMode = mode;
+            // The mode lives on the PART, not on the viewport — so this is a model edit
+            // followed by "pick it up", and it re-uploads nothing.
+            _flange.DisplayMode = mode;
+            await _viewport!.RefreshDisplayModesAsync();
+        }
     }
 
     private async Task OnHolesChanged(ChangeEventArgs e)
@@ -273,13 +437,25 @@
 
             // Through a Part, so the viewport draws the very geometry these numbers
             // describe: Part.GetMesh caches the display mesh the renderer then uploads.
-            var part = new Part("Flange", shape, Palette.Steel);
+            var part = new Part("Flange", shape, Palette.Steel) { DisplayMode = _flangeMode };
             var mesh = part.GetMesh();
             var t3 = Stopwatch.GetTimestamp();
 
             var scene = new Scene();
             scene.Add(part);
+            // The backing plate the flange bolts to, built AFTER the clock stops: it is a
+            // plain cylinder and timing it would only dilute the numbers above, which
+            // exist to measure the boolean / face-splitting / trimmed-tessellation paths.
+            // Its radius (34) is inside the flange's (40) and it is only 4 thick, so it is
+            // hidden under the flange except for the disc visible down the bore — which is
+            // the whole point of having a translucent mode, and what the ?report check
+            // measures. Amber rather than a palette colour because the check classifies it
+            // by hue: at 0.4 alpha under steel, Coral lands at r-b = +8 and is
+            // indistinguishable from noise, where this lands at +69.
+            scene.Add(new Part(
+                "Backplate", Shape.Cylinder(34, 4).Translate(0, 0, -7), new PartColor(0.94f, 0.44f, 0.16f)));
             _scene = scene;
+            _flange = part;
 
             _result = new BuildResult(
                 mesh.FaceCount, mesh.VertexCount, mesh.IsClosed, mesh.Volume(),
