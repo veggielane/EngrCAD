@@ -384,6 +384,36 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     edges are outside the [0.66 L, 1.33 L] band; after 40 passes **0%** are, at 73 ms. Note
     that in DEBUG builds `EditableMesh` runs a full `Validate()` after every operator, so
     remeshing is O(n) per operation there and DEBUG timings are meaningless.
+  - **Scheduling** (`RemeshOptions.Scheduling`, `FastSplitPasses`) — g3's `RemesherPro`
+    throughput work, both opt-in. `RemeshScheduling.Queue` processes only the edges and
+    vertices the previous pass disturbed: the first pass seeds the queues with the whole mesh
+    *in the sweep's own stride order* (so a one-pass remesh is bit-identical either way), and
+    afterwards a successful operation re-queues the one-ring it changed while a vertex that
+    moved appreciably re-queues its own. `FastSplitPasses` runs split-only sweeps first —
+    halving an 8×-too-long edge takes three rounds whatever else happens, and doing them here
+    costs three edge sweeps instead of three full passes over a mesh nowhere near its final
+    vertex count. Queued edge ids are recycled, so every pop re-validates *and* re-canonicalizes
+    (a collapse merges edge pairs, so the survivor is generally named by the other half).
+    Both stay fully deterministic: FIFO queues, fixed stride, no RNG.
+  - Measured (Release, win-arm64, `UvSphere(1, 96, 64)` = 12 096 faces → target 0.05, against
+    a `MeshProjectionTarget` of itself; see `RemesherSchedulingBenchmark`): at 40 passes,
+    sweep **777 ms**, queue **532 ms** (1.46×), queue + 4 fast-split passes **331 ms**
+    (2.35×). **Neither feature pays on its own under sweep scheduling, and that is the
+    result worth keeping.** While the whole mesh is still active, queue scheduling is a wash
+    (240 vs 243 ms at 12 passes) — its per-vertex ring walk to re-queue a neighbourhood costs
+    about what skipping quiet regions saves, because there are none yet; and a fast-split
+    prepass alone is likewise a wash (239 vs 243), since a sweep visits everything every pass
+    however the density got there. They are complementary: reaching the target density sooner
+    is precisely what lets regions go quiet sooner. The cost is a slightly less relaxed mesh
+    (0.6% of edges outside the band against the sweep's 0.2%), because a quiet region stops
+    being smoothed — a different answer, not the same one faster, which is why it is opt-in.
+  - The quiescence threshold that decides "moved appreciably" is **1e-2 × the target edge
+    length**, and the obvious first guess of 1e-3 makes the whole feature pointless: damped
+    smoothing at speed 0.1 still moves a *converged* vertex about 5e-3 L per pass, so every
+    vertex re-woke its own ring every pass, the active set stayed the entire mesh, and queue
+    scheduling measured **slower** than the sweep it exists to beat (783 vs 747 ms) — all of
+    the sweep's work plus the bookkeeping. A scheduler whose wake-up rule never fires is a
+    pure overhead.
 - **`IProjectionTarget` / `MeshProjectionTarget`** — the surface a remesh pulls vertices back
   onto. Smoothing shrinks a model (Laplacian flow is curvature flow — a sphere loses radius
   every pass), and projection is what undoes it, so the remesh changes the tessellation and

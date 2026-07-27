@@ -479,6 +479,117 @@ public class RemesherTests
         }
     }
 
+    // ---------------------------------------------------------------- scheduling
+
+    [Fact]
+    public void QueueScheduling_ConvergesAsWell()
+    {
+        var sphere = MeshPrimitives.UvSphere(1.0, 24, 16).Triangulated();
+        var options = new RemeshOptions(0.15)
+        {
+            Iterations = 20,
+            FeatureAngleDegrees = 0,
+            ProjectionTarget = new MeshProjectionTarget(sphere),
+        };
+
+        var swept = Remesher.Remesh(sphere, options);
+        var queued = Remesher.Remesh(sphere, options with { Scheduling = RemeshScheduling.Queue });
+
+        queued.Mesh.Validate();
+        Assert.True(queued.Mesh.IsClosed);
+        Assert.Equal(2, queued.Mesh.EulerCharacteristic);
+        AssertAllTriangles(queued.Mesh);
+
+        // Not the same answer — a quiet region stops being smoothed — but the convergence
+        // metric must land in the same place, or the scheduler is losing work rather than
+        // skipping work that had nothing to do.
+        double sweptOut = FractionOutsideBand(swept.Mesh, options);
+        double queuedOut = FractionOutsideBand(queued.Mesh, options);
+        Assert.True(queuedOut < 0.05, $"{queuedOut:P1} of edges outside the band");
+        Assert.True(queuedOut < sweptOut + 0.03, $"sweep {sweptOut:P1} vs queue {queuedOut:P1}");
+    }
+
+    [Fact]
+    public void QueueScheduling_IsDeterministic()
+    {
+        // FIFO queues seeded in the sweep's own stride order, no RNG: two runs must agree
+        // bit for bit, as the sweep path does.
+        var patch = GridPatch(9);
+        var options = new RemeshOptions(0.08)
+        {
+            Iterations = 8,
+            Scheduling = RemeshScheduling.Queue,
+            FeatureAngleDegrees = 0,
+        };
+
+        var (p1, f1) = Remesher.Remesh(patch, options).Mesh.ToIndexed();
+        var (p2, f2) = Remesher.Remesh(patch, options).Mesh.ToIndexed();
+
+        Assert.Equal(p1, p2); // Vector3d equality is bitwise
+        Assert.Equal(f1.Count, f2.Count);
+        for (int i = 0; i < f1.Count; i++)
+            Assert.Equal(f1[i], f2[i]);
+    }
+
+    [Fact]
+    public void QueueScheduling_FirstPassMatchesTheSweep()
+    {
+        // The queues are seeded with the whole mesh in the sweep's own stride order, so a
+        // single-pass remesh is identical either way; only the passes AFTER it differ.
+        var patch = GridPatch(7);
+        var options = new RemeshOptions(0.09) { Iterations = 1, FeatureAngleDegrees = 0 };
+
+        var (sweptPositions, sweptFaces) = Remesher.Remesh(patch, options).Mesh.ToIndexed();
+        var (queuedPositions, queuedFaces) =
+            Remesher.Remesh(patch, options with { Scheduling = RemeshScheduling.Queue }).Mesh.ToIndexed();
+
+        Assert.Equal(sweptPositions, queuedPositions);
+        Assert.Equal(sweptFaces.Count, queuedFaces.Count);
+        for (int i = 0; i < sweptFaces.Count; i++)
+            Assert.Equal(sweptFaces[i], queuedFaces[i]);
+    }
+
+    [Fact]
+    public void FastSplitPasses_SplitAndNothingElse()
+    {
+        var patch = GridPatch(4);   // edges of 0.25 and 0.354
+        var options = new RemeshOptions(0.1) { Iterations = 0, FastSplitPasses = 3 };
+
+        var result = Remesher.Remesh(patch, options);
+
+        result.Mesh.Validate();
+        Assert.Equal(0, result.Collapses);
+        Assert.Equal(0, result.Flips);
+        Assert.True(result.Splits > 0);
+        Assert.True(result.Mesh.FaceCount > patch.FaceCount);
+        // Split-only, so every original vertex is still exactly where it was: no smoothing
+        // pass ran, and the prepass never moves anything.
+        foreach (var vertex in patch.Vertices)
+            Assert.Contains(result.Mesh.Vertices, v => v.Position == vertex.Position);
+        // Three halvings take the long diagonal 0.354 below 1.33 x 0.1.
+        Assert.True(EdgeLengths(result.Mesh).Max <= 0.133 + 1e-12);
+    }
+
+    [Fact]
+    public void FastSplitPasses_StopEarlyWhenNothingIsTooLong()
+    {
+        // An over-generous count costs only the sweeps that find nothing, and the loop
+        // breaks out rather than sweeping a converged mesh ninety more times.
+        var patch = GridPatch(4);
+        var few = Remesher.Remesh(patch, new RemeshOptions(0.1) { Iterations = 0, FastSplitPasses = 3 });
+        var many = Remesher.Remesh(patch, new RemeshOptions(0.1) { Iterations = 0, FastSplitPasses = 90 });
+
+        Assert.Equal(few.Splits, many.Splits);
+        Assert.Equal(few.Mesh.FaceCount, many.Mesh.FaceCount);
+    }
+
+    [Fact]
+    public void FastSplitPasses_RejectNegative()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => Remesher.Remesh(GridPatch(3), new RemeshOptions(0.1) { FastSplitPasses = -1 }));
+    }
+
     // ---------------------------------------------------------------- projection target
 
     [Fact]

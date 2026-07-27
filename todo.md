@@ -16,10 +16,6 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 `MeshDecimator` on `EditableMesh`, BSP boolean retired (`Csg.cs` and `BooleanMethod`
 deleted; the imprint boolean is the only one). Remaining:
 
-- [ ] **`RemesherPro`'s scheduling** — the modified-edge queue and the fast-split
-  prepass. The basic pass converges in tens of ms at current sizes, so this is throughput
-  for large meshes only; note that queued edge ids are recycled, so every consumer must
-  re-validate (the same hazard that put constraints on vertices).
 - [ ] **Face-aligned (RZN-flow) sharp-edge reprojection remesh** — g3's
   `RemesherPro.SharpEdgeReprojectionRemesh`: per-triangle rigid repositioning onto an
   ORIENTED projection target with area × (n·n′)³ blending. Needs `IProjectionTarget` to
