@@ -41,7 +41,9 @@ scene.Add(history.ToPart("bracket", Palette.Steel));
 
 `FeatureContext` gives `Apply` the running body (`c.Body`), a lazily lowered B-Rep
 for [selector queries](chamfer-fillet.md) (`c.Lowered`), and the current top plane
-(`c.TopPlane`).
+(`c.TopPlane`). Features can also *declare* the geometry they need — a plane, a face,
+an axis — as typed properties that validate up front and re-resolve every
+regeneration: see [geometry inputs](geometry-inputs.md).
 
 ## Regeneration
 
@@ -84,4 +86,6 @@ if (!history.Regenerate().Succeeded) throw new Exception("regeneration after loa
 
 Standard features (`ExtrudeSketchFeature`, `RevolveSketchFeature`, `HoleFeature`,
 `FilletRimFeature`, `ChamferRimFeature`, `BooleanFeature`, linear/circular pattern
-features) cover simple histories out of the box.
+features) cover simple histories out of the box. Their geometry inputs — the drilling
+plane, the rim faces, the pattern axis — are [typed
+references](geometry-inputs.md) that round-trip through the same JSON.

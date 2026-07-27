@@ -24,6 +24,8 @@
   href: chamfer-fillet.md
 - name: Parametric features
   href: features.md
+- name: Geometry inputs for features
+  href: geometry-inputs.md
 - name: 3D annotations (PMI)
   href: annotations.md
 - name: Three representations

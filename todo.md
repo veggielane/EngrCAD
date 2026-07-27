@@ -849,10 +849,27 @@ stdout guarded, geometry evaluated lazily). Remaining:
 
 ## App layer / infrastructure
 
-- [ ] **Parametric features follow-ups** (`FeatureHistory` landed) — persistent
+- [ ] **Parametric features follow-ups** (`FeatureHistory` landed; typed geometry
+  inputs landed — `GeometryRefs.cs`: `PlaneRef`/`FaceRef`/`FaceSetRef`/`EdgeSetRef`/
+  `AxisRef` with cardinality in the type, descriptor-as-cache-key-as-serialized-form,
+  per-`Apply` resolution, and `ValidateInputs` naming the failing property) — persistent
   topological IDs (selectors are the naming story today), property-panel UI editing of
   `[Param]`s, feature list in the viewer model tree, a feature registry for UI
   insertion.
+- [ ] **Geometry-reference vocabulary follow-ups** — the named queries cover what the
+  standard features need and no more. Wanted next: `PlaneRef.Offset(distance)` and
+  `PlaneRef.Rotated` (an offset construction plane is the commonest missing one);
+  `FaceSetRef.Largest` / `SmallestArea` (needs a face-area query — `BrepQueries` has
+  none, and a curved trimmed face's area is not free); `FaceSetRef.Touching(point)` and
+  `.AdjacentTo(faceRef)`; radius/length *ranges* rather than exact values (today
+  `Cylindrical(r)` and `Circular(r)` compare at the weld tier, which is right for
+  exactly-constructed geometry and useless as a filter); a `VertexRef`. Also: the
+  `Shape` API's own selector overloads still take raw `Func`s — `FaceSetRef.AsSelector`
+  bridges them, but `Shape.Fillet(radius, FaceSetRef)` overloads would let a design
+  outside a feature history use the same vocabulary, and `Draft`/`Shelling`'s per-face
+  predicates could take one too. And `Mates`' eagerly pinned references could be
+  *expressed* as `GeometryRef`s (resolved once at construction, which is a consumer
+  choice, not a different vocabulary) so a mate could serialize alongside features.
 - [ ] **Assemblies follow-ups** (v2 landed: BOM, exploded views, mates, STEP assembly
   export + import) — true GPU instanced drawing (matrix buffer, one draw per part), tree
   expand/collapse, per-instance color/display-mode overrides, retro-assign palette colors
@@ -872,10 +889,11 @@ stdout guarded, geometry evaluated lazily). Remaining:
   knurled/flanged inserts, ISO 2338's crowned pin ends); and stacks that anchor into a
   *placed component* — today `PlaceThrough` always cuts the screw's own tapped pilot in
   the far body, so anchoring into an insert means placing the insert separately.
-- [ ] **Frame3d enabled next steps** — `FeatureContext.TopPlane` could become
-  `SketchPlane.On(topFace)` (behavior decision: drill origins would move from world
-  (0,0,z) to the face centroid); arbitrary section planes from a frame; `StepWriter`
-  emitting AXIS2 placements via `Frame3d`; Part poses as frames (assemblies above).
+- [ ] **Frame3d enabled next steps** (the `TopPlane` behaviour question is settled: both
+  conventions are now expressible — `PlaneRef.TopPlane` keeps world (0,0,z) origins,
+  `PlaneRef.OnTopFace` gives the face's own frame — so it is a per-feature choice rather
+  than a global decision) — arbitrary section planes from a frame; `StepWriter` emitting
+  AXIS2 placements via `Frame3d`; Part poses as frames (assemblies above).
 - [ ] **Parametric model layer / scripting** — fluent C# builder over the retained
   document model; `.csx` scripting via Roslyn (C# *is* our SCAD language); reusable
   parametric components as plain C# methods — document the pattern.

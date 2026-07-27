@@ -221,13 +221,68 @@ Regeneration replays with **prefix caching** (editing feature 5 re-runs only 5..
 keep `Apply` a pure function of parameters + context), validates `[Param]` ranges
 first, stops at the first failure keeping the last good body, supports suppression,
 and reports per-feature statuses. `SaveParameters`/`LoadParameters` round-trip values
-as JSON so a design is re-tunable without recompiling. Between-feature geometry
-references are **selector-based** (`FeatureContext.Lowered` + `BrepQueries`) — semantic
-queries that survive regeneration; persistent topological IDs are future work.
+as JSON so a design is re-tunable without recompiling.
 Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, patterns,
 `BooleanFeature`) cover simple histories; `Feature.FromFunc` handles one-offs.
 `FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
 (the cached prefix output), which the construction tree below previews.
+
+### Geometry inputs (`GeometryRefs.cs`)
+
+Between-feature geometry references are **semantic queries** over the regenerated
+body, not persistent topological IDs — and they have a typed vocabulary, so "this
+feature needs a plane" is something a feature can *say*:
+
+| Type | Resolves to | Cardinality |
+| --- | --- | --- |
+| `PlaneRef` | `SketchPlane` | exactly one |
+| `FaceRef` | `BrepFace` | exactly one |
+| `FaceSetRef` | `IReadOnlyList<BrepFace>` | at least one (`.Optional()` → any) |
+| `EdgeSetRef` | `IReadOnlyList<BrepEdge>` | at least one |
+| `AxisRef` | `Ray3d` | exactly one |
+
+```csharp
+public sealed class Boss : Feature
+{
+    [Param(Min = 1)] public double Height { get; init; } = 6;
+
+    [Param(Description = "Face the boss grows from")]
+    public PlaneRef Plane { get; init; } = PlaneRef.TopPlane;
+
+    public override Shape Apply(FeatureContext c) =>
+        c.Body! | Shape.Extrude(profile, Height, Plane.Resolve(c, nameof(Plane)));
+}
+```
+
+Queries nest and are named: `FaceSetRef.PlanarWithNormal(n)` / `Cylindrical(r?)` /
+`All` / `RimFacesOf(edges)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
+`Top` / `Bottom`, `PlaneRef.TopPlane` / `OnTopFace` / `On(faceRef)` / `At(plane)`,
+`EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)`, `AxisRef.OfCylindrical(face)` /
+`Of(origin, direction)`. `FaceSetRef.From/Where` and `EdgeSetRef.From` take a lambda
+when no named query fits. A `SketchPlane` — and a `SketchPlane?` whose null means "the
+top plane" — converts implicitly, so incumbent code is untouched.
+
+Three properties make them more than sugar:
+
+- **The `Descriptor` is the cache key AND the serialized form.** One canonical
+  parseable string (`topPlane`, `extreme(planar([0,0,1]),[0,0,1])`) that `ToString`
+  returns, so a `[Param]` reference contributes an honest term to the regeneration
+  snapshot and round-trips through `SaveParameters`/`LoadParameters`. Lambda-backed
+  references print `opaque(label)`, are `IsSerializable = false`, and load as a
+  warning rather than a crash.
+- **Resolution is per-`Apply` and never memoized on the reference** — it caches on the
+  `FeatureContext`, which is fresh per feature, so validation and `Apply` share one
+  query while an edited model always re-resolves. (`Mates` deliberately does the
+  opposite and pins at construction: a mate is a numerical constraint, not a query.)
+- **`Feature.ValidateInputs` resolves everything before `Apply`, all-or-nothing**, and
+  names the property: `"Plane: expected exactly one cylindrical face, found 0."` A
+  failure is a `Failed` status with the last good body intact, never an exception from
+  inside the operation. Override it to add checks of your own.
+
+`[DeferredInput]` marks an input handed to the `Shape` graph's own late-resolved
+selectors (the rim features' `Faces`): validation skips it, because resolving early
+would force a B-Rep lowering regeneration otherwise never pays for — the deferred
+resolution still names the input when it fails.
 
 ## The construction tree: how a part was built
 

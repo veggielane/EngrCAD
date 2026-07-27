@@ -589,6 +589,51 @@ Design decisions:
   keep the last good body, report per-feature statuses. Cross-feature geometry
   references are deliberately *selector queries* over the lowered body rather than
   persistent IDs — semantic references survive regeneration by re-running.
+- **Typed geometry inputs** (`GeometryRefs.cs`) give those selector queries a
+  vocabulary, because "this feature needs a plane" had no way to be *said*. Five types —
+  `PlaneRef` → `SketchPlane`, `FaceRef` → one face, `FaceSetRef`, `EdgeSetRef`,
+  `AxisRef` → `Ray3d` — each carry how to find the geometry (named `BrepQueries`
+  queries, nesting; an explicit frame as the escape hatch; a lambda as the last resort),
+  and each carries **cardinality in the type**, which is the thing none of the five
+  incumbent selector shapes could express. Three design decisions:
+  - **The descriptor is the cache key is the serialized form.** Each reference renders
+    as one canonical parseable term (`topPlane`, `planar([0,0,1])`,
+    `extreme(planar([0,0,1]),[0,0,1])`) and `ToString` returns it, so `FormatValue`
+    picks it up for the regeneration snapshot with no special case, and JSON
+    round-tripping needs one line on each side of `FeatureHistory`'s closed type list.
+    One string, three jobs, so they cannot disagree. Lambda-backed references print
+    `opaque(label)` and decline to parse — a warning, matching `LoadParameters`' style —
+    and stay sound as cache keys because the snapshot also carries instance identity and
+    a fresh instance always re-runs. Two consequences worth writing down: the opaque
+    label is sanitized to characters `System.Text.Json` will not escape (a quoted marker
+    came back from a saved file as `'` noise), and an explicit axis keeps an
+    ALREADY-unit direction verbatim instead of dividing again, because re-normalizing
+    moves a unit vector by an ulp and the descriptor would stop being a fixed point.
+  - **Timing is per-`Apply`, and nothing is memoized on the reference.** Resolutions
+    cache on the `FeatureContext`, which is constructed fresh for every applied feature,
+    so up-front validation and `Apply` share one query while an edited model still
+    re-resolves from scratch. This is the deliberate opposite of `Mates`, which pins its
+    references once at construction because a mate is a numerical constraint, not a
+    query — the eager/lazy split is a property of the consumer, so it is chosen at the
+    call site rather than legislated.
+  - **Validation resolves before `Apply`, all-or-nothing, naming the property.**
+    `Feature.ValidateInputs` reflects over declared `GeometryRef` properties (no
+    per-feature boilerplate) and `FeatureHistory` reports a resolution failure as
+    `Failed` — "Plane: expected exactly one cylindrical face, found 0." — with the last
+    good prefix intact, in `Filleting.RimFacesFor`'s naming style rather than the
+    operation-named message the deferred rim selector used to give. The cost note is
+    real and shaped the design: resolving forces `Lowered`, so a reference that needs no
+    body (an explicit plane or axis) never triggers one, a feature declaring none pays
+    nothing, and `[DeferredInput]` opts out inputs handed to the `Shape` graph's own
+    late-resolved selectors — the rim features' face sets, where an early resolve would
+    buy a whole extra B-Rep lowering per regeneration and learn nothing, since the
+    selector runs against the compiler's own solid anyway.
+
+  `FeatureContext.TopPlane` is now `PlaneRef.TopPlane` resolved against the context, so
+  the hard-coded special case is gone while its world-axis-aligned `(0, 0, z)` origin —
+  which drill coordinates depend on — is unchanged; `PlaneRef.OnTopFace` is the
+  face-frame variant, making the open behaviour question an *option* instead of a fork
+  in the road.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;
