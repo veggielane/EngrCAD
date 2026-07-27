@@ -231,16 +231,8 @@ concerns.
     box, re-centered to the tightest box with the PCA axes. **A heuristic, not the
     minimum-volume box**, and not a small gap: PCA orients by how the points are
     DISTRIBUTED, so sampling density changes the axes even when the shape does not.
-    The exact method is known and every piece of it exists except one — the
-    minimum-volume box has a face flush with a hull face (Freeman–Shapira), so it is
-    "hull → per hull face, project and take `Fitting2d.MinAreaBox`, pair with the
-    normal extent, keep the smallest" — but the 3D `ConvexHull` lives in EngrCAD.Mesh,
-    which references Core, so Core cannot call it and a second quickhull here would be
-    worse than the heuristic. Moving the hull into Core, or an overload taking a
-    caller-supplied hull, is the open decision (todo.md).
-
-    box, re-centered to the tightest box with the PCA axes (good-fit heuristic, needs no
-    hull, tolerates degenerate clouds).
+    Good fit, needs no hull, tolerates degenerate clouds; the exact method is
+    `MinVolumeBox` below, which takes a caller-supplied hull.
   - `Fitting3d.MinVolumeBox(hullVertices, hullTriangles)` → `OrientedBox3d` — the
     **minimum-volume** oriented box. **The 2D calipers theorem does not lift to 3D**: the
     minimum-volume box need NOT have a face flush with a hull face (Freeman–Shapira, and a
