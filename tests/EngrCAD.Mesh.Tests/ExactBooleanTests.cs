@@ -4,14 +4,17 @@ using Xunit;
 namespace EngrCAD.Mesh.Tests;
 
 /// <summary>
-/// The imprint boolean (<see cref="BooleanMethod.Exact"/>). Every case asserts the result
+/// The imprint boolean — the only boolean this engine has. Every case asserts the result
 /// is a genuine solid — closed, manifold, right genus — as well as the right volume; a
 /// boolean that gets the volume right but leaks boundary edges is not usable downstream.
+/// <para>
+/// The cases under "where the retired BSP path failed" are the measurements that settled
+/// the question of maintaining two algorithms: they are kept because they are hostile
+/// inputs worth pinning, not because anything still chooses between the two.
+/// </para>
 /// </summary>
 public class ExactBooleanTests
 {
-    private const BooleanMethod Exact = BooleanMethod.Exact;
-
     private static HalfEdgeMesh Box(double x0, double y0, double z0, double x1, double y1, double z1) =>
         MeshPrimitives.Box(new Aabb((x0, y0, z0), (x1, y1, z1)));
 
@@ -34,9 +37,9 @@ public class ExactBooleanTests
         var a = Box(0, 0, 0, 2, 2, 2);
         var b = Box(1, 1, 1, 3, 3, 3);
 
-        AssertSolid(MeshBoolean.Union(a, b, Exact), 15, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Intersection(a, b, Exact), 1, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Difference(a, b, Exact), 7, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(a, b), 15, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(a, b), 1, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(a, b), 7, expectedEuler: 2);
     }
 
     [Fact]
@@ -46,9 +49,9 @@ public class ExactBooleanTests
         var inner = Box(0.5, 0.5, 0.5, 1.5, 1.5, 1.5);
 
         // A hollow solid: outer shell plus an inverted inner shell — two genus-0 shells.
-        AssertSolid(MeshBoolean.Difference(outer, inner, Exact), 7, expectedEuler: 4);
-        AssertSolid(MeshBoolean.Union(outer, inner, Exact), 8, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Intersection(outer, inner, Exact), 1, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(outer, inner), 7, expectedEuler: 4);
+        AssertSolid(MeshBoolean.Union(outer, inner), 8, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(outer, inner), 1, expectedEuler: 2);
     }
 
     [Fact]
@@ -57,9 +60,9 @@ public class ExactBooleanTests
         var a = Box(0, 0, 0, 2, 2, 2);
         var b = Box(5, 5, 5, 6, 6, 6);
 
-        AssertSolid(MeshBoolean.Union(a, b, Exact), 9, expectedEuler: 4); // two bodies
-        AssertSolid(MeshBoolean.Difference(a, b, Exact), 8, expectedEuler: 2);
-        Assert.Equal(0, MeshBoolean.Intersection(a, b, Exact).FaceCount);
+        AssertSolid(MeshBoolean.Union(a, b), 9, expectedEuler: 4); // two bodies
+        AssertSolid(MeshBoolean.Difference(a, b), 8, expectedEuler: 2);
+        Assert.Equal(0, MeshBoolean.Intersection(a, b).FaceCount);
     }
 
     [Fact]
@@ -72,7 +75,7 @@ public class ExactBooleanTests
         // The bore is the cylinder's own 24-gon prism through 2 units of material.
         double bore = 0.5 * 24 * Math.Sin(2 * Math.PI / 24) * 0.4 * 0.4 * 2;
 
-        var result = MeshBoolean.Difference(box, cylinder, Exact);
+        var result = MeshBoolean.Difference(box, cylinder);
 
         AssertSolid(result, 8 - bore, expectedEuler: 0); // one through hole
     }
@@ -83,7 +86,7 @@ public class ExactBooleanTests
         var box = Box(-1.5, -1.5, -1.5, 1.5, 1.5, 1.5);
         var sphere = MeshPrimitives.UvSphere(1.0, segments: 32, rings: 16);
 
-        var result = MeshBoolean.Difference(box, sphere, Exact);
+        var result = MeshBoolean.Difference(box, sphere);
 
         // The cavity is exactly the tessellated sphere, so this is an identity, not an
         // approximation: two shells, volume difference to the last few ulps.
@@ -96,7 +99,7 @@ public class ExactBooleanTests
         var box = Box(0, -2, -2, 2, 2, 2);
         var sphere = MeshPrimitives.UvSphere(1.0, segments: 32, rings: 16);
 
-        var result = MeshBoolean.Intersection(box, sphere, Exact);
+        var result = MeshBoolean.Intersection(box, sphere);
 
         // The sphere's meridians land on the cutting plane, so the half is exact.
         AssertSolid(result, sphere.Volume() / 2, expectedEuler: 2, relativeTolerance: 1e-12);
@@ -112,14 +115,13 @@ public class ExactBooleanTests
         var box = Box(0, 0, 0, 2, 2, 2);
         var sphere = MeshPrimitives.UvSphere(1.2, segments: 24, rings: 12);
 
-        var exact = MeshBoolean.Difference(box, sphere, Exact);
+        var result = MeshBoolean.Difference(box, sphere);
 
-        exact.Validate();
-        Assert.True(exact.IsClosed);
-        // Named explicitly: Exact is the default now, so the two-argument overload would
-        // make this a tautology rather than a cross-check.
-        Assert.Equal(
-            MeshBoolean.Difference(box, sphere, BooleanMethod.Bsp).SignedVolume(), exact.SignedVolume(), 9);
+        // The sphere's centre is a box corner, so exactly one octant of it is removed and
+        // the rest of the sphere never enters the box: the cavity is an eighth of the
+        // tessellated sphere's volume, and that is an identity rather than an approximation
+        // (both the meridians at u = 0/90 degrees and the equator lie in the box's planes).
+        AssertSolid(result, 8 - sphere.Volume() / 8, expectedEuler: 2, relativeTolerance: 1e-12);
     }
 
     [Fact]
@@ -132,70 +134,71 @@ public class ExactBooleanTests
 
         var result = MeshBoolean.Difference(
             MeshBoolean.Difference(
-                MeshBoolean.Difference(plate, Tool(1, 1), Exact), Tool(3, 1), Exact), Tool(2, 3), Exact);
+                MeshBoolean.Difference(plate, Tool(1, 1)), Tool(3, 1)), Tool(2, 3));
 
         // Booleans compose: the output of one is clean enough to be the input of the next.
         AssertSolid(result, 16 - 3 * bore, expectedEuler: -4); // genus 3
     }
 
     [Fact]
-    public void CrossedCylinders_AgreeWithTheBspPath()
+    public void CrossedCylinders_SatisfyTheInclusionExclusionIdentities()
     {
-        // A well-conditioned case both algorithms handle, as a cross-check that the
-        // classification keeps the same halves the BSP clipper does.
+        // Curved surfaces crossing curved surfaces, with no analytic volume available for
+        // the tessellated Steinmetz solid. The three operations still have to agree with
+        // each other: |A u B| = |A| + |B| - |A n B| and |A - B| = |A| - |A n B| hold exactly
+        // for the polyhedra the boolean actually produces, so they cross-check the
+        // classification without a second algorithm to compare against.
         var vertical = MeshPrimitives.Cylinder(1.0, 6.0, 48).Transformed(Matrix4d.CreateTranslation((0, 0, -3)));
         var horizontal = vertical.Transformed(Matrix4d.CreateRotationX(Math.PI / 2));
 
-        const BooleanMethod Bsp = BooleanMethod.Bsp; // named: Exact is the default now
-        foreach (var (exact, bsp) in new[]
+        var union = MeshBoolean.Union(vertical, horizontal);
+        var difference = MeshBoolean.Difference(vertical, horizontal);
+        var intersection = MeshBoolean.Intersection(vertical, horizontal);
+
+        foreach (var result in new[] { union, difference, intersection })
         {
-            (MeshBoolean.Union(vertical, horizontal, Exact), MeshBoolean.Union(vertical, horizontal, Bsp)),
-            (MeshBoolean.Difference(vertical, horizontal, Exact), MeshBoolean.Difference(vertical, horizontal, Bsp)),
-            (MeshBoolean.Intersection(vertical, horizontal, Exact), MeshBoolean.Intersection(vertical, horizontal, Bsp)),
-        })
-        {
-            exact.Validate();
-            Assert.True(exact.IsClosed);
-            Assert.Equal(bsp.SignedVolume(), exact.SignedVolume(), 9);
+            result.Validate();
+            Assert.True(result.IsClosed);
         }
+
+        double a = vertical.Volume(), b = horizontal.Volume(), both = intersection.SignedVolume();
+        Assert.True(both > 0, "the crossing region is a solid, not an empty result");
+        Assert.Equal(a + b - both, union.SignedVolume(), 9);
+        Assert.Equal(a - both, difference.SignedVolume(), 9);
     }
 
-    // ---------------------------------------------------------------- where BSP fails
+    // ------------------------------------------------ where the retired BSP path failed
 
     [Fact]
-    public void NearTangentBore_BspLeavesACrackedShell_ExactDoesNot()
+    public void NearTangentBore_StaysAClosedSolid()
     {
         // The bore's flats stop one part in 1e9 short of the box's side planes. That gap is
-        // at the BSP path's absolute plane epsilon (1e-9), so it classifies those facets as
-        // coincident and the result comes back with boundary edges — a hole in the solid,
-        // useless for printing or FEA. The exact path's guards are relative (1e-13 of the
-        // extent), four decades clear of the gap.
+        // exactly the absolute plane epsilon the retired BSP clipper used, so it classified
+        // those facets as coincident and returned a shell with boundary edges — a hole in
+        // the solid, useless for printing or FEA. The imprint path's guards are relative
+        // (1e-13 of the extent), four decades clear of the gap.
         var box = Box(-1, -1, -1, 1, 1, 1);
         var cylinder = MeshPrimitives.Cylinder(0.999999999, 4, 64)
             .Transformed(Matrix4d.CreateTranslation((0, 0, -2)));
 
-        var bsp = MeshBoolean.Difference(box, cylinder, BooleanMethod.Bsp);
-        Assert.False(bsp.IsClosed, "this test exists because the BSP path cracks here");
+        var result = MeshBoolean.Difference(box, cylinder);
 
-        var exact = MeshBoolean.Difference(box, cylinder, Exact);
         double bore = 0.5 * 64 * Math.Sin(2 * Math.PI / 64) * 0.999999999 * 0.999999999 * 2;
-        AssertSolid(exact, 8 - bore, expectedEuler: 0);
+        AssertSolid(result, 8 - bore, expectedEuler: 0);
     }
 
     [Fact]
-    public void SmallModel_BspReturnsNothing_ExactIsScaleFree()
+    public void SmallModel_IsScaleFree()
     {
         // At 1e-5 scale a triangle's cross product is ~1e-10, below the absolute 1e-9 the
-        // BSP path uses to reject degenerate polygons: every face is discarded and the
-        // union comes back empty.
+        // retired BSP path used to reject degenerate polygons: every face was discarded and
+        // the union came back empty. Nothing here is absolute.
         const double s = 1e-5;
         var a = Box(0, 0, 0, 2 * s, 2 * s, 2 * s);
         var b = Box(s, s, s, 3 * s, 3 * s, 3 * s);
 
-        Assert.Equal(0, MeshBoolean.Union(a, b, BooleanMethod.Bsp).FaceCount);
-
-        AssertSolid(MeshBoolean.Union(a, b, Exact), 15 * s * s * s, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Intersection(a, b, Exact), s * s * s, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(a, b), 15 * s * s * s, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(a, b), s * s * s, expectedEuler: 2);
     }
 
     // ---------------------------------------------------------------- contracts
@@ -206,8 +209,8 @@ public class ExactBooleanTests
         var open = HalfEdgeMesh.Build([(0, 0, 0), (1, 0, 0), (0, 1, 0)], [new[] { 0, 1, 2 }]);
         var box = Box(0, 0, 0, 1, 1, 1);
 
-        Assert.Throws<ArgumentException>(() => MeshBoolean.Union(open, box, Exact));
-        Assert.Throws<ArgumentException>(() => MeshBoolean.Difference(box, open, Exact));
+        Assert.Throws<ArgumentException>(() => MeshBoolean.Union(open, box));
+        Assert.Throws<ArgumentException>(() => MeshBoolean.Difference(box, open));
     }
 
     // ------------------------------------------------------- flush-mating (coincident) parts
@@ -222,10 +225,10 @@ public class ExactBooleanTests
         var lower = Box(0, 0, 0, 1, 1, 1);
         var upper = Box(0, 0, 1, 1, 1, 2);
 
-        AssertSolid(MeshBoolean.Union(lower, upper, Exact), 2, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Difference(lower, upper, Exact), 1, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(lower, upper), 2, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(lower, upper), 1, expectedEuler: 2);
         // A ∩ B is the shared square: zero volume, so an empty solid rather than a sheet.
-        Assert.Equal(0, MeshBoolean.Intersection(lower, upper, Exact).FaceCount);
+        Assert.Equal(0, MeshBoolean.Intersection(lower, upper).FaceCount);
     }
 
     [Fact]
@@ -237,8 +240,8 @@ public class ExactBooleanTests
         var lower = Box(0, 0, 0, 2, 2, 1);
         var upper = Box(1, 0, 1, 3, 2, 2);
 
-        AssertSolid(MeshBoolean.Union(lower, upper, Exact), 8, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Difference(lower, upper, Exact), 4, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(lower, upper), 8, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(lower, upper), 4, expectedEuler: 2);
     }
 
     [Fact]
@@ -250,9 +253,9 @@ public class ExactBooleanTests
         var a = Box(0, 0, 0, 2, 2, 2);
         var b = Box(1, 0, 0, 3, 2, 2);
 
-        AssertSolid(MeshBoolean.Union(a, b, Exact), 12, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Intersection(a, b, Exact), 4, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Difference(a, b, Exact), 4, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(a, b), 12, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(a, b), 4, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(a, b), 4, expectedEuler: 2);
     }
 
     [Fact]
@@ -260,9 +263,9 @@ public class ExactBooleanTests
     {
         var mesh = MeshPrimitives.UvSphere(1.0, segments: 24, rings: 12);
 
-        AssertSolid(MeshBoolean.Union(mesh, mesh, Exact), mesh.Volume(), expectedEuler: 2);
-        AssertSolid(MeshBoolean.Intersection(mesh, mesh, Exact), mesh.Volume(), expectedEuler: 2);
-        Assert.Equal(0, MeshBoolean.Difference(mesh, mesh, Exact).FaceCount);
+        AssertSolid(MeshBoolean.Union(mesh, mesh), mesh.Volume(), expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(mesh, mesh), mesh.Volume(), expectedEuler: 2);
+        Assert.Equal(0, MeshBoolean.Difference(mesh, mesh).FaceCount);
     }
 
     [Fact]
@@ -274,8 +277,8 @@ public class ExactBooleanTests
         var post = MeshPrimitives.Cylinder(1, 2, 32).Transformed(Matrix4d.CreateTranslation((0, 0, 1)));
         double cap = 0.5 * 32 * Math.Sin(2 * Math.PI / 32);
 
-        AssertSolid(MeshBoolean.Union(plate, post, Exact), 16 + 2 * cap, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Difference(plate, post, Exact), 16, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(plate, post), 16 + 2 * cap, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Difference(plate, post), 16, expectedEuler: 2);
     }
 
     [Fact]
@@ -287,7 +290,7 @@ public class ExactBooleanTests
         var tool = MeshPrimitives.Cylinder(0.5, 1, 32);
         double bore = 0.5 * 32 * Math.Sin(2 * Math.PI / 32) * 0.25;
 
-        AssertSolid(MeshBoolean.Difference(plate, tool, Exact), 16 - bore, expectedEuler: 0);
+        AssertSolid(MeshBoolean.Difference(plate, tool), 16 - bore, expectedEuler: 0);
     }
 
     [Fact]
@@ -299,7 +302,7 @@ public class ExactBooleanTests
         // (measured: a non-manifold union at 1e-5).
         foreach (double s in new[] { 1e-5, 1.0, 1e5 })
         {
-            var union = MeshBoolean.Union(Box(0, 0, 0, s, s, s), Box(0, 0, s, s, s, 2 * s), Exact);
+            var union = MeshBoolean.Union(Box(0, 0, 0, s, s, s), Box(0, 0, s, s, s, 2 * s));
 
             union.Validate();
             Assert.True(union.IsClosed, $"the union at scale {s} must be closed");
@@ -319,10 +322,10 @@ public class ExactBooleanTests
         var plate = Box(-5, -5, -2, 5, 5, 2);
         var bar = Box(-2, -10, -2, 2, 10, 2);
 
-        AssertSolid(MeshBoolean.Union(plate, bar, Exact), 400 + 320 - 160, expectedEuler: 2);
-        AssertSolid(MeshBoolean.Intersection(plate, bar, Exact), 160, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Union(plate, bar), 400 + 320 - 160, expectedEuler: 2);
+        AssertSolid(MeshBoolean.Intersection(plate, bar), 160, expectedEuler: 2);
         // The bar cuts the plate clean in two: a difference with two shells.
-        AssertSolid(MeshBoolean.Difference(plate, bar, Exact), 240, expectedEuler: 4);
+        AssertSolid(MeshBoolean.Difference(plate, bar), 240, expectedEuler: 4);
     }
 
     [Fact]
@@ -334,7 +337,7 @@ public class ExactBooleanTests
         var l2 = Box(0, 0, 1, 2, 2, 2);
         var l3 = Box(0, 0, 2, 1, 1, 3);
 
-        var stack = MeshBoolean.Union(MeshBoolean.Union(l1, l2, Exact), l3, Exact);
+        var stack = MeshBoolean.Union(MeshBoolean.Union(l1, l2), l3);
 
         AssertSolid(stack, 9 + 4 + 1, expectedEuler: 2);
     }
@@ -349,7 +352,7 @@ public class ExactBooleanTests
         int boxFaces = box.FaceCount, cylinderFaces = cylinder.FaceCount;
 
         Assert.Throws<OperationCanceledException>(
-            () => MeshBoolean.Difference(box, cylinder, Exact, new ProgressCancel(() => true)));
+            () => MeshBoolean.Difference(box, cylinder, new ProgressCancel(() => true)));
 
         // Kernel operations never return half-built geometry, and the inputs are immutable.
         Assert.Equal(boxFaces, box.FaceCount);
@@ -363,7 +366,7 @@ public class ExactBooleanTests
         var box = Box(-1, -1, -1, 1, 1, 1);
         var cylinder = MeshPrimitives.Cylinder(0.4, 4, 64).Transformed(Matrix4d.CreateTranslation((0, 0, -2)));
 
-        var result = MeshBoolean.Difference(box, cylinder, Exact, new ProgressCancel(reported.Add));
+        var result = MeshBoolean.Difference(box, cylinder, new ProgressCancel(reported.Add));
 
         Assert.NotEmpty(reported);
         Assert.Equal(1.0, reported[^1], 12);
@@ -373,48 +376,23 @@ public class ExactBooleanTests
         result.Validate();
     }
 
-    [Fact]
-    public void CancellationIsIgnoredByTheBspPath_ButTheApiStillAccepts()
-    {
-        // The BSP clipper is a recursive tree walk with no checkpoint to poll; the parameter
-        // is accepted so callers need not branch on the method.
-        var a = Box(0, 0, 0, 2, 2, 2);
-        var b = Box(1, 1, 1, 3, 3, 3);
-
-        var result = MeshBoolean.Union(a, b, BooleanMethod.Bsp, new ProgressCancel(() => true));
-
-        Assert.True(result.FaceCount > 0);
-    }
+    // ---------------------------------------------------------------- determinism
 
     [Fact]
-    public void TheDefaultMethodIsExact()
+    public void RepeatedRuns_AreBitIdentical()
     {
-        // The two-argument overloads route to the imprint boolean. This is the whole point
-        // of the coincident-surface work: the exact path is no longer opt-in, so a scene
-        // built with plain MeshBoolean.Union gets the scale-free, near-tangency-proof
-        // algorithm without asking.
+        // No RNG and no scheduling-dependent ordering anywhere in the pipeline: the boolean
+        // is a pure function of its operands, which is what lets downstream caches key on
+        // the inputs and what makes a "bit-identical output" claim testable at all.
         var a = Box(0, 0, 0, 2, 2, 2);
         var b = Box(1, 1, 1, 3, 3, 3);
 
         var (positions, faces) = MeshBoolean.Union(a, b).ToIndexed();
-        var (exactPositions, exactFaces) = MeshBoolean.Union(a, b, Exact).ToIndexed();
+        var (againPositions, againFaces) = MeshBoolean.Union(a, b).ToIndexed();
 
-        Assert.Equal(exactPositions, positions);
-        Assert.Equal(exactFaces.Count, faces.Count);
+        Assert.Equal(againPositions, positions);
+        Assert.Equal(againFaces.Count, faces.Count);
         for (int f = 0; f < faces.Count; f++)
-            Assert.Equal(exactFaces[f], faces[f]);
-
-        // And the BSP path is still reachable, unchanged, for anyone who needs it.
-        Assert.Equal(15.0, MeshBoolean.Union(a, b, BooleanMethod.Bsp).SignedVolume(), 9);
-    }
-
-    [Fact]
-    public void FlushMatingPartsWorkThroughTheDefaultOverload()
-    {
-        // The case that kept the default on BSP. No method argument, no ceremony.
-        var lower = Box(0, 0, 0, 1, 1, 1);
-        var upper = Box(0, 0, 1, 1, 1, 2);
-
-        AssertSolid(MeshBoolean.Union(lower, upper), 2, expectedEuler: 2);
+            Assert.Equal(againFaces[f], faces[f]);
     }
 }

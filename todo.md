@@ -13,13 +13,9 @@ Wave-A ✅ landed: `EditableMesh` (guarded Euler operators + journaled bit-ident
 undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAll),
 `MeshExtrude` (faces/thicken/selections), selections + connected components. Wave-B ✅:
 `Remesher` (isotropic, vertex-keyed constraints), `HoleFiller.FillMinimal`/`FillSmoothed`,
-`MeshDecimator` on `EditableMesh`, iterative BSP walks. Remaining:
+`MeshDecimator` on `EditableMesh`, BSP boolean retired (`Csg.cs` and `BooleanMethod`
+deleted; the imprint boolean is the only one). Remaining:
 
-- [ ] **Retire the BSP boolean.** The stack overflow is fixed (every `CsgNode` walk is
-  explicit-stack), but fixing it produced the measurement that settles the question: a
-  32k+32k sphere union takes **74.9 s** and returns an **open** 347k-face shell, against
-  **0.71 s** closed for the exact path. Once coplanar overlaps are classified, delete
-  `Csg.cs` and `BooleanMethod` outright rather than maintaining two algorithms.
 - [ ] **Region refinement across a seam** — `MeshRegionOperator` deliberately refuses a
   replacement whose seam was re-split (splitting a seam edge leaves the neighbour face
   holding the un-split edge — a T-junction), so `MeshDecimator` round-trips but
@@ -127,10 +123,9 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 
 - [ ] **Remaining tolerance follow-ups** (named seam constants, `ConvexHull2` →
   `Orient2dSign`, `TracerSettings`, and the scale-relative `Sketch` guards ✅ all
-  landed): **BSP `Csg.Epsilon` 1e-9 and `MeshWelder`'s 1e-7 absolutes → extent-scaled**
-  — deferred while the exact boolean's coplanar handling is in flight, since re-tuning
-  BSP's seam epsilons underneath that would confound both; boolean seam re-testing
-  required when it happens.
+  landed): **`MeshWelder`'s 1e-7 seam absolutes → extent-scaled** — unblocked now that
+  the BSP boolean is retired (its `Csg.Epsilon` item is moot: `Csg.cs` is deleted).
+  Boolean seam re-testing required when it happens.
 - [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
   (`CoplanarFaceCosine`, 0.081° = acos(1 − 1e-6)) but deliberately not widened: a dot
   of unit vectors is already scale-free, so the quadratic-scale argument does not apply.

@@ -80,13 +80,15 @@ Each engine uses the data structure its mathematics wants:
   element IDs (g3's per-element add/remove records were rejected precisely because
   they don't restore IDs; replay verifies each slot's expected value before writing,
   so out-of-order application throws instead of corrupting).
-- **Booleans are BSP-based** (csg.js): robust enough for well-conditioned inputs and two
-  orders of magnitude simpler than exact intersection booleans. The known BSP weakness —
-  the two sides of an intersection seam are tessellated independently, leaving T-junction
-  cracks — is repaired by **seam zipping**: any directed edge with no reverse partner
-  gets the other side's collinear crack vertices inserted, after which both sides carry
-  identical subdivision and welding closes the surface. An exact-intersection rewrite
-  remains on the roadmap for coplanar/tangent robustness.
+- **Booleans were BSP-based first** (csg.js): robust enough for well-conditioned inputs
+  and two orders of magnitude simpler than exact intersection booleans, which made it the
+  right thing to build before the mesh engine had an intersection curve at all. It has
+  since been **retired outright** — see the exact-boolean bullet below for what replaced
+  it and why. Two of its properties outlived it: **seam zipping** (any directed edge with
+  no reverse partner gets the other side's collinear crack vertices inserted, so
+  independently tessellated sides weld shut) survives in `MeshWelder` for the B-Rep
+  tessellator, and every absolute epsilon it carried is the origin of this codebase's
+  scale-free-guard rule.
 - **`PolygonTriangulator` is a faithful mapbox-earcut port** (linked list, full recovery
   ladder: filter → cure local intersections → split; Eberly hole bridging with sector
   tie-breaking). Hand-rolling "most of earcut" was tried and failed in exactly the corner
@@ -117,9 +119,14 @@ Each engine uses the data structure its mathematics wants:
   through `MeshChangeSet` instead of leaving a half-cut mesh. Classification is then
   **per patch** (flood-fill across non-seam edges, one winding-number probe at the
   largest triangle's centroid), because the intersection curve is an edge of both
-  meshes, so no patch straddles the other surface. It stays opt-in
-  (`BooleanMethod.Exact`) only because coplanar overlaps are rejected rather than
-  classified; BSP handles those, so the default cannot flip until they are.
+  meshes, so no patch straddles the other surface. Coplanar overlaps — the last thing
+  BSP did that this path could not — are classified by **normal agreement**
+  (`CoincidentSurface`), which is what made it first the default and then the *only*
+  boolean: `Csg.cs` and the `BooleanMethod` selector are gone. Maintaining two algorithms
+  had stopped being a hedge and become a liability, since the measurement was one-sided
+  in every dimension (a 32k+32k sphere union: 0.71 s closed here against 74.9 s for an
+  *open* 347k-face shell, plus correct results at 1e-5 scale and under near-tangency
+  where BSP's absolute constants failed outright).
 - **Winding-number classification** (`MeshWindingNumber`) gives robust inside/outside
   for non-watertight meshes: `WindingNumber` sums signed solid angles
   (Van Oosterom–Strackee) exactly, `FastWindingNumber` is the Barill/Jacobson order-2
@@ -1140,8 +1147,9 @@ for `in`-parameters being illegal in expression trees.
 
 ## 10. Known limitations / roadmap
 
-- **Booleans**: transversal cases only; coplanar-face and tangent configurations (both
-  mesh/BSP and B-Rep pipelines) remain future work.
+- **Booleans**: the mesh pipeline handles coplanar and near-tangent configurations; the
+  B-Rep pipeline is still transversal cases only, so coplanar-face and tangent
+  configurations there remain future work.
 - **Trimmed generated faces**: splitting the closed edges of a generated band face (a
   cut through a bore) outruns the full-domain grid tessellator; needs loop-driven
   trimmed tessellation.

@@ -65,20 +65,8 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   vertices, not sliver fans); degenerate inputs (&lt; 4 points, coincident, collinear,
   coplanar) throw with the reason. Output goes through the manifold-validating `Build`
   as a safety net.
-- **`MeshBoolean`** — union/difference/intersection, two algorithms behind one API.
-  `BooleanMethod.Exact` is **the default**; `BooleanMethod.Bsp` keeps the older BSP-tree
-  clipper (csg.js plus a seam-zipping pass) reachable for comparison. Every BSP tree walk
-  (`Build`, `ClipTo`, `ClipPolygons`, `AllPolygons`, `Invert`) uses an **explicit stack,
-  never recursion**: the splitting plane is the first polygon's plane, so a convex body — a
-  sphere above all — builds an essentially degenerate chain whose depth is O(polygons), and
-  two 32k-triangle spheres used to kill the process with a stack overflow inside `Build`
-  (measured: a 3000-node chain is fine, 4000 crashes). Depth is a property of the input, so
-  no stack size would have been "enough". The iterative walks keep the recursive visit order
-  exactly, because the polygon order feeds the next `Build` and therefore decides how the
-  result gets subdivided. What the fix bought is honesty rather than speed: the 32k sphere
-  pair now *completes* in 74.9 s and returns an **open** 347k-face shell, where the exact
-  path takes 0.71 s and returns a closed 50k-face mesh — the measurement that makes BSP
-  legacy. The default is the **imprint boolean**: cut both meshes along their exact
+- **`MeshBoolean`** — union/difference/intersection, one algorithm: the **imprint
+  boolean**. Cut both meshes along their exact
   intersection curve (`MeshMeshCut`),
   flood-fill each mesh's faces into **patches** bounded by that curve, classify each patch
   once by the other mesh's `MeshWindingNumber` at the centroid of its largest triangle,
@@ -90,20 +78,29 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   *Classification assumption*: after the imprint no face straddles the other surface, so a
   whole patch is inside or outside — probing per patch (rather than per face) is what
   keeps seam slivers, whose centroids sit arbitrarily close to the other surface, from
-  deciding anything. Cases the BSP path gets wrong and the exact path gets right, all
-  locked by tests: a bore whose flats stop 1e-9 short of the box's sides (BSP returns a
-  shell with boundary edges — a hole in the solid), any model at ~1e-5 scale (BSP's
-  absolute 1e-9 degeneracy test is applied to a cross product, i.e. an AREA, so every
-  polygon is discarded and the result is empty), and flush-mating parts (below). All three
-  operations take an optional `ProgressCancel` (the exact path only — the BSP clipper is a
-  recursive tree walk with no checkpoint to poll).
+  deciding anything. All three operations take an optional `ProgressCancel`.
+
+  *A BSP-tree clipper (csg.js) used to sit behind a `BooleanMethod` selector as the
+  alternative, and is now deleted.* It was the first boolean this engine had, and it was
+  the right thing to build before there was an intersection curve to imprint with; keeping
+  it as an escape hatch stopped making sense once coincident surface was classified
+  (below), because the comparison came out one-sided in every dimension. What it got wrong
+  is still locked by tests here, since those are hostile inputs worth pinning: a bore whose
+  flats stop 1e-9 short of the box's sides (BSP returned a shell with boundary edges — a
+  hole in the solid), any model at ~1e-5 scale (BSP's absolute 1e-9 degeneracy test was
+  applied to a cross product, i.e. an AREA, so every polygon was discarded and the result
+  came back empty), and flush-mating parts (below). Its final measurement is the one that
+  settled it: a 32k+32k sphere union took **74.9 s** and returned an **open** 347k-face
+  shell, against **0.71 s** for a closed 50k-face mesh here. Two of its lessons outlived
+  the code — every absolute epsilon it carried is the origin of this codebase's
+  scale-free-guard rule, and *a recursion whose depth is a property of the input has no
+  "big enough" stack* (its splitting plane was the first polygon's plane, so a convex body
+  built an essentially degenerate chain of depth O(polygons) and two 32k-triangle spheres
+  killed the process outright until every walk was rewritten with an explicit stack).
 
   *Performance*, measured in Release over eleven representative pairs (Debug is
   pessimistic: `EditableMesh` runs a full `Validate()` after every operator there). The
-  exact path is now **1.6–2.2× faster than it was** and, except on very coarse operands,
-  faster than BSP as well — dramatically so on curved meshes (two 48×24 spheres: 7.4 ms vs
-  262 ms; crossed 128-gon cylinders: 3.8 ms vs 54 ms), and BSP stack-overflows outright on
-  a 32k-triangle sphere pair where the exact path takes 58 ms. Three fixes, all found by
+  imprint path is **1.6–2.2× faster than it was** after three fixes, all found by
   instrumenting phases rather than by inspection, and none where the reading eye would
   look:
   1. **`MeshImprinter` located interior seam points by scanning every fragment ever cut
@@ -163,7 +160,7 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   by equality rather than by tolerance. All degeneracy tests are **relative to the
   operands' extent** (1e-13, the scale-free tier), never the absolute 1e-9 weld tier;
   that is what makes the cut work on 1e-5-scale models and on near-tangent pairs where
-  the BSP path's absolute constants fail. The imprint itself is
+  the retired BSP path's absolute constants failed. The imprint itself is
   `EditableMesh`-only — `SplitEdge` for points on edges (updating both adjacent faces, so
   no T-junction can appear), `PokeFace` for points inside a face, and `FlipEdge`
   constraint recovery (Anglada) for the segments themselves — wrapped in one
