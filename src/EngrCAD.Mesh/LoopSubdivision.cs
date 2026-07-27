@@ -9,15 +9,28 @@ namespace EngrCAD.Mesh;
 /// </summary>
 public static class LoopSubdivision
 {
-    public static HalfEdgeMesh Subdivide(HalfEdgeMesh mesh, int iterations = 1)
+    /// <summary>Subdivides <paramref name="mesh"/> <paramref name="iterations"/> times.</summary>
+    /// <param name="mesh">A pure triangle mesh.</param>
+    /// <param name="iterations">How many times to subdivide.</param>
+    /// <param name="preserveBoundary">
+    /// Keep every boundary vertex exactly where it is, instead of applying the Warren
+    /// boundary rule (which smooths the outline toward the limit curve and therefore MOVES
+    /// it). New boundary vertices are edge midpoints either way, so with this on the refined
+    /// outline is a subdivision of the original polyline rather than a different curve near
+    /// it. That is what an open patch needs when it has to be stitched back into a
+    /// surrounding mesh: <see cref="MeshRegionOperator"/> accepts a rim that was subdivided
+    /// but not one that moved, so Loop subdivision round-trips through a region operator only
+    /// with this set.
+    /// </param>
+    public static HalfEdgeMesh Subdivide(HalfEdgeMesh mesh, int iterations = 1, bool preserveBoundary = false)
     {
         if (iterations < 0) throw new ArgumentOutOfRangeException(nameof(iterations));
         for (int i = 0; i < iterations; i++)
-            mesh = SubdivideOnce(mesh);
+            mesh = SubdivideOnce(mesh, preserveBoundary);
         return mesh;
     }
 
-    private static HalfEdgeMesh SubdivideOnce(HalfEdgeMesh mesh)
+    private static HalfEdgeMesh SubdivideOnce(HalfEdgeMesh mesh, bool preserveBoundary)
     {
         foreach (var face in mesh.Faces)
         {
@@ -66,6 +79,14 @@ public static class LoopSubdivision
 
             if (vertex.IsBoundary)
             {
+                if (preserveBoundary)
+                {
+                    // Pinned: the refined outline is a subdivision of the original polyline
+                    // (new vertices are edge midpoints), not a smoothed curve near it.
+                    newPositions[vertex.Index] = p;
+                    continue;
+                }
+
                 // Boundary rule: only the two neighbors along the boundary participate.
                 var boundaryNeighbors = vertex.OutgoingHalfEdges()
                     .Where(h => h.IsBoundaryEdge)

@@ -16,11 +16,6 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 `MeshDecimator` on `EditableMesh`, BSP boolean retired (`Csg.cs` and `BooleanMethod`
 deleted; the imprint boolean is the only one). Remaining:
 
-- [ ] **Region refinement across a seam** — `MeshRegionOperator` deliberately refuses a
-  replacement whose seam was re-split (splitting a seam edge leaves the neighbour face
-  holding the un-split edge — a T-junction), so `MeshDecimator` round-trips but
-  `LoopSubdivision` does not. Refining across a seam means refining the neighbours too:
-  a different, larger operation.
 - [ ] **`RemesherPro`'s scheduling** — the modified-edge queue and the fast-split
   prepass. The basic pass converges in tens of ms at current sizes, so this is throughput
   for large meshes only; note that queued edge ids are recycled, so every consumer must

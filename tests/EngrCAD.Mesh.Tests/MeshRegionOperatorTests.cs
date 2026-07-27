@@ -125,13 +125,12 @@ public class MeshRegionOperatorTests
     }
 
     [Fact]
-    public void Reinsert_RefusesToRefineTheSeamItself()
+    public void Reinsert_RefusesASubdivisionThatMovedTheSeam()
     {
-        // Worth pinning as documentation, because it is the first thing anyone tries.
-        // Subdividing the region splits each seam edge in two; the base face on the other
-        // side still has the un-split edge, so the result would be a T-junction — an open
-        // shell, not a solid. Refining across a seam means refining the neighbours too,
-        // which is not this operator's job, so it is refused rather than half-done.
+        // Loop's default Warren boundary rule SMOOTHS the open boundary, so the rim comes
+        // back as a different curve near the old one rather than a subdivision of it. That
+        // is still refused, and must be: a moved rim welds into an invisible crack instead
+        // of failing. What is now accepted is the same subdivision with the rim pinned.
         var mesh = Box();
         var session = MeshRegionOperator.Extract(mesh, Top(mesh));
 
@@ -139,6 +138,69 @@ public class MeshRegionOperatorTests
             () => session.Reinsert(LoopSubdivision.Subdivide(session.Region, 1)));
 
         Assert.Contains("boundary", error.Message);
+    }
+
+    [Fact]
+    public void Reinsert_CarriesASubdividedSeamIntoTheNeighbours()
+    {
+        // The larger operation: the replacement split every seam edge in two, so every base
+        // face using one gains the new vertex — a T-junction would be an open shell.
+        var mesh = Box();
+        var session = MeshRegionOperator.Extract(mesh, Top(mesh));
+        var refined = LoopSubdivision.Subdivide(session.Region, 1, preserveBoundary: true);
+        Assert.Equal(8, refined.FaceCount); // two triangles → eight
+
+        var result = session.Reinsert(refined);
+
+        result.Base.Validate();
+        Assert.True(result.Base.IsClosed, "a carried seam split must not leave a T-junction");
+        Assert.Equal(2, result.Base.EulerCharacteristic);
+        // The top is planar, so subdividing it changes nothing geometrically.
+        Assert.Equal(8.0, result.Base.SignedVolume(), 12);
+        Assert.Equal(24.0, result.Base.SurfaceArea(), 12);
+        // Four rim midpoints are new, and each of the four side triangles using a rim edge
+        // was re-fanned into two.
+        Assert.Equal(mesh.VertexCount + refined.VertexCount - session.Region.VertexCount,
+            result.Base.VertexCount);
+        Assert.Equal(refined.FaceCount, result.Selection.Count);
+    }
+
+    [Fact]
+    public void Reinsert_SubdividedSeam_ChainsAndStaysManifold()
+    {
+        // Twice over, on a curved region with a long rim: the second round subdivides a seam
+        // that was already refined once, which is where a stale seam bookkeeping would show.
+        var (sphere, cap) = SphereCap();
+        var session = MeshRegionOperator.Extract(sphere, cap);
+        int rim = session.SeamEdges.Count;
+
+        session = session.Reinsert(LoopSubdivision.Subdivide(session.Region, 1, preserveBoundary: true));
+        Assert.Equal(2 * rim, session.SeamEdges.Count);
+        session = session.Reinsert(LoopSubdivision.Subdivide(session.Region, 1, preserveBoundary: true));
+
+        session.Base.Validate();
+        Assert.True(session.Base.IsClosed);
+        Assert.Equal(2, session.Base.EulerCharacteristic);
+        Assert.Equal(4 * rim, session.SeamEdges.Count);
+    }
+
+    [Fact]
+    public void Reinsert_RefinedSeam_WeldsTheNewVertexRatherThanDuplicatingIt()
+    {
+        // The crack that a naive implementation would produce: the base side and the
+        // replacement side each create their own vertex at the split point, positions equal,
+        // indices different. Build() would then report a boundary edge on both — so a closed
+        // result IS the assertion, but the vertex count pins it directly.
+        var mesh = Box();
+        var session = MeshRegionOperator.Extract(mesh, Top(mesh));
+        var refined = LoopSubdivision.Subdivide(session.Region, 1, preserveBoundary: true);
+
+        var result = session.Reinsert(refined).Base;
+
+        var midpoint = new Vector3d(1, 0, 2); // the split point of one rim edge
+        Assert.Equal(1, Enumerable.Range(0, result.VertexCount)
+            .Count(v => result.GetPosition(v) == midpoint));
+        Assert.Empty(result.BoundaryLoops());
     }
 
     [Fact]

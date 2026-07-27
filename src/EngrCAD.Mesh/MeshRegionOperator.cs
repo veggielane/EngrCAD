@@ -22,15 +22,24 @@ namespace EngrCAD.Mesh;
 /// The message says which edge broke it.
 /// </para>
 /// <para>
-/// <b>The seam may not be refined either</b> — worth stating plainly, because subdividing
-/// the region is the first thing anyone tries. Splitting a seam edge in two leaves the base
-/// face on the other side holding the un-split edge, so the result is a T-junction: an open
-/// shell, not a solid. Refining across a seam means refining the neighbours as well, which
-/// is a different operation and not this one's job; it is refused rather than half-done.
-/// Edits that DO satisfy the contract: anything confined to the interior (moving,
-/// retriangulating, adding or removing interior geometry), and <see cref="MeshDecimator"/>,
-/// whose boundary preservation is exactly this contract. <see cref="LoopSubdivision"/> is
-/// not one of them — it both splits and smooths the open boundary.
+/// <b>The seam may be REFINED, and refining it refines the neighbours too.</b> Splitting a
+/// seam edge in two leaves the base face on the other side holding the un-split edge, which
+/// would be a T-junction — an open shell, not a solid — so the reinsertion carries the split
+/// across: every base face using a refined seam edge gains the replacement's new vertices at
+/// their exact positions (a base triangle is re-fanned from its opposite corner, exactly as
+/// an edge split would leave it; a base polygon simply grows). The seam's original vertices
+/// must still be there, at bit-identical positions: what a replacement may do is subdivide
+/// the rim, never move it or retopologize it. So <see cref="LoopSubdivision"/> round-trips
+/// <b>if it is told to preserve the boundary</b> — its default Warren rules smooth the open
+/// boundary, which moves the rim, and that is still refused (and must be: a moved rim welds
+/// into an invisible crack rather than failing).
+/// </para>
+/// <para>
+/// Edits that satisfy the contract: anything confined to the interior (moving,
+/// retriangulating, adding or removing interior geometry), <see cref="MeshDecimator"/>
+/// (whose boundary preservation is exactly this contract), and now any refinement of the
+/// rim — <see cref="Remesher"/> with the seam pinned, or Loop subdivision with
+/// <c>preserveBoundary: true</c>.
 /// </para>
 /// <para>
 /// <b>Transactionality comes free here</b>, which is why this is not built on
@@ -115,34 +124,38 @@ public sealed class MeshRegionOperator
     {
         ArgumentNullException.ThrowIfNull(replacement);
         var seamVertex = SeamVertices();
-        VerifyBoundaryMatches(replacement);
+        var refinements = MatchSeam(replacement);
 
         var positions = new List<Vector3d>(Base.VertexCount);
         var baseSlot = new int[Base.VertexCount];
         Array.Fill(baseSlot, -1);
         var faces = new List<int[]>(Base.FaceCount - _regionFaces.Count + replacement.FaceCount);
+        // Refinement points, keyed by position so the base side and the replacement side
+        // resolve to the SAME output vertex. Two independently created vertices at one
+        // position would be a crack, which is the failure this whole class exists to avoid.
+        var refinementSlot = new Dictionary<Vector3d, int>();
 
-        // Everything outside the region, verbatim. Base vertices are pulled in lazily, so
-        // vertices that only the removed faces used never reach the result.
+        // Everything outside the region, verbatim — except where a face uses a seam edge the
+        // replacement subdivided, which gains the new vertices so no T-junction appears.
         for (int f = 0; f < Base.FaceCount; f++)
         {
             if (_regionFaces.Contains(f))
                 continue;
-            var loop = new List<int>(3);
-            foreach (var vertex in Base.GetFace(f).Vertices())
-                loop.Add(MapBase(vertex.Index));
-            faces.Add([.. loop]);
+            EmitBaseFace(Base.GetFace(f));
         }
 
         // The replacement: seam vertices resolve onto the base's own vertices (which is
-        // what welds the two halves), everything else is new.
+        // what welds the two halves), refinement points onto the ones the base side just
+        // created, everything else is new.
         var replacementSlot = new int[replacement.VertexCount];
         for (int v = 0; v < replacement.VertexCount; v++)
         {
             var position = replacement.GetPosition(v);
             replacementSlot[v] = seamVertex.TryGetValue(position, out int baseVertex)
                 ? MapBase(baseVertex)
-                : Fresh(position);
+                : refinementSlot.TryGetValue(position, out int shared)
+                    ? shared
+                    : Fresh(position);
         }
         int firstReinserted = faces.Count;
         foreach (var face in replacement.Faces)
@@ -188,6 +201,72 @@ public sealed class MeshRegionOperator
             positions.Add(position);
             return positions.Count - 1;
         }
+
+        int RefinementVertex(in Vector3d position)
+        {
+            if (!refinementSlot.TryGetValue(position, out int slot))
+            {
+                slot = Fresh(position);
+                refinementSlot[position] = slot;
+            }
+            return slot;
+        }
+
+        // The base side of a refined seam. A face outside the region traverses each seam edge
+        // in the OPPOSITE direction to the region, so the insertion for its directed edge
+        // (u → v) is the chain of the region's seam edge (v → u), reversed.
+        void EmitBaseFace(Face face)
+        {
+            var corners = new List<int>(face.Degree);
+            foreach (var vertex in face.Vertices())
+                corners.Add(vertex.Index);
+
+            int degree = corners.Count;
+            var loop = new List<int>(degree);
+            var cornerSlot = new int[degree];   // where each original corner landed in loop
+            var refinedEdge = new bool[degree]; // edge i runs corner i → corner i+1
+            bool anyRefined = false;
+            for (int i = 0; i < degree; i++)
+            {
+                int u = corners[i], v = corners[(i + 1) % degree];
+                cornerSlot[i] = loop.Count;
+                loop.Add(MapBase(u));
+                if (!refinements.TryGetValue((v, u), out var chain) || chain.Count == 0)
+                    continue;
+                refinedEdge[i] = true;
+                anyRefined = true;
+                // The region's chain runs v → u; this face runs u → v.
+                for (int k = chain.Count - 1; k >= 0; k--)
+                    loop.Add(RefinementVertex(chain[k]));
+            }
+
+            if (!anyRefined || degree != 3)
+            {
+                // Unrefined, or a polygon face — this engine keeps polygon faces as they are,
+                // and an n-gon that grew a few boundary vertices is still one flat face.
+                faces.Add([.. loop]);
+                return;
+            }
+
+            // A triangle is re-fanned from the corner between two UNREFINED edges wherever one
+            // exists, which reproduces exactly what an edge split would have left behind (the
+            // new vertex joined to the opposite apex). With two or three refined edges no such
+            // corner exists and any original corner does; the fan stays inside the triangle
+            // either way, because every inserted vertex lies on an edge of it.
+            int apex = cornerSlot[0];
+            for (int i = 0; i < 3; i++)
+            {
+                if (!refinedEdge[(i + 2) % 3] && !refinedEdge[i])
+                {
+                    apex = cornerSlot[i];
+                    break;
+                }
+            }
+
+            int count = loop.Count;
+            for (int k = 1; k <= count - 2; k++)
+                faces.Add([loop[apex], loop[(apex + k) % count], loop[(apex + k + 1) % count]]);
+        }
     }
 
     /// <summary>
@@ -213,38 +292,91 @@ public sealed class MeshRegionOperator
         return map;
     }
 
-    private void VerifyBoundaryMatches(HalfEdgeMesh replacement)
+    /// <summary>
+    /// Matches the replacement's boundary against the region's seam, returning the points the
+    /// replacement inserted into each seam edge (an empty list where it left the edge alone).
+    /// <para>
+    /// The match is directed — direction is what proves the replacement is oriented the same
+    /// way round as the region it replaces — and positional, because a replacement is a mesh
+    /// in its own right and shares no indices with the base.
+    /// </para>
+    /// <para>
+    /// The order of the two checks is load-bearing. <b>Every original seam vertex must be
+    /// present first</b>, before any chain is walked: without that, a replacement that MOVED a
+    /// rim vertex is indistinguishable from one that removed it and inserted a new one nearby,
+    /// and would be silently accepted as a refinement — welding a crack, the exact failure the
+    /// seam contract exists to prevent. Only then is each seam edge's chain walked, and an
+    /// intermediate point that is itself a seam vertex is refused (the replacement rewired the
+    /// rim rather than subdividing it).
+    /// </para>
+    /// </summary>
+    private Dictionary<(int From, int To), List<Vector3d>> MatchSeam(HalfEdgeMesh replacement)
     {
-        // Directed, not undirected: matching direction is what proves the replacement is
-        // oriented the same way round as the region it replaces.
-        var wanted = new HashSet<(Vector3d, Vector3d)>();
-        foreach (var (from, to) in SeamEdges)
-            wanted.Add((Base.GetPosition(from), Base.GetPosition(to)));
-
+        var successor = new Dictionary<Vector3d, Vector3d>();
         foreach (var face in replacement.Faces)
         {
             foreach (var he in face.HalfEdges())
             {
                 if (!he.Twin.IsBoundary)
                     continue;
-                var edge = (he.Origin.Position, he.Destination.Position);
-                if (!wanted.Remove(edge))
+                if (!successor.TryAdd(he.Origin.Position, he.Destination.Position))
                     throw new ArgumentException(
-                        $"The replacement has a boundary edge {edge.Item1} → {edge.Item2} that the " +
-                        "region does not. Reinsertion needs the boundary preserved exactly — this " +
-                        "engine welds shared geometry by coordinate equality, so a moved or " +
-                        "retopologized rim would silently become a crack.",
+                        $"The replacement has two boundary edges leaving {he.Origin.Position}, so its " +
+                        "rim cannot be matched to the region's unambiguously.",
                         nameof(replacement));
             }
         }
 
-        if (wanted.Count > 0)
+        var seamPositions = new HashSet<Vector3d>();
+        foreach (var (from, to) in SeamEdges)
         {
-            var (from, to) = wanted.First();
-            throw new ArgumentException(
-                $"The replacement is missing {wanted.Count} of the region's boundary edge(s), " +
-                $"e.g. {from} → {to}. Reinsertion needs the boundary preserved exactly.",
-                nameof(replacement));
+            seamPositions.Add(Base.GetPosition(from));
+            seamPositions.Add(Base.GetPosition(to));
         }
+        foreach (var position in seamPositions)
+        {
+            if (!successor.ContainsKey(position))
+                throw new ArgumentException(
+                    $"The replacement has no boundary vertex at {position}, which is on the region's " +
+                    "boundary. Reinsertion needs the rim's own vertices preserved exactly — it may be " +
+                    "subdivided, but not moved or retopologized: this engine welds shared geometry by " +
+                    "coordinate equality, so a rim that drifted would silently become a crack.",
+                    nameof(replacement));
+        }
+
+        var chains = new Dictionary<(int From, int To), List<Vector3d>>();
+        int consumed = 0;
+        foreach (var (from, to) in SeamEdges)
+        {
+            var start = Base.GetPosition(from);
+            var end = Base.GetPosition(to);
+            var interior = new List<Vector3d>();
+            var current = start;
+            while (true)
+            {
+                var next = successor[current];
+                consumed++;
+                if (next == end)
+                    break;
+                if (seamPositions.Contains(next) || interior.Count > successor.Count)
+                    throw new ArgumentException(
+                        $"The replacement's boundary leaves {start} and reaches {next} before {end}, so " +
+                        "it is not a subdivision of the region's boundary edge there. Reinsertion " +
+                        "accepts a rim that was refined, not one that was rewired.",
+                        nameof(replacement));
+                interior.Add(next);
+                current = next;
+            }
+            chains[(from, to)] = interior;
+        }
+
+        if (consumed != successor.Count)
+            throw new ArgumentException(
+                $"The replacement has {successor.Count - consumed} boundary edge(s) that are not part of " +
+                "the region's boundary — it opened a hole, or covers less of the region than it replaces. " +
+                "Reinsertion needs the boundary preserved exactly.",
+                nameof(replacement));
+
+        return chains;
     }
 }

@@ -84,6 +84,33 @@ public class LoopSubdivisionTests
     }
 
     [Fact]
+    public void Subdivide_PreserveBoundary_RefinesTheOutlineWithoutMovingIt()
+    {
+        // With the Warren rule the outline is smoothed toward its limit curve, so a corner
+        // pulls inward and the rim is a different polyline. Pinned, it is a SUBDIVISION of
+        // the original: every original vertex still there, every new one a midpoint — which
+        // is exactly the contract MeshRegionOperator's seam demands.
+        var patch = HalfEdgeMesh.Build(
+            [(0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0)],
+            [new[] { 0, 1, 2 }, new[] { 0, 2, 3 }]);
+
+        var smoothed = LoopSubdivision.Subdivide(patch, 1);
+        var pinned = LoopSubdivision.Subdivide(patch, 1, preserveBoundary: true);
+        pinned.Validate();
+
+        Assert.Equal(smoothed.FaceCount, pinned.FaceCount);
+        foreach (var corner in new Vector3d[] { (0, 0, 0), (2, 0, 0), (2, 2, 0), (0, 2, 0) })
+        {
+            Assert.Contains(pinned.Vertices, v => v.Position == corner);
+            Assert.DoesNotContain(smoothed.Vertices, v => v.Position == corner);
+        }
+        // And the new rim vertices are the exact edge midpoints.
+        Assert.Contains(pinned.Vertices, v => v.Position == new Vector3d(1, 0, 0));
+        // Two iterations still only ever halve, so the outline area is unchanged.
+        Assert.Equal(4.0, LoopSubdivision.Subdivide(patch, 2, preserveBoundary: true).SurfaceArea(), 12);
+    }
+
+    [Fact]
     public void Subdivide_RejectsPolygonMesh()
     {
         var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1))); // quads

@@ -183,6 +183,12 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   `MeshImprint` reports the shared `Points`/`Segments`, the chained `Polylines` (a closed
   loop repeats its first index), and `Length`.
 - **`LoopSubdivision`** — triangle-mesh Loop subdivision with boundary rules.
+  `preserveBoundary: true` pins boundary vertices instead of applying the Warren rule (which
+  smooths the outline toward its limit curve and therefore *moves* it). New boundary vertices
+  are edge midpoints either way, so pinned subdivision refines the outline into a subdivision
+  of the same polyline — which is what an open patch needs to be stitched back into a
+  surrounding mesh (`MeshRegionOperator` accepts a rim that was subdivided, never one that
+  moved).
 - **`MeshDecimator`** — quadric error metric (Garland–Heckbert) edge collapse with link
   condition and normal-flip guards; boundaries are preserved exactly. Candidates live in
   Core's `IndexPriorityQueue` (one always-current entry per undirected edge, re-keyed in
@@ -431,16 +437,29 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     way g3 builds it on an in-place editor: `HalfEdgeMesh` is immutable after `Build`, so
     a refused or failed reinsertion leaves the caller holding the original — there is no
     half-applied state for a journal to undo.
-  - **The seam is the contract, and it may not be refined.** A replacement must reproduce
-    the region's boundary as the same *directed* edges at bit-identical positions
-    (direction proves the orientation matches; exactness because this engine welds shared
-    geometry by equality, so a rim that drifted 1e-12 would weld into a crack instead of
-    failing). Splitting a seam edge is refused too — the base face on the other side still
-    holds the un-split edge, so the result would be a T-junction; refining across a seam
-    means refining the neighbours, which is a different operation. Edits that satisfy the
-    contract: anything confined to the interior, and `MeshDecimator` (its exact boundary
-    preservation IS this contract). `LoopSubdivision` is not one — it splits *and* smooths
-    the open boundary — and is refused with a message naming the offending edge.
+  - **The seam is the contract.** A replacement must reproduce the region's boundary as the
+    same *directed* edges through bit-identically positioned vertices (direction proves the
+    orientation matches; exactness because this engine welds shared geometry by equality, so
+    a rim that drifted 1e-12 would weld into a crack instead of failing).
+  - **The seam MAY be refined, and refining it refines the neighbours too.** A replacement
+    may subdivide a seam edge; reinsertion then carries the split across, so every base face
+    using that edge gains the new vertices at their exact positions and no T-junction can
+    appear. A base triangle is re-fanned from the corner between its two unrefined edges —
+    exactly what an edge split leaves behind — and a base polygon simply grows. The
+    refinement point is created once and shared by both sides, because two vertices at one
+    position *is* the crack.
+    - The order of the two seam checks is load-bearing, and getting it wrong would be worse
+      than not having the feature. **Every original seam vertex must be shown present
+      first**, before any chain is walked: without that, a replacement that MOVED a rim
+      vertex is indistinguishable from one that removed it and inserted a new one nearby, and
+      would be accepted as a "refinement" — welding a crack, silently, which is the failure
+      the seam contract exists to prevent. Only then is each seam edge's chain walked, and a
+      chain that reaches another seam vertex before its own endpoint is refused: the rim was
+      rewired, not subdivided.
+    - Edits that satisfy the contract: anything confined to the interior, `MeshDecimator`
+      (its exact boundary preservation IS this contract), and any refinement of the rim.
+      `LoopSubdivision` qualifies **only with `preserveBoundary: true`** — its default Warren
+      boundary rule smooths the outline, which *moves* the rim, and that is still refused.
 - **`MeshConnectedComponents`** — edge-connected face components (g3
   `MeshConnectedComponents`): deterministic ascending-seed flood fill returning
   `MeshComponent`s (face selection + area + divergence signed volume + closed flag) with
