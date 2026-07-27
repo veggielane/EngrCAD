@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 
 namespace EngrCAD.Mesh;
@@ -85,13 +86,28 @@ public static class MeshWelder
     /// partner, insert the crack vertices that lie collinearly on it; both sides then
     /// carry the identical subdivision and the surface closes up.
     /// </summary>
+    /// <remarks>
+    /// The two thresholds are the epsilon ladder's <b>1e-7 seam tier expressed
+    /// RELATIVELY</b> — a fraction of the soup's own extent, following the same rule as
+    /// the trimmed-face tessellator's rung epsilon, rather than the absolute constants
+    /// this used to carry. The tier's meaning is preserved by the scaling rather than
+    /// broken by it: a seam vertex misses its coarse edge by the two sides' *independent*
+    /// construction error, and every source of that error is proportional to the model
+    /// (a chord's sagitta scales with the radius; a float32-quantized STL's cracks scale
+    /// with the coordinate). At unit extent this is exactly the 1e-7 it replaces. It is
+    /// deliberately two decades looser than the 1e-9 weld tier, which is absolute because
+    /// geometry that must weld is constructed exactly rather than independently.
+    /// </remarks>
     internal static void ZipSeams(List<Vector3d> positions, List<List<int>> faces)
     {
-        // Seam-critical absolute values: T-junction vertices sit on the coarse edge only to
-        // within the two sides' tessellation error (~1e-7), so these are deliberately looser
-        // than the 1e-9 weld tolerance. Do not tighten without re-testing boolean seams.
-        const double seamEps = 1e-7;      // distance from a candidate vertex to the edge line
-        const double endMargin = 1e-7;    // keep clear of the edge endpoints
+        var bounds = Aabb.FromPoints(CollectionsMarshal.AsSpan(positions));
+        if (bounds.IsEmpty)
+            return; // nothing to zip
+        double extent = bounds.Size.Length;
+        if (extent <= 0)
+            return; // every position coincides: no seam either
+        double seamEps = 1e-7 * extent;   // distance from a candidate vertex to the edge line
+        double endMargin = 1e-7 * extent; // keep clear of the edge endpoints
 
         var directed = new HashSet<(int, int)>();
         foreach (var loop in faces)

@@ -118,11 +118,6 @@ deleted; the imprint boolean is the only one). Remaining:
 
 ## Core (EngrCAD.Core)
 
-- [ ] **Remaining tolerance follow-ups** (named seam constants, `ConvexHull2` →
-  `Orient2dSign`, `TracerSettings`, and the scale-relative `Sketch` guards ✅ all
-  landed): **`MeshWelder`'s 1e-7 seam absolutes → extent-scaled** — unblocked now that
-  the BSP boolean is retired (its `Csg.Epsilon` item is moot: `Csg.cs` is deleted).
-  Boolean seam re-testing required when it happens.
 - [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
   (`CoplanarFaceCosine`, 0.081° = acos(1 − 1e-6)) but deliberately not widened: a dot
   of unit vectors is already scale-free, so the quadratic-scale argument does not apply.

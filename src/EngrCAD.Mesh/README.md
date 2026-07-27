@@ -374,7 +374,21 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   interface lives here so `EngrCAD.Mesh` needs no dependency on the implicit engine —
   an SDF-backed target is a few lines in a consumer (`p − d(p)·∇d(p)`).
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
-  T-junction seam zipping.
+  T-junction seam zipping: for every directed edge with no reverse partner, the crack
+  vertices lying collinearly along it are inserted, so both sides of a seam end up with
+  the identical subdivision and the surface closes. The zip's two thresholds are the
+  epsilon ladder's **1e-7 seam tier expressed relatively** — a fraction of the soup's own
+  extent, not an absolute constant. The scaling preserves the tier's meaning rather than
+  breaking it: a seam vertex misses its coarse edge by the two sides' *independent*
+  construction error, and every source of that error is proportional to the model (a
+  chord's sagitta scales with the radius; a float32-quantized STL's cracks scale with the
+  coordinate). At unit extent it is exactly the 1e-7 it replaced, and it is deliberately
+  two decades looser than the 1e-9 weld tier, which stays absolute because geometry that
+  must weld is constructed exactly rather than independently. The absolute form was wrong
+  in both directions away from unit scale — a metre-scale model's genuine seam vertices
+  sat further off their coarse edge than 1e-7 and the crack stayed open, while a
+  1e-5-scale model's *distinct* vertices sat closer than it and were zipped onto edges
+  they had no business on.
 - **Selections** (`MeshFaceSelection` / `MeshVertexSelection` / `MeshEdgeSelection`) —
   read-only v1 of the selection/region model (g3 `MeshFaceSelection` et al.): immutable
   index sets over one mesh with `Grow`/`Contract` (one-ring steps; face grow is
