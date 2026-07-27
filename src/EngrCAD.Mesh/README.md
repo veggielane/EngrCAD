@@ -78,7 +78,13 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   *Classification assumption*: after the imprint no face straddles the other surface, so a
   whole patch is inside or outside — probing per patch (rather than per face) is what
   keeps seam slivers, whose centroids sit arbitrarily close to the other surface, from
-  deciding anything. All three operations take an optional `ProgressCancel`.
+  deciding anything. All three operations take an optional `ProgressCancel`, threaded the
+  whole way down: the imprint owns 85% of the reported span and polls per broad-phase pair
+  and inside both meshes' cuts, and each mesh's classify-and-emit pass owns half of what is
+  left. **Polling follows cost, not code structure** — coincidence classification and the
+  patch flood fill are linear passes over the faces and get one checkpoint each at their
+  boundary, while the per-patch winding-number probes (each a query over the whole *other*
+  mesh) poll every iteration.
 
   *A BSP-tree clipper (csg.js) used to sit behind a `BooleanMethod` selector as the
   alternative, and is now deleted.* It was the first boolean this engine had, and it was

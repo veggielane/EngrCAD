@@ -257,13 +257,15 @@ public sealed class Part
     /// <summary>
     /// <see cref="GetMesh(MeshQuality?)"/> with progress reporting and cooperative
     /// cancellation for the routes that support them.
-    /// <para><b>Only the SDF route observes <paramref name="progress"/></b> (Surface
-    /// Nets polygonization reports fractions and polls for cancellation). B-Rep
-    /// lowering and tessellation run to completion: their result is cached inside
-    /// <see cref="TryGetSolid"/>, and abandoning one mid-flight would leave that cache
-    /// claiming a lowering it never produced. A host that wants to stop early therefore
-    /// cancels between parts, not inside one — the part in flight finishes and its mesh
-    /// is kept, so returning to it is instant.</para>
+    /// <para><b>B-Rep <i>lowering</i> is the one step that always runs to
+    /// completion.</b> Its result is cached inside <see cref="TryGetSolid"/>, and
+    /// abandoning one mid-flight would leave that cache claiming a lowering it never
+    /// produced. Everything downstream of it is safely cancellable and does observe
+    /// <paramref name="progress"/>: Surface Nets polygonization on the SDF route, and
+    /// <see cref="BRepTessellator.Tessellate(BrepSolid, int, int, ProgressCancel?)"/> on
+    /// the B-Rep one — tessellating an already-cached solid throws nothing away, since a
+    /// revisit re-tessellates from the cache. A host that stops early still gets the
+    /// lowering it paid for.</para>
     /// </summary>
     public HalfEdgeMesh GetMesh(MeshQuality? quality, ProgressCancel? progress)
     {
@@ -281,7 +283,7 @@ public sealed class Part
             // route): tessellate the ONE cached solid. This is exactly what
             // Shape.ToMesh does for such a graph — it just re-lowered every time.
             if (SolidCore() is { } solid)
-                return _mesh = BRepTessellator.Tessellate(solid, q.SegmentsPerCircle, q.CurveSamples);
+                return _mesh = BRepTessellator.Tessellate(solid, q.SegmentsPerCircle, q.CurveSamples, progress);
             if (_solidError is { } error)
                 ExceptionDispatchInfo.Capture(error).Throw();   // same failure ToMesh would raise
 
@@ -606,10 +608,12 @@ public sealed class Tab
     /// for hosts that mesh a tab when it is first viewed instead of meshing the whole
     /// document up front. Idempotent, so a second visit costs nothing.
     /// <para><paramref name="progress"/> reports the fraction of this tab's parts done
-    /// (finer within a part where the route supports it) and is polled BETWEEN parts
-    /// for cancellation: a part already in flight finishes and stays cached rather than
-    /// being thrown away — see <see cref="Part.GetMesh(MeshQuality?, ProgressCancel?)"/>
-    /// for why mid-part cancellation is not offered. Cancellation surfaces as
+    /// (finer within a part where the route supports it) and is polled between parts as
+    /// well as within them. What a cancelled part keeps is the work that cannot be
+    /// abandoned safely: B-Rep <i>lowering</i> always runs to completion and stays cached,
+    /// while polygonization and tessellation stop where they are — see
+    /// <see cref="Part.GetMesh(MeshQuality?, ProgressCancel?)"/>. So a revisit never
+    /// repeats the expensive half. Cancellation surfaces as
     /// <see cref="OperationCanceledException"/>.</para>
     /// </summary>
     public void PreMesh(MeshQuality? quality = null, ProgressCancel? progress = null)

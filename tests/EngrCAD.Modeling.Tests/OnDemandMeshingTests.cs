@@ -105,7 +105,7 @@ public class OnDemandMeshingTests
     }
 
     [Fact]
-    public void TabPreMesh_CancelsBetweenParts()
+    public void TabPreMesh_StopsInsideTheFirstPartButKeepsItsLowering()
     {
         var scene = new Scene();
         var tab = scene.AddTab("model");
@@ -117,8 +117,29 @@ public class OnDemandMeshingTests
         Assert.Throws<OperationCanceledException>(
             () => tab.PreMesh(progress: new ProgressCancel(() => cancel, _ => cancel = true)));
 
-        Assert.True(first.HasMesh);    // work already done is kept, not thrown away
         Assert.False(second.HasMesh);
+        // The B-Rep route observes cancellation in the TESSELLATION, so the first part is
+        // abandoned mid-flight and caches no mesh...
+        Assert.False(first.HasMesh);
+        // ... but the LOWERING it paid for is kept, which is the expensive half and the
+        // one that cannot be abandoned (TryGetSolid caches it, so a half-finished lowering
+        // would poison the cache). A revisit re-tessellates from here.
+        Assert.NotNull(first.TryGetSolid());
+    }
+
+    [Fact]
+    public void TabPreMesh_CancelsBetweenPartsWhenNothingReportsMidPart()
+    {
+        // Cancelling without ever letting a part start: the between-parts checkpoint alone
+        // must stop the job, with no part touched at all.
+        var scene = new Scene();
+        var tab = scene.AddTab("model");
+        var first = tab.Add(new Part("first", Shape.Box(1, 1, 1)));
+
+        Assert.Throws<OperationCanceledException>(
+            () => tab.PreMesh(progress: new ProgressCancel(() => true)));
+
+        Assert.False(first.HasMesh);
     }
 
     [Fact]

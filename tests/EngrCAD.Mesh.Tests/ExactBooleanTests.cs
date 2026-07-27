@@ -360,6 +360,24 @@ public class ExactBooleanTests
     }
 
     [Fact]
+    public void Cancellation_IsAlsoObservedAfterTheImprint()
+    {
+        // The imprint is the long phase and has always polled; classification (a winding
+        // number query per patch, over the whole other mesh) is the other superlinear one,
+        // and used to run to completion however long it took. Cancelling only once the
+        // reported fraction is past the imprint's share proves the later phase polls too.
+        var box = Box(-1, -1, -1, 1, 1, 1);
+        var cylinder = MeshPrimitives.Cylinder(0.4, 4, 64).Transformed(Matrix4d.CreateTranslation((0, 0, -2)));
+
+        double last = 0;
+        bool stop = false;
+        Assert.Throws<OperationCanceledException>(() => MeshBoolean.Difference(
+            box, cylinder, new ProgressCancel(() => stop, f => { last = f; stop = f > 0.9; })));
+
+        Assert.True(last > 0.9, $"the imprint should have completed before cancelling; got {last}");
+    }
+
+    [Fact]
     public void Progress_IsMonotoneAndReachesOne()
     {
         var reported = new List<double>();

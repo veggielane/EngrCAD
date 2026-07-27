@@ -63,7 +63,9 @@ internal readonly record struct TabMeshCompletion(
 /// <item><b>Work already done is never wasted.</b> Parts cache their mesh, so a job
 /// starts from the longest already-meshed prefix (a revisit publishes the whole tab
 /// synchronously, with no background work at all) and a cancelled part that had already
-/// finished stays cached for the next visit.</item>
+/// finished stays cached for the next visit. A part cancelled MID-flight keeps the step
+/// that cannot be abandoned safely — its B-Rep lowering — so the next visit resumes from
+/// there.</item>
 /// <item><b>A part that throws is reported, not swallowed.</b> It is dropped from the
 /// published instances (its geometry cannot be uploaded) and named in the completion,
 /// while the rest of the tab still loads and the bar still reaches the end.</item>
@@ -132,8 +134,10 @@ internal sealed class TabMeshLoader
         return nothingToDo ? Task.CompletedTask : Task.Run(() => Work(request, token, cancel, ready));
     }
 
-    /// <summary>Abandons the running job (the part in flight finishes and stays cached;
-    /// nothing more is published).</summary>
+    /// <summary>Abandons the running job; nothing more is published. The part in flight
+    /// stops where it is and keeps whatever cannot be abandoned safely — a B-Rep part's
+    /// lowering, which is the expensive half — so a revisit resumes from there rather than
+    /// from nothing.</summary>
     public void Cancel()
     {
         lock (_gate)

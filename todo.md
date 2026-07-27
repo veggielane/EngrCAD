@@ -136,13 +136,10 @@ deleted; the imprint boolean is the only one). Remaining:
   (Freeman–Shapira). That is FALSE in 3D — the regular tetrahedron on alternate corners
   of [−1,1]³ fits its cube at volume 8 while every face-flush candidate measures 16.
   The shipped implementation follows O'Rourke instead.
-- [ ] **Core follow-ups** — thread `ProgressCancel` through the mesh booleans
-  (`MeshMeshCut`); `BRepTessellator` ✅ landed, and `MeshSdf`/winding builds were measured
-  (21.8 ms / 29.2 ms on 32 040 triangles) and deliberately declined, since viewer
-  cancellation is granular to a whole part. Also: `Part.GetMesh` should pass its
-  `ProgressCancel` to `BRepTessellator.Tessellate` (one line in
-  `EngrCAD.Modeling/Document.cs`, plus relaxing the doc paragraph there — only the
-  *lowering* must run to completion, not the tessellation of an already-cached solid);
+- [ ] **Core follow-ups** — `ProgressCancel` through the mesh booleans (`MeshMeshCut` +
+  the classify/emit phases), `BRepTessellator`, and `Part.GetMesh` → `Tessellate` ✅ all
+  landed; `MeshSdf`/winding builds were measured (21.8 ms / 29.2 ms on 32 040 triangles)
+  and deliberately declined, since a build is one indivisible call. Remaining:
   intersection-segment queries over `Bvh.QueryOverlap` pairs (the triangle–triangle
   layer belongs to EngrCAD.Mesh); routing `FaceSplitter`'s planar tracing through
   `Arrangement2d` (deferred — boolean-critical); optionally migrate

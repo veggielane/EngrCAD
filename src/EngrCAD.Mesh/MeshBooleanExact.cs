@@ -44,8 +44,8 @@ internal static class MeshBooleanExact
         if (!a.IsClosed || !b.IsClosed)
             throw new ArgumentException("Boolean operations require closed meshes.");
 
-        // The imprint is the long phase; classification and welding are linear passes, so
-        // the progress slice reflects that.
+        // The imprint is the long phase by a wide margin; each mesh's classify-and-emit
+        // pass gets the remainder, split evenly, and reports and cancels within itself.
         var imprint = MeshMeshCut.Imprint(a, b, Slice(progress, 0, 0.85));
         var seamA = SeamEdges(imprint.MeshA, imprint);
         var seamB = SeamEdges(imprint.MeshB, imprint);
@@ -66,9 +66,10 @@ internal static class MeshBooleanExact
         var positions = new List<Vector3d>();
         var index = new Dictionary<Vector3d, int>();
         var faces = new List<int[]>();
-        Emit(imprint.MeshA, seamA, imprint.MeshB, onB, keepAInside, reverse: false, fromA: true);
-        progress?.Report(0.95);
-        Emit(imprint.MeshB, seamB, imprint.MeshA, onA, keepBInside, reverseB, fromA: false);
+        Emit(imprint.MeshA, seamA, imprint.MeshB, onB, keepAInside, reverse: false, fromA: true,
+            Slice(progress, 0.85, 0.925));
+        Emit(imprint.MeshB, seamB, imprint.MeshA, onA, keepBInside, reverseB, fromA: false,
+            Slice(progress, 0.925, 1.0));
         progress?.ThrowIfCancelled();
         var result = HalfEdgeMesh.Build(positions, faces);
         progress?.Report(1);
@@ -76,11 +77,21 @@ internal static class MeshBooleanExact
 
         void Emit(
             HalfEdgeMesh mesh, HashSet<(int, int)> seam, HalfEdgeMesh otherMesh,
-            CoincidentSurface? coincident, bool keepInside, bool reverse, bool fromA)
+            CoincidentSurface? coincident, bool keepInside, bool reverse, bool fromA,
+            ProgressCancel? phase)
         {
+            // Phase boundaries, not inner loops: coincidence classification and the flood
+            // fill are linear passes over the faces, while the winding-number probes are
+            // the only part whose cost is superlinear in the OTHER mesh, so that is the one
+            // that polls per unit of work.
             var shared = Coincidences(mesh, coincident);
+            phase?.ThrowIfCancelled();
+            phase?.Report(0.2);
             var patch = Patches(mesh, seam, shared, out int patchCount);
-            var keep = Classify(mesh, patch, patchCount, shared, otherMesh, keepInside, operation, fromA);
+            phase?.ThrowIfCancelled();
+            phase?.Report(0.3);
+            var keep = Classify(mesh, patch, patchCount, shared, otherMesh, keepInside, operation, fromA,
+                Slice(phase, 0.3, 0.9));
             // The loop walk is manual, not LINQ: Face.Vertices() allocates two iterators per
             // call, and this runs once per face of both operands.
             var corners = new List<int>(4);
@@ -101,6 +112,7 @@ internal static class MeshBooleanExact
                     Array.Reverse(loop);
                 faces.Add(loop);
             }
+            phase?.Report(1);
         }
 
         int Intern(in Vector3d position)
@@ -218,7 +230,8 @@ internal static class MeshBooleanExact
     /// </summary>
     private static bool[] Classify(
         HalfEdgeMesh mesh, int[] patch, int patchCount, Coincidence[] shared,
-        HalfEdgeMesh otherMesh, bool keepInside, BooleanOperation operation, bool fromA)
+        HalfEdgeMesh otherMesh, bool keepInside, BooleanOperation operation, bool fromA,
+        ProgressCancel? progress)
     {
         var probe = new int[patchCount];
         var area = new double[patchCount];
@@ -239,16 +252,28 @@ internal static class MeshBooleanExact
             if (shared[probe[p]] == Coincidence.None)
                 questions++;
         }
+        // Building the hierarchy is the one indivisible step here — it is a single call
+        // into MeshWindingNumber — so the checkpoint sits in front of it rather than
+        // inside it.
+        progress?.ThrowIfCancelled();
         var other = Winding(otherMesh, questions);
 
         var keep = new bool[patchCount];
         for (int p = 0; p < patchCount; p++)
         {
+            // Each probe is a winding-number query over the whole other mesh, so unlike the
+            // linear passes around it this loop is worth polling per iteration.
+            if (progress is not null)
+            {
+                progress.ThrowIfCancelled();
+                progress.Report((double)p / patchCount);
+            }
             var coincidence = shared[probe[p]];
             keep[p] = coincidence == Coincidence.None
                 ? other.IsInside(mesh.GetFace(probe[p]).Centroid()) == keepInside
                 : KeepCoincident(operation, coincidence, fromA);
         }
+        progress?.Report(1);
         return keep;
     }
 
