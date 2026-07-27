@@ -412,6 +412,44 @@ visualizes the field). Properties the consumers rely on, locked by `SdfContoursT
 - Sample/value scratch comes from `ArrayPool`; levels that never cross return empty
   segment lists.
 
+## Remeshing against a field (`SdfProjectionTarget`)
+
+`new SdfProjectionTarget(field, iterations = 2)` implements EngrCAD.Mesh's
+`IProjectionTarget` over any `Sdf` — the quality-control pass for implicit output, and the
+completion of a seam the mesh engine deliberately left open (the interface lives there so
+the mesh kernel needs no dependency on the implicit engine; this is the consumer that
+supplies it). One step is the Newton step `p' = p - d(p)·grad d / |grad d|`, and the
+central-difference step is `5e-6 ×` the field's bounding-box diagonal — relative, never an
+absolute constant, so it works at 1e-4 scale.
+
+- **For an exact field, one step is not an approximation at all**: the gradient points
+  straight away from the closest surface point and `|p - c| = |d(p)|`, so the step lands on
+  `c`. Iterating exists for the fields that are *not* exact — CSG differences, smooth
+  blends, a `MeshSdf` of a coarse mesh are all correct-sign **lower bounds** with
+  `|grad d| <= 1`, so one step under-shoots and the residual shrinks by `(1 - |grad d|)` per
+  step.
+- **The guarantee is one-sidedness, and only that.** A 1-Lipschitz lower bound puts the
+  surface at least `|d(p)|` away in *every* direction, so a step of exactly that length can
+  never cross it however wrong the gradient direction is — which is why no damping or step
+  limiting appears in the code. `|d|` is *not* guaranteed to decrease.
+- **The counter-example is a plain CSG difference, and it is pinned by a test.** Inside the
+  material a subtracted tool removed, the field measures the distance to the tool's own
+  surface — a face that is not there — and the gradient jumps where the branch switches, so
+  two branches trade the point back and forth. Measured on `Box(2,2,2) - Sphere(1.2)`: a
+  probe 0.14 above the removed cap is exactly where it started after six steps, while the
+  true distance to the real rim is 0.45. This is the same "correct-sign lower bound near a
+  subtracted tool's fictitious faces" the modeling layer already warns about, seen from the
+  other side.
+- Which matters little for the job: a remeshed vertex starts **on** the surface and stays
+  within a fraction of an edge length of it, where every one of these fields is locally the
+  exact distance to a real face. Project points that are already near the surface; do not
+  use this as a general closest-point query.
+- Measured on the pairing it was written for — `SurfaceNets.Polygonize(Sphere(1), 32)`
+  remeshed at target edge 0.12 for 8 passes — the worst vertex-to-field distance drops by
+  more than an order of magnitude while the volume stays within 2% of the exact sphere.
+  Cost is 7 field evaluations per step, so wrap an expensive AST (a `MeshSdf` above all) in
+  `Sdf.Sampled(...)` or `Sdf.NarrowBand(...)` first.
+
 ## B-Rep feature edges (`BrepFeatureEdges`)
 
 `BrepFeatureEdges.Extract(solid, segmentsPerCircle = 96, curveSamples = 48,

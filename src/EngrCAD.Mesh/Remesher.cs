@@ -106,7 +106,8 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// Surface to pull free vertices back onto after each pass. Without one, smoothing
     /// shrinks the model (Laplacian flow is curvature flow); with one, the remesh changes
     /// the tessellation and leaves the shape. <see cref="MeshProjectionTarget"/> projects
-    /// onto the original mesh; an SDF-backed target is a few lines in the implicit engine.
+    /// onto the original mesh; EngrCAD.Interop's <c>SdfProjectionTarget</c> projects onto any
+    /// signed distance field, which is the quality-control pass for Surface Nets output.
     /// </summary>
     public IProjectionTarget? ProjectionTarget { get; init; }
 

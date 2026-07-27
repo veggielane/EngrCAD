@@ -386,8 +386,12 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   the winning triangle (Core's `Distance3d.ClosestPointOnTriangle` — Ericson's
   Voronoi-region form: six barycentric sign tests, no tolerance anywhere); queries are
   allocation-free through `Bvh.Nearest<TMetric>`. The
-  interface lives here so `EngrCAD.Mesh` needs no dependency on the implicit engine —
-  an SDF-backed target is a few lines in a consumer (`p − d(p)·∇d(p)`).
+  interface lives here so `EngrCAD.Mesh` needs no dependency on the implicit engine — the
+  SDF-backed target (`p − d(p)·∇d(p)`, iterated) is `SdfProjectionTarget` in
+  **EngrCAD.Interop**, which is where a type may see both engines. Its guarantee is
+  one-sided rather than convergent: a 1-Lipschitz lower bound puts the surface at least
+  `|d|` away in every direction, so the step can never cross it, but `|d|` need not
+  decrease near a CSG difference's fictitious faces. See that project's README.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with

@@ -21,10 +21,6 @@ deleted; the imprint boolean is the only one). Remaining:
   holding the un-split edge — a T-junction), so `MeshDecimator` round-trips but
   `LoopSubdivision` does not. Refining across a seam means refining the neighbours too:
   a different, larger operation.
-- [ ] **SDF projection target for remeshing** — implement `IProjectionTarget` over
-  `MeshSdf`/`Sdf` in EngrCAD.Interop (p − d(p)·∇d(p)); the interface lives in
-  EngrCAD.Mesh precisely so the mesh kernel needn't depend on the implicit engine. Pairs
-  with quality control after Surface Nets output.
 - [ ] **`RemesherPro`'s scheduling** — the modified-edge queue and the fast-split
   prepass. The basic pass converges in tens of ms at current sizes, so this is throughput
   for large meshes only; note that queued edge ids are recycled, so every consumer must
