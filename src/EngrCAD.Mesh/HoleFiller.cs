@@ -26,9 +26,9 @@ public enum HoleFillMethod
 /// <summary>Which upper tier <see cref="HoleFiller.FillAll"/> falls back to when neither the planar nor the simple fill applies.</summary>
 public enum HoleFillFallback
 {
-    /// <summary>Report the loop as <see cref="HoleFillMethod.Skipped"/> (the default: fill nothing you cannot fill well).</summary>
+    /// <summary>Report the loop as <see cref="HoleFillMethod.Skipped"/> — fill nothing you cannot fill well.</summary>
     None,
-    /// <summary>Try <see cref="HoleFiller.FillMinimal"/>.</summary>
+    /// <summary>Try <see cref="HoleFiller.FillMinimal"/>. The default.</summary>
     Minimal,
     /// <summary>Try <see cref="HoleFiller.FillSmoothed"/>, falling back to <see cref="HoleFiller.FillMinimal"/> if the patch cannot be built.</summary>
     Smoothed,
@@ -81,11 +81,17 @@ public sealed record HoleFillOptions
 
     /// <summary>
     /// Which upper tier to try for loops neither the planar nor the simple fill can handle.
-    /// Defaults to <see cref="HoleFillFallback.None"/> — reporting a hole honestly is better
-    /// than inventing questionable geometry for it, and callers who want maximum closure
-    /// (repair pipelines) opt in.
+    /// Defaults to <see cref="HoleFillFallback.Minimal"/>: the minimum-weight triangulation
+    /// of the rim's own vertices invents <b>no</b> geometry — every vertex of the patch is
+    /// already a vertex of the hole — so it is not the "guess something" tier the honest
+    /// default was guarding against. It cannot bulge, it restores creases rather than
+    /// chording across them, and where it genuinely cannot decide (no admissible
+    /// triangulation, or a rim past <see cref="MaxMinimalFillVertices"/>) it still reports
+    /// <see cref="HoleFillMethod.Skipped"/> with the reason. <see cref="HoleFillFallback.None"/>
+    /// remains available for callers who want a hole reported rather than closed at all;
+    /// <see cref="HoleFillFallback.Smoothed"/> is the opt-in that does add vertices.
     /// </summary>
-    public HoleFillFallback Fallback { get; init; } = HoleFillFallback.None;
+    public HoleFillFallback Fallback { get; init; } = HoleFillFallback.Minimal;
 
     /// <summary>
     /// Largest loop the <see cref="HoleFillFallback.Minimal"/> tier will attempt. Its

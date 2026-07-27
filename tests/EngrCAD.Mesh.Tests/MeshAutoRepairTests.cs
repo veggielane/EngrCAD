@@ -159,21 +159,53 @@ public class MeshAutoRepairTests
         Assert.Equal(6.0, mesh.Volume(), 12);
     }
 
-    [Fact]
-    public void AutoRepair_ReportsHolesItRefusesToFill()
+    /// <summary>
+    /// A long, wildly non-planar boundary the fan fill would self-intersect on. The
+    /// minimum-weight triangulation of the rim's own vertices is the default fallback and
+    /// handles exactly this, so a repair pipeline closes it — inventing nothing, since the
+    /// patch's vertices are the hole's.
+    /// </summary>
+    private static HalfEdgeMesh SphereWithANonPlanarBiteRemoved()
     {
-        // A long, wildly non-planar boundary the fan fill would self-intersect on: the
-        // dispatch has to say so rather than emit garbage.
         var mesh = MeshPrimitives.UvSphere(1, segments: 32, rings: 16).Triangulated();
         var (positions, faces) = mesh.ToIndexed();
         var kept = faces.Where(f => !f.Any(v => positions[v].Z > 0.3 && positions[v].X > 0)).ToList();
         var open = HalfEdgeMesh.Build(positions, kept);
         Assert.False(open.IsClosed);
+        return open;
+    }
+
+    [Fact]
+    public void AutoRepair_ClosesALongNonPlanarHoleWithTheMinimalFill()
+    {
+        var open = SphereWithANonPlanarBiteRemoved();
+        int vertices = open.VertexCount;
 
         var (repaired, report) = MeshRepair.AutoRepair(
             open, new MeshRepairOptions { HoleFill = new HoleFillOptions { MaxSimpleFillVertices = 4 } });
 
         Assert.Equal(0, report.CracksMerged);
+        Assert.Equal(0, report.HolesSkipped);
+        Assert.True(report.HolesFilled > 0);
+        Assert.True(repaired.IsClosed);
+        // The fill invents nothing, so the count can only go DOWN — Clean drops the
+        // vertices the removed faces orphaned before the hole is ever reached.
+        Assert.True(repaired.VertexCount <= vertices,
+            $"the minimal fill must add no vertices; {vertices} -> {repaired.VertexCount}");
+    }
+
+    [Fact]
+    public void AutoRepair_ReportsHolesItRefusesToFill()
+    {
+        // Where even the minimal tier declines — here because the rim is past its cubic
+        // dynamic program's size cap — the dispatch has to say so rather than emit garbage.
+        var open = SphereWithANonPlanarBiteRemoved();
+
+        var (repaired, report) = MeshRepair.AutoRepair(open, new MeshRepairOptions
+        {
+            HoleFill = new HoleFillOptions { MaxSimpleFillVertices = 4, MaxMinimalFillVertices = 8 },
+        });
+
         Assert.True(report.HolesSkipped > 0);
         Assert.False(repaired.IsClosed);
         Assert.Contains(report.Notes, n => n.Contains("left open"));

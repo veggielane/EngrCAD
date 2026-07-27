@@ -309,9 +309,18 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     Iterated Laplacian smoothing with a fixed boundary converges to the same membrane a
     linear solve would give, so no sparse solver is carried.
   - `HoleFillOptions.Fallback` selects which tier `FillAll` uses for the loops the planar and
-    simple fills decline, and defaults to **`None`** — reporting a hole honestly beats
-    inventing questionable geometry, and callers who want maximum closure (repair pipelines)
-    opt in. `MaxMinimalFillVertices` (default 256) caps the cubic dynamic program.
+    simple fills decline, and defaults to **`Minimal`**. It shipped as `None` on the
+    reasoning that reporting a hole honestly beats inventing questionable geometry — which
+    is right, and is exactly why `Minimal` is the better default: **it invents nothing**.
+    Every vertex of a minimum-weight patch is already a vertex of the hole, so it
+    interpolates the rim exactly, cannot bulge, and restores creases rather than chording
+    across them. The honest report survives wherever the tier genuinely cannot decide (no
+    admissible triangulation, or a rim past `MaxMinimalFillVertices`), so `FillAll`'s
+    report-what-you-cannot-fill contract is unchanged in the cases it was written for; the
+    difference is that `MeshRepair.AutoRepair` now closes a long non-planar hole instead of
+    naming it. `Fallback = None` restores the old behaviour exactly, and `Smoothed` remains
+    the opt-in that does add vertices. `MaxMinimalFillVertices` (default 256) caps the cubic
+    dynamic program.
 - **`MeshExtrude`** — construct-new extrusion ops (g3 `MeshExtrudeFaces` /
   `MeshExtrudeMesh`). `Faces(mesh, faceIndices, offsetVector | distance)` pulls a face
   patch off the mesh: patch vertices shared with the rest (or on the open mesh boundary)
@@ -489,6 +498,9 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     result is still open) `MergeCoincidentEdges` for leftover cracks and
     `HoleFiller.FillAll` for what remains, which by then is a genuine hole rather than a
     crack. Reports `CracksMerged` / `HolesFilled` / `HolesSkipped` and notes each refused
-    hole. An already-closed `Clean` result returns immediately, so the common case costs
+    hole. Since the fill's default fallback tier is `Minimal`, this closes long non-planar
+    rims a centroid fan would self-intersect on, adding no vertices; pass
+    `HoleFill = new HoleFillOptions { Fallback = HoleFillFallback.None }` to have them
+    reported instead. An already-closed `Clean` result returns immediately, so the common case costs
     nothing. Defects beyond even this (fins, self-intersections) still fail `Clean`'s
     final `Build`, loudly, with post-repair edge diagnostics.

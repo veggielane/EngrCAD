@@ -176,21 +176,22 @@ public class HoleFillerTierTests
     // ---- FillAll dispatch ----
 
     [Fact]
-    public void FillAll_MinimalFallback_ClosesWhatTheDefaultSkips()
+    public void FillAll_MinimalFallback_ClosesWhatFallbackNoneSkips()
     {
         var open = SphereWithBiteRemoved(40, 26); // rim of 40 vertices, well above a fan's comfort
 
-        var skipped = HoleFiller.FillAll(open, new HoleFillOptions { MaxSimpleFillVertices = 8 });
-        var filled = HoleFiller.FillAll(open, new HoleFillOptions
+        var filled = HoleFiller.FillAll(open, new HoleFillOptions { MaxSimpleFillVertices = 8 });
+        var skipped = HoleFiller.FillAll(open, new HoleFillOptions
         {
             MaxSimpleFillVertices = 8,
-            Fallback = HoleFillFallback.Minimal,
+            Fallback = HoleFillFallback.None,
         });
 
         Assert.Equal(HoleFillMethod.Skipped, Assert.Single(skipped.Outcomes).Method);
         Assert.Contains("Fallback", Assert.Single(skipped.Outcomes).Message);
         Assert.False(skipped.Mesh.IsClosed);
 
+        // The default tier closes it, and adds not one vertex doing so.
         Assert.Equal(HoleFillMethod.Minimal, Assert.Single(filled.Outcomes).Method);
         Assert.True(filled.Mesh.IsClosed);
         Assert.Equal(open.VertexCount, filled.Mesh.VertexCount);
@@ -233,12 +234,16 @@ public class HoleFillerTierTests
     }
 
     [Fact]
-    public void FillAll_DefaultFallbackIsStillNone()
+    public void FillAll_DefaultFallbackIsMinimal()
     {
-        // The landed contract: FillAll reports what it cannot fill well rather than guessing.
+        // Minimal is not a "guess something" tier: every vertex of its patch is already a
+        // vertex of the hole, so it interpolates the rim exactly and cannot bulge. That is
+        // what makes it a safe default for a closure-seeking pipeline, and the honest
+        // report survives wherever it genuinely cannot decide (see the size-cap case).
         var open = SphereWithBiteRemoved(40, 26);
         var result = HoleFiller.FillAll(open, new HoleFillOptions { MaxSimpleFillVertices = 8 });
 
-        Assert.Equal(HoleFillMethod.Skipped, Assert.Single(result.Outcomes).Method);
+        Assert.Equal(HoleFillMethod.Minimal, Assert.Single(result.Outcomes).Method);
+        Assert.Equal(HoleFillFallback.Minimal, HoleFillOptions.Default.Fallback);
     }
 }

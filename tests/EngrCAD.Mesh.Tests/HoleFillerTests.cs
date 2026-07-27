@@ -219,7 +219,7 @@ public class HoleFillerTests
     }
 
     [Fact]
-    public void FillAll_SaddleCrownLoop_SkippedWithReason_PlanarRimStillFilled()
+    public void FillAll_SaddleCrownLoop_FallsThroughToTheMinimalFill()
     {
         var mesh = CrownedTube(16, radius: 5, height: 2, crownAmplitude: 4);
         Assert.Equal(2, mesh.BoundaryLoops().Count);
@@ -227,27 +227,46 @@ public class HoleFillerTests
         var result = HoleFiller.FillAll(mesh);
 
         Assert.Equal(2, result.Outcomes.Count);
+        Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Planar);
+        // A centroid fan would self-intersect on a saddle; the minimum-weight triangulation
+        // of the rim's own vertices cannot, so the default tier takes it and says why.
+        var minimal = Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Minimal);
+        Assert.Contains("best-fit plane", minimal.Message);
+        result.Mesh.Validate();
+        Assert.True(result.Mesh.IsClosed);
+        Assert.Equal(mesh.VertexCount, result.Mesh.VertexCount); // no invented geometry
+    }
+
+    [Fact]
+    public void FillAll_LoopAboveSizeThreshold_FallsThroughToTheMinimalFill()
+    {
+        // The crown rim is a hair off-plane (1e-3 >> the 1e-9 planarity default) so it falls
+        // to the simple path, where the vertex-count cap rejects it; the flat bottom rim
+        // still planar-fills, and the rejected one goes to the default fallback tier.
+        var mesh = CrownedTube(16, radius: 5, height: 2, crownAmplitude: 1e-3);
+        var result = HoleFiller.FillAll(mesh, new HoleFillOptions { MaxSimpleFillVertices = 8 });
+
+        Assert.Equal(2, result.Outcomes.Count);
+        Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Planar);
+        var minimal = Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Minimal);
+        Assert.Contains("MaxSimpleFillVertices", minimal.Message);
+    }
+
+    [Fact]
+    public void FillAll_WithFallbackNone_StillReportsWhatItDeclines()
+    {
+        // The honest-report contract has not gone anywhere, it is just no longer the
+        // default: opting out of the fallback tier restores it exactly.
+        var mesh = CrownedTube(16, radius: 5, height: 2, crownAmplitude: 4);
+
+        var result = HoleFiller.FillAll(mesh, new HoleFillOptions { Fallback = HoleFillFallback.None });
+
         var skipped = Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Skipped);
         Assert.Contains("best-fit plane", skipped.Message);
         Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Planar);
         result.Mesh.Validate();
         Assert.False(result.Mesh.IsClosed); // the saddle rim stays open
         Assert.Single(result.Mesh.BoundaryLoops());
-    }
-
-    [Fact]
-    public void FillAll_LoopAboveSizeThreshold_Skipped()
-    {
-        // The crown rim is a hair off-plane (1e-3 >> the 1e-9 planarity default) so it falls
-        // to the simple path, where the vertex-count cap rejects it; the flat bottom rim
-        // still planar-fills.
-        var mesh = CrownedTube(16, radius: 5, height: 2, crownAmplitude: 1e-3);
-        var result = HoleFiller.FillAll(mesh, new HoleFillOptions { MaxSimpleFillVertices = 8 });
-
-        Assert.Equal(2, result.Outcomes.Count);
-        Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Planar);
-        var skipped = Assert.Single(result.Outcomes, o => o.Method == HoleFillMethod.Skipped);
-        Assert.Contains("MaxSimpleFillVertices", skipped.Message);
     }
 
     // ---- helpers ----

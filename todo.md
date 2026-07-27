@@ -36,10 +36,6 @@ deleted; the imprint boolean is the only one). Remaining:
 - [ ] **Region-restricted remeshing** — remesh a face selection in place instead of the
   whole mesh (g3's `RegionRemesher`). `FillSmoothed` works around this by remeshing a
   standalone patch and stitching; overlaps with the region-refinement item above.
-- [ ] **Decide `HoleFillOptions.Fallback`'s default** — it ships as `None` to keep
-  `FillAll`'s landed "report what you cannot fill well" contract; `Minimal` is arguably
-  the better product default for `MeshRepair.AutoRepair`, at the cost of three tests that
-  currently pin `Skipped` outcomes.
 - [ ] **Expose remeshing through `Shape`/`Part`** (display quality, FEA prep) — and when
   it lands it owes a `docs/examples` page, since today it is kernel API reachable through
   no `Shape` operation.
