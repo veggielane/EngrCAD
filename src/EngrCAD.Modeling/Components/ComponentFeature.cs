@@ -22,6 +22,7 @@ namespace EngrCAD.Modeling;
 /// </summary>
 public sealed class ComponentFeature : Feature
 {
+    private readonly PlaneRef _face = PlaneRef.TopPlane;
     private IReadOnlyList<PlacedComponent> _placements = [];
 
     /// <param name="component">The catalogue item being placed.</param>
@@ -43,9 +44,16 @@ public sealed class ComponentFeature : Feature
     /// <summary>Placement points in <see cref="Face"/>'s 2D coordinates.</summary>
     public IReadOnlyList<Vector2d> Points { get; }
 
-    /// <summary>The seating face; null seats on <see cref="FeatureContext.TopPlane"/>,
-    /// re-resolved every regeneration.</summary>
-    public SketchPlane? Face { get; init; }
+    /// <summary>The seating face. Defaults to (and null still means)
+    /// <see cref="PlaneRef.TopPlane"/>, re-resolved every regeneration; an explicit
+    /// <see cref="SketchPlane"/> converts implicitly, and a semantic reference such as
+    /// <c>PlaneRef.On(FaceRef.Bottom)</c> tracks the model.</summary>
+    [Param(Description = "Seating face")]
+    public PlaneRef Face
+    {
+        get => _face;
+        init => _face = value ?? PlaneRef.TopPlane;
+    }
 
     /// <summary>Which side of a fastener stack this body is.</summary>
     [Param(Description = "Host = the body the component sits in; Anchor = the far body of a stack")]
@@ -72,7 +80,7 @@ public sealed class ComponentFeature : Feature
             ?? throw new InvalidOperationException(
                 $"{Component.Designation} needs a body to install into — add the host feature first.");
 
-        var face = Face ?? context.TopPlane;
+        var face = Face.Resolve(context, nameof(Face));
         var site = new ComponentSite(
             body, Points, face, Role,
             Depth > 0 ? Depth : null,

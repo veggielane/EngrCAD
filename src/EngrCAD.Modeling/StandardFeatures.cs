@@ -4,20 +4,30 @@ using EngrCAD.Core;
 namespace EngrCAD.Modeling;
 
 // Reified wrappers over the Shape operations, so simple histories need no custom
-// feature classes. Non-[Param] inputs (sketches, hole specs, selectors) are fixed per
-// instance — replace the feature to change them.
+// feature classes. Geometry inputs are declared as GeometryRef properties (see
+// GeometryRefs.cs): they re-resolve per regeneration, validate up front by name, and
+// contribute an honest term to the cache key. Other non-[Param] inputs (sketches, hole
+// specs) are fixed per instance — replace the feature to change them.
 
 /// <summary>Extrudes a sketch; unions with the existing body (or creates it).</summary>
 public sealed class ExtrudeSketchFeature(Sketch sketch) : Feature
 {
+    private readonly PlaneRef _plane = PlaneRef.WorldXY;
+
     [Param(Min = 1e-9, Description = "Extrusion height along the plane normal")]
     public double Height { get; init; } = 10;
 
-    public SketchPlane Plane { get; init; } = SketchPlane.XY;
+    /// <summary>Where the sketch sits; a <see cref="SketchPlane"/> converts implicitly.</summary>
+    [Param(Description = "Sketch placement")]
+    public PlaneRef Plane
+    {
+        get => _plane;
+        init => _plane = value ?? PlaneRef.WorldXY;
+    }
 
     public override Shape Apply(FeatureContext context)
     {
-        var solid = Shape.Extrude(sketch, Height, Plane);
+        var solid = Shape.Extrude(sketch, Height, Plane.Resolve(context, nameof(Plane)));
         return context.Body is null ? solid : context.Body | solid;
     }
 }
@@ -25,14 +35,22 @@ public sealed class ExtrudeSketchFeature(Sketch sketch) : Feature
 /// <summary>Revolves a sketch (full turn by default); unions with the body.</summary>
 public sealed class RevolveSketchFeature(Sketch sketch) : Feature
 {
+    private readonly PlaneRef _plane = PlaneRef.WorldXZ;
+
     [Param(Min = 1e-6, Max = 2 * Math.PI, Description = "Sweep angle in radians")]
     public double Angle { get; init; } = 2 * Math.PI;
 
-    public SketchPlane Plane { get; init; } = SketchPlane.XZ;
+    /// <summary>Where the sketch sits; a <see cref="SketchPlane"/> converts implicitly.</summary>
+    [Param(Description = "Sketch placement")]
+    public PlaneRef Plane
+    {
+        get => _plane;
+        init => _plane = value ?? PlaneRef.WorldXZ;
+    }
 
     public override Shape Apply(FeatureContext context)
     {
-        var solid = Shape.Revolve(sketch, Angle, Plane);
+        var solid = Shape.Revolve(sketch, Angle, Plane.Resolve(context, nameof(Plane)));
         return context.Body is null ? solid : context.Body | solid;
     }
 }
@@ -41,47 +59,70 @@ public sealed class RevolveSketchFeature(Sketch sketch) : Feature
 /// body's top face).</summary>
 public sealed class HoleFeature(HoleSpec hole, IReadOnlyList<Vector2d> points) : Feature
 {
+    private readonly PlaneRef _plane = PlaneRef.TopPlane;
+
     [Param(Min = 1e-9, Description = "Cut depth below the plane")]
     public double Depth { get; init; } = 20;
 
-    /// <summary>Explicit plane; null drills on <see cref="FeatureContext.TopPlane"/>.</summary>
-    public SketchPlane? Plane { get; init; }
+    /// <summary>Where to drill. Defaults to (and null still means)
+    /// <see cref="PlaneRef.TopPlane"/> — the body's top face, re-resolved every
+    /// regeneration; an explicit <see cref="SketchPlane"/> converts implicitly.</summary>
+    [Param(Description = "Drilling plane")]
+    public PlaneRef Plane
+    {
+        get => _plane;
+        init => _plane = value ?? PlaneRef.TopPlane;
+    }
 
     public override Shape Apply(FeatureContext context) =>
         (context.Body ?? throw new InvalidOperationException("HoleFeature needs a body to drill."))
-            .Drill(hole, points, Depth, Plane ?? context.TopPlane);
+            .Drill(hole, points, Depth, Plane.Resolve(context, nameof(Plane)));
 }
 
-/// <summary>Fillets the rims of planar faces facing <see cref="Direction"/>.</summary>
+/// <summary>Fillets the rims of the selected planar faces (the top faces by default).</summary>
 public sealed class FilletRimFeature : Feature
 {
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+
     [Param(Min = 1e-9)]
     public double Radius { get; init; } = 2;
 
-    public Vector3d Direction { get; init; } = Vector3d.UnitZ;
-
-    public override Shape Apply(FeatureContext context)
+    /// <summary>Which face rims to round. Deferred: the rim operation resolves this at
+    /// lowering time against its own solid, so validating it up front would cost an extra
+    /// B-Rep lowering per regeneration for no new information.</summary>
+    [Param(Description = "Rim faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
     {
-        var direction = Direction;
-        return (context.Body ?? throw new InvalidOperationException("FilletRimFeature needs a body."))
-            .Fillet(Radius, s => s.PlanarFacesWithNormal(direction));
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
     }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("FilletRimFeature needs a body."))
+            .Fillet(Radius, Faces.AsSelector(nameof(Faces)));
 }
 
-/// <summary>Chamfers the rims of planar faces facing <see cref="Direction"/>.</summary>
+/// <summary>Chamfers the rims of the selected planar faces (the top faces by default).</summary>
 public sealed class ChamferRimFeature : Feature
 {
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+
     [Param(Min = 1e-9)]
     public double Setback { get; init; } = 1;
 
-    public Vector3d Direction { get; init; } = Vector3d.UnitZ;
-
-    public override Shape Apply(FeatureContext context)
+    /// <inheritdoc cref="FilletRimFeature.Faces"/>
+    [Param(Description = "Rim faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
     {
-        var direction = Direction;
-        return (context.Body ?? throw new InvalidOperationException("ChamferRimFeature needs a body."))
-            .Chamfer(Setback, s => s.PlanarFacesWithNormal(direction));
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
     }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("ChamferRimFeature needs a body."))
+            .Chamfer(Setback, Faces.AsSelector(nameof(Faces)));
 }
 
 /// <summary>Unions or subtracts a fixed shape (bosses, cutters).</summary>
@@ -101,15 +142,26 @@ public sealed class BooleanFeature(Shape tool) : Feature
 /// <summary>Circular-patterns the whole body about an axis.</summary>
 public sealed class CircularPatternFeature : Feature
 {
+    private readonly AxisRef _axis = AxisRef.Z;
+
     [Param(Min = 1, Max = 360)]
     public int Count { get; init; } = 6;
 
-    public Vector3d AxisOrigin { get; init; } = Vector3d.Zero;
-    public Vector3d AxisDirection { get; init; } = Vector3d.UnitZ;
+    /// <summary>The axis to pattern about — an explicit one, or a semantic reference such
+    /// as <c>AxisRef.OfCylindrical(FaceSetRef.Cylindrical(6))</c>.</summary>
+    [Param(Description = "Pattern axis")]
+    public AxisRef Axis
+    {
+        get => _axis;
+        init => _axis = value ?? AxisRef.Z;
+    }
 
-    public override Shape Apply(FeatureContext context) =>
-        (context.Body ?? throw new InvalidOperationException("CircularPatternFeature needs a body."))
-            .PatternCircular(Count, AxisOrigin, AxisDirection);
+    public override Shape Apply(FeatureContext context)
+    {
+        var axis = Axis.Resolve(context, nameof(Axis));
+        return (context.Body ?? throw new InvalidOperationException("CircularPatternFeature needs a body."))
+            .PatternCircular(Count, axis.Origin, axis.Direction);
+    }
 }
 
 /// <summary>Linear-patterns the whole body along a step vector.</summary>

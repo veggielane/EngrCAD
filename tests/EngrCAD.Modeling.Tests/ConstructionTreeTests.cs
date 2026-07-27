@@ -167,11 +167,15 @@ public class ConstructionTreeTests
         history.Regenerate();
         var root = ConstructionTree.FromHistory(history);
 
-        var height = Assert.Single(root.Children[0].Children);
-        Assert.Equal("Height", height.Label);
+        var height = root.Children[0].Children.Single(c => c.Label == "Height");
         Assert.Equal(ConstructionNodeKind.Parameter, height.Kind);
         Assert.Equal("10", height.Detail);
         Assert.False(height.CanPreview);   // a value row draws nothing
+
+        // Geometry inputs are parameters too, and print their descriptive query.
+        var plane = root.Children[0].Children.Single(c => c.Label == "Plane");
+        Assert.Equal(ConstructionNodeKind.Parameter, plane.Kind);
+        Assert.Equal(PlaneRef.WorldXY.Descriptor, plane.Detail);
     }
 
     [Fact]
