@@ -128,9 +128,31 @@ public sealed class FeatureHistory
                 continue;
             }
 
+            // Declared geometry inputs resolve BEFORE Apply, against the same context, so
+            // a broken reference is a named validation failure rather than an exception
+            // from deep inside the operation — and Apply reuses the resolution.
+            var context = new FeatureContext(body);
+            IReadOnlyList<string> inputFailures;
             try
             {
-                var output = feature.Apply(new FeatureContext(body));
+                inputFailures = feature.ValidateInputs(context);
+            }
+            catch (Exception exception)
+            {
+                inputFailures = [$"{exception.GetType().Name}: {exception.Message}"];
+            }
+            if (inputFailures.Count > 0)
+            {
+                _cache[i] = null;
+                statuses.Add(new FeatureStatus(feature, name, FeatureOutcome.Failed,
+                    string.Join("; ", inputFailures), stopwatch.Elapsed));
+                failed = true;
+                continue;
+            }
+
+            try
+            {
+                var output = feature.Apply(context);
                 _cache[i] = (key, output);
                 body = output;
                 chain = key;
@@ -197,6 +219,10 @@ public sealed class FeatureHistory
                     Vector2d v => (object)new[] { v.X, v.Y },
                     Vector3d v => new[] { v.X, v.Y, v.Z },
                     Enum e => e.ToString(),
+                    // Descriptor in, descriptor out: a declarative reference round-trips,
+                    // and a lambda-backed one writes its opaque marker (which LoadParameters
+                    // then declines with a warning rather than rebuilding something wrong).
+                    GeometryRef reference => reference.Descriptor,
                     var other => other,
                 };
             }
@@ -265,6 +291,9 @@ public sealed class FeatureHistory
             return new Vector2d(element[0].GetDouble(), element[1].GetDouble());
         if (type == typeof(Vector3d))
             return new Vector3d(element[0].GetDouble(), element[1].GetDouble(), element[2].GetDouble());
+        if (typeof(GeometryRef).IsAssignableFrom(type))
+            return GeometryRef.Parse(element.GetString()
+                ?? throw new FormatException("geometry references are descriptor strings"), type);
         throw new FormatException($"unsupported parameter type {type.Name}");
     }
 }

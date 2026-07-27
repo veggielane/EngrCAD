@@ -18,6 +18,17 @@ public sealed class ParamAttribute : Attribute
     public string? Description { get; set; }
 }
 
+/// <summary>
+/// Marks a geometry input that is handed to a <em>deferred</em> selector — one the
+/// <see cref="Shape"/> graph resolves later, at lowering time (the rim operations'
+/// face queries). Up-front validation skips it on purpose: resolving it early would
+/// force a B-Rep lowering that regeneration otherwise never pays for, and the deferred
+/// resolution already names the input when it fails (see
+/// <c>FaceSetRef.AsSelector</c>). Cache-key and serialization behaviour are unaffected.
+/// </summary>
+[AttributeUsage(AttributeTargets.Property)]
+public sealed class DeferredInputAttribute : Attribute;
+
 /// <summary>Metadata + current value of one feature parameter.</summary>
 public sealed record ParamInfo(
     string Name, Type Type, object? Value,
@@ -33,6 +44,7 @@ public sealed record ParamInfo(
 public abstract class Feature
 {
     private static readonly ConcurrentDictionary<Type, PropertyInfo[]> ParamProperties = new();
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> GeometryInputProperties = new();
 
     private readonly string? _name;
 
@@ -111,6 +123,40 @@ public abstract class Feature
         return violations;
     }
 
+    /// <summary>Public properties whose type is a <see cref="GeometryRef"/> and which are
+    /// not <see cref="DeferredInputAttribute">deferred</see> — the inputs up-front
+    /// validation resolves.</summary>
+    internal static PropertyInfo[] GeometryInputsOf(Type type) =>
+        GeometryInputProperties.GetOrAdd(type, t =>
+            [.. t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                .Where(p => p.CanRead
+                    && typeof(GeometryRef).IsAssignableFrom(p.PropertyType)
+                    && p.GetCustomAttribute<DeferredInputAttribute>() is null)]);
+
+    /// <summary>
+    /// Resolves every declared geometry input against <paramref name="context"/> BEFORE
+    /// <see cref="Apply"/> runs, returning one message per input that could not be
+    /// resolved (empty = valid). Resolution is all-or-nothing: the feature does not run
+    /// unless every input answered, and each resolution is cached on the context, so
+    /// <c>Apply</c> reuses it rather than querying the body a second time.
+    ///
+    /// <para>Override to add checks of your own; call <c>base.ValidateInputs(context)</c>
+    /// first so the declared references are still resolved (and cached).</para>
+    /// </summary>
+    public virtual IReadOnlyList<string> ValidateInputs(FeatureContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        List<string>? failures = null;
+        foreach (var property in GeometryInputsOf(GetType()))
+        {
+            if (property.GetValue(this) is not GeometryRef reference)
+                continue;
+            if (!context.TryResolveInput(reference, property.Name, out string? error))
+                (failures ??= []).Add(error!);
+        }
+        return failures ?? (IReadOnlyList<string>)[];
+    }
+
     /// <summary>One-off feature from a lambda (no declared parameters — a fresh
     /// instance per history build, so it re-runs whenever upstream changes).</summary>
     public static Feature FromFunc(string name, Func<FeatureContext, Shape> apply) =>
@@ -127,6 +173,7 @@ public abstract class Feature
 /// conveniences.</summary>
 public sealed class FeatureContext
 {
+    private readonly Dictionary<GeometryRef, (string Name, object? Value, string? Error)> _resolved = new();
     private BrepSolid? _lowered;
 
     public Shape? Body { get; }
@@ -139,17 +186,69 @@ public sealed class FeatureContext
     public BrepSolid Lowered => _lowered ??= (Body
         ?? throw new InvalidOperationException("No body exists yet — this is the first feature.")).ToBrep();
 
-    /// <summary>A sketch plane on the highest +Z planar face (drilling/sketching on top).</summary>
-    public SketchPlane TopPlane
+    /// <summary>A sketch plane on the highest +Z planar face (drilling/sketching on top) —
+    /// <see cref="PlaneRef.TopPlane"/> resolved against this context, and the same
+    /// world-axis-aligned origin convention it has always had.</summary>
+    public SketchPlane TopPlane => PlaneRef.TopPlane.Resolve(this, nameof(TopPlane));
+
+    /// <summary>
+    /// Resolves a geometry reference against this context, computing it at most once per
+    /// context (and replaying a failure verbatim). The cache is keyed on the reference
+    /// INSTANCE and lives only as long as this context — a reference never memoizes a
+    /// resolution across regenerations, which is what makes selector-based references
+    /// track an edited model.
+    /// </summary>
+    internal object ResolveInput(GeometryRef reference, string? inputName)
     {
-        get
+        if (_resolved.TryGetValue(reference, out var entry))
         {
-            var top = Lowered.PlanarFacesWithNormal(Vector3d.UnitZ)
-                .OrderByDescending(f => { f.IsPlanar(out var origin, out _); return origin.Z; })
-                .FirstOrDefault()
-                ?? throw new InvalidOperationException("The body has no upward-facing planar face.");
-            top.IsPlanar(out var faceOrigin, out _);
-            return SketchPlane.At((0, 0, faceOrigin.Z), Vector3d.UnitX, Vector3d.UnitY);
+            return entry.Error is null
+                ? entry.Value!
+                : throw new GeometryInputException(entry.Error);
         }
+
+        string name = inputName ?? "geometry input";
+        var value = Resolve(reference, name);
+        _resolved[reference] = (name, value, null);
+        return value;
+    }
+
+    /// <summary>Resolve-and-remember for up-front validation: a failure becomes a message
+    /// (cached, so <c>Apply</c> cannot accidentally retry it) instead of an exception.</summary>
+    internal bool TryResolveInput(GeometryRef reference, string inputName, out string? error)
+    {
+        if (_resolved.TryGetValue(reference, out var entry))
+        {
+            error = entry.Error;
+            return error is null;
+        }
+
+        try
+        {
+            _resolved[reference] = (inputName, Resolve(reference, inputName), null);
+            error = null;
+            return true;
+        }
+        catch (Exception exception)
+        {
+            error = exception is GeometryInputException
+                ? exception.Message
+                : $"{inputName}: {exception.GetType().Name}: {exception.Message}";
+            _resolved[reference] = (inputName, null, error);
+            return false;
+        }
+    }
+
+    /// <summary>The body is lowered only when the reference actually needs it — an
+    /// explicit plane or axis resolves before any geometry exists, and a feature that
+    /// declares none never pays for a lowering at all.</summary>
+    private object Resolve(GeometryRef reference, string inputName)
+    {
+        if (!reference.RequiresBody)
+            return reference.ResolveAgainst(null, inputName);
+        if (Body is null)
+            throw new GeometryInputException(
+                $"{inputName}: expected {reference.Subject}, but no body exists yet — this is the first feature.");
+        return reference.ResolveAgainst(Lowered, inputName);
     }
 }
