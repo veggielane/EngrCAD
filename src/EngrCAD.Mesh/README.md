@@ -368,8 +368,9 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   every pass), and projection is what undoes it, so the remesh changes the tessellation and
   leaves the shape. `MeshProjectionTarget` is a BVH over a **snapshot** of the target's
   triangles (the mesh being remeshed is mutating underneath) plus the exact closest point on
-  the winning triangle (Ericson's Voronoi-region form: six barycentric sign tests, no
-  tolerance anywhere); queries are allocation-free through `Bvh.Nearest<TMetric>`. The
+  the winning triangle (Core's `Distance3d.ClosestPointOnTriangle` — Ericson's
+  Voronoi-region form: six barycentric sign tests, no tolerance anywhere); queries are
+  allocation-free through `Bvh.Nearest<TMetric>`. The
   interface lives here so `EngrCAD.Mesh` needs no dependency on the implicit engine —
   an SDF-backed target is a few lines in a consumer (`p − d(p)·∇d(p)`).
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional

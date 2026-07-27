@@ -76,7 +76,7 @@ public sealed class MeshProjectionTarget : IProjectionTarget
         var metric = new TriangleDistance(_positions, _triangles, point);
         if (!_bvh.Nearest(point, ref metric, out int triangle, out _))
             return point;
-        return ClosestPointOnTriangle(
+        return Distance3d.ClosestPointOnTriangle(
             point,
             _positions[_triangles[3 * triangle]],
             _positions[_triangles[3 * triangle + 1]],
@@ -87,67 +87,12 @@ public sealed class MeshProjectionTarget : IProjectionTarget
     {
         public double DistanceTo(int item)
         {
-            var closest = ClosestPointOnTriangle(
+            var closest = Distance3d.ClosestPointOnTriangle(
                 point,
                 positions[triangles[3 * item]],
                 positions[triangles[3 * item + 1]],
                 positions[triangles[3 * item + 2]]);
             return (closest - point).Length;
         }
-    }
-
-    /// <summary>
-    /// Closest point of triangle <c>abc</c> to <paramref name="p"/> — Ericson's Voronoi-region
-    /// form (Real-Time Collision Detection §5.1.5): six barycentric sign tests locate the
-    /// feature (vertex, edge or interior) and the answer is exact for that feature, with no
-    /// tolerance anywhere. Degenerate (zero-area) triangles fall out through the edge cases.
-    /// </summary>
-    internal static Vector3d ClosestPointOnTriangle(in Vector3d p, in Vector3d a, in Vector3d b, in Vector3d c)
-    {
-        var ab = b - a;
-        var ac = c - a;
-        var ap = p - a;
-        double d1 = ab.Dot(ap), d2 = ac.Dot(ap);
-        if (d1 <= 0 && d2 <= 0)
-            return a;
-
-        var bp = p - b;
-        double d3 = ab.Dot(bp), d4 = ac.Dot(bp);
-        if (d3 >= 0 && d4 <= d3)
-            return b;
-
-        double vc = d1 * d4 - d3 * d2;
-        if (vc <= 0 && d1 >= 0 && d3 <= 0)
-        {
-            double denom = d1 - d3;
-            // Exact-zero division guard (epsilon ladder: algorithmic tier) — a zero
-            // denominator means a and b coincide, so a is the answer.
-            return denom == 0 ? a : a + ab * (d1 / denom);
-        }
-
-        var cp = p - c;
-        double d5 = ab.Dot(cp), d6 = ac.Dot(cp);
-        if (d6 >= 0 && d5 <= d6)
-            return c;
-
-        double vb = d5 * d2 - d1 * d6;
-        if (vb <= 0 && d2 >= 0 && d6 <= 0)
-        {
-            double denom = d2 - d6;
-            return denom == 0 ? a : a + ac * (d2 / denom);
-        }
-
-        double va = d3 * d6 - d5 * d4;
-        if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0)
-        {
-            double denom = d4 - d3 + (d5 - d6);
-            return denom == 0 ? b : b + (c - b) * ((d4 - d3) / denom);
-        }
-
-        double sum = va + vb + vc;
-        if (sum == 0)
-            return a; // fully degenerate triangle
-        double inv = 1.0 / sum;
-        return a + ab * (vb * inv) + ac * (vc * inv);
     }
 }

@@ -202,6 +202,20 @@ concerns.
   `SplitEdge` only ever SHRINKS an edge, so a stale entry refers to a box containing the
   real one — over-approximation, never a miss; and nothing below `MinIndexedEdges` (256)
   builds an index at all, so sketch-scale arrangements are untouched.
+- **`Distance3d`** — closest-point queries against 3D primitives, in terms of plain points
+  so every engine can call them. `ClosestPointOnTriangle(p, a, b, c)` is Ericson's
+  Voronoi-region form (Real-Time Collision Detection §5.1.5): six barycentric sign tests
+  locate the feature and the answer is exact for it, with **no tolerance anywhere** — the
+  only comparisons against a constant are exact-zero division guards (the epsilon ladder's
+  algorithmic tier), which is what keeps a collapsed or sliver triangle returning a point
+  on itself rather than a NaN. The `out TriangleRegion` overload also reports *which*
+  feature (vertex, edge, interior) won, because a signed distance field picking the
+  angle-weighted pseudonormal of the closest feature cannot reconstruct that from the point
+  alone; the plain overload delegates to it, so the two can never disagree.
+  `DistanceSquaredToTriangle` is the form branch-and-bound nearest queries want. This lives
+  here because it had been written twice — privately in EngrCAD.Mesh's
+  `MeshProjectionTarget` and again in Interop's `MeshSdf` — and the two copies had already
+  drifted (only one carried the degeneracy guards).
 - **Min-bounding fits** (`Fitting2d`, `Fitting3d`; g3: ContMinBox2/ContMinCircle2/
   ContOrientedBox3/OrthogonalPlaneFit3):
   - `Fitting2d.MinAreaBox` → `OrientedBox2d` — minimum-area oriented box via the

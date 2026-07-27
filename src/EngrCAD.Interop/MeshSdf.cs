@@ -144,15 +144,15 @@ public sealed class MeshSdf : Sdf
         if (_winding is not null)
             return _winding.FastWindingNumber(p) > 0.5 ? -distance : distance;
 
-        var (closest, region) = ClosestPoint(triangle, p);
+        var closest = ClosestPoint(triangle, p, out var region);
         var pseudonormal = region switch
         {
-            Region.Face => _faceNormals![triangle],
-            Region.EdgeAb => _edgeNormals![triangle * 3],
-            Region.EdgeBc => _edgeNormals![triangle * 3 + 1],
-            Region.EdgeCa => _edgeNormals![triangle * 3 + 2],
-            Region.VertexA => _vertexNormals![_vertexIds![triangle * 3]],
-            Region.VertexB => _vertexNormals![_vertexIds![triangle * 3 + 1]],
+            TriangleRegion.Face => _faceNormals![triangle],
+            TriangleRegion.EdgeAb => _edgeNormals![triangle * 3],
+            TriangleRegion.EdgeBc => _edgeNormals![triangle * 3 + 1],
+            TriangleRegion.EdgeCa => _edgeNormals![triangle * 3 + 2],
+            TriangleRegion.VertexA => _vertexNormals![_vertexIds![triangle * 3]],
+            TriangleRegion.VertexB => _vertexNormals![_vertexIds![triangle * 3 + 1]],
             _ => _vertexNormals![_vertexIds![triangle * 3 + 2]],
         };
         return (p - closest).Dot(pseudonormal) >= 0 ? distance : -distance;
@@ -162,60 +162,17 @@ public sealed class MeshSdf : Sdf
     private readonly struct TriangleDistance(MeshSdf sdf, Vector3d point) : IBvhDistance
     {
         public double DistanceTo(int item) =>
-            Math.Sqrt(sdf.ClosestPoint(item, point).Point.DistanceSquaredTo(point));
+            Math.Sqrt(sdf.ClosestPoint(item, point, out _).DistanceSquaredTo(point));
     }
 
-    private enum Region
-    {
-        Face,
-        VertexA,
-        VertexB,
-        VertexC,
-        EdgeAb,
-        EdgeBc,
-        EdgeCa,
-    }
-
-    /// <summary>Closest point on a triangle and the feature it lies on (Ericson, RTCD §5.1.5).</summary>
-    private (Vector3d Point, Region Region) ClosestPoint(int triangle, in Vector3d p)
-    {
-        var a = _cornerA[triangle];
-        var b = _cornerB[triangle];
-        var c = _cornerC[triangle];
-
-        var ab = b - a;
-        var ac = c - a;
-        var ap = p - a;
-        double d1 = ab.Dot(ap);
-        double d2 = ac.Dot(ap);
-        if (d1 <= 0 && d2 <= 0)
-            return (a, Region.VertexA);
-
-        var bp = p - b;
-        double d3 = ab.Dot(bp);
-        double d4 = ac.Dot(bp);
-        if (d3 >= 0 && d4 <= d3)
-            return (b, Region.VertexB);
-
-        double vc = d1 * d4 - d3 * d2;
-        if (vc <= 0 && d1 >= 0 && d3 <= 0)
-            return (a + ab * (d1 / (d1 - d3)), Region.EdgeAb);
-
-        var cp = p - c;
-        double d5 = ab.Dot(cp);
-        double d6 = ac.Dot(cp);
-        if (d6 >= 0 && d5 <= d6)
-            return (c, Region.VertexC);
-
-        double vb = d5 * d2 - d1 * d6;
-        if (vb <= 0 && d2 >= 0 && d6 <= 0)
-            return (a + ac * (d2 / (d2 - d6)), Region.EdgeCa);
-
-        double va = d3 * d6 - d5 * d4;
-        if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0)
-            return (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))), Region.EdgeBc);
-
-        double denominator = 1.0 / (va + vb + vc);
-        return (a + ab * (vb * denominator) + ac * (vc * denominator), Region.Face);
-    }
+    /// <summary>
+    /// Closest point on triangle <paramref name="triangle"/> and the feature it lies on
+    /// (<see cref="Distance3d.ClosestPointOnTriangle(in Vector3d, in Vector3d, in Vector3d, in Vector3d, out TriangleRegion)"/>).
+    /// The region is not incidental here: the sign comes from the angle-weighted
+    /// pseudonormal of whichever feature is closest, so face, edge and vertex hits select
+    /// different normals.
+    /// </summary>
+    private Vector3d ClosestPoint(int triangle, in Vector3d p, out TriangleRegion region) =>
+        Distance3d.ClosestPointOnTriangle(
+            p, _cornerA[triangle], _cornerB[triangle], _cornerC[triangle], out region);
 }

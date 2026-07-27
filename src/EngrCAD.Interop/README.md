@@ -233,7 +233,9 @@ engines.
 (The `Scene`/`Part` document model lives in `EngrCAD.Modeling`, which layers on top of
 this project's conversions.)
 - **Mesh → Implicit**: `MeshSdf(mesh)` — signed distance to a closed manifold mesh:
-  branch-and-bound nearest-triangle search over a BVH (Ericson closest-point-on-triangle);
+  branch-and-bound nearest-triangle search over a BVH (Core's
+  `Distance3d.ClosestPointOnTriangle`, whose `out TriangleRegion` exists for this caller —
+  the sign needs to know which feature won, not just where it is);
   sign from the angle-weighted pseudonormal of the closest feature (Bærentzen–Aanæs),
   exact for watertight meshes even at edges and vertices. `Evaluate` is allocation-free
   in steady state — the nearest search goes through `Bvh.Nearest<TMetric>` with a struct

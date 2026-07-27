@@ -36,9 +36,6 @@ deleted; the imprint boolean is the only one). Remaining:
 - [ ] **Region-restricted remeshing** — remesh a face selection in place instead of the
   whole mesh (g3's `RegionRemesher`). `FillSmoothed` works around this by remeshing a
   standalone patch and stitching; overlaps with the region-refinement item above.
-- [ ] **Move `ClosestPointOnTriangle` into EngrCAD.Core** — Ericson's exact
-  Voronoi-region form is private in `MeshProjectionTarget`, and Interop's `MeshSdf`
-  almost certainly has a second copy. It belongs beside `Fitting3d`.
 - [ ] **Decide `HoleFillOptions.Fallback`'s default** — it ships as `None` to keep
   `FillAll`'s landed "report what you cannot fill well" contract; `Minimal` is arguably
   the better product default for `MeshRepair.AutoRepair`, at the cost of three tests that
