@@ -75,6 +75,23 @@ public static class StandardHoles
     /// <summary>Coarse-thread tap pilot hole (threads themselves are not modeled).</summary>
     public static HoleSpec Tapped(double size) => HoleSpec.Simple(Row(size).TapDrill);
 
+    /// <summary>
+    /// The general-purpose twist drill's included point angle (118°), for
+    /// <see cref="HoleSpec.WithTipAngle"/>.
+    /// </summary>
+    /// <remarks>
+    /// These are offered as named values rather than as defaults on the factories above.
+    /// A clearance or counterbored hole is normally a THROUGH hole, where the point never
+    /// exists in the finished part, and quietly deepening every existing design's tools by
+    /// a tip length is not a change a catalogue should make on the caller's behalf. Reach
+    /// for them where the point is real — blind tapped and pilot holes.
+    /// </remarks>
+    public const double TwistDrillPoint = 118;
+
+    /// <summary>The split-point / harder-material drill's included point angle (135°),
+    /// for <see cref="HoleSpec.WithTipAngle"/>.</summary>
+    public const double SplitDrillPoint = 135;
+
     /// <summary>Pilot hole for a Tappex Trisert® threaded insert. ⚠ Verify diameters
     /// against the current Tappex datasheet for your insert type and material.</summary>
     public static HoleSpec Trisert(double size) => HoleSpec.Simple(Row(size).TrisertDiameter);

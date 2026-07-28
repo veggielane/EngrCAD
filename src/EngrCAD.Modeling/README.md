@@ -426,8 +426,31 @@ DIN 974-style counterbores for socket cap screws, 90° countersinks for ISO 1064
 flat-heads, coarse tap pilot holes (`Tapped` — pilot only; `ThreadedHole` below models
 the thread itself), and Tappex
 Trisert® insert pilots (`Trisert`/`TrisertMinimumDepth` — ⚠ verify the insert table
-against the current Tappex datasheet before production use). Blind holes get flat
-bottoms; drill-tip angles are future work.
+against the current Tappex datasheet before production use).
+
+**Drill points.** `spec.WithTipAngle(includedAngleDegrees)` gives a blind hole the
+conical bottom a real twist drill leaves (`StandardHoles.TwistDrillPoint` = 118°,
+`SplitDrillPoint` = 135°). It is exact everywhere — the tool stays ONE axis-touching
+revolved sketch, the cone being the profile run from the bore radius down to the apex on
+the axis, the same machinery a countersink already uses — and the tessellated result is
+an n-gon prism plus an n-gon pyramid, matching the discrete truth as an identity at
+every density.
+
+- **Depth is measured to the SHOULDER**, the deepest full-diameter point, with the tip
+  reaching `(diameter / 2) / tan(angle / 2)` further. That is the drawing convention
+  (ASME Y14.5 / ISO 129 dimension a blind hole excluding its point), and it makes adding
+  a tip strictly additive: the same `depth` removes the same cylinder either way, plus
+  the cone. `spec.TipLength` reports the overhang, and `HoleCallout` appends
+  " ×118° TIP" after the depth.
+- **The default stays flat**, which is what a model usually wants for a through hole or a
+  reamed/bored feature, and keeps every existing design's tools at exactly the reach they
+  had. The standard angles are offered as named constants rather than as
+  `StandardHoles` defaults for the same reason — a clearance or counterbored hole is
+  normally a through hole, where the point never exists in the finished part.
+- The tip is checked like the flat bottom is: an APEX landing exactly on a body face is
+  rejected at lowering (a point tangency) just as a coplanar flat bottom is, and the
+  cross-plane tool test reads the silhouette, so it sees a point that reaches into an
+  opposing bore the shoulder alone would clear.
 
 **Holes are validated against each other before any geometry is built**, because two
 cutting tools that overlap or touch are degenerate boolean input and fail deep inside

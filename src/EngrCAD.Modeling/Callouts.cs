@@ -19,8 +19,14 @@ public static class HoleCallout
     /// The callout text for a hole drilled with <paramref name="spec"/> to
     /// <paramref name="depth"/>: "&#x2300;D &#x21A7;depth", followed by
     /// "&#x2334;&#x2300;D &#x21A7;d" for counterbores or
-    /// "&#x2335;&#x2300;D &#x00D7;angle&#x00B0;" for countersinks.
+    /// "&#x2335;&#x2300;D &#x00D7;angle&#x00B0;" for countersinks, and
+    /// " &#x00D7;angle&#x00B0; TIP" when the hole carries a drill point.
     /// </summary>
+    /// <remarks>
+    /// The depth is quoted as given, i.e. to the SHOULDER, which is what the tip
+    /// annotation means on a drawing: the point reaches further and is not dimensioned
+    /// (see <see cref="HoleSpec.WithTipAngle"/>).
+    /// </remarks>
     public static string Text(HoleSpec spec, double depth)
     {
         ArgumentNullException.ThrowIfNull(spec);
@@ -28,6 +34,8 @@ public static class HoleCallout
             throw new ArgumentOutOfRangeException(nameof(depth));
         string callout = "\u2300" + Annotation.Format(spec.Diameter)
             + " \u21A7" + Annotation.Format(depth);
+        if (spec.TipAngleDegrees is { } tip)
+            callout += " \u00D7" + Annotation.Format(tip) + "\u00B0 TIP";
         if (spec.IsCounterbore)
             callout += " \u2334\u2300" + Annotation.Format(spec.FeatureDiameter)
                 + " \u21A7" + Annotation.Format(spec.CounterboreDepth);

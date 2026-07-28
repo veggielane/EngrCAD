@@ -948,20 +948,31 @@ internal static class ShapeCompiler
         var effective = m * drill.PlaneMatrix;
         var drillNormal = effective.TransformVector((0, 0, 1)).Normalized();
 
+        // The shoulder plane (the deepest full-diameter point, always at −Depth) and, on a
+        // tipped tool, the drill point's apex. A tool that ENDS on a face plane is
+        // degenerate whichever of the two lands there: the shoulder makes the bore wall
+        // and the face coincide along a circle, the apex touches it at a single point.
+        double deepest = drill.ToolSilhouette[0].Axial;
+        Span<double> ends = deepest < -drill.Depth ? [-drill.Depth, deepest] : [-drill.Depth];
+
         foreach (var point in drill.Points)
         {
-            var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, -drill.Depth));
-            foreach (var face in body.Faces)
+            foreach (double end in ends)
             {
-                if (!face.IsPlanar(out var origin, out var normal))
-                    continue;
-                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < CoplanarFaceCosine)
-                    continue;
-                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= CoplanarFaceDistance)
-                    throw new ArgumentException(
-                        $"Drill depth {drill.Depth:g6} puts the tool's flat bottom coplanar with a planar " +
-                        $"face of the body (hole at {point}); increase depth so the tool clears the far " +
-                        "face, or reduce it for a blind hole.");
+                var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, end));
+                foreach (var face in body.Faces)
+                {
+                    if (!face.IsPlanar(out var origin, out var normal))
+                        continue;
+                    if (Math.Abs(normal.Normalized().Dot(drillNormal)) < CoplanarFaceCosine)
+                        continue;
+                    if (Math.Abs(drillNormal.Dot(origin - bottom)) <= CoplanarFaceDistance)
+                        throw new ArgumentException(
+                            $"Drill depth {drill.Depth:g6} puts the tool's " +
+                            (end < -drill.Depth ? "drill point" : "bottom") +
+                            $" coplanar with a planar face of the body (hole at {point}); increase depth " +
+                            "so the tool clears the far face, or reduce it for a blind hole.");
+                }
             }
         }
     }

@@ -29,6 +29,40 @@ with a flat bottom. The tools overshoot the surface so the booleans never see
 coplanar faces, and the countersink cone continues its slope past the surface so the
 surface diameter stays exact.
 
+## Drill points
+
+A real twist drill leaves a cone at the bottom of a blind hole.
+`spec.WithTipAngle(degrees)` models it — `StandardHoles.TwistDrillPoint` is the
+general-purpose 118°, `SplitDrillPoint` the 135° of split-point drills:
+
+```csharp render:holes-tip
+var top = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
+var flat = HoleSpec.Simple(6);
+var drilled = flat.WithTipAngle(StandardHoles.TwistDrillPoint);
+
+var plate = Shape.Box(60, 30, 12)
+    .Drill(flat, [new(-15, 0)], depth: 7, top)       // flat bottom: reamed or bored
+    .Drill(drilled, [new(15, 0)], depth: 7, top);    // 118 degrees: as drilled
+
+// Both bores are 7 mm deep to the SHOULDER; the point reaches further.
+var sectioned = Shape.From(plate.ToImplicit())
+    - Shape.Box(62, 32, 16).Translate(0, 16, 0);
+
+var scene = new Scene(new MeshQuality { SdfResolution = 160 });
+scene.Add(new Part("flat and drilled bottoms", sectioned, Palette.Copper,
+    Matrix4d.CreateTranslation((0, 0, 6))));
+```
+
+![A sectioned plate showing a flat-bottomed bore beside a drill-pointed one](images/holes-tip.png)
+
+**Depth is measured to the shoulder** — the deepest full-diameter point — with the tip
+reaching `(diameter / 2) / tan(angle / 2)` further, which is how a drawing dimensions a
+blind hole. So adding a point is strictly additive: the same `depth` removes the same
+cylinder either way, plus the cone. `spec.TipLength` reports the overhang, which is the
+number to check against the far face — a blind depth that cleared it may not once the
+point is there. The default stays flat, so existing designs are unchanged and a through
+hole (where the point never survives into the finished part) needs nothing.
+
 ## The standards catalog
 
 `StandardHoles` (metric, mm) supplies ISO 273 clearance fits, DIN 974-style
