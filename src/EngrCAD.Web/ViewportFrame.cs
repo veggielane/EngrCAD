@@ -69,6 +69,16 @@ public readonly record struct ViewportContours(
     string NegativeKey, int NegativeVertexCount);
 
 /// <summary>
+/// The annotation overlay's upload: billboarded line segments built by the shared
+/// <c>AnnotationGeometry.Build</c> (the same dimension anatomy, stroke-font text and
+/// screen-constant sizing the desktop layer draws), re-uploaded by the component only
+/// when the <c>AnnotationCamera</c> value or the item set changes.
+/// </summary>
+/// <param name="Key">Upload key of the annotation line vertices.</param>
+/// <param name="VertexCount">Vertices in that upload (segments x 2).</param>
+public readonly record struct ViewportAnnotations(string Key, int VertexCount);
+
+/// <summary>
 /// The view cube's frame inputs: the canvas size (CSS pixels — the region maths is in
 /// DIPs, scaled to framebuffer pixels by the frame's <c>pixelScale</c>) and the hovered
 /// direction, if any. The geometry itself is the shared <c>ViewCubeGeometry</c> arrays,
@@ -203,6 +213,10 @@ public static class ViewportFrame
     /// <param name="cube">The view cube, or null. Drawn last of all (the desktop rule:
     /// the cube is window chrome sitting on top of everything), into its own top-right
     /// sub-viewport with the depth buffer cleared first.</param>
+    /// <param name="annotations">The annotation overlay, or null. Drawn depth-off
+    /// (always-on-top v1) in the shared <c>AnnotationGeometry.Color</c>, never
+    /// section-clipped — annotations are documentation, not model geometry — after the
+    /// isolines and before the cube, the desktop pass order.</param>
     public static FrameDescription Build(
         IReadOnlyList<ViewportInstance> instances,
         CameraState camera,
@@ -216,7 +230,8 @@ public static class ViewportFrame
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         ViewportContours? contours = null,
-        ViewportCube? cube = null)
+        ViewportCube? cube = null,
+        ViewportAnnotations? annotations = null)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -429,7 +444,32 @@ public static class ViewportFrame
                     first: 0, count: iso.ZeroVertexCount, unclip: true));
         }
 
-        // Pass 6: the view cube, last of all — it is window chrome and sits on top of
+        // Pass 6: the annotation overlay — depth test OFF (always-on-top v1, so
+        // dimensions read over the model from any angle) and never section-clipped
+        // (documentation, not model geometry). The desktop draws it at the same point:
+        // after the scene and its overlays, before the view cube.
+        if (annotations is { VertexCount: > 0 } pmi)
+        {
+            var uniforms = new Dictionary<string, object>
+            {
+                ["uModel"] = ColumnMajor(Matrix4d.Identity),
+                ["uColor"] = Rgb(AnnotationGeometry.Color),
+            };
+            if (sectionActive)
+                uniforms["uSectionEnabled"] = 0f;
+            draws.Add(new DrawCall
+            {
+                Program = LineProgram,
+                Geometry = pmi.Key,
+                First = 0,
+                Count = pmi.VertexCount,
+                DepthTest = false,
+                Cull = false,
+                Uniforms = uniforms,
+            });
+        }
+
+        // Pass 7: the view cube, last of all — it is window chrome and sits on top of
         // everything, exactly as the desktop draws it at the end of its render pass.
         if (cube is { } widget)
             AppendViewCube(draws, widget, camera, pixelScale, sectionActive);

@@ -24,6 +24,8 @@
                 <button type="button" style="@ButtonStyle(false)" title="Nudge the plane up the axis"
                         @onclick="() => NudgeSectionAsync(+1)">+</button>
             }
+            <button type="button" style="@ButtonStyle(_annotations)" title="Show 3D annotations (PMI)"
+                    @onclick="() => _annotations = !_annotations">Annot</button>
         </div>
     }
     @if (Tabs.Count > 1)
@@ -69,7 +71,7 @@
                              Scene="Scene" TabIndex="_tabIndex"
                              Furniture="Furniture" ViewStyle="EffectiveStyle" Picking="Picking"
                              SectionEnabled="_section" SectionAxis="_sectionAxis"
-                             SectionOffset="_sectionOffset"
+                             SectionOffset="_sectionOffset" ShowAnnotations="_annotations"
                              Width="100%" Height="100%"
                              SelectionChanged="OnViewportSelectionChanged"
                              PartFailed="OnPartFailed"
@@ -159,6 +161,7 @@
     private bool _section;
     private SectionAxis _sectionAxis = SectionAxis.Z;
     private double? _sectionOffset;
+    private bool _annotations = true;   // the desktop Annot toggle's default
     private ViewStyle? _styleOverride;
 
     private ViewStyle EffectiveStyle => _styleOverride ?? ViewStyle;

@@ -92,6 +92,12 @@
     /// the nearest standard orientation on release, hovering brightens the target.</summary>
     [Parameter] public bool ShowViewCube { get; set; } = true;
 
+    /// <summary>3D annotations (PMI) — dimensions, leaders, datum labels resolved from
+    /// each part's own <c>Part.Annotations</c> (on, the desktop's Annot default).
+    /// Rendering is the shared <c>AnnotationGeometry</c>: billboarded, screen-constant,
+    /// always-on-top, never section-clipped. Hiding a part hides its annotations.</summary>
+    [Parameter] public bool ShowAnnotations { get; set; } = true;
+
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
@@ -150,6 +156,18 @@
     private Vector3d? _cubeHover;
     private bool _pressOnCube;
     private int _cameraAnimation;
+
+    // Annotation state: per-instance resolved items (collected once per load — the
+    // resolution rides Part.TryResolveAnnotations' cached lowering), the built
+    // segments, and the AnnotationCamera the build is valid for. Value equality on the
+    // camera is the rebuild key, the same rule the desktop AnnotationLayer keeps: an
+    // orbit rebuilds, a static camera never does.
+    private readonly List<(int Instance, AnnotationItem Item)> _annotationItems = [];
+    private readonly List<AnnotationItem> _annotationScratch = [];
+    private readonly List<(Vector3d A, Vector3d B)> _annotationSegments = [];
+    private AnnotationCamera _builtAnnotationCamera;
+    private bool _annotationsDirty = true;
+    private bool _shownAnnotations = true;
     // Parts whose implicit lowering failed and was already reported (the failure is
     // cached on the Part, so without this every rebuild repeats the status line —
     // the same dedupe the desktop SectionContourRenderer keeps).
@@ -268,6 +286,7 @@
             return;
         _drawn[index] = _drawn[index] with { Visible = visible };
         _pick[index] = _pick[index] with { Visible = visible };
+        _annotationsDirty = true;       // hiding a part hides its annotations
         await RebuildContoursAsync();   // a hidden part's isolines go with it
         await PumpAsync();
     }
@@ -292,6 +311,7 @@
         }
         if (!changed)
             return;
+        _annotationsDirty = true;
         await RebuildContoursAsync();
         await PumpAsync();
     }
@@ -547,6 +567,11 @@
             await RebuildContoursAsync();
             redraw = true;
         }
+        if (_shownAnnotations != ShowAnnotations)
+        {
+            _shownAnnotations = ShowAnnotations;
+            redraw = true;
+        }
         if (redraw)
             await PumpAsync();
     }
@@ -637,6 +662,8 @@
         _drawnInstances.Clear();
         _pick.Clear();
         _contours = null;
+        _annotationItems.Clear();
+        _annotationsDirty = true;
         _bounds = Aabb.Empty;
         _gridSpacing = 0;
         _failed = false;
@@ -688,6 +715,24 @@
             _drawnInstances.Add(instance);
             _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
             _bounds = _bounds.Union(worldBounds);
+
+            // The part's own annotations, posed by the instance transform (assembly
+            // instances show their part's dimensions in place). Resolution rides the
+            // part's cached lowering; a broken selector becomes a status message, not
+            // a crash — the desktop's TryResolveAnnotations convention.
+            if (part.Annotations.Count > 0)
+            {
+                if (part.TryResolveAnnotations(out var resolved, out string? annotationError))
+                {
+                    foreach (var annotation in resolved)
+                        _annotationItems.Add((_drawn.Count - 1, new AnnotationItem(annotation, instance.World)));
+                    _annotationsDirty = true;
+                }
+                else if (annotationError is not null)
+                {
+                    await ReportAsync($"{part.Name}: annotations: {annotationError}");
+                }
+            }
 
             if (!_userMovedCamera)
                 _camera = ViewportFrame.DefaultCamera(_bounds);
@@ -876,11 +921,40 @@
             if (width <= 0 || height <= 0)
                 return;   // not laid out yet; the next request will find a real size
             _lastSize = (width, height);
+
+            // The annotation overlay: rebuilt (and re-uploaded) only when the
+            // AnnotationCamera VALUE or the item/visibility set changed — an orbit
+            // rebuilds, a static camera never does. Billboarding is CPU-side, so the
+            // upload is a few hundred small segments, well under one part draw.
+            ViewportAnnotations? annotations = null;
+            if (ShowAnnotations && _annotationItems.Count > 0)
+            {
+                var annotationCamera = AnnotationCamera.From(
+                    _camera, orthographic: false, height * pixelScale, pixelScale);
+                if (_annotationsDirty || annotationCamera != _builtAnnotationCamera)
+                {
+                    _annotationScratch.Clear();
+                    foreach (var (index, item) in _annotationItems)
+                    {
+                        if (index < _drawn.Count && _drawn[index].Visible)
+                            _annotationScratch.Add(item);
+                    }
+                    AnnotationGeometry.Build(_annotationSegments, _annotationScratch, annotationCamera);
+                    await gl.UploadLineVerticesAsync(
+                        "@annotations", RenderGeometry.SegmentVertices(_annotationSegments));
+                    _builtAnnotationCamera = annotationCamera;
+                    _annotationsDirty = false;
+                }
+                if (_annotationSegments.Count > 0)
+                    annotations = new ViewportAnnotations("@annotations", _annotationSegments.Count * 2);
+            }
+
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
                 _selected, _hovered,
                 sectionPlanes: ActiveSectionPlanes(), contours: _contours,
-                cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null));
+                cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null,
+                annotations: annotations));
         }
         catch (JSDisconnectedException)
         {
