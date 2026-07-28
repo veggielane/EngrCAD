@@ -93,6 +93,12 @@ public sealed class SketchRegion : IPlanarRegion
                 case SegmentKind.FullCircle:
                     CircleMinimum(x, y, distances, _a[s], _b[s], _c[s]);
                     break;
+                case SegmentKind.Arc:
+                    ArcMinimum(x, y, distances, s);
+                    break;
+                case SegmentKind.Cubic:
+                    CubicMinimum(x, y, distances, s);
+                    break;
                 default:
                     GeneralMinimum(x, y, distances, s);
                     break;
@@ -110,17 +116,26 @@ public sealed class SketchRegion : IPlanarRegion
 
     private enum SegmentKind : byte
     {
-        /// <summary>Anything whose own <c>Distance</c> is called through the abstraction
-        /// (partial arcs — <c>Atan2</c> has no bit-exact vector form — and béziers).</summary>
+        /// <summary>Anything whose own <c>Distance</c> is called through the abstraction —
+        /// today only the degenerate arcs the wedge test's preconditions exclude.</summary>
         General = 0,
         Line = 1,
         FullCircle = 2,
+        /// <summary>Partial arc: <see cref="ArcData"/>, wedge test plus a certainty band.</summary>
+        Arc = 3,
+        /// <summary>Cubic bézier: <see cref="CubicData"/>, sampled scan plus masked Newton.</summary>
+        Cubic = 4,
     }
 
     private SegmentKind[] _kinds = [];
     private double[] _a = [], _b = [], _c = [], _d = [], _e = [];
     private double[] _minX = [], _maxX = [], _minY = [], _maxY = [];
     private SketchSegment[] _general = [];
+    /// <summary>Index into <see cref="_arcs"/> / <see cref="_cubics"/> for segments of that
+    /// kind (the five flat <c>_a.._e</c> columns stop paying for themselves at thirteen).</summary>
+    private int[] _slot = [];
+    private ArcData[] _arcs = [];
+    private CubicData[] _cubics = [];
 
     /// <summary>
     /// Relative slack that makes the bounding-box reject provably conservative. The
@@ -146,6 +161,9 @@ public sealed class SketchRegion : IPlanarRegion
         _minY = new double[n];
         _maxY = new double[n];
         _general = new SketchSegment[n];
+        _slot = new int[n];
+        var arcs = new List<ArcData>();
+        var cubics = new List<CubicData>();
 
         for (int s = 0; s < n; s++)
         {
@@ -181,11 +199,24 @@ public sealed class SketchRegion : IPlanarRegion
                     _b[s] = arc.Center.Y;
                     _c[s] = arc.Radius;
                     break;
+                case ArcSeg arc when ArcData.TryBuild(arc, out var data):
+                    _kinds[s] = SegmentKind.Arc;
+                    _slot[s] = arcs.Count;
+                    arcs.Add(data);
+                    break;
+                case CubicSeg cubic:
+                    _kinds[s] = SegmentKind.Cubic;
+                    _slot[s] = cubics.Count;
+                    cubics.Add(new CubicData(cubic));
+                    break;
                 default:
                     _kinds[s] = SegmentKind.General;
                     break;
             }
         }
+
+        _arcs = [.. arcs];
+        _cubics = [.. cubics];
     }
 
     private double Distance(double px, double py)
@@ -200,6 +231,14 @@ public sealed class SketchRegion : IPlanarRegion
                     break;
                 case SegmentKind.FullCircle:
                     best = Math.Min(best, CircleDistance(px, py, _a[s], _b[s], _c[s]));
+                    break;
+                case SegmentKind.Arc:
+                    if (!Rejected(px, py, s, best))
+                        best = Math.Min(best, ArcDistance(px, py, _arcs[_slot[s]]));
+                    break;
+                case SegmentKind.Cubic:
+                    if (!Rejected(px, py, s, best))
+                        best = Math.Min(best, CubicDistance(px, py, _cubics[_slot[s]]));
                     break;
                 default:
                     if (!Rejected(px, py, s, best))
@@ -326,6 +365,475 @@ public sealed class SketchRegion : IPlanarRegion
             if (Rejected(x[i], y[i], s, best[i]))
                 continue;
             best[i] = Math.Min(best[i], segment.Distance(new Vector2d(x[i], y[i])));
+        }
+    }
+
+    /// <summary>True when every lane of a comparison mask is set.</summary>
+    private static bool AllSet(Vector<long> mask) => Vector.EqualsAll(mask, Vector<long>.AllBitsSet);
+
+    /// <summary>True when no lane of a comparison mask is set.</summary>
+    private static bool AllClear(Vector<long> mask) => Vector.EqualsAll(mask, Vector<long>.Zero);
+
+    /// <summary>
+    /// Lane-wise <see cref="Rejected"/>. Note the lane-wise kernels do not <em>skip</em>
+    /// rejected lanes — they compute them and then substitute +∞ before the min-fold, which
+    /// is what "skip" means to a running minimum. That is identity by construction rather
+    /// than by the reject's conservativeness argument, so the two paths cannot drift.
+    /// </summary>
+    private static Vector<long> RejectMask(
+        Vector<double> px, Vector<double> py, Vector<double> best,
+        Vector<double> minX, Vector<double> maxX, Vector<double> minY, Vector<double> maxY)
+    {
+        var zero = Vector<double>.Zero;
+        var gapX = Vector.Max(Vector.Max(minX - px, px - maxX), zero);
+        var gapY = Vector.Max(Vector.Max(minY - py, py - maxY), zero);
+        // A +∞ running best makes the right-hand side +∞, which no finite gap exceeds —
+        // exactly the scalar guard's early "not rejected".
+        return Vector.GreaterThan(
+            gapX * gapX + gapY * gapY, best * best * new Vector<double>(1 + RejectSlack));
+    }
+
+    // ------------------------------------------------------------------------ partial arcs
+
+    /// <summary>
+    /// Angular half-width of the band around either sweep boundary ray inside which the
+    /// lane-wise wedge test refuses to answer and hands the block to the scalar
+    /// <c>Atan2</c> path.
+    /// <para>
+    /// <b>Why a band and not a transcription.</b> The scalar decision is
+    /// <c>delta &lt;= span</c> over <c>delta = wrap(Atan2(oy, ox) − from)</c>; the lane-wise
+    /// one reads the <em>signs</em> of the two cross products c₀ = f × o and c₁ = g × o
+    /// against the wedge's boundary rays f and g. Both decide the same predicate — is this
+    /// direction inside the wedge — but by different arithmetic, so they can be made to
+    /// agree only where neither is near flipping. Since c₀ = |o|·sin(delta) and
+    /// c₁ = |o|·sin(delta − span), requiring |c₀| &gt; tol·|o| and |c₁| &gt; tol·|o| bounds
+    /// delta away from 0 and from span by ≈ tol radians (and, over-conservatively, from π
+    /// and span + π, where the combined test is insensitive anyway).
+    /// </para>
+    /// <para>
+    /// <b>Why 1e-9 is comfortable.</b> Scalar-side error in delta: <c>Atan2</c>'s own (a few
+    /// ulps of a result bounded by π, ≤ 1e-15), the subtraction <c>angle − from</c>
+    /// (≤ 1e-14 with |from| capped at <see cref="ArcData.AngleLimit"/>) and the reduction by
+    /// the <em>double</em> 2·PI rather than by real 2π (2.4e-16 per turn, ≤ 1e-14 over the
+    /// same cap; the <c>%</c> itself is exact). Lane-wise side: the cross products carry
+    /// ~4 ulps of |o|, so their sines are right to ~4e-16. Both are five orders inside the
+    /// band, so <b>outside it the two tests provably agree, and inside it the block is
+    /// recomputed scalar — the batch result is bit-identical for every input</b>. This is a
+    /// certainty guard in the same family as <see cref="RejectSlack"/>, not a tolerance on
+    /// the answer.
+    /// </para>
+    /// <para>
+    /// Radians are dimensionless, so an absolute constant is legitimate here (the same
+    /// reasoning the sketch builder's angular guards carry). And the inputs that most want
+    /// exactness land in the band by construction: a segment endpoint, shared bit-for-bit
+    /// with its neighbour, sits exactly on a boundary ray.
+    /// </para>
+    /// </summary>
+    private const double WedgeCertainty = 1e-9;
+
+    /// <summary>
+    /// A partial arc flattened for both the scalar transcription of <c>ArcSeg.Distance</c>
+    /// and its lane-wise form. <see cref="From"/>/<see cref="Span"/> reproduce
+    /// <c>ArcSeg.AngleInSweep</c> exactly; <see cref="Fx"/>…<see cref="Gy"/> are the two
+    /// boundary rays the wedge test reads instead. Precomputing the endpoints matters on its
+    /// own account: <c>ArcSeg.Start</c>/<c>End</c> are properties that each evaluate a
+    /// <c>Cos</c> and a <c>Sin</c>, so the out-of-sweep branch used to cost four
+    /// transcendentals per query.
+    /// </summary>
+    private sealed class ArcData
+    {
+        /// <summary>
+        /// Cap on |from| and |from + span|, which is what bounds the scalar path's
+        /// subtraction and modular-reduction error inside <see cref="WedgeCertainty"/>.
+        /// Sketch arc angles are <c>Atan2</c> results (|a| ≤ π) plus at most one sweep, so
+        /// nothing the builders produce comes near 64; an arc that did would simply stay on
+        /// the <see cref="SegmentKind.General"/> path.
+        /// </summary>
+        public const double AngleLimit = 64;
+
+        public readonly double Cx, Cy, Radius;
+        public readonly double Sx, Sy, Ex, Ey;
+        public readonly double From, Span;
+        public readonly double Fx, Fy, Gx, Gy;
+
+        /// <summary>Sweep wider than a half turn, which inverts the wedge test — see
+        /// <see cref="InSweep"/>.</summary>
+        public readonly bool WideSweep;
+
+        private ArcData(ArcSeg arc, double from, double span)
+        {
+            Cx = arc.Center.X;
+            Cy = arc.Center.Y;
+            Radius = arc.Radius;
+            Sx = arc.Start.X;
+            Sy = arc.Start.Y;
+            Ex = arc.End.X;
+            Ey = arc.End.Y;
+            From = from;
+            Span = span;
+            Fx = Math.Cos(from);
+            Fy = Math.Sin(from);
+            Gx = Math.Cos(from + span);
+            Gy = Math.Sin(from + span);
+            WideSweep = span > Math.PI;
+        }
+
+        public static bool TryBuild(ArcSeg arc, out ArcData data)
+        {
+            data = null!;
+            double span = Math.Abs(arc.Sweep);
+            // A full circle is its own kind; a sweep of zero or one that covers more than a
+            // turn breaks the wedge derivation's delta ∈ [0, 2π) premise. Both are degenerate
+            // and both keep the scalar path.
+            if (!(span > 0) || !(span < 2 * Math.PI))
+                return false;
+            double from = arc.Sweep > 0 ? arc.StartAngle : arc.StartAngle + arc.Sweep;
+            if (!(Math.Abs(from) <= AngleLimit) || !(Math.Abs(from + span) <= AngleLimit))
+                return false;
+            data = new ArcData(arc, from, span);
+            return true;
+        }
+
+        /// <summary>
+        /// The wedge test, from the signs of c₀ = |o|·sin(delta) and c₁ = |o|·sin(delta − span).
+        /// For span ≤ π the sweep is the intersection of the two half-planes: sin(delta) ≥ 0
+        /// puts delta in [0, π] and sin(delta − span) ≤ 0 puts it in [span − π, span], and the
+        /// two meet in exactly [0, span]. For span &gt; π the <em>complement</em> (span, 2π) is
+        /// the narrow wedge, so the same two half-planes describe it and the test flips to a
+        /// union. At span = π the forms coincide, so the branch has no boundary of its own.
+        /// </summary>
+        public bool InSweep(double c0, double c1) => WideSweep ? c0 >= 0 || c1 <= 0 : c0 >= 0 && c1 <= 0;
+    }
+
+    /// <summary>Term for term <c>ArcSeg.Distance</c> for a partial arc — <c>Atan2</c>
+    /// included, since this is the answer the lane-wise kernel must reproduce.</summary>
+    private static double ArcDistance(double px, double py, ArcData arc)
+    {
+        double ox = px - arc.Cx;
+        double oy = py - arc.Cy;
+        double angle = Math.Atan2(oy, ox);
+        // ArcSeg.AngleInSweep, minus the IsFullCircle short-circuit that classification
+        // already decided.
+        double delta = (angle - arc.From) % (2 * Math.PI);
+        if (delta < 0)
+            delta += 2 * Math.PI;
+        if (delta <= arc.Span)
+            return Math.Abs(Math.Sqrt(ox * ox + oy * oy) - arc.Radius);
+        double sx = px - arc.Sx, sy = py - arc.Sy;
+        double ex = px - arc.Ex, ey = py - arc.Ey;
+        return Math.Min(Math.Sqrt(sx * sx + sy * sy), Math.Sqrt(ex * ex + ey * ey));
+    }
+
+    private void ArcMinimum(ReadOnlySpan<double> x, ReadOnlySpan<double> y, Span<double> best, int s)
+    {
+        var arc = _arcs[_slot[s]];
+        int n = x.Length;
+        int i = 0;
+        if (Accelerated)
+        {
+            int w = Vector<double>.Count;
+            var zero = Vector<double>.Zero;
+            var infinity = new Vector<double>(double.PositiveInfinity);
+            var vminX = new Vector<double>(_minX[s]);
+            var vmaxX = new Vector<double>(_maxX[s]);
+            var vminY = new Vector<double>(_minY[s]);
+            var vmaxY = new Vector<double>(_maxY[s]);
+            var vcx = new Vector<double>(arc.Cx);
+            var vcy = new Vector<double>(arc.Cy);
+            var vr = new Vector<double>(arc.Radius);
+            var vsx = new Vector<double>(arc.Sx);
+            var vsy = new Vector<double>(arc.Sy);
+            var vex = new Vector<double>(arc.Ex);
+            var vey = new Vector<double>(arc.Ey);
+            var vfx = new Vector<double>(arc.Fx);
+            var vfy = new Vector<double>(arc.Fy);
+            var vgx = new Vector<double>(arc.Gx);
+            var vgy = new Vector<double>(arc.Gy);
+            var vtol = new Vector<double>(WedgeCertainty);
+            ref double xr = ref MemoryMarshal.GetReference(x);
+            ref double yr = ref MemoryMarshal.GetReference(y);
+            ref double br = ref MemoryMarshal.GetReference(best);
+            for (; i <= n - w; i += w)
+            {
+                var px = Vector.LoadUnsafe(ref xr, (nuint)i);
+                var py = Vector.LoadUnsafe(ref yr, (nuint)i);
+                var b = Vector.LoadUnsafe(ref br, (nuint)i);
+                var rejected = RejectMask(px, py, b, vminX, vmaxX, vminY, vmaxY);
+                if (AllSet(rejected))
+                    continue;
+
+                var ox = px - vcx;
+                var oy = py - vcy;
+                var rho = Vector.SquareRoot(ox * ox + oy * oy);
+                var c0 = vfx * oy - vfy * ox;
+                var c1 = vgx * oy - vgy * ox;
+
+                // Any lane inside the certainty band takes the whole block back to the exact
+                // scalar path (see WedgeCertainty). In practice that is a measure-zero set of
+                // sample points, and the branch is one compare per block.
+                var margin = vtol * rho;
+                var uncertain = Vector.BitwiseOr(
+                    Vector.LessThanOrEqual(Vector.Abs(c0), margin),
+                    Vector.LessThanOrEqual(Vector.Abs(c1), margin));
+                if (!AllClear(uncertain))
+                {
+                    for (int k = i; k < i + w; k++)
+                    {
+                        if (!Rejected(x[k], y[k], s, best[k]))
+                            best[k] = Math.Min(best[k], ArcDistance(x[k], y[k], arc));
+                    }
+                    continue;
+                }
+
+                var inside = Vector.Abs(rho - vr);
+                var dsx = px - vsx;
+                var dsy = py - vsy;
+                var dex = px - vex;
+                var dey = py - vey;
+                var outside = Vector.Min(
+                    Vector.SquareRoot(dsx * dsx + dsy * dsy),
+                    Vector.SquareRoot(dex * dex + dey * dey));
+                var low = Vector.GreaterThanOrEqual(c0, zero);
+                var high = Vector.LessThanOrEqual(c1, zero);
+                var inSweep = arc.WideSweep
+                    ? Vector.BitwiseOr(low, high)
+                    : Vector.BitwiseAnd(low, high);
+                var distance = Vector.ConditionalSelect(
+                    rejected, infinity, Vector.ConditionalSelect(inSweep, inside, outside));
+                Vector.Min(b, distance).StoreUnsafe(ref br, (nuint)i);
+            }
+        }
+        for (; i < n; i++)
+        {
+            if (!Rejected(x[i], y[i], s, best[i]))
+                best[i] = Math.Min(best[i], ArcDistance(x[i], y[i], arc));
+        }
+    }
+
+    // -------------------------------------------------------------------- cubic béziers
+
+    /// <summary>
+    /// A cubic bézier flattened for <c>CubicSeg.Distance</c>'s two stages. The 17 scan
+    /// points are the same for every query — the scalar code re-evaluated the curve at
+    /// i/16 on every call — so they are baked once; the Newton stage then needs only the
+    /// Bernstein difference constants.
+    /// </summary>
+    private sealed class CubicData
+    {
+        public const int Samples = 16;
+        public const int NewtonSteps = 8;
+
+        /// <summary>The scan parameters, exactly <c>(double)i / samples</c> as the scalar
+        /// loop forms them.</summary>
+        public static readonly double[] SampleT = BuildSampleT();
+
+        public readonly double[] SampleX = new double[Samples + 1];
+        public readonly double[] SampleY = new double[Samples + 1];
+        public readonly double P0x, P0y, C1x, C1y, C2x, C2y, P3x, P3y;
+        public readonly double D0x, D0y, D1x, D1y, D2x, D2y;
+        public readonly double Ax, Ay, Bx, By;
+
+        public CubicData(CubicSeg cubic)
+        {
+            var p0 = cubic.P0;
+            var c1 = cubic.Control1;
+            var c2 = cubic.Control2;
+            var p3 = cubic.P3;
+            (P0x, P0y) = (p0.X, p0.Y);
+            (C1x, C1y) = (c1.X, c1.Y);
+            (C2x, C2y) = (c2.X, c2.Y);
+            (P3x, P3y) = (p3.X, p3.Y);
+            // CubicSeg.DerivativeAt's three differences and SecondDerivativeAt's two — loop
+            // invariants of the Newton stage, formed by the same expressions.
+            (D0x, D0y) = (c1.X - p0.X, c1.Y - p0.Y);
+            (D1x, D1y) = (c2.X - c1.X, c2.Y - c1.Y);
+            (D2x, D2y) = (p3.X - c2.X, p3.Y - c2.Y);
+            (Ax, Ay) = (c2.X - c1.X * 2 + p0.X, c2.Y - c1.Y * 2 + p0.Y);
+            (Bx, By) = (p3.X - c2.X * 2 + c1.X, p3.Y - c2.Y * 2 + c1.Y);
+
+            for (int i = 0; i <= Samples; i++)
+            {
+                double t = SampleT[i];
+                double u = 1 - t;
+                SampleX[i] = P0x * (u * u * u) + C1x * (3 * u * u * t)
+                    + C2x * (3 * u * t * t) + P3x * (t * t * t);
+                SampleY[i] = P0y * (u * u * u) + C1y * (3 * u * u * t)
+                    + C2y * (3 * u * t * t) + P3y * (t * t * t);
+            }
+        }
+
+        private static double[] BuildSampleT()
+        {
+            var t = new double[Samples + 1];
+            for (int i = 0; i <= Samples; i++)
+                t[i] = (double)i / Samples;
+            return t;
+        }
+    }
+
+    /// <summary>
+    /// Term for term <c>CubicSeg.Distance</c>: coarse scan for the basin, then Newton on
+    /// (B − p)·B′. Every expression keeps the segment class's association order, which is
+    /// what the golden bit-hashes check.
+    /// </summary>
+    private static double CubicDistance(double px, double py, CubicData c)
+    {
+        double bestT = 0, bestDistance = double.PositiveInfinity;
+        for (int i = 0; i <= CubicData.Samples; i++)
+        {
+            double sx = px - c.SampleX[i], sy = py - c.SampleY[i];
+            double d = Math.Sqrt(sx * sx + sy * sy);
+            if (d < bestDistance)
+            {
+                bestDistance = d;
+                bestT = CubicData.SampleT[i];
+            }
+        }
+
+        double refined = bestT;
+        for (int iteration = 0; iteration < CubicData.NewtonSteps; iteration++)
+        {
+            double t = refined, u = 1 - t;
+            double fx = c.P0x * (u * u * u) + c.C1x * (3 * u * u * t)
+                + c.C2x * (3 * u * t * t) + c.P3x * (t * t * t);
+            double fy = c.P0y * (u * u * u) + c.C1y * (3 * u * u * t)
+                + c.C2y * (3 * u * t * t) + c.P3y * (t * t * t);
+            double offsetX = fx - px, offsetY = fy - py;
+            double d1x = c.D0x * (3 * u * u) + c.D1x * (6 * u * t) + c.D2x * (3 * t * t);
+            double d1y = c.D0y * (3 * u * u) + c.D1y * (6 * u * t) + c.D2y * (3 * t * t);
+            double d2x = c.Ax * (6 * u) + c.Bx * (6 * t);
+            double d2y = c.Ay * (6 * u) + c.By * (6 * t);
+            double g = offsetX * d1x + offsetY * d1y;
+            double gPrime = (d1x * d1x + d1y * d1y) + (offsetX * d2x + offsetY * d2y);
+            if (Math.Abs(gPrime) < 1e-18)
+                break;
+            refined = Math.Clamp(refined - g / gPrime, 0, 1);
+        }
+
+        double ut = 1 - refined, tt = refined;
+        double ex = c.P0x * (ut * ut * ut) + c.C1x * (3 * ut * ut * tt)
+            + c.C2x * (3 * ut * tt * tt) + c.P3x * (tt * tt * tt);
+        double ey = c.P0y * (ut * ut * ut) + c.C1y * (3 * ut * ut * tt)
+            + c.C2y * (3 * ut * tt * tt) + c.P3y * (tt * tt * tt);
+        double rx = px - ex, ry = py - ey;
+        return Math.Min(bestDistance, Math.Sqrt(rx * rx + ry * ry));
+    }
+
+    /// <summary>
+    /// Lane-wise <see cref="CubicDistance"/>. Newton on a polynomial is pure algebra, so the
+    /// arithmetic vectorizes bit-exactly; the one piece of divergent control flow is the
+    /// scalar loop's <c>break</c> on a vanishing derivative, and that is reproduced by
+    /// <b>masking the write to <c>refined</c></b> with a sticky per-lane flag. A stopped lane
+    /// therefore keeps the value it stopped at, verbatim — the correctness does not rest on a
+    /// converged Newton step being a fixed point (it is not: a vanishing g′ makes the step
+    /// infinite, which the clamp would turn into 0 or 1).
+    /// </summary>
+    private void CubicMinimum(ReadOnlySpan<double> x, ReadOnlySpan<double> y, Span<double> best, int s)
+    {
+        var cubic = _cubics[_slot[s]];
+        int n = x.Length;
+        int i = 0;
+        if (Accelerated)
+        {
+            int w = Vector<double>.Count;
+            var zero = Vector<double>.Zero;
+            var one = Vector<double>.One;
+            var three = new Vector<double>(3.0);
+            var six = new Vector<double>(6.0);
+            var epsilon = new Vector<double>(1e-18);
+            var infinity = new Vector<double>(double.PositiveInfinity);
+            var vminX = new Vector<double>(_minX[s]);
+            var vmaxX = new Vector<double>(_maxX[s]);
+            var vminY = new Vector<double>(_minY[s]);
+            var vmaxY = new Vector<double>(_maxY[s]);
+            var vp0x = new Vector<double>(cubic.P0x);
+            var vp0y = new Vector<double>(cubic.P0y);
+            var vc1x = new Vector<double>(cubic.C1x);
+            var vc1y = new Vector<double>(cubic.C1y);
+            var vc2x = new Vector<double>(cubic.C2x);
+            var vc2y = new Vector<double>(cubic.C2y);
+            var vp3x = new Vector<double>(cubic.P3x);
+            var vp3y = new Vector<double>(cubic.P3y);
+            var vd0x = new Vector<double>(cubic.D0x);
+            var vd0y = new Vector<double>(cubic.D0y);
+            var vd1x = new Vector<double>(cubic.D1x);
+            var vd1y = new Vector<double>(cubic.D1y);
+            var vd2x = new Vector<double>(cubic.D2x);
+            var vd2y = new Vector<double>(cubic.D2y);
+            var vax = new Vector<double>(cubic.Ax);
+            var vay = new Vector<double>(cubic.Ay);
+            var vbx = new Vector<double>(cubic.Bx);
+            var vby = new Vector<double>(cubic.By);
+            ref double xr = ref MemoryMarshal.GetReference(x);
+            ref double yr = ref MemoryMarshal.GetReference(y);
+            ref double br = ref MemoryMarshal.GetReference(best);
+            for (; i <= n - w; i += w)
+            {
+                var px = Vector.LoadUnsafe(ref xr, (nuint)i);
+                var py = Vector.LoadUnsafe(ref yr, (nuint)i);
+                var b = Vector.LoadUnsafe(ref br, (nuint)i);
+                var rejected = RejectMask(px, py, b, vminX, vmaxX, vminY, vmaxY);
+                if (AllSet(rejected))
+                    continue;
+
+                var bestDistance = infinity;
+                var bestT = zero;
+                for (int k = 0; k <= CubicData.Samples; k++)
+                {
+                    var sx = px - new Vector<double>(cubic.SampleX[k]);
+                    var sy = py - new Vector<double>(cubic.SampleY[k]);
+                    var d = Vector.SquareRoot(sx * sx + sy * sy);
+                    var closer = Vector.LessThan(d, bestDistance);
+                    bestDistance = Vector.ConditionalSelect(closer, d, bestDistance);
+                    bestT = Vector.ConditionalSelect(
+                        closer, new Vector<double>(CubicData.SampleT[k]), bestT);
+                }
+
+                var refined = bestT;
+                var active = Vector<long>.AllBitsSet;
+                for (int iteration = 0; iteration < CubicData.NewtonSteps; iteration++)
+                {
+                    var t = refined;
+                    var u = one - t;
+                    var fx = vp0x * (u * u * u) + vc1x * (three * u * u * t)
+                        + vc2x * (three * u * t * t) + vp3x * (t * t * t);
+                    var fy = vp0y * (u * u * u) + vc1y * (three * u * u * t)
+                        + vc2y * (three * u * t * t) + vp3y * (t * t * t);
+                    var offsetX = fx - px;
+                    var offsetY = fy - py;
+                    var d1x = vd0x * (three * u * u) + vd1x * (six * u * t) + vd2x * (three * t * t);
+                    var d1y = vd0y * (three * u * u) + vd1y * (six * u * t) + vd2y * (three * t * t);
+                    var d2x = vax * (six * u) + vbx * (six * t);
+                    var d2y = vay * (six * u) + vby * (six * t);
+                    var g = offsetX * d1x + offsetY * d1y;
+                    var gPrime = (d1x * d1x + d1y * d1y) + (offsetX * d2x + offsetY * d2y);
+                    // Sticky: once a lane's derivative vanishes it has "broken" and never
+                    // writes refined again, which is what the scalar break does.
+                    active = Vector.BitwiseAnd(
+                        active, Vector.GreaterThanOrEqual(Vector.Abs(gPrime), epsilon));
+                    if (AllClear(active))
+                        break;
+                    var step = Vector.Min(Vector.Max(refined - g / gPrime, zero), one);
+                    refined = Vector.ConditionalSelect(active, step, refined);
+                }
+
+                var ut = one - refined;
+                var tt = refined;
+                var ex = vp0x * (ut * ut * ut) + vc1x * (three * ut * ut * tt)
+                    + vc2x * (three * ut * tt * tt) + vp3x * (tt * tt * tt);
+                var ey = vp0y * (ut * ut * ut) + vc1y * (three * ut * ut * tt)
+                    + vc2y * (three * ut * tt * tt) + vp3y * (tt * tt * tt);
+                var rx = px - ex;
+                var ry = py - ey;
+                var distance = Vector.Min(bestDistance, Vector.SquareRoot(rx * rx + ry * ry));
+                Vector.Min(b, Vector.ConditionalSelect(rejected, infinity, distance))
+                    .StoreUnsafe(ref br, (nuint)i);
+            }
+        }
+        for (; i < n; i++)
+        {
+            if (!Rejected(x[i], y[i], s, best[i]))
+                best[i] = Math.Min(best[i], CubicDistance(x[i], y[i], cubic));
         }
     }
 

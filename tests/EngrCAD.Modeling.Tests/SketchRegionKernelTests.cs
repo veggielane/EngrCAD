@@ -29,11 +29,29 @@ public class SketchRegionKernelTests
         .QuadraticTo(new Vector2d(-3, 6), new Vector2d(0, 0))
         .Close();
 
+    /// <summary>A rounded rectangle (quarter turns, axis-aligned boundary rays) with a
+    /// major-arc hole — a sweep wider than π, which inverts the wedge test's branch.</summary>
+    private static Sketch Arcs() => Sketch.RoundedRectangle(20, 12, 3)
+        .WithHole(Sketch.Start(-2, 0)
+            .ArcTo(new Vector2d(2, 0), 2.5, clockwise: false, largeArc: true)
+            .Close());
+
+    /// <summary>A cubic with a genuine cusp (B′ vanishes at t = ½, which needs
+    /// p₃ + c₂ = c₁ + p₀) — the Newton stage's hostile input.</summary>
+    private static Sketch Cusp() => Sketch.Start(0, 0)
+        .BezierTo(new Vector2d(9, 0), new Vector2d(0, 9), new Vector2d(9, -9))
+        .LineTo(12, -12)
+        .LineTo(12, 6)
+        .LineTo(0, 6)
+        .Close();
+
     private static Sketch Named(string name) => name switch
     {
         "plate" => Plate(),
         "curvy" => Curvy(),
         "slot" => Sketch.Slot(20, 8),
+        "arcs" => Arcs(),
+        "cusp" => Cusp(),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 
@@ -67,10 +85,20 @@ public class SketchRegionKernelTests
         }
     }
 
+    /// <summary>
+    /// Every one of these is the plain segment loop's answer, not this code's: "plate",
+    /// "curvy" and "slot" predate the kernels entirely, and "arcs"/"cusp" — added with the
+    /// arc and bézier kernels to reach the sweep-wider-than-π branch and a cusped Newton
+    /// solve — were taken by routing the region back through <c>SketchSegment.Distance</c>
+    /// and reading the hash off THAT. So they prove the transcriptions are term for term,
+    /// which is the only reason the lane-wise forms are allowed to exist.
+    /// </summary>
     [Theory]
     [InlineData("plate", -20992552982407019L)]
     [InlineData("curvy", -1804961155336630648L)]
     [InlineData("slot", 9097049425223680080L)]
+    [InlineData("arcs", 4040765462217916895L)]
+    [InlineData("cusp", 4167966295857103130L)]
     public void SignedDistance_MatchesTheGoldenBitPattern(string name, long fingerprint)
     {
         var sketch = Named(name);
@@ -99,6 +127,8 @@ public class SketchRegionKernelTests
     [InlineData("plate")]
     [InlineData("curvy")]
     [InlineData("slot")]
+    [InlineData("arcs")]
+    [InlineData("cusp")]
     public void BatchSignedDistance_IsBitIdenticalToScalar(string name)
     {
         var sketch = Named(name);
@@ -154,6 +184,168 @@ public class SketchRegionKernelTests
                 BitConverter.DoubleToInt64Bits(region.SignedDistance(probes[i])),
                 BitConverter.DoubleToInt64Bits(batched[i]));
         }
+    }
+
+    // ------------------------------------------------------- sweep boundaries and béziers
+
+    /// <summary>
+    /// Asserts the batch and scalar entry points agree to the bit over an arbitrary probe
+    /// list, at eight leading offsets so every probe visits every SIMD lane — a lane-wise
+    /// kernel that only disagreed in, say, lane 0 of a block would otherwise hide behind a
+    /// fixed alignment.
+    /// </summary>
+    private static void AssertProbesAgree(SketchRegion region, IReadOnlyList<Vector2d> probes)
+    {
+        for (int lead = 0; lead < 8; lead++)
+        {
+            var x = new double[probes.Count + lead];
+            var y = new double[probes.Count + lead];
+            for (int i = 0; i < lead; i++)
+                (x[i], y[i]) = (1e4 + i, -1e4 - i);
+            for (int i = 0; i < probes.Count; i++)
+                (x[lead + i], y[lead + i]) = (probes[i].X, probes[i].Y);
+
+            var batched = new double[x.Length];
+            region.SignedDistance(x, y, batched);
+            for (int i = 0; i < x.Length; i++)
+            {
+                double expected = region.SignedDistance(new Vector2d(x[i], y[i]));
+                Assert.Equal(
+                    BitConverter.DoubleToInt64Bits(expected), BitConverter.DoubleToInt64Bits(batched[i]));
+            }
+        }
+    }
+
+    /// <summary>Probes strung along a sweep boundary ray and along rays rotated off it by a
+    /// ladder of angles, each at radii spanning twelve decades.</summary>
+    private static void AddRayProbes(
+        List<Vector2d> into, Vector2d centre, Vector2d endpoint, bool onRayOnly)
+    {
+        var arm = endpoint - centre;
+        double[] scales = [0, 1e-6, 1e-3, 0.5, 1 - 1e-12, 1, 1 + 1e-12, 2, 1e3, 1e6];
+        if (onRayOnly)
+        {
+            // EXACTLY on the boundary ray: the cross products vanish, so every one of these
+            // lands inside the certainty band and is answered by the scalar Atan2 path.
+            foreach (double scale in scales)
+                into.Add(centre + arm * scale);
+            return;
+        }
+        // Rotated off the ray by more than the band's half-width (1e-9 rad), so the lane-wise
+        // wedge test answers these itself — this is where it must agree with Atan2.
+        foreach (double delta in new[] { -1e-2, -1e-4, -1e-6, -1e-8, 1e-8, 1e-6, 1e-4, 1e-2 })
+        {
+            double cos = Math.Cos(delta), sin = Math.Sin(delta);
+            var turned = new Vector2d(arm.X * cos - arm.Y * sin, arm.X * sin + arm.Y * cos);
+            foreach (double scale in scales)
+                into.Add(centre + turned * scale);
+        }
+    }
+
+    /// <summary>
+    /// The wedge test replaces <c>ArcSeg.Distance</c>'s <c>Atan2</c>, so the sweep boundary
+    /// rays are where it has to earn its keep. Points rotated off a boundary by 1e-8 rad and
+    /// more are decided by the lane-wise test itself, so any disagreement with <c>Atan2</c>
+    /// shows up here; points sitting exactly ON a boundary — which is where an arc's shared
+    /// endpoint lands — fall inside the certainty band and are handed back to the scalar
+    /// path. Both must be bit-identical, and both are checked at every model scale from
+    /// microns to kilometres, because the guard is angular and must not care.
+    /// </summary>
+    [Theory]
+    [InlineData(1e-5)]
+    [InlineData(1)]
+    [InlineData(1e5)]
+    public void ArcSweepBoundaries_AreBitIdenticalToScalar(double scale)
+    {
+        // Corner-arc centres and one endpoint each, plus the major-arc hole's, in the
+        // geometry Arcs() builds (10 x 6 half-extents, radius 3; hole centred (0, -1.5)).
+        var region = new SketchRegion(ScaledArcs(scale));
+        var onRay = new List<Vector2d>();
+        var offRay = new List<Vector2d>();
+        foreach (var (centre, first, second) in ArcRays(scale))
+        {
+            AddRayProbes(onRay, centre, first, onRayOnly: true);
+            AddRayProbes(onRay, centre, second, onRayOnly: true);
+            AddRayProbes(offRay, centre, first, onRayOnly: false);
+            AddRayProbes(offRay, centre, second, onRayOnly: false);
+            onRay.Add(centre);
+        }
+
+        AssertProbesAgree(region, onRay);
+        AssertProbesAgree(region, offRay);
+    }
+
+    private static Sketch ScaledArcs(double scale) => Sketch.RoundedRectangle(20 * scale, 12 * scale, 3 * scale)
+        .WithHole(Sketch.Start(-2 * scale, 0)
+            .ArcTo(new Vector2d(2 * scale, 0), 2.5 * scale, clockwise: false, largeArc: true)
+            .Close());
+
+    /// <summary>Each arc of <see cref="ScaledArcs"/> as (centre, endpoint, endpoint).</summary>
+    private static IEnumerable<(Vector2d Centre, Vector2d First, Vector2d Second)> ArcRays(double scale)
+    {
+        double w = 10 * scale, h = 6 * scale, r = 3 * scale;
+        foreach (int sx in new[] { -1, 1 })
+            foreach (int sy in new[] { -1, 1 })
+            {
+                var centre = new Vector2d(sx * (w - r), sy * (h - r));
+                yield return (centre, centre + new Vector2d(sx * r, 0), centre + new Vector2d(0, sy * r));
+            }
+        var hole = new Vector2d(0, -1.5 * scale);
+        yield return (hole, new Vector2d(-2 * scale, 0), new Vector2d(2 * scale, 0));
+    }
+
+    /// <summary>
+    /// A degenerate arc — a sweep of a few nanoradians at a millimetre radius, so its two
+    /// boundary rays are separated by less than the certainty band itself. The kernel must
+    /// still answer exactly (it does, by refusing: every probe is uncertain against one ray
+    /// or the other and takes the scalar path).
+    /// </summary>
+    [Fact]
+    public void ANearDegenerateArc_IsStillBitIdenticalToScalar()
+    {
+        // A chord of 1e-8 across a radius of 1 sweeps 1e-8 rad.
+        var sketch = Sketch.Start(0, 0)
+            .LineTo(1, 0)
+            .ArcTo(new Vector2d(1, 1e-8), 1, clockwise: false)
+            .LineTo(0, 1e-8)
+            .Close();
+        var region = new SketchRegion(sketch);
+        var probes = new List<Vector2d>();
+        for (int i = -20; i <= 20; i++)
+            for (int k = 0; k < 4; k++)
+                probes.Add(new Vector2d(1 + i * 1e-9 * Math.Pow(10, k), i * 1e-9));
+        AssertProbesAgree(region, probes);
+    }
+
+    /// <summary>
+    /// The bézier kernel's hostile points: the sixteen scan parameters themselves (where the
+    /// scan finds distance zero and Newton starts already converged), the control points, the
+    /// endpoints shared with neighbouring segments, and the neighbourhood of a cusp, where
+    /// B′ vanishes and the Newton step's divergent <c>break</c> — reproduced by masking the
+    /// write to the refined parameter — is the only thing keeping the two paths together.
+    /// </summary>
+    [Fact]
+    public void BezierStructuredPoints_AreBitIdenticalToScalar()
+    {
+        var region = new SketchRegion(Cusp());
+        Vector2d p0 = new(0, 0), c1 = new(9, 0), c2 = new(0, 9), p3 = new(9, -9);
+        var probes = new List<Vector2d> { p0, c1, c2, p3 };
+        for (int i = 0; i <= 64; i++)
+        {
+            double t = (double)i / 64;
+            double u = 1 - t;
+            var on = p0 * (u * u * u) + c1 * (3 * u * u * t) + c2 * (3 * u * t * t) + p3 * (t * t * t);
+            probes.Add(on);
+            // A tight ring around each curve point: the sign flips across the boundary, and
+            // the nearest-point solve is at its most ill-conditioned right at a cusp.
+            for (int k = 0; k < 8; k++)
+            {
+                double angle = 2 * Math.PI * k / 8;
+                foreach (double radius in new[] { 1e-12, 1e-7, 1e-3, 0.25 })
+                    probes.Add(on + new Vector2d(Math.Cos(angle), Math.Sin(angle)) * radius);
+            }
+        }
+        AssertProbesAgree(region, probes);
     }
 
     /// <summary>

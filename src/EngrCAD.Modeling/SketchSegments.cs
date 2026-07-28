@@ -258,6 +258,14 @@ internal sealed class CubicSeg(Vector2d p0, Vector2d c1, Vector2d c2, Vector2d p
     public override Vector2d Start => p0;
     public override Vector2d End => p3;
 
+    // The control points, for SketchRegion's lane-wise kernel: it re-derives the Bernstein
+    // and Newton arithmetic below term for term over SIMD lanes, so it needs the same four
+    // points this segment does. Internal, like the whole segment family.
+    public Vector2d P0 => p0;
+    public Vector2d Control1 => c1;
+    public Vector2d Control2 => c2;
+    public Vector2d P3 => p3;
+
     private Vector2d PointAt(double t)
     {
         double u = 1 - t;
