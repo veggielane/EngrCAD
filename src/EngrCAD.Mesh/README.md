@@ -548,6 +548,19 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   - Deterministic (mesh-order assembly + deterministic solver): identical inputs give
     bit-identical output, and a planar mesh stays planar **exactly** (the out-of-plane
     system is 0 = 0, and substituting a zero vector is zero) — both pinned by tests.
+- **`LaplacianMeshDeformer`** — handle-based Laplacian surface editing: minimizes the
+  bi-Laplacian bending energy ‖L·(x − x₀)‖² plus **soft** positional constraints as
+  weighted rows ((L² + W)·x = L²·x₀ + W·c per coordinate, `SparseCholesky`), with the
+  boundary and any `PinVertex`ed vertices substituted as **hard** constraints that stay
+  bit-identical. Soft handles are the point: a hard handle transmits C⁰ (a cone at the
+  handle) where a weighted row lets the bending energy round the transition — and the
+  weight trade-off is scale-free because the cotangent Laplacian is dimensionless. The
+  extremes are pinned by tests: w = 1e6 interpolates to &lt; 1e-6, w = 1e-4 barely moves
+  the vertex. `DeformRegion(mesh, selection, handles)` is the ROI form: extract via
+  `MeshRegionOperator`, deform with the rim pinned (the deformer's boundary pinning IS
+  the seam contract — bit-identical rim, so reinsertion welds by exact equality),
+  reinsert; everything outside the region survives bit-for-bit. With no handles the
+  input mesh itself is returned (the energy's exact minimizer). Deterministic.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with
