@@ -201,6 +201,24 @@ operations. Depends only on `EngrCAD.Core`.
   test suite from 4m16s to 44s. Both fall back to the base implementation only where
   the reduction genuinely does not apply (a collapsed extrusion direction, a point on a
   revolve's axis where the azimuth is undefined).
+  **All three swept surfaces share ONE seed-selection rule** (`SeedSelection`): refine from
+  every LOCAL MINIMUM of the sampled residual and from each minimum's two neighbours, never
+  from the single best seed. `SweptSurface` learned this first — a sliver profile hides two
+  branches inside one seed interval, so a single seed descends to whichever is nearer and
+  returns the MIRRORED parameter — and the other two INHERITED the same weakness from the
+  generic base rather than introducing it, so the rule now lives in one place instead of
+  three. It is purely combinatorial: no epsilon decides which seeds are tried, so it cannot
+  be right at one scale and wrong at another. Measured against a deliberately single-seeded
+  reference on a 12-bump wavy vase generator (more features than 17 samples can resolve),
+  round-trip acceptance over a 42×42 grid went **1092 → 1428** for both the extrusion and
+  the revolve, and at 20 bumps **504 → 1008**; a circular generator extruded along a
+  direction nearly in its own plane — whose projection perpendicular to that direction is
+  the sliver — went from 1758 to a complete **1764/1764**. The fix also cleared a defect
+  that had been diagnosed as something else entirely: `FilletAllEdges`' spherical corner
+  patches reported 176 tessellation vertices "2.6e-3 off the surface", which was really the
+  projection converging onto the mirrored branch of a great-circle generator that folds in
+  (radius, axial). The vertices were on the surface all along, and "the vertex is off the
+  surface" and "the projection converged somewhere else" produce identical evidence.
   `SweptSurface` gets there by a DIFFERENT structural fact, because its
   rotation-minimizing frame varies along the path so no parameter is available in closed
   form. What is true is that every surface point at path parameter v lies in the frame's

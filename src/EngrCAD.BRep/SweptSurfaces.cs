@@ -3,6 +3,75 @@ using EngrCAD.Core;
 namespace EngrCAD.BRep;
 
 /// <summary>
+/// The seed-selection rule shared by all three swept surfaces' one-dimensional inverse
+/// evaluations. ONE copy, because this exact defect was inherited rather than introduced:
+/// the generic 17×17 base implementation has the same single-best-seed weakness, and each
+/// 1D reduction copied it.
+/// </summary>
+/// <remarks>
+/// <para><b>The rule.</b> Refine from every LOCAL MINIMUM of the sampled residual and from
+/// each minimum's two neighbours — never from the single best seed alone. It is purely
+/// combinatorial: no epsilon decides which seeds are worth trying, so it cannot be tuned
+/// wrong at one scale and right at another.</para>
+/// <para><b>Why the neighbours.</b> A generator can double back so that two branches of the
+/// residual sit closer together than one seed interval — a sliver profile, an extrusion of a
+/// hairpin, a revolve whose generator nearly touches its own reflection. The sampled residual
+/// then shows ONE broad minimum straddling both branches, 1D Gauss–Newton from it descends to
+/// whichever branch happens to be nearer, and the answer comes back as the MIRRORED
+/// parameter: a point tens of millimetres away that still passes every structural check.
+/// Marking the neighbours costs two more Newton runs — a handful of curve evaluations — and
+/// puts a seed on each side of the straddle.</para>
+/// </remarks>
+internal static class SeedSelection
+{
+    /// <summary>
+    /// Flags the seeds worth refining and returns the globally best seed index (the fallback
+    /// answer if every refinement fails). <paramref name="residuals"/> holds one value per
+    /// seed, seeds + 1 of them; <paramref name="periodic"/> wraps the neighbour relation for
+    /// a closed generator, whose first and last samples are the same point.
+    /// </summary>
+    public static int MarkCandidates(ReadOnlySpan<double> residuals, Span<bool> refine, bool periodic)
+    {
+        int seeds = residuals.Length - 1;
+        int globalBest = 0;
+        double smallest = double.PositiveInfinity;
+        for (int i = 0; i <= seeds; i++)
+        {
+            if (residuals[i] < smallest)
+            {
+                smallest = residuals[i];
+                globalBest = i;
+            }
+        }
+        Mark(refine, globalBest, seeds, periodic);
+        for (int i = 0; i <= seeds; i++)
+        {
+            if (IsLocalMinimum(residuals, i, seeds, periodic))
+                Mark(refine, i, seeds, periodic);
+        }
+        return globalBest;
+    }
+
+    /// <summary>Flags seed <paramref name="i"/> and its two neighbours for refinement.</summary>
+    private static void Mark(Span<bool> refine, int i, int seeds, bool periodic)
+    {
+        refine[i] = true;
+        refine[i > 0 ? i - 1 : (periodic ? seeds - 1 : 1)] = true;
+        refine[i < seeds ? i + 1 : (periodic ? 1 : seeds - 1)] = true;
+    }
+
+    /// <summary>Is sample <paramref name="i"/> no worse than both its neighbours (wrapping
+    /// when the generator closes)?</summary>
+    private static bool IsLocalMinimum(ReadOnlySpan<double> residuals, int i, int seeds, bool periodic)
+    {
+        double here = residuals[i];
+        int previous = i > 0 ? i - 1 : (periodic ? seeds - 1 : 1);
+        int next = i < seeds ? i + 1 : (periodic ? 1 : seeds - 1);
+        return residuals[previous] >= here && residuals[next] >= here;
+    }
+}
+
+/// <summary>
 /// Ruled surface P(u, v) = C(u) + v·direction for v ∈ [0, 1]: the side surface of an
 /// extrusion. With the generator wound counter-clockwise about the extrude direction,
 /// ∂u × ∂v points outward.
@@ -58,39 +127,59 @@ public sealed class ExtrudedSurface(Curve3d generator, Vector3d direction) : Sur
         double period = domain.Length;
 
         const int seeds = 16; // the base class's u resolution
-        double best = double.PositiveInfinity, parameter = domain.Start;
+        Span<double> sampled = stackalloc double[seeds + 1];
         for (int i = 0; i <= seeds; i++)
         {
-            double u = domain.ParameterAt((double)i / seeds);
-            double squared = Perpendicular(generator.PointAt(u) - target, direction, directionLengthSquared)
-                .LengthSquared;
-            if (squared < best)
+            sampled[i] = Perpendicular(
+                generator.PointAt(domain.ParameterAt((double)i / seeds)) - target,
+                direction, directionLengthSquared).LengthSquared;
+        }
+
+        // Refine from every local minimum AND its neighbours, not the single best seed —
+        // see SeedSelection for why a generator that doubles back otherwise returns the
+        // mirrored parameter.
+        Span<bool> refine = stackalloc bool[seeds + 1];
+        int globalBest = SeedSelection.MarkCandidates(sampled, refine, periodic);
+        double parameter = domain.ParameterAt((double)globalBest / seeds);
+        double best = double.PositiveInfinity;
+        for (int i = 0; i <= seeds; i++)
+        {
+            if (!refine[i])
+                continue;
+            double candidate = Solve(domain.ParameterAt((double)i / seeds));
+            double residual = Perpendicular(
+                generator.PointAt(candidate) - target, direction, directionLengthSquared).LengthSquared;
+            if (residual < best)
             {
-                best = squared;
-                parameter = u;
+                best = residual;
+                parameter = candidate;
             }
         }
 
-        for (int iteration = 0; iteration < 25; iteration++)
+        double Solve(double seed)
         {
-            var residual = Perpendicular(generator.PointAt(parameter) - target, direction, directionLengthSquared);
-            if (residual.Length < tolerance)
-                break;
-            var slope = Perpendicular(generator.DerivativeAt(parameter), direction, directionLengthSquared);
-            double denominator = slope.LengthSquared;
-            // Degenerate-Jacobian guard (generator tangent parallel to the extrude
-            // direction): a scale-free near-underflow test, not a model tolerance.
-            if (denominator < 1e-30)
-                break;
-            double next = FoldIntoDomain(parameter - slope.Dot(residual) / denominator, domain, periodic);
-            // Stall guard at relative machine precision — the step has stopped moving,
-            // so further iterations cannot improve the residual.
-            if (Math.Abs(next - parameter) <= period * 1e-15)
+            for (int iteration = 0; iteration < 25; iteration++)
             {
-                parameter = next;
-                break;
+                var residual = Perpendicular(generator.PointAt(seed) - target, direction, directionLengthSquared);
+                if (residual.Length < tolerance)
+                    break;
+                var slope = Perpendicular(generator.DerivativeAt(seed), direction, directionLengthSquared);
+                double denominator = slope.LengthSquared;
+                // Degenerate-Jacobian guard (generator tangent parallel to the extrude
+                // direction): a scale-free near-underflow test, not a model tolerance.
+                if (denominator < 1e-30)
+                    break;
+                double next = FoldIntoDomain(seed - slope.Dot(residual) / denominator, domain, periodic);
+                // Stall guard at relative machine precision — the step has stopped moving,
+                // so further iterations cannot improve the residual.
+                if (Math.Abs(next - seed) <= period * 1e-15)
+                {
+                    seed = next;
+                    break;
+                }
+                seed = next;
             }
-            parameter = next;
+            return seed;
         }
 
         double along = (target - generator.PointAt(parameter)).Dot(direction) / directionLengthSquared;
@@ -182,37 +271,57 @@ public sealed class RevolvedSurface : Surface
         }
 
         const int seeds = 16; // the base class's v resolution
-        double best = double.PositiveInfinity, parameter = domain.Start;
+        Span<double> sampled = stackalloc double[seeds + 1];
         for (int i = 0; i <= seeds; i++)
         {
-            double v = domain.ParameterAt((double)i / seeds);
-            var (r, z, _, _) = Profile(Generator, AxisOrigin, axis, v);
-            double squared = (r - radius) * (r - radius) + (z - height) * (z - height);
-            if (squared < best)
+            var (r, z, _, _) = Profile(Generator, AxisOrigin, axis, domain.ParameterAt((double)i / seeds));
+            sampled[i] = (r - radius) * (r - radius) + (z - height) * (z - height);
+        }
+
+        // Refine from every local minimum AND its neighbours (SeedSelection): a generator
+        // whose (radius, axial) profile doubles back — a bead, a re-entrant vase wall, a
+        // torus generator seen from outside — hides two branches inside one seed interval,
+        // and a single seed silently returns the mirrored one.
+        Span<bool> refine = stackalloc bool[seeds + 1];
+        int globalBest = SeedSelection.MarkCandidates(sampled, refine, periodic);
+        double parameter = domain.ParameterAt((double)globalBest / seeds);
+        double best = double.PositiveInfinity;
+        for (int i = 0; i <= seeds; i++)
+        {
+            if (!refine[i])
+                continue;
+            double candidate = Solve(domain.ParameterAt((double)i / seeds));
+            var (r, z, _, _) = Profile(Generator, AxisOrigin, axis, candidate);
+            double residual = (r - radius) * (r - radius) + (z - height) * (z - height);
+            if (residual < best)
             {
-                best = squared;
-                parameter = v;
+                best = residual;
+                parameter = candidate;
             }
         }
 
-        for (int iteration = 0; iteration < 25; iteration++)
+        double Solve(double seed)
         {
-            var (r, z, dr, dz) = Profile(Generator, AxisOrigin, axis, parameter);
-            double fr = r - radius, fz = z - height;
-            if (Math.Sqrt(fr * fr + fz * fz) < tolerance)
-                break;
-            double denominator = dr * dr + dz * dz;
-            // Degenerate-Jacobian guard: a scale-free near-underflow test.
-            if (denominator < 1e-30)
-                break;
-            double next = FoldIntoDomain(parameter - (dr * fr + dz * fz) / denominator, domain, periodic);
-            // Stall guard at relative machine precision.
-            if (Math.Abs(next - parameter) <= period * 1e-15)
+            for (int iteration = 0; iteration < 25; iteration++)
             {
-                parameter = next;
-                break;
+                var (r, z, dr, dz) = Profile(Generator, AxisOrigin, axis, seed);
+                double fr = r - radius, fz = z - height;
+                if (Math.Sqrt(fr * fr + fz * fz) < tolerance)
+                    break;
+                double denominator = dr * dr + dz * dz;
+                // Degenerate-Jacobian guard: a scale-free near-underflow test.
+                if (denominator < 1e-30)
+                    break;
+                double next = FoldIntoDomain(seed - (dr * fr + dz * fz) / denominator, domain, periodic);
+                // Stall guard at relative machine precision.
+                if (Math.Abs(next - seed) <= period * 1e-15)
+                {
+                    seed = next;
+                    break;
+                }
+                seed = next;
             }
-            parameter = next;
+            return seed;
         }
 
         // Azimuth from the generator point at the solved v to the query point.
@@ -459,24 +568,12 @@ public sealed class SweptSurface : Surface
         int seeds = profile.Length - 1;
         bool periodic = _profileGenerator.IsClosed;
 
+        Span<double> sampled = stackalloc double[seeds + 1];
+        for (int i = 0; i <= seeds; i++)
+            sampled[i] = (profile[i] - localTarget).LengthSquared;
+
         Span<bool> refine = stackalloc bool[seeds + 1];
-        int globalBest = 0;
-        double smallest = double.PositiveInfinity;
-        for (int i = 0; i <= seeds; i++)
-        {
-            double squared = (profile[i] - localTarget).LengthSquared;
-            if (squared < smallest)
-            {
-                smallest = squared;
-                globalBest = i;
-            }
-        }
-        Mark(refine, globalBest, seeds, periodic);
-        for (int i = 0; i <= seeds; i++)
-        {
-            if (IsLocalMinimum(profile, localTarget, i, seeds, periodic))
-                Mark(refine, i, seeds, periodic);
-        }
+        int globalBest = SeedSelection.MarkCandidates(sampled, refine, periodic);
 
         double best = double.PositiveInfinity, answer = domain.ParameterAt((double)globalBest / seeds);
         for (int i = 0; i <= seeds; i++)
@@ -492,24 +589,6 @@ public sealed class SweptSurface : Surface
             }
         }
         return answer;
-    }
-
-    /// <summary>Flags seed <paramref name="i"/> and its two neighbours for refinement.</summary>
-    private static void Mark(Span<bool> refine, int i, int seeds, bool periodic)
-    {
-        refine[i] = true;
-        refine[i > 0 ? i - 1 : (periodic ? seeds - 1 : 1)] = true;
-        refine[i < seeds ? i + 1 : (periodic ? 1 : seeds - 1)] = true;
-    }
-
-    /// <summary>Is sample <paramref name="i"/> no worse than both its neighbours (wrapping when the generator closes)?</summary>
-    private static bool IsLocalMinimum(ReadOnlySpan<Vector2d> profile, in Vector2d target, int i, int seeds, bool periodic)
-    {
-        double here = (profile[i] - target).LengthSquared;
-        int previous = i > 0 ? i - 1 : (periodic ? seeds - 1 : 1);
-        int next = i < seeds ? i + 1 : (periodic ? 1 : seeds - 1);
-        return (profile[previous] - target).LengthSquared >= here
-            && (profile[next] - target).LengthSquared >= here;
     }
 
     /// <summary>1D Gauss–Newton from one seed, on the generator's exact derivative.</summary>

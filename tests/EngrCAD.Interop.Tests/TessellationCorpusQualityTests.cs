@@ -183,22 +183,28 @@ public class TessellationCorpusQualityTests
     /// Facet vertices that do not lie on their own face's surface, per case and density —
     /// documented exceptions, each a measurement with a diagnosed cause, locked so that
     /// both a regression AND a fix fail the test and get the number revisited.
-    /// <para><b>rounded box at 96/48</b>: <see cref="Filleting.FilletAllEdges"/>'s
-    /// spherical corner patches (quarter revolves of a great-circle <c>CurveSegment</c>)
-    /// carry 70 vertices per corner face — 176 vertex-instances over 37 644 facets, 34 of
-    /// them in triangles with no projectable vertex at all — that sit 2.6e-3 off the patch
-    /// they are drawn on, i.e. 1.3e-4 of the 20-unit box and three decades past the 1e-6
-    /// inverse-evaluation tolerance. Orientation is unaffected (worst agreement 0.999866)
-    /// and the mesh still welds closed, which means the offending vertices are SHARED
-    /// consistently between the patch and its bands — so the error is in the edge curve
-    /// the two faces share, not in the tessellator. Absent at 16/8 and 48/24. Filed
-    /// against the B-Rep side in todo.md.</para>
+    /// <para><b>Empty, and the story of why is worth keeping.</b> This table used to carry
+    /// <c>rounded box at 96/48 → (176 vertices, 34 facets)</c>: 176 vertex-instances on
+    /// <see cref="Filleting.FilletAllEdges"/>'s spherical corner patches that the audit
+    /// could not project onto the patch they were drawn on, measured at 2.6e-3 away — three
+    /// decades past the 1e-6 inverse-evaluation tolerance. The diagnosis recorded here was
+    /// that the shared edge curve was at fault, since orientation was unaffected and the
+    /// mesh still welded closed. <b>That diagnosis was wrong.</b> The vertices were on the
+    /// surface all along; <see cref="RevolvedSurface.TryProjectPoint"/> was returning the
+    /// MIRRORED generator parameter, because a corner patch's great-circle generator folds
+    /// in (radius, axial) and a single-seed 1D refinement descends to whichever branch its
+    /// one seed happened to sit on. The 2.6e-3 was the distance to the wrong branch. Giving
+    /// both swept surfaces the multi-seed rule <c>SweptSurface</c> already had took this
+    /// entry to (0, 0) with the mesh — and every rendered docs PNG — unchanged, which is
+    /// exactly the signature of an evaluation bug rather than a construction one.</para>
+    /// <para>Two lessons the empty table is carrying: <b>a locked known-defect number is
+    /// what makes a fix visible</b> (this one announced itself by failing the test), and
+    /// <b>"the vertex is 2.6e-3 off the surface" and "the projection converged somewhere
+    /// else" produce identical evidence</b> — distinguishing them needs a second seed, not
+    /// a closer look at the geometry.</para>
     /// </summary>
     private static readonly Dictionary<(string Name, int SegmentsPerCircle), (int Vertices, int Facets)>
-        KnownOffSurface = new()
-        {
-            [("rounded box", 96)] = (176, 34),
-        };
+        KnownOffSurface = [];
 
     /// <summary>
     /// No facet may oppose its own surface, and every facet vertex must lie on the surface
