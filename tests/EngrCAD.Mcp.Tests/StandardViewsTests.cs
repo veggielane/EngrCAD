@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Viewer;
 using Xunit;
 
 namespace EngrCAD.Mcp.Tests;
@@ -65,5 +66,44 @@ public class StandardViewsTests
     public void The_default_view_leaves_framing_to_the_renderer()
     {
         Assert.Null(StandardViews.For("default", [], null));
+    }
+
+    // ---- equivalence against the now-public shared math ----
+    // ViewCubeMath and CameraMath live in EngrCAD.Viewer.Core; the mirror in this
+    // package exists only because they used to be internal. These assertions are the
+    // deletion warrant: every named view's pose and the framing distance must be
+    // BIT-identical between the mirror and the shared functions, at which point the
+    // mirror can be deleted and the callers pointed at the real thing.
+
+    [Fact]
+    public void Every_named_pose_is_bit_identical_to_ViewCubeMath()
+    {
+        foreach (string view in StandardViews.Names)
+        {
+            var direction = StandardViews.DirectionFor(view)!.Value;
+            var mirror = StandardViews.PoseFor(direction);
+            // The window passes its CURRENT yaw for the pole views; the headless
+            // renderer has none, which is exactly what PoleYaw stands in for.
+            var shared = ViewCubeMath.PoseFor(direction, currentYaw: StandardViews.PoleYaw);
+            Assert.Equal(shared.Yaw, mirror.Yaw);       // exact, not tolerance
+            Assert.Equal(shared.Pitch, mirror.Pitch);
+        }
+    }
+
+    [Fact]
+    public void PitchLimit_and_FrameDistance_are_bit_identical_to_CameraMath()
+    {
+        Assert.Equal(CameraMath.PitchLimit, StandardViews.PitchLimit);
+
+        foreach (var bounds in (Aabb[])
+        [
+            new(new Vector3d(-10, -6, 0), new Vector3d(10, 6, 6)),
+            new(new Vector3d(0, 0, 0), new Vector3d(0.001, 0.001, 0.001)),
+            new(new Vector3d(-5000, -5000, -5000), new Vector3d(5000, 5000, 5000)),
+            Aabb.Empty,
+        ])
+        {
+            Assert.Equal(CameraMath.FrameDistance(bounds), StandardViews.FrameDistance(bounds));
+        }
     }
 }
