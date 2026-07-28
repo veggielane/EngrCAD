@@ -26,9 +26,10 @@ public static class SurfaceNets
     private const int WindowSampleBudget = 8 << 20;
 
     /// <summary>
-    /// Sample positions staged per batch call. Matches the implicit engine's own batch
-    /// chunk so the coordinate scratch (24 KB) and the operator temporaries below it stay
-    /// cache resident; the value is not load bearing for correctness.
+    /// Sample positions a parallel worker should own at a minimum, expressed as a count and
+    /// divided by the row length to get whole rows. Matches the implicit engine's own batch
+    /// chunk so the coordinate scratch and the operator temporaries below it stay cache
+    /// resident; the value is not load bearing for correctness.
     /// </summary>
     private const int SampleChunk = 1024;
 
@@ -52,7 +53,11 @@ public static class SurfaceNets
     /// ReadOnlySpan{double}, Span{double})"/>) generated on the fly from the grid indices,
     /// in a sliding window of x-slabs — no <c>Vector3d</c> corner array is ever built, so
     /// the grid costs 8 bytes per live sample instead of 32 and peak memory is bounded by
-    /// the slab window rather than the grid volume. Slabs are sampled in parallel
+    /// the slab window rather than the grid volume. A <see cref="SurfaceCull"/> pass first
+    /// removes the blocks the surface provably cannot reach (one evaluation per block, sound
+    /// because the field is 1-Lipschitz), so the walk visits a shell around the surface
+    /// instead of the whole volume; the visit ORDER is untouched, so the mesh is bit-for-bit
+    /// what the full walk produces. Slabs are sampled in parallel
     /// (bit-for-bit deterministic — every sample lands in its own slot); the topology
     /// passes stay sequential and quads are emitted into per-axis buckets, so the output
     /// mesh's vertex and face ordering never depends on scheduling or on the window size.
@@ -61,14 +66,16 @@ public static class SurfaceNets
     /// throws <see cref="OperationCanceledException"/>).
     /// </summary>
     public static HalfEdgeMesh Polygonize(Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress = null) =>
-        Polygonize(sdf, region, resolution, progress, WindowSampleBudget);
+        Polygonize(sdf, region, resolution, progress, WindowSampleBudget, cull: true);
 
     /// <summary>
-    /// The implementation, with the slab window's sample budget exposed so tests can force
-    /// streaming on a small grid and assert the output is bit-for-bit window-independent.
+    /// The implementation, with the slab window's sample budget and the surface cull exposed
+    /// so tests can force streaming on a small grid, disable the cull, and assert the output
+    /// is bit-for-bit independent of both.
     /// </summary>
     internal static HalfEdgeMesh Polygonize(
-        Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress, int windowSampleBudget)
+        Sdf sdf, in Aabb region, int resolution, ProgressCancel? progress, int windowSampleBudget,
+        bool cull = true)
     {
         if (region.IsEmpty)
             throw new ArgumentException("Sampling region is empty.", nameof(region));
@@ -86,6 +93,15 @@ public static class SurfaceNets
         int nx = cells.X, ny = cells.Y, nz = cells.Z; // scalar copies for the hot loops
         var origin = region.Min;
 
+        // Blocks the surface provably cannot reach are never sampled and never walked. The
+        // grid, the coordinate expressions and every loop's ORDER are untouched, so the mesh
+        // is bit-identical to the full walk — the cull only removes work that would have
+        // produced nothing (SurfaceCull carries the completeness argument).
+        var visit = cull
+            ? SurfaceCull.Build(sdf, origin, cell, cells, progress)
+            : SurfaceCull.All(cells);
+        const int block = SurfaceCull.BlockCells;
+
         int sy = ny + 1, sz = nz + 1;
         int slabSamples = sy * sz;
         // Whole slabs held at once; at least two (a cell spans slabs i and i+1).
@@ -102,37 +118,55 @@ public static class SurfaceNets
             {
                 if (progress is not null && progress.CancelRequested)
                     return;
-                var rented = ArrayPool<double>.Shared.Rent(SampleChunk * 3);
+                var rented = ArrayPool<double>.Shared.Rent(sz * 3);
+                var tiles = ArrayPool<bool>.Shared.Rent(visit.CellBlocksZ);
                 try
                 {
-                    var xs = rented.AsSpan(0, SampleChunk);
-                    var ys = rented.AsSpan(SampleChunk, SampleChunk);
-                    var zs = rented.AsSpan(SampleChunk * 2, SampleChunk);
-                    int filled = 0;
-                    int flush = localOrigin + r0 * sz;
+                    var xs = rented.AsSpan(0, sz);
+                    var ys = rented.AsSpan(sz, sz);
+                    var zs = rented.AsSpan(sz * 2, sz);
+                    var row = tiles.AsSpan(0, visit.CellBlocksZ);
                     for (int r = r0; r < r1; r++)
                     {
+                        int slab = from + r / sy;
+                        int j = r % sy;
                         // Coordinates are recomputed from the indices with the same
                         // expression the dense sampler used, so values are unchanged.
-                        double px = origin.X + (from + r / sy) * cell;
-                        double py = origin.Y + r % sy * cell;
-                        for (int k = 0; k < sz; k++)
+                        double px = origin.X + slab * cell;
+                        double py = origin.Y + j * cell;
+                        int rowBase = localOrigin + r * sz;
+
+                        // Adjacent active tiles merge into one run, so a row typically feeds
+                        // the field one or two contiguous batches rather than sz/1024 of them.
+                        visit.SampleTilesForRow(slab, j, row);
+                        for (int bk = 0; bk < row.Length;)
                         {
-                            xs[filled] = px;
-                            ys[filled] = py;
-                            zs[filled] = origin.Z + k * cell;
-                            if (++filled != SampleChunk)
+                            if (!row[bk])
+                            {
+                                bk++;
                                 continue;
-                            sdf.Evaluate(xs, ys, zs, values.AsSpan(flush, SampleChunk));
-                            flush += SampleChunk;
-                            filled = 0;
+                            }
+                            int k0 = bk * block;
+                            while (bk < row.Length && row[bk])
+                                bk++;
+                            // A run of cells [k0, k1) has corners [k0, k1] — hence the +1.
+                            int k1 = Math.Min(bk * block + 1, sz);
+                            int length = k1 - k0;
+                            for (int k = k0; k < k1; k++)
+                            {
+                                xs[k - k0] = px;
+                                ys[k - k0] = py;
+                                zs[k - k0] = origin.Z + k * cell;
+                            }
+                            sdf.Evaluate(
+                                xs[..length], ys[..length], zs[..length],
+                                values.AsSpan(rowBase + k0, length));
                         }
                     }
-                    if (filled > 0)
-                        sdf.Evaluate(xs[..filled], ys[..filled], zs[..filled], values.AsSpan(flush, filled));
                 }
                 finally
                 {
+                    ArrayPool<bool>.Shared.Return(tiles);
                     ArrayPool<double>.Shared.Return(rented);
                 }
             }, minBlockSize: Math.Max(1, SampleChunk / sz));
@@ -237,107 +271,129 @@ public static class SurfaceNets
             // sample within it.
             int Corner(int dx, int j, int k) => (dx == 0 ? slab0 : slab1) + j * sz + k;
 
+            // Cells are visited in exactly the (j, k) order the full walk used — the tile
+            // loop only skips runs the cull proved empty, so vertex numbering is unchanged.
+            int cellBlock = i / block;
             for (int j = 0; j < ny; j++)
             {
-                for (int k = 0; k < nz; k++)
+                var cellTiles = visit.CellRow(cellBlock, j / block);
+                for (int bk = 0; bk < cellTiles.Length; bk++)
                 {
-                    corners[0] = Corner(0, j, k);
-                    corners[1] = Corner(1, j, k);
-                    corners[2] = Corner(0, j + 1, k);
-                    corners[3] = Corner(1, j + 1, k);
-                    corners[4] = Corner(0, j, k + 1);
-                    corners[5] = Corner(1, j, k + 1);
-                    corners[6] = Corner(0, j + 1, k + 1);
-                    corners[7] = Corner(1, j + 1, k + 1);
-
-                    int insideMask = 0;
-                    for (int c = 0; c < 8; c++)
-                    {
-                        if (values[corners[c]] < 0)
-                            insideMask |= 1 << c;
-                    }
-                    if (insideMask is 0 or 255)
+                    if (!cellTiles[bk])
                         continue;
-
-                    var map = new int[8];
-                    Array.Fill(map, -1);
-
-                    // Flood-fill inside corners over the cube's face adjacency (bit flips).
-                    int seenMask = 0;
-                    for (int seed = 0; seed < 8; seed++)
+                    int kEnd = Math.Min((bk + 1) * block, nz);
+                    for (int k = bk * block; k < kEnd; k++)
                     {
-                        if ((insideMask & (1 << seed)) == 0 || (seenMask & (1 << seed)) != 0)
-                            continue;
-                        int componentMask = 0;
-                        int top = 0;
-                        stack[top++] = seed;
-                        seenMask |= 1 << seed;
-                        while (top > 0)
+                        corners[0] = Corner(0, j, k);
+                        corners[1] = Corner(1, j, k);
+                        corners[2] = Corner(0, j + 1, k);
+                        corners[3] = Corner(1, j + 1, k);
+                        corners[4] = Corner(0, j, k + 1);
+                        corners[5] = Corner(1, j, k + 1);
+                        corners[6] = Corner(0, j + 1, k + 1);
+                        corners[7] = Corner(1, j + 1, k + 1);
+
+                        int insideMask = 0;
+                        for (int c = 0; c < 8; c++)
                         {
-                            int c = stack[--top];
-                            componentMask |= 1 << c;
-                            foreach (int neighbor in (ReadOnlySpan<int>)[c ^ 1, c ^ 2, c ^ 4])
+                            if (values[corners[c]] < 0)
+                                insideMask |= 1 << c;
+                        }
+                        if (insideMask is 0 or 255)
+                            continue;
+
+                        var map = new int[8];
+                        Array.Fill(map, -1);
+
+                        // Flood-fill inside corners over the cube's face adjacency (bit flips).
+                        int seenMask = 0;
+                        for (int seed = 0; seed < 8; seed++)
+                        {
+                            if ((insideMask & (1 << seed)) == 0 || (seenMask & (1 << seed)) != 0)
+                                continue;
+                            int componentMask = 0;
+                            int top = 0;
+                            stack[top++] = seed;
+                            seenMask |= 1 << seed;
+                            while (top > 0)
                             {
-                                int bit = 1 << neighbor;
-                                if ((insideMask & bit) != 0 && (seenMask & bit) == 0)
+                                int c = stack[--top];
+                                componentMask |= 1 << c;
+                                foreach (int neighbor in (ReadOnlySpan<int>)[c ^ 1, c ^ 2, c ^ 4])
                                 {
-                                    seenMask |= bit;
-                                    stack[top++] = neighbor;
+                                    int bit = 1 << neighbor;
+                                    if ((insideMask & bit) != 0 && (seenMask & bit) == 0)
+                                    {
+                                        seenMask |= bit;
+                                        stack[top++] = neighbor;
+                                    }
                                 }
+                            }
+
+                            // Component vertex: mean of the crossings on edges leaving it.
+                            var sum = Vector3d.Zero;
+                            int crossings = 0;
+                            foreach (var (ea, eb) in edges)
+                            {
+                                bool aIn = (componentMask & (1 << ea)) != 0;
+                                bool bIn = (componentMask & (1 << eb)) != 0;
+                                if (aIn == bIn)
+                                    continue;
+                                int insideCorner = aIn ? ea : eb;
+                                int outsideCorner = aIn ? eb : ea;
+                                if (values[corners[outsideCorner]] < 0)
+                                    continue; // both grid-inside: edge internal to the solid
+                                double t = values[corners[insideCorner]] /
+                                    (values[corners[insideCorner]] - values[corners[outsideCorner]]);
+                                sum += Vector3d.Lerp(
+                                    CornerPosition(i, j, k, insideCorner),
+                                    CornerPosition(i, j, k, outsideCorner), t);
+                                crossings++;
+                            }
+
+                            int vertex = positions.Count;
+                            positions.Add(sum / crossings);
+                            for (int c = 0; c < 8; c++)
+                            {
+                                if ((componentMask & (1 << c)) != 0)
+                                    map[c] = vertex;
                             }
                         }
 
-                        // Component vertex: mean of the crossings on edges leaving it.
-                        var sum = Vector3d.Zero;
-                        int crossings = 0;
-                        foreach (var (ea, eb) in edges)
-                        {
-                            bool aIn = (componentMask & (1 << ea)) != 0;
-                            bool bIn = (componentMask & (1 << eb)) != 0;
-                            if (aIn == bIn)
-                                continue;
-                            int insideCorner = aIn ? ea : eb;
-                            int outsideCorner = aIn ? eb : ea;
-                            if (values[corners[outsideCorner]] < 0)
-                                continue; // both grid-inside: edge internal to the solid
-                            double t = values[corners[insideCorner]] /
-                                (values[corners[insideCorner]] - values[corners[outsideCorner]]);
-                            sum += Vector3d.Lerp(
-                                CornerPosition(i, j, k, insideCorner),
-                                CornerPosition(i, j, k, outsideCorner), t);
-                            crossings++;
-                        }
-
-                        int vertex = positions.Count;
-                        positions.Add(sum / crossings);
-                        for (int c = 0; c < 8; c++)
-                        {
-                            if ((componentMask & (1 << c)) != 0)
-                                map[c] = vertex;
-                        }
+                        int slot = j * nz + k;
+                        currentMap[slot] = map;
+                        currentTouched.Add(slot);
                     }
-
-                    int slot = j * nz + k;
-                    currentMap[slot] = map;
-                    currentTouched.Add(slot);
                 }
             }
+
+            // The three quad passes walk grid EDGES, and an edge can only carry a quad when
+            // all four cells around it produced a vertex — so the sample mask (the cell mask
+            // dilated to the corners) is a superset of the edges worth testing. Over-inclusion
+            // is free: Emit already returns on a missing neighbour map.
 
             // X-aligned edges: quad over cells varying in (y, z); CCW in (y, z) → +X normal.
             for (int j = 1; j < ny; j++)
             {
-                for (int k = 1; k < nz; k++)
+                var tiles = visit.SampleRow(cellBlock, j / block);
+                for (int bk = 0; bk < tiles.Length; bk++)
                 {
-                    bool insideStart = values[Corner(0, j, k)] < 0;
-                    if (insideStart == values[Corner(1, j, k)] < 0)
+                    if (!tiles[bk])
                         continue;
-                    int d = insideStart ? 0 : 1; // local x-bit of the inside endpoint
-                    Emit(facesX,
-                        currentMap[(j - 1) * nz + k - 1], d | 2 | 4,
-                        currentMap[j * nz + k - 1], d | 4,
-                        currentMap[j * nz + k], d,
-                        currentMap[(j - 1) * nz + k], d | 2,
-                        flip: !insideStart);
+                    int kEnd = Math.Min((bk + 1) * block, nz);
+                    for (int k = Math.Max(1, bk * block); k < kEnd; k++)
+                    {
+                        bool insideStart = values[Corner(0, j, k)] < 0;
+                        if (insideStart == values[Corner(1, j, k)] < 0)
+                            continue;
+                        int d = insideStart ? 0 : 1; // local x-bit of the inside endpoint
+                        Emit(facesX,
+                            currentMap[(j - 1) * nz + k - 1], d | 2 | 4,
+                            currentMap[j * nz + k - 1], d | 4,
+                            currentMap[j * nz + k], d,
+                            currentMap[(j - 1) * nz + k], d | 2,
+                            flip: !insideStart);
+                    }
                 }
             }
 
@@ -347,36 +403,50 @@ public static class SurfaceNets
             // Y-aligned edges: quad over cells varying in (z, x); CCW in (z, x) → +Y normal.
             for (int j = 0; j < ny; j++)
             {
-                for (int k = 1; k < nz; k++)
+                var tiles = visit.SampleRow(cellBlock, j / block);
+                for (int bk = 0; bk < tiles.Length; bk++)
                 {
-                    bool insideStart = values[Corner(0, j, k)] < 0;
-                    if (insideStart == values[Corner(0, j + 1, k)] < 0)
+                    if (!tiles[bk])
                         continue;
-                    int d = (insideStart ? 0 : 1) << 1; // local y-bit of the inside endpoint
-                    Emit(facesY[j] ??= [],
-                        previousMap[j * nz + k - 1], d | 1 | 4,
-                        previousMap[j * nz + k], d | 1,
-                        currentMap[j * nz + k], d,
-                        currentMap[j * nz + k - 1], d | 4,
-                        flip: !insideStart);
+                    int kEnd = Math.Min((bk + 1) * block, nz);
+                    for (int k = Math.Max(1, bk * block); k < kEnd; k++)
+                    {
+                        bool insideStart = values[Corner(0, j, k)] < 0;
+                        if (insideStart == values[Corner(0, j + 1, k)] < 0)
+                            continue;
+                        int d = (insideStart ? 0 : 1) << 1; // local y-bit of the inside endpoint
+                        Emit(facesY[j] ??= [],
+                            previousMap[j * nz + k - 1], d | 1 | 4,
+                            previousMap[j * nz + k], d | 1,
+                            currentMap[j * nz + k], d,
+                            currentMap[j * nz + k - 1], d | 4,
+                            flip: !insideStart);
+                    }
                 }
             }
 
             // Z-aligned edges: quad over cells varying in (x, y); CCW in (x, y) → +Z normal.
             for (int k = 0; k < nz; k++)
             {
-                for (int j = 1; j < ny; j++)
+                int sampleTileZ = k / block;
+                for (int bj = 0; bj < visit.SampleBlocksY; bj++)
                 {
-                    bool insideStart = values[Corner(0, j, k)] < 0;
-                    if (insideStart == values[Corner(0, j, k + 1)] < 0)
+                    if (!visit.SampleActive(cellBlock, bj, sampleTileZ))
                         continue;
-                    int d = (insideStart ? 0 : 1) << 2; // local z-bit of the inside endpoint
-                    Emit(facesZ[k] ??= [],
-                        previousMap[(j - 1) * nz + k], d | 1 | 2,
-                        currentMap[(j - 1) * nz + k], d | 2,
-                        currentMap[j * nz + k], d,
-                        previousMap[j * nz + k], d | 1,
-                        flip: !insideStart);
+                    int jEnd = Math.Min((bj + 1) * block, ny);
+                    for (int j = Math.Max(1, bj * block); j < jEnd; j++)
+                    {
+                        bool insideStart = values[Corner(0, j, k)] < 0;
+                        if (insideStart == values[Corner(0, j, k + 1)] < 0)
+                            continue;
+                        int d = (insideStart ? 0 : 1) << 2; // local z-bit of the inside endpoint
+                        Emit(facesZ[k] ??= [],
+                            previousMap[(j - 1) * nz + k], d | 1 | 2,
+                            currentMap[(j - 1) * nz + k], d | 2,
+                            currentMap[j * nz + k], d,
+                            previousMap[j * nz + k], d | 1,
+                            flip: !insideStart);
+                    }
                 }
             }
         }

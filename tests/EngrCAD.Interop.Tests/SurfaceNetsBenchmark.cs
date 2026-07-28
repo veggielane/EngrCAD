@@ -81,4 +81,85 @@ public class SurfaceNetsBenchmark(ITestOutputHelper output)
             output.WriteLine($"{resolution,4} | {best,7:F1} | {allocated / 1048576.0,9:F1} | {vertices}");
         }
     }
+
+    /// <summary>
+    /// What the surface cull buys, per field and per resolution. Both columns produce the
+    /// bit-identical mesh (locked by
+    /// <see cref="SurfaceNetsSamplingTests.TheCulledWalk_IsBitIdenticalToTheFullWalk"/>), so
+    /// this is purely a cost measurement.
+    /// <para>
+    /// Reference machine (win-arm64, .NET 10.0.302, Release, otherwise idle), best of three
+    /// after a wall-clock warm-up budget:
+    /// </para>
+    /// <code>
+    ///  field       | res |  full ms | culled ms | speedup
+    ///  csg         |  48 |      3.6 |       3.1 |   1.16x
+    ///  csg         |  96 |     21.4 |      13.4 |   1.60x
+    ///  csg         | 192 |    138.8 |      63.7 |   2.18x
+    ///  csg         | 256 |    310.7 |     126.3 |   2.46x
+    ///  mesh sdf    |  48 |     44.7 |      36.8 |   1.21x
+    ///  mesh sdf    |  96 |    352.4 |     117.9 |   2.99x
+    /// </code>
+    /// <para>
+    /// <b>The speedup is smaller than the sample saving, and that is the finding.</b> The
+    /// cull evaluates 28.4% of the grid at resolution 96, 15.6% at 192 and 12.0% at 256 —
+    /// an 8× saving — yet buys only 2.5×, because polygonization stops being sample-bound
+    /// once the samples are gone. Measured at resolution 256 with a field whose evaluation
+    /// is a single square root: the whole call still takes 132.8 ms against 129.3 ms for the
+    /// real CSG field, i.e. evaluation is now free and the cost is assembly —
+    /// <see cref="HalfEdgeMesh.Build"/> alone is 39% (56.9 of 145.8 ms at 131 294 vertices,
+    /// 48% at resolution 192), the rest being the per-cell component maps, the quad lists and
+    /// the sample window. Anything further has to attack the mesh assembly, not the grid.
+    /// </para></summary>
+    [Fact]
+    public void CullSpeedupByFieldAndResolution()
+    {
+        if (!Enabled)
+            return;
+
+        var csg = (Sdf.Box(2, 2, 2) - Sdf.Cylinder(0.6, 3))
+            .SmoothUnion(Sdf.Sphere(1.2).Translate((0.8, 0.3, 0.2)), 0.25);
+        var csgRegion = new Aabb((-2.2, -2.2, -2.2), (2.4, 2.2, 2.2));
+
+        // An expensive field: every sample is a BVH nearest-triangle query.
+        var mesh = SurfaceNets.Polygonize(csg, csgRegion, 64);
+        var meshField = new MeshSdf(mesh);
+        var meshRegion = meshField.Bounds.Expanded(0.3);
+
+        var warm = Stopwatch.StartNew();
+        do
+        {
+            SurfaceNets.Polygonize(csg, csgRegion, 40);
+        }
+        while (warm.ElapsedMilliseconds < 1200);
+
+        output.WriteLine(" field       | res |  full ms | culled ms | speedup");
+        foreach (var (label, field, region, resolutions) in new (string, Sdf, Aabb, int[])[]
+        {
+            ("csg", csg, csgRegion, [48, 96, 192, 256]),
+            ("mesh sdf", meshField, meshRegion, [48, 96]),
+        })
+        {
+            foreach (int resolution in resolutions)
+            {
+                double full = Best(() =>
+                    SurfaceNets.Polygonize(field, region, resolution, null, int.MaxValue, cull: false));
+                double culled = Best(() => SurfaceNets.Polygonize(field, region, resolution));
+                output.WriteLine(
+                    $" {label,-11} | {resolution,3} | {full,8:F1} | {culled,9:F1} | {full / culled,6:F2}x");
+            }
+        }
+    }
+
+    private static double Best(Action body)
+    {
+        double best = double.PositiveInfinity;
+        for (int trial = 0; trial < 3; trial++)
+        {
+            var watch = Stopwatch.StartNew();
+            body();
+            best = Math.Min(best, watch.Elapsed.TotalMilliseconds);
+        }
+        return best;
+    }
 }

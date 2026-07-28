@@ -34,8 +34,27 @@ engines.
     passes run slab by slab. `SurfaceNetsSamplingTests` locks all of it against golden
     bit-hashes of the pre-streaming output, against a wrapper that forces every batch back
     through the scalar `Evaluate`, and across window sizes from "whole grid" to "two slabs".
-- **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples)` —
-
+  - **Only the blocks the surface can reach are visited** (`SurfaceCull`). The grid is
+    tiled into 8³-cell blocks; a block whose centre reports `|d| > halfDiagonal + oneCell`
+    is skipped entirely, at a cost of one evaluation per block (a 32-cell coarse level in
+    front of it throws away the far field for 1/64th of that). **The completeness argument
+    is the whole point**: an `Sdf` here is 1-Lipschitz, so every point `p` of such a block
+    has `|d(p)| ≥ |d(c)| − |c − p| ≥ |d(c)| − R > 0` and the block cannot contain a sign
+    change, hence no vertex and no quad. Nothing is seeded and nothing is flooded — *a
+    seed-and-flood continuation silently drops components its seeds miss, and the only sound
+    way to prove the seed set complete is a cull, which has already produced the visit set.*
+    Cell and quad loops keep their exact `(j, k)` order and only skip runs of tiles, so the
+    mesh is **bit-identical to the full walk**, ordering included
+    (`TheCulledWalk_IsBitIdenticalToTheFullWalk`, including three separated components — one
+    smaller than a block — and a hollow shell).
+    Measured (reference machine, `SurfaceNetsBenchmark.CullSpeedupByFieldAndResolution`):
+    the CSG field evaluates **28.4% / 15.6% / 12.0%** of the grid at res 96 / 192 / 256 for
+    **1.60× / 2.18× / 2.46×**, and a `MeshSdf` field **2.99×** at res 96.
+  - **Beyond that, polygonization is no longer sample-bound** — the honest half of the
+    result. At res 256 a field costing one square root per sample still takes 132.8 ms
+    against 129.3 ms for the real CSG field: evaluation is free and the cost is assembly.
+    `HalfEdgeMesh.Build` alone is 39–48%, the rest being per-cell component maps, quad lists
+    and the sample window. Further work belongs there, not in the grid walk.
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress?)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces

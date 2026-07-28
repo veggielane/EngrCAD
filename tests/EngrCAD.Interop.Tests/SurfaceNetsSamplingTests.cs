@@ -59,6 +59,21 @@ public class SurfaceNetsSamplingTests
         "csg" => (Csg(), new Aabb((-2.2, -2.2, -2.2), (2.4, 2.2, 2.2))),
         "torus" => (Sdf.Torus(1.0, 0.35).Rotate(Quaterniond.FromAxisAngle(Vector3d.UnitX, 0.7)),
             new Aabb((-1.6, -1.6, -1.6), (1.6, 1.6, 1.6))),
+        // Three components with nothing but empty space between them, one of them small
+        // enough to sit inside a single cull block: the case a seed-and-flood continuation
+        // would drop and a Lipschitz cull cannot.
+        "scattered" => (
+            Sdf.Union(
+                Sdf.Sphere(0.9),
+                Sdf.Box(0.5, 0.5, 0.5).Translate((3.2, -2.8, 2.6)),
+                Sdf.Sphere(0.22).Translate((-3.0, 3.1, -2.7))),
+            new Aabb((-4.0, -4.0, -4.0), (4.0, 4.0, 4.0))),
+        // A hollow shell: two nested surfaces a few cells apart, so the cull's kept region
+        // is a thick spherical band and both walls must survive it. (Thinner than a cell
+        // and Surface Nets itself gives up — the sampled field stops registering inside —
+        // so this is deliberately three cells thick at the resolutions tested.)
+        "thin shell" => (Sdf.Sphere(1.2).Shell(0.2),
+            new Aabb((-1.6, -1.6, -1.6), (1.6, 1.6, 1.6))),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 
@@ -124,6 +139,63 @@ public class SurfaceNetsSamplingTests
         // 29 cells → 30 slabs of 30×30 samples; these budgets give 5-, 3- and 2-slab windows.
         foreach (int budget in new[] { 4500, 2700, 1800 })
             Assert.Equal(dense, Fingerprint(SurfaceNets.Polygonize(field, region, 29, null, budget)));
+    }
+
+    /// <summary>
+    /// The surface cull is a work filter, never a numerical one. It removes blocks the field
+    /// provably cannot reach — so the walk that skips them must produce EXACTLY the mesh the
+    /// walk that visits everything produces: same vertices, same faces, same ordering.
+    /// <para>"scattered" and "thin shell" are the cases that would catch an incomplete visit
+    /// set: three components separated by empty space (one of them smaller than a cull
+    /// block), and a shell thinner than a cell. A seed-and-flood continuation drops the
+    /// former unless its seeds are already complete; the Lipschitz cull is complete by
+    /// construction, which is why the cull IS the algorithm here and no flood is needed.</para>
+    /// </summary>
+    [Theory]
+    [InlineData("sphere", 40)]
+    [InlineData("csg", 37)]
+    [InlineData("torus", 43)]
+    [InlineData("scattered", 64)]
+    [InlineData("thin shell", 48)]
+    public void TheCulledWalk_IsBitIdenticalToTheFullWalk(string name, int resolution)
+    {
+        var (field, region) = Case(name);
+        var full = SurfaceNets.Polygonize(field, region, resolution, null, int.MaxValue, cull: false);
+        var culled = SurfaceNets.Polygonize(field, region, resolution, null, int.MaxValue);
+
+        Assert.True(full.VertexCount > 0);
+        Assert.Equal(full.VertexCount, culled.VertexCount);
+        Assert.Equal(full.FaceCount, culled.FaceCount);
+        Assert.Equal(Fingerprint(full), Fingerprint(culled));
+    }
+
+    /// <summary>
+    /// …and the cull composes with the slab window, which slides on a completely different
+    /// schedule: a two-slab budget over a culled walk must still be the dense full walk.
+    /// </summary>
+    [Theory]
+    [InlineData("scattered", 53)]
+    [InlineData("thin shell", 39)]
+    public void CullAndStreaming_Compose(string name, int resolution)
+    {
+        var (field, region) = Case(name);
+        long full = Fingerprint(
+            SurfaceNets.Polygonize(field, region, resolution, null, int.MaxValue, cull: false));
+        Assert.Equal(full, Fingerprint(SurfaceNets.Polygonize(field, region, resolution, null, 1)));
+    }
+
+    /// <summary>
+    /// The separated components come back as separated components — a direct check that the
+    /// cull loses nothing, phrased as geometry rather than as a hash.
+    /// </summary>
+    [Fact]
+    public void ScatteredComponents_AllSurvive()
+    {
+        var (field, region) = Case("scattered");
+        var mesh = SurfaceNets.Polygonize(field, region, 64);
+        var components = MeshConnectedComponents.Find(mesh);
+        Assert.Equal(3, components.Count);
+        Assert.All(components, c => Assert.True(c.IsClosed));
     }
 
     /// <summary>Streaming must survive a grid whose window slides many times.</summary>
