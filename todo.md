@@ -626,6 +626,10 @@ export — is recorded in CLAUDE.md):
     "B-Rep silhouettes" item below, not a boolean fix.
   - [ ] **B-Rep silhouettes** — true silhouette curves on curved surfaces. Today the
     outline is always mesh-derived, so its fidelity is the mesh's however exact the solid.
+    Now has a second consumer with a sharper need: `HiddenLineRemoval` draws a smooth
+    surface's outline from the display mesh's view-dependent silhouette and labels it
+    `EdgeSource.Silhouette` precisely because it is the one part of a drawing that is not
+    exact. Exact HLR is blocked on this.
   - [ ] **`OfSolid` on a flush plane** — a plane containing a face or an edge throws
     (that section is an area, not a curve). A proper answer needs coplanar-face handling,
     the same gap as coplanar booleans.
@@ -646,11 +650,14 @@ export — is recorded in CLAUDE.md):
   deferred"): shape is `Func<double, Scene>` + offline frame bake, the work is
   prefix/identity caching across frames, and it should be built only when a concrete
   model needs morphing geometry.
-- [ ] **DXF/SVG follow-ups** (v1 ✅ landed — `DxfDocument` LINE/ARC/CIRCLE/LWPOLYLINE
-  with layers both ways, exact bulge arcs; `SvgDrawing` visible/hidden/section line
-  classes over Section/Silhouette/Sketch): DXF SPLINE entities (cubic béziers now
-  flatten on export), hidden-line classification computed from the model (needs HLR —
-  today the caller says which class a curve set is), DXF units header ($INSUNITS).
+- [ ] **DXF/SVG follow-ups** (v1 ✅ landed — `DxfDocument` LINE/ARC/CIRCLE/LWPOLYLINE/TEXT
+  with layers and an LTYPE table both ways, exact bulge arcs; `SvgDrawing`
+  visible/hidden/section/thin line classes plus sheet-sized output and text over
+  Section/Silhouette/Sketch/`DrawingSheet`; hidden-line classification is now COMPUTED
+  from the model by `HiddenLineRemoval`): DXF SPLINE entities (cubic béziers still
+  flatten on export), DXF units header ($INSUNITS), MTEXT for multi-line notes (a note
+  currently writes one TEXT entity per line), and SVG hatch as a `<pattern>` fill rather
+  than one path per hatch line (smaller files for a big section).
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
@@ -849,15 +856,41 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   without the AP214 ceremony ONLY if a measured need (load time, exactness of swept
   surfaces STEP cannot carry) appears; the honest alternative — version the format
   from day one or don't ship it — is the whole cost.
-- [ ] Hidden-line removal (HLR) projections for 2D drawings. Design assessment
-  (task #11): the exact-algebra route (OCCT `HLRBRep`: project edges + silhouette
-  curves, split at visibility changes, classify against every face) is a large
-  project with the same robustness surface as the boolean; the pragmatic first rung
-  is MESH-based HLR — project tessellation feature edges (`BrepFeatureEdges` already
-  exists), depth-test segments against the triangle BVH (`Part` pick BVHs already
-  exist), and emit visible/hidden per segment for the DXF/SVG layer item. That gets
-  usable drawings at display fidelity now and leaves exact HLR as the upgrade whose
-  seam (a list of classified 2D segments) is already right.
+- [ ] **HLR / drawing follow-ups** (v1 ✅ landed — `HiddenLineRemoval` classifying exact
+  B-Rep feature edges against the display mesh, `DrawingSheet`/`DrawingView` with
+  third/first-angle standard layouts and section views, `SheetAnnotation` dimensions,
+  SVG/DXF sheet export; `docs/examples/drawings.md`):
+  - [ ] **Exact HLR** (OCCT `HLRBRep`): project edges AND true silhouette curves and
+    classify algebraically against every face, instead of ray-casting against the
+    display mesh. Blocked on the B-Rep silhouette item in the OpenSCAD section — with
+    exact silhouette curves the rest is the same splitting machinery the boolean
+    already has. The seam is right today (a list of classified 2D polylines), so this
+    is a swap behind `HiddenLineRemoval.Project`, not a rewrite of the sheet layer.
+  - [ ] **Auto-dimensioning**: a first pass placing the obvious dimensions (overall
+    extents per view, hole diameters and their bolt-circle or grid spacing) from the
+    graph's own `DrillShape`/`LocationSet` nodes, the way `HoleTable.For(part)` already
+    reads them. Explicit placement stays the contract; this is a starting point, not a
+    replacement.
+  - [ ] **BOM-linked balloons**: `SheetBalloon` draws a circled string today, and `Bom`
+    already numbers distinct parts — connecting them means picking a leader anchor per
+    occurrence from the projection (a visible point on that instance's line work) and
+    emitting a parts-list table beside the title block.
+  - [ ] **More sheet standards**: ISO 5457 border/zone frames with the row/column grid
+    and centring marks, the third/first-angle projection SYMBOL as geometry rather than
+    the words the title block prints today, an ISO 7200 field layout, and the B-series
+    and ANSI A–E paper sizes beside the A series.
+  - [ ] **Detail views** (a scaled-up circle of a region) and **broken views** (a long
+    part with its middle removed). Both are clipping problems on top of the existing
+    view, not new projections.
+  - [ ] **Cut-plane indication**: a section view is drawn correctly but nothing marks
+    WHERE it was cut on its parent view — the chain-dashed cutting line with its arrows
+    and letters. Needs a view-to-view reference, which the sheet model does not have
+    yet.
+  - [ ] **Corner resolution**: within one bias step of a model vertex the local-surface
+    read picks up the far side's faces, so a hidden run stops that far short of its
+    corner (measured: three junctions on a box cost 0.037 of an analytic 57.155, i.e.
+    one bias each). Absorbed by the minimum-run rule and far below drawing resolution,
+    but an exact HLR would not have it at all.
 - [ ] OCAF-style document framework: undo/redo, attributes, persistence. Design
   assessment (task #11): do NOT port OCAF's label-tree/attribute model — this
   codebase's document model is `Scene`/`Tab`/`Part` with `FeatureHistory` as the
@@ -901,12 +934,6 @@ honest no) is recorded in design.md §6b with the comparison committed as
 - [ ] **Packing follow-ups**: rotation (90° first, then free), true-outline nesting
   (the silhouette regions are already computed — only their AABBs are used), and
   multi-plate overflow instead of the loud refusal.
-- [ ] **Drafting / dimensions** — build123d's `drafting` module (`Draft`,
-  `DimensionLine`, `ExtensionLine`, `TechnicalDrawing`). We have 3D PMI annotations
-  landed (`LinearDimension`, `RadialDimension`, `LeaderNote`, `DatumLabel` with
-  auto-measuring selectors), so this is mostly a **2D drawing sheet** gap: dimensions
-  laid out on a projected view rather than in model space. Pairs with the HLR item in the
-  OCCT section — HLR gives the view, drafting gives the annotation on it.
 - [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
   `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
   build123d's edge-classification line types) and **VTK/VTU** ✅ (`VtuWriter` +

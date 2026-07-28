@@ -71,7 +71,7 @@ if (!canRender)
 }
 
 // ---- collect snippets ------------------------------------------------------------
-var fenceOpen = new Regex(@"^```csharp[ \t]+(render|run|animate):([A-Za-z0-9][A-Za-z0-9-]*)((?:[ \t]+\S+)*)[ \t]*$");
+var fenceOpen = new Regex(@"^```csharp[ \t]+(render|run|animate|svg):([A-Za-z0-9][A-Za-z0-9-]*)((?:[ \t]+\S+)*)[ \t]*$");
 var snippets = new List<Snippet>();
 var errors = new List<string>();
 var seenIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -112,7 +112,7 @@ foreach (var file in mdFiles)
         var optionsValid = true;
         foreach (var token in open.Groups[3].Value.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
         {
-            if (kind == "run")
+            if (kind is "run" or "svg")
             {
                 errors.Add($"{file}: snippet '{kind}:{id}' — render options ('{token}') only apply to render:/animate: fences.");
                 optionsValid = false;
@@ -170,25 +170,27 @@ foreach (var file in mdFiles)
             continue;
 
         seenIds[id] = file;
-        snippets.Add(new Snippet(id, kind == "render", kind == "animate", file, string.Join('\n', body),
+        snippets.Add(new Snippet(id, kind == "render", kind == "animate", kind == "svg", file,
+            string.Join('\n', body),
             style, sectionAxis, sectionOffset, sectionPlanes, animationFrames));
     }
 }
 
 if (snippets.Count == 0)
 {
-    Console.Error.WriteLine($"no render:/run: snippets found under {docsRoot} — nothing to verify.");
+    Console.Error.WriteLine($"no render:/run:/svg: snippets found under {docsRoot} — nothing to verify.");
     return 2;
 }
 
-// Every render/animate snippet's markdown must reference the image it produces (an
-// APNG is served as .png, so one rule covers both).
-foreach (var s in snippets.Where(s => s.Render || s.Animate))
+// Every snippet that produces an artifact must reference it from its own page (an APNG
+// is served as .png, so render and animate share one rule; an svg: fence writes .svg,
+// which DocFX copies from examples/images/ like any other resource).
+foreach (var s in snippets.Where(s => s.Render || s.Animate || s.Svg))
 {
-    var expectedLink = $"images/{s.Id}.png";
+    var expectedLink = $"images/{s.Id}{(s.Svg ? ".svg" : ".png")}";
     if (!File.ReadAllText(s.File).Contains(expectedLink, StringComparison.OrdinalIgnoreCase))
-        errors.Add($"{s.File}: snippet '{(s.Render ? "render" : "animate")}:{s.Id}' is never shown — "
-                 + $"add ![...]({expectedLink}) to the page.");
+        errors.Add($"{s.File}: snippet '{(s.Render ? "render" : s.Animate ? "animate" : "svg")}:{s.Id}' "
+                 + $"is never shown — add ![...]({expectedLink}) to the page.");
 }
 
 // ---- execute ---------------------------------------------------------------------
@@ -216,7 +218,9 @@ var rendered = 0;
 var executed = 0;
 foreach (var s in snippets)
 {
-    Console.WriteLine($"[{(s.Render ? "render" : s.Animate ? "animate" : "run   ")}] {s.Id}  ({Path.GetFileName(s.File)})");
+    Console.WriteLine(
+        $"[{(s.Render ? "render" : s.Animate ? "animate" : s.Svg ? "svg   " : "run   ")}] "
+        + $"{s.Id}  ({Path.GetFileName(s.File)})");
     ScriptState<object>? state = null;
     try
     {
@@ -231,6 +235,26 @@ foreach (var s in snippets)
     catch (Exception ex)
     {
         errors.Add($"{s.File} ({s.Id}): snippet THREW at run time: {ex.GetType().Name}: {ex.Message}");
+        continue;
+    }
+
+    if (s.Svg)
+    {
+        // A drawing SHEET is line work on paper, not a render: it has no camera, no
+        // lighting and no pixels, and turning it into a PNG here would throw away the
+        // one property that makes it useful downstream (it is vector output a machinist
+        // can open). So the snippet hands back the document itself as `string svg` and
+        // it is written verbatim; nothing about it needs GL, which is why an svg: fence
+        // works on a machine that cannot render at all.
+        var svgText = state.Variables.LastOrDefault(v => v.Name == "svg")?.Value as string;
+        if (string.IsNullOrWhiteSpace(svgText))
+        {
+            errors.Add($"{s.File} ({s.Id}): svg snippet must define a variable `svg` of type string "
+                     + "(e.g. `var svg = sheet.ToSvg();`).");
+            continue;
+        }
+        File.WriteAllText(Path.Combine(imagesDir, $"{s.Id}.svg"), svgText);
+        rendered++;
         continue;
     }
 
@@ -401,7 +425,7 @@ static bool TryReadVariable<T>(
 }
 
 internal sealed record Snippet(
-    string Id, bool Render, bool Animate, string File, string Code,
+    string Id, bool Render, bool Animate, bool Svg, string File, string Code,
     ViewStyle Style, SectionAxis SectionAxis, double? SectionOffset,
     IReadOnlyList<SectionPlane>? SectionPlanes, int AnimationFrames);
 

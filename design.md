@@ -1185,6 +1185,73 @@ Design decisions:
   own "no value", since dropping the array loses the result that exists and zeros show a
   fake safe region.
 
+## 6c. Drawings (hidden lines, sheets, drafting)
+
+A drawing is a *document*, not a picture, and the whole design follows from that.
+
+- **The v1 fidelity split is deliberate and stated in the output.** What gets DRAWN is
+  exact wherever the kernel has it — a B-Rep part's feature edges are sampled from the
+  actual edge curves, so a bore rim is a smooth circle however coarse the mesh — while
+  what gets ANSWERED ("is there material in front of this point") comes from the display
+  mesh. The gap between the two is one thing: a smooth surface has no modelled edge along
+  its outline, so a cylinder seen from the side takes one from the mesh's view-dependent
+  silhouette. That is the known upgrade (true B-Rep silhouette curves), and rather than
+  hide it, `EdgeSource` labels every run so a consumer can see which fidelity it holds.
+  The alternative — OCCT's `HLRBRep`, projecting exact edges AND silhouette curves and
+  classifying against every face algebraically — is a project with the boolean's entire
+  robustness surface; this rung gets usable drawings now and leaves the seam (a list of
+  classified 2D polylines) already the right shape for the exact version to slot into.
+- **The back-face test is exact and comes first.** The interesting design decision is not
+  the ray cast but what happens before it: the surface immediately around a sample point
+  is read from its own instance's mesh, and if every face there points away from the
+  viewer the point is hidden with no ray at all. That settles the majority of a solid's
+  edges exactly, and it costs one small box query. The ray only answers the genuinely
+  non-local question — is some OTHER geometry in the way — which is the part a mesh can
+  answer honestly.
+- **The probe steps off along the most eye-facing local normal, not along the view.** A
+  step toward the eye is useless in exactly the cases that matter, because they are
+  tangencies: the ray from a point on a bore's bottom rim runs parallel to the bore wall
+  and would scrape it for the wall's whole length. Stepping along the wall's own normal
+  moves the probe radially into the void, and the ray then runs up an empty hole. The
+  same step handles the inverse problem: an exact edge point on a concave surface sits
+  INSIDE the inscribed mesh by up to the chord sagitta, and the step is what takes it
+  out. That is why the bias is a fraction of the model and not a weld-tier constant — it
+  must exceed the tessellation's own error, so a deliberately coarse mesh wants a bigger
+  one.
+- **Chaining before sampling is a correctness decision, not tidying.** A run can only be
+  split where it is sampled, and a feature-edge segment is the smallest unit that carries
+  a classification — so a rim delivered as 96 separate chords can only change visibility
+  at a chord end. Measured against an occluder edge at x = 5, the boundary landed on 4.870,
+  which is exactly the 52.5-degree sample; chaining the segments into one polyline lets
+  the bisection find 5.000. The lesson generalizes: **whenever a refinement step exists,
+  check that the thing being refined is not already quantized by its input.**
+- **A run shorter than a pen stroke is dropped.** Within one bias step of a model VERTEX,
+  "the surface near this point" legitimately includes the faces on the far side of that
+  vertex, so a hidden edge reads visible for its last bias-length. There is no epsilon
+  that removes this, because the ambiguity is geometric rather than numerical: a corner
+  really is where several surfaces meet. Dropping runs too short to draw is the honest
+  response, and it is the same judgement a drafting standard makes when it says
+  coincident lines are drawn once.
+- **A section view takes a POINT, not a plane.** A section view's cutting plane is
+  perpendicular to its own view direction by definition — that is what makes the exposed
+  faces project in true shape, and therefore what makes hatching and dimensioning them
+  meaningful. Offering an arbitrary plane would let a caller produce a foreshortened cut
+  face with dimensions that lie, so the API offers the depth and documents that an
+  oblique cut is a view along the oblique normal.
+- **Anchors are in model coordinates; anatomy is in paper millimetres.** A sheet
+  dimension must measure the part (so its anchors and value live in the view's projected
+  model space) while its arrowheads must be printable (so the drawn anatomy is sized in
+  sheet millimetres). Keeping the two apart is what lets a view be rescaled or moved with
+  its dimensions following and its values unchanged. The *proportions* are shared with
+  the 3D PMI overlay rather than re-invented: `SheetStyle` states each length as a ratio
+  to its text height, and those ratios are `AnnotationGeometry`'s pixel constants over
+  its own text height, asserted by a test that reads both.
+- **One `Compute()`, two writers.** The SVG and DXF writers consume the same
+  `SheetContent` and differ only in spelling. The DXF side carries one rule worth
+  stating: a file that NAMES a line type its layers use must also DEFINE it, or every
+  reader falls back to solid lines and the visible/hidden classification — the entire
+  point of the exercise — is silently lost in transit.
+
 ## 7. Query layer
 
 `SpatialCollection<T>` = items + a bounds *expression* + a BVH. Its `IQueryable`

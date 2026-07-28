@@ -422,8 +422,13 @@ internal static class AmbientOcclusion
             {
                 foreach (int triangle in node.Items)
                 {
-                    if (RayTriangle(ray, triangles[triangle * 3], triangles[triangle * 3 + 1],
-                            triangles[triangle * 3 + 2], out double t) && t < nearest)
+                    // The shared predicate over the edge-widened triangles, with the
+                    // acceptance range applied here because it is the caller's: t in
+                    // (0, nearest) — the ray direction IS the search radius, so a hit
+                    // beyond its tip is outside this hemisphere sample's reach.
+                    if (Intersect3d.RayTriangleEdges(ray, triangles[triangle * 3],
+                            triangles[triangle * 3 + 1], triangles[triangle * 3 + 2], out double t)
+                        && t > 0 && t < nearest)
                         nearest = t;
                 }
                 continue;
@@ -497,38 +502,4 @@ internal static class AmbientOcclusion
         return new Vector3d(mesh.Positions[i * 3], mesh.Positions[i * 3 + 1], mesh.Positions[i * 3 + 2]);
     }
 
-    /// <summary>
-    /// Moller-Trumbore test over a triangle stored as corner + two edge vectors; t is in
-    /// units of the (unnormalized) ray direction, so a hit inside the search radius has
-    /// t &lt; 1. Deliberately separate from the picking copy in
-    /// <see cref="ViewportControl"/>: that one wants a world point for the measure tool.
-    /// <para>
-    /// Note that this is NOT an any-hit test, tempting as the name would be: the caller
-    /// attenuates a hit by its distance (<c>1 − t</c>), so occlusion is a nearest-hit
-    /// quantity and an early-out on the first intersection would change the shading. The
-    /// early-out available here is the traversal's box pruning, which is exact.
-    /// </para>
-    /// </summary>
-    private static bool RayTriangle(
-        in Ray3d ray, in Vector3d a, in Vector3d e1, in Vector3d e2, out double t)
-    {
-        t = 0;
-        var p = ray.Direction.Cross(e2);
-        double determinant = e1.Dot(p);
-        // Round-off-scale parallel-ray guard (a shading estimate, not model geometry:
-        // a missed edge-on triangle costs a fraction of one vertex's occlusion).
-        if (Math.Abs(determinant) < 1e-15)
-            return false;
-        double inverse = 1.0 / determinant;
-        var s = ray.Origin - a;
-        double u = s.Dot(p) * inverse;
-        if (u < 0 || u > 1)
-            return false;
-        var q = s.Cross(e1);
-        double v = ray.Direction.Dot(q) * inverse;
-        if (v < 0 || u + v > 1)
-            return false;
-        t = e2.Dot(q) * inverse;
-        return t > 0 && t < 1;
-    }
 }

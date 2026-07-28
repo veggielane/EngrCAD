@@ -20,6 +20,7 @@ scene.Add(new Part("demo", Shape.Sphere(10)));
 | --- | --- |
 | ` ```csharp render:<id> ` | Executed. Must end with a variable **`scene`** of type `Scene` in scope; the generator renders it to `examples/images/<id>.png`, and the same page must reference that image (`![alt](images/<id>.png)`). |
 | ` ```csharp animate:<id> ` | Executed. Must define `scene`, and may define an **`animation`** (`Animation`); without one it gets a default 4-second turntable. Rendered to an **APNG** at `examples/images/<id>.png` — an APNG *is* a PNG, so the reference rule is unchanged and browsers just play it. Mind the build time and committed size: every frame is an offscreen render, so keep `frames:` modest. |
+| ` ```csharp svg:<id> ` | Executed. Must define a variable **`svg`** of type `string` (e.g. `var svg = sheet.ToSvg();`), written verbatim to `examples/images/<id>.svg` and referenced the same way (`![alt](images/<id>.svg)`). For a **drawing sheet**, which is line work on paper rather than a render — it has no camera, no lighting and no pixels, and rasterizing it would throw away the one property that makes it useful. Needs no GL, so it works on any machine. |
 | ` ```csharp run:<id> ` | Executed for correctness only — no screenshot. Use for exports, queries, and other non-visual examples. Throw on unexpected results so regressions fail the build. |
 | ` ```csharp ` | Display-only. Not executed — use sparingly, for fragments that cannot stand alone (project files, switch tables, viewer-interactive calls like `EngrCad.Show`). |
 

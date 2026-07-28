@@ -208,7 +208,9 @@ public static class ScenePick
                 var a = PickMesh.Vertex(mesh, mesh.Indices[triangle * 3]);
                 var b = PickMesh.Vertex(mesh, mesh.Indices[triangle * 3 + 1]);
                 var c = PickMesh.Vertex(mesh, mesh.Indices[triangle * 3 + 2]);
-                if (!RayTriangle(ray, a, b, c, out double t) || t >= bestT)
+                // Minimum hit distance (direction-length units): rejects self-hits at
+                // the ray origin; a UI-picking threshold, not a kernel tolerance.
+                if (!Intersect3d.RayTriangle(ray, a, b, c, out double t) || t <= 1e-9 || t >= bestT)
                     continue;
 
                 // t is in units of the (unnormalized) local direction, which is the
@@ -232,33 +234,6 @@ public static class ScenePick
         return best < 0 ? PickResult.None : new PickResult(best, bestWorld);
     }
 
-    /// <summary>Möller–Trumbore; t is in units of the (unnormalized) ray direction.</summary>
-    private static bool RayTriangle(
-        in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
-    {
-        t = 0;
-        var e1 = b - a;
-        var e2 = c - a;
-        var p = ray.Direction.Cross(e2);
-        double determinant = e1.Dot(p);
-        // Round-off-scale parallel-ray guard (picking robustness, not model geometry:
-        // a missed edge-on triangle costs a click, never a weld).
-        if (Math.Abs(determinant) < 1e-15)
-            return false;
-        double inverse = 1.0 / determinant;
-        var s = ray.Origin - a;
-        double u = s.Dot(p) * inverse;
-        if (u < 0 || u > 1)
-            return false;
-        var q = s.Cross(e1);
-        double v = ray.Direction.Dot(q) * inverse;
-        if (v < 0 || u + v > 1)
-            return false;
-        t = e2.Dot(q) * inverse;
-        // Minimum hit distance (direction-length units): rejects self-hits at the ray
-        // origin; a UI-picking threshold, not a kernel tolerance.
-        return t > 1e-9;
-    }
 }
 
 /// <summary>

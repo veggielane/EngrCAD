@@ -1552,6 +1552,92 @@ dashed / dash-dot groups per layer, the build123d edge-classification lesson);
 model space is y-up mm, flipped once at the root, 1 user unit = 1 mm. Docs:
 `docs/examples/dxf-svg.md`.
 
+## Drawings (HiddenLine.cs, Drawings.cs, SheetAnnotations.cs, SheetExport.cs)
+
+Turning the kernel's geometry into a document a machinist can read: three layers, each
+usable on its own.
+
+**Hidden-line removal** (`HiddenLineRemoval.Project`) projects instances into a view
+frame (`StandardViews.SheetFrame` — X sheet-right, Y sheet-up, Z toward the viewer) and
+returns classified 2D polylines: `HiddenLineRun(Points, Visibility, Source)`, visible or
+hidden, from a modelled edge or a mesh-derived silhouette. Two edge sets go in — a
+part's `GetFeatureEdges` (the ACTUAL B-Rep edge curves for a B-Rep part, so a bore rim
+is a smooth circle at any mesh quality) and, for the curved surfaces with no modelled
+edge at their outline, the display mesh's view-dependent silhouette, faceted and
+labelled `EdgeSource.Silhouette` so the fidelity story survives into the output.
+
+Visibility is a two-stage test, and the first stage is exact. **The point's own surface
+decides first**: every triangle of the owning instance within one bias step is "the
+surface here", and if all of them face away the point is buried in its own material —
+hidden, with no ray cast and no mesh query beyond that neighbourhood. That settles the
+majority of a solid's edges for free. Only when some local face still faces the viewer
+does a ray go out, and it starts at the point stepped off along the **most eye-facing
+local normal** — which is what makes the grazing cases work, since on a bore's bottom rim
+that normal points into the void and the ray runs up the empty hole instead of scraping
+the wall it is tangent to.
+
+Three rules the measurements forced, all worth keeping:
+
+- **Feature-edge segments are chained into polylines before sampling.** A segment is the
+  unit a run can be split into, so a rim delivered as 96 separate chords can only change
+  visibility at a chord end. Measured against an occluder edge at x = 5, the boundary
+  landed at 4.870 — exactly the 52.5-degree sample — where the chained form bisects to
+  5.000. Endpoints are keyed by EXACT bits, sound because consecutive segments of one
+  edge come from one sampled polyline.
+- **A run shorter than a pen stroke is absorbed into its neighbour**
+  (`MinimumRunFraction`). Within one bias step of a model VERTEX the local-surface read
+  picks up the faces on the far side, so a hidden edge reads visible for its last
+  bias-length. Every HLR implementation has a version of this, because "the surface near
+  this point" genuinely is ambiguous at a corner; dropping runs too short to draw is the
+  honest response.
+- **At a tangency the coincident pair is drawn once, solid** — a rim seen edge-on, a
+  box viewed down an axis. Reached structurally rather than by an epsilon: the cap's
+  normal is exactly perpendicular to the view, so the back-face stage does not reject it
+  and the ray steps off along that cap into clear air.
+
+Every length in `HiddenLineOptions` is a FRACTION of the projected extent (the scale-free
+tier), so a 4 mm dowel and a 4 m beam behave the same.
+
+**The sheet** (`DrawingSheet`) is paper, a border, a title block and placed
+`DrawingView`s, all in sheet millimetres with the origin at the bottom-left — the
+convention `SvgDrawing` already writes and a ruler already uses. `StandardLayout` builds
+front/top/right plus an isometric at one shared scale, chosen as the largest standard
+ratio (ISO 5455, `DrawingScales`) that fits, placed third or first angle. The three
+orthographic directions come from `StandardViews`, **the same table the viewer's toolbar
+reads**, so a sheet's FRONT and the viewer's Front cannot disagree. A view's projection
+is cached and its PLACEMENT is applied afterwards, so laying a sheet out is cheap even
+when the geometry is not.
+
+A **section view** is that same view with a depth: `SectionThrough` removes everything
+nearer the viewer than a point. It takes a point and not a plane because a section
+view's cutting plane is perpendicular to its own view direction *by definition* — that
+is what makes the exposed faces project in true shape, and so worth hatching and
+dimensioning. (An oblique cut is a view along the oblique normal, not a foreshortened
+lie.) Parts with `ClippedBySection = false` pass through whole. Cut faces come from
+`PlanarSection.OfSolid` where the part lowers and from the mesh cut's loops where the
+exact route refuses (a plane flush with a face). `SheetHatch.Fill` clips 45-degree lines
+to those regions by an **exact even-odd scan** — the one careful decision is a crossing
+at a vertex, settled by a half-open span test so a vertex is counted by exactly one of
+its two edges — with lines anchored to the ORIGIN so neighbouring cut faces share one
+continuous pattern.
+
+**The drafting layer** (`SheetAnnotation` and friends: linear/aligned, horizontal,
+vertical, radial, diameter, angular, notes, BOM balloons) splits two unit systems, and
+the split is the point: anchors and measured values are in projected MODEL coordinates,
+so a dimension reads the part; arrowheads, lettering and standoffs are in PAPER
+millimetres, so they stay printable at any drawing scale. `SheetStyle` holds each length
+as a ratio to its text height, and those ratios ARE the viewer's `AnnotationGeometry`
+pixel constants over its own 12-px text height — a viewer test asserts it by reading
+both sides.
+
+**Export** (`SheetWriter.ToSvg`/`ToDxf`/`SaveSvg`/`SaveDxf`) consumes one
+`DrawingSheet.Compute()` result, so the two writers cannot disagree about what a drawing
+looks like. Line CLASS drives everything: visible solid and wide, hidden narrow and
+dashed, cut chain-dashed, furniture narrow and continuous, each on its own layer. The
+DXF writer emits an **LTYPE table** for every pattern its layers name — a file that
+names a line type without defining it shows solid lines in every reader, and the
+classification is lost in transit. Docs: `docs/examples/drawings.md`.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for
