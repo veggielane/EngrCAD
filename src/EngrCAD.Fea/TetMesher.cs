@@ -177,7 +177,18 @@ public static class TetMesher
             _delaunay = DelaunayTetrahedralization.Build(surfacePositions, progress);
             _points = _delaunay.Points;
             InitializeVertexPatches();
-            progress?.Report(0.3);
+            progress?.Report(0.25);
+
+            // The BOUNDARY is sized before recovery, not after. A coarse solid's interior
+            // circumcentres nearly all fall outside it (that is what makes its elements
+            // coarse), so interior refinement alone stalls almost immediately: a 4-unit box
+            // asked for 1.5-unit elements gained exactly one vertex and stopped at 12
+            // tetrahedra. Refining the surface first gives the interior somewhere to go, and
+            // doing it BEFORE recovery means recovery validates the final boundary rather
+            // than one that is about to change.
+            if (options.RefineQuality)
+                RefineBoundaryToSize();
+            progress?.Report(0.35);
 
             var (label, region) = Recover();
             progress?.Report(0.6);
@@ -185,13 +196,7 @@ public static class TetMesher
             if (options.RefineQuality)
             {
                 RefineQuality(label, region);
-                (label, region) = Classify();
-                var offending = OffendingFaces(label, out _);
-                if (offending.Count > 0)
-                    throw new TetMeshException(
-                        $"Quality refinement broke the recovered boundary: {offending.Count} interior " +
-                        "faces no longer lie on the input surface. Refinement must never move the " +
-                        "boundary; this is a defect, not a configuration problem.");
+                (label, region) = Recover();
             }
             progress?.Report(0.85);
 
@@ -295,14 +300,14 @@ public static class TetMesher
             int[] region;
             List<BoundaryFace> offending;
 
-            for (_recoveryRounds = 0; ; _recoveryRounds++)
+            for (int round = 0; ; round++, _recoveryRounds++)
             {
                 (label, region) = Classify();
                 offending = OffendingFaces(label, out _);
                 if (offending.Count == 0)
                     return (label, region);
 
-                if (_recoveryRounds >= options.MaxRecoveryRounds)
+                if (round >= options.MaxRecoveryRounds)
                 {
                     var worst = offending[0];
                     throw new TetMeshException(
@@ -314,32 +319,87 @@ public static class TetMesher
                         "surface (Remesher.Remesh) before tetrahedralizing.");
                 }
 
-                // Refine every patch touched by an offending face's vertices. Splitting by
-                // locality rather than globally is what keeps a local defect from quadrupling
-                // the whole surface.
-                var toSplit = new HashSet<int>();
-                foreach (var face in offending)
-                    foreach (int v in (int[])[face.V0, face.V1, face.V2])
-                        if (v < _vertexPatches.Count)
-                            toSplit.UnionWith(_vertexPatches[v]);
-
-                if (toSplit.Count == 0)
-                    throw new TetMeshException(
-                        "Boundary recovery found faces off the input surface whose vertices belong to no " +
-                        "surface patch, so there is nothing to refine. This indicates a corrupted " +
-                        "triangulation.");
-
-                var replacement = new List<SubTriangle>(_subTriangles.Count * 4);
-                foreach (var sub in _subTriangles)
-                {
-                    if (toSplit.Contains(sub.Patch))
-                        Split(sub, replacement);
-                    else
-                        replacement.Add(sub);
-                }
-                _subTriangles = replacement;
+                SplitEncroached(offending);
                 progress?.ThrowIfCancelled();
             }
+        }
+
+        /// <summary>
+        /// Refines the surface in response to faces that failed to lie on it — Ruppert's
+        /// ENCROACHMENT rule: split exactly those sub-triangles whose diametral ball contains
+        /// an offending vertex, and no others.
+        ///
+        /// <para>Locality is not an optimization here, it is the difference between
+        /// converging and not. Splitting every sub-triangle of a touched PATCH — which is
+        /// what this did first — quadruples a whole box face per round, so one interior
+        /// insertion near a wall could cascade the entire surface; measured, it exhausted a
+        /// 500 000-point budget. The encroachment ball is the smallest region that provably
+        /// has to change.</para>
+        /// </summary>
+        private void SplitEncroached(List<BoundaryFace> offending)
+        {
+            var vertices = new HashSet<int>();
+            foreach (var face in offending)
+            {
+                vertices.Add(face.V0);
+                vertices.Add(face.V1);
+                vertices.Add(face.V2);
+            }
+
+            var doomed = new HashSet<int>();
+            for (int i = 0; i < _subTriangles.Count; i++)
+            {
+                var sub = _subTriangles[i];
+                if (!TetGeometry.TryTriangleCircumcentre(
+                        _points[sub.V0], _points[sub.V1], _points[sub.V2],
+                        out var centre, out double radius))
+                {
+                    doomed.Add(i); // a degenerate sub-triangle cannot be recovered as it is
+                    continue;
+                }
+
+                double radiusSquared = radius * radius;
+                foreach (int v in vertices)
+                {
+                    if (v == sub.V0 || v == sub.V1 || v == sub.V2)
+                        continue;
+                    if ((_points[v] - centre).LengthSquared < radiusSquared)
+                    {
+                        doomed.Add(i);
+                        break;
+                    }
+                }
+            }
+
+            if (doomed.Count == 0)
+            {
+                // Nothing is encroached, yet a face still fails to lie on the surface. Fall
+                // back to splitting the patches the offending vertices belong to, which is
+                // coarser but always makes progress.
+                var patches = new HashSet<int>();
+                foreach (int v in vertices)
+                    if (v < _vertexPatches.Count)
+                        patches.UnionWith(_vertexPatches[v]);
+                for (int i = 0; i < _subTriangles.Count; i++)
+                    if (patches.Contains(_subTriangles[i].Patch))
+                        doomed.Add(i);
+            }
+
+            if (doomed.Count == 0)
+                throw new TetMeshException(
+                    "Boundary recovery found faces off the input surface that encroach no sub-triangle " +
+                    "and belong to no surface patch, so there is nothing to refine. This indicates a " +
+                    "corrupted triangulation.");
+
+            var replacement = new List<SubTriangle>(_subTriangles.Count + 3 * doomed.Count);
+            for (int i = 0; i < _subTriangles.Count; i++)
+            {
+                if (doomed.Contains(i))
+                    Split(_subTriangles[i], replacement);
+                else
+                    replacement.Add(_subTriangles[i]);
+            }
+            _subTriangles = replacement;
         }
 
         /// <summary>
@@ -488,12 +548,13 @@ public static class TetMesher
                     $"Boundary recovery exceeded the Steiner-point budget of {options.MaxSteinerPoints}. " +
                     "Raise TetMeshOptions.MaxSteinerPoints, or simplify/remesh the input surface.");
 
+            // A midpoint that is ALREADY a vertex is normal, not a defect: neighbouring
+            // patches refine to different levels, so a coarse triangle's edge midpoint
+            // routinely lands on a finer neighbour's existing vertex (the hanging-node
+            // geometry). Reusing that vertex is exactly right — it is the same point — and
+            // AppendAndInsert returns its index without touching the triangulation.
             var midpoint = (_points[a] + _points[b]) * 0.5;
-            if (_delaunay.ContainsPoint(midpoint))
-                throw new TetMeshException(
-                    $"The midpoint of edge ({a}, {b}) at {midpoint} is already a vertex of the " +
-                    "triangulation, so the input surface has a vertex sitting exactly on an edge " +
-                    "midpoint. Remesh the surface (Remesher.Remesh) before tetrahedralizing.");
+            bool isNew = !_delaunay.ContainsPoint(midpoint);
 
             int index = _delaunay.AppendAndInsert(midpoint);
             EnsureVertexPatchSlots();
@@ -504,7 +565,8 @@ public static class TetMesher
             _vertexPatches[index].Add(patch);
 
             _edgeMidpoints[key] = index;
-            _boundarySteiner++;
+            if (isNew)
+                _boundarySteiner++;
             return index;
         }
 
@@ -577,11 +639,52 @@ public static class TetMesher
 
         // ---- stage 4: quality refinement ----
 
+        /// <summary>
+        /// Red-refines the surface's sub-triangles until each one's circumradius is within
+        /// half the sizing field's value at its centroid. Every new vertex is an edge
+        /// midpoint, so it lies on the input surface and the fidelity contract is untouched.
+        /// </summary>
+        private void RefineBoundaryToSize()
+        {
+            if (options.SizingField is null && options.MaxElementSize is null)
+                return;
+
+            for (int pass = 0; pass < 24; pass++)
+            {
+                var replacement = new List<SubTriangle>(_subTriangles.Count * 4);
+                bool changed = false;
+                foreach (var sub in _subTriangles)
+                {
+                    var a = _points[sub.V0];
+                    var b = _points[sub.V1];
+                    var c = _points[sub.V2];
+                    double target = TargetSize((a + b + c) / 3.0);
+                    if (double.IsPositiveInfinity(target))
+                    {
+                        replacement.Add(sub);
+                        continue;
+                    }
+                    double circumradius = TetGeometry.TriangleCircumradius(a, b, c);
+                    if (circumradius <= 0.5 * target)
+                    {
+                        replacement.Add(sub);
+                        continue;
+                    }
+                    Split(sub, replacement);
+                    changed = true;
+                }
+                _subTriangles = replacement;
+                if (!changed)
+                    return;
+                progress?.ThrowIfCancelled();
+            }
+        }
+
         private void RefineQuality(Side[] label, int[] region)
         {
             for (int pass = 0; pass < 60; pass++)
             {
-                var candidates = new List<(double Priority, Vector3d Point)>();
+                var candidates = new List<(double Priority, Vector3d Point, double Radius)>();
                 foreach (int t in _delaunay.LiveTets())
                 {
                     if (label[t] != Side.Inside)
@@ -610,7 +713,7 @@ public static class TetMesher
                     if (!IsInsideAnyBody(centre))
                         continue;
 
-                    candidates.Add((ratio, centre));
+                    candidates.Add((ratio, centre, radius));
                 }
 
                 if (candidates.Count == 0)
@@ -627,29 +730,71 @@ public static class TetMesher
                     return byY != 0 ? byY : x.Point.Z.CompareTo(y.Point.Z);
                 });
 
-                // Insert only a prefix: every insertion invalidates the circumcentres behind
-                // it, and inserting a whole stale queue is how a refinement loop turns into an
-                // over-refinement loop.
-                int quota = Math.Max(1, candidates.Count / 2);
-                int inserted = 0;
-                foreach (var (_, point) in candidates)
+                // ---- what makes this loop terminate, and the mistake that broke it ----
+                //
+                // Delaunay refinement terminates because a tetrahedron's circumcentre is, by
+                // the empty-circumsphere property, at least its circumradius R away from
+                // EVERY existing vertex. Points therefore pack no denser than the local R,
+                // and a bounded domain holds boundedly many of them.
+                //
+                // That guarantee is against the triangulation AS IT WAS when the circumcentre
+                // was computed. Inserting a batch straight off the queue silently voids it:
+                // the second point of the batch has no relationship at all to the first, so
+                // two candidates can land arbitrarily close together, create a sliver, and
+                // feed the next round. Measured on a 4-unit box asked for 1.5-unit elements:
+                // it blew through 200, 800 and 3000-point budgets without converging.
+                //
+                // Batching is still worth having (a pass costs a full re-classification), so
+                // the fix is to keep the batch INDEPENDENT: accept a candidate only if it is
+                // at least half a circumradius from every point already accepted this pass.
+                // That restores the packing bound up to a constant factor.
+                var accepted = new List<(Vector3d Point, double Radius)>();
+                int quota = Math.Clamp(candidates.Count / 2, 1, 1024);
+                foreach (var (_, point, radius) in candidates)
                 {
                     if (_boundarySteiner + _qualitySteiner >= options.MaxSteinerPoints)
                         throw new TetMeshException(
                             "Quality refinement exceeded the Steiner-point budget of " +
                             $"{options.MaxSteinerPoints}. Raise TetMeshOptions.MaxSteinerPoints, relax " +
-                            "RadiusEdgeRatio, or coarsen the sizing field.");
+                            "RadiusEdgeRatio (values below 2.0 are not guaranteed to terminate, which is " +
+                            "why the default is exactly 2.0), or coarsen the sizing field.");
                     if (_delaunay.ContainsPoint(point))
                         continue;
+
+                    bool crowded = false;
+                    foreach (var (other, otherRadius) in accepted)
+                    {
+                        if ((point - other).LengthSquared < 0.25 * Math.Max(radius, otherRadius)
+                                                                * Math.Max(radius, otherRadius))
+                        {
+                            crowded = true;
+                            break;
+                        }
+                    }
+                    if (crowded)
+                        continue;
+
                     _delaunay.AppendAndInsert(point);
                     EnsureVertexPatchSlots();
                     _qualitySteiner++;
-                    if (++inserted >= quota)
+                    accepted.Add((point, radius));
+                    if (accepted.Count >= quota)
                         break;
                 }
 
+                if (accepted.Count == 0)
+                    return; // every remaining candidate is unreachable; the report says so
+
                 progress?.ThrowIfCancelled();
-                (label, region) = Classify();
+
+                // Recover, not merely re-classify. An interior insertion CAN make a recovered
+                // boundary face stop being Delaunay — that is exactly the encroachment case
+                // Ruppert's algorithm answers by splitting the encroached facet instead of
+                // inserting the circumcentre. The recovery loop already performs that split,
+                // so composing the two is the whole response: no separate encroachment rule,
+                // no spatial index over diametral balls, and the boundary is conforming again
+                // by the time the next pass measures quality.
+                (label, region) = Recover();
             }
         }
 

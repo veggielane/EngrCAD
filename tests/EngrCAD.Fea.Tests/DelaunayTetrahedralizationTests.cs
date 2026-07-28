@@ -157,6 +157,46 @@ public class DelaunayTetrahedralizationTests
     }
 
     [Fact]
+    public void PointsInsertedAfterConstruction_AreNotMistakenForEnclosingSimplexCorners()
+    {
+        // The four artificial corners are appended after the input points but BEFORE any
+        // later insertion, so an "index >= firstArtificial" test silently calls every
+        // Steiner point artificial. The symptom is remote and baffling - the mesher's
+        // classification finds NO interior elements, because every refined tetrahedron looks
+        // like it touches the enclosing simplex - so it is pinned here at the source.
+        var points = new List<Vector3d>();
+        foreach (int x in new[] { 0, 4 })
+            foreach (int y in new[] { 0, 4 })
+                foreach (int z in new[] { 0, 4 })
+                    points.Add(new Vector3d(x, y, z));
+
+        var d = DelaunayTetrahedralization.Build(points);
+        Assert.Equal(64.0, RealVolume(d), 10);
+
+        int inserted = d.AppendAndInsert(new Vector3d(2.13, 2.07, 1.91));
+        Assert.False(d.IsArtificial(inserted));
+        for (int v = 0; v < 8; v++)
+            Assert.False(d.IsArtificial(v));
+        for (int v = 8; v < 12; v++)
+            Assert.True(d.IsArtificial(v));
+
+        d.Validate(checkDelaunay: false);
+        Assert.Equal(64.0, RealVolume(d), 10);
+    }
+
+    private static double RealVolume(DelaunayTetrahedralization d)
+    {
+        double volume = 0;
+        foreach (int t in d.LiveTets())
+        {
+            if (!AllReal(d, t)) continue;
+            var tet = d.TetAt(t);
+            volume += TetMesh.SignedVolume(d.Points[tet.A], d.Points[tet.B], d.Points[tet.C], d.Points[tet.D]);
+        }
+        return volume;
+    }
+
+    [Fact]
     public void CoincidentPoints_AreRefusedByName()
     {
         var points = new List<Vector3d>

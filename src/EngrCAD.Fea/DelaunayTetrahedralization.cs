@@ -83,8 +83,18 @@ internal sealed class DelaunayTetrahedralization
     /// <summary>Vertex positions, including the artificial ones at the end.</summary>
     public IReadOnlyList<Vector3d> Points => _points;
 
-    /// <summary>True when <paramref name="vertex"/> is one of the four enclosing-simplex corners.</summary>
-    public bool IsArtificial(int vertex) => vertex >= _firstArtificialVertex;
+    /// <summary>
+    /// True when <paramref name="vertex"/> is one of the four enclosing-simplex corners.
+    ///
+    /// <para>Note the RANGE test rather than <c>vertex &gt;= _firstArtificialVertex</c>. The
+    /// artificial corners are appended after the input points but BEFORE any Steiner point,
+    /// so a "greater or equal" test calls every later insertion artificial. That bug is
+    /// invisible until something actually inserts — the mesher's classification then finds
+    /// no interior elements at all, because every refined tetrahedron looks like it touches
+    /// the enclosing simplex.</para>
+    /// </summary>
+    public bool IsArtificial(int vertex) =>
+        vertex >= _firstArtificialVertex && vertex < _firstArtificialVertex + 4;
 
     /// <summary>Capacity of the tetrahedron arrays, including dead slots.</summary>
     public int TetSlotCount => _dead.Count;

@@ -55,6 +55,48 @@ public static class TetGeometry
         return Math.Min(shortest, (d - c).Length);
     }
 
+    /// <summary>
+    /// Circumradius of a triangle, <c>abc/4A</c>. Returns +infinity for a degenerate one
+    /// (relative to its own extent — an area threshold must scale quadratically).
+    /// </summary>
+    public static double TriangleCircumradius(in Vector3d a, in Vector3d b, in Vector3d c)
+    {
+        double ab = (b - a).Length, bc = (c - b).Length, ca = (a - c).Length;
+        double twiceArea = (b - a).Cross(c - a).Length;
+        double extent = Math.Max(ab, Math.Max(bc, ca));
+        return twiceArea <= 1e-13 * extent * extent
+            ? double.PositiveInfinity
+            : ab * bc * ca / (2.0 * twiceArea);
+    }
+
+    /// <summary>
+    /// Circumcentre and circumradius of a triangle in 3D. The sphere centred there with that
+    /// radius is the triangle's <em>diametral ball</em> — the smallest ball containing it —
+    /// which is what Delaunay refinement's encroachment rule tests points against. Returns
+    /// false for a degenerate triangle (relative to its own extent).
+    /// </summary>
+    public static bool TryTriangleCircumcentre(
+        in Vector3d a, in Vector3d b, in Vector3d c, out Vector3d centre, out double radius)
+    {
+        var ab = b - a;
+        var ac = c - a;
+        var normal = ab.Cross(ac);
+        double normalSquared = normal.LengthSquared;
+        double extent = Math.Max(ab.Length, ac.Length);
+        if (normalSquared <= 1e-26 * extent * extent * extent * extent)
+        {
+            centre = default;
+            radius = 0;
+            return false;
+        }
+
+        var offset = (ac.Cross(normal) * ab.LengthSquared + normal.Cross(ab) * ac.LengthSquared)
+                   / (2.0 * normalSquared);
+        centre = a + offset;
+        radius = offset.Length;
+        return true;
+    }
+
     /// <summary>Length of the longest of a tetrahedron's six edges.</summary>
     public static double LongestEdge(in Vector3d a, in Vector3d b, in Vector3d c, in Vector3d d)
     {
