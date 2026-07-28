@@ -66,7 +66,12 @@ Dark-themed layout around one shared GL viewport:
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
   an **AO** toggle (ambient occlusion, on by default — see below), a **Section**
-  toggle with an **X/Y/Z axis cycler** button beside it (see below), an **Annot**
+  toggle with an **X/Y/Z axis cycler** button beside it (see below), a **Cut@View**
+  button (an *oblique* section plane from the current view: through the orbit target,
+  normal = the camera's eye direction, so it clips away everything between the viewer
+  and the view centre — the minimal toolbar affordance for planes the axis model
+  cannot express; `[`/`]` still nudge it along its own normal, and hosts keep the
+  full `ViewportControl.SectionPlanes` API), an **Annot**
   toggle (3D annotations, on by default — see below), a **Measure** toggle
   (interactive dimensioning — see below), an **Explode** toggle with a factor slider
   (see below), a **BOM** button (see below), and a **Check** button (the model
@@ -101,7 +106,9 @@ Dark-themed layout around one shared GL viewport:
     scene **immediately, flat-lit**, and each part's occlusion arrives as its own bake
     finishes (`AmbientOcclusion.BakeInBackground`, **cheapest part first** so most of a
     scene lights up in the first moments, with the whole job reported once in the status
-    bar). This is not a placeholder state: a mesh VAO with no occlusion buffer reads the
+    bar and **per-part progress in the model tree**: a row carries a small italic "ao"
+    badge until its part's bake lands — `ViewportControl.OcclusionBaked` raises the
+    part on the UI thread as each result publishes). This is not a placeholder state: a mesh VAO with no occlusion buffer reads the
     context constant 1.0, which is *exactly* the AO-off shading, so an unbaked part is
     the correct flat-lit render of that part and the only thing the bake changes is that
     crevices darken. The bake queue follows the **visible tab**, so a tab you never open
@@ -189,7 +196,9 @@ Dark-themed layout around one shared GL viewport:
   face* (`BrepQueries.Frame(face)`) or a sketch plane. Nothing downstream needed
   changing: the shaders, `SectionClip` and the isoline overlay have always taken a
   general normal; only the toolbar's axis cycler is restricted to X/Y/Z, and hosts reach
-  past it with `ViewportControl.SectionPlanes` (or `RenderToImage(sectionPlanes:)`).
+  past it with `ViewportControl.SectionPlanes` (or `RenderToImage(sectionPlanes:)`) —
+  the toolbar's **Cut@View** button is the built-in shortcut, placing one oblique plane
+  from the current camera.
   **Per-part opt-out**: `Part.ClippedBySection = false` makes a part render *and pick*
   whole inside a cutaway. That is the drafting convention every standard shares —
   shafts, bolts, nuts, washers, keys, pins and ribs are drawn unsectioned, because
@@ -199,7 +208,11 @@ Dark-themed layout around one shared GL viewport:
   (`ViewportControl.SectionFor`, mirrored in the offscreen pass), with picking simply
   not consulting `SectionClip` for such a part, so the clickable and the visible surface
   stay the same one; an exempt part also contributes no isolines, having no cut face to
-  draw them on. With no section active the flag changes nothing at all (renders are
+  draw them on. The model tree carries a per-row **cut/whole** toggle beside the
+  display-mode cycler (`ViewportControl.SetClippedBySection` — writes through the part,
+  so sibling rows and every instance follow; the isoline overlay detects the changed
+  flag itself, the same self-detection visibility changes use). With no section active
+  the flag changes nothing at all (renders are
   byte-identical), so design code can set it unconditionally.
 - **SDF isolines on the section plane** (automatic when available): when the section
   plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
@@ -216,7 +229,13 @@ Dark-themed layout around one shared GL viewport:
   bar; a wall thinner than one spacing simply shows no interior ring). Extraction is
   `SdfContours` in EngrCAD.Interop (marching squares over one batch-`Evaluate` grid,
   ~160 cells across, per part per rebuild); it reruns only when the section height,
-  scene, or visibility changes — never per frame. Lines draw through the shared line
+  scene, or visibility changes — never per frame — and in the window it runs **on a
+  background task** (`SectionContourWorker`, the `AmbientOcclusion.BakeInBackground`
+  precedent): the first section-enabled frame no longer stalls on the marching
+  squares plus a bridged shape's first `TryGetSdf` lowering; the previous contours
+  (or nothing, on first enable) draw until the new ones land, generation-stamped so
+  a scene swap or a superseding nudge can never adopt a stale build (the
+  `TabMeshLoader` rule). Lines draw through the shared line
   program, pulled 1% of the spacing to the visible side of the clip so the fragment
   discard never eats them; depth-tested like feature edges (polygon-offset fills lose
   to coincident lines). The plumbing is plane-general (`SectionContours.PlaneFrame`
@@ -293,13 +312,31 @@ Dark-themed layout around one shared GL viewport:
   viewport or enters the cube region. Hover shares the pick raycast, so it honors the
   section plane exactly as clicking does.
 - **3D annotations (PMI)**: parts annotated in Modeling (`Part.Annotate` —
-  selector-measured `LinearDimension`/`RadialDimension`, `LeaderNote`,
-  `DatumLabel`, hole/thread callouts; see the Modeling README) render as classic
+  selector-measured `LinearDimension`/`RadialDimension`/`AngularDimension`,
+  `LeaderNote`,
+  `DatumLabel`, hole/thread callouts, hole tables; see the Modeling README) render as
+  classic
   dimension graphics: extension lines with a gap at the model and an overshoot past
-  the dimension line, arrowheads, radial/note leaders, datum boxes, and **billboarded
+  the dimension line, arrowheads, radial/note leaders, datum boxes, **angular arcs**
+  (extension rays + a 5°-chorded arc with tangent arrowheads + degree text outside
+  its midpoint; the arc radius is the author's `Offset` length, else ¾ of the shorter
+  ray), and **billboarded
   screen-constant text** from the shared **`StrokeFont`** (`StrokeFont.cs`: digits,
   A-Z, and the dimension symbols — diameter, degree, plus-minus, depth, counterbore,
   countersink — as polyline glyphs; the view cube's labels use the same table).
+  Text may be **multi-line** (`'\n'`): billboarded blocks center their lines, leader
+  text stacks continuation lines below the tail line (hole callouts put their
+  counterbore/countersink continuations there), and a datum box grows to span every
+  line — single-line output is bit-identical to the pre-multi-line layout, which the
+  committed docs PNGs hang off.
+  **Annotations are pickable**: a click within `AnnotationGeometry.PickRadiusPx`
+  (8 style px) of any of an annotation's drawn segments selects it — drawn again in
+  the one selection gold (`Highlight.Selection`), text reported in the status bar;
+  clicking it again or empty space deselects; a claimed click never falls through to
+  the part behind. The pick is `AnnotationGeometry.Pick` (pure math — the same
+  `Build` segments, so what you see is exactly what you can click) and is
+  **depth-blind on purpose**, matching the always-on-top draw; drive it directly via
+  `ViewportControl.PickAnnotation(point)` / read `SelectedAnnotationText`.
   Implementation is self-contained in `AnnotationLayer.cs` following the
   isoline/cube precedents: `AnnotationGeometry` is pure math (unit-tested without
   GL), billboarding is CPU-side and rebuilt **only when the camera pose, viewport,
@@ -344,7 +381,10 @@ Dark-themed layout around one shared GL viewport:
   paths ("stack/clamp.2/bolt") in the title/status bar. Each part row also has a
   small **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part
   through Shaded → Wireframe → Translucent (see below); the mode lives on the
-  shared `Part`, so every instance of that part changes together.
+  shared `Part`, so every instance of that part changes together. Beside it sit the
+  **cut/whole** section-exemption toggle (`Part.ClippedBySection` — see the section
+  planes above) and the transient **"ao" badge** that marks a part whose ambient
+  occlusion is still baking in the background.
 - **Construction tree** (the disclosure triangle on a part row): expands a part into
   **how it was built** — for a `Shape` part the operation graph as nested rows
   (booleans, drills, rims and patterns showing their operands as children, and a
@@ -360,8 +400,26 @@ Dark-themed layout around one shared GL viewport:
   task** and is memoized per graph node (`ConstructionPreviewCache`), so the UI never
   stalls and a second click is instant; a step that cannot be lowered reports in the
   status bar instead of throwing. Expansion state is keyed by occurrence path, so it
-  survives tab switches and live reloads. Custom hosts drive the overlay directly via
+  survives tab switches and live reloads — and the **preview itself is restored by
+  path** after a live reload or a tab revisit (`RestorePreview`: node references
+  change with the fresh scene, but the occurrence path and the construction path in
+  the preview key do not; a key that no longer resolves restores nothing). Custom
+  hosts drive the overlay directly via
   `ViewportControl.SetConstructionPreview(segments, world)`.
+  **Feature rows are editable**: each row of a `FeatureHistory` part carries a
+  **suppress toggle** ("sup"/"uns" — a suppressed feature passes the body through
+  untouched) and a **rollback marker** ("‖" — suppresses every feature below it;
+  clicking a later row moves the bar down, restoring what it suppressed above, and
+  the last row's marker restores the whole history; the flag logic is the UI-free
+  `FeatureRollback`, which records what the *bar* suppressed so it never restores a
+  feature the user suppressed deliberately). Clicking a feature row also opens its
+  **`[Param]` values as editable fields in the properties panel** — Enter applies the
+  value through the SAME JSON seam `SaveParameters`/`LoadParameters` (and the MCP
+  `set_param` tool) use, so accepted spellings cannot drift, then regenerates via
+  `Part.Regenerate()` on a background task: a successful regeneration republishes the
+  tab (the loader re-meshes exactly the changed part), a failed one keeps the
+  previous geometry and names the failing feature in the status bar, exactly the
+  feature-tree semantics.
   **Headless renders draw previews too** — `EngrCad.RenderToImage(..., preview:
   new ConstructionPreviewRequest(part, node))` puts one row's rollback view into a
   still image, through the same `PreviewLayer` the window uses, so the colour, the

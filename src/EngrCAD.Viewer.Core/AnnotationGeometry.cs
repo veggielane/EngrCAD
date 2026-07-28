@@ -109,6 +109,12 @@ public static class AnnotationGeometry
     /// <summary>Padding of the datum box around its text.</summary>
     public const double DatumBoxPaddingPx = 4;
 
+    /// <summary>Baseline-to-baseline distance of multi-line text, in text heights.</summary>
+    public const double LineSpacing = 1.5;
+
+    /// <summary>Arc chord step of an angular dimension (5 degrees per segment).</summary>
+    public const double ArcStepRadians = Math.PI / 36;
+
     /// <summary>Builds the whole overlay into <paramref name="segments"/> (cleared
     /// first). World-space output; layers draw it with an identity model matrix.</summary>
     public static void Build(
@@ -136,8 +142,144 @@ public static class AnnotationGeometry
                 case AnnotationKind.DatumLabel:
                     BuildLeader(segments, a, offset, annotation.Text, boxed: true, camera);
                     break;
+                case AnnotationKind.AngularDimension:
+                    BuildAngular(segments, a, b,
+                        item.World.TransformPoint(annotation.AnchorC), offset,
+                        annotation.Text, camera);
+                    break;
             }
         }
+    }
+
+    /// <summary>Angular dimension: extension rays from the vertex through both ray
+    /// points, an arc between them with arrowheads at its ends, degree text outside
+    /// the arc's midpoint. The arc radius is the author's offset length when set, else
+    /// three quarters of the shorter ray.</summary>
+    private static void BuildAngular(
+        List<(Vector3d A, Vector3d B)> segments, in Vector3d a, in Vector3d b,
+        in Vector3d vertex, in Vector3d offset, string text, in AnnotationCamera camera)
+    {
+        var va = a - vertex;
+        var vb = b - vertex;
+        if (!va.TryNormalize(Tolerance.Default, out var dirA)
+            || !vb.TryNormalize(Tolerance.Default, out var dirB))
+        {
+            AddBillboardText(segments, vertex, text, camera);
+            return;
+        }
+        double angle = Math.Acos(Math.Clamp(dirA.Dot(dirB), -1, 1));
+        var axisRaw = dirA.Cross(dirB);
+        if (!axisRaw.TryNormalize(Tolerance.Default, out var axis))
+        {
+            // Parallel rays span no plane; the resolver refuses these, so this is
+            // belt-and-braces for hand-built resolved annotations.
+            AddBillboardText(segments, vertex, text, camera);
+            return;
+        }
+
+        double radius = offset.Length > 0 ? offset.Length : Math.Min(va.Length, vb.Length) * 0.75;
+        double overshoot = camera.PxToWorld(ExtensionOvershootPx, vertex);
+        double gap = camera.PxToWorld(ExtensionGapPx, vertex);
+
+        // Extension rays from just off the vertex to just past the arc.
+        segments.Add((vertex + dirA * gap, vertex + dirA * (radius + overshoot)));
+        segments.Add((vertex + dirB * gap, vertex + dirB * (radius + overshoot)));
+
+        // The arc, chorded at ~5 degrees per step.
+        int steps = Math.Max(4, (int)Math.Ceiling(angle / ArcStepRadians));
+        var previous = vertex + dirA * radius;
+        for (int i = 1; i <= steps; i++)
+        {
+            var point = vertex + Rotate(dirA, axis, angle * i / steps) * radius;
+            segments.Add((previous, point));
+            previous = point;
+        }
+
+        // Arrowheads at the arc ends, wings trailing along the arc (tangent
+        // directions; the tangent at parameter t is axis x direction(t)).
+        var startTangent = axis.Cross(dirA);
+        var endTangent = axis.Cross(dirB);
+        AddArrowhead(segments, vertex + dirA * radius, startTangent, dirA, camera);
+        AddArrowhead(segments, vertex + dirB * radius, -endTangent, dirB, camera);
+
+        // Degree text outside the arc's midpoint.
+        var midDir = Rotate(dirA, axis, angle * 0.5);
+        var arcMid = vertex + midDir * radius;
+        var textCenter = arcMid + midDir * camera.PxToWorld(TextGapPx + TextHeightPx * 0.5, arcMid);
+        AddBillboardText(segments, textCenter, text, camera);
+    }
+
+    /// <summary>Rodrigues rotation of a vector about a unit axis.</summary>
+    private static Vector3d Rotate(in Vector3d v, in Vector3d axis, double angle)
+    {
+        double cos = Math.Cos(angle);
+        double sin = Math.Sin(angle);
+        return v * cos + axis.Cross(v) * sin + axis * (axis.Dot(v) * (1 - cos));
+    }
+
+    /// <summary>Screen-space pick radius for <see cref="Pick"/> (style pixels) — a
+    /// line overlay needs a fatter target than its 1-px stroke.</summary>
+    public const double PickRadiusPx = 8;
+
+    /// <summary>
+    /// Picks the annotation nearest the ray, or −1: each item's own drawn segments are
+    /// rebuilt (the same <see cref="Build"/> geometry, so what you see is exactly what
+    /// you can click) and the winner is the item whose nearest segment passes within
+    /// <paramref name="radiusPx"/> style pixels of the ray at that depth. Depth-blind
+    /// on purpose, matching the always-on-top draw: an annotation you can SEE is
+    /// pickable even when model geometry sits in front of its anchors.
+    /// </summary>
+    public static int Pick(
+        IReadOnlyList<AnnotationItem> items, in AnnotationCamera camera, in Ray3d ray,
+        double radiusPx = PickRadiusPx)
+    {
+        var scratch = new List<(Vector3d A, Vector3d B)>();
+        var one = new AnnotationItem[1];
+        int best = -1;
+        double bestPx = radiusPx;
+        for (int i = 0; i < items.Count; i++)
+        {
+            one[0] = items[i];
+            Build(scratch, one, camera);
+            foreach (var (a, b) in scratch)
+            {
+                double distance = RaySegmentDistance(ray, a, b, out var onSegment);
+                double px = distance
+                    / (camera.PixelScale * camera.WorldPerPixel(onSegment));
+                if (px < bestPx)
+                {
+                    bestPx = px;
+                    best = i;
+                }
+            }
+        }
+        return best;
+    }
+
+    /// <summary>Closest distance between a ray (t &#x2265; 0) and a segment, with the
+    /// segment's closest point out (the depth reference for the pixel conversion).
+    /// The clamped two-segment closest-point solve; the parallel guard is a relative
+    /// machine-epsilon degeneracy test (scale-free tier).</summary>
+    private static double RaySegmentDistance(
+        in Ray3d ray, in Vector3d a, in Vector3d b, out Vector3d onSegment)
+    {
+        var d1 = ray.Direction;
+        var d2 = b - a;
+        var w = ray.Origin - a;
+        double a11 = d1.Dot(d1);
+        double a22 = d2.Dot(d2);
+        double a12 = d1.Dot(d2);
+        double b1 = d1.Dot(w);
+        double b2 = d2.Dot(w);
+        double denom = a11 * a22 - a12 * a12;
+
+        double s = denom > 1e-14 * a11 * a22 ? Math.Max(0, (a12 * b2 - a22 * b1) / denom) : 0;
+        double t = a22 > 0 ? Math.Clamp((b2 + s * a12) / a22, 0, 1) : 0;
+        s = a11 > 0 ? Math.Max(0, (t * a12 - b1) / a11) : 0;
+        t = a22 > 0 ? Math.Clamp((b2 + s * a12) / a22, 0, 1) : 0;
+
+        onSegment = a + d2 * t;
+        return (ray.Origin + d1 * s).DistanceTo(onSegment);
     }
 
     /// <summary>The classic dimension: extension lines from the anchors, a dimension
@@ -234,7 +376,10 @@ public static class AnnotationGeometry
     }
 
     /// <summary>Shared leader ending: a short horizontal tail on the side the leader
-    /// leans toward, then the text (and its datum box when <paramref name="boxed"/>).</summary>
+    /// leans toward, then the text (and its datum box when <paramref name="boxed"/>).
+    /// Multi-line text (split on '\n') stacks downward from the tail line, left-aligned
+    /// on the right side and right-aligned against the tail on the left side, with the
+    /// box (when boxed) spanning every line.</summary>
     private static void FinishLeaderText(
         List<(Vector3d A, Vector3d B)> segments, in Vector3d elbow, in Vector3d leaderDir,
         string text, bool boxed, in AnnotationCamera camera)
@@ -243,31 +388,57 @@ public static class AnnotationGeometry
         var tailEnd = elbow + camera.Right * (side * camera.PxToWorld(TailLengthPx, elbow));
         segments.Add((elbow, tailEnd));
 
+        string[] lines = text.Split('\n');
         double height = camera.PxToWorld(TextHeightPx, tailEnd);
-        double width = StrokeFont.TextWidth(text) * height;
+        double lineStep = height * LineSpacing;
+        double maxWidth = 0;
+        foreach (string line in lines)
+            maxWidth = Math.Max(maxWidth, StrokeFont.TextWidth(line) * height);
         double gap = camera.PxToWorld(TextGapPx, tailEnd);
-        // Baseline-left origin: text continues away from the tail, vertically centered.
-        var origin = side > 0
-            ? tailEnd + camera.Right * gap - camera.Up * (height * 0.5)
-            : tailEnd - camera.Right * (gap + width) - camera.Up * (height * 0.5);
-        StrokeFont.AppendText(segments, text, origin, camera.Right, camera.Up, height);
+
+        // First line vertically centered on the tail; the rest stack below it.
+        for (int i = 0; i < lines.Length; i++)
+        {
+            double lineWidth = StrokeFont.TextWidth(lines[i]) * height;
+            var lineOrigin = (side > 0
+                    ? tailEnd + camera.Right * gap
+                    : tailEnd - camera.Right * (gap + lineWidth))
+                - camera.Up * (height * 0.5 + i * lineStep);
+            StrokeFont.AppendText(segments, lines[i], lineOrigin, camera.Right, camera.Up, height);
+        }
 
         if (boxed)
         {
             double pad = camera.PxToWorld(DatumBoxPaddingPx, tailEnd);
-            AddBox(segments, origin, camera.Right, camera.Up, width, height, pad);
+            // The box's baseline-left origin is the LAST line's leftmost origin; its
+            // height spans from that baseline up to the first line's cap height.
+            var boxOrigin = (side > 0
+                    ? tailEnd + camera.Right * gap
+                    : tailEnd - camera.Right * (gap + maxWidth))
+                - camera.Up * (height * 0.5 + (lines.Length - 1) * lineStep);
+            double boxHeight = height + (lines.Length - 1) * lineStep;
+            AddBox(segments, boxOrigin, camera.Right, camera.Up, maxWidth, boxHeight, pad);
         }
     }
 
-    /// <summary>Billboarded text centered at a world point, sized in screen pixels.</summary>
+    /// <summary>Billboarded text centered at a world point, sized in screen pixels;
+    /// multi-line text (split on '\n') is stacked and centered as a block, each line
+    /// centered within it.</summary>
     private static void AddBillboardText(
         List<(Vector3d A, Vector3d B)> segments, in Vector3d center, string text,
         in AnnotationCamera camera)
     {
+        string[] lines = text.Split('\n');
         double height = camera.PxToWorld(TextHeightPx, center);
-        double width = StrokeFont.TextWidth(text) * height;
-        var origin = center - camera.Right * (width * 0.5) - camera.Up * (height * 0.5);
-        StrokeFont.AppendText(segments, text, origin, camera.Right, camera.Up, height);
+        double lineStep = height * LineSpacing;
+        double blockHeight = height + (lines.Length - 1) * lineStep;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            double width = StrokeFont.TextWidth(lines[i]) * height;
+            var origin = center - camera.Right * (width * 0.5)
+                + camera.Up * (blockHeight * 0.5 - height - i * lineStep);
+            StrokeFont.AppendText(segments, lines[i], origin, camera.Right, camera.Up, height);
+        }
     }
 
     /// <summary>A V arrowhead: tip at <paramref name="tip"/>, wings trailing along

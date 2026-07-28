@@ -44,15 +44,24 @@ internal sealed class AnnotationLayer
     private uint _vao, _vbo;
     private int _vertexCount;
 
+    // The selected annotation's own segments, drawn again in selection gold over the
+    // normal batch (same geometry, so the highlight can never sit beside its lines).
+    private readonly List<(Vector3d A, Vector3d B)> _selectedSegments = [];
+    private bool _selectedUploaded;
+    private uint _selectedVao, _selectedVbo;
+    private int _selectedVertexCount;
+
     /// <summary>Whether any persistent (part-attached) annotations are loaded — hosts
     /// use it to decide the toolbar toggle's relevance.</summary>
     public bool HasItems => _items.Count > 0;
 
-    /// <summary>Replaces the persistent annotation items (scene apply/live reload).</summary>
+    /// <summary>Replaces the persistent annotation items (scene apply/live reload).
+    /// Clears any selection — the indices no longer mean the same rows.</summary>
     public void SetItems(IReadOnlyList<AnnotationItem> items)
     {
         _items.Clear();
         _items.AddRange(items);
+        _selected = -1;
         _dirty = true;
     }
 
@@ -66,6 +75,39 @@ internal sealed class AnnotationLayer
 
     /// <summary>True when a transient measure dimension is showing.</summary>
     public bool HasTransient => _transient is not null;
+
+    // ---- picking + selection (always-on-top overlay => depth-blind pick) ----
+
+    private int _selected = -1;
+
+    /// <summary>Index of the selected persistent annotation (−1 for none).</summary>
+    public int SelectedIndex => _selected;
+
+    /// <summary>The selected annotation's display text (hosts report it), or null.</summary>
+    public string? SelectedText =>
+        _selected >= 0 && _selected < _items.Count ? _items[_selected].Annotation.Text : null;
+
+    /// <summary>
+    /// Picks the persistent annotation nearest the ray (within
+    /// <see cref="AnnotationGeometry.PickRadiusPx"/> style pixels of its drawn
+    /// segments), or −1 — pure math (<see cref="AnnotationGeometry.Pick"/>), callable
+    /// off the render thread. Ignored while hidden: an invisible overlay must not
+    /// swallow clicks.
+    /// </summary>
+    public int Pick(in AnnotationCamera camera, in Ray3d ray, bool showPersistent) =>
+        showPersistent ? AnnotationGeometry.Pick(_items, camera, ray) : -1;
+
+    /// <summary>Selects (or clears, −1) an annotation; the selected one draws in
+    /// selection gold. Returns true when the selection changed.</summary>
+    public bool Select(int index)
+    {
+        int next = index >= 0 && index < _items.Count ? index : -1;
+        if (next == _selected)
+            return false;
+        _selected = next;
+        _dirty = true;
+        return true;
+    }
 
     /// <summary>
     /// Draws the overlay: rebuilds geometry when the camera pose/viewport or the item
@@ -90,6 +132,15 @@ internal sealed class AnnotationLayer
             if (_transient is { } transient)
                 _buildScratch.Add(new AnnotationItem(transient, Matrix4d.Identity));
             AnnotationGeometry.Build(_segments, _buildScratch, camera);
+
+            // The selected item's segments again, for the gold overdraw batch.
+            _selectedSegments.Clear();
+            if (showPersistent && _selected >= 0 && _selected < _items.Count)
+            {
+                _buildScratch.Clear();
+                _buildScratch.Add(_items[_selected]);
+                AnnotationGeometry.Build(_selectedSegments, _buildScratch, camera);
+            }
             Upload(gl);
             _dirty = false;
             _builtCamera = camera;
@@ -109,6 +160,15 @@ internal sealed class AnnotationLayer
         gl.Disable(EnableCap.DepthTest);
         gl.BindVertexArray(_vao);
         gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_vertexCount);
+        if (_selectedVertexCount > 0)
+        {
+            // Selection gold over the normal batch — the one selection colour
+            // (Highlight.Selection), never a second definition of it.
+            var gold = Highlight.Selection;
+            gl.Uniform3(uColor, gold.R, gold.G, gold.B);
+            gl.BindVertexArray(_selectedVao);
+            gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_selectedVertexCount);
+        }
         gl.BindVertexArray(0);
         gl.Enable(EnableCap.DepthTest);
     }
@@ -116,22 +176,38 @@ internal sealed class AnnotationLayer
     /// <summary>Deletes the GPU buffers (deinit path; GL context current).</summary>
     public void Release(GL gl)
     {
-        if (!_uploaded)
-            return;
-        gl.DeleteBuffer(_vbo);
-        gl.DeleteVertexArray(_vao);
-        _uploaded = false;
-        _vertexCount = 0;
+        if (_uploaded)
+        {
+            gl.DeleteBuffer(_vbo);
+            gl.DeleteVertexArray(_vao);
+            _uploaded = false;
+            _vertexCount = 0;
+        }
+        if (_selectedUploaded)
+        {
+            gl.DeleteBuffer(_selectedVbo);
+            gl.DeleteVertexArray(_selectedVao);
+            _selectedUploaded = false;
+            _selectedVertexCount = 0;
+        }
     }
 
     private void Upload(GL gl)
     {
         Release(gl);
-        if (_segments.Count == 0)
-            return;
-        (_vao, _vbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(_segments));
-        _vertexCount = _segments.Count * 2;
-        _uploaded = true;
+        if (_segments.Count > 0)
+        {
+            (_vao, _vbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(_segments));
+            _vertexCount = _segments.Count * 2;
+            _uploaded = true;
+        }
+        if (_selectedSegments.Count > 0)
+        {
+            (_selectedVao, _selectedVbo) =
+                RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(_selectedSegments));
+            _selectedVertexCount = _selectedSegments.Count * 2;
+            _selectedUploaded = true;
+        }
     }
 
     /// <summary>

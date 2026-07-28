@@ -285,7 +285,8 @@ foreach (var s in snippets)
     if (!TryReadVariable<IEnumerable<SectionPlane>>(state, "sectionPlanes", s, errors, out var declaredPlanes)
         || !TryReadVariable<SectionCombine?>(state, "sectionCombine", s, errors, out var declaredCombine)
         || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera)
-        || !TryReadVariable<double?>(state, "explode", s, errors, out var declaredExplode))
+        || !TryReadVariable<double?>(state, "explode", s, errors, out var declaredExplode)
+        || !TryReadVariable<ConstructionPreviewRequest?>(state, "preview", s, errors, out var declaredPreview))
         continue;
 
     var planes = declaredPlanes is null ? s.SectionPlanes : [.. declaredPlanes];
@@ -308,6 +309,7 @@ foreach (var s in snippets)
                 planes is { Count: > 0 } ? planes[0].Offset : s.SectionOffset,
                 sectionPlanes: planes,
                 sectionCombine: declaredCombine ?? SectionCombine.Intersection,
+                preview: declaredPreview,
                 explode: declaredExplode ?? 0);
             rendered++;
         }

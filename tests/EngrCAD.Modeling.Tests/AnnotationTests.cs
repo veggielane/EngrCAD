@@ -288,16 +288,19 @@ public class AnnotationTests
     [Fact]
     public void HoleCallout_Counterbore_AppendsRecess()
     {
-        // DIN 974 M5 cbore: bore 5.5, recess diameter 10, recess depth 5.5.
-        Assert.Equal("\u23005.5 \u21A714 \u2334\u230010 \u21A75.5",
+        // DIN 974 M5 cbore: bore 5.5, recess diameter 10, recess depth 5.5. The
+        // counterbore is a CONTINUATION LINE (drawing convention; the stroke-font
+        // layout stacks '\n'-separated lines).
+        Assert.Equal("\u23005.5 \u21A714\n\u2334\u230010 \u21A75.5",
             HoleCallout.Text(StandardHoles.Counterbored(5), 14));
     }
 
     [Fact]
     public void HoleCallout_Countersink_AppendsConeAndAngle()
     {
-        // ISO 10642 M5 csk: bore 5.5, cone diameter 11.6, 90 degrees.
-        Assert.Equal("\u23005.5 \u21A714 \u2335\u230011.6 \u00D790\u00B0",
+        // ISO 10642 M5 csk: bore 5.5, cone diameter 11.6, 90 degrees; the cone is a
+        // continuation line like the counterbore's.
+        Assert.Equal("\u23005.5 \u21A714\n\u2335\u230011.6 \u00D790\u00B0",
             HoleCallout.Text(StandardHoles.Countersunk(5), 14));
     }
 

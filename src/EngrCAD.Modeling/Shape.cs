@@ -433,7 +433,7 @@ public abstract class Shape
             result -= tool;
         }
         return new DrillShape(
-            this, result, points, depth, placementPlane.ToMatrix(), surfaceDiameter,
+            this, result, hole, points, depth, placementPlane.ToMatrix(), surfaceDiameter,
             hole.ToolSilhouette(depth));
     }
 

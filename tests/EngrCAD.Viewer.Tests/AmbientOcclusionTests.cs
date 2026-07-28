@@ -152,7 +152,7 @@ public class AmbientOcclusionTests
         var completed = new TaskCompletionSource<(int Count, TimeSpan Elapsed)>();
         int callbacks = 0;
         AmbientOcclusion.BakeInBackground(
-            parts, onPartBaked: () => Interlocked.Increment(ref callbacks),
+            parts, onPartBaked: _ => Interlocked.Increment(ref callbacks),
             onFinished: (count, elapsed) => completed.SetResult((count, elapsed)),
             CancellationToken.None);
 
@@ -180,7 +180,7 @@ public class AmbientOcclusionTests
         int reported = 0;
         int callbacks = 0;
         AmbientOcclusion.BakeInBackground(
-            [part], onPartBaked: () => Interlocked.Increment(ref callbacks),
+            [part], onPartBaked: _ => Interlocked.Increment(ref callbacks),
             onFinished: (_, _) => Interlocked.Increment(ref reported), CancellationToken.None);
 
         // No completion callback fires, so just give the job time to run through.
@@ -205,7 +205,7 @@ public class AmbientOcclusionTests
         int reported = 0;
         AmbientOcclusion.BakeInBackground(
             parts,
-            onPartBaked: () =>
+            onPartBaked: _ =>
             {
                 // Runs ON the bake thread between parts, so cancelling here is seen at
                 // the very next loop iteration: exactly one part gets baked.

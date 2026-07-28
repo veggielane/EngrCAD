@@ -69,7 +69,8 @@ internal sealed class SceneHost
     /// <summary>One model-tree row backed by a viewport instance (assembly header rows
     /// are not instances — they only contribute an ancestor checkbox).</summary>
     private sealed record PartRow(
-        int Index, Part Part, CheckBox Own, IReadOnlyList<CheckBox> Ancestors, Button Label, Button ModeButton);
+        int Index, Part Part, CheckBox Own, IReadOnlyList<CheckBox> Ancestors, Button Label,
+        Button ModeButton, Button ClipButton, TextBlock AoBadge);
 
     private readonly List<PartRow> _partRows = [];
     private IReadOnlyList<PartInstance> _instances = [];
@@ -209,8 +210,15 @@ internal sealed class SceneHost
             IsChecked = Viewport.AmbientOcclusion,
         };
         ToolTip.SetTip(occlusion, "Ambient occlusion - darken pockets, bores and crevices (baked per part)");
-        occlusion.IsCheckedChanged += (_, _) => Viewport.AmbientOcclusion = occlusion.IsChecked ?? true;
+        occlusion.IsCheckedChanged += (_, _) =>
+        {
+            Viewport.AmbientOcclusion = occlusion.IsChecked ?? true;
+            RefreshOcclusionBadges();   // pending badges only make sense while AO is on
+        };
         toolbar.Children.Add(occlusion);
+        // Per-part bake progress: each part's row shows a small "ao" badge until its
+        // background bake lands (one status line for the whole job is not progress).
+        Viewport.OcclusionBaked += OnOcclusionBaked;
 
         var section = new ToggleButton { Content = "Section", Padding = new Thickness(10, 4), FontSize = 12 };
         section.IsCheckedChanged += (_, _) => Viewport.SectionEnabled = section.IsChecked ?? false;
@@ -244,6 +252,31 @@ internal sealed class SceneHost
             sectionCount.Content = next.ToString();
         };
         toolbar.Children.Add(sectionCount);
+
+        // Oblique section plane from the current view: the minimal toolbar affordance
+        // for planes the X/Y/Z axis model cannot express (hosts can already set
+        // ViewportControl.SectionPlanes directly). The plane passes through the orbit
+        // target with the camera's own eye direction as its normal, so it clips away
+        // everything between the viewer and the view centre — the classic
+        // "section from view". [ and ] still nudge it along its own normal.
+        var cutAtView = new Button { Content = "Cut@View", Padding = new Thickness(8, 4), FontSize = 12 };
+        ToolTip.SetTip(cutAtView,
+            "Oblique section plane from the current view (through the view centre, facing the camera)");
+        cutAtView.Click += (_, _) =>
+        {
+            var camera = Viewport.Camera;
+            var normal = (CameraMath.Eye(camera.Yaw, camera.Pitch, camera.Distance, camera.Target)
+                - camera.Target).Normalized();
+            Viewport.SectionPlanes = [SectionPlane.Through(camera.Target, normal)];
+            sectionCount.Content = "1";
+            section.IsChecked = true;          // fires the handler that enables sectioning
+            Viewport.SectionEnabled = true;    // idempotent when it was already on
+            // The click can only run after the constructor finished, so the status
+            // field is always assigned by then (hence the suppression).
+            _statusText!.Text =
+                $"section: oblique plane from view (normal {normal.X:F2}, {normal.Y:F2}, {normal.Z:F2})";
+        };
+        toolbar.Children.Add(cutAtView);
         toolbar.Children.Add(new Border { Width = 8 });
 
         // Annotations (PMI): on by default — a scene that carries dimensions shows
@@ -654,8 +687,11 @@ internal sealed class SceneHost
         // same tab structure Instances() flattens, so row instance indices line up.
         var instances = tab?.Instances(_explode) ?? [];
 
-        // A new instance list clears the viewport's preview overlay (ApplyInstances);
-        // drop our matching row state so the tree agrees with what is drawn.
+        // A new instance list clears the viewport's preview overlay (ApplyInstances).
+        // The key is remembered so a live reload can RESTORE the preview by path: node
+        // references change with the fresh scene, but occurrence paths and construction
+        // paths are stable, so the same row can be found again (see RestorePreview).
+        string? previewToRestore = _previewKey;
         _previewKey = null;
         _failed = [];
         _tabInstances = instances;
@@ -672,6 +708,8 @@ internal sealed class SceneHost
             Frame: !keepCamera && !restored));
         if (restored)
             Viewport.Camera = _tabCameras[name!];
+        if (previewToRestore is not null)
+            RestorePreview(previewToRestore);
 
         for (int i = 0; i < _tabStrip.Children.Count; i++)
         {
@@ -1101,6 +1139,48 @@ internal sealed class SceneHost
         };
         DockPanel.SetDock(mode, Dock.Right);
 
+        // Section-exemption toggle: writes through Part.ClippedBySection (shared by
+        // every instance), the drafting convention that fasteners, shafts and pins
+        // draw whole inside a cutaway. "cut" = clipped (default), "whole" = exempt.
+        var clip = new Button
+        {
+            Content = ClipLabel(part.ClippedBySection),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(4, 2),
+            FontSize = 10,
+            Foreground = DimText,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(clip,
+            "Section clipping - click to toggle: cut by section planes / drawn whole (fastener convention)");
+        clip.Click += (_, _) =>
+        {
+            bool clipped = !part.ClippedBySection;
+            Viewport.SetClippedBySection(index, clipped);
+            foreach (var row in _partRows)
+            {
+                if (ReferenceEquals(row.Part, part))
+                    row.ClipButton.Content = ClipLabel(clipped);
+            }
+        };
+        DockPanel.SetDock(clip, Dock.Right);
+
+        // Ambient-occlusion progress: visible until this part's background bake lands
+        // (Viewport.OcclusionBaked clears it), hidden when AO is off or already baked.
+        var aoBadge = new TextBlock
+        {
+            Text = "ao",
+            Foreground = DimText,
+            FontSize = 9,
+            FontStyle = FontStyle.Italic,
+            Padding = new Thickness(2, 3),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = OcclusionPending(part),
+        };
+        ToolTip.SetTip(aoBadge, "ambient occlusion: baking in the background...");
+        DockPanel.SetDock(aoBadge, Dock.Right);
+
         bool broken = _failedRows.TryGetValue(part, out string? failure);
         var label = new Button
         {
@@ -1138,13 +1218,13 @@ internal sealed class SceneHost
             _tree.Children.Add(new DockPanel
             {
                 Margin = new Thickness(depth * 14, 0, 0, 0),
-                Children = { expander, check, mode, label },
+                Children = { expander, check, mode, clip, aoBadge, label },
             });
         }
         // Registered even when a collapsed ancestor hides the row: EffectiveVisibility
         // walks _partRows to push per-instance visibility to the viewport, and a
         // collapsed assembly must not change what renders.
-        _partRows.Add(new PartRow(index, part, check, ancestors, label, mode));
+        _partRows.Add(new PartRow(index, part, check, ancestors, label, mode, clip, aoBadge));
 
         if (visible && construction is not null && _expanded.Contains(partKey))
             AddConstructionRows(index, construction, depth + 1);
@@ -1168,6 +1248,53 @@ internal sealed class SceneHost
 
         var panel = new DockPanel { Margin = new Thickness(depth * 14, 0, 0, 0) };
         panel.Children.Add(expander);
+
+        // Feature rows are editable history steps: a suppress toggle and a rollback
+        // marker, the feature-tree affordances every parametric CAD has. Both
+        // regenerate through Part.Regenerate on a background task.
+        if (node.Feature is { } feature && PartAt(instanceIndex) is { History: not null } featurePart)
+        {
+            var rollback = new Button
+            {
+                Content = "‖",   // double vertical bar: the rollback marker
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(3, 2),
+                FontSize = 10,
+                Foreground = DimText,
+                VerticalAlignment = VerticalAlignment.Center,
+                [DockPanel.DockProperty] = Dock.Right,
+            };
+            ToolTip.SetTip(rollback,
+                "Roll back to here - suppress every feature below this one "
+                + "(click the last feature's marker to restore)");
+            rollback.Click += (_, _) => RollBackTo(featurePart, node);
+            panel.Children.Add(rollback);
+
+            var suppress = new Button
+            {
+                Content = node.Suppressed ? "uns" : "sup",
+                Background = Brushes.Transparent,
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(3, 2),
+                FontSize = 10,
+                Foreground = DimText,
+                VerticalAlignment = VerticalAlignment.Center,
+                [DockPanel.DockProperty] = Dock.Right,
+            };
+            ToolTip.SetTip(suppress,
+                "Suppress/unsuppress this feature (a suppressed feature passes the body "
+                + "through untouched) and regenerate");
+            suppress.Click += (_, _) =>
+            {
+                feature.Suppressed = !feature.Suppressed;
+                // A manual toggle overrides any rollback bookkeeping for this feature.
+                if (_rolledBack.TryGetValue(featurePart, out var rolled))
+                    rolled.Remove(feature);
+                RegenerateAndRefresh(featurePart);
+            };
+            panel.Children.Add(suppress);
+        }
 
         if (node.Detail is { Length: > 0 } detail)
         {
@@ -1212,8 +1339,17 @@ internal sealed class SceneHost
             HorizontalContentAlignment = HorizontalAlignment.Left,
             Foreground = idle,
         };
-        ToolTip.SetTip(label, $"{node.Kind}: click to preview this step in the viewport");
-        label.Click += (_, _) => PreviewNode(instanceIndex, node, key);
+        ToolTip.SetTip(label, node.Feature is null
+            ? $"{node.Kind}: click to preview this step in the viewport"
+            : $"{node.Kind}: click to preview this step and edit its parameters");
+        label.Click += (_, _) =>
+        {
+            // A feature row also opens its [Param] values as editable fields in the
+            // properties panel (the preview is the rollback view of the same step).
+            if (node.Feature is not null && PartAt(instanceIndex) is { History: not null } featureOwner)
+                ShowFeatureProperties(featureOwner, node);
+            PreviewNode(instanceIndex, node, key);
+        };
         panel.Children.Add(label);
 
         _tree.Children.Add(panel);
@@ -1354,6 +1490,34 @@ internal sealed class SceneHost
         _statusText.Text = "preview: cleared";
     }
 
+    /// <summary>
+    /// Re-applies a preview after the scene was replaced (a live reload) or a tab was
+    /// revisited, by PATH: the key carries the occurrence path and the construction
+    /// path ("N{occurrence}#{node path}"), both of which survive a reload even though
+    /// every node reference changes. A key that no longer resolves — the row's part
+    /// was removed, or it belonged to another tab — simply restores nothing, which is
+    /// the pre-restore behaviour.
+    /// </summary>
+    private void RestorePreview(string key)
+    {
+        if (!key.StartsWith('N'))
+            return;
+        int separator = key.LastIndexOf('#');
+        if (separator < 0)
+            return;
+        string occurrencePath = key[1..separator];
+        string nodePath = key[(separator + 1)..];
+        for (int i = 0; i < _instances.Count; i++)
+        {
+            if (_instances[i].Path != occurrencePath)
+                continue;
+            var root = _instances[i].Part.ConstructionTree();
+            if (root?.Find(nodePath) is { CanPreview: true } node)
+                PreviewNode(i, node, key);
+            return;
+        }
+    }
+
     private void HighlightConstructionRow()
     {
         foreach (var (key, label, idle) in _constructionRows)
@@ -1362,6 +1526,181 @@ internal sealed class SceneHost
             label.FontWeight = active ? FontWeight.Bold : FontWeight.Normal;
             label.Foreground = active ? PreviewText : idle;
         }
+    }
+
+    // ---- feature editing (suppress, rollback, [Param] fields) ----
+
+    /// <summary>The part behind a viewport instance index, or null (a failed row).</summary>
+    private Part? PartAt(int instanceIndex) =>
+        instanceIndex >= 0 && instanceIndex < _instances.Count ? _instances[instanceIndex].Part : null;
+
+    /// <summary>Features suppressed by the rollback marker (per part), so restoring the
+    /// bar un-suppresses exactly these and never a feature the user suppressed
+    /// deliberately.</summary>
+    private readonly Dictionary<Part, HashSet<Feature>> _rolledBack = [];
+
+    /// <summary>
+    /// The rollback bar as click semantics (the flag logic itself is
+    /// <see cref="FeatureRollback.RollBackTo"/>, UI-free and tested): rolling back to a
+    /// feature suppresses every feature BELOW it (recorded per part), moving the marker
+    /// down restores the ones above it, and the last feature's marker restores the
+    /// whole history. Only features the bar suppressed are ever restored.
+    /// </summary>
+    private void RollBackTo(Part part, ConstructionNode featureNode)
+    {
+        if (part.History is not { } history || featureNode.Feature is not { } marker)
+            return;
+        var rolled = _rolledBack.TryGetValue(part, out var existing) ? existing : [];
+        _rolledBack[part] = rolled;
+        if (!FeatureRollback.RollBackTo(history, marker, rolled))
+        {
+            _statusText.Text = "rollback: nothing to change";
+            return;
+        }
+        RegenerateAndRefresh(part);
+    }
+
+    /// <summary>
+    /// Regenerates an edited part on a background task (feature Apply bodies lower
+    /// geometry — never on the UI thread) and republishes the tab: a successful
+    /// regeneration swapped the body and cleared every derived cache, so the loader
+    /// re-meshes exactly the changed part while untouched parts republish from cache.
+    /// A failure keeps the previous geometry; either way the per-feature statuses land
+    /// in the status bar.
+    /// </summary>
+    private void RegenerateAndRefresh(Part part)
+    {
+        _statusText.Text = $"regenerating '{part.Name}' ...";
+        var scene = _scene;
+        Task.Run(() =>
+        {
+            RegenerationResult result;
+            try
+            {
+                result = part.Regenerate();
+            }
+            catch (Exception exception)
+            {
+                Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                    _statusText.Text = $"regeneration threw: {exception.GetType().Name}: {exception.Message}");
+                return;
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (!ReferenceEquals(_scene, scene))
+                    return;   // a live reload replaced the document while we regenerated
+                if (result.Succeeded)
+                {
+                    // Old tree nodes (and their preview cache entries) are stale now.
+                    _previewCache.Clear();
+                    Viewport.SetConstructionPreview(null);
+                    _previewKey = null;
+                    ShowTab(_currentTab, keepCamera: true);
+                    double elapsed = result.Statuses.Sum(s => s.Elapsed.TotalSeconds);
+                    _statusText.Text = $"regenerated '{part.Name}' in {elapsed:F1} s";
+                }
+                else
+                {
+                    var failed = result.Statuses.FirstOrDefault(s => s.Outcome == FeatureOutcome.Failed);
+                    _statusText.Text = failed is null
+                        ? $"regeneration of '{part.Name}' failed"
+                        : $"regeneration failed at '{failed.Name}': {failed.Error} "
+                          + "(previous geometry kept; the edit stays applied)";
+                }
+            });
+        });
+    }
+
+    /// <summary>
+    /// The properties panel as a feature editor: one text field per <c>[Param]</c>
+    /// (Enter applies), writing through the SAME JSON seam
+    /// <c>FeatureHistory.SaveParameters</c>/<c>LoadParameters</c> use — so the accepted
+    /// spellings cannot drift from the file format or the MCP <c>set_param</c> tool —
+    /// then <see cref="RegenerateAndRefresh"/>.
+    /// </summary>
+    private void ShowFeatureProperties(Part part, ConstructionNode node)
+    {
+        if (node.Feature is not { } feature)
+            return;
+        _properties.Children.Clear();
+        AddProperty("Feature", node.Label);
+        AddProperty("Part", part.Name);
+        AddProperty("Status", feature.Suppressed ? "suppressed" : "active");
+        foreach (var parameter in feature.Parameters)
+        {
+            string caption = parameter.Units is { Length: > 0 } units
+                ? $"{parameter.Name} ({units})"
+                : parameter.Name;
+            _properties.Children.Add(new TextBlock { Text = caption, Foreground = DimText, FontSize = 10 });
+            var box = new TextBox
+            {
+                Text = EditableValue(parameter),
+                FontSize = 12,
+                Padding = new Thickness(4, 2),
+                Margin = new Thickness(0, 0, 0, 4),
+            };
+            if (parameter.Description is { Length: > 0 } description)
+                ToolTip.SetTip(box, description);
+            var name = parameter.Name;
+            box.KeyDown += (_, e) =>
+            {
+                if (e.Key == Avalonia.Input.Key.Enter)
+                    ApplyParameter(part, node.Label, name, box.Text ?? "");
+            };
+            _properties.Children.Add(box);
+        }
+        _properties.Children.Add(new TextBlock
+        {
+            Text = "Enter applies a value and regenerates.",
+            Foreground = DimText,
+            FontSize = 10,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+    }
+
+    /// <summary>A parameter value as editable text that round-trips through the JSON
+    /// seam: numbers/bools as JSON literals, vectors as [x, y] / [x, y, z] arrays,
+    /// everything else (strings, enum names) as plain text.</summary>
+    private static string EditableValue(ParamInfo parameter) => parameter.Value switch
+    {
+        null => "",
+        double d => d.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        float f => f.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+        Vector2d v => FormattableString.Invariant($"[{v.X:R}, {v.Y:R}]"),
+        Vector3d v => FormattableString.Invariant($"[{v.X:R}, {v.Y:R}, {v.Z:R}]"),
+        bool b => b ? "true" : "false",
+        var other => other.ToString() ?? "",
+    };
+
+    /// <summary>Applies one typed value: parse the text as JSON when it is JSON (numbers,
+    /// booleans, vectors), else treat it as a string (enum names, labels), push the
+    /// single-feature override through <c>LoadParameters</c>, and regenerate. A value
+    /// that does not convert is a status message naming the parameter, not a crash.</summary>
+    private void ApplyParameter(Part part, string featureName, string parameterName, string text)
+    {
+        if (part.History is not { } history)
+            return;
+        System.Text.Json.Nodes.JsonNode? value;
+        try
+        {
+            value = System.Text.Json.Nodes.JsonNode.Parse(text);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            value = System.Text.Json.Nodes.JsonValue.Create(text);
+        }
+        string json = new System.Text.Json.Nodes.JsonObject
+        {
+            [featureName] = new System.Text.Json.Nodes.JsonObject { [parameterName] = value },
+        }.ToJsonString();
+        var warnings = history.LoadParameters(json);
+        if (warnings.Count > 0)
+        {
+            _statusText.Text = $"{featureName}.{parameterName}: {string.Join("; ", warnings)}";
+            return;
+        }
+        RegenerateAndRefresh(part);
     }
 
     /// <summary>Effective visibility per instance: its own checkbox AND every ancestor
@@ -1409,6 +1748,36 @@ internal sealed class SceneHost
         DisplayMode.Translucent => "glass",
         _ => "shade",
     };
+
+    private static string ClipLabel(bool clippedBySection) => clippedBySection ? "cut" : "whole";
+
+    /// <summary>Whether a part's ambient-occlusion bake is still to come: AO is on and
+    /// the cache has nothing for its display mesh yet. A part not yet meshed is pending
+    /// (its bake queues after its batch lands); a part that failed to mesh is not (there
+    /// is nothing to bake). Never meshes: <c>HasMesh</c> gates the <c>GetMesh</c> read.</summary>
+    private bool OcclusionPending(Part part)
+    {
+        if (!Viewport.AmbientOcclusion || _failedRows.ContainsKey(part))
+            return false;
+        return !part.HasMesh || Viewer.AmbientOcclusion.TryGet(part.GetMesh()) is null;
+    }
+
+    /// <summary>A part's background bake landed (UI thread): clear its rows' badges.</summary>
+    private void OnOcclusionBaked(Part part)
+    {
+        foreach (var row in _partRows)
+        {
+            if (ReferenceEquals(row.Part, part))
+                row.AoBadge.IsVisible = false;
+        }
+    }
+
+    /// <summary>Recomputes every row's pending badge (the AO toggle flipped).</summary>
+    private void RefreshOcclusionBadges()
+    {
+        foreach (var row in _partRows)
+            row.AoBadge.IsVisible = OcclusionPending(row.Part);
+    }
 
     private void OnViewportSelection(int index)
     {

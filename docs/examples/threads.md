@@ -52,26 +52,25 @@ scene.Add(new Part("M8 stud", boss | stud, Palette.Steel,
 does: at each 2D point it drills the tap pilot (`ThreadSpec.TapDrillDiameter`, via
 [`Drill`](holes.md)) and then subtracts a modeled thread void, both along −normal to
 `depth` below the plane. The pilot truncates the internal crests to the tap-drill
-diameter — exactly what tapping a drilled hole does. Cutting the block in half shows
-the internal thread profile (the viewer's [section mode](viewer.md) does this
-interactively):
+diameter — exactly what tapping a drilled hole does. A real **section plane** through
+the hole axis shows the internal thread profile (the viewer's
+[section mode](viewer.md) interactively; here the fence's `section:y,0` option). Note
+what makes this cut possible: a downstream *boolean* may slice a modeled thread only
+with axis-perpendicular planes (helical∩tilted-plane falls to the tracer and fails
+loudly), but the viewer's section is a fragment-shader clip, not a boolean — so it
+slices ALONG the thread axis effortlessly, on the same whole geometry:
 
-```csharp render:thread-hole
+```csharp render:thread-hole section:y,0
 var top = SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
 var block = Shape.Box(16, 12, 10)   // printable: clearance keeps this on the SDF route
     .ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], depth: 12, top, clearance: 0.15);
 
-// Expose the internal thread by cutting away the front half through the hole axis.
-// (A section cut slicing ALONG the thread axis is beyond the B-Rep boolean's
-// perpendicular-plane support — the SDF route handles it exactly.)
-var sectioned = block - Shape.Box(20, 14, 14).Translate(0, 7, 0);
-
 var scene = new Scene(new MeshQuality { SdfResolution = 220 });
-scene.Add(new Part("tapped block", sectioned, Palette.Brass,
+scene.Add(new Part("tapped block", block, Palette.Brass,
     Matrix4d.CreateTranslation((0, 0, 5))));
 ```
 
-![A half-sectioned block showing the internal thread profile of an M6 tapped hole](images/thread-hole.png)
+![A section plane through the hole axis showing the internal thread profile of an M6 tapped hole](images/thread-hole.png)
 
 ## Printing clearance
 

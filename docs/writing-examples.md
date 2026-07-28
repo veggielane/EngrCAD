@@ -59,6 +59,7 @@ snippet may **declare them as variables**, exactly the way it already declares
 | `sectionCombine` | `SectionCombine` | `Intersection` (default — the quarter/octant cutaway) or `Union`. |
 | `camera` | `CameraState` | An explicit pose instead of the auto-framed iso view. |
 | `explode` | `double` | Exploded-view factor (0 assembled → 1 fully exploded). Derives occurrence offsets via `Assembly.AutoExplode` if the design has not set them. |
+| `preview` | `ConstructionPreviewRequest` | One construction-tree row (`new(part, part.ConstructionTree()!.Find(path)!)`) drawn over the render as the model tree's rollback view — construction-cyan edges, always on top. A row that cannot be lowered fails the build. |
 
 `EngrCAD.Viewer` is imported for exactly these types. A variable of the right name but
 the **wrong type is an error**, never a silent miss — an example that quietly ignored

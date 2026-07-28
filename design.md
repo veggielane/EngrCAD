@@ -1715,6 +1715,30 @@ for `in`-parameters being illegal in expression trees.
   - The **measure tool** is interactive dimensioning, not a separate feature: two
     surface picks (the existing raycast, now returning the hit point) build a
     transient point-to-point `LinearDimension` through the same layer.
+  - **An angular face dimension measures the INCLUDED angle, not the normals'
+    angle.** `AngularDimension.BetweenFaces` takes the two in-plane directions
+    perpendicular to the planes' shared intersection line, each pointing from the
+    line toward its own face's centroid: that is the angle a drafter dimensions (a
+    10°-drafted side against the base reads 80°, where the outward normals span
+    100°), and it also chooses the arc's branch automatically — the arc opens the
+    way the faces do. The vertex is the intersection-line point nearest the
+    centroids' midpoint, so the graphic lands beside the faces instead of at the
+    line's arbitrary origin.
+  - **Annotation picking is depth-blind on purpose, and tests the DRAWN segments.**
+    The overlay renders always-on-top, so an annotation you can see must be
+    clickable even when model geometry sits in front of its anchors — the pick
+    (`AnnotationGeometry.Pick`) measures the ray's distance to the same segments
+    `Build` emits (what you see is exactly what you can click), converted to style
+    pixels at each segment's own depth. A claimed click never falls through to the
+    part behind, mirroring the view cube's region-claims-the-click rule.
+  - **Hole tables are GENERATED from the graph, never transcribed.** A
+    `DrillShape`/`ThreadedHoleShape` node already carries its spec, points, depth
+    and placement plane, so `HoleTable.For(part)` letters one row per call in call
+    order (program order — stable across regenerations because the graph is rebuilt
+    in program order) and `HoleAnnotations.AutoAttach` derives per-call callouts.
+    Both are explicit calls rather than a flag on `Drill`: annotations belong to
+    the PART (the document object), and a graph node cannot know which part will
+    carry it.
 - **A protocol dependency lives in its own package.** `EngrCAD.Mcp` is separate from
   `EngrCAD.Viewer` for the same reason the viewer is separate from the `EngrCAD`
   meta-package: someone who wants a window should not inherit an MCP stack, and someone
