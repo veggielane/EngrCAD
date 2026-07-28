@@ -57,6 +57,17 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Interop / meshing (EngrCAD.Interop)
 
+- [ ] **A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**
+  `HalfEdgeMesh.Triangulated` fans from corner 0, so a quad's split is decided by where
+  its cycle happens to start. Measured on a left-hand threaded rod, whose band is a
+  sheared grid: it tessellates to the *identical* vertex set as the mirror of its
+  right-hand twin — 0 of 131 200 vertices differ at 1e-9 — yet carries a systematically
+  **3× larger volume deficit** at every density (RH deficit 0.668 vs LH 2.00 at 64
+  segments; 0.167 vs 0.501 at 128). Both converge quadratically onto the same analytic
+  volume, so this is a discretization *constant*, not a drift, and it is documented at
+  the one assertion it forces wider (`ThreadShapeTests`, 2.5% band). A shortest-diagonal
+  rule would improve every grid band, not just threads — but it moves rendered geometry,
+  so it needs the 54 docs PNGs as its oracle.
 - [ ] **`SdfProjectionTarget` stalls on a CSG difference's fictitious faces.** Its
   guarantee is one-sided (a 1-Lipschitz lower bound puts the surface at least |d| away, so
   a step can never cross it) but |d| need not decrease: inside material a subtracted tool
@@ -231,13 +242,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 - [ ] **Threads follow-ups** (B-Rep-native external threads AND threaded holes ✅
   landed — `HelicalSurface`/`SpiralArc3d`/`MakeThreadedRod`, boolean-free lateral
-  sweep, clipped-pilot hole tool) — remaining: (a) 45° end-chamfer cones in B-Rep
+  sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch
+  series** ✅ landed too) — remaining: (a) 45° end-chamfer cones in B-Rep
   (cone∩helical via tracer + trimmed helical tessellation); (b) clearance profiles in
   B-Rep (distance-field offsets round reflex corners — needs arc-generator helical
   bands); (c) helical∩cylinder and helical∩tilted-plane intersections + general
   trimmed helical faces (today only axis-perpendicular plane cuts of threads work,
-  others fail loudly); (d) left-hand threads (negative pitch / mirrored lowering);
-  (e) fine-pitch series, thread runout, cosmetic-thread annotation.
+  others fail loudly); (d) thread runout and cosmetic-thread annotation.
 - [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
   polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
   `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`): **exact curved 2D
@@ -269,11 +280,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 - [ ] **2D curve ↔ `Sketch` bridge** — `Sketch` builds its own segment types and `Curve2d`
   is a parallel vocabulary. They should meet (a sketch segment exposing a `Curve2d`, or
   `Profile` accepting `Curve2d` chains) before either grows further.
-- [ ] **Drill follow-ups** — drill-tip angles, thread cosmetics/annotation, hole tables.
-  Also **cross-PLANE hole validation**: spacing is cross-validated only among drills
-  sharing a placement plane, so opposing bores on the two faces of a plate can still
-  produce intersecting tools. Needs a tool-vs-tool solid intersection test rather than a
-  2D centre-distance one.
+- [ ] **Drill follow-ups** (drill-tip angles ✅ landed — `HoleSpec.WithTipAngle`, exact
+  as an identity, depth measured to the shoulder; **cross-PLANE hole validation** ✅
+  landed — bounding-cylinder separation plus a separating axis, since collinear tools
+  bored from opposite faces have zero radial axis distance however much web is left) —
+  remaining: hole tables, and thread cosmetics/annotation. Not covered by the
+  interference test: `ThreadedHole`'s thread void (its tap-drill pilot goes through
+  `Drill` and is), and tools from separate `Shape` branches later unioned.
 - [ ] **Ambient occlusion is now the largest single cost of opening a window** (~7–8 s
   of an ~11 s demo launch before lazy tabs; two thread parts alone are 5.7 s and
   already saturate every core, so parallelism has no more to give). The next lever is
@@ -284,20 +297,35 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   it is not a bottleneck: on the worst engraving case only 113 of 894 face pairs survive
   it, and all 113 intersections resolve analytically in ~1 ms. Recorded so nobody
   "fixes" it later.
-- [ ] **Boolean/splitting edge cases** (all now LOUD rather than silent — sketch-
-  extrusion pockets/slots/engraving are exact as of the bounded-planar-carrier fix) —
+- [ ] **Boolean/splitting edge cases** (all LOUD rather than silent. The **bounded
+  conic-clipping tier** ✅ landed — `TryPatchQuadric` gives a bounded planar carrier the
+  same exact curves the main switch gives a real `PlaneSurface`, which took a bore in an
+  extruded SIDE wall from a non-converging −7.4e-4 / −5.3e-5 / +4.7e-5 / +6.5e-5 at
+  32/64/128/256 segments to 7.1e-14 / 6.8e-14 / 4.3e-14 / −5.3e-14, exact as an identity
+  like the cap bore. `CylinderSurface` **constant-v** wrap-split ✅ landed, exact at
+  1.7e-15 relative. `CurveSegment`-over-polyline in `SampleEdge` and the `TraceFaces`
+  2%/98% probes ✅ landed — both now route through
+  `FaceGeometry.ExactSampleParameters`/`IsPolylineBacked`.) — remaining:
   a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of
   a side face) throws `Open splitting curves must start and end outside the face`;
   flush/coplanar embossing does not fuse (the union leaves touching shells with the
-  right volume — sink the tool a fraction to fuse); extruded-line × cylinder/sphere/
-  revolved pairs still march, so a **bounded conic-clipping tier** would extend the win
-  the planar tier just delivered; equal-radius perpendicular cylinders (tangent bicylinder:
-  overlapping v-ranges rejected; the tracer's degenerate output there is untested);
-  `CylinderSurface` bands can't wrap-split (tools lower to extruded circles today, but
-  a raw `MakeCylinder` cross-drill tool would throw); `CurveSegment`-over-polyline
-  edges aren't special-cased in `BRepTessellator.SampleEdge`; `TraceFaces` angle
-  probes sample at 2%/98% of edge domains (off-surface for polyline-backed coedges).
-  Also still open: coplanar/tangent boolean cases generally.
+  right volume — sink the tool a fraction to fuse); equal-radius perpendicular cylinders
+  (tangent bicylinder: overlapping v-ranges rejected; the tracer's degenerate output
+  there is untested). Also still open: coplanar/tangent boolean cases generally.
+- [ ] **Trimmed cylindrical tessellation with WRAPPING loops** — the blocker behind the
+  one wrap-split case still refused: a cross-drill piercing a plain `CylinderSurface`
+  band makes a wrapping cut whose v varies, and its sub-bands keep the whole surface, so
+  they need the trimmed path — which supports cylindrical faces only with *non*-wrapping
+  loops. Refused by name today (the message points at the extruded-circle route, which
+  does work); letting it through was measurably worse, since the split succeeded and the
+  failure resurfaced three stages later as `Directed edge appears twice` from the mesh
+  builder.
+- [ ] **The tracer reports NOTHING for a conic partially crossing a bounded extrusion's
+  edge** — a bore whose rim runs off the side wall it pierces. Pre-existing and separate
+  from the bounded-patch tier above, which correctly *defers* that case rather than
+  fabricating a whole circle the wall does not carry (pinned by
+  `BoreCrossingTheWallsEdge_FabricatesNoCircle`). Clipping the conic to the patch would
+  produce arcs whose endpoints must weld to the face boundary — that is the real work.
 
 ## Deformation / analysis (new territory, lower priority)
 

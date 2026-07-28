@@ -685,6 +685,67 @@ Design decisions:
   built for this: analytic plane⊥revolved-surface circles, wrap-splitting of revolved
   bands with geometrically refined cut parameters (projection error would crack cone
   welds), and pole-aware boolean probe points.
+
+  **Drill points measure depth to the SHOULDER, not to the tip.** `WithTipAngle` adds
+  the cone a real twist drill leaves, and the deepest *full-diameter* point stays at
+  `depth` with the point reaching `(diameter / 2) / tan(angle / 2)` further. This is the
+  drawing convention (ASME Y14.5 / ISO 129 dimension a blind hole excluding its point)
+  and it is chosen for a stronger reason than convention: it makes the feature **strictly
+  additive**. The same `depth` removes the same cylinder with or without a tip, plus the
+  cone, so adding a point can never silently shorten an existing hole — which
+  depth-to-tip would have done to every design that adopted it. The cost is that a blind
+  depth which cleared the far face may not once the point is there, so `TipLength` is
+  public and the docs say to check it. The default stays flat: not a drilled bottom, but
+  what a model wants for a through hole or a reamed feature, and what every existing
+  design already has.
+
+  **Tool interference is validated by convexity, not by a boolean.** Two cutting tools
+  that overlap or touch are degenerate boolean input, and the failure otherwise surfaces
+  deep inside tessellation rather than at the call that created it. Within one plane the
+  surface circles are coplanar, so centre distance against summed radii is the exact
+  test; across planes the tools are solids of revolution, and each is covered by bounding
+  cylinders about its axis. A pair is cleared by *either* of two sufficient conditions —
+  the distance between the axis SEGMENTS exceeding the summed radii, or a separating axis
+  (a finite solid cylinder is convex, and its support extent along a unit **d** is exactly
+  `|n·d|·halfLength + r·√(1 − (n·d)²)`). **Neither subsumes the other**, which is the
+  design point: segment distance settles skew and offset-parallel layouts in one test,
+  but two COLLINEAR tools bored towards each other from opposite faces have axis segments
+  at zero radial distance however much web is left between them, so only the axial
+  projection separates those. Refinement, when the whole-tool bound is ambiguous, runs the
+  same test slab by slab over the tool's silhouette breakpoints; it is **sound in the
+  accept direction at any subdivision** and exact wherever a slab's radius is constant,
+  which is all of a simple or counterbored tool. The residual error is therefore a
+  conservative refusal in a near-tangent band — precisely the configuration a boolean
+  cannot survive anyway. An exact solid intersection was rejected as the wrong shape of
+  answer: it costs a full boolean to decide a question whose useful answer is "clearly
+  apart" almost always.
+- **Thread handedness is arithmetic, and `Mirror` is the same fact read backwards.**
+  A left-hand thread shares every diameter with its right-hand twin — handedness is not a
+  different thread — so it is carried as a flag on `ThreadSpec` rather than a second
+  catalogue, and each representation spends one sign on it: `ThreadSdf`'s helical phase
+  reads `z − h·P·θ/2π`, and `MakeThreadedRod` takes a signed axial rate. Because every
+  formula in the factory is written in the band's own phase *u* with
+  `z = z_generator + rate·u`, negating the rate makes *u* descend as the rod ascends and
+  the rest follows mechanically: a rail's helix anchors on the top cap (`Helix3d`'s domain
+  always starts at its own frame's plane, so a descending rail must start there), the
+  `u = min` / `u = max` edges of a band swap which cap they are, and both cap loops chain
+  the other way. Counts, Euler and the Pappus volume are untouched.
+
+  **The trap worth recording: a left-hand rod is NOT a right-hand rod on some other
+  frame.** Every right-handed frame is a rotation of every other, so no choice of pose can
+  flip handedness — it *has* to enter the formulas. The near-miss that looks like it works
+  is flipping two axes, which is a half-turn, not a reflection.
+
+  That same identity, used backwards, is what makes `Mirror(thread)` exact rather than
+  refused. A reflection across a plane *containing* the axis maps phase θ to −θ, which is
+  precisely what negating the rate does — so writing a mirrored placement as
+  `m = (m·FlipY)·FlipY` leaves a proper similarity placing a rod of the opposite
+  handedness, and `Mirror(Mirror(x))` returns right-handed by construction. `FlipY`
+  rather than the `FlipZ` the implicit path uses: `FlipZ` reverses the rod's own axis,
+  which would move the caps and reverse the profile's axial order, where `FlipY` leaves
+  both alone; any two reflections differ by a rotation, so choosing the convenient one is
+  free. The refusal that remains is a genuinely different one — a sheared or
+  non-uniformly scaled placement cannot re-place a helix at all.
 - **Queries and rim features**: `BrepQueries` gives B-Rep topology the LINQ vocabulary
   (classification, adjacency, convexity, normal-directed face selection); `Shape.Chamfer/
   Fillet(amount, faceSelector)` run `Filleting.ChamferRim/FilletRim` topology surgery
