@@ -114,6 +114,14 @@ operations. Depends only on `EngrCAD.Core`.
   `Profile` constructor, so closure, planarity and winding are validated in exactly one place;
   `Sketch.ToCurves`/`Sketch.FromCurves` close the loop on the Modeling side. See design.md §5
   for why the bridge is deliberately this small.
+  **`Curve2d.TryToCurvedEdge` / `Curve2d.FromCurvedEdge`** are the bridge to Core's EXACT
+  curved 2D tier (`Geometry2.CurvedEdge2d` — the boundary vocabulary of `CurvedArrangement2d`,
+  which lives in Core because Core cannot reference this project). `TryToCurvedEdge` is
+  virtual and its default REFUSES rather than sampling — the same rule `ToCurve3d` states by
+  being abstract — with only `Line2d` and `Arc2d` overriding, because lines and circles are
+  exactly the tier that arrangement can decide soundly (its tangential tie-break is complete
+  for them and would need an unbounded jet for a Bézier; see the Core README). The signed
+  sweep crosses verbatim in both directions, so orientation is data on both sides.
 - **Biarc fitting** (`BiArcFit`, `BiArc2d`, `BiArcChain2d`/`BiArcChain3d`): two
   tangent-continuous arcs through a point+tangent pair, plus tolerance-driven chains
   through a polyline and a 3D wrapper that turns a PLANAR traced polyline into exact
@@ -308,6 +316,13 @@ operations. Depends only on `EngrCAD.Core`.
   so these profiles are polygonal: a region derived from curved sketch input carries that
   flattening (see `Sketch.ToRegions`), whereas a sketch handed straight to a modeling
   operation keeps its exact arcs and NURBS.
+  **`Profile.FromCurvedRegion(region, frame?)`** is the EXACT counterpart, taking Core's
+  `Geometry2.CurvedRegion2d` — the output of the curved 2D boolean and offset, whose
+  boundary still carries circles. The profiles it returns hold `Circle3d`s and trimmed arcs
+  rather than chords, so an extruded sketch-boolean result is an analytic B-Rep with the
+  closed-form volume instead of a prism whose error is a floor no tessellation density can
+  lower; a region whose whole boundary is one full circle becomes a single-closed-curve
+  profile, exactly as `Profile.Circle` would, so an extruded disc is a three-face cylinder.
 - **`SolidFactory`** — `MakeBox`, `MakeCylinder`, `MakeSphere`, `MakeTorus`,
   `MakeCone(r1, r2, height[, baseCenter, axis])` (frustum; the side is an exact
   `RevolvedSurface` of the slanted line generator, reusing the revolved-band machinery —

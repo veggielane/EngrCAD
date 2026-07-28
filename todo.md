@@ -256,13 +256,40 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   others fail loudly); (d) thread runout and cosmetic-thread annotation.
 - [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
   polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
-  `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`): **exact curved 2D
-  booleans** (arcs and béziers carried through the arrangement as curves instead of
-  being flattened at a chord tolerance — today everything built from a region inherits
-  that flattening), `PolySimplification2`-style Douglas–Peucker simplification (only
-  the exact-collinear pass landed), and `Region2d` self-intersection validation (a
-  loop is checked against other loops but not against itself, so a self-intersecting
-  outer loop produces garbage silently).
+  `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`; **exact curved 2D
+  booleans ✅ landed too** — `CurvedEdge2d`/`CurvedRegion2d`/`CurvedArrangement2d`/
+  `CurvedRegion2dBoolean`/`CurvedRegion2dOffset` in Core carry lines and arcs
+  unflattened, wired up through `Curve2d.TryToCurvedEdge`, `Profile.FromCurvedRegion`
+  and `Sketch.ToCurvedRegions`/`FromCurvedRegion`/`UnionExact`/`OffsetExact`):
+  `PolySimplification2`-style Douglas–Peucker simplification (only the exact-collinear
+  pass landed), and `Region2d` self-intersection validation (a loop is checked against
+  other loops but not against itself, so a self-intersecting outer loop produces garbage
+  silently).
+- [ ] **Curved-2D-tier follow-ups** (the lines-and-arcs tier ✅ landed and is
+  complete in the sense that matters — its tangent+curvature tie-break is decidable
+  for exactly those two shapes; see design.md §5):
+  - [ ] **Béziers and general NURBS in the curved arrangement.** They are flattened at
+    the entry points today, and the refusal is documented rather than hidden. Making
+    them exact needs (a) bezier/anything intersection by subdivision or Bézier clipping
+    to a stated tolerance, and (b) a REPLACEMENT for the second-order fan tie-break,
+    since two Béziers can agree to second order and separate only in the third
+    derivative. A jet comparison of bounded order is not sound in general; the honest
+    v2 is probably to compare a small parametric offset off the node and refuse when
+    even that ties.
+  - [ ] **`CurvedRegion2dOffset.Stroke`** — the open-path stroke of a curved chain
+    (the polygonal `Region2dOffset.Stroke` takes a polyline). All the primitives
+    already exist (annular-sector slabs, exact sector joins and caps); it is the
+    both-side join bookkeeping that has to be redone for arcs.
+  - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
+    `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
+    and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
+    cannot, since it is a union of projected triangles.
+  - [ ] **A curved `Region2dValidation`.** `CurvedRegion2d`'s constructor rejects
+    transversal self-crossings (tangential contact is legal, and for lines and arcs a
+    tangency is always a touch) but its pairwise sweep is O(n²) with only a box reject
+    in front of it, where the polygonal validator has a `Bvh` above 24 segments.
+  - [ ] **`ContainedIn` is O(cells × operand edges)** here as well — the curved twin of
+    the open item below.
 - [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
@@ -534,9 +561,10 @@ export — is recorded in CLAUDE.md):
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
   chamfer joins, erosion as complement dilation; **open-path stroking ✅ landed** —
   `Region2dOffset.Stroke(path, width, cap, join)`, butt/round/square caps, both-side
-  corner joins so reversals get round noses, closed circuits enclose holes): **exact
-  curved offsets** (arcs stay arcs — today everything flattens first, same limitation
-  as all region work); **variable offset along the outline** (per-vertex distances —
+  corner joins so reversals get round noses, closed circuits enclose holes; **exact
+  curved offsets ✅ landed** — `CurvedRegion2dOffset` keeps arcs as arcs and makes round
+  joins true sectors, which retires the inscribed-arc contract rather than honouring it):
+  **variable offset along the outline** (per-vertex distances —
   trapezoid slabs + interpolated-radius joins on the same union construction; design
   question: how distances interpolate along an edge, linear-in-arclength being the
   obvious rule).
@@ -548,11 +576,19 @@ export — is recorded in CLAUDE.md):
   Native (big kernel feature, low priority).
 - [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
   `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
-  - [ ] **`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.** Repro: the
-    64-segment torus silhouette viewed side-on. Areas are right to 6 significant figures
-    and order-independent after quantization; it is the HOLE COUNT that is unreliable
-    there, which is why the test asserts on hole area. A cell-classification fix, not an
-    epsilon one.
+  - [x] ~~**`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.**~~ **CLOSED
+    with the opposite finding, which is why the note survives the closure.** The
+    boolean is correct and the MESH has the hole: 780 of 780 probe points inside the
+    64x48 torus's 1.45e-5 side-on hole are covered by ZERO facets, tested with the
+    exact `Orient2d` over every triangle. In the band |z| ∈ [r·cos(π/n_minor), r] — the
+    minor polygon's scallop, 4.28e-3 deep at n = 48 — the discrete tube only reaches
+    that height near its minor-polygon VERTICES, and the major discretization breaks
+    that thin band into lenses that need not overlap; the hole measured 1.16e-3 deep, a
+    quarter of the scallop. Nor is it systematic: holes at 64x48, none at 32x24, 96x72,
+    128x96, 64x96 or 128x48, because whether two lenses overlap is an alignment
+    question. The test now asserts the strong form (every hole is uncovered by every
+    facet). Residual, if anyone wants the SMOOTH body's silhouette: that is the
+    "B-Rep silhouettes" item below, not a boolean fix.
   - [ ] **B-Rep silhouettes** — true silhouette curves on curved surfaces. Today the
     outline is always mesh-derived, so its fidelity is the mesh's however exact the solid.
   - [ ] **`OfSolid` on a flush plane** — a plane containing a face or an edge throws

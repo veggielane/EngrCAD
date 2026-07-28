@@ -147,6 +147,96 @@ concerns.
   stroke is the path's Minkowski sum with a disk, short only of the inscribed-arc
   sagitta; straight-segment butt/square/miter strokes are exact.
 
+### The CURVED tier — `CurvedEdge2d` / `CurvedRegion2d` / `CurvedArrangement2d`
+
+Everything above is polygonal, so curved sketch input reaches it flattened at a chord
+tolerance and **everything built from a region inherits that error** — offsets, sketch
+booleans, sections, silhouettes, and the `Profile`s an extrusion is built from. The curved
+tier carries **lines and circular arcs through the arrangement unflattened**.
+
+- **`Geometry2.CurvedEdge2d`** — the boundary vocabulary: a straight segment or a circular
+  arc over t ∈ [0, 1], with a SIGNED sweep so orientation is intrinsic (no flag, matching
+  `BRep.Arc2d`). It carries its own exact closed forms: `SignedAreaTerm` (Green's theorem
+  with the arc term ½[r²Δ + cx(y₁−y₀) − cy(x₁−x₀)], so a disc measures πr² rather than an
+  inscribed polygon's area), tight `Bounds` including the cardinal extremes inside the
+  sweep, `NearestPoint`/`DistanceTo`, and `RayCrossings` over the arc's y-monotone pieces.
+  It lives here rather than beside `Curve2d` because `Curve2d.ToCurve3d` returns a
+  `Curve3d` and Core cannot reference EngrCAD.BRep; `Curve2d.TryToCurvedEdge` /
+  `Curve2d.FromCurvedEdge` bridge the two exactly.
+- **`Geometry2.CurvedRegion2d`** — one outer chain plus hole chains, closed implicitly by
+  CHAINING (edge i's end is edge i+1's start; a single full-circle edge is a legal loop).
+  Exact `Area`, canonical winding, `FromLoops` containment nesting, `ToRegion(chordTolerance)`
+  down to the polygonal type and `FromRegion` up from it.
+- **`Geometry2.CurveIntersection2d`** — line/line, line/arc and arc/arc in closed form.
+- **`Geometry2.CurvedArrangement2d`** + **`CurvedRegion2dBoolean`** + **`CurvedRegion2dOffset`**
+  — the same three algorithms as the polygonal path, with arcs surviving.
+
+**Why a parallel type, and not an extension of `Arrangement2d`.** The straight arrangement
+is boolean-critical: `Region2dBoolean`, `Region2dOffset`, every planar section and
+silhouette and every rendered docs image sit on it, and its output is pinned bit for bit.
+Teaching it curves would change its vertex fan comparator (positions → tangents), its edge
+identity (a vertex pair → a vertex pair *plus a carrier*) and its area rule, three changes
+at once in the code with the widest regression surface. The curved type shares the exact
+predicates and the algorithms' shape instead; **the straight path is untouched** (locked by
+`Region2dGoldenTests`' committed bit fingerprints). Same call design.md §5 makes for
+`FaceSplitter`: do not unify boolean-critical machinery.
+
+**Why the tier stops at arcs, and why that is a complete stopping point rather than an
+arbitrary one.** The cell walk orders edges at a node by their departure TANGENT with the
+departure CURVATURE as the tie-break — from p(s) = v + s·d + ½s²κ·n̂, two edges leaving
+along the same d separate at second order and the larger signed curvature sits further
+counter-clockwise. For lines and circles, agreeing in *both* means sharing a carrier: a line
+and a circle never osculate, and two circles that osculate are one circle. So the tie-break
+is complete and the walk never guesses. A third shape breaks it — two Béziers can agree to
+second order and separate only in the third derivative, so the rule would need a jet of
+unbounded order. Béziers are therefore flattened at the entry points (`Sketch.ToCurvedRegions`
+says so), and the comparator **refuses by name** if it is ever handed a second-order tie
+between different carriers.
+
+**One tolerance, and it is a LENGTH** — the arrangement's own vertex snap distance, with no
+second epsilon anywhere in the tier. A line is tangent to a circle when the centre's
+distance from it differs from the radius by less than that; two circles are tangent when
+their centre distance differs from r₀ + r₁ (or |r₀ − r₁|) by less than it; a point is on an
+edge when its distance to the edge is under it. Every one of those is the same resolution at
+which the arrangement can tell two vertices apart, so nothing finer could be represented.
+
+**Near-tangency SNAPS rather than refusing.** A discriminant inside the band is reported as
+ONE touch point, not as two near-coincident crossings and not as a miss. Both alternatives
+are unstable — a pair of crossings a nanometre apart is a degenerate sliver cell whose
+classification is decided by rounding — while snapping is area-neutral to O(τ^1.5) and
+always yields a valid arrangement, *because a tangential contact is representable here*: the
+two edges leave the node with equal tangents and different curvature, which the fan can
+rank.
+
+**The interior sample gains one thing the straight proof did not need.** Classification
+still takes the boundary edge midpoint with the greatest clearance and pushes half of it
+along the inward normal, but the push is also capped by the edge's own CURVATURE RADIUS.
+Without that cap a small circular hole inside a large cell sends the sample straight past
+the circle's centre and out the far side; with it the pushed point sits at |r ∓ s| from the
+centre with 0 < s < r, so it is off the carrier circle by exactly s and off every other edge
+by more — the same proof the straight case gives with an infinite radius. Classification
+itself is the epsilon-free `ParityInside`, not the closed-set `Contains`, whose on-boundary
+band would answer "inside both" for a cell thinner than the weld tolerance.
+
+**Offsets are exact.** A circular edge's slab is an ANNULAR SECTOR (the edge, two radial
+segments, the offset arc), degenerating to a pie slice of radius r when an inward offset
+reaches the centre — both exactly the set of points within d of that arc on its outward
+side. A round join is a circular SECTOR, which **retires** the inscribed-arc contract rather
+than honouring it: an exactly-offset arc is neither inside nor outside the true offset, it
+IS the true offset. A full-turn edge is halved before a slab is raised, because a whole
+circle's annular sector is an annulus — a region with a hole, not a simple loop. A
+tangent-continuous joint (a line meeting an arc) raises no join primitive at all: its two
+outward normals are equal, so the exact-zero cross test that already skipped straight-through
+vertices skips it too, and a stadium offsets to a four-edge stadium.
+
+**Numerical lesson: a full-turn arc's END is its START, exactly.** Evaluating the end angle
+instead lands ~2e-16·r away, because `sin(2π)` is not 0 in doubles — and that gap is not
+cosmetic. A +x parity ray whose ordinate falls inside it counts the seam piece's two
+endpoints on opposite sides, and a point measurably inside a disc reads as OUTSIDE (found by
+a disc∩rectangle that returned empty). The companion rule is that an arc's first and last
+y-monotone piece take their ordinate from the STORED endpoints, never from the angle, so a
+chain's parity is consistent across every joint.
+
   boundary, so `Contains`'s closed-set convention never has to decide a tie. The clearance
   comes from a **`Bvh` over the arrangement's edges built once per boolean** (edges embedded
   at z = 0, so the branch-and-bound's box distance is exactly the 2D one), replacing a
