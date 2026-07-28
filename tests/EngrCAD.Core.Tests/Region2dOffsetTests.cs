@@ -317,4 +317,113 @@ public class Region2dOffsetTests
         Assert.Equal(triangle.Area, recovered.Area, 6);
         Assert.Equal(3, recovered.Outer.Count);
     }
+
+    // ---- open-path strokes ---------------------------------------------------
+
+    [Fact]
+    public void Stroke_StraightSegment_ButtCap_IsTheExactRectangle()
+    {
+        var stroke = Region2dOffset.Stroke(
+            [new Vector2d(0, 0), new Vector2d(10, 0)], width: 2, StrokeCap.Butt);
+
+        var region = Assert.Single(stroke);
+        Assert.Equal(10 * 2, region.Area, 9);
+        AssertCanonical(stroke);
+    }
+
+    [Fact]
+    public void Stroke_SquareCaps_ExtendHalfTheWidth()
+    {
+        var stroke = Region2dOffset.Stroke(
+            [new Vector2d(0, 0), new Vector2d(10, 0)], width: 2, StrokeCap.Square);
+
+        Assert.Equal((10 + 2) * 2, TotalArea(stroke), 9);
+    }
+
+    [Fact]
+    public void Stroke_RoundCaps_MakeTheInscribedCapsule()
+    {
+        var stroke = Region2dOffset.Stroke(
+            [new Vector2d(0, 0), new Vector2d(10, 0)], width: 2, StrokeCap.Round);
+
+        // Rectangle plus two inscribed half-discs: below the true capsule area,
+        // within the fan's sagitta of it.
+        double area = TotalArea(stroke);
+        double exact = 10 * 2 + Math.PI;
+        Assert.True(area <= exact + 1e-9, $"inscribed arcs must stay inside: {area} vs {exact}");
+        Assert.True(area > exact * 0.995, $"cap fans too coarse: {area} vs {exact}");
+    }
+
+    [Fact]
+    public void Stroke_RightAngleMiter_IsExact()
+    {
+        // Two length-10 legs (measured to the corner), width 2, miter joins: the
+        // outer corner squares off, so area = 10*2 + 10*2 - (w/2)^2 + (w/2)^2 = 40.
+        var stroke = Region2dOffset.Stroke(
+            [new Vector2d(-10, 0), new Vector2d(0, 0), new Vector2d(0, 10)],
+            width: 2, StrokeCap.Butt, OffsetJoin.Miter);
+
+        Assert.Equal(40, TotalArea(stroke), 9);
+    }
+
+    [Fact]
+    public void Stroke_DoubledBackPath_GetsTheRoundNose()
+    {
+        // Out and straight back: the reversal at the far end must close with a round
+        // nose (both sides' half-discs), giving exactly one capsule.
+        var stroke = Region2dOffset.Stroke(
+            [new Vector2d(0, 0), new Vector2d(10, 0), new Vector2d(0, 0)],
+            width: 2, StrokeCap.Round);
+
+        var region = Assert.Single(stroke);
+        double exact = 10 * 2 + Math.PI;
+        Assert.True(region.Area <= exact + 1e-9 && region.Area > exact * 0.99,
+            $"doubled-back stroke should be one capsule: {region.Area} vs {exact}");
+    }
+
+    [Fact]
+    public void Stroke_SelfCrossingPath_CoversTheOverlapOnce()
+    {
+        // An X: two crossing strokes; the union covers the crossing once, so the area
+        // is less than the two rectangles' sum.
+        var stroke = Region2dOffset.Stroke(
+            [new Vector2d(-5, -5), new Vector2d(5, 5), new Vector2d(-5, 5), new Vector2d(5, -5)],
+            width: 1, StrokeCap.Butt, OffsetJoin.Miter);
+
+        double area = TotalArea(stroke);
+        Assert.True(area > 0);
+        double segments = 2 * Math.Sqrt(200) * 1 + Math.Sqrt(200);   // three leg rectangles
+        Assert.True(area < segments, $"overlap must not double-count: {area} vs {segments}");
+        AssertCanonical(stroke);
+    }
+
+    [Fact]
+    public void Stroke_ClosedCircuit_EnclosesAHole()
+    {
+        // Stroking a closed square circuit (first point repeated) leaves the middle
+        // empty: one region with one hole.
+        var stroke = Region2dOffset.Stroke(
+            [
+                new Vector2d(0, 0), new Vector2d(10, 0), new Vector2d(10, 10),
+                new Vector2d(0, 10), new Vector2d(0, 0),
+            ],
+            width: 2, StrokeCap.Round, OffsetJoin.Miter);
+
+        var region = Assert.Single(stroke);
+        Assert.Single(region.Holes);
+        // Outer 12x12 minus inner 8x8 hole, with round corner sagitta slack... the
+        // three round joins are inscribed; the start/end corner is closed by the two
+        // round caps. Outer bound: 12*12 - 8*8 = 80.
+        Assert.True(region.Area is > 78 and <= 80.0 + 1e-9, $"circuit area {region.Area}");
+    }
+
+    [Fact]
+    public void Stroke_ValidatesItsArguments()
+    {
+        Assert.Throws<ArgumentNullException>(() => Region2dOffset.Stroke(null!, 1));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => Region2dOffset.Stroke([new Vector2d(0, 0), new Vector2d(1, 0)], 0));
+        Assert.Throws<ArgumentException>(
+            () => Region2dOffset.Stroke([new Vector2d(1, 1), new Vector2d(1, 1)], 1));
+    }
 }

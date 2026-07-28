@@ -48,6 +48,40 @@ if (bar.Offset(-2).Count != 2) throw new Exception("the 3-wide neck should part 
 if (bar.Offset(-6).Count != 0) throw new Exception("nothing should survive -6");
 ```
 
+## Stroking an open path
+
+`Region2dOffset.Stroke(path, width, cap, join)` sweeps an **open** polyline into a
+region of constant width — a toolpath's footprint, a slot from its centre line, an
+SVG stroke. Caps are `Butt`/`Round`/`Square`; joins are the same styles as `Offset`,
+and because it is the same union-of-primitives construction, self-crossing paths and
+doubled-back reversals need no special handling — with round caps and joins the
+stroke is exactly the path's Minkowski sum with a disk:
+
+```csharp render:stroke-toolpath
+// A zig-zag clearing pass, stroked to the cutter's 3 mm diameter and extruded.
+var pass = new List<Vector2d>();
+for (int i = 0; i <= 6; i++)
+{
+    double x = -18 + i * 6;
+    pass.Add(new Vector2d(x, i % 2 == 0 ? -10 : 10));
+}
+var swept = Region2dOffset.Stroke(pass, width: 3);
+
+var scene = new Scene();
+scene.Add(new Part("stock", Shape.Box(48, 30, 4), Palette.Steel));
+foreach (var (region, i) in swept.Select((r, i) => (r, i)))
+{
+    var (outer, holes) = Profile.FromRegion(region);
+    scene.Add(new Part($"pass {i}", Shape.Extrude(outer, Vector3d.UnitZ * 3, holes)
+        .Translate(0, 0, 2), Palette.Brass));
+}
+```
+
+![A zig-zag toolpath stroked to cutter width above a stock plate](images/stroke-toolpath.png)
+
+Closed circuits work by repeating the first point — the stroke then encloses a hole
+(one region, one hole), which is how a contour pass differs from a pocket.
+
 ## Section: `projection(cut = true)`
 
 `Shape.Section(plane)` is the cross-section — the drawing-view section, and OpenSCAD's

@@ -34,4 +34,44 @@ internal static class SystemFonts
 
     /// <summary>The font; only valid when <see cref="SkipReason"/> is null.</summary>
     public static TrueTypeFont Font => Loaded.Value!;
+
+    // ---- OpenType/CFF (.otf) -------------------------------------------------
+
+    private static readonly string[] CffDirectories =
+    [
+        @"C:\Windows\Fonts",
+        "/usr/share/fonts/opentype",
+        "/System/Library/Fonts",
+    ];
+
+    private static readonly Lazy<TrueTypeFont?> LoadedCff = new(() =>
+    {
+        foreach (string directory in CffDirectories)
+        {
+            if (!Directory.Exists(directory))
+                continue;
+            foreach (string path in Directory.EnumerateFiles(directory, "*.otf", SearchOption.AllDirectories))
+            {
+                try
+                {
+                    var font = TrueTypeFont.Load(path);
+                    if (font.HasPostScriptOutlines)
+                        return font;
+                }
+                catch (FontFormatException)
+                {
+                    // An .otf we cannot read (CFF2, collection): keep looking.
+                }
+            }
+        }
+        return null;
+    });
+
+    /// <summary>Null when a real OpenType/CFF font was found, otherwise the reason to
+    /// skip. Windows ships no .otf out of the box, so this commonly skips.</summary>
+    public static string? CffSkipReason =>
+        LoadedCff.Value is null ? $"no OpenType/CFF (.otf) font found (looked under {string.Join(", ", CffDirectories)})" : null;
+
+    /// <summary>The CFF font; only valid when <see cref="CffSkipReason"/> is null.</summary>
+    public static TrueTypeFont CffFont => LoadedCff.Value!;
 }

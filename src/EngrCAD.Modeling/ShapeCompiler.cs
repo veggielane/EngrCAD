@@ -56,6 +56,8 @@ internal static class ShapeCompiler
             "quickhull over the operands' tessellated mesh vertices",
         _ when node.StartsWith("Remeshed(", StringComparison.Ordinal) =>
             "isotropic remesh of the child's mesh lowering, projected back onto it",
+        _ when node.StartsWith("Extrude(twist", StringComparison.Ordinal) =>
+            "section rings swept through the twist, caps triangulated once and shared by index",
         _ => "polygonized from the signed distance field (Surface Nets)",
     };
 
@@ -83,7 +85,10 @@ internal static class ShapeCompiler
                         "a non-uniform scale or shear would need an elliptic cone surface"));
                 break;
             case RevolveShape { Sketch: { } sketch } revolve:
-                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                // Mirrored similarities included: a reflection conjugates the rotation —
+                // F·Rot(d, φ)·F = Rot(−F·d, φ) — so a mirrored revolve is the same
+                // sweep about the negated transformed axis, exactly.
+                if (!TryDecomposeSimilarity(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
                 else if (revolve.IsFullTurn && sketch.Holes.Count > 0)
@@ -97,10 +102,31 @@ internal static class ShapeCompiler
                 break;
 
             case RevolveShape or SweepShape:
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                // Mirrored similarities included: revolves negate the transformed axis
+                // (see the sketch case above); sweeps need no fix at all — the RMF
+                // transport is intrinsic, so sweeping the reflected profile along the
+                // reflected path IS the reflected sweep.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
+                break;
+            case TwistExtrudeShape twisted:
+                // A pure taper is exact: every straight side sweeps a plane through the
+                // scaling centre, so the solid is a ruled loft between base and top. A
+                // twisted side wall is no surface this kernel carries.
+                if (twisted.IsTwisted)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a twisted side wall is not an analytic or ruled surface the B-Rep kernel carries; ToMesh sweeps section rings and ToImplicit wraps that mesh"));
+                else if (twisted.Sketch.Holes.Count > 0)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a tapered extrusion of a sketch with holes needs loft sections with holes (a documented follow-up); cut the hole after the taper, or use ToMesh/ToImplicit"));
+                else
+                    entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                        ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                            "ruled loft between the base section and the scaled top (SolidFactory.Loft)")
+                        : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                            "a non-uniform scale or shear does not commute with the loft's parameterization"));
                 break;
             case LoftShape:
                 // Rigid + uniform only: the loft's chord-length parameterization and
@@ -127,8 +153,12 @@ internal static class ShapeCompiler
                     "only expressible as a signed distance field, and meshes cannot be imported into B-Rep"));
                 break;
             case RimShape rim:
+                // Mirrored similarities included: chamfers and fillets are metric
+                // features and a reflection is an isometry, so the surgery on the
+                // mirrored child is the mirrored surgery. (Selectors run on the
+                // LOWERED, i.e. mirrored, solid — the same contract rotations have.)
                 ClassifyBrep(rim.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "planar-face rim feature; rim shape constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -264,8 +294,12 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared subtree goes through a tessellated mesh SDF"));
                 break;
+            case TwistExtrudeShape { IsTwisted: true }:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                    "twisted-extrusion section sweep wrapped in a mesh SDF"));
+                break;
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
-                or DraftShape or BrepShellShape or RoundEdgesShape:
+                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -394,11 +428,11 @@ internal static class ShapeCompiler
             case BoxShape box:
             {
                 if (IsIdentity(m))
-                    return SolidFactory.MakeBox(box.Bounds);
+                    return SolidFactory.MakeBox(box.Extents);
                 if (IsTranslation(m, out var offset))
-                    return SolidFactory.MakeBox(new Aabb(box.Bounds.Min + offset, box.Bounds.Max + offset));
-                var (x0, y0, z0) = box.Bounds.Min;
-                var (x1, y1, z1) = box.Bounds.Max;
+                    return SolidFactory.MakeBox(new Aabb(box.Extents.Min + offset, box.Extents.Max + offset));
+                var (x0, y0, z0) = box.Extents.Min;
+                var (x1, y1, z1) = box.Extents.Max;
                 var profile = Profile.FromPoints(
                 [
                     m.TransformPoint((x0, y0, z0)),
@@ -481,33 +515,68 @@ internal static class ShapeCompiler
                     m.TransformVector(extrude.Direction),
                     TransformProfiles(extrude.Holes, m));
 
+            case TwistExtrudeShape twisted:
+            {
+                if (twisted.IsTwisted)
+                    throw new NotSupportedException(
+                        "A twisted extrusion has no exact B-Rep side surface; lower to mesh or implicit instead.");
+                if (twisted.Sketch.Holes.Count > 0)
+                    throw new NotSupportedException(
+                        "A tapered extrusion of a sketch with holes needs loft sections with holes; cut the hole after the taper, or use ToMesh/ToImplicit.");
+                Decompose(m, shape, out _, out _, out _);   // rigid + uniform only (the loft rule)
+                var effective = m * twisted.PlaneMatrix;
+                // The top section is the base scaled per axis about the plane origin and
+                // lifted by the height; a ruled loft between the two IS the linear taper
+                // (scaling is linear, and a two-section loft's v is linear), and every
+                // straight side sweeps an exact plane through the scaling centre.
+                var topLocal = Matrix4d.CreateTranslation((0, 0, twisted.Height))
+                             * Matrix4d.CreateScale((twisted.ScaleTop.X, twisted.ScaleTop.Y, 1));
+                var (outer, _) = twisted.Sketch.ToProfiles();
+                return SolidFactory.Loft(
+                    [TransformProfile(outer, effective), TransformProfile(outer, effective * topLocal)],
+                    LoftStyle.Ruled);
+            }
+
             case RevolveShape { Sketch: { } sketch } revolve:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                DecomposeSimilarity(m, shape, out _, out _, out _, out bool reflected);
                 var effective = m * revolve.PlaneMatrix;
                 var (outer, holes) = sketch.ToProfiles();
+                // A reflection conjugates the rotation — F·Rot(d, φ)·F = Rot(F·d, −φ)
+                // = Rot(−F·d, φ) — so the mirrored revolve is the SAME angular sweep
+                // about the NEGATED transformed axis (the LH-thread identity; for full
+                // turns the sign only keeps the orientation conventions aligned).
+                var axis = effective.TransformVector((0, 1, 0));    // the plane's y axis
                 return SolidFactory.Revolve(
                     TransformProfile(outer, effective),
                     effective.TransformPoint(Vector3d.Zero),
-                    effective.TransformVector((0, 1, 0)),   // the plane's y axis
+                    reflected ? -axis : axis,
                     revolve.Angle,
                     TransformProfiles(holes, effective));
             }
 
             case RevolveShape revolve:
             {
-                Decompose(m, shape, out var rotation, out _, out _);
+                DecomposeSimilarity(m, shape, out var rotation, out _, out _, out bool reflected);
+                // Proper placements keep the exact spelling they always had; reflected
+                // ones take the negated linear image of the axis (see the sketch case).
+                var axis = reflected
+                    ? -m.TransformVector(revolve.AxisDirection)
+                    : rotation.Rotate(revolve.AxisDirection);
                 return SolidFactory.Revolve(
                     TransformProfile(revolve.Profile!, m),
                     m.TransformPoint(revolve.AxisOrigin),
-                    rotation.Rotate(revolve.AxisDirection),
+                    axis,
                     revolve.Angle,
                     TransformProfiles(revolve.Holes, m));
             }
 
             case SweepShape { Sketch: { } sketch } sweep:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                // Mirrored similarities need no fix here: rotation-minimizing transport
+                // is intrinsic (it commutes with any isometry), so sweeping the
+                // reflected profile along the reflected path IS the reflected sweep.
+                DecomposeSimilarity(m, shape, out _, out _, out _);
                 var effective = m * sweep.PlaneMatrix;
                 var (outer, holes) = sketch.ToProfiles();
                 var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
@@ -517,7 +586,7 @@ internal static class ShapeCompiler
 
             case SweepShape sweep:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                DecomposeSimilarity(m, shape, out _, out _, out _); // mirrored OK (see above)
                 var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
                 return SolidFactory.Sweep(
                     TransformProfile(sweep.Profile!, m), path, TransformProfiles(sweep.Holes, m));
@@ -562,8 +631,10 @@ internal static class ShapeCompiler
             case RimShape rim:
             {
                 // Amounts scale with the accumulated uniform factor so a feature
-                // authored before a Scale behaves as if scaled with the part.
-                Decompose(m, shape, out _, out _, out double featureScale);
+                // authored before a Scale behaves as if scaled with the part. Mirrored
+                // similarities are fine: the surgery runs on the (mirrored) lowered
+                // child, and chamfer/fillet geometry commutes with isometries.
+                DecomposeSimilarity(m, shape, out _, out _, out double featureScale);
                 var solid = LowerBrep(rim.Child, m);
                 var selected = rim.Selector(solid).ToList();
                 if (selected.Count == 0)
@@ -778,8 +849,8 @@ internal static class ShapeCompiler
         switch (shape)
         {
             case BoxShape box:
-                return Place(Sdf.Box(box.Bounds.Size.X, box.Bounds.Size.Y, box.Bounds.Size.Z)
-                        .Translate(box.Bounds.Center),
+                return Place(Sdf.Box(box.Extents.Size.X, box.Extents.Size.Y, box.Extents.Size.Z)
+                        .Translate(box.Extents.Center),
                     rotation, translation, scale);
             case SphereShape sphere:
                 return Place(Sdf.Sphere(sphere.Radius), rotation, translation, scale);
@@ -810,8 +881,15 @@ internal static class ShapeCompiler
                 return Place(Sdf.RevolvedRegion(new SketchRegion(sketch, forRevolution: true)), q, t, s);
             }
 
+            case TwistExtrudeShape { IsTwisted: true } twisted:
+                // The twist has no field form; the section-swept mesh is the geometry,
+                // wrapped as an exact mesh SDF and placed rigidly (we are in the
+                // decomposable branch; the sheared case bridged above).
+                return Place(new MeshSdf(TwistedExtrusion.Build(twisted, quality)),
+                    rotation, translation, scale);
+
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
-                or DraftShape or BrepShellShape or RoundEdgesShape:
+                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 
@@ -989,6 +1067,14 @@ internal static class ShapeCompiler
                     ProjectionTarget = remesh.Options.ProjectionTarget ?? new MeshProjectionTarget(source),
                 };
                 return Remesher.Remesh(source, options).Mesh;
+            }
+
+            case TwistExtrudeShape { IsTwisted: true } twisted:
+            {
+                // Direct section sweep (the node's plane is baked in); the accumulated
+                // transform applies to the finished mesh, winding flips included.
+                var swept = TwistedExtrusion.Build(twisted, quality);
+                return IsIdentity(m) ? swept : TransformMesh(swept, m);
             }
 
             case TransformShape t:
@@ -1249,6 +1335,16 @@ internal static class ShapeCompiler
         out Quaterniond rotation, out Vector3d translation, out double scale)
     {
         if (!TryDecomposeSimilarity(m, out rotation, out translation, out scale, out _))
+            throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
+    }
+
+    /// <summary>As above, but also reporting whether the similarity is improper
+    /// (mirrored) — the nodes that must negate an axis need to know.</summary>
+    private static void DecomposeSimilarity(
+        in Matrix4d m, Shape shape,
+        out Quaterniond rotation, out Vector3d translation, out double scale, out bool reflected)
+    {
+        if (!TryDecomposeSimilarity(m, out rotation, out translation, out scale, out reflected))
             throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
     }
 

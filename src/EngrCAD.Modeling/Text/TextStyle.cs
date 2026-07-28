@@ -41,10 +41,10 @@ public sealed record TextStyle
     public TextAlign Align { get; init; } = TextAlign.Left;
 
     /// <summary>
-    /// Apply the font's pair kerning (default true). Only the legacy <c>kern</c> table
-    /// is read; fonts that ship kerning only in OpenType <c>GPOS</c> lay out on their
-    /// advance widths alone, which is what <see cref="TrueTypeFont.HasKerning"/>
-    /// reports.
+    /// Apply the font's pair kerning (default true). Pairs come from the OpenType
+    /// <c>GPOS</c> <c>kern</c> feature when the font has one (which makes the legacy
+    /// <c>kern</c> table invisible, per the spec), else from the legacy table;
+    /// <see cref="TrueTypeFont.HasKerning"/> reports whether either source exists.
     /// </summary>
     public bool Kerning { get; init; } = true;
 }

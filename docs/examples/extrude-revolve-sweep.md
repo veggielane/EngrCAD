@@ -19,6 +19,44 @@ scene.Add(new Part("L-bracket", Shape.Extrude(bracket, 16), Palette.Copper));
 
 ![An L-profile sketch extruded into a bracket](images/extrude.png)
 
+### Twist and taper
+
+`Shape.Extrude(sketch, height, twist, scale, plane?, slices?)` is OpenSCAD's
+`linear_extrude(twist, scale, slices)`: the cross-section at height fraction `t` is
+the sketch scaled by `lerp(1, scale, t)` (per axis, about the plane origin) and
+rotated by `twist·t` about the plane normal — radians, counter-clockwise (OpenSCAD's
+`twist` is the opposite sign). A call with zero twist and unit scale is exactly the
+plain extrusion:
+
+```csharp render:extrude-twist
+var star = Sketch.Polygon(Enumerable.Range(0, 10)
+    .Select(i =>
+    {
+        double a = Math.PI / 2 + i * Math.PI / 5;
+        double r = i % 2 == 0 ? 14.0 : 6.5;
+        return new Vector2d(r * Math.Cos(a), r * Math.Sin(a));
+    }).ToList());
+
+var scene = new Scene();
+scene.Add(new Part("twisted star", Shape.Extrude(star, 40, twist: Math.PI / 2), Palette.Brass));
+scene.Add(new Part("tapered boss",
+    Shape.Extrude(Sketch.Rectangle(24, 24), 30, twist: 0, scale: 0.4).Translate(40, 0, 0),
+    Palette.Steel));
+```
+
+![A star profile twisted through a quarter turn beside a tapered square boss](images/extrude-twist.png)
+
+Representation support is honest about what each case is:
+
+- A **pure taper** (`twist: 0`) is **B-Rep-Native** — every straight side sweeps an
+  exact plane through the scaling centre, so the solid is a ruled loft between the
+  base and the scaled top (a tapered sketch *with holes* is B-Rep-Impossible until
+  loft sections support holes; cut the hole after the taper, or use mesh/implicit).
+- A **nonzero twist** has no analytic side surface, so it is B-Rep-Impossible: the
+  mesh lowering sweeps section rings directly (`slices` controls the ring count;
+  omitted, it derives from the twist and the mesh quality), and the implicit lowering
+  wraps that mesh in a mesh SDF. `Explain(target)` reports each case.
+
 ## Revolve
 
 `Shape.Revolve(sketch, angle?, plane?)` spins the sketch about its plane's y axis;

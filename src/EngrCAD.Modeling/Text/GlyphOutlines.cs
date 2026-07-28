@@ -65,9 +65,11 @@ internal static class GlyphOutlines
 
     private static Contour? BuildContour(GlyphContour source, double scale, in Vector2d origin)
     {
-        var points = Compact(source.Points, scale, origin);
+        var points = Compact(source.Points, scale, origin, source.IsCubic);
         if (points.Count < 2)
             return null;
+        if (source.IsCubic)
+            return BuildCubicContour(points);
 
         // Start at the first on-curve point. A contour made entirely of off-curve
         // points (a smooth oval) has none, and then the format's rule is to start at
@@ -153,9 +155,92 @@ internal static class GlyphOutlines
         }
     }
 
+    /// <summary>
+    /// A CFF contour: on-curve anchors joined by lines, or by cubic Béziers whose two
+    /// control points sit between them as off-curve entries. The contour starts on an
+    /// anchor (charstrings always moveto first), and a trailing control pair curves
+    /// back to the start — the cubic analogue of TrueType's wrap-around quadratic.
+    /// </summary>
+    private static Contour? BuildCubicContour(List<GlyphPoint> points)
+    {
+        if (!points[0].OnCurve)
+            return null;                             // no anchor to start from: a malformed artifact contour
+
+        var start = points[0].Position;
+        var builder = Sketch.Start(start.X, start.Y);
+        var vertices = new List<Vector2d> { start };
+        var current = start;
+        int segments = 0;
+        Vector2d? control1 = null, control2 = null;
+
+        for (int i = 1; i < points.Count; i++)
+        {
+            var point = points[i];
+            if (point.OnCurve)
+            {
+                Emit(point.Position);
+            }
+            else if (control1 is null)
+            {
+                control1 = point.Position;
+            }
+            else if (control2 is null)
+            {
+                control2 = point.Position;
+            }
+            else
+            {
+                return null;                         // three controls in a row: not a cubic contour
+            }
+        }
+        Emit(start);                                 // close back to the first anchor
+
+        if (segments < 2)
+            return null;
+
+        Sketch sketch;
+        try
+        {
+            sketch = builder.Close();
+        }
+        catch (ArgumentException)
+        {
+            return null;                             // zero-area artifact contour (see the quadratic path)
+        }
+
+        var samples = new List<Vector2d>(vertices.Count * 2);
+        for (int i = 0; i < vertices.Count; i++)
+        {
+            samples.Add(vertices[i]);
+            samples.Add(Vector2d.Lerp(vertices[i], vertices[(i + 1) % vertices.Count], 0.5));
+        }
+        return new Contour(sketch, [.. samples]);
+
+        void Emit(in Vector2d to)
+        {
+            // Zero-chord segments are dropped — the same out-and-back-spike policy as
+            // the quadratic path (zero area, degenerate NURBS downstream).
+            if (to.DistanceTo(current) <= Weld)
+            {
+                control1 = control2 = null;
+                return;
+            }
+            if (control1 is { } c1 && control2 is { } c2)
+                builder.BezierTo(c1, c2, to);
+            else
+                builder.LineTo(to);                  // no controls — or a lone control, collapsed to its chord
+            vertices.Add(to);
+            current = to;
+            segments++;
+            control1 = control2 = null;
+        }
+    }
+
     /// <summary>Scales and places the font's points, dropping consecutive duplicates
-    /// (which would become zero-length segments).</summary>
-    private static List<GlyphPoint> Compact(IReadOnlyList<GlyphPoint> points, double scale, in Vector2d origin)
+    /// (which would become zero-length segments). For cubic (CFF) contours only
+    /// coincident <em>anchors</em> are dropped: a cubic's two control points may
+    /// legitimately coincide with each other or with an anchor.</summary>
+    private static List<GlyphPoint> Compact(IReadOnlyList<GlyphPoint> points, double scale, in Vector2d origin, bool isCubic = false)
     {
         var compacted = new List<GlyphPoint>(points.Count);
         foreach (var point in points)
@@ -163,6 +248,7 @@ internal static class GlyphOutlines
             var mapped = new GlyphPoint(origin + point.Position * scale, point.OnCurve);
             if (compacted.Count > 0 &&
                 compacted[^1].OnCurve == mapped.OnCurve &&
+                (!isCubic || mapped.OnCurve) &&
                 compacted[^1].Position.DistanceTo(mapped.Position) <= Weld)
                 continue;
             compacted.Add(mapped);
@@ -170,6 +256,7 @@ internal static class GlyphOutlines
         // The contour wraps, so the last point may duplicate the first.
         if (compacted.Count > 1 &&
             compacted[0].OnCurve == compacted[^1].OnCurve &&
+            (!isCubic || compacted[0].OnCurve) &&
             compacted[0].Position.DistanceTo(compacted[^1].Position) <= Weld)
             compacted.RemoveAt(compacted.Count - 1);
         return compacted;

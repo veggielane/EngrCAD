@@ -19,6 +19,21 @@ public enum OffsetJoin
     Chamfer,
 }
 
+/// <summary>How the ends of a stroked open path are closed — SVG's
+/// <c>stroke-linecap</c> vocabulary.</summary>
+public enum StrokeCap
+{
+    /// <summary>The stroke stops flat exactly at the end point.</summary>
+    Butt,
+
+    /// <summary>A half-disc of the stroke's own half-width — the true Minkowski end,
+    /// and the only cap under which a stroke is exactly the path dilated by a disk.</summary>
+    Round,
+
+    /// <summary>A square extension of half the width past the end point.</summary>
+    Square,
+}
+
 /// <summary>
 /// Polygon offsetting (inflate / deflate, Minkowski sum with a disk for
 /// <see cref="OffsetJoin.Round"/>) — the geometry behind shells, pockets, clearances and
@@ -107,6 +122,120 @@ public static class Region2dOffset
         return delta > 0
             ? Grow(regions, delta, join, miterLimit, arcTolerance)
             : Shrink(regions, -delta, join, miterLimit, arcTolerance);
+    }
+
+    /// <summary>
+    /// Strokes an OPEN polyline into a region of the given <paramref name="width"/> —
+    /// a toolpath's swept footprint, a slot from its centre line, an SVG-style stroke.
+    /// The same union-of-primitives construction as <see cref="Offset"/>: one
+    /// full-width slab per segment, corner joins at every interior vertex (both sides
+    /// are offered; the inner side's wedge is already covered by its slabs, so only
+    /// the outer gap changes anything — and a 180° reversal legitimately fills both,
+    /// which is what puts the round nose on a doubled-back path), and end caps. Since
+    /// it is a union, self-crossing paths need no special handling: the overlap is
+    /// just covered once, and the result may carry holes (a path that loops encloses
+    /// one).
+    /// <para>With <see cref="StrokeCap.Round"/> caps and <see cref="OffsetJoin.Round"/>
+    /// joins the stroke is exactly the path's Minkowski sum with a disk of radius
+    /// width/2, short of it only by the inscribed-arc sagitta.</para>
+    /// </summary>
+    /// <param name="path">The polyline's points, in order (at least two distinct;
+    /// exact consecutive duplicates are dropped). NOT closed implicitly — repeat the
+    /// first point to stroke a closed circuit.</param>
+    /// <param name="width">Full stroke width (&gt; 0).</param>
+    /// <param name="cap">End treatment — see <see cref="StrokeCap"/>.</param>
+    /// <param name="join">Corner style at interior vertices.</param>
+    /// <param name="miterLimit">See <see cref="Offset(Region2d, double, OffsetJoin, double, double)"/>.</param>
+    /// <param name="arcTolerance">See <see cref="Offset(Region2d, double, OffsetJoin, double, double)"/>.</param>
+    public static IReadOnlyList<Region2d> Stroke(
+        IReadOnlyList<Vector2d> path, double width, StrokeCap cap = StrokeCap.Round,
+        OffsetJoin join = OffsetJoin.Round, double miterLimit = DefaultMiterLimit,
+        double arcTolerance = DefaultArcTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!(width > 0) || !double.IsFinite(width))
+            throw new ArgumentOutOfRangeException(nameof(width), "The stroke width must be positive.");
+        if (!(arcTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(arcTolerance), "The arc tolerance must be positive.");
+        if (!(miterLimit >= 1))
+            throw new ArgumentOutOfRangeException(nameof(miterLimit), "The miter limit must be at least 1.");
+
+        // Exact duplicate compaction (zero-length segments carry no direction).
+        var points = new List<Vector2d>(path.Count);
+        foreach (var point in path)
+        {
+            if (points.Count > 0 && point == points[^1])
+                continue;
+            points.Add(point);
+        }
+        if (points.Count < 2)
+            throw new ArgumentException("A stroked path needs at least two distinct points.", nameof(path));
+
+        double half = width / 2;
+        int n = points.Count;
+        var directions = new Vector2d[n - 1];
+        for (int i = 0; i < n - 1; i++)
+            directions[i] = (points[i + 1] - points[i]).Normalized();
+
+        var primitives = new List<Region2d>();
+
+        // Slabs: the full-width rectangle per segment.
+        for (int i = 0; i < n - 1; i++)
+        {
+            var shift = directions[i].Perpendicular * half;
+            primitives.Add(new Region2d(
+                [points[i] + shift, points[i + 1] + shift, points[i + 1] - shift, points[i] - shift]));
+        }
+
+        // Interior joins: offer the corner fill on BOTH sides. The turn's outer side
+        // has the genuine gap; the inner side's wedge lies inside its own slabs (so
+        // the union is unchanged), and an exact reversal fills both half-discs —
+        // exactly the round nose a doubled-back path needs.
+        for (int i = 1; i < n - 1; i++)
+        {
+            var left0 = directions[i - 1].Perpendicular;
+            var left1 = directions[i].Perpendicular;
+            AddCornerJoin(points[i], left0, left1, half, join, miterLimit, arcTolerance, primitives);
+            AddCornerJoin(points[i], -left0, -left1, half, join, miterLimit, arcTolerance, primitives);
+        }
+
+        // Caps.
+        if (cap != StrokeCap.Butt)
+        {
+            AddCap(points[0], -directions[0], half, cap, arcTolerance, primitives);
+            AddCap(points[^1], directions[^1], half, cap, arcTolerance, primitives);
+        }
+
+        return Region2dBoolean.UnionAll(primitives);
+    }
+
+    /// <summary>A cap extending past <paramref name="end"/> in direction
+    /// <paramref name="outward"/> (unit): a half-disc (inscribed polygonal arc, its
+    /// diameter chord along the stroke's end edge) or a half-width square.</summary>
+    private static void AddCap(
+        in Vector2d end, in Vector2d outward, double half, StrokeCap cap,
+        double arcTolerance, List<Region2d> into)
+    {
+        var side = outward.Perpendicular * half;
+        if (cap == StrokeCap.Square)
+        {
+            var reach = outward * half;
+            into.Add(new Region2d([end + side, end + side + reach, end - side + reach, end - side]));
+            return;
+        }
+        // Round: rotate the side vector by π through the outward direction (the
+        // perpendicular rotated +90° is −outward, so sweep from −side to +side).
+        int segments = Math.Max(2, ArcSegments(Math.PI, half, arcTolerance));
+        var arc = new List<Vector2d>(segments + 1);
+        var from = -side;
+        for (int k = 0; k <= segments; k++)
+        {
+            double angle = Math.PI * k / segments;
+            double cos = Math.Cos(angle);
+            double sin = Math.Sin(angle);
+            arc.Add(end + new Vector2d(from.X * cos - from.Y * sin, from.X * sin + from.Y * cos));
+        }
+        into.Add(new Region2d(arc));
     }
 
     // ---- outward: the region plus one primitive per edge and per convex corner ----

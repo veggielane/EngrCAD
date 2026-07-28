@@ -129,6 +129,65 @@ public abstract class Shape
     }
 
     /// <summary>
+    /// Extrudes a sketch with a twist and/or taper — OpenSCAD's
+    /// <c>linear_extrude(twist, scale, slices)</c>, uniform-scale form. See
+    /// <see cref="Extrude(Sketch, double, double, Vector2d, SketchPlane?, int?)"/>.
+    /// </summary>
+    public static Shape Extrude(
+        Sketch sketch, double height, double twist, double scale = 1,
+        SketchPlane? plane = null, int? slices = null) =>
+        Extrude(sketch, height, twist, new Vector2d(scale, scale), plane, slices);
+
+    /// <summary>
+    /// Extrudes a sketch with a twist and/or per-axis taper — OpenSCAD's
+    /// <c>linear_extrude(twist, scale, slices)</c>. The cross-section at height
+    /// fraction <c>t</c> is the sketch scaled by <c>lerp(1, scale, t)</c> per axis
+    /// about the plane origin, then rotated by <c>twist·t</c> about the plane normal
+    /// (radians, counter-clockwise / right-handed — OpenSCAD's <c>twist</c> is the
+    /// opposite sign).
+    /// <para>Representation support: a pure taper (<paramref name="twist"/> = 0) is
+    /// <b>B-Rep-Native</b> — every straight side sweeps an exact plane through the
+    /// scaling centre, so the solid is a ruled loft between the base and the scaled
+    /// top. A nonzero twist has no analytic side surface in the kernel and is
+    /// B-Rep-Impossible; the mesh lowering is a direct section sweep
+    /// (<paramref name="slices"/> rings, derived from the twist and the mesh quality
+    /// when null), and the implicit lowering wraps that mesh in a mesh SDF.
+    /// <c>Explain(target)</c> reports each case.</para>
+    /// </summary>
+    /// <param name="sketch">The profile; holes are carried through the sweep (a
+    /// tapered B-Rep of a holed sketch is rejected — loft sections with holes are a
+    /// documented follow-up).</param>
+    /// <param name="height">Extrusion height along the plane normal (&gt; 0).</param>
+    /// <param name="twist">Total twist over the height, radians.</param>
+    /// <param name="scale">Per-axis scale of the top section (components &gt; 0; use
+    /// <see cref="Cone"/> or <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/> for
+    /// apex-degenerate tops).</param>
+    /// <param name="plane">Sketch placement (default world XY).</param>
+    /// <param name="slices">Section rings for the twisted mesh sweep; null sizes them
+    /// from the twist angle and the quality's segments-per-circle.</param>
+    public static Shape Extrude(
+        Sketch sketch, double height, double twist, Vector2d scale,
+        SketchPlane? plane = null, int? slices = null)
+    {
+        ArgumentNullException.ThrowIfNull(sketch);
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        if (!double.IsFinite(twist))
+            throw new ArgumentOutOfRangeException(nameof(twist));
+        if (!(scale.X > 0) || !(scale.Y > 0))
+            throw new ArgumentOutOfRangeException(nameof(scale),
+                "Top-section scale components must be positive; a zero scale degenerates the top to a point (use Cone or a Loft).");
+        if (slices is < 1)
+            throw new ArgumentOutOfRangeException(nameof(slices));
+
+        // Exact-zero semantic test (not a tolerance): a literal no-op parameterization
+        // IS a plain extrusion, and gets the plain node's exactness everywhere.
+        if (twist == 0 && scale.X == 1 && scale.Y == 1)
+            return Extrude(sketch, height, plane);
+        return new TwistExtrudeShape(sketch, plane ?? SketchPlane.XY, height, twist, scale, slices);
+    }
+
+    /// <summary>
     /// Revolves a sketch about its plane's y axis (the sketch's x = 0 line); sketch x
     /// is the radial direction and must be ≥ 0. The default plane (XZ) puts the axis on
     /// world Z. Sketches may touch the axis on full turns in every representation:
@@ -788,6 +847,41 @@ public abstract class Shape
     public static Shape From(HalfEdgeMesh mesh) => new SourceShape(mesh);
     public static Shape From(Sdf sdf) => new SourceShape(sdf);
 
+    /// <summary>
+    /// Heightmap terrain — OpenSCAD's <c>surface()</c>: the grid becomes a closed
+    /// solid (top surface, flat base at <paramref name="baseLevel"/>, perimeter
+    /// walls), wrapped as a mesh-backed shape via <see cref="From(HalfEdgeMesh)"/>.
+    /// Booleans, transforms and the implicit route work as for any mesh source;
+    /// B-Rep is Impossible (meshes cannot be imported). Heights can come from
+    /// <see cref="Modeling.Heightmap.ReadPng(string)"/> (grayscale PNG, 0..1 — set
+    /// <paramref name="heightScale"/> to the terrain's real peak height) or
+    /// <see cref="Modeling.Heightmap.ReadDat(string)"/> (OpenSCAD text matrices).
+    /// </summary>
+    /// <param name="heights"><c>[row, column]</c> heights, columns along +X and rows
+    /// along −Y (image order); at least 2×2, all strictly above the base.</param>
+    /// <param name="cellSize">Grid spacing in model units.</param>
+    /// <param name="heightScale">Multiplier applied to every height (for normalized
+    /// PNG data); default 1.</param>
+    /// <param name="baseLevel">The z of the flat bottom face (after scaling).</param>
+    /// <param name="centered">Center the footprint on the origin (default).</param>
+    public static Shape Heightmap(
+        double[,] heights, double cellSize = 1, double heightScale = 1,
+        double baseLevel = 0, bool centered = true)
+    {
+        ArgumentNullException.ThrowIfNull(heights);
+        if (heightScale <= 0)
+            throw new ArgumentOutOfRangeException(nameof(heightScale));
+        double[,] scaled = heights;
+        if (heightScale != 1)
+        {
+            scaled = new double[heights.GetLength(0), heights.GetLength(1)];
+            for (int r = 0; r < heights.GetLength(0); r++)
+                for (int c = 0; c < heights.GetLength(1); c++)
+                    scaled[r, c] = heights[r, c] * heightScale;
+        }
+        return From(Modeling.Heightmap.Mesh(scaled, cellSize, baseLevel, centered));
+    }
+
     // ---- Booleans ----
 
     public Shape Union(Shape other) => new BooleanShape(BooleanOp.Union, this, other);
@@ -881,14 +975,106 @@ public abstract class Shape
     public Shape Scale(double factor) => Transform(Matrix4d.CreateScale(factor));
 
     /// <summary>
+    /// Non-uniform scale about the origin (OpenSCAD's <c>scale([x, y, z])</c>).
+    /// Support follows the node, exactly as <see cref="Explain"/> reports it: profile
+    /// extrusions (box, cylinder, sketch extrude, wedge) bake any affine map into
+    /// their construction inputs and stay B-Rep-Native; a sphere/torus/cone under a
+    /// non-uniform scale would need an ellipsoid-family surface and is
+    /// B-Rep-Impossible; implicit lowerings of a sheared subtree bridge through a
+    /// tessellated mesh SDF (a non-uniform scale breaks the distance metric, so there
+    /// is no exact field form); meshes transform exactly.
+    /// </summary>
+    public Shape Scale(double x, double y, double z) => Scale(new Vector3d(x, y, z));
+
+    /// <inheritdoc cref="Scale(double, double, double)"/>
+    public Shape Scale(in Vector3d factors)
+    {
+        if (!(factors.X > 0) || !(factors.Y > 0) || !(factors.Z > 0))
+            throw new ArgumentOutOfRangeException(nameof(factors),
+                "Scale factors must be positive (use Mirror for reflections).");
+        return Transform(Matrix4d.CreateScale(factors));
+    }
+
+    /// <summary>
+    /// The shape's axis-aligned bounds, measured on its mesh lowering at
+    /// <paramref name="quality"/> — the one route every shape has. Tessellations
+    /// inscribe curved surfaces, so curved extents read a chord's sagitta small at
+    /// coarse quality; exact for polyhedral geometry.
+    /// </summary>
+    public Aabb Bounds(MeshQuality? quality = null)
+    {
+        var bounds = Aabb.Empty;
+        foreach (var position in ToMesh(quality).ToIndexed().Positions)
+            bounds = bounds.Union(position);
+        return bounds;
+    }
+
+    /// <summary>
+    /// Scales the shape (about the origin, per axis) so its bounds measure
+    /// <paramref name="newSize"/> — OpenSCAD's <c>resize()</c>. A zero component
+    /// keeps that axis unscaled, or, with the matching <paramref name="auto"/> flag,
+    /// scales it by the same factor as the first sized axis (so
+    /// <c>Resized((50, 0, 0), auto: (false, true, true))</c> is a proportional
+    /// resize). The current size is measured per <see cref="Bounds"/> — on the mesh
+    /// lowering at <paramref name="quality"/>, eagerly, at this call.
+    /// <para>The result is an ordinary scale transform, so representation support is
+    /// <see cref="Scale(double, double, double)"/>'s: equal factors keep every node's
+    /// support unchanged; unequal factors are B-Rep-Impossible for the curved
+    /// primitives (the message names the surface it would need) and bridge the
+    /// implicit lowering through a tessellated mesh SDF.</para>
+    /// </summary>
+    public Shape Resized(in Vector3d newSize, (bool X, bool Y, bool Z) auto, MeshQuality? quality = null)
+    {
+        if (newSize.X < 0 || newSize.Y < 0 || newSize.Z < 0)
+            throw new ArgumentOutOfRangeException(nameof(newSize), "Target sizes must be non-negative.");
+        if (newSize.X == 0 && newSize.Y == 0 && newSize.Z == 0)
+            throw new ArgumentException("At least one target size must be positive.", nameof(newSize));
+
+        var size = Bounds(quality).Size;
+        Span<double> factors = [1, 1, 1];
+        Span<double> targets = [newSize.X, newSize.Y, newSize.Z];
+        Span<bool> autos = [auto.X, auto.Y, auto.Z];
+        Span<double> current = [size.X, size.Y, size.Z];
+
+        double? firstFactor = null;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            if (targets[axis] <= 0)
+                continue;
+            if (current[axis] <= 0)
+                throw new InvalidOperationException(
+                    $"The shape has zero extent on axis {(char)('X' + axis)}; it cannot be resized to {targets[axis]:g4} there.");
+            factors[axis] = targets[axis] / current[axis];
+            firstFactor ??= factors[axis];
+        }
+        for (int axis = 0; axis < 3; axis++)
+        {
+            if (targets[axis] <= 0 && autos[axis])
+                factors[axis] = firstFactor ?? throw new ArgumentException(
+                    "An auto axis needs at least one sized axis to take its factor from.", nameof(auto));
+        }
+        return Scale(new Vector3d(factors[0], factors[1], factors[2]));
+    }
+
+    /// <summary>Resize with one auto flag for every zero-sized axis — OpenSCAD's
+    /// <c>resize(newsize, auto)</c>. See
+    /// <see cref="Resized(in Vector3d, ValueTuple{bool, bool, bool}, MeshQuality?)"/>.</summary>
+    public Shape Resized(in Vector3d newSize, bool auto = false, MeshQuality? quality = null) =>
+        Resized(newSize, (auto, auto, auto), quality);
+
+    /// <summary>
     /// Mirror across the plane through <paramref name="point"/> with
     /// <paramref name="normal"/> (OpenSCAD's <c>mirror()</c>). Correct in every
     /// representation: meshes transform positions and reverse winding (staying
     /// outward-oriented), implicit lowering reflects the query point (exact), and
     /// B-Rep support follows the node: box/cylinder/sketch-extrude handle any affine
-    /// map, sphere/torus/cone re-place natively under mirrored similarities, while
-    /// mirrored revolve/sweep/rim/drill nodes have no B-Rep lowering yet (their mirror
-    /// is exact via mesh or SDF — see <see cref="Explain"/>).
+    /// map; sphere/torus/cone re-place natively under mirrored similarities; revolves
+    /// negate the transformed axis (a reflection conjugates the rotation,
+    /// F·Rot(d, φ)·F = Rot(−F·d, φ) — the identity that also makes mirrored threads
+    /// left-handed); sweeps need no fix at all (rotation-minimizing transport is
+    /// intrinsic); and rim features / drills follow, since chamfers, fillets and
+    /// revolved tools commute with isometries. See <see cref="Explain"/> for the
+    /// per-node verdicts.
     /// </summary>
     public Shape Mirror(in Vector3d point, in Vector3d normal)
     {

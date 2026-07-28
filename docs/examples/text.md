@@ -1,7 +1,8 @@
 # Text
 
-`Shape.Text` turns a TrueType font into real geometry — nameplates, part numbers, logos,
-engraved labels. Glyph outlines are **lines and quadratic Béziers**, which is exactly the
+`Shape.Text` turns a font into real geometry — nameplates, part numbers, logos,
+engraved labels. TrueType (`.ttf`) glyph outlines are **lines and quadratic Béziers**
+and OpenType/CFF (`.otf`) outlines are **lines and cubic Béziers** — both exactly the
 sketch vocabulary, so glyphs become sketches with no flattening: text is native in all
 three representations, with exact profiles for B-Rep and crisp tessellation for printing.
 
@@ -34,9 +35,10 @@ height instead, so `font.EmSizeForCapHeight(9)` converts: capitals come out exac
 
 The origin is the **baseline** at the start of the first line, x along the writing
 direction and y up. `TextStyle` carries alignment (measured per line), tracking, and line
-spacing as em multiples; `\n` starts a new line. Advance widths and legacy `kern` pair
-kerning are applied automatically — `font.HasKerning` tells you whether a font supplies
-them.
+spacing as em multiples; `\n` starts a new line. Advance widths and pair kerning are
+applied automatically — from the OpenType `GPOS` `kern` feature when the font has one
+(where modern fonts keep it), else from the legacy `kern` table. `font.HasKerning`
+tells you whether a font supplies either.
 
 A character the font doesn't contain throws, naming the character and the font, rather
 than silently dropping it.
@@ -58,9 +60,14 @@ TrueType outlines: `head`, `maxp`, `cmap` (formats 4 and 12), `loca`, `glyf` (si
 **and** composite glyphs, so accented characters work), `hhea`/`hmtx`, plus optional
 `kern` and `OS/2`. The reader is hand-rolled and dependency-free, like the PNG writer.
 
-OpenType/CFF fonts (`.otf` with PostScript outlines) and TrueType Collections (`.ttc`)
-are **rejected with a clear message** rather than partially misread — support for them
-is future work.
+OpenType/CFF fonts (`.otf`, PostScript Type 2 charstrings — cubic Béziers) load the
+same way, including CID-keyed fonts; `font.HasPostScriptOutlines` reports which flavour
+you got. A nameplate in an `.otf` face is exactly the code above with a different path —
+`TrueTypeFont.Load(@"C:\path\to\SourceSans3-Regular.otf")` — and the geometry is just as
+exact, with cubic glyph walls becoming exact NURBS profiles in B-Rep.
+
+TrueType Collections (`.ttc`) and variable-font `CFF2` tables are **rejected with a
+clear message** rather than partially misread — support for them is future work.
 
 ## Engraving
 

@@ -13,11 +13,17 @@ public readonly record struct GlyphPoint(Vector2d Position, bool OnCurve);
 
 /// <summary>One closed contour of a glyph outline: the points exactly as the font
 /// stores them (composite components already transformed into place).</summary>
-public sealed class GlyphContour(IReadOnlyList<GlyphPoint> points)
+public sealed class GlyphContour(IReadOnlyList<GlyphPoint> points, bool isCubic = false)
 {
     /// <summary>The contour's points in font units, in font order; the contour closes
     /// from the last point back to the first.</summary>
     public IReadOnlyList<GlyphPoint> Points { get; } = points;
+
+    /// <summary>True when off-curve points are <em>cubic</em> Bézier controls in
+    /// pairs (PostScript/CFF outlines); false for TrueType's quadratics, where a lone
+    /// off-curve point is one control and consecutive off-curve points imply an
+    /// on-curve midpoint between them.</summary>
+    public bool IsCubic { get; } = isCubic;
 }
 
 /// <summary>

@@ -1,3 +1,4 @@
+using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Interop;
 using EngrCAD.Modeling;
@@ -52,8 +53,15 @@ public class MirrorShapeTests
         Assert.True(mirroredSdf.Evaluate(new Vector3d(1, 0.5, 0)) < 0,
             "the un-mirrored hole position should be solid material in the mirrored plate");
 
-        // Honest B-Rep story: mirrored drills (revolved tools) have no B-Rep lowering yet.
-        Assert.False(mirrored.Explain(TargetRep.Brep).IsConvertible);
+        // Mirrored drills are B-Rep-Native now: the revolved tools lower via the
+        // axis-negation identity, so the whole drilled plate survives ToBrep.
+        Assert.True(mirrored.Explain(TargetRep.Brep).IsConvertible);
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var brepMesh = BRepTessellator.Tessellate(solid, 64, 24);
+        Assert.True(brepMesh.IsClosed);
+        Assert.True(Math.Abs(brepMesh.Volume() - mesh.Volume()) / mesh.Volume() < 1e-3,
+            $"mirrored B-Rep volume {brepMesh.Volume()} vs mesh {mesh.Volume()}");
     }
 
     [Fact]
@@ -120,12 +128,12 @@ public class MirrorShapeTests
     [Fact]
     public void MirroredSketchRevolve_IsExactViaImplicitAndMesh()
     {
-        // Revolves have no mirrored B-Rep lowering (honestly Impossible), but the
-        // mirror stays exact through the SDF and mesh routes.
+        // Mirrored revolves are B-Rep-Native (axis negation); the mirror also stays
+        // exact through the SDF and mesh routes.
         var vase = Shape.Revolve(Sketch.Polygon([(0, 0), (1, 0), (0.8, 1), (0, 1)]));
         var mirrored = vase.Mirror((0, 0, 0.2), (0, 0, 1));
 
-        Assert.False(mirrored.Explain(TargetRep.Brep).IsConvertible);
+        Assert.True(mirrored.Explain(TargetRep.Brep).IsConvertible);
         Assert.True(mirrored.Explain(TargetRep.Implicit).IsConvertible);
 
         var sdf = vase.ToImplicit();
@@ -143,5 +151,75 @@ public class MirrorShapeTests
         Assert.True(mesh.IsClosed);
         Assert.True(Math.Abs(mesh.Volume() - reference.Volume()) < 1e-9,
             $"mirrored vase volume {mesh.Volume()} vs {reference.Volume()}");
+    }
+
+    // ---- mirrored B-Rep completion: revolve / sweep / rim / drill -------------
+    // The identity: a reflection conjugates a rotation, F·Rot(d, φ)·F = Rot(−F·d, φ),
+    // so a mirrored revolve is the same sweep about the negated transformed axis —
+    // the same pattern that made mirrored threads exact (left-hand threads).
+
+    [Fact]
+    public void MirroredPartialRevolve_IsBrepNative_WithTheExactVolume()
+    {
+        // A quarter-turn revolve of an off-axis square: exact volume by Pappus,
+        // V = A · (2π r̄) · (angle/2π) = A · r̄ · angle.
+        var section = Sketch.Polygon([(2, 0), (3, 0), (3, 1), (2, 1)]);
+        var revolve = Shape.Revolve(section, Math.PI / 2);
+        var mirrored = revolve.Mirror((0.4, -0.2, 0.1), (1, 0.5, 0.3));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 128, 24);
+        Assert.True(mesh.IsClosed);
+
+        double exact = 1.0 * 2.5 * (Math.PI / 2);   // A=1, centroid radius 2.5
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 1e-3,
+            $"mirrored revolve volume {mesh.Volume()} vs {exact}");
+
+        // And the geometry is genuinely the mirror image: the B-Rep tessellations of
+        // "mirror the shape" and "reflect the reference mesh" agree in volume and
+        // bounds.
+        var reference = revolve.ToMesh(new MeshQuality { SegmentsPerCircle = 128 });
+        Assert.True(Math.Abs(mesh.Volume() - reference.Volume()) / reference.Volume() < 1e-6);
+    }
+
+    [Fact]
+    public void MirroredSweep_IsBrepNative_AndMatchesTheReflectedGeometry()
+    {
+        // Sweep a circle along a bending NURBS path (start tangent +Z, matching the
+        // default XY sketch plane), then mirror across a slanted plane. The RMF
+        // transport is intrinsic, so the mirrored sweep needs no sign fix; volumes
+        // agree with the unmirrored solid (reflection is an isometry).
+        var path = new NurbsCurve(2,
+            [(0, 0, 0), (0, 0, 2.6), (0, 2.2, 4.4)], null,
+            [0, 0, 0, 1, 1, 1]);
+        var sweep = Shape.Sweep(Sketch.Circle(0.4), path);
+        var mirrored = sweep.Mirror((1, 0.3, 0), (0.4, 1, 0.2));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var mesh = BRepTessellator.Tessellate(mirrored.ToBrep(), 64, 24);
+        var reference = BRepTessellator.Tessellate(sweep.ToBrep(), 64, 24);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - reference.Volume()) / reference.Volume() < 1e-9,
+            $"mirrored sweep volume {mesh.Volume()} vs {reference.Volume()}");
+    }
+
+    [Fact]
+    public void MirroredChamfer_IsBrepNative_AndCutsTheMirroredRim()
+    {
+        // Chamfer the top rim of a plate, then mirror across a vertical plane: the
+        // chamfer commutes with the isometry, so the mirrored solid's volume equals
+        // the chamfered plate's. (The selector runs on the LOWERED, i.e. mirrored,
+        // solid — an x-mirror keeps the top face's +Z normal, so it still matches.)
+        var plate = Shape.Box(20, 12, 6).Chamfer(1.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+        var mirrored = plate.Mirror((3, 0, 0), (1, 0, 0));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var mesh = BRepTessellator.Tessellate(mirrored.ToBrep(), 64, 24);
+        var reference = BRepTessellator.Tessellate(plate.ToBrep(), 64, 24);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - reference.Volume()) < 1e-9,
+            $"mirrored chamfered volume {mesh.Volume()} vs {reference.Volume()}");
     }
 }

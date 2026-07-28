@@ -36,6 +36,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; ❌ with holes) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (rigid + uniform scale; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
@@ -53,11 +54,13 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Remeshed(...)` (isotropic remesh) | ❌ a remesh is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (remeshed triangles → mesh SDF, so the field carries their chord error) | ✅ native (`Remesher` over the child's mesh lowering, projected back onto it) |
 | `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
-| `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) · ❌ revolve/sweep/rim/drill (no mirrored lowering yet) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
+| `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
+| `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
 | `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
 | `ThreadedHole` (no clearance) | ✅ **native** (pilot + thread as ONE clipped-profile helical tool; spiral-arc chains split the drilled faces) | ✅ native | ✅ native (B-Rep tessellation) |
 | `ExternalThread` (chamfers) / either with clearance | ❌ chamfer cones / distance-field profile offsets — reported per cause | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
+| `Heightmap(heights, cellSize)` (OpenSCAD `surface()`; grids, `.dat`, grayscale PNG via `Heightmap.ReadDat/ReadPng`) | ❌ mesh construction | ✅ exact mesh SDF | ✅ native (manifold-by-construction terrain solid) |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
 | `From(HalfEdgeMesh)` | ❌ no mesh→B-Rep import | ✅ exact mesh SDF (closed meshes) | ✅ as-is |
 | `From(Sdf)` | ❌ no SDF→B-Rep | ✅ native | 🔶 polygonized |
@@ -634,10 +637,12 @@ cuts along the threads fail loudly; use clearance or the implicit route for thos
 ## Text
 
 Modeled text — OpenSCAD's `text()`, but exact. TrueType `glyf` outlines are straight
-lines and **quadratic** Béziers, and `SketchBuilder` already has `LineTo`/`QuadraticTo`,
-so glyph contours map onto sketch segments with **no flattening**. Text therefore
-inherits the whole pipeline: exact NURBS profiles in B-Rep, the exact 2D signed distance
-in implicit, crisp tessellation in mesh — Native in all three, no bridge anywhere.
+lines and **quadratic** Béziers, OpenType/CFF (`.otf`) outlines are lines and **cubic**
+Béziers, and `SketchBuilder` already has `LineTo`/`QuadraticTo`/`BezierTo` — so glyph
+contours of either flavour map onto sketch segments with **no flattening**. Text
+therefore inherits the whole pipeline: exact NURBS profiles in B-Rep, the exact 2D
+signed distance in implicit, crisp tessellation in mesh — Native in all three, no
+bridge anywhere.
 
 ```csharp
 var font = TrueTypeFont.Load(@"C:\Windows\Fonts\arial.ttf");
@@ -654,9 +659,22 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
   (formats 4 and 12), `loca`, `glyf` (simple **and** composite glyphs, with the
   repeat/short-vector coordinate compression), `hhea`/`hmtx`, plus optional `kern`
   (format 0), `name` and `OS/2`. Hinting instructions are skipped — modeled text is
-  resolution independent. **OpenType/CFF (`.otf`, PostScript cubic outlines) and
-  TrueType Collections (`.ttc`) are rejected with a message naming the limitation**,
-  never silently mis-modeled.
+  resolution independent. **TrueType Collections (`.ttc`) and variable-font `CFF2`
+  tables are rejected with a message naming the limitation**, never silently
+  mis-modeled.
+- **OpenType/CFF (`.otf`) fonts work too** (`Text/CffOutlines.cs`): `OTTO` containers
+  store glyphs as PostScript Type 2 charstrings — cubic Béziers — parsed by the same
+  hand-rolled approach (INDEX/DICT structures, local + global subroutines with the
+  count-dependent bias, the whole curve-operator family including flex, and CID-keyed
+  fonts via FDArray/FDSelect). Contours carry `GlyphContour.IsCubic` and become
+  `BezierTo` segments, so `.otf` text is exactly as exact as `.ttf` text;
+  `font.HasPostScriptOutlines` reports which flavour loaded. **The decoding trap worth
+  knowing**: `hintmask`/`cntrmask` are followed by one data byte per eight declared
+  stems, *including stems declared implicitly by arguments still on the stack* —
+  miscounting reads mask bytes as operators and garbles everything after, which is why
+  the synthetic-font tests pin decoded outlines to exact coordinates (CFF's cousin of
+  TrueType's implied-midpoint subtlety). Legacy `seac` accent composition and the
+  Type 2 arithmetic operators are rejected by name.
 - **Size is the em size** (the typographic meaning of "12 point"); capitals are shorter.
   When a drawing specifies letter height, convert with `font.EmSizeForCapHeight(h)`.
 - **The origin is the baseline** at the start of the first line — x along the writing
@@ -665,8 +683,12 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
 - **`TextStyle`** carries `LetterSpacing` (tracking, inserted between glyphs only),
   `LineSpacing` (baseline step, default 1.2), `Align` and `Kerning` — all spacing as a
   multiple of the em size, so one style is correct at every size. Kerning comes from the
-  legacy `kern` table; fonts that ship kerning only in OpenType `GPOS` lay out on their
-  advance widths alone (`font.HasKerning` reports which).
+  OpenType `GPOS` `kern` feature when the font has one (`Text/GposKerning.cs`: PairPos
+  formats 1 and 2 — the class-pair matrix most fonts use — unwrapped through Extension
+  lookups, both coverage and both class-definition formats, lookups accumulating), else
+  from the legacy `kern` table; per the spec, a GPOS `kern` feature makes the legacy
+  table invisible rather than merging with it. `font.HasKerning` reports whether either
+  source exists.
 - **Counters** (the holes in O, A, 8) are separate contours. TrueType's convention is
   clockwise outlines and counter-clockwise counters, but real fonts violate it often
   enough that orientation is not trusted: contours are nested by **containment** (a
@@ -1241,8 +1263,8 @@ host fallback > `MeshQuality` defaults**.
 
 Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
-non-uniformly scaled spheres. For text: OpenType/CFF (cubic) outlines, `GPOS` kerning,
-text on a curve, variable fonts, and B-Rep booleans for sketch-extrusion tools (which
+non-uniformly scaled spheres. For text: text on a curve, variable fonts (`fvar`/`gvar`/
+`CFF2`), and B-Rep booleans for sketch-extrusion tools (which
 would make engraving B-Rep-native). For standard components: more families (button and
 countersunk heads, nuts, washers, bearings), higher body fidelity (hex sockets, modeled
 threads on the shank, knurled inserts), and stacks that anchor into a placed component

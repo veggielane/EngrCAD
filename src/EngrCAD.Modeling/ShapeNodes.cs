@@ -14,7 +14,10 @@ internal enum BooleanOp
 
 internal sealed class BoxShape(Aabb bounds) : Shape
 {
-    public Aabb Bounds => bounds;
+    /// <summary>The box's own extents (named to stay clear of the public measured
+    /// <c>Shape.Bounds(quality)</c> and the <c>Shape.Box</c> factory, which this
+    /// node must not hide).</summary>
+    public Aabb Extents => bounds;
     internal override string Describe() => $"Box({bounds.Size.X:g4}×{bounds.Size.Y:g4}×{bounds.Size.Z:g4})";
 }
 
@@ -141,6 +144,41 @@ internal sealed class ExtrudeShape : Shape
     }
 
     internal override string Describe() => Sketch is null ? "Extrude" : "Extrude(sketch)";
+}
+
+/// <summary>
+/// A twisted and/or tapered sketch extrusion — OpenSCAD's
+/// <c>linear_extrude(twist, scale, slices)</c>. The cross-section at height fraction
+/// <c>t</c> is the sketch scaled by <c>lerp(1, ScaleTop, t)</c> per axis and rotated
+/// by <c>Twist·t</c> about the plane normal (scale first, then rotation — the OpenSCAD
+/// composition). Construction guarantees the node is non-trivial: a call with zero
+/// twist and unit scale returns a plain <see cref="ExtrudeShape"/> instead, so every
+/// instance of this node genuinely twists or tapers.
+/// </summary>
+internal sealed class TwistExtrudeShape(
+    Sketch sketch, SketchPlane plane, double height, double twist, Vector2d scaleTop, int? slices) : Shape
+{
+    public Sketch Sketch { get; } = sketch;
+    public Matrix4d PlaneMatrix { get; } = plane.ToMatrix();
+    public double Height { get; } = height;
+
+    /// <summary>Total twist over the height, radians, counter-clockwise about the
+    /// plane normal (right-handed; OpenSCAD's <c>twist</c> is the opposite sign).</summary>
+    public double Twist { get; } = twist;
+
+    /// <summary>Per-axis scale of the top section relative to the base.</summary>
+    public Vector2d ScaleTop { get; } = scaleTop;
+
+    /// <summary>Section rings between base and top for the mesh sweep; null derives
+    /// the count from the twist and the quality's segments-per-circle.</summary>
+    public int? Slices { get; } = slices;
+
+    /// <summary>Exact-zero semantic test (not a tolerance): the constructor routes a
+    /// literal zero twist to the taper-only paths, which are exact.</summary>
+    public bool IsTwisted => Twist != 0;
+
+    internal override string Describe() =>
+        $"Extrude(twist {Twist * 180 / Math.PI:g4} deg, scale {ScaleTop.X:g4}x{ScaleTop.Y:g4})";
 }
 
 internal sealed class RevolveShape : Shape

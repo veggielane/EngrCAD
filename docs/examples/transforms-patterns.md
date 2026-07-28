@@ -22,9 +22,38 @@ scene.Add(new Part("scaled x1.4", blank.Scale(1.4), Palette.Coral,
 ![A blank, a rotated copy, and a uniformly scaled copy](images/transforms.png)
 
 Uniform scaling keeps everything exact (feature sizes scale with it); shear and
-non-uniform scale are exact for boxes, cylinders, and extrusions, and bridge or
-reject elsewhere — `Explain` names the offending node
-([details](representations.md)).
+non-uniform scale — `Scale(x, y, z)`, OpenSCAD's `scale([x,y,z])` — are exact for
+boxes, cylinders, and extrusions, and bridge or reject elsewhere — `Explain` names
+the offending node ([details](representations.md)).
+
+## Resize
+
+`Resized(newSize, auto?)` is OpenSCAD's `resize()`: measure the shape's bounds (on
+its mesh lowering — `Shape.Bounds(quality)`), then scale per axis about the origin so
+they hit the target. A zero component keeps its axis; with the matching `auto` flag it
+follows the first sized axis's factor instead, which is the proportional resize:
+
+```csharp render:resize
+var gear = Shape.Cylinder(12, 4) - Shape.Cylinder(4, 5);
+
+var scene = new Scene();
+scene.Add(new Part("original", gear, Palette.Steel));
+// Proportional: x to 16, y and z follow (factor 2/3).
+scene.Add(new Part("resized", gear.Resized((16, 0, 0), auto: true).Translate(24, 0, 0),
+    Palette.Brass));
+// Per-axis: an elliptical squash - B-Rep keeps it exact (cylinders become ellipses).
+scene.Add(new Part("squashed", gear.Resized((24, 12, 4)).Translate(-26, 0, 0),
+    Palette.Coral));
+```
+
+![A ring, a proportionally resized copy, and an elliptically squashed copy](images/resize.png)
+
+Because `Resized` is just a scale about the origin, representation support is the
+non-uniform-scale story above: equal factors change nothing, unequal factors keep
+boxes/cylinders/extrusions B-Rep-exact and make a sphere B-Rep-Impossible (the
+message names the ellipsoid it would need) while mesh and implicit routes stay
+available. The bounds are *measured*, eagerly, at the call — a tessellation inscribes
+curved surfaces, so extremes read a chord's sagitta small at coarse quality.
 
 ## Mirror
 
@@ -52,12 +81,14 @@ scene.Add(new Part("left-hand", bracket.Mirror(Vector3d.UnitX), Palette.Copper))
 Mirroring is a single exact reflection matrix, correct in every representation:
 meshes transform positions and reverse triangle winding (staying outward-oriented),
 and the implicit lowering reflects the query point, which is exact for any SDF.
-B-Rep support follows the node under the mirror: boxes, cylinders, and sketch
-extrusions handle any affine map (this bracket stays fully B-Rep-native);
-spheres, tori, and cones are re-placed natively under mirrored similarities; but
-mirrored revolve/sweep/chamfer/fillet/drill nodes have **no B-Rep lowering yet** —
-their mirrors are still exact via mesh or SDF, and `Explain` names the node
-([support matrix](representations.md)).
+B-Rep support follows the node under the mirror, and every modeling node now has a
+mirrored lowering: boxes, cylinders, and sketch extrusions handle any affine map
+(this bracket stays fully B-Rep-native); spheres, tori, and cones re-place natively
+under mirrored similarities; revolves sweep about the **negated** transformed axis
+(a reflection conjugates the rotation — the same identity that makes a mirrored
+thread the left-hand thread); sweeps need no fix at all (rotation-minimizing frames
+are intrinsic); and chamfers, fillets, and drilled holes follow because their
+geometry commutes with isometries ([support matrix](representations.md)).
 
 ## Linear patterns
 

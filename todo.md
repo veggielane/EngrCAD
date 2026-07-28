@@ -500,34 +500,52 @@ export — is recorded in CLAUDE.md):
 
 - [ ] **Text follow-ups** (`Shape.Text` ✅ landed — dependency-free TrueType reader,
   glyphs → exact sketch segments, containment-based counter detection, layout with
-  `kern` kerning): **CFF/OpenType-PostScript outlines** (`CFF ` table, cubic Béziers →
-  `BezierTo`) — rejected loudly today, and supporting it opens every `.otf`; **GPOS
-  kerning** (modern fonts ship kerning only there); **text on a curve/path** (layout
-  maps the pen position to a frame instead of a straight baseline); **variable fonts**
-  (`fvar`/`gvar`); **vertical alignment** for text blocks (horizontal-only today);
+  `kern` kerning; **CFF/OpenType-PostScript outlines ✅ landed** — `CffOutlines`, Type 2
+  charstrings → cubic `BezierTo`, CID-keyed via FDArray/FDSelect, every `.otf` opens;
+  **GPOS kerning ✅ landed** — `GposKerning`, PairPos 1+2 incl. Extension lookups, with
+  the spec's GPOS-over-legacy-`kern` precedence): **text on a curve/path**
+  (layout maps the pen position to a frame instead of a straight baseline); **variable
+  fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today); **`seac` accent
+  composition** (legacy CFF accents — rejected loudly today, needs charset + standard
+  encoding); **vertical alignment** for text blocks (horizontal-only today);
   **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
   font reference).
-- [ ] `surface()` — heightmap (image/data grid) → mesh terrain
-- [ ] `minkowski()` — general Minkowski sum is hard; the important special case is
-  rounding, which we already have cheaply (SDF `Offset` ≡ sphere-Minkowski, and
-  `Filleting`). Document the equivalence; general polyhedron⊕polyhedron is low priority
+- [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
+  `Heightmap.Mesh/ReadDat/ReadPng`, grayscale-PNG reader dependency-free over BCL
+  `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —
+  decide a documented rule first); Adam7 interlaced PNGs; chunk CRC verification
+  (currently structural failures only).
+- ~~`minkowski()`~~ — resolved as documentation: `docs/examples/implicit.md` maps the
+  OpenSCAD recipes onto `Offset` (≡ sphere-Minkowski, exact as a field),
+  opening/closing compositions, and the exact B-Rep routes (`RoundEdges`/`Fillet`),
+  with convex⊕convex available via `Hull` over translated copies. General
+  polyhedron⊕polyhedron is **not planned** (convex decomposition + pairwise sums +
+  union — combinatorially explosive, and its engineering uses are better served by
+  `Offset` on the exact field).
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)
-- [ ] mirror B-Rep completion — mirrored revolve/sweep/rim/drill nodes are Impossible
-  in v1 (exact via mesh/SDF); native route: `F∘R(d,θ)∘F = R(−F·d, θ)` axis negation
-  for revolves/sweeps (`Shape.Mirror` ✅ landed otherwise: implicit exact via
-  improper-similarity decomposition, mesh exact, B-Rep native for
-  box/cylinder/extrude/sphere/torus/cone)
-- [ ] `resize()` — non-uniform scale to target bounds (mesh: easy; SDF: breaks the
-  distance metric — document lower-bound semantics; B-Rep: needs affine surfaces)
+- [ ] mirror B-Rep completion, remaining nodes — revolve/sweep/rim/drill ✅ landed
+  (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF for sweeps,
+  isometry-commuting surgery for rims/drills); still rigid-proper-only:
+  `Draft` (pull direction needs the linear image under the reflection),
+  `Shell(t, openings)`, `RoundEdges`, `Loft` — all isometry-commuting, each a small
+  DecomposeSimilarity change plus tests when wanted
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
-  chamfer joins, erosion as complement dilation): **exact curved offsets** (arcs stay
-  arcs — today everything flattens first, same limitation as all region work); variable
-  offset along the outline; open-path offsetting (a stroke, for toolpaths).
-- [ ] `linear_extrude(twist, scale, slices)` — twisted/tapered extrusion (a
-  `SweptSurface` variant with per-v rotation/scale; g3's `GenCylGenerators` is the
-  mesh route)
+  chamfer joins, erosion as complement dilation; **open-path stroking ✅ landed** —
+  `Region2dOffset.Stroke(path, width, cap, join)`, butt/round/square caps, both-side
+  corner joins so reversals get round noses, closed circuits enclose holes): **exact
+  curved offsets** (arcs stay arcs — today everything flattens first, same limitation
+  as all region work); **variable offset along the outline** (per-vertex distances —
+  trapezoid slabs + interpolated-radius joins on the same union construction; design
+  question: how distances interpolate along an edge, linear-in-arclength being the
+  obvious rule).
+- [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
+  ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
+  twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
+  tapered sketches WITH holes are B-Rep-Impossible until loft sections support holes
+  (same gap as the Loft section); an exact twisted B-Rep surface type would make twist
+  Native (big kernel feature, low priority).
 - [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
   `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
   - [ ] **`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.** Repro: the
