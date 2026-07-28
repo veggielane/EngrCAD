@@ -5,4 +5,7 @@
   <ItemGroup>
     <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Modeling.Tests" />
+  </ItemGroup>
 </Project>

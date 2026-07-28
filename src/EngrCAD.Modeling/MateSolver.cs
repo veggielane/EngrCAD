@@ -269,7 +269,16 @@ public sealed partial class MateSet
     /// writes the occurrence frames only when it converged.
     /// </summary>
     public MateSolveResult TrySolve(MateSolverSettings? settings = null) =>
-        new Solver(this, settings ?? new MateSolverSettings()).Run();
+        new Solver(this, settings ?? new MateSolverSettings(), []).Run();
+
+    /// <summary>
+    /// <see cref="TrySolve(MateSolverSettings?)"/> with auxiliary constraints (screw
+    /// pitch couplings, gear ratios, cams, drivers) appended to the residual vector —
+    /// the seam <see cref="Mechanism"/> drives. With an empty list this is exactly the
+    /// public solve.
+    /// </summary>
+    internal MateSolveResult TrySolve(MateSolverSettings settings, IReadOnlyList<AuxiliaryConstraint> extras) =>
+        new Solver(this, settings, extras).Run();
 
     // =====================================================================
     //  The solver
@@ -284,7 +293,8 @@ public sealed partial class MateSet
     /// </summary>
     private const double RankRelativeTolerance = 1e-8;
 
-    private sealed class Solver(MateSet set, MateSolverSettings settings)
+    private sealed partial class Solver(
+        MateSet set, MateSolverSettings settings, IReadOnlyList<AuxiliaryConstraint> extras)
     {
         private readonly List<Occurrence> _free = [];
         private readonly Dictionary<Occurrence, int> _block = [];
@@ -309,9 +319,14 @@ public sealed partial class MateSet
                 Register(mate.A);
                 Register(mate.B);
             }
+            foreach (var extra in extras)
+            {
+                foreach (var end in extra.Ends)
+                    Register(end);
+            }
 
             _columns = _free.Count * 6;
-            _rows = mates.Sum(m => m.RowCount);
+            _rows = mates.Sum(m => m.RowCount) + extras.Sum(x => x.RowCount);
             _poses = [.. _free.Select(o => o.Frame)];
             _length = CharacteristicLength();
 
@@ -520,6 +535,14 @@ public sealed partial class MateSet
                 row += mate.RowCount;
                 offenders.Add((mate.Name, peak));
             }
+            foreach (var extra in extras)
+            {
+                double peak = 0;
+                for (int i = 0; i < extra.RowCount; i++)
+                    peak = Math.Max(peak, Math.Abs(residual[row + i]));
+                row += extra.RowCount;
+                offenders.Add((extra.Name, peak));
+            }
             foreach (var (name, peak) in offenders.OrderByDescending(o => o.Residual).Take(3))
                 diagnostics.Add($"'{name}' is off by {peak:g4}");
             diagnostics.Add("nothing was moved — the occurrence frames are unchanged");
@@ -542,6 +565,15 @@ public sealed partial class MateSet
                     length = Math.Max(length, Evaluate(mate.A).Point.Length);
                 if (mate.B.Ancestors is not null)
                     length = Math.Max(length, Evaluate(mate.B).Point.Length);
+            }
+            foreach (var extra in extras)
+            {
+                foreach (var end in extra.Ends)
+                {
+                    length = Math.Max(length, end.Point.Length);
+                    if (end.Ancestors is not null)
+                        length = Math.Max(length, Evaluate(end).Point.Length);
+                }
             }
             foreach (var occurrence in set.Assembly.Occurrences)
                 length = Math.Max(length, occurrence.Frame.Origin.Length);
@@ -669,6 +701,13 @@ public sealed partial class MateSet
                 }
             }
 
+            foreach (var extra in extras)
+            {
+                var ends = EvaluateEnds(extra);
+                extra.Residual(ends, _length, residual.AsSpan(row, extra.RowCount));
+                row += extra.RowCount;
+            }
+
             double worst = 0;
             for (int i = 0; i < residual.Length; i++)
                 worst = Math.Max(worst, Math.Abs(residual[i]));
@@ -777,6 +816,47 @@ public sealed partial class MateSet
                 }
                 row = start + mate.RowCount;
             }
+
+            foreach (var extra in extras)
+            {
+                int count = extra.Ends.Count;
+                var ends = new End[count];
+                var values = new EndValue[count];
+                for (int i = 0; i < count; i++)
+                {
+                    ends[i] = Evaluate(extra.Ends[i]);
+                    values[i] = new EndValue(ends[i].Point, ends[i].Direction);
+                }
+                var deltas = new EndDelta[count];
+                // Heap, not stackalloc: this sits in a loop, and stackalloc in a loop
+                // grows the frame per extra until the method returns.
+                Span<double> rows = new double[extra.RowCount];
+                for (int column = 0; column < _columns; column++)
+                {
+                    for (int i = 0; i < count; i++)
+                    {
+                        var (dPoint, dDirection) = Derivative(ends[i], column);
+                        deltas[i] = new EndDelta(dPoint, dDirection);
+                    }
+                    extra.Derivative(values, deltas, _length, rows);
+                    for (int r = 0; r < extra.RowCount; r++)
+                        jacobian[(row + r) * _columns + column] = rows[r];
+                }
+                row += extra.RowCount;
+            }
+        }
+
+        /// <summary>The world geometry of an auxiliary constraint's ends at the current
+        /// working poses.</summary>
+        private EndValue[] EvaluateEnds(AuxiliaryConstraint extra)
+        {
+            var ends = new EndValue[extra.Ends.Count];
+            for (int i = 0; i < ends.Length; i++)
+            {
+                var end = Evaluate(extra.Ends[i]);
+                ends[i] = new EndValue(end.Point, end.Direction);
+            }
+            return ends;
         }
 
         private void Set(double[] jacobian, ref int row, int column, in Vector3d value)
