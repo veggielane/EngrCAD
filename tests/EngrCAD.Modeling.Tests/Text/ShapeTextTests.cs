@@ -100,10 +100,12 @@ public class ShapeTextTests
     {
         // The documented embossing pattern: sketch on the face, union. No new operation
         // is needed - SketchPlane.On + the existing boolean do the whole job. Lettering
-        // sitting FLUSH on the face is a coplanar pair, which the v1 boolean does not
-        // fuse: it takes the disjoint fast path and the result is the plate and the
-        // glyph as two touching shells. Closed, valid and exactly the right volume, but
-        // see Text_EmbossesAsOneShellWhenSunkIntoTheFace for a fused union.
+        // sitting FLUSH on the face is a COINCIDENT pair, and the boolean's coplanar tier
+        // fuses it into ONE solid: the glyph's underside and the patch of plate beneath it
+        // have opposing outward normals, so both copies of the shared surface drop and the
+        // plate's top face is imprinted with the glyph's own outline. It used to take the
+        // disjoint fast path and return two touching shells - closed, valid, right volume,
+        // wrong topology.
         var plate = Shape.Box(40, 20, 4);                             // top face at z = 2
         var top = plate.ToBrep().PlanarFacesWithNormal(Vector3d.UnitZ).First();
 
@@ -111,7 +113,8 @@ public class ShapeTextTests
 
         var solid = embossed.ToBrep();
         solid.Validate();
-        Assert.Equal(2, solid.Shells.Count);                          // touching, not fused
+        Assert.Single(solid.Shells);                                  // fused, not touching
+        Assert.True(solid.SatisfiesEulerFormula());
         var mesh = embossed.ToMesh();
         Assert.True(mesh.IsClosed);
         Assert.Equal(40 * 20 * 4 + BarArea * 1, mesh.Volume(), 6);

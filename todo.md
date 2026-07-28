@@ -314,13 +314,21 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   like the cap bore. `CylinderSurface` **constant-v** wrap-split ✅ landed, exact at
   1.7e-15 relative. `CurveSegment`-over-polyline in `SampleEdge` and the `TraceFaces`
   2%/98% probes ✅ landed — both now route through
-  `FaceGeometry.ExactSampleParameters`/`IsPolylineBacked`.) — remaining:
-  a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of
-  a side face) throws `Open splitting curves must start and end outside the face`;
-  flush/coplanar embossing does not fuse (the union leaves touching shells with the
-  right volume — sink the tool a fraction to fuse); equal-radius perpendicular cylinders
-  (tangent bicylinder: overlapping v-ranges rejected; the tracer's degenerate output
-  there is untested). Also still open: coplanar/tangent boolean cases generally.
+  `FaceGeometry.ExactSampleParameters`/`IsPolylineBacked`. **Coincident PLANAR faces** ✅
+  landed — flush embossing, stacked plates, butted blocks and flush pocket floors all
+  fuse into one solid (`CoplanarFaces.cs`, normal-agreement classification; design.md
+  §5). Cylinder promotion now requires a WHOLE turn ✅, which fixed near-miss pairs at a
+  rounded corner. **Cuts that break out through a face boundary part-way** ✅ landed too,
+  as a side effect of snapping traced curve ends — a bore swallowing a rounded corner now
+  converges quadratically onto its analytic volume; what still refuses is a tool drilled
+  ALONG a band's own axis, filed with the other traced-curve residuals below.) — remaining:
+  equal-radius perpendicular cylinders (tangent bicylinder: overlapping v-ranges
+  rejected; the tracer's degenerate output there is untested); coincident or tangent
+  CURVED faces (a shaft in a bore of its own diameter) — refused BY NAME for coaxial
+  equal-radius cylinders, and the honest blocker is that the shared region's rim needs
+  the two trims re-intersected on a curved carrier, which is the SAME missing machinery
+  as curved shelling corners and general trihedral fillet patches, so the three should be
+  solved together.
 - [ ] **Trimmed cylindrical tessellation with WRAPPING loops** — the blocker behind the
   one wrap-split case still refused: a cross-drill piercing a plain `CylinderSurface`
   band makes a wrapping cut whose v varies, and its sub-bands keep the whole surface, so
@@ -650,19 +658,24 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   round-trips manifold with zero diagnostics). A closed NURBS generator under a partial
   sweep still keeps the honest non-manifold diagnostic — recovering it needs projection,
   not congruence, and nothing exports one today.
-- [ ] **`BrepBoolean` on whole-solid fillets: band-crossing tools** — centre drills
-  through the caps ✅ work (locked, Steiner-minus-bore exact). The band case is now
-  precisely diagnosed (the old "re-surfaced sub-band loses corner arcs" story was
-  wrong): the tool∩band tracer loop closes on the EXTENDED carrier; run pseudo-samples
-  now reach the domain edge (adaptive extrapolation ✅ landed — one local gap was
-  measured falling short, leaving zero crossing seeds), but `RefineCrossing` demands a
-  true 3D intersection to 1e-11 and a chordal tracer polyline is a sagitta (~1e-4) off
-  the exact tangency edge mid-chord — skew curves, every seed rejected, band never
-  splits, whole band mis-classifies, result cracks along entire tangency edges (refused
-  loudly; unpaired edges itemized). Remaining fix: tag tracer curves with their surface
-  pair, refine boundary crossings as exact edge∩other-surface root solves, and SNAP the
-  polyline segment ends to the exact crossing on BOTH solids (the segment endpoints are
-  seam geometry — a 1e-4 chordal end would open a pinhole at every crossing).
+- [ ] **Traced-curve residuals after the band-crossing fix** (`SnapTracerEnds` ✅ landed —
+  a traced polyline is extended onto the EXACT solution of E(t) = S(u, v) once, on the
+  curve object both faces share, and `SplitByCurve`'s interior probe ✅ now takes an exact
+  sample instead of a mid-chord midpoint; together they closed the whole-solid-fillet
+  band case and, unexpectedly, cuts that break out through a face boundary part-way).
+  What is left:
+  - [ ] **A tool drilled ALONG a band's own axis** — its intersection with the band runs
+    the band's whole LENGTH rather than crossing it, and still throws `Open splitting
+    curves must start and end outside the face` (pinned by
+    `WholeSolidFilletBooleanTests.ToolRunningAlongABandsAxis_StillRefusesLoudly`).
+  - [ ] **A baked tracer polyline does not refine with the grid.** Its sample count is
+    fixed at boolean time, so as `segmentsPerCircle` rises the facets straddling it
+    disagree more with the exact surface: measured 0.999 at 32 segments → 0.90 at 192 on a
+    band-crossing bore (no folds, and volumes still converge, so this is accuracy rather
+    than validity). `TrimmedFaceRefusalTests`' "cap cut low with bore" is the same story
+    and folds at 16/8 and 192/96 while being clean at the audited 32/24. The fix is to
+    re-sample a baked intersection curve at tessellation time against its two exact
+    carriers, which needs the surface pair carried on the curve.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
   as `Shape.Draft`): curved faces; caps with holes; a non-planar neutral surface.
 - [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall
@@ -705,8 +718,9 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   that returns fragment→host provenance without sealing, which is the modification
   history item again. *Glue* (merge coincident faces of touching solids without a
   boolean) is `ShapeHealing.SewDuplicateEdges` generalized from edges to overlapping
-  face REGIONS — needs the coplanar-overlap machinery the mesh boolean has and the
-  B-Rep boolean lacks; not cheap.
+  face REGIONS. The B-Rep boolean now HAS the planar half of that machinery
+  (`CoplanarFaces` — same-plane recognition, area-overlap sampling, normal-agreement
+  classification), so a planar *glue* is within reach; curved overlaps still are not.
 - [ ] Surface interpolation + least-squares approximation (`GeomAPI_PointsToBSpline`
   proper; curve interpolation exists). Assessed (task #11): the interpolation half is
   the tensor-product generalization of `NurbsCurve.InterpolatePoints` — chord-length
@@ -1097,16 +1111,16 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   builder over the retained document model; `#load` library conventions for shared
   `.csx` component files; a `dotnet tool` packaging of the script runner so
   `engrcad model.csx` works without the repo.
-- [ ] **B-Rep boolean: near-miss parallel-cylinder pairs produce an open-curve
-  refusal.** Found by a Ø8 counterbore drilled 10 mm from a rounded-rect plate's Ø12
-  corner: the tool cylinder and the corner quarter-cylinder do not intersect on their
-  actual face DOMAINS, but their carriers do (parallel axes 5.66 apart, radii 4+6),
-  the face-bounds prefilter cannot separate AABBs that touch at one corner, and the
-  analytic parallel-cylinder intersection emits carrier lines that end inside the
-  face — `FaceSplitter.SplitByCurve` then throws "Open splitting curves must start
-  and end outside the face" for a boolean that geometrically is a plain hole. Clip
-  the analytic lines against BOTH faces' domains (or reject the pair when the clipped
-  curve is empty) before handing them to the splitter.
+- [ ] **Bounded planar carriers clip; unbounded ones only clip to the query region.**
+  Two `PlaneSurface` faces meeting at an angle produce a line spanning the whole
+  region, so a boss's wall imprints its footprint edge ACROSS the host's entire top
+  face instead of just the shared rim — topologically fine (the splitter keeps only
+  the interior stretches and every fragment classifies correctly), but a flush union
+  leaves the host's top face in more pieces than it needs. `SolidFactory.MakeBox`
+  builds `PlaneSurface` faces; sketch extrusions already get the bounded-parallelogram
+  treatment. Options: give `MakeBox` bounded carriers, or pass `Intersect` a per-pair
+  region (the two faces' bounds, expanded) instead of the whole-model one — the latter
+  touches every pair in the boolean pipeline, so it needs the corpus gate behind it.
 - [ ] **Logging follow-ups** (`ILogger` adoption ✅; kernel extension ✅ landed —
   Interop and BRep take the abstractions reference, weighed per project: optional
   trailing `ILogger` on `BrepBoolean` ops (event 80, sub-steps threaded through),

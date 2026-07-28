@@ -306,8 +306,49 @@ logging complements them, never replaces them.
 - **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
   (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See
-  design.md §5. v1 handles transversal cases; inputs are consumed; output passes
-  `Validate()` with correct genus and exact volumes.
+  design.md §5. Transversal and coplanar-PLANAR cases are handled; inputs are consumed;
+  output passes `Validate()` with correct genus and exact volumes.
+  - **Coincident (flush) planar surface** (`CoplanarFaces.cs`) — flush embossing, stacked
+    plates, blocks butted together, a pocket floor flush with the host's own face. The
+    model is the mesh boolean's, translated: the shared region's rim is imprinted by the
+    ordinary TRANSVERSAL curves of the neighbouring faces, and the coincident fragments
+    are then classified by **normal agreement** instead of by an inside/outside probe,
+    which reads zero there and decides nothing (the B-Rep twin of the winding number
+    being ½ on a shared surface). Agreeing normals mean both solids lie on the same side,
+    so the surface bounds the union and the intersection and vanishes from the
+    difference; opposing normals mean the solids mate back to back, so union and
+    intersection bury it and only the difference keeps it. **Exactly one copy can ever
+    survive and it is always the FIRST solid's** — the asymmetry is deliberate and is
+    documented in design.md §5. Coincident CURVED surface (a shaft in a bore of its own
+    diameter) is refused BY NAME before any splitting.
+    - Three rules had to be added around the classification itself, and each was found by
+      a case that failed without it. **A curve that never reaches a face's INTERIOR must
+      not split it**: when two solids mate, each neighbour face's own boundary IS an
+      intersection curve (a boss's wall meets its host's top plane exactly along the
+      wall's bottom rim), and splitting a face along its own boundary is what the
+      arrangement tracer cannot close. **A pair whose bounds meet in a single POINT is
+      dropped**: butting a boss against a plate puts the two side walls corner to corner,
+      and their carrier planes still cross in a full line that runs clean through the
+      plate's wall — the line is real, the contact is not. **The disjoint fast path is
+      disqualified by a shared plane**: two stacked plates of the same footprint meet
+      only along their own boundary edges, so after the first rule every curve is gone and
+      the operands look disjoint, which returned them as two touching shells — precisely
+      the fusion failure this tier exists to fix. All three are gated on a shared plane
+      existing, so a purely transversal boolean takes exactly the path it took before.
+    - **The rim imprint has a second source, and it is needed.** The transversal path
+      supplies the rim for an unbounded `PlaneSurface` neighbour, but a sketch extrusion's
+      wall is a *bounded* patch and `TryPlaneExtrudedSection` deliberately reports NO
+      section when the cutting plane is flush with the generator's rim. Embossed text is
+      exactly that case, so a coplanar face also takes the partner face's OWN boundary
+      curves as rim curves (skipped where an existing curve already covers them, since
+      splitting twice along one curve breaks the tracer). Taking the partner's curves is
+      also the best possible weld: the new edges ride the geometry the other solid already
+      references, so `SealSeams` pairs them by construction rather than by tolerance.
+    - Coplanar overlap is decided by **sampling the shared area**, not by probing
+      centroids: two plates overlapping in a strip have neither centroid inside the other,
+      and the first version of the test missed exactly the case that most needs it. A miss
+      is safe in one direction only — it leaves the boolean on its pre-existing path,
+      which fails loudly rather than producing wrong geometry.
   - **The result is verified before it is returned.** Every operation checks that the
     assembled solid is two-manifold (each edge used by exactly two coedges, every loop
     chaining end-to-start) and throws `BrepBooleanException` otherwise, naming the
@@ -321,6 +362,32 @@ logging complements them, never replaces them.
     Note the limit of the check — it catches *unclosed* results, not *wrong but closed*
     ones (a tool buried as an internal cavity is perfectly manifold), so end-to-end tests
     must still assert analytic volumes.
+  - **Traced curves are SNAPPED onto their exact boundary landing** before either solid
+    splits (`SnapTracerEnds`). The marching tracer breaks its step only AFTER the
+    corrector's parameters leave the domain, so a traced curve always stops up to one
+    march step short of a bounded surface's edge; where that edge also bounds the face
+    being split, the polyline crosses nothing, `FaceSplitter` finds ZERO crossings, and
+    the face is whole-classified. That is what cracked a whole-solid fillet along entire
+    tangency edges: measured on `FilletAllEdges(20×14×8, r2) − Ø6 cylinder`, the four band
+    curves ended 5.5e-5 and 1.1e-2 from the two tangency lines and produced no crossings
+    at all. The landing is SOLVED, not extrapolated — E(t) = S(u, v) is a well-posed 3×3
+    Newton system on the exact boundary edge and the other solid's exact carrier, seeded
+    from the polyline's own last vertex (which already lies on S, so only t moves) — and
+    it happens ONCE, on the single curve object both faces share, so the two solids get a
+    bit-identical endpoint. Snapping per face during splitting would instead give them
+    endpoints a sagitta apart, opening a pinhole at every crossing.
+    Together with the face splitter's exact interior probe (see the BRep README) this
+    closed the band-crossing family: a Ø6 bore down through two fillet bands, and Ø4
+    cross-drills along Y and X, are now `Validate`-clean and closed, satisfy
+    |A| − |A−B| = |A∩B| to 0.02–0.06 % of the removed volume, and converge with
+    tessellation density. It also closed a family nobody was aiming at — a bore swallowing
+    a rounded rectangle's corner and breaking out through both adjacent walls now
+    converges QUADRATICALLY onto its analytic volume (1.0e-4 / 2.7e-5 / 6.8e-6 / 1.7e-6
+    relative at 32/64/128/256 segments). **What remains** is a tool drilled ALONG a band's
+    own axis, whose intersection runs the band's whole length instead of crossing it, and
+    the quality note that a baked tracer polyline keeps a fixed sample count while the
+    grid around it refines, so facet-vs-surface agreement on those bands DEGRADES with
+    density (0.999 at 32 → 0.90 at 192; no folds, and volumes still converge).
   - **Straight-edged sketch extrusions (pockets, slots, polygons, engraved lettering)
     are exact**, via `SurfaceIntersection`'s bounded planar carriers — see the BRep
     README. Before that they were the headline silent failure: the marching tracer

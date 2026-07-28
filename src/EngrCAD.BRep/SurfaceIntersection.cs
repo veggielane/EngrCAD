@@ -287,14 +287,63 @@ public static class SurfaceIntersection
             e.Direction.IsParallelTo(c.Axis, Tolerance.Default))
         {
             var candidate = new CylinderSurface(c.Center, c.XDirection, c.YDirection, c.Radius);
-            // Wrapped generators (e.g. TransformedCurve) may sample away from the
-            // underlying circle; promote only when the actual generator lies on the
-            // candidate cylinder.
-            var start = e.Generator.PointAt(e.Generator.Domain.Start);
-            if (candidate.TryProjectPoint(start, out _, 1e-9))
+            if (WrapsWholeCylinder(e.Generator, candidate))
                 return candidate;
         }
         return s;
+    }
+
+    /// <summary>
+    /// Whether the ACTUAL generator wraps the candidate cylinder exactly once — the only
+    /// condition under which the extrusion IS that cylinder rather than a bounded patch on
+    /// one. Both halves are sampled from the real curve, never read off
+    /// <see cref="Curve3d.Underlying"/>: a wrapper (a <c>TransformedCurve</c>, or the
+    /// <c>CurveSegment</c> a sketch's rounded corner arrives as) reports the untransformed,
+    /// untrimmed circle as its underlying geometry and says nothing about where the
+    /// generator actually goes.
+    ///
+    /// <para><b>The angular half is load-bearing, not belt-and-braces.</b> A rounded
+    /// rectangle's corner is a QUARTER arc extruded, and every point of a quarter arc lies
+    /// on the full cylinder — so a start-point-only guard promotes it, and the promoted
+    /// carrier then reports intersections around 270° of surface the face does not carry.
+    /// Measured on a Ø8 counterbore near a Ø12 rounded corner: the tool's band crossed the
+    /// *fabricated* far side of the corner cylinder, the tracer produced two open curves
+    /// whose endpoints sit strictly inside the tool's band, and
+    /// <c>FaceSplitter.SplitByCurve</c> refused them with "Open splitting curves must start
+    /// and end outside the face" — for a boolean that geometrically is a plain hole 10 mm
+    /// from the corner.</para>
+    /// </summary>
+    private static bool WrapsWholeCylinder(Curve3d generator, CylinderSurface candidate)
+    {
+        var axis = candidate.Axis;
+        var domain = generator.Domain;
+        const int samples = 32;
+        double swept = 0, previous = 0;
+        for (int i = 0; i <= samples; i++)
+        {
+            var offset = generator.PointAt(domain.ParameterAt((double)i / samples)) - candidate.Origin;
+            var radial = offset - axis * offset.Dot(axis);
+            // Weld tier: the generator either IS the cylinder's circle (constructed
+            // exactly) or is some other curve that merely shares its underlying type.
+            if (Math.Abs(radial.Length - candidate.Radius) > Tolerance.Default.Linear)
+                return false;
+            double angle = Math.Atan2(radial.Dot(candidate.YDirection), radial.Dot(candidate.XDirection));
+            if (i > 0)
+            {
+                // Shortest step between consecutive samples: 32 of them put a full turn's
+                // step at 0.196 rad, so the branch can only ever fire at the seam.
+                double delta = angle - previous;
+                if (delta > Math.PI)
+                    delta -= 2 * Math.PI;
+                else if (delta < -Math.PI)
+                    delta += 2 * Math.PI;
+                swept += delta;
+            }
+            previous = angle;
+        }
+        // Radians are dimensionless, so this guard is deliberately absolute (the epsilon
+        // ladder's stated exception for angular quantities).
+        return Math.Abs(Math.Abs(swept) - 2 * Math.PI) <= Tolerance.Default.Angular;
     }
 
     // ---- bounded planar carriers ----

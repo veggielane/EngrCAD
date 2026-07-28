@@ -268,6 +268,35 @@ public static class FaceSplitter
     }
 
     /// <summary>
+    /// A parameter strictly inside [<paramref name="s0"/>, <paramref name="s1"/>] at which the
+    /// curve is genuinely ON its surface — used to ask whether a stretch of a splitting curve
+    /// lies inside the face.
+    ///
+    /// <para><b>The arithmetic midpoint is wrong for a tracer polyline</b>, and this is the
+    /// third site to learn it (after <c>BRepTessellator.SampleEdge</c> and <c>TraceFaces</c>'
+    /// departure probes): a polyline is exact only at its VERTICES, so a mid-chord point sits a
+    /// sagitta off the surface — measured 5e-3 on a whole-solid fillet's quarter-arc band at
+    /// the tracer's own sample density, five thousand times the 1e-6 inverse-evaluation
+    /// tolerance. The projection then FAILS, the stretch is discarded as "leaves the surface
+    /// entirely", no seam edge is built, and the face comes back unsplit with no complaint.
+    /// <see cref="FaceGeometry.ExactSampleParameters"/> is the shared rule; a stretch that
+    /// spans no vertex has no exact interior sample and keeps the midpoint, which is the
+    /// pre-existing behaviour.</para>
+    ///
+    /// <para>Non-polyline curves keep the arithmetic midpoint bit-for-bit: every analytic curve
+    /// is exact everywhere, so there is nothing to fix and no reason to move an existing
+    /// probe.</para>
+    /// </summary>
+    private static double InteriorProbeParameter(Curve3d curve, double s0, double s1)
+    {
+        double midpoint = (s0 + s1) / 2;
+        if (!FaceGeometry.IsPolylineBacked(curve))
+            return midpoint;
+        var exact = FaceGeometry.ExactSampleParameters(curve, s0, s1, 2);
+        return exact.Count > 2 ? exact[exact.Count / 2] : midpoint;
+    }
+
+    /// <summary>
     /// Curve parameters where the curve crosses the face's boundary. Used by booleans to
     /// force matching seam subdivision on the other solid's faces. Empty when the curve
     /// does not lie on the face's surface.
@@ -417,7 +446,7 @@ public static class FaceSplitter
             double s1 = to.CurveParam;
             if (s1 <= s0) // closed-curve wrap segment
                 s1 += curve.Domain.Length;
-            double mid = (s0 + s1) / 2;
+            double mid = InteriorProbeParameter(curve, s0, s1);
             if (!surface.TryProjectPoint(curve.PointAt(WrapParam(curve, mid)), out var midUv, FaceGeometry.InverseEvaluationTolerance))
                 continue; // this stretch of the curve leaves the surface entirely
             if (!ParityContains(rawLoops, midUv, period))

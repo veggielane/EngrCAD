@@ -490,4 +490,56 @@ public class SurfaceIntersectionTests
         Assert.NotEmpty(curves);
         Assert.All(curves, c => Assert.IsType<PolylineCurve3d>(c));
     }
+
+    /// <summary>A rounded rectangle's corner: a quarter arc of a circle, extruded.</summary>
+    private static ExtrudedSurface QuarterArcCorner() => new(
+        new CurveSegment(new Circle3d((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY, 6), 0, Math.PI / 2),
+        (0, 0, 10));
+
+    [Fact]
+    public void QuarterArcExtrusion_IsNotPromotedToAWholeCylinder()
+    {
+        // Every point of a quarter arc lies on the full cylinder, so a start-point-only
+        // promotion guard accepts it — and then reports 270 degrees of surface the face
+        // does not carry. The section here must stay the ARC: same start, and a midpoint
+        // at 45 degrees rather than the full circle's 180.
+        var corner = QuarterArcCorner();
+        var cap = new PlaneSurface((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
+
+        var curve = Assert.Single(SurfaceIntersection.Intersect(corner, cap, new Aabb((-20, -20, -20), (20, 20, 20))));
+        Assert.False(curve.IsClosed);
+        Assert.Equal(0, curve.PointAt(curve.Domain.Start).DistanceTo((6, 0, 5)), 9);
+        Assert.Equal(0, curve.PointAt(curve.Domain.End).DistanceTo((0, 6, 5)), 9);
+        double diagonal = 6 / Math.Sqrt(2);
+        Assert.Equal(0, curve.PointAt(curve.Domain.Mid).DistanceTo((diagonal, diagonal, 5)), 9);
+    }
+
+    [Fact]
+    public void FullCircleExtrusion_IsStillPromotedToACylinder()
+    {
+        // The promotion exists for bore walls, which sweep the whole circle; a section is
+        // then the exact closed Circle3d, not a tracer polyline.
+        var bore = new ExtrudedSurface(
+            new CurveSegment(new Circle3d((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY, 6), 0, 2 * Math.PI),
+            (0, 0, 10));
+        var cap = new PlaneSurface((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
+
+        var circle = Assert.IsType<Circle3d>(
+            Assert.Single(SurfaceIntersection.Intersect(bore, cap, new Aabb((-20, -20, -20), (20, 20, 20)))));
+        Assert.Equal(6, circle.Radius, 12);
+    }
+
+    [Fact]
+    public void QuarterArcCorner_ReportsNothingAgainstACylinderItNeverReaches()
+    {
+        // The counterbore-near-a-rounded-corner near miss, at the surface layer: a radius-4
+        // cylinder whose axis sits 4*sqrt(2) from the corner centre crosses the corner's
+        // CARRIER circle at 186 and 264 degrees — nowhere near the [0, 90] quarter the
+        // corner actually covers.
+        var corner = QuarterArcCorner();
+        var tool = new CylinderSurface(
+            (-4, -4, 0), Vector3d.UnitX, Vector3d.UnitY, 4);
+
+        Assert.Empty(SurfaceIntersection.Intersect(corner, tool, new Aabb((-20, -20, -5), (20, 20, 15))));
+    }
 }

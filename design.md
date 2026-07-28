@@ -617,12 +617,85 @@ Booleans deliberately live in Interop, not BRep: classification rides on the mes
 engine's signed distance field — the hybrid kernel earning its keep.
 
 Two supporting mechanisms: circle-extrusions along their axis are **promoted to analytic
-cylinders** inside `SurfaceIntersection`, so drilled bores get exact circles rather than
-marched polylines; and a closed curve whose pullback drifts a full period (a bore circle
+cylinders** inside `SurfaceIntersection` — only when the generator sweeps a WHOLE turn, since
+an extruded ARC merely *lies on* that cylinder and promoting it fabricates surface the face
+does not carry — so drilled bores get exact circles rather than marched polylines; and a
+closed curve whose pullback drifts a full period (a bore circle
 on a band) is recognized as non-contractible and handled by `SplitBandByWrapCurve`,
 which cuts the band into two bands with exactly reconstructed sub-surfaces.
 
-v1 contract: transversal intersections only (no coplanar or tangent face pairs); the
+A third mechanism exists for the curves the tracer DOES have to produce. **The tracer breaks
+its step only after the corrector's parameters leave the domain**, so a traced curve always
+stops up to one march step short of a bounded surface's edge. Where that edge also bounds the
+face being split, the curve crosses nothing at all: face splitting finds zero crossings, the
+face is whole-classified, and the result cracks along the whole boundary. `SnapTracerEnds`
+therefore extends each traced polyline onto the exact solution of E(t) = S(u, v) — its
+boundary edge against the other solid's carrier, a well-posed 3×3 Newton system seeded from
+the polyline's own last vertex, which already lies on S so only t moves. **It runs once, on
+the single curve object both faces share**, which is what makes the two solids agree: snapping
+per face during splitting would give them endpoints a sagitta apart and open a pinhole at
+every crossing. This closed booleans that cross a whole-solid fillet's bands, and — a family
+nobody was aiming at — cuts that break out through a face boundary part-way, such as a bore
+swallowing a rounded rectangle's corner.
+
+#### Coincident (flush) planar surface
+
+Transversal intersection is not the only way two solids can meet: they can *share*
+boundary instead of crossing it. Flush embossing, stacked plates, blocks butted together
+and a pocket whose floor is the host's own face are all everyday inputs, and step (4)
+above simply cannot decide them — a fragment lying on the other solid's boundary reads
+distance ~0 from its SDF, so the sign is rounding. It is the same hole the mesh boolean
+found where the winding number is exactly ½, and the answer is deliberately the same one,
+so the two engines cannot disagree about what a flush mate means.
+
+**Classification is by normal agreement, and the surviving copy is always the first
+solid's.** With outward normals AGREEING both solids lie on the same side, so the shared
+surface bounds the union and the intersection (one copy of it) and vanishes from the
+difference — locally A minus B removes all of A's material there. With normals OPPOSING
+the solids mate back to back: union and intersection bury the surface inside the result,
+while the difference leaves the first solid untouched and keeps its copy. Both solids
+cover the region, so exactly one copy can ever survive; **choosing A's is an asymmetry on
+purpose**. B's copy is redundant when the normals agree and back-to-front when they
+oppose, so it is never the better choice; and a difference reverses B's faces anyway, so
+keeping ITS copy would also be geometrically right — but keeping A's needs no special
+case and leaves the surviving patch's edges the ones A's own neighbours already
+reference, which is what lets `SealSeams` pair them.
+
+**Scope is coplanar PLANES, and the boundary is a policy, not an oversight.** A plane is
+the one carrier whose shared region this can decide without surface–surface
+re-intersection: two coplanar faces overlap where their trims overlap, which is a 2D
+question on a common parameterization. Coincident CURVED surface — a shaft in a bore of
+its own diameter, a flange band tangent to a sheet — needs the shared region's rim
+computed by re-intersecting the two trims on a curved carrier, the same missing machinery
+that blocks curved shelling corners and general trihedral fillet patches. It is therefore
+refused BY NAME, before any splitting, rather than approximated: `SurveyCoincidence`
+recognizes coaxial equal-radius cylinders and says so, naming the axis and radius and
+pointing at the working alternatives (a working clearance, or the implicit route).
+
+Three supporting rules fall out, each gated on a shared plane existing so that a purely
+transversal boolean is bit-for-bit unaffected. **A curve that never reaches a face's
+interior must not split it** — when two solids mate, each neighbour face's own boundary
+IS an intersection curve, and splitting a face along its own boundary is what the
+arrangement tracer cannot close. **A face pair whose bounds meet in a single point is
+dropped** — their carriers still cross in a full line, which is real geometry through a
+contact that is not. **A shared plane disqualifies the disjoint fast path** — two stacked
+plates of one footprint intersect only along their own boundary edges, so after the first
+rule they look disjoint, and the fast path would hand them back as two touching shells,
+which is exactly the fusion failure this tier exists to fix.
+
+The rim itself has two sources, and needing the second is a genuine asymmetry in the
+kernel rather than belt and braces. Usually the ordinary transversal path supplies it (a
+`MakeBox` boss's wall is an unbounded `PlaneSurface`, and plane ∩ plane returns the rim
+line), but a sketch extrusion's wall is a *bounded* planar patch and
+`TryPlaneExtrudedSection` deliberately reports no section when the cutting plane is flush
+with the generator's rim — splitting the wall there would only fabricate zero-extent
+slivers. Embossed text is precisely that case. So a coplanar face also takes its
+partner's OWN boundary curves as rim curves, skipped where an existing curve already
+covers them. That is also the best available weld: the new edges ride the very geometry
+the other solid references, so the seam pairs by construction rather than by tolerance.
+
+v1 contract: transversal intersections, plus coincident PLANAR face pairs (coincident or
+tangent curved surface is refused by name); the
 input solids are consumed. Output is **topologically sealed** by
 `TopologyEditor.SealSeams`: edge uses contributed by discarded fragments are pruned,
 coincident vertices unify (edges have internally settable vertex references for this),

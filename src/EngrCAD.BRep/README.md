@@ -481,6 +481,26 @@ operations. Depends only on `EngrCAD.Core`.
     unbounded `PlaneSurface` still takes the main switch verbatim, so nothing in the
     boolean pipeline's regression surface changed route.
 
+  **Cylinder promotion needs the WHOLE circle** (`Promote` / `WrapsWholeCylinder`). An
+  extrusion of a full circle along its axis IS a `CylinderSurface`, and promoting it is
+  what gives drilled bores exact analytic rim circles. An extrusion of an ARC is not —
+  it is a bounded patch on that cylinder — so the guard samples the ACTUAL generator and
+  requires both that every sample sit on the candidate cylinder and that the accumulated
+  swept angle be a full turn. **The angular half is load-bearing, not belt-and-braces**:
+  a rounded rectangle's corner is a quarter arc extruded, every point of which lies on
+  the full cylinder, so the previous start-point-only guard promoted it and the kernel
+  then reported intersections around 270° of surface the face does not carry. Measured
+  consequence: on a 60 × 40 × 10 plate with Ø12 corners, a THROUGH counterbore anywhere —
+  dead centre, 27.8 mm from every corner, as well as the reported Ø8 hole 10 mm from a
+  corner — failed with `Open splitting curves must start and end outside the face`,
+  because the fabricated far side of a corner cylinder crossed the tool's band and the
+  tracer's open curve ended strictly inside it. Tightening the face-bounds prefilter could
+  not have separated that pair (the two AABBs touch at a corner, and the prefilter is
+  deliberately conservative-over — see todo.md). With the guard in place the same drill is
+  a plain hole, and the near-corner and dead-centre placements remove volumes agreeing to
+  2.6e-10. A quarter-arc corner now also sections against a parallel plane as the exact
+  translated ARC (via the generator-translate path) instead of a whole fabricated circle.
+
   These replaced the marching tracer for these pairs, which was the root cause of
   "subtracting a straight-edged sketch extrusion silently produces an open mesh": the
   tracer breaks the step *after* its parameters leave the domain, so its polyline stopped
@@ -540,7 +560,18 @@ operations. Depends only on `EngrCAD.Core`.
   direction 2% along an edge's domain and therefore read it from a point a sagitta off
   the surface. Those probes now use the nearest exact vertex parameter, falling back to
   the FAR endpoint for a single-chord edge (an on-surface vertex, and a chord's exact
-  direction). Note the predicate is deliberately not a test on `Underlying`: a segment's
+  direction). **A third site joined them**: `SplitByCurve`'s "is this stretch of the cut
+  inside the face?" probe took the ARITHMETIC midpoint of the interior stretch, which on
+  a tracer polyline is a mid-chord point — measured 5e-3 off the surface on a whole-solid
+  fillet's quarter-arc band at the tracer's own sample density, five thousand times the
+  inverse-evaluation tolerance. `TryProjectPoint` then failed, the stretch was discarded
+  as "leaves the surface entirely", no seam edge was built, and the face came back
+  UNSPLIT with no complaint — which is how a bore crossing a fillet band cracked the
+  result along entire tangency edges. `InteriorProbeParameter` takes an exact interior
+  sample instead; a stretch spanning no vertex has none and keeps the midpoint, and
+  non-polyline curves keep it bit-for-bit (an analytic curve is exact everywhere, so
+  there is nothing to fix and no reason to move an existing probe). Note the predicate is
+  deliberately not a test on `Underlying`: a segment's
   underlying curve is its base's, which says nothing about the parameter mapping the
   rule turns on. Closed curves interior to a face honor **mandatory seam breaks**
   (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`

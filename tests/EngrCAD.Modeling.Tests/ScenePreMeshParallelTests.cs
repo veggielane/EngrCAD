@@ -105,13 +105,10 @@ public class ScenePreMeshParallelTests
     [Fact]
     public void PartThatCannotLower_RethrowsTheOriginalException_NotAnAggregate()
     {
-        // Two crossing extrusions with identical z-extents: coplanar caps, which the v1
-        // exact boolean refuses. Sequentially PreMesh surfaced that exception directly;
+        // A shaft the same diameter as its own bore: coincident CURVED faces, which the exact
+        // boolean refuses by name. Sequentially PreMesh surfaced that exception directly;
         // running in parallel must not wrap it in an AggregateException.
-        static Sketch Rect(double w, double h) => Sketch.Polygon(
-            [new(-w / 2, -h / 2), new(w / 2, -h / 2), new(w / 2, h / 2), new(-w / 2, h / 2)]);
-        var plane = SketchPlane.At((0, 0, -2), Vector3d.UnitX, Vector3d.UnitY);
-        var unclosable = Shape.Extrude(Rect(10, 10), 4, plane) | Shape.Extrude(Rect(4, 20), 4, plane);
+        var unclosable = BooleanFailureTests.CoincidentShaftInItsBore();
 
         var scene = new Scene();
         scene.Add(new Part("fine", MeshPrimitives.Box(1, 1, 1)));
@@ -119,7 +116,7 @@ public class ScenePreMeshParallelTests
         scene.Add(new Part("also fine", SolidFactory.MakeBox(new Aabb((0, 0, 0), (1, 1, 1)))));
 
         var error = Assert.Throws<InvalidOperationException>(() => scene.PreMesh());
-        Assert.Contains("unclosed solid", error.Message);
+        Assert.Contains("coincident CYLINDRICAL faces", error.Message);
 
         // The healthy parts were still primed — priming is per-part and independent.
         Assert.NotNull(scene.AllParts.First(p => p.Name == "also fine").GetMesh());
