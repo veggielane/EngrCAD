@@ -73,13 +73,16 @@ public class AmbientOcclusionBenchmark(ITestOutputHelper output)
     /// it. Nearest-hit ordering, the per-triangle vertex cache and any future pruning all
     /// have to come through here unchanged.
     /// <para>Fingerprints were taken from the pre-optimization bake (linear scan order,
-    /// vertices re-read from the float arrays per ray-triangle test).</para>
+    /// vertices re-read from the float arrays per ray-triangle test). The two Surface Nets
+    /// fixtures were re-taken once <see cref="PolygonFan"/> landed: their quads are
+    /// genuinely non-planar, so the shorter-diagonal split gives a different set of
+    /// triangles to cast against. The two B-Rep fixtures are planar-quad and unchanged.</para>
     /// </summary>
     [Theory]
     [InlineData("pocket", 132, 8893418034819288304L)]
     [InlineData("drilled plate", 924, -7376055861503636810L)]
-    [InlineData("csg blob", 173268, -6494157893160102997L)]
-    [InlineData("gyroid", 228348, -3061474520229751364L)]
+    [InlineData("csg blob", 173268, 5417102775247476765L)]
+    [InlineData("gyroid", 228348, 3787921545543771635L)]
     public void Bake_MatchesTheGoldenBitPattern(string name, int vertices, long fingerprint)
     {
         var mesh = Fixtures().First(f => f.Name == name).Mesh;

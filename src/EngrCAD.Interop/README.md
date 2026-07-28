@@ -179,6 +179,10 @@ logging complements them, never replaces them.
     inward, worst agreement −0.163**, against zero folds and 0.99976 for the identical
     geometry unsubtracted (a threaded rod). The reversal now rotates so vertex 0 stays
     put — `[a, d, c, b]` — and the hole matches the rod at 0.99897.
+    (`PolygonFan` has since made the downstream split a function of the geometry rather
+    than of vertex 0, so the two spellings would now triangulate alike; the rotation stays
+    because a polygon whose corner 0 wanders is still a polygon whose *audit* wanders, and
+    a rule that cannot be broken by a re-wind is better than one that merely is not.)
 
     Oversized interior edges are then midpoint-split to the natural grid density with
     new vertices on the exact surface. Boundary vertices are always the exact shared edge

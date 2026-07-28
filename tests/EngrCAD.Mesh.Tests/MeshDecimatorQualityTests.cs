@@ -103,6 +103,10 @@ public class MeshDecimatorQualityTests(ITestOutputHelper output)
     [Fact]
     public void ApproximationErrorMatchesTheRecordedBaseline()
     {
+        // Every row is measured and reported before anything fails: a baseline TABLE whose
+        // first mismatch hides the other eleven rows cannot tell you whether a change is a
+        // regression or a shift, which is the only question it exists to answer.
+        var failures = new List<string>();
         foreach (var (fixture, target, faces, mean, max) in Baseline)
         {
             var mesh = Fixture(fixture);
@@ -114,18 +118,21 @@ public class MeshDecimatorQualityTests(ITestOutputHelper output)
                              $"max {error.Max / extent:P4} (baseline {max:P4})");
 
             Assert.Equal(faces, decimated.FaceCount);
-            AssertNearBaseline(error.Mean / extent, mean, $"{fixture} -> {target} mean");
-            AssertNearBaseline(error.Max / extent, max, $"{fixture} -> {target} max");
+            CheckBaseline(error.Mean / extent, mean, $"{fixture} -> {target} mean");
+            CheckBaseline(error.Max / extent, max, $"{fixture} -> {target} max");
         }
+        Assert.True(failures.Count == 0, string.Join("\n", failures));
 
         // The baseline was recorded on win-arm64; on x64 the JIT contracts FP differently,
         // which flips a near-tie collapse choice (measured: cylinder -> 60 mean 0.2054% vs
         // the recorded 0.2102%, max identical, every other row exact). 2.5% relative slack
         // covers that architecture divergence while still catching the failures this table
         // exists for — the seeding bug it caught was a 2.4x (140%) quality regression.
-        static void AssertNearBaseline(double actual, double expected, string what) =>
-            Assert.True(Math.Abs(actual - expected) <= 0.025 * expected + 1e-12,
-                $"{what}: {actual:E6} vs baseline {expected:E6}");
+        void CheckBaseline(double actual, double expected, string what)
+        {
+            if (Math.Abs(actual - expected) > 0.025 * expected + 1e-12)
+                failures.Add($"{what}: {actual:E6} vs baseline {expected:E6}");
+        }
     }
 
     [Fact]

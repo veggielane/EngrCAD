@@ -57,17 +57,25 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Interop / meshing (EngrCAD.Interop)
 
-- [ ] **A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**
-  `HalfEdgeMesh.Triangulated` fans from corner 0, so a quad's split is decided by where
-  its cycle happens to start. Measured on a left-hand threaded rod, whose band is a
-  sheared grid: it tessellates to the *identical* vertex set as the mirror of its
-  right-hand twin — 0 of 131 200 vertices differ at 1e-9 — yet carries a systematically
-  **3× larger volume deficit** at every density (RH deficit 0.668 vs LH 2.00 at 64
-  segments; 0.167 vs 0.501 at 128). Both converge quadratically onto the same analytic
-  volume, so this is a discretization *constant*, not a drift, and it is documented at
-  the one assertion it forces wider (`ThreadShapeTests`, 2.5% band). A shortest-diagonal
-  rule would improve every grid band, not just threads — but it moves rendered geometry,
-  so it needs the 54 docs PNGs as its oracle.
+- ~~**A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**~~ ✅ **done** —
+  `PolygonFan` is now the one rule (shorter 3D diagonal for quads, corner-0 fan for
+  n-gons) and every consumer goes through it: `Triangulated`, `SignedVolume` via
+  `FaceFanStart`, `MeshMassProperties`, `MeshConnectedComponents`, `RenderMesh`, and the
+  STL/3MF/AMF writers. The mirrored thread now measures identically to its twin
+  (`ThreadShapeTests` tightened from a 2.5% band to 1%, plus an exact 9-digit equality).
+  Two findings came out of it: the tie guard has to be RELATIVE, because a UV-sphere
+  quad's diagonals are mathematically equal and an exact comparison gave 408 of 960
+  splits to round-off; and the win is *consistency* rather than universally less error —
+  on a saddle cell the two triangulations bracket the surface with equal magnitude.
+  18 of 87 docs PNGs move (SDF/Surface Nets, threads, lofts). Residual:
+  - [ ] **The repair/import fans are deliberately untouched** (`MeshRepair`,
+    `MeshSoupOps`, `StlReader`): they decompose soup that is not a mesh yet, where the
+    fan is a documented fallback for input earcut declined. Worth revisiting only if a
+    dirty-import case is ever traced to a fan diagonal.
+  - [ ] **A quad is still fanned, not optimally triangulated.** For n > 4 the corner-0 fan
+    remains, and on a non-convex n-gon that is simply wrong geometry — nothing in the
+    kernel produces one today (planar faces earcut before they reach here), which is why
+    it was left alone, but it is where the next defect of this family would live.
 - [ ] **`SdfProjectionTarget` stalls on a CSG difference's fictitious faces.** Its
   guarantee is one-sided (a 1-Lipschitz lower bound puts the surface at least |d| away, so
   a step can never cross it) but |d| need not decrease: inside material a subtracted tool

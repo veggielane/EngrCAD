@@ -401,10 +401,10 @@ public sealed class HalfEdgeMesh
         double volume = 0;
         for (int f = 0; f < FaceCount; f++)
         {
-            int start = _faceHe[f];
-            var p0 = _positions[_heOrigin[start]];
-            int he = _heNext[start];
-            while (_heNext[he] != start)
+            int apex = FaceFanStart(f);
+            var p0 = _positions[_heOrigin[apex]];
+            int he = _heNext[apex];
+            while (_heNext[he] != apex)
             {
                 var p1 = _positions[_heOrigin[he]];
                 var p2 = _positions[_heOrigin[_heNext[he]]];
@@ -413,6 +413,27 @@ public sealed class HalfEdgeMesh
             }
         }
         return volume / 6.0;
+    }
+
+    /// <summary>
+    /// The half-edge a face should be fan-triangulated from — <see cref="PolygonFan"/>'s
+    /// rule expressed on the half-edge walk, so a consumer that traverses the topology
+    /// directly (mass properties, volume) cannot pick a different diagonal from one that
+    /// goes through <see cref="ToIndexed"/> (rendering, export, triangulation).
+    /// </summary>
+    internal int FaceFanStart(int face)
+    {
+        int start = _faceHe[face];
+        int second = _heNext[start];
+        int third = _heNext[second];
+        int fourth = _heNext[third];
+        if (_heNext[fourth] != start)
+            return start;   // not a quad; PolygonFan keeps corner 0
+        return PolygonFan.QuadApex(
+            _positions[_heOrigin[start]], _positions[_heOrigin[second]],
+            _positions[_heOrigin[third]], _positions[_heOrigin[fourth]]) == 1
+            ? second
+            : start;
     }
 
     /// <summary>Face normal with magnitude equal to the face area (Newell's method), unnormalized.</summary>
@@ -529,9 +550,10 @@ public sealed class HalfEdgeMesh
     }
 
     /// <summary>
-    /// New mesh with every face fan-triangulated from its first vertex — or this mesh
-    /// itself when it is already all triangles, which is safe because a
-    /// <see cref="HalfEdgeMesh"/> is immutable once built.
+    /// New mesh with every face fan-triangulated from the corner <see cref="PolygonFan"/>
+    /// picks (a quad splits along its shorter 3D diagonal; larger n-gons fan from
+    /// corner 0) — or this mesh itself when it is already all triangles, which is safe
+    /// because a <see cref="HalfEdgeMesh"/> is immutable once built.
     /// <para>
     /// The short circuit matters: the general path is a full <see cref="Build"/>, manifold
     /// validation included, and the exact boolean triangulates BOTH operands on entry. A
@@ -547,8 +569,14 @@ public sealed class HalfEdgeMesh
         var triangles = new List<int[]>();
         foreach (var face in faces)
         {
+            int apex = PolygonFan.Apex(face, positions);
             for (int i = 1; i < face.Length - 1; i++)
-                triangles.Add([face[0], face[i], face[i + 1]]);
+            {
+                triangles.Add([
+                    face[apex],
+                    face[PolygonFan.Corner(apex, face.Length, i)],
+                    face[PolygonFan.Corner(apex, face.Length, i + 1)]]);
+            }
         }
         return Build(positions, triangles);
     }

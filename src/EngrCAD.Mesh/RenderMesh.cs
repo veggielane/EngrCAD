@@ -30,11 +30,15 @@ public sealed class RenderMesh
         {
             var n = face.Normal();
             var loop = face.Vertices().Select(v => v.Position).ToList();
+            // The shared fan rule: a quad splits along its shorter 3D diagonal. On a
+            // non-planar cell the two splits are different SURFACES, so this has to agree
+            // with what SignedVolume measures and what the writers export.
+            int apex = PolygonFan.Apex(loop);
             for (int i = 1; i < loop.Count - 1; i++)
             {
-                AppendVertex(positions, normals, loop[0], n);
-                AppendVertex(positions, normals, loop[i], n);
-                AppendVertex(positions, normals, loop[i + 1], n);
+                AppendVertex(positions, normals, loop[apex], n);
+                AppendVertex(positions, normals, loop[PolygonFan.Corner(apex, loop.Count, i)], n);
+                AppendVertex(positions, normals, loop[PolygonFan.Corner(apex, loop.Count, i + 1)], n);
                 uint baseIndex = (uint)(positions.Count / 3 - 3);
                 indices.Add(baseIndex);
                 indices.Add(baseIndex + 1);
@@ -71,11 +75,12 @@ public sealed class RenderMesh
         foreach (var face in mesh.Faces)
         {
             var loop = face.Vertices().Select(v => v.Index).ToList();
+            int apex = PolygonFan.Apex([.. loop.Select(mesh.GetPosition)]);
             for (int i = 1; i < loop.Count - 1; i++)
             {
-                indices.Add((uint)loop[0]);
-                indices.Add((uint)loop[i]);
-                indices.Add((uint)loop[i + 1]);
+                indices.Add((uint)loop[apex]);
+                indices.Add((uint)loop[PolygonFan.Corner(apex, loop.Count, i)]);
+                indices.Add((uint)loop[PolygonFan.Corner(apex, loop.Count, i + 1)]);
             }
         }
 

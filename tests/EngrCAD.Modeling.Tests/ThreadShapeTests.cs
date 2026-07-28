@@ -82,16 +82,22 @@ public class ThreadShapeTests
         mirroredBrep.Validate();
         var mirroredMesh = EngrCAD.Interop.BRepTessellator.Tessellate(mirroredBrep);
         Assert.True(mirroredMesh.IsClosed);
-        // A wider band than the unmirrored case above, for a reason worth knowing: the
-        // mirrored rod's tessellation has the SAME vertices as the mirror of the
-        // unmirrored one (measured: 0 of 131 200 differ at 1e-9) but a systematically
-        // 3x larger volume deficit, because a grid quad's diagonal is chosen by CORNER
-        // ORDER — the fan in HalfEdgeMesh.Triangulated starts at corner 0 — and mirroring
-        // a sheared band's cells swaps which diagonal that picks. Both converge
-        // quadratically onto the same analytic volume (LeftHandThreadTests pins that),
-        // so this is a discretization constant, not an error that stops shrinking.
-        Assert.True(Math.Abs(mirroredMesh.Volume() - expected) / expected < 0.025,
+        // The SAME band as the unmirrored case above, which it did not used to be. A
+        // mirrored rod tessellates to the same vertices as the mirror of its twin
+        // (measured: 0 of 131 200 differ at 1e-9), but it used to carry a systematically
+        // 3x larger volume deficit, because a grid quad's diagonal was chosen by CORNER
+        // ORDER and mirroring a sheared band's cells swaps which diagonal a corner-0 fan
+        // picks. PolygonFan reads the geometry instead — shorter 3D diagonal — so the two
+        // rods now measure IDENTICALLY: deficit 1.5963 / 0.3997 / 0.1001 at 32 / 64 / 128
+        // segments for both, where the mirrored rod used to read 4.7643 / 1.1974 / 0.3002.
+        Assert.True(Math.Abs(mirroredMesh.Volume() - expected) / expected < 0.01,
             $"mirrored volume {mirroredMesh.Volume():g6} vs analytic {expected:g6}");
+        // Same geometry, mirrored: the measured volume must now agree to the last digits
+        // rather than merely to a band. This is the assertion the whole fan rule exists
+        // for — a discretization that depends on handedness is measuring its own
+        // construction order.
+        var plainMesh = EngrCAD.Interop.BRepTessellator.Tessellate(brep);
+        Assert.Equal(plainMesh.Volume(), mirroredMesh.Volume(), 9);
         double minZ = mirroredMesh.Vertices.Min(v => v.Position.Z);
         double maxZ = mirroredMesh.Vertices.Max(v => v.Position.Z);
         Assert.InRange(minZ, -length - 1e-9, -length + 1e-9);

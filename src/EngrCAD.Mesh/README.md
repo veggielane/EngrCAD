@@ -35,6 +35,45 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     half-edge at one vertex IS the bow-tie). Measured on Surface Nets output: **3.3–3.7×**
     on assembly (47.5 → 13.4 ms at 129 268 vertices), whole-polygonization 1.2–1.5×; see
     `SurfaceNetsBenchmark.AssemblyShareByResolution`.
+- **`PolygonFan`** — the one rule for how an n-gon face becomes triangles, shared by
+  everything that needs them: `Triangulated`, `SignedVolume` (via the internal
+  `FaceFanStart`), `MeshMassProperties`, `MeshConnectedComponents`, `RenderMesh`, and the
+  STL/3MF/AMF writers. **A quad splits along its shorter 3D diagonal; larger n-gons keep
+  the corner-0 fan.**
+  - *Why it exists*: fanning from vertex 0 means the split of a quad is decided by where
+    its half-edge cycle happens to start, which is construction order rather than
+    geometry. For a planar quad that costs nothing, but every grid band of a curved or
+    sheared surface is non-planar and there the two triangulations are different
+    *surfaces*. Measured on a threaded rod (a sheared helical grid, cell diagonal ratios
+    to 40:1): a left-hand rod tessellates to the identical vertex set as the mirror of its
+    right-hand twin — 0 of 131 200 vertices differ at 1e-9 — yet carried a systematically
+    **3× larger volume deficit** at every density, purely because mirroring swapped which
+    diagonal corner 0 picked. It now measures identically (deficit 1.5963 / 0.3997 /
+    0.1001 at 32 / 64 / 128 segments for both, where the mirrored rod read 4.7643 /
+    1.1974 / 0.3002).
+  - *Why the tie guard is relative and load bearing*: a great many grid cells have
+    diagonals that are **mathematically equal** — every UV-sphere quad is mirror-symmetric
+    about its own meridian — so their computed squares differ only in the last ulps. An
+    exact comparison hands the split to round-off: measured, **408 of the 960 quads of
+    `UvSphere(40, 26)`** report the far diagonal as shorter, at a ratio of
+    1.000000000000, and the two triangulations are equal in quality to twelve digits of
+    the inscribed-volume deficit. That is the original defect in new clothes, and it
+    measurably perturbed decimation and remeshing downstream before `RelativeTie` (1e-12
+    on the squared lengths, the scale-free tier) went in.
+  - *Not universally a smaller deficit — universally a CONSISTENT one.* On a saddle cell
+    the two triangulations bracket the surface: a twisted lofted column measures
+    244.37 / 255.27 at 16/12 and 249.66 / 250.34 at 256/192 under corner-0 / shortest —
+    equal in magnitude, opposite in sign, both converging on the analytic 250. Where they
+    differ in magnitude (the thread) the shorter diagonal is the smaller error.
+  - *Every consumer must use it.* `SignedVolume` fans a face to measure it and
+    `RenderMesh` fans it to draw it; if those disagreed, the reported volume would be of a
+    solid nobody sees. `MeshMassProperties` walked the half-edge arrays with its own
+    corner-0 fan and was 1.5 out of 69.5 adrift on a sheared hexahedron until it went
+    through `FaceFanStart` — found by the test that asserts the four decompositions agree.
+  - *Deliberately NOT applied* to the repair/import fans (`MeshRepair`, `MeshSoupOps`,
+    `StlReader`): those decompose soup that is not a mesh yet, where the fan is a
+    documented fallback for input earcut declined, and a quality rule there would change
+    repair behaviour for no gain.
 - **Handles** (`Vertex`, `HalfEdge`, `Face`) — cheap struct wrappers designed for fluent
   LINQ traversal (`vertex.OutgoingHalfEdges()`, `face.AdjacentFaces()`, `face.Bounds`).
 - **`EditableMesh`** — the mutable companion (index-based, like g3's `DMesh3`;
