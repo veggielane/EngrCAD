@@ -469,7 +469,9 @@ public static class MeshMeshCut
 
         if (onA == 3 || onB == 3)
         {
-            return CoplanarTrianglesOverlap(meshA, triA, meshB, triB, normalA, originA, epsilon)
+            Span<Vector3d> cornersA = [meshA.Positions[triA[0]], meshA.Positions[triA[1]], meshA.Positions[triA[2]]];
+            Span<Vector3d> cornersB = [meshB.Positions[triB[0]], meshB.Positions[triB[1]], meshB.Positions[triB[2]]];
+            return CoplanarTrianglesOverlap(cornersA, cornersB, normalA, originA, epsilon)
                 ? PairOutcome.CoplanarOverlap
                 : PairOutcome.None; // coplanar but only touching along a shared edge/corner
         }
@@ -555,8 +557,8 @@ public static class MeshMeshCut
     /// along an edge or at a corner, which is harmless and common between neighbouring
     /// solids).
     /// </summary>
-    private static bool CoplanarTrianglesOverlap(
-        CutOperand meshA, int[] triA, CutOperand meshB, int[] triB,
+    internal static bool CoplanarTrianglesOverlap(
+        ReadOnlySpan<Vector3d> cornersA, ReadOnlySpan<Vector3d> cornersB,
         in Vector3d normal, in Vector3d origin, double epsilon)
     {
         var (ex, ey) = Basis(normal);
@@ -564,8 +566,8 @@ public static class MeshMeshCut
         Span<Vector2d> b = stackalloc Vector2d[3];
         for (int i = 0; i < 3; i++)
         {
-            a[i] = Project(meshA.Positions[triA[i]] - origin, ex, ey);
-            b[i] = Project(meshB.Positions[triB[i]] - origin, ex, ey);
+            a[i] = Project(cornersA[i] - origin, ex, ey);
+            b[i] = Project(cornersB[i] - origin, ex, ey);
         }
         // Separating-axis test on the six edge normals (three per triangle — vertex-in-other
         // tests alone would miss a Star-of-David overlap, where no vertex is inside).

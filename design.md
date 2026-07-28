@@ -476,6 +476,59 @@ splitting and B-Rep booleans will consume.
   wall's circles when a cut passes through the hole) outruns the grid tessellator —
   trimmed-face tessellation is the companion work item to booleans.
 
+#### Assessment: should `FaceSplitter`'s tracing run on `Arrangement2d`? — **No**
+
+The backlog has long carried "route `FaceSplitter`'s planar tracing through
+`Arrangement2d` (deferred — boolean-critical)", on the reasonable-looking grounds that
+`Arrangement2d` does the same dance with adaptive-exact predicates instead of a
+floating-point angular guard. Assessed properly, the answer is no, and the reason is worth
+recording so it is not re-opened on the same intuition.
+
+**What would actually change.** Only the *tracing* step could move — steps 1–3 above
+cannot. `Arrangement2d` intersects straight **segments in the plane**; `FaceSplitter`
+intersects **curves on a surface**, and it deliberately does not do that in parameter
+space: crossings are refined by 3D curve–curve Gauss–Newton because projected-uv Newton
+fails near bounded domain edges, and tracer polylines are on-surface only at their
+vertices, so a uv-space crossing is off-surface by the sampling sagitta (~1e-4 at display
+density — the exact defect that made the cross-drilled bore silently return an unsplit
+band). Feeding flattened polylines to the arrangement would replace the hardest-won part
+of the pipeline with a flattened approximation.
+
+**And the exactness would land on inexact inputs.** For tracing, the thing `Arrangement2d`
+offers is `SortedIncidentEdges` — exact counter-clockwise order of the edges at a node via
+`Orient2d`. But the quantity being ordered here is the *tangent of a curve*, which the
+arrangement cannot represent: to use it you would hand it the chord to a point 2% along
+the edge, which is precisely what `DepartureAngle` already computes. Shewchuk's predicates
+make decisions exact **on the coordinates given**; when those coordinates are a 2%-chord
+stand-in for a tangent, exactness buys nothing that the existing `1e-12` turn guard is
+losing. (The angular *order* itself is safe under the uv anisotropy, incidentally: a
+tightest-turn rule only needs the cyclic order of directions around a node, which any
+orientation-preserving linear map preserves — so the anisotropic parameterization is not
+the fragility here.)
+
+**The regression surface is the rest of `TraceFaces`, and it has no counterpart.** The
+walk is a minority of that method. The rest is: periodic **u wrapping** (loops whose pulled
+area is meaningless are band boundaries, paired bottom-to-top by v, with unpaired ones
+bounding pole-capped bands); **reversed faces**, where the handedness of the tightest turn
+flips; and the reconstruction of **topology** — traced loops become `BrepLoop`s of
+`BrepCoedge`s carrying `SameSense` and the original exact curves, which is what keeps
+tessellation and downstream booleans on exact geometry. `Arrangement2d` models a
+non-periodic plane and returns cells as polygons of 2D points; every one of those would
+have to be layered back on top of it, inside the code path that carries the entire B-Rep
+boolean regression surface.
+
+**The smaller change that IS worth evaluating** is orthogonal to the arrangement: replace
+the finite-difference `DepartureAngle`/`ArrivalAngle` with **exact analytic tangents**.
+Every analytic curve now overrides `Curve3d.DerivativeAt`, so the 2% chord could become a
+true tangent pulled back through the surface's Jacobian — removing the approximation the
+`1e-12` guard exists to tolerate, without touching the graph, the periodicity or the
+topology. It needs surface partial derivatives at the node, and a decision about what to do
+where the Jacobian is singular (poles), which is why it is a work item rather than a patch.
+
+Note that the 2D sketch path already gets the benefit this item was reaching for:
+`Region2dBoolean` runs on `Arrangement2d`. It is the B-Rep *face* path that structurally
+cannot, because its arrangement is not planar, not straight-edged, and not untopological.
+
 ### B-Rep booleans (`BrepBoolean`, in Interop)
 
 The pipeline, per operation: (1) capture both solids' `MeshSdf` before mutating anything;

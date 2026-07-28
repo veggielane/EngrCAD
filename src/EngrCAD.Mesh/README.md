@@ -224,6 +224,28 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   plane via `PolygonTriangulator` before clipping — each piece is convex, so
   Sutherland–Hodgman never bridges separate kept regions (a vertex-0 fan only works for
   star-shaped polygons).
+- **`MeshIntersection`** — where two surfaces meet, as a *query*: broad phase is
+  `Bvh.QueryOverlap` over per-triangle boxes, narrow phase the Möller interval test.
+  `Between(a, b)` returns a `MeshIntersectionReport`, `Crosses(a, b)` is the same narrow
+  phase stopped at the first interpenetration (the interference early-out), and
+  `WithinItself(mesh)` is the self-intersection check, excluding faces that share a vertex —
+  they meet along their shared edge by construction, which is what a mesh *is*.
+  - **Three facts, kept apart deliberately.** `Segments` is every curve piece where the
+    surfaces meet, `Crosses` is whether any of it is genuine interpenetration, and
+    `CoplanarOverlaps` is flush contact, which produces no curve at all. A part *seated* on
+    another produces both a coplanar overlap AND a full rim of segments — every side face of
+    the upper part reaches the lower part's top plane along its bottom edge — so folding
+    either into "they intersect" would call every assembly a clash. A segment is
+    **`Transversal`** only when BOTH triangles pass through the other's plane, corners
+    strictly on both sides; testing one side is not enough, because the lower part's top face
+    passes clean through each side face's plane.
+  - **This is not `MeshMeshCut`, on purpose.** The boolean's cut finds the same segments but
+    is bound by a stronger requirement — every point derived from a canonical (edge, plane)
+    pair so both meshes weld by equality, plus the half-edge and parameter the imprint will
+    poke — and none of that says anything about *where the surfaces meet*. A caller asking
+    that question should not pay for an imprint it throws away. Only the coplanar-overlap
+    decision is shared, because its separating-axis epsilon scaling is subtle
+    (`Orient2d` returns twice an area, so the guard must be scaled by the edge length).
 - **`MeshWindingNumber`** — generalized winding number (Jacobson et al. 2013) for robust
   inside/outside classification, including on **non-watertight** meshes (holes,
   self-intersections, duplicated patches) where normal/ray-parity tests fail.
@@ -235,9 +257,22 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   thresholds at ½. Construction triangulates and indexes once; the mesh may be open.
   `FromTriangulated` skips the triangulating copy when the caller already paid for it;
   **`Direct` additionally skips the hierarchy**, making every query the exact O(n) sum.
-  That is the right trade below ~32 queries — the hierarchy costs ~0.7 µs per triangle to
+  That is the right trade below ~32 queries — the hierarchy costs ~0.45 µs per triangle to
   build and an exact query ~20 ns per triangle — and it is a cost decision only:
   `FastWindingNumber` and `IsInside` fall through to the exact sum, so they stay correct.
+  **The clustering IS Core's `Bvh`.** This class carried its own median-split builder,
+  written before `Bvh` exposed per-node contiguous ranges (`NodeView.First`/`Count` /
+  `ItemsInTreeOrder`) — which is precisely what the multipole coefficients need, since each
+  is a scan of its node's range. It now builds a `Bvh` over triangle boxes at leaf size 8
+  and copies the shape into its own node array (the query is hot, and a `NodeView`
+  re-indexes the hierarchy on every property). `Bvh` sorts through a contiguous key array
+  and forks sibling subtrees onto the pool where the copy sorted an `int[]` through an
+  `IComparer<int>` chasing scattered centroids: **21.0 → 9.4 ms for 21 192 triangles and
+  53.5 → 21.8 ms for 47 724**, i.e. 2.2–2.5×. The one visible difference is that the split
+  key is a triangle's *box centre* rather than its centroid, which moves a few triangles
+  across a median and so changes the last bits of a far-field sum. Nothing depends on those
+  bits — the fast winding number is an approximation whose tests check it against the exact
+  sum, and the exact sum has no hierarchy at all.
 - **`MeshMassProperties` / `MassProperties` / `MassPropertyIntegrator`** — volume, surface
   area, centre of mass and the inertia tensor of the solid a closed mesh bounds (OCCT's
   `GProp_GProps`), with a `density` parameter so mass and moments come out in real units.

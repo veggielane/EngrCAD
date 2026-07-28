@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Core.Spatial;
 
 namespace EngrCAD.Mesh;
 
@@ -32,6 +33,13 @@ public sealed class MeshWindingNumber
     private readonly Vector3d[] _b;
     private readonly Vector3d[] _c;
 
+    /// <summary>
+    /// One cluster: the tree structure copied out of <see cref="Bvh"/> at construction, plus
+    /// this cluster's multipole coefficients. The structure is copied rather than read back
+    /// through <see cref="Bvh.NodeView"/> per visit because the query is the hot path and a
+    /// <c>NodeView</c> re-indexes the hierarchy's node array on every property; copying also
+    /// keeps the coefficients in the same cache line as the child pointer that leads to them.
+    /// </summary>
     private struct Node
     {
         public int Left;         // index of left child (right child is Left + 1); -1 marks a leaf
@@ -65,9 +73,10 @@ public sealed class MeshWindingNumber
     /// query is then the exact O(triangles) solid-angle sum, and construction costs only a
     /// scan of the corners.
     /// <para>
-    /// Use it when the caller makes few queries. The hierarchy costs roughly 0.7 µs per
-    /// triangle to build — about thirty exact queries' worth — so below that it is pure
-    /// overhead. <see cref="MeshBooleanExact"/> is the motivating case: it asks one question
+    /// Use it when the caller makes few queries. The hierarchy costs roughly 0.45 µs per
+    /// triangle to build (9.4 ms for 21 192 triangles, 21.8 ms for 47 724) — a few dozen
+    /// exact queries' worth — so below that it is pure overhead.
+    /// <see cref="MeshBooleanExact"/> is the motivating case: it asks one question
     /// per surface patch, typically fewer than ten, and building two hierarchies for that
     /// was measured at 66–86% of its whole classification phase.
     /// </para>
@@ -116,6 +125,7 @@ public sealed class MeshWindingNumber
         var b = new Vector3d[n];
         var c = new Vector3d[n];
         var centroids = new Vector3d[n];
+        var boxes = hierarchy && n > 0 ? new Aabb[n] : [];
         foreach (var face in triangulated.Faces)
         {
             int i = face.Index;
@@ -124,6 +134,8 @@ public sealed class MeshWindingNumber
             b[i] = h0.Next.Origin.Position;
             c[i] = h0.Next.Next.Origin.Position;
             centroids[i] = (a[i] + b[i] + c[i]) / 3.0;
+            if (boxes.Length > 0)
+                boxes[i] = Aabb.FromPoints([a[i], b[i], c[i]]);
         }
 
         if (n == 0 || !hierarchy)
@@ -137,17 +149,24 @@ public sealed class MeshWindingNumber
             return;
         }
 
-        // Median-split hierarchy over triangle centroids (same scheme as Core's Bvh, but
-        // owning contiguous ranges so per-node coefficients are computed by range scans).
-        var order = new int[n];
-        for (int i = 0; i < n; i++)
-            order[i] = i;
-        var builder = new Builder(centroids, order, new Node[2 * n - 1]);
-        builder.Subdivide(builder.AllocateNode(), 0, n);
-        _nodes = builder.Nodes;
-        _nodeCount = builder.NodeCount;
+        // The clustering IS Core's Bvh: median split on the longest centroid axis, every
+        // node owning a contiguous range of ItemsInTreeOrder — which is exactly what the
+        // multipole coefficients need, since each is a scan of its node's range. This class
+        // used to carry its own copy of that builder, written before Bvh exposed the ranges.
+        // Bvh sorts through a contiguous key array and forks sibling subtrees onto the pool,
+        // where the copy sorted an int[] through an IComparer<int> chasing scattered
+        // centroids; the only visible difference is that the split key is a triangle's BOX
+        // centre rather than its centroid, which moves a few triangles across a median and
+        // therefore the last bits of a far-field sum. Nothing depends on those bits: the
+        // fast winding number is an approximation checked against the exact sum, and the
+        // exact sum has no hierarchy.
+        var bvh = Bvh.Build(boxes, LeafSize);
+        _nodeCount = bvh.NodeCount;
+        _nodes = new Node[_nodeCount];
+        CopyStructure(bvh);
 
         // Permute corners into tree order.
+        var order = bvh.ItemsInTreeOrder;
         _a = new Vector3d[n];
         _b = new Vector3d[n];
         _c = new Vector3d[n];
@@ -166,41 +185,29 @@ public sealed class MeshWindingNumber
         ComputeCoefficients(areaNormals, triCentroids);
     }
 
-    private sealed class Builder(Vector3d[] centroids, int[] order, Node[] nodes)
+    /// <summary>
+    /// Copies the hierarchy's shape into <see cref="_nodes"/>. <see cref="Bvh.NodeView.Index"/>
+    /// is dense in [0, NodeCount), so the copy is a plain indexed array and the traversal
+    /// below never touches the <see cref="Bvh"/> again.
+    /// </summary>
+    private void CopyStructure(Bvh bvh)
     {
-        public Node[] Nodes { get; } = nodes;
-        public int NodeCount { get; private set; }
-
-        private readonly IComparer<int>[] _axisComparers =
-        [
-            Comparer<int>.Create((a, b) => centroids[a].X.CompareTo(centroids[b].X)),
-            Comparer<int>.Create((a, b) => centroids[a].Y.CompareTo(centroids[b].Y)),
-            Comparer<int>.Create((a, b) => centroids[a].Z.CompareTo(centroids[b].Z)),
-        ];
-
-        public int AllocateNode() => NodeCount++;
-
-        public void Subdivide(int nodeIndex, int first, int count)
+        var stack = new Stack<Bvh.NodeView>();
+        stack.Push(bvh.Root);
+        while (stack.Count > 0)
         {
-            var centroidBounds = Aabb.Empty;
-            for (int i = first; i < first + count; i++)
-                centroidBounds = centroidBounds.Union(centroids[order[i]]);
-
-            int axis = centroidBounds.LongestAxis;
-            if (count <= LeafSize || centroidBounds.Size[axis] <= 0)
+            var view = stack.Pop();
+            bool leaf = view.IsLeaf;
+            _nodes[view.Index] = new Node
             {
-                Nodes[nodeIndex] = new Node { Left = -1, First = first, Count = count };
-                return;
-            }
-
-            Array.Sort(order, first, count, _axisComparers[axis]);
-            int mid = first + count / 2;
-
-            int left = AllocateNode();
-            int right = AllocateNode();
-            Nodes[nodeIndex] = new Node { Left = left, First = first, Count = count };
-            Subdivide(left, first, mid - first);
-            Subdivide(right, mid, first + count - mid);
+                Left = leaf ? -1 : view.Left.Index,
+                First = view.First,
+                Count = view.Count,
+            };
+            if (leaf)
+                continue;
+            stack.Push(view.Left);
+            stack.Push(view.Right);
         }
     }
 
