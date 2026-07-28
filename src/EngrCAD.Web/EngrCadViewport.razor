@@ -168,6 +168,7 @@
     private AnnotationCamera _builtAnnotationCamera;
     private bool _annotationsDirty = true;
     private bool _shownAnnotations = true;
+    private bool _shownViewCube = true;
     // Parts whose implicit lowering failed and was already reported (the failure is
     // cached on the Part, so without this every rebuild repeats the status line —
     // the same dedupe the desktop SectionContourRenderer keeps).
@@ -385,6 +386,17 @@
         await PumpAsync();
     }
 
+    /// <summary>Shows or hides the annotation overlay and draws — the direct-call path
+    /// for the toolbar and self-checks, for the reason <see cref="SetViewStyleAsync"/>
+    /// is a method: a caller that flipped the parameter and immediately captured would
+    /// read the previous frame.</summary>
+    public Task SetAnnotationsAsync(bool show)
+    {
+        ShowAnnotations = show;
+        _shownAnnotations = show;
+        return PumpAsync();
+    }
+
     // ---- view cube ----
     //
     // The pure halves are all shared (ViewCubeMath for region/hit/pose/snap,
@@ -394,6 +406,15 @@
 
     /// <summary>The hovered cube direction (components in {-1,0,1}), or null.</summary>
     public Vector3d? CubeHover => _cubeHover;
+
+    /// <summary>Shows or hides the view cube and draws (the direct-call path, like
+    /// <see cref="SetViewStyleAsync"/>).</summary>
+    public Task SetViewCubeAsync(bool show)
+    {
+        ShowViewCube = show;
+        _shownViewCube = show;
+        return PumpAsync();
+    }
 
     /// <summary>
     /// Routes a click through the view cube: returns true when the position lies inside
@@ -548,6 +569,8 @@
             _showingFurniture = Furniture;
             _shownStyle = ViewStyle;
             _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+            _shownAnnotations = ShowAnnotations;
+            _shownViewCube = ShowViewCube;
             await LoadAsync();
             return;
         }
@@ -570,6 +593,11 @@
         if (_shownAnnotations != ShowAnnotations)
         {
             _shownAnnotations = ShowAnnotations;
+            redraw = true;
+        }
+        if (_shownViewCube != ShowViewCube)
+        {
+            _shownViewCube = ShowViewCube;
             redraw = true;
         }
         if (redraw)

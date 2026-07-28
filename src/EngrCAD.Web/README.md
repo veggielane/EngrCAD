@@ -64,11 +64,14 @@ Three decisions there are load-bearing and easy to "fix" wrongly:
 - **Fills do not cull.** Both desktop passes leave face culling off, because a section
   plane exposes a solid's interior as *backfaces*, which the shared fragment shader
   shades as cut material via `gl_FrontFacing`. Culling would look fine today and break
-  the section rung silently.
-- **`uSectionCount` is never sent.** It is an `int` uniform, and the interop marshals
-  every JSON number through `uniform1f`, which GL rejects on an int. The clip rule
-  short-circuits on `uSectionEnabled` and an unset int uniform is already 0, so the
-  neutral state must say nothing about it. A test asserts the absence.
+  sectioning silently.
+- **`uSectionCount` travels as a typed marker, never a plain number.** It is an `int`
+  uniform, and the interop marshals every JSON number through `uniform1f`, which GL
+  rejects on an int with no visible error. `IntUniform` serializes as `{"int": n}` and
+  dispatches through `uniform1i`; `Vec4ArrayUniform` (`{"vec4": [...]}` →
+  `uniform4fv`) exists because four packed section planes are exactly 16 floats, which
+  the shape dispatch would otherwise send as a mat4. WHICH uniforms need which type
+  stays a C# decision — the JS only dispatches on the marker's shape.
 - **Translucent fills carry no polygon offset.** Opaque fills are pushed back so the
   edge overlay wins the depth test; translucent fills write no depth at all, so there is
   nothing for their edges to z-fight with — and the desktop disables it here too.

@@ -24,8 +24,8 @@
                 <button type="button" style="@ButtonStyle(false)" title="Nudge the plane up the axis"
                         @onclick="() => NudgeSectionAsync(+1)">+</button>
             }
-            <button type="button" style="@ButtonStyle(_annotations)" title="Show 3D annotations (PMI)"
-                    @onclick="() => _annotations = !_annotations">Annot</button>
+            <button type="button" style="@ButtonStyle(EffectiveAnnotations)" title="Show 3D annotations (PMI)"
+                    @onclick="() => _annotationsOverride = !EffectiveAnnotations">Annot</button>
             <button type="button" style="@ButtonStyle(_propertiesVisible)" title="Properties of the selection"
                     @onclick="() => _propertiesVisible = !_propertiesVisible">Props</button>
             <button type="button" style="@ButtonStyle(_bomVisible)" title="Bill of materials"
@@ -92,7 +92,8 @@
                              Scene="Scene" TabIndex="_tabIndex"
                              Furniture="Furniture" ViewStyle="EffectiveStyle" Picking="Picking"
                              SectionEnabled="_section" SectionAxis="_sectionAxis"
-                             SectionOffset="_sectionOffset" ShowAnnotations="_annotations"
+                             SectionOffset="_sectionOffset" ShowAnnotations="EffectiveAnnotations"
+                             ShowViewCube="ShowViewCube"
                              Width="100%" Height="100%"
                              SelectionChanged="OnViewportSelectionChanged"
                              PartFailed="OnPartFailed"
@@ -155,6 +156,13 @@
     /// <summary>Click picking and hover in the viewport.</summary>
     [Parameter] public bool Picking { get; set; } = true;
 
+    /// <summary>The view cube, passed through to the viewport.</summary>
+    [Parameter] public bool ShowViewCube { get; set; } = true;
+
+    /// <summary>3D annotations, the host-supplied initial state; the toolbar's Annot
+    /// toggle then owns it (the same override pattern the style dropdown uses).</summary>
+    [Parameter] public bool ShowAnnotations { get; set; } = true;
+
     /// <summary>Show the toolbar above the viewport (Fit, view style, sections).</summary>
     [Parameter] public bool ShowToolbar { get; set; } = true;
 
@@ -207,12 +215,14 @@
     private bool _section;
     private SectionAxis _sectionAxis = SectionAxis.Z;
     private double? _sectionOffset;
-    private bool _annotations = true;   // the desktop Annot toggle's default
+    private bool? _annotationsOverride;
     private bool _propertiesVisible;
     private bool _bomVisible;
     private ViewStyle? _styleOverride;
 
     private ViewStyle EffectiveStyle => _styleOverride ?? ViewStyle;
+
+    private bool EffectiveAnnotations => _annotationsOverride ?? ShowAnnotations;
 
     /// <summary>The GL viewport, for hosts that drive the camera, capture pixels or pick
     /// directly.</summary>
