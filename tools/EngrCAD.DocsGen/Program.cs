@@ -6,6 +6,11 @@
 //   ```csharp render:<example-id>     — executed; must define `Scene scene`; rendered
 //                                       to <images>/<example-id>.png, which the same
 //                                       markdown file must reference.
+//   ```csharp animate:<example-id>    — executed; must define `Scene scene` and may
+//                                       define `Animation animation` (default: a 4 s
+//                                       turntable); rendered to an APNG at
+//                                       <images>/<example-id>.png (an APNG IS a PNG,
+//                                       so the reference/link rules are unchanged).
 //   ```csharp run:<example-id>        — executed for correctness only (no screenshot).
 //   ```csharp                         — display-only; ignored by this tool.
 // render: fences accept per-snippet render options after the id:
@@ -14,6 +19,8 @@
 //                                                    section:z,6 (single cut) or
 //                                                    section:x,0;y,0 (quarter cut)
 // so docs cutaways use the viewer's actual section planes instead of boolean-cut fakes.
+// animate: fences accept style:<name> and frames:<n> (default 24 — mind the docs build
+// time and the committed file size; every frame is an offscreen render).
 //
 // Exit code: nonzero when any snippet fails to compile/run, defines no scene where one
 // is required, reuses an id, or fails to reference its image. When offscreen rendering
@@ -64,7 +71,7 @@ if (!canRender)
 }
 
 // ---- collect snippets ------------------------------------------------------------
-var fenceOpen = new Regex(@"^```csharp[ \t]+(render|run):([A-Za-z0-9][A-Za-z0-9-]*)((?:[ \t]+\S+)*)[ \t]*$");
+var fenceOpen = new Regex(@"^```csharp[ \t]+(render|run|animate):([A-Za-z0-9][A-Za-z0-9-]*)((?:[ \t]+\S+)*)[ \t]*$");
 var snippets = new List<Snippet>();
 var errors = new List<string>();
 var seenIds = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -95,17 +102,19 @@ foreach (var file in mdFiles)
         var kind = open.Groups[1].Value;
         var id = open.Groups[2].Value;
 
-        // Optional per-snippet render options after the id (style:<name>, section:<axis>,<offset>).
+        // Optional per-snippet render options after the id (style:<name>, section:<axis>,<offset>;
+        // animate: fences take style:<name> and frames:<n>).
         var style = ViewStyle.ShadedWithEdges;
         var sectionAxis = SectionAxis.Z;
         double? sectionOffset = null;
         IReadOnlyList<SectionPlane>? sectionPlanes = null;
+        var animationFrames = 24;
         var optionsValid = true;
         foreach (var token in open.Groups[3].Value.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries))
         {
-            if (kind != "render")
+            if (kind == "run")
             {
-                errors.Add($"{file}: snippet '{kind}:{id}' — render options ('{token}') only apply to render: fences.");
+                errors.Add($"{file}: snippet '{kind}:{id}' — render options ('{token}') only apply to render:/animate: fences.");
                 optionsValid = false;
                 break;
             }
@@ -115,16 +124,23 @@ foreach (var file in mdFiles)
                 case "style" when parts.Length == 2 && TryParseStyle(parts[1], out var s):
                     style = s;
                     break;
-                case "section" when parts.Length == 2 && TryParseSection(parts[1], out var planes):
+                case "section" when kind == "render" && parts.Length == 2 && TryParseSection(parts[1], out var planes):
                     sectionAxis = AxisOf(planes[0]);
                     sectionOffset = planes[0].Offset;
                     sectionPlanes = planes.Count > 1 ? planes : null;
                     break;
+                case "frames" when kind == "animate" && parts.Length == 2
+                        && int.TryParse(parts[1], out var count) && count is >= 2 and <= 120:
+                    animationFrames = count;
+                    break;
                 default:
                     errors.Add($"{file}: snippet '{kind}:{id}' — unrecognized render option '{token}' "
-                             + "(expected style:<points|wireframe|shaded|shaded-edges> or "
-                             + "section:<x|y|z>,<offset> — repeat with ';' for a quarter or octant cut, "
-                             + "e.g. section:x,0;y,0).");
+                             + (kind == "animate"
+                                 ? "(animate: fences take style:<points|wireframe|shaded|shaded-edges> "
+                                   + "and frames:<2..120>)."
+                                 : "(expected style:<points|wireframe|shaded|shaded-edges> or "
+                                   + "section:<x|y|z>,<offset> — repeat with ';' for a quarter or octant cut, "
+                                   + "e.g. section:x,0;y,0)."));
                     optionsValid = false;
                     break;
             }
@@ -154,8 +170,8 @@ foreach (var file in mdFiles)
             continue;
 
         seenIds[id] = file;
-        snippets.Add(new Snippet(id, kind == "render", file, string.Join('\n', body),
-            style, sectionAxis, sectionOffset, sectionPlanes));
+        snippets.Add(new Snippet(id, kind == "render", kind == "animate", file, string.Join('\n', body),
+            style, sectionAxis, sectionOffset, sectionPlanes, animationFrames));
     }
 }
 
@@ -165,12 +181,14 @@ if (snippets.Count == 0)
     return 2;
 }
 
-// Every render snippet's markdown must reference the image it produces.
-foreach (var s in snippets.Where(s => s.Render))
+// Every render/animate snippet's markdown must reference the image it produces (an
+// APNG is served as .png, so one rule covers both).
+foreach (var s in snippets.Where(s => s.Render || s.Animate))
 {
     var expectedLink = $"images/{s.Id}.png";
     if (!File.ReadAllText(s.File).Contains(expectedLink, StringComparison.OrdinalIgnoreCase))
-        errors.Add($"{s.File}: snippet 'render:{s.Id}' is never shown — add ![...]({expectedLink}) to the page.");
+        errors.Add($"{s.File}: snippet '{(s.Render ? "render" : "animate")}:{s.Id}' is never shown — "
+                 + $"add ![...]({expectedLink}) to the page.");
 }
 
 // ---- execute ---------------------------------------------------------------------
@@ -196,7 +214,7 @@ var rendered = 0;
 var executed = 0;
 foreach (var s in snippets)
 {
-    Console.WriteLine($"[{(s.Render ? "render" : "run   ")}] {s.Id}  ({Path.GetFileName(s.File)})");
+    Console.WriteLine($"[{(s.Render ? "render" : s.Animate ? "animate" : "run   ")}] {s.Id}  ({Path.GetFileName(s.File)})");
     ScriptState<object>? state = null;
     try
     {
@@ -214,12 +232,45 @@ foreach (var s in snippets)
         continue;
     }
 
-    if (!s.Render) continue;
+    if (!s.Render && !s.Animate) continue;
 
     var scene = state.Variables.LastOrDefault(v => v.Name == "scene")?.Value as Scene;
     if (scene is null)
     {
         errors.Add($"{s.File} ({s.Id}): render snippet must define a variable `scene` of type Scene.");
+        continue;
+    }
+
+    if (s.Animate)
+    {
+        // An animation page's fence: the snippet may declare `Animation animation`
+        // (and `camera`, the render-fence convention); without one it gets the default
+        // 4-second turntable. Output is an APNG at the same images/<id>.png path —
+        // an APNG IS a PNG, so DocFX, the link checker and browsers need nothing new.
+        if (!TryReadVariable<Animation>(state, "animation", s, errors, out var declaredAnimation)
+            || !TryReadVariable<CameraState>(state, "camera", s, errors, out var animateCamera))
+            continue;
+        var animatePng = Path.Combine(imagesDir, $"{s.Id}.png");
+        if (canRender)
+        {
+            try
+            {
+                var animation = declaredAnimation
+                    ?? new Animation(durationSeconds: 4).With(TurntableTrack.Around(scene));
+                animation.RenderApng(scene, animatePng, s.AnimationFrames,
+                    width: 640, height: 448, camera: animateCamera, style: s.Style);
+                rendered++;
+            }
+            catch (Exception ex)
+            {
+                errors.Add($"{s.File} ({s.Id}): RenderApng failed: {ex.Message}");
+            }
+        }
+        else if (!File.Exists(animatePng))
+        {
+            errors.Add($"{s.File} ({s.Id}): rendering unavailable and no committed APNG at {animatePng} — " +
+                       "generate it on a machine with GL and commit it.");
+        }
         continue;
     }
 
@@ -346,9 +397,9 @@ static bool TryReadVariable<T>(
 }
 
 internal sealed record Snippet(
-    string Id, bool Render, string File, string Code,
+    string Id, bool Render, bool Animate, string File, string Code,
     ViewStyle Style, SectionAxis SectionAxis, double? SectionOffset,
-    IReadOnlyList<SectionPlane>? SectionPlanes);
+    IReadOnlyList<SectionPlane>? SectionPlanes, int AnimationFrames);
 
 namespace EngrCAD.DocsGen
 {
