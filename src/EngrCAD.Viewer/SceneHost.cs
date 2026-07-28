@@ -123,6 +123,24 @@ internal sealed class SceneHost
     /// background task).</summary>
     private readonly HashSet<string> _explodePlanned = [];
 
+    // ---- animation playback ----
+
+    /// <summary>The toolbar transport (play toggle, loop toggle, time scrubber) —
+    /// hidden entirely unless the host gave the window an animation
+    /// (<see cref="EngrCadOptions.Animation"/>). Playback STATE lives in the UI-free
+    /// <see cref="AnimationPlayback"/>; this class owns only the timer and widgets.</summary>
+    private readonly ToggleButton _playToggle;
+
+    private readonly ToggleButton _loopToggle;
+    private readonly Slider _timeSlider;
+    private AnimationPlayback? _playback;
+    private Avalonia.Threading.DispatcherTimer? _playTimer;
+    private readonly System.Diagnostics.Stopwatch _playClock = new();
+
+    /// <summary>Guards the scrubber against feedback: playback moves the slider, and
+    /// the slider's change handler must not then seek to where playback already is.</summary>
+    private bool _updatingTimeSlider;
+
     public ViewportControl Viewport { get; }
     public Control Root { get; }
 
@@ -275,6 +293,57 @@ internal sealed class SceneHost
         toolbar.Children.Add(_explodeToggle);
         toolbar.Children.Add(_explodeSlider);
 
+        // Animation transport: play/pause, loop, and a scrubber, beside the explode
+        // slider. All hidden unless the host supplied an animation. Playback drives the
+        // same SetInstancePoses route the explode slider uses (matrices only), so a
+        // running animation never re-uploads a buffer, and evaluation stays in the
+        // UI-free layer (Animation.At / AnimationPlayback) so scrubbing here and a
+        // headless export render the same frames.
+        _playToggle = new ToggleButton
+        {
+            Content = "Play",
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsVisible = false,
+        };
+        ToolTip.SetTip(_playToggle, "Play/pause the scene's animation");
+        _playToggle.IsCheckedChanged += (_, _) => TogglePlay(_playToggle.IsChecked ?? false);
+        _loopToggle = new ToggleButton
+        {
+            Content = "Loop",
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsChecked = true,
+            IsVisible = false,
+        };
+        ToolTip.SetTip(_loopToggle, "Loop playback at the end of the timeline");
+        _loopToggle.IsCheckedChanged += (_, _) =>
+        {
+            if (_playback is { } playback)
+                playback.Loop = _loopToggle.IsChecked ?? true;
+        };
+        _timeSlider = new Slider
+        {
+            Minimum = 0,
+            Maximum = 1,
+            Value = 0,
+            Width = 96,
+            IsVisible = false,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(_timeSlider, "Animation timeline: drag to scrub");
+        _timeSlider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == RangeBase.ValueProperty && !_updatingTimeSlider && _playback is { } playback)
+            {
+                playback.Seek(_timeSlider.Value);
+                ApplyAnimationSample();
+            }
+        };
+        toolbar.Children.Add(_playToggle);
+        toolbar.Children.Add(_loopToggle);
+        toolbar.Children.Add(_timeSlider);
+
         var bom = ToolButton("BOM", ShowBom);
         ToolTip.SetTip(bom, "Bill of materials for this tab (quantities per part; CSV saved beside it)");
         toolbar.Children.Add(bom);
@@ -402,6 +471,159 @@ internal sealed class SceneHost
 
         var target = scene.Tabs.FirstOrDefault(t => t.Name == _currentTab) ?? scene.Tabs.FirstOrDefault();
         ShowTab(target?.Name, keepCamera: target?.Name == _currentTab);
+        ArmAnimation(scene);
+    }
+
+    // ---- animation playback ----
+
+    /// <summary>
+    /// Builds the host-supplied animation for a freshly set scene — per scene rather
+    /// than once, because a live reload remakes the scene and tracks pose the
+    /// occurrences they captured. The factory runs on a background task
+    /// (track construction may mesh parts for bounds — the AutoExplode rule), and a
+    /// stale result is dropped if another scene arrived meanwhile (the TabMeshLoader
+    /// generation lesson, one token cheaper: the scene reference IS the token).
+    /// </summary>
+    private void ArmAnimation(Scene scene)
+    {
+        StopPlayTimer();
+        _playback = null;
+        _playToggle.IsChecked = false;
+        ShowTransport(false);
+
+        if (EngrCad.CurrentOptions.Animation is not { } factory)
+            return;
+        Task.Run(() =>
+        {
+            Animation? animation = null;
+            string? error = null;
+            try
+            {
+                animation = factory(scene);
+            }
+            catch (Exception exception)
+            {
+                error = $"{exception.GetType().Name}: {exception.Message}";
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                if (!ReferenceEquals(_scene, scene))
+                    return;   // a newer scene arrived while the factory ran
+                if (error is not null)
+                {
+                    _statusText.Text = $"animation: {error}";
+                    return;
+                }
+                if (animation is null)
+                    return;
+                _playback = new AnimationPlayback(animation) { Loop = _loopToggle.IsChecked ?? true };
+                ShowTransport(true);
+                _updatingTimeSlider = true;
+                _timeSlider.Value = 0;
+                _updatingTimeSlider = false;
+            });
+        });
+    }
+
+    private void ShowTransport(bool visible)
+    {
+        _playToggle.IsVisible = visible;
+        _loopToggle.IsVisible = visible;
+        _timeSlider.IsVisible = visible;
+    }
+
+    private void TogglePlay(bool on)
+    {
+        if (_playback is not { } playback)
+            return;
+        if (on)
+        {
+            playback.Play();
+            _playToggle.Content = "Pause";
+            StartPlayTimer();
+        }
+        else
+        {
+            playback.Pause();
+            _playToggle.Content = "Play";
+            StopPlayTimer();
+        }
+    }
+
+    private void StartPlayTimer()
+    {
+        _playClock.Restart();
+        _playTimer ??= new Avalonia.Threading.DispatcherTimer
+        {
+            Interval = TimeSpan.FromMilliseconds(16),
+        };
+        _playTimer.Tick -= OnPlayTick;
+        _playTimer.Tick += OnPlayTick;
+        _playTimer.Start();
+    }
+
+    private void StopPlayTimer() => _playTimer?.Stop();
+
+    private void OnPlayTick(object? sender, EventArgs e)
+    {
+        if (_playback is not { } playback)
+        {
+            StopPlayTimer();
+            return;
+        }
+        // Real elapsed time, not the timer interval: a slow frame advances the clock by
+        // what actually passed, so playback speed is honest under load.
+        double dt = _playClock.Elapsed.TotalSeconds;
+        _playClock.Restart();
+        if (playback.Advance(dt))
+            ApplyAnimationSample();
+        if (!playback.Playing)
+        {
+            // A non-looping run reached the end: reflect it in the toggle (whose
+            // change handler pauses and stops the timer — idempotent here).
+            _playToggle.IsChecked = false;
+        }
+    }
+
+    /// <summary>Renders the playback position: slider follows, pose tracks re-pose the
+    /// viewport (matrices only), camera tracks move the camera.</summary>
+    private void ApplyAnimationSample()
+    {
+        if (_playback is not { } playback)
+            return;
+        var sample = playback.Animation.At(playback.T);
+        _updatingTimeSlider = true;
+        _timeSlider.Value = playback.T;
+        _updatingTimeSlider = false;
+        if (sample.Instances is { } posed)
+            ApplyAnimatedPoses(posed);
+        if (sample.Camera is { } camera)
+            Viewport.Camera = camera;
+    }
+
+    /// <summary>
+    /// Re-poses the current tab's instances from an animation sample, matched by
+    /// occurrence PATH: a track built over the whole scene may carry instances of other
+    /// tabs (ignored here), and instances this tab has that the sample lacks keep their
+    /// document pose. The list handed to the viewport is always the tab's own instances
+    /// in the tab's own order — the SetInstancePoses contract.
+    /// </summary>
+    private void ApplyAnimatedPoses(IReadOnlyList<PartInstance> sample)
+    {
+        if (_tabInstances.Count == 0)
+            return;
+        var worldByPath = new Dictionary<string, Matrix4d>(sample.Count);
+        foreach (var instance in sample)
+            worldByPath[instance.Path] = instance.World;
+        var posed = new PartInstance[_tabInstances.Count];
+        for (int i = 0; i < _tabInstances.Count; i++)
+        {
+            var instance = _tabInstances[i];
+            posed[i] = worldByPath.TryGetValue(instance.Path, out var world)
+                ? instance with { World = world }
+                : instance;
+        }
+        Viewport.SetInstancePoses(posed);
     }
 
     private void ShowTab(string? name, bool keepCamera = false)

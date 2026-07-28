@@ -450,6 +450,28 @@ Headless has the same knob and therefore the same result by construction:
 the design has not set them; a zero factor never touches the document, and an exploded
 render at factor 0 is byte-identical to a plain one.
 
+## Animation playback
+
+The toolbar grows a transport — **Play/Pause**, **Loop**, and a time scrubber — when
+the host gives the window an animation: `EngrCad.Configure().WithAnimation(scene =>
+new Animation(...)...)`. The factory runs per scene, INCLUDING per live reload (tracks
+pose the occurrences they captured, and a hot reload remakes the scene), on a
+background task because track construction may read bounds and mesh parts — the same
+rule `AutoExplode` follows; a stale result is dropped by comparing the scene reference,
+the TabMeshLoader generation lesson one token cheaper.
+
+The layering rule: **evaluation and transport state live in `EngrCAD.Viewer.Core`**
+(`Animation.At(t)` is pure; `AnimationPlayback` is the play/pause/loop/seek machine),
+and `SceneHost` owns only a `DispatcherTimer` and the widgets. Each tick advances the
+clock by REAL elapsed time (not the timer interval, so playback speed is honest under
+load), evaluates the sample, and applies it: pose tracks re-pose the current tab's
+instances **matched by occurrence path** (a whole-scene track may carry other tabs'
+instances — ignored; unmatched instances keep their document pose) through the same
+`SetInstancePoses` matrices-only route the explode slider uses, and camera tracks set
+`Viewport.Camera`. Scrubbing while paused renders the same frames playback would — one
+evaluation path, which is the point. The web viewport gets the same reuse for free when
+its transport lands (filed in todo.md).
+
 ## Bill of materials
 
 The **BOM** toolbar button shows the current tab's parts list — quantities per distinct
