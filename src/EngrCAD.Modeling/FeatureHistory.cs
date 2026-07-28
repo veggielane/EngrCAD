@@ -203,7 +203,7 @@ public sealed class FeatureHistory
 
     // ---- JSON parameter overrides ----
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    internal static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>Parameter values as JSON: <c>{ "featureName": { "Param": value } }</c>.</summary>
     public string SaveParameters()
@@ -213,24 +213,27 @@ public sealed class FeatureHistory
         {
             var values = new Dictionary<string, object?>();
             foreach (var parameter in feature.Parameters)
-            {
-                values[parameter.Name] = parameter.Value switch
-                {
-                    Vector2d v => (object)new[] { v.X, v.Y },
-                    Vector3d v => new[] { v.X, v.Y, v.Z },
-                    Enum e => e.ToString(),
-                    // Descriptor in, descriptor out: a declarative reference round-trips,
-                    // and a lambda-backed one writes its opaque marker (which LoadParameters
-                    // then declines with a warning rather than rebuilding something wrong).
-                    GeometryRef reference => reference.Descriptor,
-                    var other => other,
-                };
-            }
+                values[parameter.Name] = SerializeValue(parameter.Value);
             if (values.Count > 0)
                 document[NameOf(feature)] = values;
         }
         return JsonSerializer.Serialize(document, JsonOptions);
     }
+
+    /// <summary>A parameter value in its JSON form — one vocabulary shared by
+    /// <see cref="SaveParameters"/> and <see cref="SaveHistory"/> so the two files
+    /// cannot spell a value differently.</summary>
+    internal static object? SerializeValue(object? value) => value switch
+    {
+        Vector2d v => new[] { v.X, v.Y },
+        Vector3d v => new[] { v.X, v.Y, v.Z },
+        Enum e => e.ToString(),
+        // Descriptor in, descriptor out: a declarative reference round-trips,
+        // and a lambda-backed one writes its opaque marker (which LoadParameters
+        // then declines with a warning rather than rebuilding something wrong).
+        GeometryRef reference => reference.Descriptor,
+        var other => other,
+    };
 
     /// <summary>Applies JSON parameter overrides (reflection handles init-only
     /// setters). Returns warnings for unknown features/parameters or bad values
@@ -248,26 +251,35 @@ public sealed class FeatureHistory
                 warnings.Add($"unknown feature '{featureEntry.Name}'");
                 continue;
             }
-            var properties = Feature.PropertiesOf(feature.GetType());
-            foreach (var valueEntry in featureEntry.Value.EnumerateObject())
-            {
-                var property = properties.FirstOrDefault(p => p.Name == valueEntry.Name);
-                if (property is null)
-                {
-                    warnings.Add($"unknown parameter '{featureEntry.Name}.{valueEntry.Name}'");
-                    continue;
-                }
-                try
-                {
-                    property.SetValue(feature, Convert(valueEntry.Value, property.PropertyType));
-                }
-                catch (Exception exception)
-                {
-                    warnings.Add($"could not set '{featureEntry.Name}.{valueEntry.Name}': {exception.Message}");
-                }
-            }
+            ApplyParameters(feature, featureEntry.Value, featureEntry.Name, warnings);
         }
         return warnings;
+    }
+
+    /// <summary>Sets <c>[Param]</c> properties from a JSON object, warning per entry it
+    /// cannot apply — shared by <see cref="LoadParameters"/> and
+    /// <see cref="LoadHistory"/>.</summary>
+    internal static void ApplyParameters(
+        Feature feature, JsonElement values, string featureName, List<string> warnings)
+    {
+        var properties = Feature.PropertiesOf(feature.GetType());
+        foreach (var valueEntry in values.EnumerateObject())
+        {
+            var property = properties.FirstOrDefault(p => p.Name == valueEntry.Name);
+            if (property is null)
+            {
+                warnings.Add($"unknown parameter '{featureName}.{valueEntry.Name}'");
+                continue;
+            }
+            try
+            {
+                property.SetValue(feature, Convert(valueEntry.Value, property.PropertyType));
+            }
+            catch (Exception exception)
+            {
+                warnings.Add($"could not set '{featureName}.{valueEntry.Name}': {exception.Message}");
+            }
+        }
     }
 
     private static object? Convert(JsonElement element, Type type)
@@ -296,4 +308,118 @@ public sealed class FeatureHistory
                 ?? throw new FormatException("geometry references are descriptor strings"), type);
         throw new FormatException($"unsupported parameter type {type.Name}");
     }
+
+    // ---- whole-history persistence (the FeatureRegistry side) ----
+
+    /// <summary>
+    /// The WHOLE history as JSON — ordered feature records with type, name, suppression,
+    /// serialized constructor inputs (<see cref="Feature.SaveInputs"/>) and
+    /// <c>[Param]</c> values (the same value vocabulary as <see cref="SaveParameters"/>).
+    /// <see cref="LoadHistory"/> reconstructs it through a <see cref="FeatureRegistry"/>.
+    /// Features whose inputs have no serialized form (lambdas, <see cref="Shape"/>
+    /// tools, catalogue components) are still WRITTEN — type, name and parameters — so
+    /// the file is an honest record; they come back only through the load hook.
+    /// </summary>
+    public string SaveHistory()
+    {
+        var features = new System.Text.Json.Nodes.JsonArray();
+        foreach (var feature in _features)
+        {
+            var record = new System.Text.Json.Nodes.JsonObject
+            {
+                ["type"] = feature.GetType().Name,
+                ["name"] = feature.Name,
+            };
+            if (feature.Suppressed)
+                record["suppressed"] = true;
+            if (feature.SaveInputs() is { } inputs)
+                record["inputs"] = inputs;
+            var parameters = new System.Text.Json.Nodes.JsonObject();
+            foreach (var parameter in feature.Parameters)
+                parameters[parameter.Name] =
+                    JsonSerializer.SerializeToNode(SerializeValue(parameter.Value), JsonOptions);
+            if (parameters.Count > 0)
+                record["parameters"] = parameters;
+            features.Add(record);
+        }
+        return new System.Text.Json.Nodes.JsonObject { ["features"] = features }
+            .ToJsonString(JsonOptions);
+    }
+
+    /// <summary>
+    /// Rebuilds a history from <see cref="SaveHistory"/> JSON. Each record is
+    /// constructed through <paramref name="registry"/> (default:
+    /// <see cref="FeatureRegistry.Default"/>), its name and suppression restored, and
+    /// its <c>[Param]</c> values applied through the same conversion vocabulary as
+    /// <see cref="LoadParameters"/> — so geometry references re-resolve per
+    /// regeneration exactly as saved ones do.
+    /// <para>A record the registry cannot construct (see
+    /// <see cref="FeatureTypeInfo.Reason"/>) is offered to
+    /// <paramref name="resolveOpaque"/> — the caller's chance to supply the instance
+    /// (rebuild the lambda, reference the catalogue component). A null return SKIPS the
+    /// feature with a warning naming it, and the result's
+    /// <see cref="HistoryLoadResult.Complete"/> goes false: downstream features then
+    /// see a different upstream body than the saved model did, which the caller must
+    /// judge.</para>
+    /// </summary>
+    public static HistoryLoadResult LoadHistory(
+        string json,
+        FeatureRegistry? registry = null,
+        Func<FeatureRecord, Feature?>? resolveOpaque = null)
+    {
+        registry ??= FeatureRegistry.Default;
+        var history = new FeatureHistory();
+        var warnings = new List<string>();
+        using var document = JsonDocument.Parse(json);
+        if (!document.RootElement.TryGetProperty("features", out var array)
+            || array.ValueKind != JsonValueKind.Array)
+            throw new FormatException("A saved history is an object with a 'features' array.");
+
+        foreach (var element in array.EnumerateArray())
+        {
+            string typeName = element.GetProperty("type").GetString()
+                ?? throw new FormatException("feature records carry a 'type' string");
+            string name = element.GetProperty("name").GetString() ?? typeName;
+            bool suppressed = element.TryGetProperty("suppressed", out var s) && s.GetBoolean();
+            JsonElement? inputs = element.TryGetProperty("inputs", out var i) ? i.Clone() : null;
+            JsonElement? parameters = element.TryGetProperty("parameters", out var p) ? p.Clone() : null;
+            var record = new FeatureRecord(typeName, name, suppressed, inputs, parameters);
+
+            Feature? feature;
+            if (!registry.TryCreate(typeName, inputs, out feature, out string? error))
+            {
+                feature = resolveOpaque?.Invoke(record);
+                if (feature is null)
+                {
+                    warnings.Add($"skipped '{name}' ({typeName}): {error}");
+                    continue;
+                }
+            }
+
+            NameProperty.SetValue(feature, name);
+            feature!.Suppressed = suppressed;
+            if (parameters is { } values)
+                ApplyParameters(feature, values, name, warnings);
+            history.Add(feature);
+        }
+        return new HistoryLoadResult(history, warnings);
+    }
+
+    // Name is init-only; reflection writes it the same way LoadParameters writes
+    // init-only [Param] setters.
+    private static readonly System.Reflection.PropertyInfo NameProperty =
+        typeof(Feature).GetProperty(nameof(Feature.Name))!;
+}
+
+/// <summary>One saved feature as raw data — what <see cref="FeatureHistory.LoadHistory"/>
+/// hands to the caller's resolve hook when the registry cannot construct the type.</summary>
+public sealed record FeatureRecord(
+    string TypeName, string Name, bool Suppressed, JsonElement? Inputs, JsonElement? Parameters);
+
+/// <summary>Result of <see cref="FeatureHistory.LoadHistory"/>: the rebuilt history plus
+/// one warning per record that could not be fully restored.</summary>
+public sealed record HistoryLoadResult(FeatureHistory History, IReadOnlyList<string> Warnings)
+{
+    /// <summary>True when every saved feature was reconstructed.</summary>
+    public bool Complete => Warnings.Count == 0;
 }

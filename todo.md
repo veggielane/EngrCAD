@@ -946,10 +946,15 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
 - [ ] **Parametric features follow-ups** (`FeatureHistory` landed; typed geometry
   inputs landed — `GeometryRefs.cs`: `PlaneRef`/`FaceRef`/`FaceSetRef`/`EdgeSetRef`/
   `AxisRef` with cardinality in the type, descriptor-as-cache-key-as-serialized-form,
-  per-`Apply` resolution, and `ValidateInputs` naming the failing property) — persistent
-  topological IDs (selectors are the naming story today), property-panel UI editing of
-  `[Param]`s, feature list in the viewer model tree, a feature registry for UI
-  insertion.
+  per-`Apply` resolution, and `ValidateInputs` naming the failing property; feature
+  registry + whole-history JSON landed — `FeatureRegistry` with instance-free
+  `[Param]` metadata and honest `CanCreate`/`Reason`, `SaveHistory`/`LoadHistory`
+  with exact sketch/hole-spec constructor-input serialization via `Feature.SaveInputs`)
+  — persistent topological IDs (selectors are the naming story today), property-panel
+  UI editing of `[Param]`s driven by the registry's metadata, feature list in the
+  viewer model tree with registry-backed insertion, serialized forms for the remaining
+  code inputs (a `Shape`-graph serialization would unlock `BooleanFeature`; a
+  catalogue-designation lookup could rebuild `ComponentFeature`).
 - [ ] **Geometry-reference vocabulary follow-ups** — the named queries cover what the
   standard features need and no more. Wanted next: `PlaneRef.Offset(distance)` and
   `PlaneRef.Rotated` (an offset construction plane is the commonest missing one);

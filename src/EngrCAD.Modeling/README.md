@@ -278,6 +278,35 @@ Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, pa
 `FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
 (the cached prefix output), which the construction tree below previews.
 
+### The feature registry and whole-history persistence
+
+`FeatureRegistry` (`FeatureRegistry.cs`) is type discovery for UI insertion and the
+construction side of persistence. `registry.All` lists every known feature type with
+`[Param]` metadata (names, types, ranges, units — no instance needed) and an honest
+`CanCreate`/`Reason` pair; `TryCreate(name, inputs)` builds one from data.
+`FeatureHistory.SaveHistory()` writes the WHOLE history — ordered records of type,
+name, suppression, **constructor inputs** (`Feature.SaveInputs`, a virtual returning
+the feature's non-`[Param]` data in JSON) and `[Param]` values (the same value
+vocabulary as `SaveParameters`, extracted into `SerializeValue`/`ApplyParameters` so
+the two files cannot drift) — and `FeatureHistory.LoadHistory(json, registry?,
+resolveOpaque?)` rebuilds it, returning the history plus one warning per record it
+could not fully restore (`Complete` = no warnings; the saved file is a fixed point
+under save → load → save).
+
+What is data-constructible: `[Param]`-only features (fillet/chamfer rims, patterns)
+via their parameterless constructors; `HoleFeature` (its `HoleSpec` serializes kind +
+factory arguments and `WithTipAngle`); and `ExtrudeSketchFeature` /
+`RevolveSketchFeature`, because **a `Sketch` serializes exactly through the public
+`Curve2d` vocabulary** (`ToCurves`/`FromCurves` — lines, arcs, Béziers, hole loops;
+nothing flattened, `InputJson` in `FeatureRegistry.cs`). What cannot, and why:
+`BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
+`VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
+`HardwareComponent` is a code object), and `FromFunc` lambdas — `SaveHistory` still
+writes their type/name/parameters so the file is an honest record, and `LoadHistory`
+skips each with a warning naming it unless the caller's `resolveOpaque` hook supplies
+the instance. User feature classes join with `Register<T>()` (parameterless) or
+`Register(type, factory)` paired with a `SaveInputs` override.
+
 ### Geometry inputs (`GeometryRefs.cs`)
 
 Between-feature geometry references are **semantic queries** over the regenerated
