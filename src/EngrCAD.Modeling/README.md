@@ -657,6 +657,13 @@ housing.Add(new Part("lid", lidSolid));            // color auto-assigned from P
 scene.Add(new Part("jig", jigMesh));               // shorthand: default "Model" tab
 ```
 
+Colorless parts get palette colors from the tab: at `Add` time, and — for parts added
+to an assembly AFTER the assembly joined the tab — retroactively on the next
+`Tab.Instances()` flatten. **The color-stability rule**: a color, once assigned, never
+changes (assignment is `??=` and the tab's palette cursor only advances), and
+latecomers take the *next* entries in the tab's display order — so adding a part later
+can never reshuffle an existing part's color, only consume a fresh one.
+
 `Part.GetMesh(quality)` produces the display mesh on first use and caches it (Shapes
 via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
 `Scene.PreMesh()` does this for every **distinct** part up front so viewers never
@@ -856,15 +863,37 @@ var report = new MateSet(rig)
   `Perpendicular` (1), `Angle` (1). `Ground(occurrence)` pins one in place;
   `MateGeometry.World(point, direction)` mates against space itself.
 - **Geometry references** are `MateRef`s: explicit local coordinates
-  (`MateGeometry.Point/Axis`) or **semantic B-Rep selectors**
-  (`MateGeometry.PlanarFace/CylindricalFace`) — the same `BrepQueries` vocabulary rim
-  features and annotations use. Selectors resolve **once, when the mate is built**: a
-  mate is a numerical constraint, so its geometry is pinned rather than re-queried
-  inside the solver's inner loop.
-- **Scope, deliberately**: mates constrain ONE assembly level — the direct occurrences
-  of the assembly the `MateSet` was built on. A nested sub-assembly is one rigid body,
-  which is the right semantics; mating into a sub-assembly's internals is rejected with
-  a message telling you to build a `MateSet` on the sub-assembly instead.
+  (`MateGeometry.Point/Axis`), **semantic B-Rep selectors**
+  (`MateGeometry.PlanarFace/CylindricalFace` with a lambda), or **typed
+  `FaceRef`/`AxisRef` queries** (`MateGeometry.PlanarFace(occ, FaceRef.Top)`) — the
+  same `GeometryRefs` vocabulary features declare. All of them resolve **once, when
+  the mate is built**: a mate is a numerical constraint, so its geometry is pinned
+  rather than re-queried inside the solver's inner loop (the deliberate opposite of
+  feature inputs, which re-resolve per regeneration — eager-vs-lazy is the consumer's
+  choice, not a different vocabulary).
+- **Across assembly levels**: every builder has an `(Assembly, path, …)` overload —
+  `MateGeometry.Point(rig, "carrier/bolt", p)` — where the occurrence path
+  (`Assembly.ResolvePath`) names a unique *placement* even when the sub-assembly type
+  is shared. The deep occurrence's own local frame becomes the solver unknown; its
+  ancestors' frames compose as inputs, and an ancestor that is itself a mate target
+  contributes its own chain-rule columns (a variable is a world-space rigid
+  perturbation, so the chain rule is the one-level formulas with the rotation moment
+  arm taken about each free link's composed world origin — still fully analytic).
+  Sub-assemblies no mate reaches into stay rigid; `Ground("carrier/bolt")` pins a deep
+  occurrence so a chain through it still rides its free ancestors. **One refusal keeps
+  it honest**: a deep target whose owning sub-assembly is placed more than once is ONE
+  shared frame — solving would move every placement — so the solve rejects it naming
+  the placements (follow-up: flexible sub-assemblies with per-instance internal DOF).
+- **Persistence** (`MateSet.SaveMates`/`LoadMates`, the `FeatureHistory` conventions):
+  each end saves its occurrence path, its pinned coordinates, and — when built from a
+  typed query — the `GeometryRef` descriptor (`cylindricalFace(one(cylindrical))`).
+  Loading resolves paths against the assembly and re-resolves queries against the
+  parts *eagerly* (construction time is load time), returns warnings instead of
+  throwing (a failed query falls back to the pinned coordinates; a missing occurrence
+  skips that mate by name), and saved JSON is a fixed point under save→load→save —
+  which is why `MateRef` keeps an already-unit direction verbatim instead of
+  re-normalizing it by an ulp. Lambda-backed selectors save an `opaque` marker and
+  load from coordinates with a warning, exactly like opaque feature references.
 - **How it solves**: Levenberg–Marquardt on the residuals with an **analytic** Jacobian
   (finite differences would cap accuracy near 1e-8, an order worse than the 1e-9 weld
   tier this aims at). Angular residuals are multiplied by the assembly's characteristic
@@ -874,7 +903,10 @@ var report = new MateSet(rig)
   left exactly as the caller left them — and `MateSolveResult.Diagnostics` names the
   mates carrying the residual. The result also always reports how many degrees of
   freedom the mates actually pinned (rank of the Jacobian, from a diagonally pivoted
-  Cholesky of JᵀJ), so an under-constrained assembly says so;
+  Cholesky of JᵀJ), plus a per-movable-occurrence report
+  (`MateSolveResult.OccurrenceFreedoms`: the rank of each occurrence's own 6×6 block —
+  an upper bound on its pinning, honestly labeled, since a mate between two
+  occurrences pins *relative* motion), so an under-constrained assembly says so;
   `MateSolverSettings.RequireFullyConstrained` turns that into a failure too. An
   under-constrained assembly is legitimate CAD — a hinge is *supposed* to keep a
   rotation — so it is reported, not refused, by default.

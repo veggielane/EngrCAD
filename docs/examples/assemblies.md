@@ -193,6 +193,50 @@ mate whose directions start *exactly* parallel is a stationary configuration —
 d/dθ cos θ = 0 at θ = 0, so no first-order step exists. The solver detects that and says
 so. Nudging at random would "usually converge", which is worse than refusing.
 
+### Across assembly levels, typed references, and saving
+
+A mate can reach *into* a sub-assembly by **occurrence path** — the deep occurrence's
+own frame becomes the unknown and its ancestors' frames compose through the solve (any
+ancestor that is itself mated contributes its own chain-rule terms). Geometry can also
+be named with the same typed `FaceRef`/`AxisRef` queries features use — still resolved
+**once, when the mate is built** — which is what lets a mate set serialize:
+
+```csharp run:assembly-mates-cross
+Shape BoredPlate() => Shape.Box(40, 30, 6) - Shape.Cylinder(5, 20);
+
+var carrier = new Assembly("carrier");
+carrier.Add(new Part("plate", BoredPlate()),
+    Frame3d.FromXY((3, 4, 5), Vector3d.UnitX, Vector3d.UnitY));
+
+var rig = new Assembly("rig");
+var lower = rig.Add(new Part("lower", BoredPlate()));
+rig.Add(carrier, Frame3d.FromXY((17, 9, 25), Vector3d.UnitX, Vector3d.UnitY));
+
+var mates = new MateSet(rig)
+    .Ground(lower)
+    .Add(Mate.Concentric(
+        MateGeometry.CylindricalFace(lower, FaceRef.One(FaceSetRef.Cylindrical())),
+        MateGeometry.CylindricalFace(rig, "carrier/plate", FaceRef.One(FaceSetRef.Cylindrical()))))
+    .Add(Mate.Planar(
+        MateGeometry.PlanarFace(lower, FaceRef.Top),
+        MateGeometry.PlanarFace(rig, "carrier/plate", FaceRef.Bottom)));
+
+var result = mates.Solve();     // the plate seats THROUGH the carrier's frame
+if (!result.Converged) throw new Exception(result.ToString());
+
+string json = mates.SaveMates();          // queries serialize as their descriptors
+var reloaded = new MateSet(rig);
+if (reloaded.LoadMates(json).Count != 0) throw new Exception("expected a clean load");
+```
+
+The carrier itself was never mentioned, so it stays rigid where it was placed — only
+the plate moves, *within* it. `MateSolveResult.OccurrenceFreedoms` reports DOF per
+movable occurrence by path. Two honesty rules ride along: a deep target inside a
+sub-assembly that is **placed more than once** is refused by name (its frame is one
+shared object — solving would move every placement), and `SaveMates`/`LoadMates`
+follow the `FeatureHistory` contract — query-backed ends re-resolve eagerly on load,
+lambda-backed ends load from their pinned coordinates with a warning.
+
 ## In the viewer
 
 The renders on this page are the offscreen scene render — the interactive window
@@ -201,6 +245,8 @@ renderable by the documentation build, so it is described here):
 
 - The **model tree** shows assembly hierarchies with occurrences indented under
   their assembly and sub-assembly rows, in the same order as `Tab.Instances()`.
+  Assembly rows carry a disclosure triangle — collapsing one is pure UI state
+  (nothing hides in the viewport, and re-expanding restores exactly what was there).
 - **Visibility checkboxes** exist at every level: a part row toggles that one
   instance, an assembly row hides its whole subtree (effective visibility is the
   row's own checkbox AND all its ancestors' — unchecking a parent does not rewrite
@@ -222,6 +268,6 @@ a `NEXT_ASSEMBLY_USAGE_OCCURRENCE` per placement, which `StepReader` reads back 
 display path uses to share meshes; posing the geometry and writing it N times would
 throw away the structure the format exists to carry.
 
-Still future work: mates *across* assembly levels (a sub-assembly is one rigid body
-today), per-instance colour overrides, and the dashed explode-path leader lines drafting
-standards draw between an exploded part and its seat.
+Still future work: per-instance colour overrides, flexible sub-assemblies (per-instance
+internal DOF for a sub-assembly placed more than once), and the dashed explode-path
+leader lines drafting standards draw between an exploded part and its seat.
