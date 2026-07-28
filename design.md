@@ -323,7 +323,34 @@ Each engine uses the data structure its mathematics wants:
   halves verbatim so watertightness is by index and no vertex is invented, with a global
   uv-area identity as the closing guard. It returns null and defers to the ear clipper
   whenever it cannot prove the decomposition, so it cannot be worse than what it replaces.
-- **A fold COUNT is not a quality metric; the worst normal dot is.** This defect rendered
+- **Interior rows: the base triangulation carries the curvature, refinement carries the
+  residue.** A trimmed band spanning many natural steps in a curved cross parameter used
+  to be swept boundary-to-boundary — every base facet spanned the band's whole height —
+  and midpoint bisection then had to invent all the interior structure, inverting halves
+  wherever the surface midpoint of a long chord left the chord (`Sphere(10) −
+  Cylinder(3, 40)`: 43 948 facets, 12 folds, worst −0.2022, refusing outright at high
+  density; a hand-built spherical band: base 94 facets at 0.99954 wrecked to 2 784 at
+  0.1998 — refinement degrading a base that was already good is what proved a better
+  bisection RULE would treat the symptom). The landed design puts the natural grid's own
+  sample rows into the BASE: one constant-cross path per inside stretch of each natural
+  level (crossings in key order alternate enter/leave, so levels thread between scallops
+  and hole rims), anchored on existing boundary vertices — a boundary vertex is shared
+  edge geometry and must never be invented — with interior vertices at the natural key
+  values; each path cuts its piece in two and the resulting sub-bands (≤ ~1.5 steps) go
+  through the same monotone stack sweep, which between two full rows emits exactly the
+  untrimmed grid's quads. Winding bands get full-period rows with closure duplicates;
+  their chain-adjacent strips get partial rows with the strip's seam chords PRE-SPLIT at
+  the levels — legal because a seam chord is an unrolling artifact internal to the face,
+  so both sides get bit-identical twins and still weld. Three supporting rules, each
+  paid for: **`Refine`'s step metric is per-axis max-norm** (a grid cell's own diagonal
+  is one step in each axis; under a 2-norm refinement bisects the very grid that defines
+  the quality bar), **pole-fan edges are refinement-exempt** (the pole's u is arbitrary,
+  so a fan edge's u-span is an artifact — refining a *flat* disk's fan folded it 467
+  times), and **every rowed path closes with a uv-area identity and falls back to the
+  rowless sweep**, so it can never be worse than what it replaces. Result: drilled
+  sphere 3 244 facets / 0 folds / 0.9994 with volume ratios 4.35 / 5.08, and refinement
+  measured IDLE on 16 of 19 corpus members' trimmed faces — the "refinement is not a
+  convergence mechanism" lesson, now enforced structurally rather than remembered.
   as a visibly crumpled fan and had **zero** strictly-inverted triangles - before *and*
   after. What was wrong was a worst facet-vs-surface dot of 0.0198, an 88.9 degree sliver,
   which any inversion count calls clean. Nor is a count a convergence test: volume excess

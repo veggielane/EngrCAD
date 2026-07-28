@@ -6,7 +6,7 @@ namespace EngrCAD.Interop.Tests;
 
 /// <summary>
 /// The two band shapes the rung-counting split cannot see, and which the stack sweep
-/// (<c>SweepStrip</c>) now handles: a band whose end is a CURVED cross edge, sampled at
+/// (<c>SweepCycle</c>) now handles: a band whose end is a CURVED cross edge, sampled at
 /// many points rather than two, and a band whose two chains MEET AT A POINT.
 /// <para><b>Neither is reachable from the <c>Shape</c> API today</b>, which is why these
 /// faces are hand-built. The constructions that would produce one — a spherical band
@@ -33,12 +33,11 @@ public class TrimmedBandGapTests
 
     /// <summary>
     /// The patches below occupy the generator's LOW quarter (v in [0, 0.25], about six
-    /// natural v steps) rather than its whole domain. That is deliberate: a band spanning
-    /// all 24 steps is dominated by the standing refinement defect filed in todo.md — its
-    /// base triangulation is correct and fold-free, but refinement then inflates it 14x and
-    /// leaves inverted facets behind — which would make these tests about that instead of
-    /// about the band SHAPES they exist to cover. Measured on the full-domain versions:
-    /// 5 012 facets at worst agreement 0.912 (curved ends) and 1 318 at -0.475 (apex).
+    /// natural v steps) rather than its whole domain — chosen when a tall band was
+    /// dominated by the since-fixed carried-by-refinement defect (a full-domain version
+    /// measured 5 012 facets at worst 0.912 for the curved ends and 1 318 at −0.475 for
+    /// the apex). Kept as-is: the committed baselines below are calibrated to this size,
+    /// and the SHAPES are what these tests exist to cover.
     /// </summary>
     private const double Top = -0.6 + 0.5;
 
@@ -152,19 +151,21 @@ public class TrimmedBandGapTests
 
         var (facets, worstDot) = Check(face);
 
-        // The sweep's own answer is ~2n = 190 facets for four 25-vertex sides. The rest is
-        // curvature refinement, and the ratio is the standing refinement defect in
-        // miniature: the patch spans about 7.6 natural u steps by 6 v steps, so the grid
-        // asks for ~92 triangles and midpoint bisection of a base strip with no interior
-        // rows produces 2 784. Committed baseline — a move in EITHER direction wants
-        // understanding before the number is updated. What matters here is that the shape
-        // is HANDLED and handled correctly, which the assertions above check.
-        Assert.InRange(facets, 190, 2784);
-        // The 0.1998 is NOT the sweep's doing, and that is the finding worth keeping: the
-        // base triangulation measures 94 facets at worst agreement 0.99954, and curvature
-        // refinement turns it into 2 784 at 0.1998. Refinement here does not improve the
-        // mesh, it wrecks it — the clearest evidence yet for the item filed in todo.md.
-        Assert.InRange(worstDot, 0.19, 1.0);
+        // Committed baseline — a move in EITHER direction wants understanding before the
+        // number is updated. Measured 2 612 facets at worst agreement 0.8359 (was 2 784
+        // at 0.1998 before the per-axis refinement metric).
+        //
+        // This band is the one shape the interior-row path still declines, and the
+        // reason is worth keeping: its boundary coordinates are EXACTLY tied in both
+        // axes — a meridian's samples share one bit-identical u (closed-form azimuth)
+        // and a latitude's samples one bit-identical v (deterministic profile solves) —
+        // so the monotone sweep's extreme-end tie-breaks meet exactly-collinear runs in
+        // whichever key it sweeps, where boolean-produced boundaries carry ~1e-9
+        // projection jitter and never tie exactly. The base falls back to the rowless
+        // path (94 facets at 0.9075) and refinement inflates it; bounded now, but the
+        // residual is filed in todo.md.
+        Assert.InRange(facets, 94, 2700);
+        Assert.InRange(worstDot, 0.80, 1.0);
     }
 
     /// <summary>
@@ -193,13 +194,13 @@ public class TrimmedBandGapTests
             diagonal);
 
         var (facets, worstDot) = Check(face);
-        // As above: ~n facets from the sweep, 1 258 after refinement. Committed baseline.
-        Assert.InRange(facets, 60, 1258);
-        // Here the base mesh is poor on its own (worst -0.570 before refinement, -0.529
-        // after), for a reason the sweep cannot fix: a monotone sweep of a region that
-        // narrows to a point FANS it from that point, so the facets nearest the apex span
-        // the whole width of the patch. Interior rows are what a patch this shape needs,
-        // which is the same conclusion the todo.md item reaches from three other repros.
-        Assert.InRange(worstDot, -0.55, 1.0);
+        // Committed baseline: 166 facets at worst 0.9905 (base 136 at 0.9907). Interior
+        // rows fixed exactly what the old numbers predicted they would: without them the
+        // sweep FANNED the region from the apex, every facet near it spanned the whole
+        // patch, and the result was 1 258 facets at worst agreement −0.529 — inverted
+        // geometry. The level paths now anchor on the diagonal chain's own samples, so
+        // the base carries the curvature and refinement barely has anything to do.
+        Assert.InRange(facets, 100, 400);
+        Assert.InRange(worstDot, 0.98, 1.0);
     }
 }

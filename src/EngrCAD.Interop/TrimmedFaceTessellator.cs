@@ -7,14 +7,21 @@ namespace EngrCAD.Interop;
 /// Parameter-space triangulation for trimmed faces on curved surfaces — faces whose loops
 /// do not cover the surface's natural grid domain (fragments produced by
 /// <see cref="FaceSplitter.SplitByCurve"/>, e.g. a bore wall cut through by a slot).
-/// The loops' shared edge-polyline samples are pulled into (u, v) space; non-wrapping
-/// regions are ear-clipped with an exact-coordinate clipper, band-like regions (loops
-/// winding the periodic direction — rings subdivided into arcs, which the grid path can
-/// no longer match) are strip-zipped between their two ring chains (or fanned to the
-/// pole). Oversized interior edges are then midpoint-split down to the natural grid
-/// density with new vertices evaluated on the exact surface. Boundary vertices are the
-/// exact shared edge samples — never re-evaluated approximations — so neighboring faces
-/// weld without cracks.
+/// The loops' shared edge-polyline samples are pulled into (u, v) space; band-like
+/// regions — loops winding the periodic direction, or a single non-wrapping loop whose
+/// boundary is two monotone chains — take the natural grid's INTERIOR ROWS into their
+/// base triangulation (<see cref="RowedStrip"/>, <see cref="RowedPeriodicBand"/>,
+/// <see cref="RowedPoleFan"/>), so the base carries the surface's curvature itself;
+/// what remains is swept chain-to-chain (or fanned to the pole), and only regions that
+/// are not bands at all are ear-clipped with an exact-coordinate clipper. Oversized
+/// interior edges are then midpoint-split down to the natural grid density with new
+/// vertices evaluated on the exact surface — a residual duty, not a convergence
+/// mechanism: with the rows in place refinement is nearly idle (measured identical
+/// output on 16 of 19 corpus members' trimmed faces), and where a base is coarse the
+/// fix is more rows, never a better bisection rule. Boundary vertices are the exact
+/// shared edge samples — never re-evaluated approximations — so neighboring faces weld
+/// without cracks; interior row vertices weld to nothing and need only be exact surface
+/// points.
 ///
 /// The clipper is deliberately not <see cref="Mesh.PolygonTriangulator"/> (earcut):
 /// iso-parameter boundary runs (ring arcs at constant v) are exactly collinear in uv, and
@@ -60,13 +67,16 @@ internal static class TrimmedFaceTessellator
     /// can refuse loudly instead of falling back to a grid that would silently produce an
     /// open mesh.</para>
     /// </summary>
+    /// <param name="refine">Test seam: false skips the curvature-refinement pass so the
+    /// BASE triangulation can be audited on its own. Production always refines.</param>
     public static bool TryTessellate(
         BrepFace face,
         Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
         int segmentsPerCircle,
         int curveSamples,
         List<IReadOnlyList<Vector3d>> polygons,
-        out string? failure)
+        out string? failure,
+        bool refine = true)
     {
         failure = null;
         var surface = face.Surface;
@@ -117,7 +127,7 @@ internal static class TrimmedFaceTessellator
         {
             // A band between two paired boundary chains zips; anything else ear-clips.
             triangles =
-                TriangulateStrip(loopUv, loopPoints, stepU, stepV, uvAll, pointsAll, boundaryEdges)
+                TriangulateStrip(surface, period, loopUv, loopPoints, stepU, stepV, uvAll, pointsAll, boundaryEdges)
                 ?? TriangulateRegion(loopUv, loopPoints, period, uvAll, pointsAll, boundaryEdges);
         }
         else if (windings.Any(w => w == 0))
@@ -129,7 +139,7 @@ internal static class TrimmedFaceTessellator
         else
         {
             // Band-like: winding loops zip as strips (or fan to the pole).
-            triangles = TriangulateBand(surface, period, loopUv, loopPoints, windings, uvAll, pointsAll, boundaryEdges);
+            triangles = TriangulateBand(surface, period, stepU, stepV, loopUv, loopPoints, windings, uvAll, pointsAll, boundaryEdges);
         }
         if (triangles is null || triangles.Count == 0)
         {
@@ -141,7 +151,7 @@ internal static class TrimmedFaceTessellator
         //    keeps its curvature between distant boundary samples. A refinement that
         //    cannot converge must fail the whole face — emitting a partially refined
         //    set would break the no-touch-on-failure contract above.
-        if (!Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV))
+        if (refine && !Refine(surface, period, uvAll, pointsAll, triangles, boundaryEdges, stepU, stepV))
         {
             failure = "curvature refinement did not converge";
             return false;
@@ -167,6 +177,8 @@ internal static class TrimmedFaceTessellator
     /// shared vertex arrays untouched so the caller can ear-clip instead.</para>
     /// </summary>
     private static List<(int A, int B, int C)>? TriangulateStrip(
+        Surface surface,
+        double period,
         List<List<Vector2d>> loopUv,
         List<List<Vector3d>> loopPoints,
         double stepU,
@@ -184,45 +196,60 @@ internal static class TrimmedFaceTessellator
 
         // Walk the loop counter-clockwise so the run with INCREASING key is always the
         // strip's first side: on a CCW loop the interior lies to the left of travel.
-        var order = new int[n];
+        // The loop's vertices go into the shared arrays up front (rolled back if every
+        // attempt fails) so the row paths can allocate interior vertices beside them.
         bool alreadyCcw = FaceGeometry.LoopSignedArea(uv) > 0;
+        int start = uvAll.Count;
+        var cycle = new List<int>(n);
         for (int i = 0; i < n; i++)
-            order[i] = alreadyCcw ? i : n - 1 - i;
+        {
+            int src = alreadyCcw ? i : n - 1 - i;
+            uvAll.Add(uv[src]);
+            pointsAll.Add(loopPoints[0][src]);
+            cycle.Add(start + i);
+        }
 
         // The chains run along the parameter that carries the natural sampling, so the
         // rungs lie across the direction whose chords are already exact (an extrusion is
         // ruled in v) or at least coarser. Getting this backwards would fan a 2-sample
         // rung against a 25-sample chain.
         bool uFirst = StepSpan(uv, alongU: true, stepU) >= StepSpan(uv, alongU: false, stepV);
-        foreach (bool alongU in (ReadOnlySpan<bool>)[uFirst, !uFirst])
+
+        // Interior rows in BOTH orientations before any rowless fallback — where a cross
+        // direction is curved, the base triangulation must carry the surface's curvature
+        // itself (see RowedStrip), so a rowed triangulation in the less-preferred key
+        // beats a rowless one in the preferred key. Then the stack sweep: the correct
+        // triangulation of ANY monotone region, so it covers the two shapes the
+        // rung-counting split cannot see — an end sampled at more than two points (a
+        // curved cross edge) and two chains meeting at a point (a rung of no steps at
+        // all). The rung split stays behind it because a band whose chains are monotone
+        // in neither parameter is not a band, and ear clipping is the honest answer
+        // there.
+        foreach (bool rowed in (ReadOnlySpan<bool>)[true, false])
         {
-            // The stack sweep first: it is the correct triangulation of ANY monotone
-            // region, so it covers the two shapes the rung-counting split cannot see —
-            // an end sampled at more than two points (a curved cross edge) and two
-            // chains meeting at a point (a rung of no steps at all). The rung split
-            // stays behind it because a band whose chains are monotone in neither
-            // parameter is not a band, and ear clipping is the honest answer there.
-            if ((SweepStrip(uv, order, alongU) ?? ZipStrip(uv, order, alongU)) is { } local)
+            foreach (bool alongU in (ReadOnlySpan<bool>)[uFirst, !uFirst])
             {
-                int start = uvAll.Count;
-                for (int i = 0; i < n; i++)
+                var local = rowed
+                    ? RowedStrip(surface, period, stepU, stepV, uvAll, pointsAll, cycle, alongU)
+                    : SweepCycle(uvAll, cycle, alongU) ?? ZipCycle(uvAll, cycle, alongU);
+                if (local is not null)
                 {
-                    uvAll.Add(uv[order[i]]);
-                    pointsAll.Add(loopPoints[0][order[i]]);
+                    // Every loop chord is shared geometry: refinement must never split one.
+                    for (int i = 0; i < n; i++)
+                        boundaryEdges.Add(EdgeKey(start + i, start + (i + 1) % n));
+                    return local;
                 }
-                // Every loop chord is shared geometry: refinement must never split one.
-                for (int i = 0; i < n; i++)
-                    boundaryEdges.Add(EdgeKey(start + i, start + (i + 1) % n));
-                return [.. local.Select(t => (start + t.A, start + t.B, start + t.C))];
             }
         }
+        uvAll.RemoveRange(start, uvAll.Count - start);
+        pointsAll.RemoveRange(start, pointsAll.Count - start);
         return null;
     }
 
     /// <summary>The rung-counting split followed by the merge zip, as one step.</summary>
-    private static List<(int A, int B, int C)>? ZipStrip(List<Vector2d> uv, int[] order, bool alongU) =>
-        TrySplitBand(uv, order, alongU, out var rising, out var falling)
-            ? ZipBand(uv, order, rising, falling, alongU)
+    private static List<(int A, int B, int C)>? ZipCycle(List<Vector2d> uvAll, List<int> cycle, bool alongU) =>
+        TrySplitBand(uvAll, cycle, alongU, out var rising, out var falling)
+            ? ZipBand(uvAll, cycle, rising, falling, alongU)
             : null;
 
     /// <summary>
@@ -251,9 +278,11 @@ internal static class TrimmedFaceTessellator
     /// through the apex) are refused earlier by the exact B-Rep boolean. They are covered
     /// by direct unit tests on hand-built faces — see <c>TrimmedBandGapTests</c>.</para>
     /// </summary>
-    private static List<(int A, int B, int C)>? SweepStrip(List<Vector2d> uv, int[] order, bool alongU)
+    private static List<(int A, int B, int C)>? SweepCycle(List<Vector2d> uvAll, List<int> cycle, bool alongU)
     {
-        int n = order.Length;
+        int n = cycle.Count;
+        if (n < 3)
+            return null;
 
         // Sweep coordinates: the key first, the cross direction second. For a v-keyed band
         // that is (v, -u) — a rotation, NOT a coordinate swap, because a swap is a
@@ -261,8 +290,19 @@ internal static class TrimmedFaceTessellator
         var sweep = new List<Vector2d>(n);
         for (int i = 0; i < n; i++)
         {
-            var p = uv[order[i]];
+            var p = uvAll[cycle[i]];
             sweep.Add(alongU ? p : new Vector2d(p.Y, -p.X));
+        }
+
+        // A triangular piece (row cutting can leave one at a band's end) has exactly one
+        // triangulation; the sweep below needs an interior vertex on one side, so emit
+        // it directly.
+        if (n == 3)
+        {
+            var direct = new List<(int A, int B, int C)>();
+            return AddOriented(direct, sweep, 0, 1, 2)
+                ? [.. direct.Select(t => (cycle[t.A], cycle[t.B], cycle[t.C]))]
+                : null;
         }
 
         double min = sweep.Min(p => p.X), max = sweep.Max(p => p.X);
@@ -298,12 +338,16 @@ internal static class TrimmedFaceTessellator
             forward.Average(i => sweep[i].Y) <= backward.Average(i => sweep[i].Y);
         var lower = forwardIsLower ? forward : backward;
         var other = forwardIsLower ? backward : forward;
-        if (other.Count <= 2)
-            return null; // one side is a single edge: no band to sweep
-        var upper = other.GetRange(1, other.Count - 2);
+        // One side reduced to the single base edge lo→hi is a monotone MOUNTAIN (row
+        // cutting leaves them where a chain dives to meet a path anchor): the same
+        // stack sweep triangulates it with an empty opposite chain — the base edge
+        // arrives as the final funnel close.
+        var upper = other.Count <= 2 ? [] : other.GetRange(1, other.Count - 2);
 
         var triangles = new List<(int A, int B, int C)>();
-        return SweepMonotone(triangles, sweep, lower, upper) ? triangles : null;
+        return SweepMonotone(triangles, sweep, lower, upper)
+            ? [.. triangles.Select(t => (cycle[t.A], cycle[t.B], cycle[t.C]))]
+            : null;
 
         static List<int> Walk(int from, int to, int step, int n)
         {
@@ -344,15 +388,15 @@ internal static class TrimmedFaceTessellator
     /// exists to avoid. Such a face ear-clips instead.</para>
     /// </summary>
     private static bool TrySplitBand(
-        List<Vector2d> uv, int[] order, bool alongU, out List<int> rising, out List<int> falling)
+        List<Vector2d> uvAll, List<int> cycle, bool alongU, out List<int> rising, out List<int> falling)
     {
         rising = [];
         falling = [];
-        int n = order.Length;
+        int n = cycle.Count;
 
         double Key(int i)
         {
-            var p = uv[order[i]];
+            var p = uvAll[cycle[i]];
             return alongU ? p.X : p.Y;
         }
 
@@ -431,7 +475,7 @@ internal static class TrimmedFaceTessellator
     /// geometry.
     /// </summary>
     private static List<(int A, int B, int C)>? ZipBand(
-        List<Vector2d> uv, int[] order, List<int> rising, List<int> falling, bool alongU)
+        List<Vector2d> uvAll, List<int> cycle, List<int> rising, List<int> falling, bool alongU)
     {
         // The rising run is the strip's first side and the falling run, reversed, its
         // second: on a CCW loop that pairs them end for end (see TrySplitBand).
@@ -441,7 +485,7 @@ internal static class TrimmedFaceTessellator
 
         double Key(int i)
         {
-            var p = uv[order[i]];
+            var p = uvAll[cycle[i]];
             return alongU ? p.X : p.Y;
         }
 
@@ -468,8 +512,597 @@ internal static class TrimmedFaceTessellator
         {
             // Exact-zero comparison on purpose: a fold or a zero-area rung triangle is a
             // structural refusal, not a tolerance question.
-            if ((uv[order[y]] - uv[order[x]]).Cross(uv[order[z]] - uv[order[x]]) <= 0)
+            if ((uvAll[cycle[y]] - uvAll[cycle[x]]).Cross(uvAll[cycle[z]] - uvAll[cycle[x]]) <= 0)
                 return null;
+        }
+        return [.. triangles.Select(t => (cycle[t.Item1], cycle[t.Item2], cycle[t.Item3]))];
+    }
+
+    // ---- interior rows: the natural grid's sample rows inside a trimmed band ----
+
+    /// <summary>
+    /// Triangulates a single-loop band WITH the natural grid's interior rows, so the base
+    /// triangulation carries the surface's curvature itself instead of leaning on
+    /// <see cref="Refine"/> to invent it. A band spanning many natural steps in the cross
+    /// parameter used to be swept with every triangle running chain to chain; midpoint
+    /// bisection then had to manufacture all the interior structure, and on a strongly
+    /// curved surface the surface midpoint of a long chord lies far enough off the chord
+    /// to invert the halves (measured: a hand-built spherical band's base of 94 facets at
+    /// worst normal agreement 0.99954 became 2 784 facets at 0.1998 after refinement).
+    /// <para>The rows are the natural grid's own sample lines: constant-cross paths at the
+    /// grid's parameter values (<see cref="NaturalValues"/>), one per inside STRETCH of a
+    /// level — its boundary crossings, taken in key order, alternate enter/leave, so a
+    /// level threads BETWEEN scallops or hole rims rather than refusing. Each path runs
+    /// between two existing BOUNDARY vertices (the loop vertex nearest where the level
+    /// crosses — never an invented boundary point, which would crack the neighbouring
+    /// face) with interior vertices at the natural key values in between, and cuts the
+    /// piece holding its anchors in two; what remains is a set of sub-bands at most ~1.5
+    /// steps tall, each triangulated by the same monotone machinery
+    /// (<see cref="SweepCycle"/>). Between two full rows that reproduces the untrimmed
+    /// grid's own quads; only the chain-adjacent sub-bands need the general sweep.</para>
+    /// <para>Refusals are structural and total: odd crossing parity, a sub-band the sweep
+    /// declines, or a triangle-area sum that does not match the loop's own uv area (the
+    /// same closing guard <see cref="ZipSlabs"/> uses) all abandon the rows entirely —
+    /// the caller falls back to the plain sweep, so this path can never be worse than
+    /// what it replaces. An anchor two levels both want, or a stretch too narrow to cut,
+    /// merely skips that stretch, leaving a locally taller sub-band.</para>
+    /// </summary>
+    private static List<(int A, int B, int C)>? RowedStrip(
+        Surface surface,
+        double period,
+        double stepU,
+        double stepV,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        List<int> cycle,
+        bool alongU)
+    {
+        double crossStep = alongU ? stepV : stepU;
+        if (!double.IsFinite(crossStep) || crossStep <= 0)
+            return null; // the cross direction is ruled: chains-to-chain chords are exact
+        double crossStart = alongU ? surface.DomainV.Start : surface.DomainU.Start;
+        double keyStep = alongU ? stepU : stepV;
+        double keyStart = alongU ? surface.DomainU.Start : surface.DomainV.Start;
+
+        double Cross(int gi) => alongU ? uvAll[gi].Y : uvAll[gi].X;
+        double KeyOf(int gi) => alongU ? uvAll[gi].X : uvAll[gi].Y;
+
+        int n = cycle.Count;
+        double yMin = double.PositiveInfinity, yMax = double.NegativeInfinity;
+        foreach (int gi in cycle)
+        {
+            yMin = Math.Min(yMin, Cross(gi));
+            yMax = Math.Max(yMax, Cross(gi));
+        }
+        // Half a natural step of clearance at each side. This is a sampling-density
+        // choice, not a tolerance: a row closer to the chain than to the next row would
+        // make a thin sub-band for no fidelity gain, and half a step is the point of
+        // equal distance. The chain-adjacent sub-band is then between 0.5 and 1.5 steps
+        // tall, which is Refine's benign regime.
+        var levels = NaturalValues(crossStart, crossStep, yMin + crossStep / 2, yMax - crossStep / 2);
+        if (levels.Count == 0)
+            return null;
+
+        int mark = uvAll.Count;
+        List<(int A, int B, int C)>? Fail()
+        {
+            uvAll.RemoveRange(mark, uvAll.Count - mark);
+            pointsAll.RemoveRange(mark, pointsAll.Count - mark);
+            return null;
+        }
+
+        // Build the row paths bottom-up. A level's crossings with the boundary, taken in
+        // key order, alternate enter/leave, so consecutive pairs bound the level's
+        // inside stretches — one path per stretch, which is what lets a level thread
+        // BETWEEN scallops or holes in the boundary instead of refusing outright. Each
+        // path is anchored at the boundary vertex nearest where its level crosses the
+        // loop (never an invented boundary point) and carries interior vertices at the
+        // natural key values. An anchor two levels both want goes to the lower level;
+        // the later stretch is simply skipped, leaving a locally taller sub-band.
+        var paths = new List<List<int>>();
+        var usedAnchors = new HashSet<int>();
+        foreach (double level in levels)
+        {
+            var crossings = new List<(double AtKey, int Edge)>();
+            for (int i = 0; i < n; i++)
+            {
+                int g0 = cycle[i], g1 = cycle[(i + 1) % n];
+                double a = Cross(g0), b = Cross(g1);
+                if (a <= level != b <= level)
+                {
+                    // Interpolated key of the crossing, for ORDERING only — an error
+                    // here misassembles a path, which the area guard then rejects.
+                    double t = (level - a) / (b - a);
+                    crossings.Add((KeyOf(g0) + t * (KeyOf(g1) - KeyOf(g0)), i));
+                }
+            }
+            if (crossings.Count % 2 != 0)
+                return Fail(); // parity broken: the level threads a degenerate contact
+            crossings.Sort((x, y) => x.AtKey.CompareTo(y.AtKey));
+
+            int AnchorOf(int edge)
+            {
+                int g0 = cycle[edge], g1 = cycle[(edge + 1) % n];
+                return Math.Abs(Cross(g0) - level) <= Math.Abs(Cross(g1) - level) ? g0 : g1;
+            }
+            for (int c = 0; c + 1 < crossings.Count; c += 2)
+            {
+                int left = AnchorOf(crossings[c].Edge);
+                int right = AnchorOf(crossings[c + 1].Edge);
+                if (left == right || usedAnchors.Contains(left) || usedAnchors.Contains(right))
+                    continue;
+                if (!(KeyOf(left) < KeyOf(right)))
+                    continue;
+
+                var path = new List<int> { left };
+                if (double.IsFinite(keyStep) && keyStep > 0)
+                {
+                    foreach (double key in NaturalValues(
+                        keyStart, keyStep, KeyOf(left) + keyStep / 2, KeyOf(right) - keyStep / 2))
+                    {
+                        var q = alongU ? new Vector2d(key, level) : new Vector2d(level, key);
+                        path.Add(uvAll.Count);
+                        uvAll.Add(q);
+                        pointsAll.Add(EvaluateAt(surface, period, q));
+                    }
+                }
+                path.Add(right);
+                usedAnchors.Add(left);
+                usedAnchors.Add(right);
+                paths.Add(path);
+            }
+        }
+        if (paths.Count == 0)
+            return Fail();
+
+        // Cut the region along each path in level order. A cut splits the piece holding
+        // the path's anchors into two CCW pieces sharing the path verbatim (watertight
+        // by index); every piece left at the end is swept. Anchors are never reused, so
+        // each lives in exactly one piece — a path whose anchors ended up in different
+        // pieces is stale (an earlier cut separated them) and is skipped; its interior
+        // vertices stay unreferenced, which is waste but not damage.
+        var pieces = new List<List<int>> { new(cycle) };
+        foreach (var path in paths)
+        {
+            int at = -1, posL = -1, posR = -1;
+            for (int i = 0; i < pieces.Count && at < 0; i++)
+            {
+                int l = pieces[i].IndexOf(path[0]);
+                int r = pieces[i].IndexOf(path[^1]);
+                if (l >= 0 && r >= 0)
+                {
+                    at = i;
+                    posL = l;
+                    posR = r;
+                }
+            }
+            if (at < 0)
+                continue;
+
+            var piece = pieces[at];
+            var pieceA = new List<int>(path);
+            for (int i = (posR + 1) % piece.Count; i != posL; i = (i + 1) % piece.Count)
+                pieceA.Add(piece[i]);
+            var pieceB = new List<int>(path.Count + piece.Count);
+            for (int i = path.Count - 1; i >= 0; i--)
+                pieceB.Add(path[i]);
+            for (int i = (posL + 1) % piece.Count; i != posR; i = (i + 1) % piece.Count)
+                pieceB.Add(piece[i]);
+            // A path with no interior vertices between cycle-adjacent anchors IS the
+            // boundary edge it would cut along: the cut is a no-op leaving a two-vertex
+            // "piece". Skip it rather than hand the sweep a degenerate cycle.
+            if (pieceA.Count < 3 || pieceB.Count < 3)
+                continue;
+            pieces[at] = pieceA;
+            pieces.Add(pieceB);
+        }
+
+        var triangles = new List<(int A, int B, int C)>();
+        foreach (var piece in pieces)
+        {
+            if (SweepCycle(uvAll, piece, alongU) is not { } swept)
+                return Fail();
+            triangles.AddRange(swept);
+        }
+
+        // Closing guard, as in ZipSlabs: the emitted uv area must match the loop's own —
+        // neither a gap nor an overlap can satisfy it. Relative, because uv carries no
+        // model units.
+        double target = Math.Abs(RingArea(uvAll, cycle));
+        double sum = 0;
+        foreach (var (a, b, c) in triangles)
+            sum += Math.Abs((uvAll[b] - uvAll[a]).Cross(uvAll[c] - uvAll[a])) / 2;
+        return Math.Abs(sum - target) <= 1e-9 * target ? triangles : Fail();
+    }
+
+    /// <summary>
+    /// The natural grid's parameter values <c>start + k·step</c> falling inside
+    /// [<paramref name="lo"/>, <paramref name="hi"/>], ascending. These are the SAME
+    /// values the untrimmed grid samples (its <c>ParameterAt(i/n)</c> agrees to
+    /// round-off), extended by whole steps beyond the primary domain so unwrapped
+    /// periodic loops get a consistent grid — a period is a whole number of steps.
+    /// </summary>
+    private static List<double> NaturalValues(double start, double step, double lo, double hi)
+    {
+        var values = new List<double>();
+        if (!double.IsFinite(step) || step <= 0 || !(hi > lo))
+            return values;
+        long first = (long)Math.Ceiling((lo - start) / step);
+        long last = (long)Math.Floor((hi - start) / step);
+        for (long k = first; k <= last; k++)
+            values.Add(start + k * step);
+        return values;
+    }
+
+    /// <summary>
+    /// One period of natural u samples shifted into [<paramref name="anchor"/>,
+    /// anchor + period), ascending — the untrimmed grid's own columns, rotated to the
+    /// band's seam phase. Null when the natural step does not divide the period (no
+    /// consistent grid exists across the seam).
+    /// </summary>
+    private static List<double>? PeriodicNaturalU(
+        Surface surface, double period, double stepU, double anchor)
+    {
+        if (!double.IsFinite(stepU) || stepU <= 0)
+            return null;
+        int count = (int)Math.Round(period / stepU);
+        // Scale-free step-divides-period test (whole grids only; a fractional column
+        // count has no consistent closure).
+        if (count < 3 || Math.Abs(count * stepU - period) > 1e-9 * period)
+            return null;
+        double start = surface.DomainU.Start;
+        var us = new List<double>(count);
+        for (int j = 0; j < count; j++)
+        {
+            double u = start + j * stepU;
+            u += period * Math.Ceiling((anchor - u) / period); // into [anchor, anchor + period)
+            us.Add(u);
+        }
+        us.Sort();
+        return us;
+    }
+
+    /// <summary>
+    /// Triangulates a two-ring periodic band with the natural grid's interior rows: full
+    /// rows at the natural v values strictly between the rings (half-step clearance, see
+    /// <see cref="RowedStrip"/>), each sampled at the natural u columns with a closure
+    /// duplicate (same exact 3D point, uv one period on), then one
+    /// <see cref="SweepMonotone"/> per adjacent chain pair. Row-to-row strips reproduce
+    /// the untrimmed grid's zigzag exactly; only the chain-adjacent strips do general
+    /// work. Every chain-head chord down the seam is marked as boundary — the right seam
+    /// is the left's exact one-period translate, so the pair welds and refinement must
+    /// never split it inconsistently. Null (leaving the shared arrays untouched) when the
+    /// cross direction is ruled, a chain is non-monotone, a sweep declines, or the area
+    /// guard trips — the caller then takes the rowless path.
+    /// </summary>
+    private static List<(int A, int B, int C)>? RowedPeriodicBand(
+        Surface surface,
+        double period,
+        double stepU,
+        double stepV,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges,
+        List<int> bottom,
+        List<int> top,
+        double anchor)
+    {
+        if (!double.IsFinite(stepV) || stepV <= 0)
+            return null;
+        if (!NonDecreasingU(uvAll, bottom) || !NonDecreasingU(uvAll, top))
+            return null;
+
+        double lo = double.NegativeInfinity, hi = double.PositiveInfinity;
+        foreach (int i in bottom)
+            lo = Math.Max(lo, uvAll[i].Y);
+        foreach (int i in top)
+            hi = Math.Min(hi, uvAll[i].Y);
+        var levels = NaturalValues(surface.DomainV.Start, stepV, lo + stepV / 2, hi - stepV / 2);
+        if (levels.Count == 0)
+            return null;
+        var us = PeriodicNaturalU(surface, period, stepU, anchor);
+        if (us is null)
+            return null;
+
+        int mark = uvAll.Count;
+        List<(int A, int B, int C)>? Fail()
+        {
+            uvAll.RemoveRange(mark, uvAll.Count - mark);
+            pointsAll.RemoveRange(mark, pointsAll.Count - mark);
+            return null;
+        }
+
+        var chains = new List<List<int>>(levels.Count + 2) { bottom };
+        foreach (double v in levels)
+            chains.Add(BuildRow(surface, period, us, v, uvAll, pointsAll));
+        chains.Add(top);
+
+        var triangles = new List<(int A, int B, int C)>();
+        for (int k = 0; k + 1 < chains.Count; k++)
+        {
+            if (!StripBetween(
+                    surface, period, stepU, stepV, uvAll, pointsAll, triangles, boundaryEdges,
+                    chains[k], chains[k + 1], chainAdjacent: k == 0 || k + 2 == chains.Count))
+                return Fail();
+        }
+
+        // Closing guard: the band's unwrapped uv area (bottom forward, top reversed,
+        // seam chords implicit) against the emitted triangles'.
+        var outline = new List<int>(bottom);
+        for (int i = top.Count - 1; i >= 0; i--)
+            outline.Add(top[i]);
+        double target = Math.Abs(RingArea(uvAll, outline));
+        double sum = 0;
+        foreach (var (a, b, c) in triangles)
+            sum += Math.Abs((uvAll[b] - uvAll[a]).Cross(uvAll[c] - uvAll[a])) / 2;
+        if (Math.Abs(sum - target) > 1e-9 * target)
+            return Fail();
+
+        for (int k = 0; k + 1 < chains.Count; k++)
+        {
+            boundaryEdges.Add(EdgeKey(chains[k][0], chains[k + 1][0]));
+            boundaryEdges.Add(EdgeKey(chains[k][^1], chains[k + 1][^1]));
+        }
+        return triangles;
+    }
+
+    /// <summary>
+    /// Triangulates one strip between two u-monotone chains. A chain-adjacent strip may
+    /// still span many natural v steps wherever the ring chain scallops (a rim cut
+    /// through by neighbouring faces dips far below its own peaks — Box − Sphere
+    /// breaking out of every face is the measured case), so it first gets its own
+    /// partial rows via <see cref="RowedStrip"/> on the strip's unrolled cycle, whose
+    /// level stretches thread BETWEEN the scallops. Row-to-row strips take the plain
+    /// monotone sweep, which on equal column samples is exactly the untrimmed grid's
+    /// zigzag.
+    /// </summary>
+    private static bool StripBetween(
+        Surface surface,
+        double period,
+        double stepU,
+        double stepV,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        List<(int A, int B, int C)> triangles,
+        HashSet<(int, int)> boundaryEdges,
+        List<int> lower,
+        List<int> upper,
+        bool chainAdjacent)
+    {
+        if (chainAdjacent && double.IsFinite(stepV) && stepV > 0)
+        {
+            // Split the two seam chords at the natural levels BEFORE cutting, or every
+            // level's seam-side stretch would anchor on the same two chord endpoints,
+            // the anchor-reuse rule would skip all but the first, and the seam would
+            // keep a one-column-wide, many-steps-tall region for Refine to invert —
+            // measured: the base's worst normal agreement moved 0.3662 → 0.9337 on
+            // Box(20) − Sphere(12) when the seams gained their split vertices. The
+            // split is legal precisely because a seam chord is an unrolling artifact
+            // internal to this face, not shared edge geometry: the right chord is the
+            // left's exact one-period translate, each split vertex's 3D point is
+            // computed once and COPIED to its twin, and every sub-chord is marked as
+            // boundary — so the pair still welds bit-for-bit and refinement can never
+            // touch it.
+            var leftSeam = new List<int>();
+            var rightSeam = new List<int>();
+            double vA = uvAll[lower[0]].Y, vB = uvAll[upper[0]].Y;
+            double uA = uvAll[lower[0]].X, uB = uvAll[upper[0]].X;
+            foreach (double v in NaturalValues(
+                surface.DomainV.Start, stepV, Math.Min(vA, vB) + stepV / 2, Math.Max(vA, vB) - stepV / 2))
+            {
+                double t = (v - vA) / (vB - vA);
+                double u = uA + t * (uB - uA); // on the uv chord, so pieces stay exact
+                var q = new Vector2d(u, v);
+                leftSeam.Add(uvAll.Count);
+                uvAll.Add(q);
+                var point = EvaluateAt(surface, period, q);
+                pointsAll.Add(point);
+                rightSeam.Add(uvAll.Count);
+                uvAll.Add(new Vector2d(u + period, v));
+                pointsAll.Add(point); // the twin, bit-identical
+            }
+            // Seam vertex chains run lower → upper; sub-chords on both sides are
+            // boundary (shared-by-translation geometry, like the unsplit chord was).
+            var leftChain = new List<int> { lower[0] };
+            var rightChain = new List<int> { lower[^1] };
+            if (vA <= vB)
+            {
+                leftChain.AddRange(leftSeam);
+                rightChain.AddRange(rightSeam);
+            }
+            else
+            {
+                for (int i = leftSeam.Count - 1; i >= 0; i--)
+                {
+                    leftChain.Add(leftSeam[i]);
+                    rightChain.Add(rightSeam[i]);
+                }
+            }
+            leftChain.Add(upper[0]);
+            rightChain.Add(upper[^1]);
+            for (int i = 0; i + 1 < leftChain.Count; i++)
+            {
+                boundaryEdges.Add(EdgeKey(leftChain[i], leftChain[i + 1]));
+                boundaryEdges.Add(EdgeKey(rightChain[i], rightChain[i + 1]));
+            }
+
+            // CCW strip cycle: lower forward, up the right seam, upper backward, down
+            // the left seam.
+            var stripCycle = new List<int>(lower.Count + upper.Count + 2 * leftSeam.Count);
+            stripCycle.AddRange(lower);
+            for (int i = 1; i + 1 < rightChain.Count; i++)
+                stripCycle.Add(rightChain[i]);
+            for (int i = upper.Count - 1; i >= 0; i--)
+                stripCycle.Add(upper[i]);
+            for (int i = leftChain.Count - 2; i >= 1; i--)
+                stripCycle.Add(leftChain[i]);
+            if (RowedStrip(surface, period, stepU, stepV, uvAll, pointsAll, stripCycle, alongU: true)
+                is { } rowed)
+            {
+                triangles.AddRange(rowed);
+                return true;
+            }
+            // Rows declined: fall back to the plain chain-to-chain sweep. The seam
+            // vertices stay unreferenced (waste, not damage) and their boundary marks
+            // name edges no triangle carries, which refinement never consults.
+        }
+        return SweepMonotone(triangles, uvAll, lower, upper);
+    }
+
+    /// <summary>One full-period row at constant v: natural u columns plus the closure
+    /// duplicate (same exact 3D point, uv one period on), as <see cref="BuildChain"/>
+    /// builds ring chains.</summary>
+    private static List<int> BuildRow(
+        Surface surface,
+        double period,
+        List<double> us,
+        double v,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll)
+    {
+        var row = new List<int>(us.Count + 1);
+        foreach (double u in us)
+        {
+            var q = new Vector2d(u, v);
+            row.Add(uvAll.Count);
+            uvAll.Add(q);
+            pointsAll.Add(EvaluateAt(surface, period, q));
+        }
+        row.Add(uvAll.Count);
+        uvAll.Add(new Vector2d(uvAll[row[0]].X + period, v));
+        pointsAll.Add(pointsAll[row[0]]);
+        return row;
+    }
+
+    /// <summary>
+    /// Triangulates a pole cap with the natural grid's interior rows: full-period rows
+    /// between the ring chain and the pole, strips swept pairwise, and only the last row
+    /// — at most ~1.5 natural steps from the pole — fanned to the pole point. Without
+    /// rows every fan triangle spans the cap's whole meridian arc and refinement has to
+    /// invent all the interior structure. Seam-head chords (including the two pole
+    /// chords) are marked as boundary, as in <see cref="RowedPeriodicBand"/>.
+    /// </summary>
+    private static List<(int A, int B, int C)>? RowedPoleFan(
+        Surface surface,
+        double period,
+        double stepU,
+        double stepV,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges,
+        List<int> chain,
+        int poleIndex,
+        double vFar,
+        bool poleBelow)
+    {
+        if (!double.IsFinite(stepV) || stepV <= 0)
+            return null;
+        if (!NonDecreasingU(uvAll, chain))
+            return null;
+
+        double chainLo = double.PositiveInfinity, chainHi = double.NegativeInfinity;
+        foreach (int i in chain)
+        {
+            chainLo = Math.Min(chainLo, uvAll[i].Y);
+            chainHi = Math.Max(chainHi, uvAll[i].Y);
+        }
+        var levels = poleBelow
+            ? NaturalValues(surface.DomainV.Start, stepV, vFar + stepV / 2, chainLo - stepV / 2)
+            : NaturalValues(surface.DomainV.Start, stepV, chainHi + stepV / 2, vFar - stepV / 2);
+        if (levels.Count == 0)
+            return null;
+        var us = PeriodicNaturalU(surface, period, stepU, uvAll[chain[0]].X);
+        if (us is null)
+            return null;
+
+        int mark = uvAll.Count;
+        List<(int A, int B, int C)>? Fail()
+        {
+            uvAll.RemoveRange(mark, uvAll.Count - mark);
+            pointsAll.RemoveRange(mark, pointsAll.Count - mark);
+            return null;
+        }
+
+        // Chains ordered by ascending v so every strip sweep is lower-to-upper CCW.
+        var chains = new List<List<int>>(levels.Count + 1);
+        foreach (double v in levels)
+            chains.Add(BuildRow(surface, period, us, v, uvAll, pointsAll));
+        if (poleBelow)
+            chains.Add(chain);
+        else
+            chains.Insert(0, chain);
+
+        var triangles = new List<(int A, int B, int C)>();
+        for (int k = 0; k + 1 < chains.Count; k++)
+        {
+            bool chainAdjacent = ReferenceEquals(chains[k], chain) || ReferenceEquals(chains[k + 1], chain);
+            if (!StripBetween(
+                    surface, period, stepU, stepV, uvAll, pointsAll, triangles, boundaryEdges,
+                    chains[k], chains[k + 1], chainAdjacent))
+                return Fail();
+        }
+
+        var fanChain = poleBelow ? chains[0] : chains[^1];
+        for (int i = 0; i + 1 < fanChain.Count; i++)
+        {
+            triangles.Add(poleBelow
+                ? (fanChain[i + 1], fanChain[i], poleIndex)
+                : (fanChain[i], fanChain[i + 1], poleIndex));
+            // Every fan edge is refinement-exempt, not just the two seam chords: the
+            // pole vertex carries an ARBITRARY u (half a period from the row's start),
+            // so a fan edge's uv u-span is an artifact, not curvature — and the fan is
+            // already within ~1.5 natural steps of the pole. Refining it bisects a tiny
+            // polar ring at scattered azimuths and folds it (measured: a revolved
+            // vase's pole cap forced through this path went from clean to 934 folds).
+            boundaryEdges.Add(EdgeKey(fanChain[i], poleIndex));
+        }
+        boundaryEdges.Add(EdgeKey(fanChain[^1], poleIndex));
+
+        // Closing guard over the covered region: the ring chain, the seam-tail zigzag to
+        // the pole and back up the seam heads (the two zigzags are exact one-period
+        // translates, so the region is what the strips + fan cover by construction).
+        // Head/tail lists are ordered FROM the chain TOWARD the pole.
+        var polewardHeads = new List<int>();
+        var polewardTails = new List<int>();
+        foreach (var c in chains)
+        {
+            if (ReferenceEquals(c, chain))
+                continue;
+            polewardHeads.Add(c[0]);
+            polewardTails.Add(c[^1]);
+        }
+        if (poleBelow)
+        {
+            // chains ascend in v, so with the pole below, collection order was
+            // pole-to-chain; flip to chain-to-pole.
+            polewardHeads.Reverse();
+            polewardTails.Reverse();
+        }
+        // Walk: chain forward, tails toward the pole, the pole, heads back to the chain.
+        var outline = new List<int>(chain.Count + 2 * polewardHeads.Count + 1);
+        outline.AddRange(chain);
+        outline.AddRange(polewardTails);
+        outline.Add(poleIndex);
+        for (int i = polewardHeads.Count - 1; i >= 0; i--)
+            outline.Add(polewardHeads[i]);
+        double target = Math.Abs(RingArea(uvAll, outline));
+        double sum = 0;
+        foreach (var (a, b, c) in triangles)
+            sum += Math.Abs((uvAll[b] - uvAll[a]).Cross(uvAll[c] - uvAll[a])) / 2;
+        if (Math.Abs(sum - target) > 1e-9 * target)
+            return Fail();
+
+        // Seam chords, chain to pole on both sides.
+        var headSeam = new List<int> { chain[0] };
+        var tailSeam = new List<int> { chain[^1] };
+        headSeam.AddRange(polewardHeads);
+        tailSeam.AddRange(polewardTails);
+        headSeam.Add(poleIndex);
+        tailSeam.Add(poleIndex);
+        for (int i = 0; i + 1 < headSeam.Count; i++)
+        {
+            boundaryEdges.Add(EdgeKey(headSeam[i], headSeam[i + 1]));
+            boundaryEdges.Add(EdgeKey(tailSeam[i], tailSeam[i + 1]));
         }
         return triangles;
     }
@@ -566,6 +1199,8 @@ internal static class TrimmedFaceTessellator
     private static List<(int A, int B, int C)>? TriangulateBand(
         Surface surface,
         double period,
+        double stepU,
+        double stepV,
         List<List<Vector2d>> loopUv,
         List<List<Vector3d>> loopPoints,
         List<int> windings,
@@ -590,6 +1225,16 @@ internal static class TrimmedFaceTessellator
                 loopUv[0].Average(p => p.Y) <= loopUv[1].Average(p => p.Y);
             var bottom = firstIsBottom ? first : second;
             var top = firstIsBottom ? second : first;
+
+            // A band spanning natural v rows takes them into its BASE triangulation —
+            // the accuracy has to come from the base, not from refinement (see
+            // RowedPeriodicBand). The rowless sweep below stays as the fallback and as
+            // the path for ruled or single-row bands.
+            if (RowedPeriodicBand(
+                    surface, period, stepU, stepV, uvAll, pointsAll, boundaryEdges,
+                    bottom, top, anchor) is { } rowed)
+                return rowed;
+
             boundaryEdges.Add(EdgeKey(bottom[0], top[0]));
             boundaryEdges.Add(EdgeKey(bottom[^1], top[^1]));
 
@@ -651,16 +1296,32 @@ internal static class TrimmedFaceTessellator
             int poleIndex = uvAll.Count;
             uvAll.Add(new Vector2d(uvAll[chain[0]].X + period / 2, vFar));
             pointsAll.Add(pole);
-            boundaryEdges.Add(EdgeKey(chain[0], poleIndex));
-            boundaryEdges.Add(EdgeKey(chain[^1], poleIndex));
 
             bool poleBelow = vFar < meanV;
+
+            // A deep cap takes the natural grid's interior rows between the chain and
+            // the pole (see RowedPoleFan); the direct fan below stays as the fallback
+            // and as the path for caps within ~1.5 natural steps of the pole.
+            if (RowedPoleFan(
+                    surface, period, stepU, stepV, uvAll, pointsAll, boundaryEdges,
+                    chain, poleIndex, vFar, poleBelow) is { } rowedCap)
+                return rowedCap;
+
             for (int i = 0; i + 1 < chain.Count; i++)
             {
                 triangles.Add(poleBelow
                     ? (chain[i + 1], chain[i], poleIndex)
                     : (chain[i], chain[i + 1], poleIndex));
+                // Fan edges are refinement-exempt (as in RowedPoleFan): the pole's u is
+                // arbitrary, so a fan edge's uv u-span is an artifact, not curvature.
+                // On a v-ruled cap (a revolved-line disk) the fan is already EXACT, and
+                // refining it bends the shared fan edges into overlapping folds —
+                // measured 467 folds at worst −1.0 on a flat vase disk. A v-curved cap
+                // reaching here (its rows declined) stays honestly coarse instead of
+                // being carried by refinement.
+                boundaryEdges.Add(EdgeKey(chain[i], poleIndex));
             }
+            boundaryEdges.Add(EdgeKey(chain[^1], poleIndex));
         }
         return triangles;
     }
@@ -954,7 +1615,11 @@ internal static class TrimmedFaceTessellator
     private static bool SweepMonotone(
         List<(int A, int B, int C)> triangles, List<Vector2d> uv, List<int> lower, List<int> upper)
     {
-        if (lower.Count + upper.Count < 3 || lower.Count == 0 || upper.Count == 0)
+        // An empty UPPER chain is the monotone-mountain case: the lower chain carries
+        // every vertex (both extremes included) and the base edge between the extremes
+        // is implicit — the final funnel close fans against it. Lower must be nonempty
+        // because the merge below seeds from it.
+        if (lower.Count + upper.Count < 3 || lower.Count == 0)
             return false;
 
         // Merge the chains by u; a tie keeps the lower chain's vertex first, so a vertical
@@ -977,8 +1642,25 @@ internal static class TrimmedFaceTessellator
             {
                 for (int s = stack.Count - 1; s > 0; s--)
                 {
-                    if (!AddOriented(triangles, uv, v.Index, stack[s].Index, stack[s - 1].Index))
-                        return false;
+                    if (AddOriented(triangles, uv, v.Index, stack[s].Index, stack[s - 1].Index))
+                        continue;
+                    // The closer is EXACTLY collinear with the stack's top segment.
+                    // Boundary samples carry ~1e-9 inverse-evaluation jitter, so this
+                    // only happens on CONSTRUCTED vertices — interior row paths and
+                    // seam splits, which sit at bit-equal levels — and the standard fan
+                    // from the closer would emit zero-area facets or drop the run.
+                    // Fan the remaining funnel [stack[0..s], closer] from its BOTTOM
+                    // vertex instead: the stack chain is reflex, so its vertices are in
+                    // angular order from either end and the bottom sees them all. A
+                    // remainder that is entirely collinear still fails here, which is
+                    // the degenerate-region refusal this method has always made.
+                    for (int t = 1; t <= s; t++)
+                    {
+                        if (!AddOriented(triangles, uv, stack[0].Index, stack[t].Index,
+                                t == s ? v.Index : stack[t + 1].Index))
+                            return false;
+                    }
+                    break;
                 }
                 var previous = order[k - 1];
                 stack.Clear();
@@ -1431,11 +2113,16 @@ internal static class TrimmedFaceTessellator
         if (double.IsInfinity(stepU) && double.IsInfinity(stepV))
             return true;
 
+        // Per-axis (max-norm) step metric, deliberately NOT the 2-norm: the natural
+        // grid's own cell diagonal spans one step in EACH axis, and under a 2-norm it
+        // measures sqrt(2) — so refinement would bisect every diagonal of the very grid
+        // that defines the quality bar, doubling the mesh while adding nothing the grid
+        // itself has. An edge is oversized only when some single axis exceeds one step.
         double MetricSquared((int, int) e)
         {
             double du = double.IsInfinity(stepU) ? 0 : (uv[e.Item2].X - uv[e.Item1].X) / stepU;
             double dv = double.IsInfinity(stepV) ? 0 : (uv[e.Item2].Y - uv[e.Item1].Y) / stepV;
-            return du * du + dv * dv;
+            return Math.Max(du * du, dv * dv);
         }
         bool Oversized((int, int) e) => MetricSquared(e) > 1 + 1e-9;
 

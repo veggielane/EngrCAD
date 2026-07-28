@@ -121,7 +121,7 @@ internal static class TessellationQuality
     /// points report the same convention.</para>
     /// </summary>
     internal static SolidReport AuditTrimmedPath(
-        BrepSolid solid, int segmentsPerCircle, int curveSamples)
+        BrepSolid solid, int segmentsPerCircle, int curveSamples, bool refine = true)
     {
         var edgePolylines = new Dictionary<BrepEdge, List<Vector3d>>();
         foreach (var edge in solid.Edges)
@@ -135,7 +135,7 @@ internal static class TessellationQuality
                 continue;
             var polygons = new List<IReadOnlyList<Vector3d>>();
             if (!TrimmedFaceTessellator.TryTessellate(
-                    face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? why))
+                    face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? why, refine))
             {
                 refusals.Add($"{face.Surface.GetType().Name}: {why}");
                 continue;

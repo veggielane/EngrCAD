@@ -41,11 +41,11 @@ public class TessellationCorpusQualityTests
     /// Named solids covering every tessellation path: planar caps, cylinder bands, natural
     /// grids on all four generated surface types, helical bands, and — the reason this
     /// file exists — every trimmed-face tier (zip band, slab-swept band with holes,
-    /// periodic band, pole fan, ear clip).
+    /// periodic band with interior rows, pole fan, ear clip).
     /// </summary>
     public static TheoryData<string> Corpus =>
     [
-        "drilled plate", "cross-drilled housing", "spherical cavity",
+        "drilled plate", "cross-drilled housing", "spherical cavity", "drilled sphere",
         "threaded rod", "threaded hole",
         "loft", "shelled tray", "drafted boss",
         "filleted box", "filleted L", "filleted hexagon", "chamfered box", "rounded box",
@@ -68,8 +68,15 @@ public class TessellationCorpusQualityTests
             case "spherical cavity":
                 // A spherical pocket breaking out of one face: the trimmed pole-fan and
                 // two-ring band tiers, without the pathology locked by
-                // SpherePiercingEverySide_IsCarriedByRefinementAndSaysSoLoudly.
+                // SpherePiercingEverySide_HasNoFoldsAndABoundedResidual.
                 return (Shape.Box(40, 40, 30) - Shape.Sphere(12).Translate((0, 0, 10))).ToBrep();
+            case "drilled sphere":
+                // A cylinder drilled straight through a sphere: the sphere face becomes a
+                // two-ring periodic band spanning nearly pole to pole — the shape that
+                // used to be CARRIED by refinement (43 948 facets, 12 folds, worst
+                // −0.2022 at 32/24; refused outright at 128/96) and now takes the
+                // natural grid's interior rows in its base triangulation.
+                return (Shape.Sphere(10) - Shape.Cylinder(3, 40)).ToBrep();
             case "threaded rod":
                 return SolidFactory.MakeThreadedRod(ThreadProfile(), ThreadPitch, 6);
             case "threaded hole":
@@ -307,6 +314,9 @@ public class TessellationCorpusQualityTests
             { "cone", Math.PI * 12 * (64 + 24 + 9) / 3.0 },
             // 60 x 40 x 10 less three through-bores of diameter 6.
             { "drilled plate", 60.0 * 40 * 10 - 3 * Math.PI * 9 * 10 },
+            // The napkin ring: a sphere of radius R with a through-hole of radius r
+            // keeps 4 pi/3 (R^2 - r^2)^(3/2).
+            { "drilled sphere", 4 * Math.PI / 3 * Math.Pow(100 - 9, 1.5) },
             // A quadratic-NURBS-path sweep of a radius-5 circle: Pappus does not apply to
             // a curved path, so the reference is the finest tessellation and only the
             // RATIO is asserted (see the test).
@@ -344,49 +354,48 @@ public class TessellationCorpusQualityTests
             $"(errors {coarse:E3} / {medium:E3} / {fine:E3})");
     }
 
-    // ---- the one member the gate cannot yet hold ----
+    // ---- the one member still below the gate's floor ----
 
     /// <summary>
     /// <c>Box(20, 20, 20) − Sphere(12)</c> — a sphere larger than the box it is cut from,
     /// so the cavity breaks out of ALL SIX faces and what remains is a twelve-edge frame.
-    /// It is the only construction found that the trimmed band path cannot carry, and it
-    /// is locked here rather than quietly dropped from <see cref="Corpus"/>.
-    /// <para>The cavity wall is a band whose two chains are a 48-sample latitude circle
-    /// against a 240-sample rim scalloped by four side-face cuts, spanning about fifteen
-    /// natural v steps. The monotone sweep triangulates that region correctly — every base
-    /// facet has positive uv area — but the base mesh has NO interior rows, so every one of
-    /// them spans the band's whole height and <c>Refine</c> has to manufacture the interior
-    /// by midpoint bisection. On a surface this strongly curved the surface midpoint of a
-    /// long chord lies far enough off the chord to invert the halves, so the folds this
-    /// test records are made BY refinement, not left by the zip. Refinement is not a
-    /// convergence mechanism — the base triangulation has to carry the accuracy — and this
-    /// is the corpus member that proves it: see todo.md's Interop section.</para>
-    /// <para>Measured at 48/24 after routing the two-ring band through the sweep: 101 246
-    /// facets, 266 folded, worst agreement −0.2426 (it was 102 226 / 2 226 / −0.9978 from
-    /// the merge walk). Volume converges at ratios 2.64 then 2.13, not 4.</para>
+    /// The cavity wall splits into two periodic bands whose chains run pole to pole,
+    /// scalloped by every hole rim they thread through — the hardest trimmed shape the
+    /// suite knows, locked here rather than quietly dropped from <see cref="Corpus"/>.
+    /// <para>This used to be the standing proof that refinement is not a convergence
+    /// mechanism: with no interior rows the base facets spanned the band's whole height
+    /// (~15 natural v steps) and midpoint bisection inverted the halves — 101 246 facets,
+    /// 266 folded, worst agreement −0.2426 at 48/24, REFUSING outright at 96/48. Interior
+    /// rows in the base triangulation (partial level paths threading between the
+    /// scallops, plus seam-chord splits) fixed the mechanism: the counts below are ~22x
+    /// smaller, fold-free at every density, and 96/48 now tessellates.</para>
+    /// <para>What keeps it out of <see cref="Corpus"/> is the residual: at each hole
+    /// rim's u-extreme the rim tangent goes vertical, no level path can anchor cleanly,
+    /// and a narrow column a few natural steps tall remains for refinement to fill —
+    /// worst agreement 0.7024 at 48/24 against the corpus floor of 0.9239. Honest but
+    /// below the bar; filed in todo.md.</para>
     /// </summary>
     [Fact]
-    public void SpherePiercingEverySide_IsCarriedByRefinementAndSaysSoLoudly()
+    public void SpherePiercingEverySide_HasNoFoldsAndABoundedResidual()
     {
         var solid = (Shape.Box(20, 20, 20) - Shape.Sphere(12)).ToBrep();
-        var report = TessellationQuality.Audit(solid, 48, 24);
 
-        // A committed baseline, not a tolerance: if these move in EITHER direction the
-        // cause must be understood and the numbers updated deliberately.
-        Assert.InRange(report.Folds, 1, 266);
-        Assert.InRange(report.Triangles, 1, 105_000);
-        Assert.InRange(report.WorstDot, -0.25, 0);
-        Assert.Equal(0, report.Slivers);
+        // Committed baselines, not tolerances: a move in EITHER direction wants
+        // understanding before the numbers are updated. Measured 796 / 4 608 / 15 400
+        // facets at worst 0.8832 / 0.7024 / 0.9240.
+        foreach (var (segmentsPerCircle, curveSamples, maxTriangles, worstFloor) in
+            (ReadOnlySpan<(int, int, int, double)>)[(16, 8, 1_000, 0.85), (48, 24, 6_000, 0.70), (96, 48, 20_000, 0.90)])
+        {
+            var report = TessellationQuality.Audit(solid, segmentsPerCircle, curveSamples);
+            string where = $"at {segmentsPerCircle}/{curveSamples}: {report.Describe()}";
+            Assert.True(report.Folds == 0, $"facets face inward — {where}");
+            Assert.Equal(0, report.Slivers);
+            Assert.InRange(report.Triangles, 1, maxTriangles);
+            Assert.True(report.WorstDot >= worstFloor, $"worst agreement regressed — {where}");
 
-        // Still welds closed at the density it can reach — wrong-looking, never open.
-        var mesh = BRepTessellator.Tessellate(solid, 48, 24);
-        mesh.Validate();
-        Assert.True(mesh.IsClosed);
-
-        // And past that density it REFUSES rather than handing back the natural grid.
-        var error = Assert.Throws<NotSupportedException>(
-            () => BRepTessellator.Tessellate(solid, 96, 48));
-        Assert.Contains("curvature refinement did not converge", error.Message);
-        Assert.Contains("open mesh", error.Message);
+            var mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples);
+            mesh.Validate();
+            Assert.True(mesh.IsClosed, $"welded open — {where}");
+        }
     }
 }

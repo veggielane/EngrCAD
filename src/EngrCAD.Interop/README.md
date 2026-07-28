@@ -64,8 +64,21 @@ engines.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:
-    1. **Strip sweep** — a single-loop region whose boundary is a *band*: two chains
-       monotone in one surface parameter. The chain direction is the parameter carrying
+    1. **Strip, interior rows first** — a single-loop region whose boundary is a *band*:
+       two chains monotone in one surface parameter. When the cross direction is curved
+       (finite natural step), `RowedStrip` inserts the natural grid's own sample rows
+       into the BASE triangulation before anything else: one constant-cross path per
+       inside stretch of each natural level (crossings taken in key order alternate
+       enter/leave, so a level threads *between* scallops), anchored at existing
+       boundary vertices — never an invented boundary point — with interior vertices at
+       the natural key values. Each path cuts its piece in two; the sub-bands, at most
+       ~1.5 steps tall, go through the same monotone stack sweep, which between two full
+       rows reproduces the untrimmed grid's quads exactly. A uv-area identity is the
+       closing guard; any snag falls back to the rowless sweep below, so the rowed path
+       can never be worse than what it replaces. Rows are tried in BOTH key orientations
+       before any rowless fallback — a rowed triangulation in the less-preferred key
+       beats a rowless one in the preferred key.
+       The rowless path: the chain direction is the parameter carrying
        the natural sampling, so the cross edges lie across the ruled or coarser one
        (getting that backwards would fan a 2-sample end against a 25-sample chain). The
        loop is split at its extreme-key vertices and handed to the same **stack sweep**
@@ -107,16 +120,23 @@ engines.
        cap. A global uv-area identity (outer ring less the holes) is the closing guard,
        since the per-slab tests cannot see a gap or an overlap between slabs. Ear
        clipping remains the fallback for holes that do not decompose this way.
-    3. **Periodic band** — loops winding the period (rings subdivided into arcs) go
-       through the same **stack sweep**, or fan to a pole for a single winding chain.
-       The sweep replaced a plain merge walk here for the reason `ZipSlabs` records: a
-       merge pairs the chains by u, so wherever one chain carries many samples between
-       two of the other's it fans them from a single far vertex, and where that stretch
-       turns back on itself consecutive fan triangles invert. Measured on
-       `Box(20, 20, 20) − Sphere(12)`, whose cavity wall runs a 48-sample latitude circle
-       against a 240-sample rim scalloped by four side-face cuts: **2 226 inverted facets
-       (worst agreement −0.9978) → 266 (−0.2426)**. The merge walk is kept as a fallback
-       for chains the sweep declines (either not u-monotone, or crossing).
+    3. **Periodic band, interior rows first** — loops winding the period (rings
+       subdivided into arcs) get full-period rows at the natural v values strictly
+       between the rings (`RowedPeriodicBand`: natural u columns plus a closure
+       duplicate, one `SweepMonotone` per adjacent chain pair — row-to-row strips ARE
+       the untrimmed grid's zigzag), and a single winding chain gets rows between chain
+       and pole with only the last row fanned to the pole point (`RowedPoleFan`).
+       Chain-adjacent strips may still span many steps where a ring chain scallops
+       through hole rims, so they get their own partial rows via `RowedStrip` on the
+       strip's unrolled cycle — with the strip's two seam chords pre-split at the
+       natural levels, which is legal precisely because a seam chord is an unrolling
+       artifact internal to the face (the right chord is the left's exact one-period
+       translate; each split vertex's 3D point is computed once and copied to its twin;
+       every sub-chord is marked as boundary so the pair still welds bit-for-bit).
+       Pole-fan edges are refinement-exempt: the pole's u is arbitrary, so a fan edge's
+       uv u-span is an artifact, not curvature — refining it bent a *flat* vase disk
+       into 467 folds. The rowless sweep (and behind it the old merge walk) remains the
+       fallback for chains the rows decline.
     4. **Ear clip** — everything else, by an exact-coordinate clipper (shortest-diagonal
        ears, on-edge points block, holes bridged).
 
@@ -189,15 +209,25 @@ engines.
     it is correct on any monotone slab, and on the free slabs it reproduces exactly the
     natural grid's zigzag.
 
-    Other numerical lessons baked in: earcut's exact-collinear filtering would drop
-
-    fragments such as a bore wall cut through by a slot) go through
-    `TrimmedFaceTessellator`: loops pulled into (u, v), non-wrapping regions ear-clipped
-    by an exact-coordinate clipper (shortest-diagonal ears, on-edge points block, holes
-    bridged), band-like regions (loops winding the period — rings subdivided into arcs)
-    strip-zipped chain-to-chain or fanned to a pole, then oversized interior edges
-    midpoint-split to the natural grid density with new vertices on the exact surface.
-    Boundary vertices are always the exact shared edge samples, so seams weld at 1e-9.
+    **Interior rows are what retired "carried by refinement".** Measured before/after on
+    `Sphere(10) − Cylinder(3, 40)` (a drilled sphere, whose wall is a two-ring periodic
+    band spanning nearly pole to pole): **43 948 facets / 12 folds / worst −0.2022 →
+    3 244 / 0 / 0.9994** at 32/24, an outright refusal at 128/96 → 49 902 clean facets,
+    and volume error falling at ratios 4.35 / 5.08 per density doubling (napkin-ring
+    analytic 3 636.2246) — it is now a corpus member. `Box(20,20,20) − Sphere(12)`, the
+    corpus's hardest shape: **101 246 / 266 folds / −0.2426 → 4 608 / 0 folds / 0.7024**
+    at 48/24, tessellating at 96/48 where it used to refuse (its residual — a narrow
+    column at each hole rim's u-extreme, where the rim tangent goes vertical and no
+    level path can anchor — keeps it just below the corpus floor; filed in todo.md).
+    With rows in place the corpus measures **refinement idle on 16 of 19 members'
+    trimmed faces** (identical output with it on or off); it stays for the residual
+    columns it still genuinely fixes (Box − Sphere's base has 3 marginal folds that
+    refinement REPAIRS), demoted from convergence mechanism to residue duty. Two rules
+    fell out: the refinement step metric is **per-axis max-norm**, never the 2-norm — a
+    grid cell's own diagonal spans one step in EACH axis, and a 2-norm bisects the very
+    grid that defines the quality bar — and **pole-fan edges are refinement-exempt**,
+    because the pole's u is arbitrary so a fan edge's uv u-span is an artifact
+    (refining a *flat* vase disk's fan bent it into 467 folds at worst −1.0).
   - **Progress + cancellation** (`ProgressCancel? progress = null`, free when absent) is
     polled at **edge and face boundaries** — the coarse checkpoints, since one trimmed face
     is an indivisible ear-clipping job — and cancellation throws rather than returning a
