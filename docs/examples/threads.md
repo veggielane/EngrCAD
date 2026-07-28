@@ -9,10 +9,22 @@ diameter, root flat P/4 at the minor diameter d − (5/4)·H, thread depth 5H/8.
 custom `ThreadSpec(nominalDiameter, pitch)` covers anything outside the catalog;
 right-hand threads only.
 
+`StandardThreads.Fine(size)` gives the first-choice ISO 261 **fine** pitch of the same
+sizes, and `Metric(size, pitch)` names a second- or third-choice one:
+
 ```csharp
-var m8 = StandardThreads.Metric(8);      // M8×1.25, tap drill 6.8
+var m8 = StandardThreads.Metric(8);      // M8×1.25 coarse, tap drill 6.8
+var m8f = StandardThreads.Fine(8);       // M8×1 fine,      tap drill 7.0
+var m10 = StandardThreads.Metric(10, 0.75);                 // third-choice fine
 var odd = new ThreadSpec(nominalDiameter: 7, pitch: 1.0);   // custom 60° thread
+
+StandardThreads.Pitches(10);             // [1.5, 1.25, 1.0, 0.75] — coarse, then fine
+StandardHoles.Tapped(m8f);               // the pilot for any spec, from its own tap drill
 ```
+
+Fine tap drills are exactly `d − P`; the coarse chart rounds to a stock drill (6.8 for
+M8, not 6.75), which is why only the coarse table stores a second column. ⚠ Verify the
+pitch and tap-drill values against a current standard before production use.
 
 ## External threads
 

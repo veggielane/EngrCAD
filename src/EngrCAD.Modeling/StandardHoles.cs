@@ -76,6 +76,18 @@ public static class StandardHoles
     public static HoleSpec Tapped(double size) => HoleSpec.Simple(Row(size).TapDrill);
 
     /// <summary>
+    /// Tap pilot hole for ANY <see cref="ThreadSpec"/> — fine pitches
+    /// (<c>Tapped(StandardThreads.Fine(10))</c>) and custom threads included. The spec
+    /// already carries its own tap drill, so this is the composition rather than a second
+    /// table that could drift from the first.
+    /// </summary>
+    public static HoleSpec Tapped(ThreadSpec spec)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        return HoleSpec.Simple(spec.TapDrillDiameter);
+    }
+
+    /// <summary>
     /// The general-purpose twist drill's included point angle (118°), for
     /// <see cref="HoleSpec.WithTipAngle"/>.
     /// </summary>

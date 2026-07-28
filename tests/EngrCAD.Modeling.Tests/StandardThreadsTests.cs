@@ -69,4 +69,73 @@ public class StandardThreadsTests
         Assert.Throws<ArgumentOutOfRangeException>(() => StandardThreads.Metric(7));
         Assert.Throws<ArgumentOutOfRangeException>(() => StandardThreads.Metric(16));
     }
+
+    [Theory]
+    [InlineData(2.0, 0.25)]
+    [InlineData(2.5, 0.35)]
+    [InlineData(3.0, 0.35)]
+    [InlineData(4.0, 0.50)]
+    [InlineData(5.0, 0.50)]
+    [InlineData(6.0, 0.75)]
+    [InlineData(8.0, 1.00)]
+    [InlineData(10.0, 1.25)]
+    [InlineData(12.0, 1.50)]
+    public void FineSeries_IsTheFirstChoicePitch(double size, double pitch)
+    {
+        var spec = StandardThreads.Fine(size);
+        Assert.Equal(pitch, spec.Pitch, 12);
+        Assert.Equal(size, spec.MajorDiameter, 12);
+        // A fine thread is always finer than the coarse one of the same size.
+        Assert.True(spec.Pitch < StandardThreads.Metric(size).Pitch);
+        // Same ISO 68-1 profile, just a smaller P: the formulas are the spec's, not the
+        // table's, so this is the check that the new rows go through the same geometry.
+        double h = Math.Sqrt(3) / 2 * pitch;
+        Assert.Equal(size - 0.75 * h, spec.PitchDiameter, 12);
+        Assert.Equal(size - 1.25 * h, spec.MinorDiameter, 12);
+    }
+
+    [Theory]
+    [InlineData(8.0, 1.00)]
+    [InlineData(10.0, 1.25)]
+    [InlineData(12.0, 1.50)]
+    public void FineTapDrillsAreExactlyDiameterMinusPitch(double size, double pitch)
+    {
+        // Unlike the coarse chart, whose d − P lands between stock drills and is rounded,
+        // the fine pitches are round numbers to begin with — so there is no second column
+        // to keep in step, and none is stored.
+        Assert.Equal(size - pitch, StandardThreads.Fine(size).TapDrillDiameter, 12);
+    }
+
+    [Fact]
+    public void SecondChoiceFinePitchesAreReachableByName()
+    {
+        Assert.Equal(0.75, StandardThreads.Metric(8, 0.75).Pitch, 12);
+        Assert.Equal(1.0, StandardThreads.Metric(10, 1.0).Pitch, 12);
+        Assert.Equal(0.75, StandardThreads.Metric(10, 0.75).Pitch, 12);
+        Assert.Equal("M10×0.75", StandardThreads.Metric(10, 0.75).Designation);
+        // The coarse pitch is reachable through the same door.
+        Assert.Equal(6.80, StandardThreads.Metric(8, 1.25).TapDrillDiameter, 12);
+    }
+
+    [Fact]
+    public void AnUncataloguedPitchNamesWhatIsAvailable()
+    {
+        var error = Assert.Throws<ArgumentOutOfRangeException>(() => StandardThreads.Metric(8, 1.5));
+        Assert.Contains("1.25", error.Message);
+        Assert.Contains("0.75", error.Message);
+
+        // Every size lists coarse first, then the fine series from coarsest down.
+        Assert.Equal([1.5, 1.25, 1.0, 0.75], StandardThreads.Pitches(10));
+        Assert.Throws<ArgumentOutOfRangeException>(() => StandardThreads.Fine(7));
+    }
+
+    [Fact]
+    public void AFinePilotHoleComesFromTheSpecItself()
+    {
+        // One composition rather than a second tap-drill table that could drift. The
+        // callout is the public window onto a spec's bore diameter.
+        Assert.Equal("⌀8.75 ↧10", HoleCallout.Text(StandardHoles.Tapped(StandardThreads.Fine(10)), 10));
+        Assert.Equal(HoleCallout.Text(StandardHoles.Tapped(6), 10),
+            HoleCallout.Text(StandardHoles.Tapped(StandardThreads.Metric(6)), 10));
+    }
 }

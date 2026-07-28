@@ -499,7 +499,16 @@ var block = Shape.Box(30, 20, 12)
 **`StandardThreads.Metric(size)`** supplies the ISO 261/262 coarse series M2–M12 with
 the ISO 68-1 basic profile (`ThreadSpec` documents the formulas: H = (√3/2)P, crest
 flat P/8 at d, root flat P/4 at d1 = d − (5/4)H, depth 5H/8); custom `ThreadSpec`s are
-allowed. `ExternalThread` is a threaded rod along +Z (45° lead-in chamfers to the minor
+allowed. **`StandardThreads.Fine(size)`** is the first-choice ISO 261 fine pitch of the
+same sizes (M8×1, M10×1.25, M12×1.5), **`Metric(size, pitch)`** names a second- or
+third-choice one (M10×0.75), and `Pitches(size)` lists what a size carries — coarse
+first, then the fine series from coarsest down; an uncatalogued pitch is refused with
+that list in the message. Fine tap drills are exactly `d − P` and no second column stores
+them: unlike the coarse chart, whose `d − P` falls between stock drills and is rounded,
+the fine pitches are round numbers to begin with. `StandardHoles.Tapped(ThreadSpec)` cuts
+the pilot for any spec, fine or custom, from the spec's own tap drill. ⚠ Verify the pitch
+and tap-drill columns against a current standard before production use.
+`ExternalThread` is a threaded rod along +Z (45° lead-in chamfers to the minor
 diameter on both ends by default); `ThreadedHole` cuts a tap-drill pilot (via `Drill`,
 truncating the internal crests as tapping does) plus a modeled thread void per point.
 

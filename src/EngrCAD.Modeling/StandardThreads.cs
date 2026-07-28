@@ -80,10 +80,13 @@ public sealed class ThreadSpec
 }
 
 /// <summary>
-/// Standard metric thread catalog: the ISO 261/262 coarse-pitch series M2–M12 with the
-/// ISO 68-1 basic profile (see <see cref="ThreadSpec"/> for the profile formulas).
-/// Tap-drill diameters reuse the <see cref="StandardHoles"/> table (the standard-chart
-/// values, i.e. d − P rounded to a stock drill: 6.8 for M8, 10.2 for M12).
+/// Standard metric thread catalog: the ISO 261/262 coarse- and fine-pitch series M2–M12
+/// with the ISO 68-1 basic profile (see <see cref="ThreadSpec"/> for the profile
+/// formulas). Coarse tap-drill diameters reuse the <see cref="StandardHoles"/> table (the
+/// standard-chart values, i.e. d − P rounded to a stock drill: 6.8 for M8, 10.2 for M12);
+/// fine pitches are already round numbers, so their tap drills are exactly d − P.
+/// ⚠ Verify the pitch and tap-drill columns against a current standard before production
+/// use.
 /// </summary>
 public static class StandardThreads
 {
@@ -101,6 +104,23 @@ public static class StandardThreads
         [12.0] = (1.75, 10.20),
     };
 
+    // ISO 261 fine pitches, coarsest (first choice) first — the order Fine() reads.
+    // Every fine tap drill is exactly d − P, so no second column is needed: unlike the
+    // coarse series, whose d − P lands between stock drills and is rounded on the chart,
+    // the fine pitches are round numbers to begin with (M8x1 -> 7.0, M10x1.25 -> 8.75).
+    private static readonly Dictionary<double, double[]> FinePitches = new()
+    {
+        [2.0] = [0.25],
+        [2.5] = [0.35],
+        [3.0] = [0.35],
+        [4.0] = [0.5],
+        [5.0] = [0.5],
+        [6.0] = [0.75],
+        [8.0] = [1.0, 0.75],
+        [10.0] = [1.25, 1.0, 0.75],
+        [12.0] = [1.5, 1.25, 1.0],
+    };
+
     /// <summary>Coarse-pitch metric thread for an M<paramref name="size"/> fastener
     /// (e.g. <c>Metric(8)</c> → M8×1.25).</summary>
     public static ThreadSpec Metric(double size) =>
@@ -108,5 +128,47 @@ public static class StandardThreads
             ? new ThreadSpec(size, row.Pitch, row.TapDrill)
             : throw new ArgumentOutOfRangeException(nameof(size),
                 $"M{size:g3} is not in the coarse-thread table (available: " +
+                $"{string.Join(", ", Coarse.Keys.OrderBy(k => k).Select(k => $"M{k:g3}"))}).");
+
+    /// <summary>
+    /// The first-choice FINE-pitch metric thread for an M<paramref name="size"/> fastener
+    /// (e.g. <c>Fine(8)</c> → M8×1, <c>Fine(10)</c> → M10×1.25). Sizes carrying more than
+    /// one fine pitch are reached through <see cref="Metric(double, double)"/>.
+    /// </summary>
+    public static ThreadSpec Fine(double size) => Metric(size, FinePitchesFor(size)[0]);
+
+    /// <summary>
+    /// A catalogued metric thread at an explicit <paramref name="pitch"/> — the way to
+    /// name a second- or third-choice fine pitch such as M10×0.75. Pitches outside the
+    /// catalogue are refused by name; construct a <see cref="ThreadSpec"/> directly for
+    /// genuinely non-standard threads.
+    /// </summary>
+    public static ThreadSpec Metric(double size, double pitch)
+    {
+        foreach (double fine in FinePitchesFor(size))
+        {
+            // Exact match against a catalogue literal: these are table lookups, not
+            // measurements, and a near-miss is a caller typo worth reporting.
+            if (pitch == fine)
+                return new ThreadSpec(size, pitch, size - pitch);
+        }
+        if (Coarse.TryGetValue(size, out var coarse) && pitch == coarse.Pitch)
+            return new ThreadSpec(size, pitch, coarse.TapDrill);
+        throw new ArgumentOutOfRangeException(nameof(pitch),
+            $"M{size:g3}×{pitch:g4} is not in the catalogue; M{size:g3} is available at " +
+            $"{string.Join(", ", Pitches(size).Select(p => p.ToString("g4")))}.");
+    }
+
+    /// <summary>Every catalogued pitch for a size, coarse first then the fine series.</summary>
+    public static IReadOnlyList<double> Pitches(double size) =>
+        [Coarse[ValidSize(size)].Pitch, .. FinePitchesFor(size)];
+
+    private static double[] FinePitchesFor(double size) => FinePitches[ValidSize(size)];
+
+    private static double ValidSize(double size) =>
+        Coarse.ContainsKey(size)
+            ? size
+            : throw new ArgumentOutOfRangeException(nameof(size),
+                $"M{size:g3} is not in the thread table (available: " +
                 $"{string.Join(", ", Coarse.Keys.OrderBy(k => k).Select(k => $"M{k:g3}"))}).");
 }
