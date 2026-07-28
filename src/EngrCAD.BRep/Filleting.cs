@@ -123,20 +123,33 @@ public static class Filleting
     }
 
     /// <summary>
-    /// Fillets a set of EDGES rather than a face: the selection is resolved to the rim
-    /// features that reproduce it (see <see cref="RimFacesFor"/>) and applied in turn.
+    /// Fillets a set of EDGES rather than a face. Complete planar face rims resolve to
+    /// rim surgery exactly as before; a selection that stops PART-WAY along a rim now
+    /// resolves to contiguous runs blended with SETBACK terminations at each open end —
+    /// a planar cut perpendicular to the terminal edge at the stop vertex, exact
+    /// because the band's cross-section there is already planar (the industry default;
+    /// cliff and vertex-blend terminations stay refused). The whole selection is
+    /// grouped and validated BEFORE any surgery runs; a selection that fits neither
+    /// shape throws, naming the stranded edge. A lone edge lies on two planar faces;
+    /// the ambiguity resolves to the edge's first use, which only matters for the
+    /// asymmetric chamfer (fillets and symmetric chamfers are the same solid either
+    /// way).
     /// </summary>
     public static BrepSolid FilletEdges(BrepSolid solid, IEnumerable<BrepEdge> edges, double radius)
     {
         if (radius <= 0)
             throw new ArgumentOutOfRangeException(nameof(radius));
+        var (rims, runs) = ResolveSelection(solid, edges);
         var solidUnderConstruction = solid;
-        foreach (var face in RimFacesFor(solid, edges))
+        foreach (var face in rims)
             solidUnderConstruction = FilletRim(solidUnderConstruction, face, radius);
+        foreach (var run in runs)
+            solidUnderConstruction = RimSurgeon.OpenRun(solidUnderConstruction, run, radius, radius, fillet: true);
         return solidUnderConstruction;
     }
 
-    /// <summary>Chamfers a set of EDGES; see <see cref="FilletEdges"/> and <see cref="RimFacesFor"/>.</summary>
+    /// <summary>Chamfers a set of EDGES; see <see cref="FilletEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>
+    /// for how complete rims and partial runs resolve.</summary>
     public static BrepSolid ChamferEdges(BrepSolid solid, IEnumerable<BrepEdge> edges, double setback) =>
         ChamferEdges(solid, edges, setback, setback);
 
@@ -146,10 +159,120 @@ public static class Filleting
     {
         if (topSetback <= 0 || sideSetback <= 0)
             throw new ArgumentOutOfRangeException(nameof(topSetback));
+        var (rims, runs) = ResolveSelection(solid, edges);
         var solidUnderConstruction = solid;
-        foreach (var face in RimFacesFor(solid, edges))
+        foreach (var face in rims)
             solidUnderConstruction = ChamferRim(solidUnderConstruction, face, topSetback, sideSetback);
+        foreach (var run in runs)
+            solidUnderConstruction = RimSurgeon.OpenRun(solidUnderConstruction, run, topSetback, sideSetback, fillet: false);
         return solidUnderConstruction;
+    }
+
+    /// <summary>
+    /// Groups an edge selection into complete planar face rims (taken greedily first,
+    /// preserving the pre-run behaviour bit for bit) plus contiguous partial RUNS, each
+    /// attributed to the planar face carrying the most of the remaining selection
+    /// (ties to the edge's first use). Throws before any surgery when an edge fits
+    /// neither shape.
+    /// </summary>
+    private static (List<BrepFace> Rims, List<List<BrepEdge>> Runs) ResolveSelection(
+        BrepSolid solid, IEnumerable<BrepEdge> edges)
+    {
+        var remaining = new List<BrepEdge>();
+        foreach (var edge in edges)
+        {
+            if (!remaining.Any(e => ReferenceEquals(e, edge)))
+                remaining.Add(edge);
+        }
+        if (remaining.Count == 0)
+            throw new ArgumentException("No edges were selected.", nameof(edges));
+
+        var rims = new List<BrepFace>();
+        while (remaining.Count > 0)
+        {
+            var face = solid.Faces.FirstOrDefault(f =>
+                !f.IsReversed && f.IsPlanar(out _, out _) &&
+                !rims.Any(t => ReferenceEquals(t, f)) &&
+                f.OuterLoop.Coedges.All(c => remaining.Any(e => ReferenceEquals(e, c.Edge))));
+            if (face is null)
+                break;
+            rims.Add(face);
+            remaining.RemoveAll(e => face.OuterLoop.Coedges.Any(c => ReferenceEquals(c.Edge, e)));
+        }
+
+        var runs = new List<List<BrepEdge>>();
+        while (remaining.Count > 0)
+        {
+            var seed = remaining[0];
+            BrepFace? host = null;
+            int hostCount = -1;
+            foreach (var use in seed.Uses)
+            {
+                var candidate = use.Loop.Face;
+                if (candidate.IsReversed || !candidate.IsPlanar(out _, out _)
+                    || !ReferenceEquals(use.Loop, candidate.OuterLoop))
+                    continue;
+                int onFace = candidate.OuterLoop.Coedges.Count(c => remaining.Any(e => ReferenceEquals(e, c.Edge)));
+                if (onFace > hostCount)
+                {
+                    hostCount = onFace;
+                    host = candidate;
+                }
+            }
+            if (host is null)
+            {
+                throw new NotSupportedException(
+                    $"The edge from {seed.Curve.PointAt(seed.Domain.Start)} to " +
+                    $"{seed.Curve.PointAt(seed.Domain.End)} does not lie on any planar face's outer rim, so " +
+                    "neither rim surgery nor a terminated partial run can blend it.");
+            }
+
+            // Maximal contiguous groups of the remaining selection along the host's rim.
+            var loopCoedges = host.OuterLoop.Coedges;
+            int total = loopCoedges.Count;
+            var selected = new bool[total];
+            for (int i = 0; i < total; i++)
+                selected[i] = remaining.Any(e => ReferenceEquals(e, loopCoedges[i].Edge));
+            for (int i = 0; i < total; i++)
+            {
+                if (!selected[i] || selected[(i + total - 1) % total])
+                    continue;
+                var run = new List<BrepEdge>();
+                for (int k = i; selected[k % total]; k++)
+                {
+                    run.Add(loopCoedges[k % total].Edge);
+                    if (run.Count > total)
+                        throw new InvalidOperationException(
+                            "A fully selected rim survived the rim-resolution phase; this is a bug.");
+                }
+                runs.Add(run);
+            }
+            foreach (var run in runs)
+                remaining.RemoveAll(e => run.Any(r => ReferenceEquals(r, e)));
+        }
+
+        // Cross-group interference, checked BEFORE any surgery (all-or-nothing): a run
+        // touching a vertex that a resolved RIM will rebuild, or that another RUN also
+        // touches, is three-or-more blended edges meeting at one vertex — the shape
+        // that needs a spherical corner patch, not rim surgery.
+        var rimVertices = new HashSet<BrepVertex>(
+            rims.SelectMany(f => f.OuterLoop.Coedges).Select(c => c.StartVertex));
+        var runVertices = new HashSet<BrepVertex>();
+        foreach (var run in runs)
+        {
+            foreach (var vertex in run
+                         .SelectMany(e => new[] { e.StartVertex, e.EndVertex })
+                         .Distinct())
+            {
+                if (rimVertices.Contains(vertex) || !runVertices.Add(vertex))
+                    throw new NotSupportedException(
+                        $"The selection blends three or more edges meeting at {vertex.Position}: a " +
+                        "terminated run there would collide with another selected rim or run. Blend " +
+                        "complete rims and runs that stay clear of each other, or use FilletAllEdges " +
+                        "to round every edge of a convex solid (its vertices get spherical corner patches).");
+            }
+        }
+        return (rims, runs);
     }
 
     /// <summary>
@@ -1154,6 +1277,323 @@ public static class Filleting
             faces.Add(newFace);
             faces.AddRange(bands);
             return new BrepSolid([new BrepShell(faces)]);
+        }
+
+        // ---- partial runs: a band that stops mid-rim with SETBACK terminations ----
+
+        /// <summary>
+        /// Applies a rim fillet/chamfer to a contiguous PARTIAL run of a planar face's
+        /// outer rim, terminating each open end with the SETBACK termination — a planar
+        /// face in the plane perpendicular to the terminal edge at the run's end vertex,
+        /// which is exact because the band's cross-section there IS a planar quarter arc
+        /// (fillet) or segment (chamfer): the industry-default stop. The rim beyond the
+        /// run keeps its sharp edges and its corner verticals untouched; the top face
+        /// keeps the terminal vertex and gains one in-plane segment from it to the inset
+        /// boundary, the terminal side face gains the matching descent segment, and the
+        /// termination face closes the triangle between them and the band's end
+        /// cross-section. Interior run corners miter/blend exactly as full rims do.
+        /// <para>Terminal edges must be straight (an arc's termination is exact too, but
+        /// its cylindrical neighbor would need periodic-band re-trimming that nothing
+        /// exercises; refused by name until something does). Cliff and vertex-blend
+        /// terminations remain refused — each is a different surface.</para>
+        /// </summary>
+        public static BrepSolid OpenRun(
+            BrepSolid solid, IReadOnlyList<BrepEdge> runEdges, double top, double side, bool fillet)
+        {
+            // Locate the carrying face NOW (an earlier run's surgery may have rebuilt
+            // it): the planar, non-reversed face whose OUTER loop carries every run
+            // edge. Prefer the face carrying the most future context is resolved by the
+            // caller; here the run is already attributed.
+            var face = runEdges[0].Uses
+                .Select(u => u.Loop.Face)
+                .FirstOrDefault(f =>
+                    !f.IsReversed && f.IsPlanar(out _, out _)
+                    && runEdges.All(e => f.OuterLoop.Coedges.Any(c => ReferenceEquals(c.Edge, e))))
+                ?? throw new NotSupportedException(
+                    "A partial rim run must lie on one planar face's outer rim.");
+            face.IsPlanar(out _, out var normal);
+            var up = normal;
+
+            // Order the run along the loop and require contiguity with two open ends.
+            var loopCoedges = face.OuterLoop.Coedges;
+            int total = loopCoedges.Count;
+            var selected = new bool[total];
+            for (int i = 0; i < total; i++)
+                selected[i] = runEdges.Any(e => ReferenceEquals(e, loopCoedges[i].Edge));
+            int count = selected.Count(s => s);
+            if (count != runEdges.Count)
+                throw new NotSupportedException("A partial rim run repeats or misses edges on its face's rim.");
+            if (count == total)
+                throw new InvalidOperationException("A complete rim must go through the rim path, not the run path.");
+            int first = -1;
+            for (int i = 0; i < total; i++)
+            {
+                if (selected[i] && !selected[(i + total - 1) % total])
+                {
+                    if (first >= 0)
+                        throw new NotSupportedException(
+                            "A partial rim run must be contiguous; split disjoint selections into separate runs.");
+                    first = i;
+                }
+            }
+            if (first < 0)
+                throw new NotSupportedException("A partial rim run must leave at least one rim edge unselected.");
+            var uses = new List<BrepCoedge>(count);
+            for (int i = 0; i < count; i++)
+            {
+                var use = loopCoedges[(first + i) % total];
+                if (!selected[(first + i) % total])
+                    throw new NotSupportedException(
+                        "A partial rim run must be contiguous; split disjoint selections into separate runs.");
+                uses.Add(use);
+            }
+
+            int n = uses.Count;
+            var edges = new List<RimEdgeInfo>(n);
+            foreach (var use in uses)
+                edges.Add(EdgeInfoFor(use, fillet, up));
+            for (int i = 0; i + 1 < n; i++)
+            {
+                if (edges[i].End.DistanceTo(edges[i + 1].Start) > 1e-9)
+                    throw new InvalidOperationException("Run does not chain.");
+            }
+            if (edges[0].Arc is not null || edges[^1].Arc is not null)
+                throw new NotSupportedException(
+                    "A partial run must start and end on STRAIGHT rim edges: an arc's setback termination " +
+                    "is exact, but its periodic cylindrical neighbor cannot be re-trimmed yet. Extend the " +
+                    "selection to the arc's full tangent-continuous chain, or stop before the arc.");
+
+            // Interior corners classify exactly as on a full rim.
+            var mitered = new bool[n + 1]; // ends stay false: terminations, not miters
+            for (int i = 1; i < n; i++)
+            {
+                mitered[i] = !IsSmoothCorner(edges[i - 1], edges[i], up);
+                if (fillet && mitered[i] && (edges[i - 1].Arc is not null || edges[i].Arc is not null))
+                    throw new NotSupportedException(
+                        $"The rim corner at {edges[i].Start} joins an arc sharply — not a conic; see the " +
+                        "full-rim refusal for the exact ways out.");
+            }
+
+            var topPoints = new Vector3d[n + 1];
+            var bottomPoints = new Vector3d[n + 1];
+            for (int i = 1; i < n; i++)
+            {
+                var corner = edges[i].Start;
+                topPoints[i] = TopOffsetCorner(edges[i - 1], edges[i], corner, top, up, mitered[i]);
+                var dropA = corner + edges[i - 1].DownDir * side;
+                var dropB = corner + edges[i].DownDir * side;
+                if (dropA.DistanceTo(dropB) > 1e-9)
+                    throw new NotSupportedException(
+                        "Rim corners must descend consistently on both neighbors (uniform side geometry).");
+                bottomPoints[i] = dropB;
+            }
+            // Terminal offsets: the perpendicular inset/drop at the run's end vertices.
+            topPoints[0] = edges[0].Start + up.Cross(TangentAtStart(edges[0])).Normalized() * top;
+            bottomPoints[0] = edges[0].Start + edges[0].DownDir * side;
+            topPoints[n] = edges[^1].End + up.Cross(TangentAtEnd(edges[^1])).Normalized() * top;
+            bottomPoints[n] = edges[^1].End + edges[^1].DownDir * side;
+
+            for (int i = 0; i < n; i++)
+            {
+                var tangent = (edges[i].End - edges[i].Start).Normalized();
+                if ((topPoints[i + 1] - topPoints[i]).Dot(tangent) <= Tolerance.Default.Linear)
+                    throw new ArgumentOutOfRangeException(nameof(top),
+                        $"The rim feature consumes the edge from {edges[i].Start} to {edges[i].End}. Reduce the size.");
+            }
+
+            var startVertex = uses[0].StartVertex;
+            var endVertex = uses[^1].EndVertex;
+            if (ReferenceEquals(startVertex, endVertex))
+                throw new NotSupportedException(
+                    "A partial rim run may not wrap the whole rim back to one vertex.");
+
+            var topVertices = new BrepVertex[n + 1];
+            var bottomVertices = new BrepVertex[n + 1];
+            for (int i = 0; i <= n; i++)
+            {
+                topVertices[i] = new BrepVertex(topPoints[i]);
+                bottomVertices[i] = new BrepVertex(bottomPoints[i]);
+            }
+            var topEdges = new BrepEdge[n];
+            var bottomEdges = new BrepEdge[n];
+            for (int i = 0; i < n; i++)
+            {
+                topEdges[i] = OffsetEdge(edges[i], topPoints[i], topPoints[i + 1], top, up, atTop: true,
+                    topVertices[i], topVertices[i + 1]);
+                bottomEdges[i] = OffsetEdge(edges[i], bottomPoints[i], bottomPoints[i + 1], side, up, atTop: false,
+                    bottomVertices[i], bottomVertices[i + 1]);
+            }
+            var cornerEdges = new BrepEdge[n + 1];
+            for (int i = 0; i <= n; i++)
+            {
+                cornerEdges[i] = fillet
+                    ? JunctionCurve(topPoints[i], bottomPoints[i], top, up, topVertices[i], bottomVertices[i])
+                    : new BrepEdge(new Line3d(topPoints[i], bottomPoints[i]), Interval.Unit,
+                        topVertices[i], bottomVertices[i]);
+            }
+
+            // Termination link segments: run vertex → inset top point (in the top
+            // plane), run vertex → dropped bottom point (in the terminal side face).
+            var startTopLink = new BrepEdge(new Line3d(startVertex.Position, topPoints[0]),
+                Interval.Unit, startVertex, topVertices[0]);
+            var startBottomLink = new BrepEdge(new Line3d(startVertex.Position, bottomPoints[0]),
+                Interval.Unit, startVertex, bottomVertices[0]);
+            var endTopLink = new BrepEdge(new Line3d(endVertex.Position, topPoints[n]),
+                Interval.Unit, endVertex, topVertices[n]);
+            var endBottomLink = new BrepEdge(new Line3d(endVertex.Position, bottomPoints[n]),
+                Interval.Unit, endVertex, bottomVertices[n]);
+
+            // Rebuild the top face: splice the run out of the outer loop, reusing every
+            // unselected coedge verbatim (their edges must keep exactly one use here).
+            var newOuterCoedges = new List<BrepCoedge>();
+            for (int i = 0; i < total; i++)
+            {
+                int at = (first + count + i) % total; // walk from just past the run
+                if (at == first)
+                {
+                    newOuterCoedges.Add(new BrepCoedge(startTopLink, true));
+                    for (int k = 0; k < n; k++)
+                        newOuterCoedges.Add(new BrepCoedge(topEdges[k], true));
+                    newOuterCoedges.Add(new BrepCoedge(endTopLink, false));
+                    break;
+                }
+                newOuterCoedges.Add(loopCoedges[at]);
+            }
+            var newFace = new BrepFace(face.Surface,
+                [new BrepLoop(newOuterCoedges), .. face.Loops.Where(l => !ReferenceEquals(l, face.OuterLoop))]);
+
+            // Lower the neighbors' rim edges; terminal neighbors also take the descent
+            // segment so their loops keep closing through the untouched run vertex.
+            for (int i = 0; i < n; i++)
+            {
+                var replacements = new List<BrepCoedge>();
+                if (i == n - 1)
+                    replacements.Add(new BrepCoedge(endBottomLink, true));
+                replacements.Add(new BrepCoedge(bottomEdges[i], false));
+                if (i == 0)
+                    replacements.Add(new BrepCoedge(startBottomLink, false));
+                edges[i].NeighborUse.Loop.ReplaceCoedge(edges[i].NeighborUse, replacements);
+            }
+
+            // Shorten the side edges descending from INTERIOR run corners (terminal
+            // corners keep their verticals — the band stops before them).
+            var shortened = new Dictionary<BrepEdge, BrepEdge>();
+            for (int i = 1; i < n; i++)
+            {
+                var oldCorner = edges[i].Start;
+                foreach (var use in edges[i].Neighbor.Loops
+                             .Concat(edges[i - 1].Neighbor.Loops)
+                             .SelectMany(l => l.Coedges))
+                {
+                    var e = use.Edge;
+                    if (shortened.ContainsKey(e) || bottomEdges.Contains(e))
+                        continue;
+                    bool atStart = e.Curve.PointAt(e.Domain.Start).DistanceTo(oldCorner) < 1e-9;
+                    bool atEnd = e.Curve.PointAt(e.Domain.End).DistanceTo(oldCorner) < 1e-9;
+                    if (!atStart && !atEnd)
+                        continue;
+                    if (e.Curve.Underlying is not Line3d)
+                        throw new NotSupportedException("Side edges at rim corners must be straight.");
+                    var farPoint = e.Curve.PointAt(atStart ? e.Domain.End : e.Domain.Start);
+                    var farVertex = atStart ? e.EndVertex : e.StartVertex;
+                    if (farPoint.DistanceTo(bottomPoints[i]) < 1e-9)
+                        throw new NotSupportedException("The side setback consumes an entire neighbor edge.");
+                    shortened[e] = atStart
+                        ? new BrepEdge(new Line3d(bottomPoints[i], farPoint), Interval.Unit, bottomVertices[i], farVertex)
+                        : new BrepEdge(new Line3d(farPoint, bottomPoints[i]), Interval.Unit, farVertex, bottomVertices[i]);
+                }
+            }
+            foreach (var anyFace in solid.Faces)
+            {
+                foreach (var loop in anyFace.Loops)
+                {
+                    foreach (var use in loop.Coedges.ToList())
+                    {
+                        if (shortened.TryGetValue(use.Edge, out var replacement))
+                            loop.ReplaceCoedge(use, [new BrepCoedge(replacement, use.SameSense)]);
+                    }
+                }
+            }
+
+            // Band faces (same loop shape as the full path).
+            var bands = new List<BrepFace>(n);
+            for (int i = 0; i < n; i++)
+            {
+                var loop = new BrepLoop(
+                [
+                    new BrepCoedge(topEdges[i], false),
+                    new BrepCoedge(cornerEdges[i], true),
+                    new BrepCoedge(bottomEdges[i], true),
+                    new BrepCoedge(cornerEdges[i + 1], false),
+                ]);
+                bands.Add(new BrepFace(
+                    BandSurface(edges[i], topPoints[i], bottomPoints[i], topPoints[i + 1], bottomPoints[i + 1],
+                        top, up, fillet, mitered[i], mitered[i + 1]), [loop]));
+            }
+
+            // Termination faces: planar cross-sections perpendicular to the terminal
+            // edges. The SOLID at a termination is the intact material just beyond the
+            // run vertex, so the outward normal points INTO the removed wedge — along
+            // the run's travel at the start, against it at the end. CCW about that
+            // normal walks vertex → bottom → top at the start and vertex → top →
+            // bottom at the end, which also gives every link edge its two uses with
+            // opposite senses.
+            var startFace = new BrepFace(
+                TerminationPlane(startVertex.Position, topPoints[0],
+                    (edges[0].End - edges[0].Start).Normalized()),
+            [
+                new BrepLoop(
+                [
+                    new BrepCoedge(startBottomLink, true), // V → bottom0
+                    new BrepCoedge(cornerEdges[0], false), // bottom0 → top0
+                    new BrepCoedge(startTopLink, false),   // top0 → V
+                ]),
+            ]);
+            var endFace = new BrepFace(
+                TerminationPlane(endVertex.Position, topPoints[n],
+                    -(edges[^1].End - edges[^1].Start).Normalized()),
+            [
+                new BrepLoop(
+                [
+                    new BrepCoedge(endTopLink, true),      // V → top_n
+                    new BrepCoedge(cornerEdges[n], true),  // top_n → bottom_n
+                    new BrepCoedge(endBottomLink, false),  // bottom_n → V
+                ]),
+            ]);
+
+            // Domain-driven neighbor surfaces: only interior neighbors (both of whose
+            // run corners are interior miters) are uniformly lowered and may be trimmed;
+            // terminal neighbors keep their full height at the run vertex.
+            var trims = new Dictionary<BrepFace, BrepFace>();
+            for (int i = 1; i < n - 1; i++)
+            {
+                if (!ReferenceEquals(edges[i].Neighbor, edges[0].Neighbor)
+                    && !ReferenceEquals(edges[i].Neighbor, edges[^1].Neighbor)
+                    && !trims.ContainsKey(edges[i].Neighbor)
+                    && TrimNeighborBand(edges[i].Neighbor, bottomPoints[i]) is { } trimmedNeighbor)
+                    trims[edges[i].Neighbor] = trimmedNeighbor;
+            }
+
+            var faces = solid.Faces
+                .Where(f => !ReferenceEquals(f, face))
+                .Select(f => trims.GetValueOrDefault(f, f))
+                .ToList();
+            faces.Add(newFace);
+            faces.AddRange(bands);
+            faces.Add(startFace);
+            faces.Add(endFace);
+            return new BrepSolid([new BrepShell(faces)]);
+        }
+
+        /// <summary>The termination plane's surface, framed so its normal (x × y) is the
+        /// given outward direction — ± the terminal edge's tangent, which the inset
+        /// offset (topPoint − vertex) is exactly perpendicular to.</summary>
+        private static PlaneSurface TerminationPlane(
+            in Vector3d vertex, in Vector3d topPoint, in Vector3d outward)
+        {
+            var x = (topPoint - vertex).Normalized();
+            var y = outward.Cross(x);
+            return new PlaneSurface(vertex, x, y);
         }
 
         // ---- helpers ----

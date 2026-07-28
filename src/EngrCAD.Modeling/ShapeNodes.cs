@@ -291,7 +291,8 @@ internal sealed class RoundEdgesShape(Shape child, double radius) : Shape
 internal sealed class RimShape(
     Shape child, bool fillet, double amount, double sideAmount,
     Func<BrepSolid, IEnumerable<BrepFace>> selector,
-    Func<Vector3d, double>? setbackLaw = null, double? lawAngleDegrees = null) : Shape
+    Func<Vector3d, double>? setbackLaw = null, double? lawAngleDegrees = null,
+    Func<BrepSolid, IEnumerable<BrepEdge>>? edgeSelector = null) : Shape
 {
     public Shape Child => child;
     public bool IsFillet => fillet;
@@ -300,6 +301,11 @@ internal sealed class RimShape(
     public Func<BrepSolid, IEnumerable<BrepFace>> Selector => selector;
     public Func<Vector3d, double>? SetbackLaw => setbackLaw;
     public double? LawAngleDegrees => lawAngleDegrees;
+
+    /// <summary>Edge-set selection (Shape.FilletEdges/ChamferEdges): resolved by the
+    /// kernel into complete rims plus terminated partial runs, so it lowers through
+    /// <c>Filleting.FilletEdges/ChamferEdges</c> rather than per-face rim surgery.</summary>
+    public Func<BrepSolid, IEnumerable<BrepEdge>>? EdgeSelector => edgeSelector;
     internal override string Describe() =>
         fillet ? $"Fillet(r={amount:g4})"
         : setbackLaw is not null

@@ -549,6 +549,19 @@ internal static class ShapeCompiler
                 // authored before a Scale behaves as if scaled with the part.
                 Decompose(m, shape, out _, out _, out double featureScale);
                 var solid = LowerBrep(rim.Child, m);
+                if (rim.EdgeSelector is { } edgeSelector)
+                {
+                    // Edge-set selection: the kernel groups it into complete rims plus
+                    // terminated partial runs (all-or-nothing before surgery).
+                    var selectedEdges = edgeSelector(solid).ToList();
+                    if (selectedEdges.Count == 0)
+                        throw new InvalidOperationException(
+                            $"{rim.Describe()}: the edge selector matched nothing on the lowered solid.");
+                    return rim.IsFillet
+                        ? Filleting.FilletEdges(solid, selectedEdges, rim.Amount * featureScale)
+                        : Filleting.ChamferEdges(
+                            solid, selectedEdges, rim.Amount * featureScale, rim.SideAmount * featureScale);
+                }
                 var selected = rim.Selector(solid).ToList();
                 if (selected.Count == 0)
                     throw new InvalidOperationException(

@@ -619,8 +619,14 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     dedicated `TriangulatePoleGrid` trimmed tier excluded from midpoint refinement).
     Remaining: curved-face shelling corners and variable-radius fillet corners still
     need the non-conic surface–surface corner curve.
-  - [ ] **Partial edge runs** — a band that stops mid-rim needs a termination surface
-    (cliff, setback or vertex blend) and each exact one is a different surface.
+  - [ ] **Partial-run follow-ups** — SETBACK terminations ✅ landed (`Filleting.
+    FilletEdges/ChamferEdges` resolve contiguous partial runs; the termination is the
+    planar band cross-section perpendicular to the terminal edge, the industry
+    default; `Shape.FilletEdges/ChamferEdges` accept them). Remaining, refused by
+    name: cliff and vertex-blend terminations (different surfaces), arc-terminal runs
+    (the cylindrical neighbour needs periodic re-trimming), mid-EDGE stops (terminate
+    at a parameter, not a vertex — needs an edge split first), and variable-setback
+    laws on runs.
   - [ ] **Variable-radius fillets** (variable-SETBACK chamfers ✅ landed — `ChamferRim`/
     `ChamferRimAtAngle`/`ChamferEdges` law overloads + `Shape.Chamfer(setbackAt, faces)`
     + `VariableChamferRimFeature`; strips stay exact planes because a constant top:side

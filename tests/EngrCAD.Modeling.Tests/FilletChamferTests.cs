@@ -171,11 +171,56 @@ public class FilletChamferTests
     }
 
     [Fact]
-    public void EdgeSelection_ThatIsNotACompleteRim_Throws()
+    public void PartialEdgeRun_FilletsWithExactSetbackTerminations()
     {
-        var shape = Shape.Box(2, 2, 1).FilletEdges(0.2, s => Top(s).SelectMany(f => f.RimEdges()).Take(1));
-        var exception = Assert.Throws<NotSupportedException>(() => shape.ToBrep());
-        Assert.Contains("complete rims", exception.Message);
+        // One top edge of a box: the removed quarter-round prism is terminated FLUSH by
+        // the setback planes at the edge's end vertices, so the volume is closed form:
+        // V = w·d·h − (1 − π/4)·r²·L. The tessellated band inscribes the quarter
+        // cylinder, so the error is the band's own chordal deficit.
+        double w = 30, d = 20, h = 6, r = 2;
+        var shape = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .FilletEdges(r, s => Top(s)
+                .SelectMany(f => f.RimEdges())
+                .Where(e => e.IsLinear(out var start, out var end)
+                    && Math.Abs(start.Y) < 1e-9 && Math.Abs(end.Y) < 1e-9));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        // The band generator is a rational NURBS quarter arc, so its density follows
+        // curveSamples (the whole quarter gets curveSamples segments).
+        var mesh = BRepTessellator.Tessellate(solid, 64, 128);
+        Assert.True(mesh.IsClosed);
+        double exact = w * d * h - (1 - Math.PI / 4) * r * r * w;
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 1e-5,
+            $"volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void PartialEdgeRun_ChamferIsExact()
+    {
+        // All-planar output: single edge exact to round-off, and the two-edge L-run
+        // subtracts the miter overlap c³/3 at its interior corner.
+        double w = 30, d = 20, h = 6, c = 1.5;
+        var one = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .ChamferEdges(c, s => Top(s)
+                .SelectMany(f => f.RimEdges())
+                .Where(e => e.IsLinear(out var start, out var end)
+                    && Math.Abs(start.Y) < 1e-9 && Math.Abs(end.Y) < 1e-9))
+            .ToBrep();
+        double oneExact = w * d * h - c * c / 2 * w;
+        Assert.True(Math.Abs(BRepTessellator.Tessellate(one).Volume() - oneExact) < 1e-9,
+            $"single-edge chamfer run volume vs {oneExact}");
+
+        var ell = Shape.Box(new Aabb((0, 0, 0), (w, d, h)))
+            .ChamferEdges(c, s => Top(s)
+                .SelectMany(f => f.RimEdges())
+                .Where(e => e.IsLinear(out var start, out var end)
+                    && (Math.Abs(start.Y) + Math.Abs(end.Y) < 1e-9
+                        || Math.Abs(start.X - w) + Math.Abs(end.X - w) < 1e-9)))
+            .ToBrep();
+        ell.Validate();
+        double ellExact = w * d * h - c * c / 2 * (w + d) + c * c * c / 3;
+        Assert.True(Math.Abs(BRepTessellator.Tessellate(ell).Volume() - ellExact) < 1e-9,
+            $"L-run chamfer volume vs {ellExact}");
     }
 
     [Fact]

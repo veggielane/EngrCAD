@@ -534,16 +534,18 @@ public abstract class Shape
     /// Fillets selected EDGES rather than faces (e.g.
     /// <c>s => s.PlanarFacesWithNormal(Vector3d.UnitZ).SelectMany(f => f.RimEdges())</c>,
     /// or any LINQ over <c>solid.Edges</c> with <c>IsLinear</c>/<c>IsCircular</c>/
-    /// <c>ConvexEdges</c>). The selection is resolved to the rim features that reproduce
-    /// it — see <see cref="Filleting.RimFacesFor"/> for exactly which sets are exact and
-    /// why the rest are refused.
+    /// <c>ConvexEdges</c>). Complete planar face rims resolve to rim surgery; a
+    /// selection stopping PART-WAY along a rim resolves to contiguous runs blended with
+    /// exact SETBACK terminations at each open end — see
+    /// <see cref="Filleting.FilletEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>.
+    /// The whole selection is grouped and validated before any surgery runs.
     /// </summary>
     public Shape FilletEdges(double radius, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
     {
         if (radius <= 0)
             throw new ArgumentOutOfRangeException(nameof(radius));
         return new RimShape(this, fillet: true, radius, radius,
-            solid => Filleting.RimFacesFor(solid, edges(solid)));
+            solid => Filleting.RimFacesFor(solid, edges(solid)), edgeSelector: edges);
     }
 
     /// <summary>Chamfers selected EDGES; see <see cref="FilletEdges"/>.</summary>
@@ -557,7 +559,7 @@ public abstract class Shape
         if (topSetback <= 0 || sideSetback <= 0)
             throw new ArgumentOutOfRangeException(nameof(topSetback));
         return new RimShape(this, fillet: false, topSetback, sideSetback,
-            solid => Filleting.RimFacesFor(solid, edges(solid)));
+            solid => Filleting.RimFacesFor(solid, edges(solid)), edgeSelector: edges);
     }
 
     /// <summary>

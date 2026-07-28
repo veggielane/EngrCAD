@@ -630,12 +630,26 @@ operations. Depends only on `EngrCAD.Core`.
     projects inside its own face's domain, which is a locked test — so this is a boolean
     limitation, not a construction one. Mitered RIM fillets do cut correctly.
   - **Selection** — by face (`FilletRim`/`ChamferRim`) or by EDGE (`FilletEdges`/
-    `ChamferEdges`, and `RimFacesFor` which resolves a selection into the rim features
-    that reproduce it). A complete planar face rim resolves; a partial run does not, and is
-    refused before any surgery runs, because a band that stops partway along a rim has to
-    terminate somewhere and every exact termination is a different surface. Filleting EVERY
-    edge of a convex solid is refused for the same reason in reverse: its vertices need the
-    spherical corner patch, which is a different construction from rim surgery.
+    `ChamferEdges`; `RimFacesFor` remains the complete-rims-only resolution). A complete
+    planar face rim resolves to rim surgery; a **partial run** — a contiguous selection
+    stopping part-way along a rim — now blends with **SETBACK terminations**: the band
+    stops at the run's end vertex with a planar face perpendicular to the terminal edge,
+    exact because the band's cross-section there is already planar (the fillet's quarter
+    arc / the chamfer's segment — the industry-default stop; cliff and vertex-blend
+    terminations stay refused, each being a different surface). The top face keeps the
+    terminal vertex and gains one in-plane link segment to the inset boundary, the
+    terminal side face gains the matching descent segment, and the termination face
+    closes the triangle against the band's end cross-section — its outward normal points
+    INTO the removed wedge (the intact material is beyond the run vertex), which is what
+    fixes every link edge's two senses. Interior run corners miter/blend exactly as full
+    rims; interior-neighbour bands re-trim, terminal neighbours keep their full height.
+    The whole selection is grouped and validated BEFORE any surgery: runs must be
+    contiguous, start and end on STRAIGHT edges (an arc terminal's periodic cylindrical
+    neighbour cannot be re-trimmed yet), and stay clear of other selected rims and runs —
+    three blended edges meeting at one vertex is the spherical-corner shape that belongs
+    to `FilletAllEdges`, and is refused naming it. Removed volumes are closed form (the
+    prism terminates flush at the end planes): one chamfered edge removes exactly
+    `c²/2·L`, an L-run `c²/2·(L₁+L₂) − c³/3`.
   - Numerical rules the surgery depends on (all learned from real cracks): rim circles come
     from EDGE SAMPLES (`ActualCircle`), never from `Underlying` — a translated extrusion
     top's underlying circle sits at the base; every new rim edge is built in the top face's
@@ -712,8 +726,9 @@ two spiral cuts) and take the same path.
 
 Coplanar/tangent boolean cases,
 NURBS surface export. Filleting gaps, all refused loudly rather than approximated:
-**partial edge runs** (a band that stops mid-rim needs a
-termination surface — cliff, setback or vertex blend — that this engine does not build),
+**cliff and vertex-blend run terminations** (the setback termination is implemented;
+each of the others is a different surface), **arc-terminal partial runs** (the
+termination itself is exact, but the periodic cylindrical neighbour needs re-trimming),
 **sharp corners at arc rim edges** (a documented policy — torus ∩ cylinder is not a
 conic; see the Filleting section), and
 **variable-radius fillets**: the band itself would be exact — a linear radius law between

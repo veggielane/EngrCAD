@@ -79,11 +79,31 @@ scene.Add(new Part("plate", plate, Palette.Sage));
 
 ![A plate whose top edges are filleted and bottom edges chamfered, selected by edge](images/fillet-edge-selection.png)
 
-The selection is resolved back to the rim features that reproduce it exactly. A
-selection that stops **part-way along a rim** is refused *before* any surgery runs —
-terminating a band mid-rim needs a cliff, setback or vertex blend, and each exact one
-is a different surface. (Rim surgery rewrites loops in place, so validating up front is
-what keeps a refusal from leaving a half-edited solid.)
+The selection is resolved back to the rim features that reproduce it exactly: complete
+rims take rim surgery, and a selection that stops **part-way along a rim** becomes a
+terminated run — the band stops at the run's end vertex with a **setback termination**,
+a planar face perpendicular to the edge there. It is exact because the band's
+cross-section is already planar (a quarter arc for fillets, a segment for chamfers),
+and it is the industry-default stop; cliff and vertex-blend terminations remain
+refused. The rest of the rim keeps its sharp corners:
+
+```csharp render:fillet-partial-run
+var plate = Shape.Box(36, 24, 8)
+    .FilletEdges(3, s => s.PlanarFacesWithNormal(Vector3d.UnitZ)
+        .SelectMany(f => f.RimEdges())
+        .Where(e => e.IsLinear(out var a, out var b) && a.Y + b.Y < -23));
+
+var scene = new Scene();
+scene.Add(new Part("partial run", plate, Palette.Steel));
+```
+
+![A plate with one top edge filleted, the band stopping flush at both corners](images/fillet-partial-run.png)
+
+The whole selection is still grouped and validated *before* any surgery runs (rim
+surgery rewrites loops in place, so validating up front is what keeps a refusal from
+leaving a half-edited solid): runs must be contiguous, start and end on straight edges,
+and stay clear of other selected rims and runs — three blended edges meeting at one
+vertex is the spherical-corner shape that belongs to `FilletAllEdges`.
 
 ## Chamfer by distance and angle
 
@@ -204,7 +224,9 @@ input with guidance rather than producing bad geometry:
 - A radius or setback large enough that the mitered offsets cross is refused, naming
   the edge it would have consumed.
 - Interior loops (holes) must stay clear of the shrunk boundary.
-- Partial edge runs are refused — see [selecting edges](#selecting-edges-instead-of-faces).
+- Partial edge runs blend with exact setback terminations — see
+  [selecting edges](#selecting-edges-instead-of-faces); runs must start and end on
+  straight edges and stay clear of other selected rims and runs.
 
 Both are B-Rep-native; the implicit lowering bridges through tessellation. Variable
 radius is not supported: the *band* would be exact, but two variable bands meet in a
