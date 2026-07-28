@@ -30,6 +30,8 @@
   href: features.md
 - name: Geometry inputs for features
   href: geometry-inputs.md
+- name: Selecting faces & edges
+  href: selection.md
 - name: 3D annotations (PMI)
   href: annotations.md
 - name: Remeshing

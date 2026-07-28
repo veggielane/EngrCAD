@@ -253,6 +253,31 @@ operations. Depends only on `EngrCAD.Core`.
   two booleans must clone first. The damage is silent otherwise: face/edge/vertex counts
   survive, so the solid still looks intact, and the second boolean either throws deep
   inside face tracing or returns a closed, `Validate`-clean, WRONG result.
+- **`BrepQueries` / `BrepSelection`** — the LINQ selection vocabulary over topology.
+  `BrepQueries` classifies and measures: `IsPlanar` (incl. extruded straight lines) /
+  `IsCylindrical` (incl. extruded circles and axis-parallel revolved lines) / `IsLinear` /
+  `IsCircular` / `Length` / `Bounds` / `IsConvex` / `NormalAt` / `Frame(face)`, adjacency
+  (`face.Edges()`, `face.RimEdges()`, `solid.FacesOf(edge)`, `solid.ConvexEdges()`) and
+  `PlanarFacesWithNormal`. `BrepSelection` is the **ordering/grouping layer** on top
+  (build123d's `sort_by`/`group_by`/`filter_by`, deliberately as extension methods rather
+  than string selectors): `SortAlong(direction)` / `Extreme` / `Highest` / `Lowest`
+  (planar faces rank by their exact plane offset when the direction is parallel to their
+  normal — a plane's stored origin is an arbitrary in-plane point, so only that component
+  is well-defined — and by bounds centre otherwise; edges rank by curve midpoint),
+  `GroupAlong(direction)` (rank clusters ascending), `GroupByCoplanar` (same outward
+  normal AND same offset at the weld tier; non-planar faces stay singletons, nothing is
+  dropped), `FilterBy(SurfaceKind)` / `Kind()` (semantic kinds — Planar / Cylindrical /
+  Conical / Spherical / Toroidal / Revolved / Extruded / Swept / Nurbs — with revolved
+  generators classified by SAMPLING, because the kernel spells circular generators three
+  ways and a curve-type switch would classify identical geometry differently),
+  `GroupByRadius` / `NthByRadius(n)` (distinct radii ascending, negative indexes from the
+  largest, out-of-range failures name the radii that exist), and **`Area(face)`** —
+  exact for planar faces (closed-form boundary-integral terms for straight edges,
+  `Circle3d` edges and `CurveSegment`s over one; other curves chord-sampled) and
+  midpoint quadrature over the pulled-back trim region for curved faces (~1–2% at the
+  default resolution — ordering-grade for `LargestByArea`/`SortByArea`, not
+  mass-property grade; that is `BrepMassProperties`' job). Everything is deterministic:
+  stable sorts, first-wins ties, groups in ascending rank or first-appearance order.
 - **`Profile`** — planar closed chain of curve segments (or one closed curve) used by the
   modeling operations; winding is auto-corrected per operation.
   `Profile.FromRegion(region, frame?)` places a Core `Geometry2.Region2d`

@@ -1,0 +1,113 @@
+# Selecting faces and edges
+
+Feature operations need a way to *say which geometry they mean* — the top face, the
+largest bore, the second step of a stepped block. CadQuery answers with string
+selectors (`">Z"`); build123d with `ShapeList.sort_by`/`group_by`/`filter_by`. EngrCAD
+deliberately takes the second road, as plain LINQ: `BrepQueries` classifies
+(`IsPlanar`, `IsCylindrical`, `IsCircular`...) and `BrepSelection` orders and groups —
+type-safe, composable with `Where`/`Select`, and with nothing stringly to mistype.
+
+| Query | Meaning |
+| --- | --- |
+| `faces.SortAlong(axis)` / `edges.SortAlong(axis)` | Sorted ascending along a direction (stable). |
+| `faces.Extreme(axis)`, `.Highest()`, `.Lowest()` | The furthest face/edge along a direction (ties keep the first — deterministic). |
+| `faces.GroupAlong(axis)[n]` | Faces grouped by level along a direction, ascending; index from the end for "one down from the top". |
+| `faces.GroupByCoplanar()` | Groups of genuinely coplanar faces (same outward normal *and* same plane offset). |
+| `faces.FilterBy(SurfaceKind.Cylindrical)` | Semantic surface-kind filter: `Planar`, `Cylindrical`, `Conical`, `Spherical`, `Toroidal`, `Revolved`, `Extruded`, `Swept`, `Nurbs`. |
+| `faces.LargestByArea()`, `.SortByArea()`, `face.Area()` | Area queries — exact for planar faces, quadrature (~1–2%) for curved ones. |
+| `faces.NthByRadius(n)` / `edges.NthByRadius(n)` | The n-th smallest distinct bore/rim radius (`-1` = largest). |
+
+Every query is deterministic: ties keep input order, so a selection cannot flicker
+between regenerations.
+
+## Selecting rims to blend
+
+A stepped block, its upper step found by *grouping the upward faces along Z* rather
+than by typing its height — then chamfered by feeding the selection straight into
+`ChamferEdges`:
+
+```csharp render:selection-vocabulary
+var block = Shape.Extrude(Sketch.Rectangle(60, 40), 10)
+          | Shape.Extrude(Sketch.Rectangle(30, 40), 22)
+                 .Transform(Matrix4d.CreateTranslation(new Vector3d(-15, 0, 0)));
+
+// "The top of the upper step": the highest planar face — no coordinates typed.
+var stepped = block.ChamferEdges(2.5,
+    solid => solid.Faces.FilterBy(SurfaceKind.Planar).Highest().RimEdges());
+
+var scene = new Scene();
+scene.Add(new Part("stepped block", stepped, new PartColor(0.75f, 0.62f, 0.35f)));
+```
+
+![Stepped block with the top rim chamfered](images/selection-vocabulary.png)
+
+The selector runs against the *lowered solid at every regeneration*, so if the step
+grows taller the query still finds it — this is the same topological-naming story the
+[parametric features](features.md) use.
+
+## Ordering, grouping, measuring
+
+```csharp run:selection-queries
+var plate = Shape.Extrude(Sketch.Rectangle(40, 30), 8)
+    .Drill(StandardHoles.Clearance(6), [new Vector2d(-10, 0)], 20)
+    .Drill(StandardHoles.Clearance(3), [new Vector2d(10, 0)], 20);
+var solid = plate.ToBrep();
+
+// Sort and take extremes along any direction.
+var top = solid.Faces.Highest();                       // the z = 8 cap
+var levels = solid.Faces.GroupAlong(Vector3d.UnitZ);   // bottom / sides+bores / top
+if (!ReferenceEquals(levels[^1][0], top)) throw new Exception("grouping disagrees");
+
+// Filter by surface kind, index bores by size without typing radii.
+var bores = solid.Faces.FilterBy(SurfaceKind.Cylindrical).ToList();
+if (bores.Count != 2) throw new Exception($"expected 2 bores, got {bores.Count}");
+var smallBore = solid.Faces.NthByRadius(0);   // the M3 clearance bore (Ø3.4)
+var largeBore = solid.Faces.NthByRadius(-1);  // the M6 clearance bore (Ø6.6)
+
+// Area: exact for planar faces (arc terms closed-form), quadrature for curved.
+double topArea = top.Area();
+double expected = 40 * 30 - Math.PI * (1.7 * 1.7 + 3.3 * 3.3);
+if (Math.Abs(topArea - expected) > 1e-6) throw new Exception($"top area {topArea}");
+var main = solid.Faces.LargestByArea();
+if (!main.IsPlanar(out _, out _)) throw new Exception("largest face should be planar");
+```
+
+`Area` is honest about its accuracy: planar faces are exact (straight edges and
+circular arcs contribute closed-form boundary-integral terms — the drilled top cap
+above lands to 1e-6), while curved faces integrate by quadrature over the trimmed
+parameter domain, good to a percent or two. That is ordering-grade — right for
+`LargestByArea` — not mass-property grade; use `BrepMassProperties` when the number
+itself matters.
+
+## The serializable spellings
+
+Every query has a [GeometryRef](geometry-inputs.md) spelling, so parametric features
+and mates can declare a selection that survives JSON round trips and re-resolves per
+regeneration:
+
+```csharp run:selection-refs
+var plate = Shape.Extrude(Sketch.Rectangle(40, 30), 8)
+    .Drill(StandardHoles.Clearance(6), [new Vector2d(-10, 0)], 20)
+    .Drill(StandardHoles.Clearance(3), [new Vector2d(10, 0)], 20);
+var solid = plate.ToBrep();
+
+var bore = FaceSetRef.NthByRadius(-1);                  // "the largest bore"
+var mainFace = FaceRef.Largest;                          // "the largest face"
+var planar = FaceSetRef.OfKind(SurfaceKind.Planar);      // "the planar faces"
+var step = FaceSetRef.GroupAlong(planar, Vector3d.UnitZ, -1); // "the top level"
+
+// Descriptors are the cache key AND the serialized form — parse round-trips exactly.
+foreach (GeometryRef reference in new GeometryRef[] { bore, mainFace, planar, step })
+{
+    var parsed = GeometryRef.Parse(reference.Descriptor, reference.GetType());
+    if (parsed.Descriptor != reference.Descriptor)
+        throw new Exception($"descriptor did not round-trip: {reference.Descriptor}");
+}
+
+var faces = bore.Resolve(solid, "Bore");
+if (faces.Count != 1) throw new Exception("expected the one M6 bore");
+```
+
+A failed query names the input and what it found — `"Bore: NthByRadius: index 5 is
+out of range — 2 distinct radius group(s) exist (1.7, 3.3)."` — rather than silently
+selecting nothing.

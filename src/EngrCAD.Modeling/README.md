@@ -306,10 +306,15 @@ public sealed class Boss : Feature
 ```
 
 Queries nest and are named: `FaceSetRef.PlanarWithNormal(n)` / `Cylindrical(r?)` /
-`All` / `RimFacesOf(edges)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
-`Top` / `Bottom`, `PlaneRef.TopPlane` / `OnTopFace` / `On(faceRef)` / `At(plane)`,
-`EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)`, `AxisRef.OfCylindrical(face)` /
-`Of(origin, direction)`. `FaceSetRef.From/Where` and `EdgeSetRef.From` take a lambda
+`All` / `RimFacesOf(edges)` / `OfKind(SurfaceKind)` / `NthByRadius(n)` /
+`GroupAlong(set, direction, n)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
+`Top` / `Bottom` / `LargestByArea(set)` / `Largest`, `PlaneRef.TopPlane` / `OnTopFace`
+/ `On(faceRef)` / `At(plane)`, `EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)` /
+`NthByRadius(n)`, `AxisRef.OfCylindrical(face)` / `Of(origin, direction)`. The
+ordering/grouping ones are the serializable spellings of `BrepSelection` in
+EngrCAD.BRep (`SortAlong`/`Extreme`/`GroupAlong`/`GroupByCoplanar`/`FilterBy`/
+`Area`/`NthByRadius` — the build123d `sort_by`/`group_by`/`filter_by` capability as
+LINQ). `FaceSetRef.From/Where` and `EdgeSetRef.From` take a lambda
 when no named query fits. A `SketchPlane` — and a `SketchPlane?` whose null means "the
 top plane" — converts implicitly, so incumbent code is untouched.
 
