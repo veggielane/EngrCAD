@@ -136,13 +136,14 @@ with many tools is cheaper than patterning a drilled body.
 
 ```csharp render:location-sets
 // One layout value: a bolt circle plus two dowel positions.
-var bolts = LocationSet.Polar(6, 24);
-var dowels = LocationSet.At(new Vector2d(0, 32), new Vector2d(0, -32));
+var bolts = LocationSet.Polar(6, 18);
+var dowels = LocationSet.At(new Vector2d(32, 0), new Vector2d(-32, 0));
 
 // The same LocationSet vocabulary drives holes and patterns alike.
+var top = SketchPlane.At((0, 0, 8), Vector3d.UnitX, Vector3d.UnitY);
 var plate = Shape.Extrude(Sketch.Circle(40), 8)
-    .Drill(StandardHoles.Clearance(5), bolts, 20)
-    .Drill(HoleSpec.Simple(4), dowels, 20);
+    .Drill(StandardHoles.Clearance(5), bolts, 20, top)
+    .Drill(HoleSpec.Simple(4), dowels, 20, top);
 
 // Pattern stamps a copy per location: the rib is modeled at the plane origin and
 // each polar location moves AND rotates it (rotate: false would keep copies upright).

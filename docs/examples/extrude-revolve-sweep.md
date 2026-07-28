@@ -70,7 +70,7 @@ along −normal, the `Drill` convention:
 // A base plate with a shelf floating above it (one body, a void between).
 var body = Shape.Extrude(Sketch.Rectangle(60, 40), 6)
          | (Shape.Extrude(Sketch.Rectangle(60, 40), 4).Translate(0, 0, 18)
-            | Shape.Box(4, 40, 12).Translate(-28, 0, 12));
+            | Shape.Box(4, 32, 16).Translate(-24, 0, 12));
 
 var above = SketchPlane.At((0, 0, 30), Vector3d.UnitX, Vector3d.UnitY);
 

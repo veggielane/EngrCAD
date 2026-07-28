@@ -8,8 +8,10 @@ randomness, so the same parts always give the same plate) — simple and predict
 rather than optimal, with no rotation or nesting in v1.
 
 ```csharp render:packing-plate
+var bracketTop = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
 var bracket = Shape.Extrude(Sketch.Rectangle(34, 18), 6)
-    .Drill(StandardHoles.Clearance(5), LocationSet.At(new Vector2d(-12, 0), new Vector2d(12, 0)), 10);
+    .Drill(StandardHoles.Clearance(5),
+        LocationSet.At(new Vector2d(-12, 0), new Vector2d(12, 0)), 10, bracketTop);
 var knob = Shape.Cylinder(9, 6).Translate(0, 0, 3)
     .SmoothUnion(Shape.Sphere(6).Translate(0, 0, 8), 2);
 var shim = Shape.Extrude(Sketch.RoundedRectangle(26, 12, 3), 2);
@@ -19,10 +21,10 @@ var layout = Packing.Pack(parts, plateWidth: 90, plateDepth: 70, gap: 3);
 var placed = layout.Apply(parts);
 
 var scene = new Scene();
-// The plate itself, drawn under the packed parts.
-scene.Add(new Part("plate", Shape.Box(90, 70, 2).Translate(45, 35, -4), Palette.Slate));
+// The plate itself, drawn under the packed parts (display only - no boolean).
+scene.Add(new Part("plate", Shape.Box(90, 70, 2).Translate(45, 35, -1), Palette.Slate));
 for (int i = 0; i < placed.Count; i++)
-    scene.Add(new Part($"part {i}", placed[i].Translate(0, 0, 4)));
+    scene.Add(new Part($"part {i}", placed[i]));
 ```
 
 ![Five parts shelf-packed onto a build plate](images/packing-plate.png)

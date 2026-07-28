@@ -27,9 +27,11 @@ than by typing its height — then chamfered by feeding the selection straight i
 `ChamferEdges`:
 
 ```csharp render:selection-vocabulary
-var block = Shape.Extrude(Sketch.Rectangle(60, 40), 10)
-          | Shape.Extrude(Sketch.Rectangle(30, 40), 22)
-                 .Transform(Matrix4d.CreateTranslation(new Vector3d(-15, 0, 0)));
+// A stepped block: an L-shaped side profile (x across, z up) extruded along y.
+var lProfile = Sketch.Start(0, 0).LineTo(60, 0).LineTo(60, 10)
+    .LineTo(30, 10).LineTo(30, 22).LineTo(0, 22).Close();
+var block = Shape.Extrude(lProfile, 40,
+    SketchPlane.At((-30, 20, 0), Vector3d.UnitX, Vector3d.UnitZ));
 
 // "The top of the upper step": the highest planar face — no coordinates typed.
 var stepped = block.ChamferEdges(2.5,
@@ -48,9 +50,10 @@ grows taller the query still finds it — this is the same topological-naming st
 ## Ordering, grouping, measuring
 
 ```csharp run:selection-queries
+var plateTop = SketchPlane.At((0, 0, 8), Vector3d.UnitX, Vector3d.UnitY);
 var plate = Shape.Extrude(Sketch.Rectangle(40, 30), 8)
-    .Drill(StandardHoles.Clearance(6), [new Vector2d(-10, 0)], 20)
-    .Drill(StandardHoles.Clearance(3), [new Vector2d(10, 0)], 20);
+    .Drill(StandardHoles.Clearance(6), [new Vector2d(-10, 0)], 20, plateTop)
+    .Drill(StandardHoles.Clearance(3), [new Vector2d(10, 0)], 20, plateTop);
 var solid = plate.ToBrep();
 
 // Sort and take extremes along any direction.
@@ -86,9 +89,10 @@ and mates can declare a selection that survives JSON round trips and re-resolves
 regeneration:
 
 ```csharp run:selection-refs
+var plateTop = SketchPlane.At((0, 0, 8), Vector3d.UnitX, Vector3d.UnitY);
 var plate = Shape.Extrude(Sketch.Rectangle(40, 30), 8)
-    .Drill(StandardHoles.Clearance(6), [new Vector2d(-10, 0)], 20)
-    .Drill(StandardHoles.Clearance(3), [new Vector2d(10, 0)], 20);
+    .Drill(StandardHoles.Clearance(6), [new Vector2d(-10, 0)], 20, plateTop)
+    .Drill(StandardHoles.Clearance(3), [new Vector2d(10, 0)], 20, plateTop);
 var solid = plate.ToBrep();
 
 var bore = FaceSetRef.NthByRadius(-1);                  // "the largest bore"
