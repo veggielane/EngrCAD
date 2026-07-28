@@ -227,7 +227,7 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|path.obj</c> → headless export, no window (CI-friendly);
+    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off</c> → headless export, no window (CI-friendly);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// <c>--render</c> additionally honors
     /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
@@ -583,6 +583,22 @@ public static class EngrCad
                 Log.WroteStl(log, path, scene.AllInstances.Count());
                 return 0;
 
+            case ".off":
+                OffWriter.WriteFile(
+                    [.. scene.AllInstances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
+                Log.WroteMeshFormat(log, path, scene.AllInstances.Count(), "merged OFF");
+                return 0;
+
+            case ".3mf":
+                ThreeMfWriter.WriteFile(ExportParts(scene, quality), path);
+                Log.WroteMeshFormat(log, path, scene.AllInstances.Count(), "3MF");
+                return 0;
+
+            case ".amf":
+                AmfWriter.WriteFile(ExportParts(scene, quality), path);
+                Log.WroteMeshFormat(log, path, scene.AllInstances.Count(), "AMF");
+                return 0;
+
             case ".step" or ".stp":
                 return ExportStep(scene, path, log);
 
@@ -626,6 +642,14 @@ public static class EngrCad
         Log.WroteStepAssembly(log, path, plan.ProductCount, plan.Instances.Count);
         return 0;
     }
+
+    /// <summary>The scene's instances as named, posed, colored export parts — what the
+    /// part-aware mesh formats (3MF, AMF) consume. Names are instance paths, so an
+    /// assembly's occurrences stay distinguishable in a slicer's object list.</summary>
+    private static List<MeshExportPart> ExportParts(Scene scene, MeshQuality quality) =>
+        [.. scene.AllInstances.Select(i => new MeshExportPart(
+            i.Part.GetMesh(quality), i.World, i.Path,
+            i.Part.Color is { } c ? (c.R, c.G, c.B) : null))];
 
     /// <summary>All part instances merged into one OBJ (assemblies flattened), with
     /// each instance's composed world transform applied.</summary>

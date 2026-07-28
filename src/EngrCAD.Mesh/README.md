@@ -683,6 +683,18 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   multi-body mesh into its bodies.
 - **`RenderMesh`** — flat (per-face) or smooth (per-vertex) triangle extraction for GPUs.
 - **`ObjWriter`** — minimal Wavefront OBJ export for debugging.
+- **`OffWriter`** — the writer twin of `OffReader` (n-gon faces as-is, merged
+  multi-part with transforms, mirror-safe windings; R-format doubles so it
+  round-trips through the reader exactly).
+- **`ThreeMfWriter` / `AmfWriter`** — the modern printing formats, dependency-free
+  over the BCL (`ZipArchive` + LINQ-to-XML). Both take `MeshExportPart` lists
+  (mesh + transform + name + optional RGB color): each part becomes one named
+  object with its transform BAKED into the vertices (the merged-STL flattening;
+  negative-determinant transforms flip triangle winding so facets stay outward,
+  which 3MF requires), and distinct colors dedupe into one material table. 3MF is
+  a proper OPC package (`[Content_Types].xml`, `_rels/.rels`,
+  `3D/3dmodel.model`); AMF is plain ISO/ASTM 52915 XML. N-gons are
+  fan-triangulated — both formats are triangles.
 - **Mesh import** — `StlReader` (binary + ASCII, autodetected: the exact
   84 + 50·n byte-size test runs *before* any `solid` prefix sniffing, because binary
   exporters routinely write "solid" into the 80-byte header; the prefix + a

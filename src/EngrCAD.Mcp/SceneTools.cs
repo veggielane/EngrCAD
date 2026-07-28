@@ -444,11 +444,12 @@ public sealed class SceneTools(SceneSession session)
 
     /// <summary>
     /// Writes the scene to a file the caller names: <c>.step</c> (exact B-Rep, one file
-    /// per part), <c>.stl</c>/<c>.obj</c> (meshes, instances merged with their
-    /// transforms), or <c>.png</c> (a render).
+    /// per part), <c>.stl</c>/<c>.obj</c>/<c>.off</c> (meshes, instances merged with
+    /// their transforms), <c>.3mf</c>/<c>.amf</c> (per-instance objects with names and
+    /// colors), or <c>.png</c> (a render).
     /// </summary>
     public CallToolResult Export(
-        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .png).")]
+        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .3mf, .amf, .off, .png).")]
         string path,
         [Description("Export only this tab (omit for the whole scene).")] string? tab = null,
         [Description("Image width in pixels for .png exports, 16-4096 (default 1280).")]
@@ -498,12 +499,39 @@ public sealed class SceneTools(SceneSession session)
                         ["instances"] = instances.Count,
                     });
 
+                case ".off":
+                    OffWriter.WriteFile([.. instances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "OFF (merged)",
+                        ["instances"] = instances.Count,
+                    });
+
+                case ".3mf":
+                    ThreeMfWriter.WriteFile(ExportMeshParts(instances, quality), path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "3MF",
+                        ["instances"] = instances.Count,
+                    });
+
+                case ".amf":
+                    AmfWriter.WriteFile(ExportMeshParts(instances, quality), path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "AMF",
+                        ["instances"] = instances.Count,
+                    });
+
                 case ".step" or ".stp":
                     return ExportStep(path, instances);
 
                 default:
                     return Error(
-                        $"Unsupported export format '{extension}' — use .step, .stl, .obj, or .png.");
+                        $"Unsupported export format '{extension}' — use .step, .stl, .obj, .3mf, .amf, .off, or .png.");
             }
         }
         catch (Exception e)
@@ -926,6 +954,14 @@ public sealed class SceneTools(SceneSession session)
             result["skipped"] = skipped;
         return Ok(result);
     }
+
+    /// <summary>The instances as named, posed, colored export parts — what the
+    /// part-aware mesh formats (3MF, AMF) consume; same shape as <c>--export</c>'s.</summary>
+    private static List<MeshExportPart> ExportMeshParts(
+        IReadOnlyList<PartInstance> instances, MeshQuality quality) =>
+        [.. instances.Select(i => new MeshExportPart(
+            i.Part.GetMesh(quality), i.World, i.Path,
+            i.Part.Color is { } c ? (c.R, c.G, c.B) : null))];
 
     /// <summary>All instances merged into one OBJ with their world transforms applied
     /// (the same output <c>--export .obj</c> produces).</summary>

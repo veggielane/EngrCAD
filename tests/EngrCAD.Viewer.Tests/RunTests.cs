@@ -96,6 +96,61 @@ public class RunTests
     public void Export_MissingPathOrBadExtension_FailsWithUsageCode()
     {
         Assert.Equal(2, EngrCad.Run(["--export"], BracketScene));
-        Assert.Equal(2, EngrCad.Run(["--export", TempFile(".3mf")], BracketScene));
+        Assert.Equal(2, EngrCad.Run(["--export", TempFile(".xyz")], BracketScene));
+    }
+
+    [Fact]
+    public void ExportOff_WritesAMergedOffFile()
+    {
+        var path = TempFile(".off");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], BracketScene);
+            Assert.Equal(0, code);
+            var result = MeshReader.ReadFile(path);
+            Assert.NotNull(result.Mesh);
+            Assert.True(result.Mesh!.IsClosed);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Export3mf_WritesAValidPackage()
+    {
+        var path = TempFile(".3mf");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], BracketScene);
+            Assert.Equal(0, code);
+            using var archive = System.IO.Compression.ZipFile.OpenRead(path);
+            Assert.NotNull(archive.GetEntry("3D/3dmodel.model"));
+            Assert.NotNull(archive.GetEntry("[Content_Types].xml"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ExportAmf_WritesObjectsWithNames()
+    {
+        var path = TempFile(".amf");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], BracketScene);
+            Assert.Equal(0, code);
+            var document = System.Xml.Linq.XDocument.Load(path);
+            Assert.Equal("amf", document.Root!.Name.LocalName);
+            Assert.Contains(document.Root.Elements("object"),
+                o => o.Element("metadata")?.Value == "bracket");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }
