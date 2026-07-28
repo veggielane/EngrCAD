@@ -561,6 +561,15 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   the seam contract — bit-identical rim, so reinsertion welds by exact equality),
   reinsert; everything outside the region survives bit-for-bit. With no handles the
   input mesh itself is returned (the energy's exact minimizer). Deterministic.
+- **`DijkstraGraphDistance`** — single/multi-source Dijkstra over the edge graph
+  (weights = Euclidean edge lengths) on Core's `IndexPriorityQueue`: the standard
+  approximate geodesic, deliberately named "graph distance" because edge paths
+  *overestimate* the true geodesic (up to ~8% on a regular triangulation's worst
+  direction — a sphere test pins the bound). Seeds may carry initial distance offsets;
+  `maxDistance` limits the search radius (beyond it vertices report +∞, never a
+  half-relaxed value); exposes `NearestSeed`/`Predecessor`/`PathToSeed` and
+  `SettledOrder` — the ascending-distance settle order the discrete exponential map
+  propagates in. Deterministic.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with
