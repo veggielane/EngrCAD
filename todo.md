@@ -150,37 +150,42 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   the identical unsubtracted rod was clean; and the two-ring periodic band used a merge
   walk where the monotone stack sweep was needed. Remaining findings are the two items
   below.
-- [ ] **Refinement quality upgrade — now with THREE repros, and one of them ordinary.**
-  The strongest single measurement: a hand-built spherical band spanning 7.6 natural u
-  steps by 6 v steps has a base triangulation of **94 facets at worst normal agreement
-  0.99954**, and `Refine` turns it into **2 784 facets at 0.1998**. Refinement there does
-  not improve the mesh, it wrecks it. The other two:
-  **(1)** `Box(20, 20, 20) − Sphere(12)` (a sphere larger than its box, so the cavity
-  breaks out of all six faces) is the one corpus member the trimmed path cannot carry,
-  and it is locked by
-  `TessellationCorpusQualityTests.SpherePiercingEverySide_IsCarriedByRefinementAndSaysSoLoudly`.
-  The cavity wall is a band whose chains are a 48-sample latitude circle against a
-  240-sample rim scalloped by four side-face cuts, spanning ~15 natural v steps. The
-  monotone sweep triangulates it correctly — every base facet has positive uv area — but
-  the base mesh has **no interior rows**, so `Refine` has to manufacture all of them by
-  midpoint bisection, and on a surface this curved the surface midpoint of a long chord
-  lies far enough off the chord to invert the halves. Measured at 48/24: **101 246 facets
-  where the grid density asks for ~1 440, 266 of them inverted, worst agreement −0.2426**;
-  volume converges at ratios 2.64 then 2.13, not 4; and at 96/48 it REFUSES outright
-  ("curvature refinement did not converge"), which is the right behaviour and an unusable
-  model. Every milder spherical cavity is clean (a pocket through one face measures
-  0.99956 with no folds), so this is specifically about tall bands. Two candidate fixes:
-  Rivara longest-edge bisection under the anisotropic metric (cheaper, still refinement),
-  or — the one that matches "the base triangulation must carry the accuracy" — inserting
-  the natural grid's interior v rows into the band before triangulating, which the
-  v-simple structure between two u-monotone chains makes well defined. No Delaunay flips.
-  **The evidence now argues for the second.** The 94 → 2 784 measurement above says
-  refinement degrades a base mesh that was already good, so a better bisection RULE is
-  treating the symptom; and repro (3) fails before refinement runs at all, which no
-  refinement scheme can fix. Note also that this is not a niche accuracy item: the drilled
-  sphere is 27x the triangle count the grid asks for, so it is a cost item too. Expect the
-  work to touch every trimmed face, so budget a full re-verification of the 52 rendered
-  docs PNGs alongside the corpus gate.
+- ~~**Refinement quality upgrade — interior rows in the base triangulation.**~~
+  ✅ **done, the second candidate fix (rows), and the evidence was right** — the base
+  triangulation now carries the surface's curvature itself (`RowedStrip`/
+  `RowedPeriodicBand`/`RowedPoleFan` in `TrimmedFaceTessellator`: the natural grid's own
+  sample rows threaded between scallops with anchors on existing boundary vertices,
+  full-period rows plus a closure duplicate for winding bands, seam chords pre-split
+  with bit-identical twins, pole fans kept within ~1.5 steps of the pole; `Refine`'s
+  step metric became per-axis max-norm so the grid's own cell diagonal stops counting as
+  oversized, and pole-fan edges are refinement-exempt since the pole's u is arbitrary).
+  Measured (i9-9900K win-x64): the drilled sphere `Sphere(10) − Cylinder(3, 40)` went
+  **43 948 facets / 12 folds / worst −0.2022 → 3 244 / 0 / 0.9994** at 32/24, no longer
+  refuses at 128/96, and its volume error falls at ratios 4.35 / 5.08 per doubling — it
+  is now the corpus's 22nd member with an analytic (napkin-ring) volume row.
+  `Box(20,20,20) − Sphere(12)` went **101 246 / 266 folds / −0.2426 → 4 608 / 0 /
+  0.7024** at 48/24 and tessellates at 96/48 where it used to refuse. Refine is
+  DEMOTED, not removed: with rows in place it is measured idle on 16 of 19 corpus
+  members' trimmed faces and still fixes the residual coarse columns (base 3 folds →
+  0 on Box − Sphere). Residuals filed below.
+- [ ] **Trimmed-face residuals after the interior-rows upgrade** (all bounded, none a
+  fold-or-refusal class):
+  - `Box(20,20,20) − Sphere(12)` stays out of the corpus: at each hole rim's u-extreme
+    the rim tangent goes vertical, no level path anchors cleanly, and a narrow column a
+    few steps tall remains for refinement — worst agreement 0.7024 at 48/24 against the
+    0.9239 floor (locked with committed baselines in
+    `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`). A per-column cut at the
+    rim's turning vertex is the likely finish.
+  - The hand-built spherical band with meridian cross edges (`TrimmedBandGapTests`,
+    test 1) declines rows in BOTH orientations because its boundary coordinates tie
+    bit-exactly in both axes (closed-form azimuth, deterministic profile solves), and
+    `SweepMonotone`'s extreme-end tie handling meets exactly-collinear runs; it falls
+    back to the rowless path at 2 612 facets / 0.8359 (was 2 784 / 0.1998). Real
+    boolean boundaries carry ~1e-9 projection jitter and never tie exactly, which is
+    why only the hand-built face shows it.
+  - `TriangulateBandWithHoles`/`ZipSlabs` has no interior rows — irrelevant today
+    because every reachable band-with-holes lives on a cylinder or extrusion (ruled in
+    v, chords exact), but a revolved band with holes would want the same treatment.
   Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5 — the trimmed side-face triangulation differs from a
   planar cap's (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
