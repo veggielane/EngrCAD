@@ -134,6 +134,16 @@ concerns.
   R's bounds grown by 3d — so there is no second algorithm and no special case for necks,
   islands, or holes merging. Cost is the union's: measured ~30 ms for a 16-gon and ~260 ms
   for a 512-gon outward round offset.
+  **`Stroke(path, width, cap, join)`** dilates an OPEN polyline into a constant-width
+  region — toolpath footprints, slots from centre lines, SVG strokes — by the same
+  union: one full-width slab per segment, corner joins offered on BOTH sides of every
+  interior vertex (the inner side's wedge is already inside its slabs, so only the
+  outer gap changes the union — and a 180° reversal legitimately fills both, which is
+  the round nose on a doubled-back path), and `StrokeCap.Butt/Round/Square` ends.
+  Self-crossing paths just work (a union covers the overlap once) and a closed
+  circuit (first point repeated) encloses its hole. With round caps and joins a
+  stroke is the path's Minkowski sum with a disk, short only of the inscribed-arc
+  sagitta; straight-segment butt/square/miter strokes are exact.
 
   boundary, so `Contains`'s closed-set convention never has to decide a tie. The clearance
   comes from a **`Bvh` over the arrangement's edges built once per boolean** (edges embedded

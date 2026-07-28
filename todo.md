@@ -555,9 +555,14 @@ export — is recorded in CLAUDE.md):
   `Shell(t, openings)`, `RoundEdges`, `Loft` — all isometry-commuting, each a small
   DecomposeSimilarity change plus tests when wanted
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
-  chamfer joins, erosion as complement dilation): **exact curved offsets** (arcs stay
-  arcs — today everything flattens first, same limitation as all region work); variable
-  offset along the outline; open-path offsetting (a stroke, for toolpaths).
+  chamfer joins, erosion as complement dilation; **open-path stroking ✅ landed** —
+  `Region2dOffset.Stroke(path, width, cap, join)`, butt/round/square caps, both-side
+  corner joins so reversals get round noses, closed circuits enclose holes): **exact
+  curved offsets** (arcs stay arcs — today everything flattens first, same limitation
+  as all region work); **variable offset along the outline** (per-vertex distances —
+  trapezoid slabs + interpolated-radius joins on the same union construction; design
+  question: how distances interpolate along an edge, linear-in-arclength being the
+  obvious rule).
 - [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
   ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
   twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
