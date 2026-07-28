@@ -996,21 +996,35 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   `PlaneRef.OnTopFace` gives the face's own frame — so it is a per-feature choice rather
   than a global decision) — arbitrary section planes from a frame; `StepWriter` emitting
   AXIS2 placements via `Frame3d`; Part poses as frames (assemblies above).
-- [ ] **Parametric model layer / scripting** — fluent C# builder over the retained
-  document model; `.csx` scripting via Roslyn (C# *is* our SCAD language); reusable
-  parametric components as plain C# methods — document the pattern.
-- [ ] **Logging follow-ups** (`ILogger` adoption ✅ landed — the `IEngrCadLog` shim is
-  gone, `EngrCAD.Viewer`/`EngrCAD.Mcp` take
-  `Microsoft.Extensions.Logging.Abstractions`, every message is a source-generated
-  `[LoggerMessage]` template with a stable event ID, and levels now distinguish a
-  skipped part (Warning) from a failed export (Error)) — remaining: **extend inward**
-  with an optional `ILogger` on the long-running kernel operations, alongside the
-  existing `ProgressCancel` (booleans, `BRepTessellator`, `MeshSdf`/winding builds,
-  STEP import). That means the kernel projects take the abstractions reference too;
-  weigh it per project rather than blanket-adding it. Keep diagnostics that are
-  *results* as return values — `StepReadResult.Diagnostics`, `MeshRepair`'s reports
-  and `Explain`'s node report are data the caller acts on, not log lines; logging
-  complements them rather than replacing them.
+- [ ] **Parametric model layer follow-ups** (`.csx` scripting landed —
+  `tools/EngrCAD.Script` runs a script through `EngrCad.Run` with save-to-reload via
+  the new `EngrCad.NotifySourceChanged()`, DocsGen's snippet contract and Roslyn seam,
+  docs page + `samples/scripts/bracket.csx`; the reusable-component pattern is
+  documented as plain C# methods returning Shape/Part) — remaining: a fluent C#
+  builder over the retained document model; `#load` library conventions for shared
+  `.csx` component files; a `dotnet tool` packaging of the script runner so
+  `engrcad model.csx` works without the repo.
+- [ ] **B-Rep boolean: near-miss parallel-cylinder pairs produce an open-curve
+  refusal.** Found by a Ø8 counterbore drilled 10 mm from a rounded-rect plate's Ø12
+  corner: the tool cylinder and the corner quarter-cylinder do not intersect on their
+  actual face DOMAINS, but their carriers do (parallel axes 5.66 apart, radii 4+6),
+  the face-bounds prefilter cannot separate AABBs that touch at one corner, and the
+  analytic parallel-cylinder intersection emits carrier lines that end inside the
+  face — `FaceSplitter.SplitByCurve` then throws "Open splitting curves must start
+  and end outside the face" for a boolean that geometrically is a plain hole. Clip
+  the analytic lines against BOTH faces' domains (or reject the pair when the clipped
+  curve is empty) before handing them to the splitter.
+- [ ] **Logging follow-ups** (`ILogger` adoption ✅; kernel extension ✅ landed —
+  Interop and BRep take the abstractions reference, weighed per project: optional
+  trailing `ILogger` on `BrepBoolean` ops (event 80, sub-steps threaded through),
+  `BRepTessellator.Tessellate` (81), `MeshSdf` ctors incl. the winding build (82),
+  `StepReader.Read/ReadFile` (90); Mesh/Core/Implicit deliberately stay
+  dependency-free since everything named is reachable at those seams; results stay
+  return values) — remaining: thread a logger from `Shape` lowering
+  (`ShapeCompiler`/`Part.TryGetSolid`) down to these seams so a design program's
+  logger sees its own booleans; consider `SurfaceNets.Polygonize` and `MeshRepair`
+  timing at the same standard; a `--log-kernel` switch on `EngrCad.Run` wiring the
+  host console logger into the kernel seams.
 - [ ] Sheet metal (bend allowances, flanges, unfold) — big, separate domain.
 - [ ] nuget.org publish — `Directory.Build.props` URLs are placeholders; a real remote
   exists (github.com/veggielane/EngrCAD). GitHub Pages needs Settings → Pages →

@@ -48,6 +48,8 @@
   href: animation.md
 - name: Viewer
   href: viewer.md
+- name: Scripting (.csx)
+  href: scripting.md
 - name: In the browser (WebAssembly)
   href: web.md
 - name: AI assistants (MCP)

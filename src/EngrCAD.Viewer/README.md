@@ -608,6 +608,14 @@ survives those too. `EngrCad.Run` also gives every model program standard switch
 B-Rep-representable parts, binary STL or OBJ merged with transforms applied —
 CI/slicer-friendly, no window).
 
+`EngrCad.NotifySourceChanged()` is the same reload path for hosts whose model SOURCE
+is data rather than compiled code: it re-invokes the live factory exactly as a hot
+reload patch does (same debounce, same keep-the-last-good-scene error handling), and
+is a no-op unless a `ShowLive` window is active. `tools/EngrCAD.Script` — the `.csx`
+model runner (see `docs/examples/scripting.md`) — watches its script file and calls
+it on save, which is what makes editing a script feel identical to editing a watched
+project.
+
 ## Configuring: `EngrCad.Configure()`
 
 `EngrCad.Run(args, factory)` works with zero configuration; when a program wants
