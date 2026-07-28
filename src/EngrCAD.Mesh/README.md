@@ -582,6 +582,21 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   makes at-level vertices outside, drops zero-length segments by exact equality, and
   carries the marching-squares node caveat: a contour through a vertex may split chains
   there. Deterministic.
+- **`MeshLocalParam`** — local surface parameterization by a **discrete exponential
+  map** (Schmidt, Grimm &amp; Wyvill 2006): per-vertex (u, v) around a seed within a
+  geodesic radius — the decal/engraving/wrapping enabler. Vertices are visited in
+  `DijkstraGraphDistance`'s settle order and each takes the **upwind average** of its
+  already-mapped neighbours' predictions (uv_k plus the 3D step expressed in k's
+  parallel-transported tangent frame), with the seed frame transported vertex-to-vertex
+  by the minimal rotation between vertex normals — computed in the trig-free Rodrigues
+  form `v·c + (axis × v) + axis·(axis·v)/(1 + c)`, exact and stable for every c &gt; −1
+  because (1 − c)/sin² = 1/(1 + c). Behaviour is pinned by tests at all three curvature
+  regimes: **exact** on a plane (transport is the identity, predictions telescope,
+  ≤ 1e-9), **≤ 2% distortion** unrolling a developable tube against its exact
+  development, and on a 35° sphere cap the radial coordinate tracks the geodesic within
+  5% — where genuine Gaussian curvature makes some distortion unavoidable.
+  `referenceDirection` fixes the +u axis (pass one whenever orientation matters).
+  Deterministic.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with
