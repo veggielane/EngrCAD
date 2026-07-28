@@ -45,15 +45,33 @@ engines.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:
-    1. **Strip zip** — a single-loop region whose boundary is a *band*: two chains
-       monotone in one surface parameter, joined at each end by a single **rung**. The
-       chains are already paired by construction, so the correct triangulation is the
-       same monotone merge walk the periodic-band path uses, minus the period closure.
-       The chain direction is the parameter carrying the natural sampling, so the rungs
-       lie across the ruled or coarser one (getting that backwards would fan a 2-sample
-       rung against a 25-sample chain). Guarded by a uv positive-area test on every
-       emitted triangle: a merge zip triangulates a monotone region only while neither
-       chain overhangs the other, and an overhang shows up as a fold.
+    1. **Strip sweep** — a single-loop region whose boundary is a *band*: two chains
+       monotone in one surface parameter. The chain direction is the parameter carrying
+       the natural sampling, so the cross edges lie across the ruled or coarser one
+       (getting that backwards would fan a 2-sample end against a 25-sample chain). The
+       loop is split at its extreme-key vertices and handed to the same **stack sweep**
+       the slab path uses, which is correct on any monotone polygon; the older
+       rung-counting split plus merge zip stays behind it as a fallback for loops the
+       sweep declines (a chain running backwards in the key, or one side that is a single
+       edge). Every band in the docs tessellates bit-identically either way — the sweep's
+       value is the two shapes the rung split *cannot express*:
+       - a **cross edge sampled at more than two points** (a curved end) is several
+         consecutive vertices at one key. The sweep stacks them — exactly collinear is
+         deliberately not a turn, so nothing pops between them — and fans them from the
+         opposite chain's first vertex when the funnel closes, which is what keeps them
+         out of the zero-area trap that fanning them among themselves would be. The
+         tie-breaking is load-bearing: the extremes are taken as the LAST of the tied
+         minimum run and the FIRST of the tied maximum run, so a whole tied run lands on
+         one chain. Split between the two chains, the merge would interleave the sides at
+         equal keys and ask the sweep to triangulate collinear points.
+       - a **band whose chains meet at a point** (a cross edge of no steps) is just a
+         monotone polygon with a single extreme vertex, where the sweep starts anyway.
+
+       Neither shape is reachable from the `Shape` API yet — the constructions that would
+       make one (a spherical band between two meridian cuts, a cone fragment through the
+       apex) are refused earlier by the exact B-Rep boolean, and a sweep of eighteen
+       further candidates found nothing else that reaches them — so both are covered by
+       direct unit tests on hand-built faces in `TrimmedBandGapTests`.
     2. **Band with holes** — two-ring bands carrying extra interior hole loops (a
        cross-drilled bore wall) are cut open along a seam placed in the largest u-gap
        left free by the holes and unrolled into a rectangle-with-holes; the two seam

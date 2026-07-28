@@ -196,8 +196,13 @@ internal static class TrimmedFaceTessellator
         bool uFirst = StepSpan(uv, alongU: true, stepU) >= StepSpan(uv, alongU: false, stepV);
         foreach (bool alongU in (ReadOnlySpan<bool>)[uFirst, !uFirst])
         {
-            if (TrySplitBand(uv, order, alongU, out var rising, out var falling) &&
-                ZipBand(uv, order, rising, falling, alongU) is { } local)
+            // The stack sweep first: it is the correct triangulation of ANY monotone
+            // region, so it covers the two shapes the rung-counting split cannot see —
+            // an end sampled at more than two points (a curved cross edge) and two
+            // chains meeting at a point (a rung of no steps at all). The rung split
+            // stays behind it because a band whose chains are monotone in neither
+            // parameter is not a band, and ear clipping is the honest answer there.
+            if ((SweepStrip(uv, order, alongU) ?? ZipStrip(uv, order, alongU)) is { } local)
             {
                 int start = uvAll.Count;
                 for (int i = 0; i < n; i++)
@@ -212,6 +217,104 @@ internal static class TrimmedFaceTessellator
             }
         }
         return null;
+    }
+
+    /// <summary>The rung-counting split followed by the merge zip, as one step.</summary>
+    private static List<(int A, int B, int C)>? ZipStrip(List<Vector2d> uv, int[] order, bool alongU) =>
+        TrySplitBand(uv, order, alongU, out var rising, out var falling)
+            ? ZipBand(uv, order, rising, falling, alongU)
+            : null;
+
+    /// <summary>
+    /// Triangulates a single-loop band by splitting it at its extreme-key vertices into
+    /// two chains and running <see cref="SweepMonotone"/> over them — the textbook stack
+    /// sweep, which is correct on ANY monotone polygon rather than only on one whose ends
+    /// are single rungs. Returns null (so the caller falls back) when either chain runs
+    /// backwards in the key, when one side has no interior vertex at all, or when the
+    /// sweep hits a degeneracy.
+    /// <para>Two shapes the rung-counting split refuses fall out of this for free.</para>
+    /// <list type="bullet">
+    /// <item>A <b>rung sampled at more than two points</b> — a curved cross edge — is
+    /// several consecutive vertices at one key. The sweep stacks them (collinear is
+    /// deliberately not a turn, so nothing pops between them) and then fans them from the
+    /// OPPOSITE chain's first vertex when the funnel closes, which is exactly the
+    /// treatment that avoids the zero-area facets fanning them among themselves would
+    /// produce. The tie-breaking below is what makes that work: the whole tied run has to
+    /// land on ONE chain, or the merge interleaves the two sides at equal keys and the
+    /// sweep is asked to triangulate collinear points.</item>
+    /// <item>A <b>band whose chains meet at a point</b> — a rung of no steps — is just a
+    /// monotone polygon with a single extreme vertex, which is where the sweep starts
+    /// anyway.</item>
+    /// </list>
+    /// <para>Neither shape is reachable from the <c>Shape</c> API today: the constructions
+    /// that would make one (a spherical band between two meridian cuts, a cone fragment
+    /// through the apex) are refused earlier by the exact B-Rep boolean. They are covered
+    /// by direct unit tests on hand-built faces — see <c>TrimmedBandGapTests</c>.</para>
+    /// </summary>
+    private static List<(int A, int B, int C)>? SweepStrip(List<Vector2d> uv, int[] order, bool alongU)
+    {
+        int n = order.Length;
+
+        // Sweep coordinates: the key first, the cross direction second. For a v-keyed band
+        // that is (v, -u) — a rotation, NOT a coordinate swap, because a swap is a
+        // reflection and would invert every facet the sweep orients by area sign.
+        var sweep = new List<Vector2d>(n);
+        for (int i = 0; i < n; i++)
+        {
+            var p = uv[order[i]];
+            sweep.Add(alongU ? p : new Vector2d(p.Y, -p.X));
+        }
+
+        double min = sweep.Min(p => p.X), max = sweep.Max(p => p.X);
+        double extent = max - min;
+        if (!(extent > 0))
+            return null;
+        // The same relative expression of the 1e-6 inverse-evaluation tier TrySplitBand
+        // uses: the two ends of a rung pull back to the same key to about that much.
+        double flat = FaceGeometry.InverseEvaluationTolerance * extent;
+
+        // The extreme vertices, tie-broken so a whole tied run sits on one chain: the LAST
+        // of the tied minimum run and the FIRST of the tied maximum run, both in traversal
+        // order, which puts every other member of each run on the other chain.
+        int lo = -1, hi = -1;
+        for (int i = 0; i < n; i++)
+        {
+            if (sweep[i].X - min <= flat && sweep[(i + 1) % n].X - min > flat)
+                lo = i;
+            if (max - sweep[i].X <= flat && max - sweep[(i + n - 1) % n].X > flat)
+                hi = i;
+        }
+        if (lo < 0 || hi < 0 || lo == hi)
+            return null; // a tied run wraps the whole loop: not a band
+
+        var forward = Walk(lo, hi, +1, n);
+        var backward = Walk(lo, hi, -1, n);
+        if (!NonDecreasingU(sweep, forward) || !NonDecreasingU(sweep, backward))
+            return null;
+
+        // Both walks carry the two shared extremes; the sweep wants each vertex once, so
+        // whichever chain is the upper one contributes only its interior.
+        bool forwardIsLower =
+            forward.Average(i => sweep[i].Y) <= backward.Average(i => sweep[i].Y);
+        var lower = forwardIsLower ? forward : backward;
+        var other = forwardIsLower ? backward : forward;
+        if (other.Count <= 2)
+            return null; // one side is a single edge: no band to sweep
+        var upper = other.GetRange(1, other.Count - 2);
+
+        var triangles = new List<(int A, int B, int C)>();
+        return SweepMonotone(triangles, sweep, lower, upper) ? triangles : null;
+
+        static List<int> Walk(int from, int to, int step, int n)
+        {
+            var chain = new List<int>();
+            for (int i = from; ; i = (i + step + n) % n)
+            {
+                chain.Add(i);
+                if (i == to)
+                    return chain;
+            }
+        }
     }
 
     /// <summary>How many natural grid steps the loop spans in one parameter; zero where

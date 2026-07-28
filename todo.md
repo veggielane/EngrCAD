@@ -80,16 +80,25 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   once, then a short per-point scan, which attacks node-test cost rather than the initial
   bound. Needs care over tie-breaking (equidistant triangles must resolve to the same one
   `Bvh.Nearest` picks) and a fallback when the candidate list blows up.
-- [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`). The zip
-  handles single-loop bands with single-sample rungs; two cases still ear-clip or
-  refuse, each cheap on its own:
-  - A **rung sampled at more than two points** (a curved cross edge) is refused rather
-    than fanned — fanning collinear rung samples would emit the very zero-area triangles
-    the strip path exists to avoid. The fix is to treat a multi-sample rung as a
-    degenerate chain end and fan from the opposite chain's first vertex, with the same uv
-    positive-area guard.
-  - A band whose two chains **meet at a point** (a rung of zero steps) falls back; the
-    merge walk needs a shared-apex start case.
+- [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`).
+  - ~~A **rung sampled at more than two points** (a curved cross edge)~~ and ~~a band
+    whose two chains **meet at a point** (a rung of zero steps)~~ ✅ **both done** — not
+    by two special cases but by replacing the rung-counting split with the same monotone
+    **stack sweep** the slab path uses, which is correct on any monotone polygon and
+    handles a tied run of end vertices and a single apex as its ordinary start/finish
+    cases. The tie-breaking is the load-bearing detail: the extremes are the LAST of the
+    tied minimum run and the FIRST of the tied maximum run, so a whole tied run lands on
+    ONE chain — split across both, the merge interleaves the sides at equal keys and the
+    sweep is asked to triangulate collinear points. The old zip stays as a fallback, and
+    every band in the docs tessellates bit-identically either way (all 52 rendered PNGs
+    unchanged). **Neither shape is reachable from the `Shape` API yet**: the
+    constructions that would produce one — `Sphere(10) − Box(20,20,40).Translate((10,10,0))`
+    (a spherical band between two meridian cuts) and `Cone(8,0,12) − Box(...)` (a cone
+    fragment through the apex) — are refused earlier by the exact B-Rep boolean with
+    "produced an unclosed solid", and a sweep of eighteen further candidates (filleted
+    rounded rectangles and slots, chamfered arcs, tilted cylinder cuts, drilled cones and
+    tori, cut lofts, sweeps and vases) reached neither. Coverage is `TrimmedBandGapTests`,
+    on hand-built faces.
   - ~~**Bands with interior hole loops** still ear-clip (`TriangulateBandWithHoles`)~~
     ✅ **done** — and it *was* visible: the cross-drilled bore wall in
     `docs/examples/images/section-oblique.png` rendered as a crumpled fan. This entry
@@ -119,10 +128,14 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   the identical unsubtracted rod was clean; and the two-ring periodic band used a merge
   walk where the monotone stack sweep was needed. Remaining findings are the two items
   below.
-- [ ] **Refinement quality upgrade — now with a repro that PROVES it is needed.**
-  `Box(20, 20, 20) − Sphere(12)` (a sphere larger than its box, so the cavity breaks out
-  of all six faces) is the one corpus member the trimmed path cannot carry, and it is
-  locked by
+- [ ] **Refinement quality upgrade — now with THREE repros, and one of them ordinary.**
+  The strongest single measurement: a hand-built spherical band spanning 7.6 natural u
+  steps by 6 v steps has a base triangulation of **94 facets at worst normal agreement
+  0.99954**, and `Refine` turns it into **2 784 facets at 0.1998**. Refinement there does
+  not improve the mesh, it wrecks it. The other two:
+  **(1)** `Box(20, 20, 20) − Sphere(12)` (a sphere larger than its box, so the cavity
+  breaks out of all six faces) is the one corpus member the trimmed path cannot carry,
+  and it is locked by
   `TessellationCorpusQualityTests.SpherePiercingEverySide_IsCarriedByRefinementAndSaysSoLoudly`.
   The cavity wall is a band whose chains are a 48-sample latitude circle against a
   240-sample rim scalloped by four side-face cuts, spanning ~15 natural v steps. The
