@@ -354,6 +354,7 @@ public sealed class ViewportControl : OpenGlControlBase
             _sceneBounds = bounds;
             _sectionContours.Invalidate();   // new scene: cached SDF routes are stale
             LoadAnnotations(report: true);
+            LoadFieldDisplay();              // the legend's scale, resolved once per swap
             ClearMeasurement();              // measure points reference the old scene
             _preview.Set(null, Matrix4d.Identity);   // preview referenced the old scene
 
@@ -1394,6 +1395,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 return;
             _visible[index] = visible;
             LoadAnnotations(report: false);   // dimensions follow their part's visibility
+            LoadFieldDisplay();               // hiding the field-carrying part hides its legend
         }
         // Isolines need no nudge: SectionContourRenderer already detects the changed
         // visibility set itself (and Invalidate would drop its cached SDF lowerings).
@@ -1572,6 +1574,8 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    private ResolvedFieldDisplay? _activeField;
+
     /// <summary>
     /// The field display currently shown, if any — the first visible instance whose
     /// part resolves one. Hosts read it for the legend and the min/max readout; it is
@@ -1580,22 +1584,26 @@ public sealed class ViewportControl : OpenGlControlBase
     /// single scale, and several parts on different scales under one bar would be a
     /// legend that lies. Parts sharing a scale is what an explicit
     /// <c>FieldDisplay.Range</c> is for.</para>
+    /// <para>Resolved when the instances or their visibility change, never per frame:
+    /// resolution takes the PART's lock, and the render thread must not be able to queue
+    /// behind a mesh in flight on another thread — the rule <see cref="Part.HasMesh"/>
+    /// exists for.</para>
     /// </summary>
-    public ResolvedFieldDisplay? ActiveFieldDisplay
+    public ResolvedFieldDisplay? ActiveFieldDisplay => _showFields ? _activeField : null;
+
+    /// <summary>Re-resolves <see cref="ActiveFieldDisplay"/> from the visible instances.
+    /// Caller holds <see cref="_sceneLock"/>, off the render thread or at a scene
+    /// swap.</summary>
+    private void LoadFieldDisplay()
     {
-        get
+        _activeField = null;
+        for (int i = 0; i < _instances.Count; i++)
         {
-            if (!_showFields)
-                return null;
-            lock (_sceneLock)
+            if (_visible[i] && _instances[i].Part.TryResolveFieldDisplay(out var resolved, out _))
             {
-                for (int i = 0; i < _instances.Count; i++)
-                {
-                    if (_visible[i] && _instances[i].Part.TryResolveFieldDisplay(out var resolved, out _))
-                        return resolved;
-                }
+                _activeField = resolved;
+                return;
             }
-            return null;
         }
     }
 
