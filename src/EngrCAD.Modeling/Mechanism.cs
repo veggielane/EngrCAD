@@ -255,6 +255,37 @@ public sealed class Mechanism
     }
 
     /// <summary>
+    /// Solves at the driven pose, then computes every moving body's velocity and
+    /// acceleration (and, via <see cref="MechanismRates.For(AxisJoint)"/>, joint
+    /// coordinate rates) for the driver moving at <paramref name="rate"/> with
+    /// <paramref name="acceleration"/> — from the ANALYTIC Jacobian: velocities solve
+    /// J·q̇ = −∂C/∂t, accelerations J·q̈ = −r̈₀ with the second-order terms assembled
+    /// exactly (finite-differencing sampled poses would cap accuracy near 1e-8, the
+    /// mate solver's own lesson). Requires the driven system fully constrained —
+    /// otherwise the rates are a family, not an answer, and it refuses saying so.
+    /// </summary>
+    public MechanismRates RatesAt(
+        MechanismDriver driver, double value, double rate = 1, double acceleration = 0,
+        MateSolverSettings? settings = null)
+    {
+        SolveAt(driver, value, settings);
+        driver.Constraint.TargetRate = rate;
+        driver.Constraint.TargetAcceleration = acceleration;
+        try
+        {
+            var extras = new List<AuxiliaryConstraint>(_couplings.Count + 1);
+            extras.AddRange(_couplings);
+            extras.Add(driver.Constraint);
+            return Mates.Rates(settings ?? new MateSolverSettings(), extras);
+        }
+        finally
+        {
+            driver.Constraint.TargetRate = 0;
+            driver.Constraint.TargetAcceleration = 0;
+        }
+    }
+
+    /// <summary>
     /// Sweeps the driver from <paramref name="from"/> to <paramref name="to"/>,
     /// recording <paramref name="frames"/> uniformly spaced poses. Between samples the
     /// step adapts: a failed step halves and retries from the last converged pose
