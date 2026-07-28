@@ -401,11 +401,11 @@ internal static class ShapeCompiler
             case BoxShape box:
             {
                 if (IsIdentity(m))
-                    return SolidFactory.MakeBox(box.Bounds);
+                    return SolidFactory.MakeBox(box.Box);
                 if (IsTranslation(m, out var offset))
-                    return SolidFactory.MakeBox(new Aabb(box.Bounds.Min + offset, box.Bounds.Max + offset));
-                var (x0, y0, z0) = box.Bounds.Min;
-                var (x1, y1, z1) = box.Bounds.Max;
+                    return SolidFactory.MakeBox(new Aabb(box.Box.Min + offset, box.Box.Max + offset));
+                var (x0, y0, z0) = box.Box.Min;
+                var (x1, y1, z1) = box.Box.Max;
                 var profile = Profile.FromPoints(
                 [
                     m.TransformPoint((x0, y0, z0)),
@@ -807,8 +807,8 @@ internal static class ShapeCompiler
         switch (shape)
         {
             case BoxShape box:
-                return Place(Sdf.Box(box.Bounds.Size.X, box.Bounds.Size.Y, box.Bounds.Size.Z)
-                        .Translate(box.Bounds.Center),
+                return Place(Sdf.Box(box.Box.Size.X, box.Box.Size.Y, box.Box.Size.Z)
+                        .Translate(box.Box.Center),
                     rotation, translation, scale);
             case SphereShape sphere:
                 return Place(Sdf.Sphere(sphere.Radius), rotation, translation, scale);

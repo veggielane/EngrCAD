@@ -14,7 +14,9 @@ internal enum BooleanOp
 
 internal sealed class BoxShape(Aabb bounds) : Shape
 {
-    public Aabb Bounds => bounds;
+    /// <summary>The box's own extents (named to stay clear of the public measured
+    /// <c>Shape.Bounds(quality)</c>, which this node must not hide).</summary>
+    public Aabb Box => bounds;
     internal override string Describe() => $"Box({bounds.Size.X:g4}×{bounds.Size.Y:g4}×{bounds.Size.Z:g4})";
 }
 

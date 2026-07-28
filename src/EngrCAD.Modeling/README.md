@@ -54,6 +54,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Remeshed(...)` (isotropic remesh) | ❌ a remesh is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (remeshed triangles → mesh SDF, so the field carries their chord error) | ✅ native (`Remesher` over the child's mesh lowering, projected back onto it) |
 | `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
+| `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) · ❌ revolve/sweep/rim/drill (no mirrored lowering yet) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
 | `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |

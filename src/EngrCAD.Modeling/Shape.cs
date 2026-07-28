@@ -920,6 +920,94 @@ public abstract class Shape
     public Shape Scale(double factor) => Transform(Matrix4d.CreateScale(factor));
 
     /// <summary>
+    /// Non-uniform scale about the origin (OpenSCAD's <c>scale([x, y, z])</c>).
+    /// Support follows the node, exactly as <see cref="Explain"/> reports it: profile
+    /// extrusions (box, cylinder, sketch extrude, wedge) bake any affine map into
+    /// their construction inputs and stay B-Rep-Native; a sphere/torus/cone under a
+    /// non-uniform scale would need an ellipsoid-family surface and is
+    /// B-Rep-Impossible; implicit lowerings of a sheared subtree bridge through a
+    /// tessellated mesh SDF (a non-uniform scale breaks the distance metric, so there
+    /// is no exact field form); meshes transform exactly.
+    /// </summary>
+    public Shape Scale(double x, double y, double z) => Scale(new Vector3d(x, y, z));
+
+    /// <inheritdoc cref="Scale(double, double, double)"/>
+    public Shape Scale(in Vector3d factors)
+    {
+        if (!(factors.X > 0) || !(factors.Y > 0) || !(factors.Z > 0))
+            throw new ArgumentOutOfRangeException(nameof(factors),
+                "Scale factors must be positive (use Mirror for reflections).");
+        return Transform(Matrix4d.CreateScale(factors));
+    }
+
+    /// <summary>
+    /// The shape's axis-aligned bounds, measured on its mesh lowering at
+    /// <paramref name="quality"/> — the one route every shape has. Tessellations
+    /// inscribe curved surfaces, so curved extents read a chord's sagitta small at
+    /// coarse quality; exact for polyhedral geometry.
+    /// </summary>
+    public Aabb Bounds(MeshQuality? quality = null)
+    {
+        var bounds = Aabb.Empty;
+        foreach (var position in ToMesh(quality).ToIndexed().Positions)
+            bounds = bounds.Union(position);
+        return bounds;
+    }
+
+    /// <summary>
+    /// Scales the shape (about the origin, per axis) so its bounds measure
+    /// <paramref name="newSize"/> — OpenSCAD's <c>resize()</c>. A zero component
+    /// keeps that axis unscaled, or, with the matching <paramref name="auto"/> flag,
+    /// scales it by the same factor as the first sized axis (so
+    /// <c>Resized((50, 0, 0), auto: (false, true, true))</c> is a proportional
+    /// resize). The current size is measured per <see cref="Bounds"/> — on the mesh
+    /// lowering at <paramref name="quality"/>, eagerly, at this call.
+    /// <para>The result is an ordinary scale transform, so representation support is
+    /// <see cref="Scale(double, double, double)"/>'s: equal factors keep every node's
+    /// support unchanged; unequal factors are B-Rep-Impossible for the curved
+    /// primitives (the message names the surface it would need) and bridge the
+    /// implicit lowering through a tessellated mesh SDF.</para>
+    /// </summary>
+    public Shape Resized(in Vector3d newSize, (bool X, bool Y, bool Z) auto, MeshQuality? quality = null)
+    {
+        if (newSize.X < 0 || newSize.Y < 0 || newSize.Z < 0)
+            throw new ArgumentOutOfRangeException(nameof(newSize), "Target sizes must be non-negative.");
+        if (newSize.X == 0 && newSize.Y == 0 && newSize.Z == 0)
+            throw new ArgumentException("At least one target size must be positive.", nameof(newSize));
+
+        var size = Bounds(quality).Size;
+        Span<double> factors = [1, 1, 1];
+        Span<double> targets = [newSize.X, newSize.Y, newSize.Z];
+        Span<bool> autos = [auto.X, auto.Y, auto.Z];
+        Span<double> current = [size.X, size.Y, size.Z];
+
+        double? firstFactor = null;
+        for (int axis = 0; axis < 3; axis++)
+        {
+            if (targets[axis] <= 0)
+                continue;
+            if (current[axis] <= 0)
+                throw new InvalidOperationException(
+                    $"The shape has zero extent on axis {(char)('X' + axis)}; it cannot be resized to {targets[axis]:g4} there.");
+            factors[axis] = targets[axis] / current[axis];
+            firstFactor ??= factors[axis];
+        }
+        for (int axis = 0; axis < 3; axis++)
+        {
+            if (targets[axis] <= 0 && autos[axis])
+                factors[axis] = firstFactor ?? throw new ArgumentException(
+                    "An auto axis needs at least one sized axis to take its factor from.", nameof(auto));
+        }
+        return Scale(new Vector3d(factors[0], factors[1], factors[2]));
+    }
+
+    /// <summary>Resize with one auto flag for every zero-sized axis — OpenSCAD's
+    /// <c>resize(newsize, auto)</c>. See
+    /// <see cref="Resized(in Vector3d, ValueTuple{bool, bool, bool}, MeshQuality?)"/>.</summary>
+    public Shape Resized(in Vector3d newSize, bool auto = false, MeshQuality? quality = null) =>
+        Resized(newSize, (auto, auto, auto), quality);
+
+    /// <summary>
     /// Mirror across the plane through <paramref name="point"/> with
     /// <paramref name="normal"/> (OpenSCAD's <c>mirror()</c>). Correct in every
     /// representation: meshes transform positions and reverse winding (staying

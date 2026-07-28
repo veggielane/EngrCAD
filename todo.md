@@ -545,8 +545,6 @@ export — is recorded in CLAUDE.md):
   for revolves/sweeps (`Shape.Mirror` ✅ landed otherwise: implicit exact via
   improper-similarity decomposition, mesh exact, B-Rep native for
   box/cylinder/extrude/sphere/torus/cone)
-- [ ] `resize()` — non-uniform scale to target bounds (mesh: easy; SDF: breaks the
-  distance metric — document lower-bound semantics; B-Rep: needs affine surfaces)
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
   chamfer joins, erosion as complement dilation): **exact curved offsets** (arcs stay
   arcs — today everything flattens first, same limitation as all region work); variable
