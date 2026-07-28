@@ -952,6 +952,43 @@ for `in`-parameters being illegal in expression trees.
   profiles, where the vector kernels beneath it are worth about a third of that. Naming a
   task "vectorize X" can point at the wrong lever entirely; the win was structural, in the
   *consumer*.
+- **A vector kernel that cannot be a transcription needs a *certainty band*, not a
+  tolerance.** Two kernels in `SketchRegion` decide a branch the scalar code decides
+  differently: a partial arc's in-sweep test is `Math.Atan2`, which has no bit-exact vector
+  form, and the wedge test that replaces it (the signs of the cross products against the
+  sweep's two boundary rays — `AND` up to a half turn, `OR` beyond it, because past π the
+  *complement* is the narrow wedge) decides the same predicate by different arithmetic. Two
+  such tests can only be made to agree where neither is near flipping, so the kernel refuses
+  near the flip: since `c₀ = |o|·sin(δ)` and `c₁ = |o|·sin(δ − span)`, requiring both to
+  exceed `1e-9·|o|` bounds the point a nanoradian off either boundary ray, and any lane
+  inside that band sends its whole block back to `Atan2`. The band is five orders wider than
+  everything the scalar path can contribute (`Atan2`'s own few ulps of a result bounded by
+  π; the subtraction and the reduction by the *double* `2*PI`, both bounded because the arc
+  is only classified as vectorizable when |from| ≤ 64 — the `%` itself is exact), which is
+  what makes "outside the band they agree" a proof rather than a hope. **The point is the
+  contract that buys: bit-identical for every input, not a bounded deviation.** A bounded
+  deviation was available and would have been much simpler — the two branches of an arc's
+  distance are continuous across the sweep boundary, so a disagreement there costs only
+  O(r·ε) — but this field's *sign* drives boolean classification kernel-wide, and the
+  repo's standing rule is that a silently divergent fast path is worse than none. Note also
+  which inputs land in the band: a segment endpoint, shared bit-for-bit with its neighbour,
+  sits exactly *on* a boundary ray, so the cases that most want exactness get the exact path
+  by construction rather than by luck.
+- **Reproduce a `break`, don't reason about it away.** The other non-transcribable kernel is
+  the bézier's Newton refinement, whose scalar form breaks out of the loop when the
+  derivative vanishes. The tempting vector answer is to let stopped lanes keep iterating on
+  the grounds that Newton from a converged point is a fixed point. It is not: a vanishing
+  `g′` makes the step infinite and the clamp turns that into 0 or 1 — a stopped lane would
+  walk to an endpoint. Masking the *write* to the refined parameter with a sticky per-lane
+  flag reproduces `break` exactly, and needs no argument at all.
+- **A lane-wise kernel should substitute +∞ for a skipped lane, not skip it.** Both new
+  kernels sit behind `SketchRegion`'s bounding-box reject, which is a proven-conservative
+  *skip* in the scalar path. Reusing that proof to justify computing rejected lanes anyway
+  ("the reject proves they cannot lower the minimum") works, but it makes the two paths'
+  agreement depend on a second argument about the computed value's error rather than on the
+  first. Blending +∞ into rejected lanes before the min-fold is what "skip" means to a
+  running minimum, costs one select, and is identity by construction. The whole-block
+  all-rejected fast path keeps the reject's actual performance value.
 - **`SketchRegion` preserves segment order even though it need not.** The distance fold is
   a running minimum over non-negative results with no NaN and no negative zero (every
   distance comes out of `Math.Sqrt`/`Math.Abs`), so it is order-independent — but keeping

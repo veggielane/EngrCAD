@@ -41,12 +41,19 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Implicit engine (EngrCAD.Implicit)
 
-- [ ] **Arc distance without `Atan2`** — `SketchRegion`'s lane-wise kernels cover lines
-  and full circles; *partial* arcs stay scalar because `ArcSeg.Distance` decides in-sweep
-  via `Math.Atan2`, which has no bit-exact vector form. A cross/dot wedge test would
-  vectorize, but it changes the boolean at the sweep boundary, so it needs its own
-  exactness argument rather than a transcription. Same for béziers, whose control points
-  `SketchRegion` cannot reach today (private to `CubicSeg`).
+- [ ] **The bézier kernel's Newton stage is fixed at 8 iterations for every lane.** The
+  scalar code was too, so this is not a regression — but a lane-wise form makes the waste
+  visible: the sticky "active" mask already knows when every lane has stopped moving, and
+  the loop only exits early when every lane's derivative has *vanished*, not when every
+  lane has *converged*. A convergence exit would change results (the scalar path does the
+  full eight), so it needs the golden hashes re-derived deliberately, with a measurement
+  showing it is worth the churn — the reject in front already skips most cubics.
+- [ ] **The lane-wise arc kernel gives a whole block back to the scalar path when any one
+  lane is inside the wedge certainty band.** Per-lane blending would keep the other three
+  lanes vectorized. Almost certainly not worth it — the band is measure-zero against a
+  sample grid, so the fallback fires only on constructed inputs — but if a consumer ever
+  samples *along* a boundary ray (an iso-line trace on a sketch's own sweep boundary, say)
+  the whole trace would run scalar.
 
 ## Interop / meshing (EngrCAD.Interop)
 

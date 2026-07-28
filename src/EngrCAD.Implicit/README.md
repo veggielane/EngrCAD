@@ -119,6 +119,14 @@ reproduces those bit for bit — a silently divergent fast path is worse than no
 They still batch through the default `EvaluateBatch` loop and still benefit from
 vectorized operands around them.
 
+The 2D side of the planar-region nodes *is* vectorized, one layer up: `SketchRegion`
+(EngrCAD.Modeling) implements the `IPlanarRegion` batch seam with lane-wise kernels for
+lines, full circles, partial arcs and cubic béziers, to the same bit-for-bit contract.
+Two of them could not be transcriptions — a partial arc's in-sweep test is `Math.Atan2`,
+and a bézier's Newton stage has a data-dependent `break` — so they carry their own
+exactness arguments (a certainty band that hands ambiguous lanes back to `Atan2`, and a
+masked write rather than a masked iteration). See that project's README.
+
 Measured on an 8-core win-arm64 box (`Vector<double>.Count == 2`, so the ceiling from
 lanes alone is 2×; the rest comes from batching away per-point virtual dispatch through
 the AST), best-of-9 after a 1 s warm-up:

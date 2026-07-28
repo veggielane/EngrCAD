@@ -131,6 +131,36 @@ revolve axis (vases, domes) work everywhere on full turns: on-axis stretches rev
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
 still need axis clearance). A 2D constraint solver is future work (todo.md).
 
+**The sketch field is the inner loop of every implicit sketch solid, so `SketchRegion`
+is structure-of-arrays with lane-wise kernels** — lines, full circles, partial arcs and
+cubic béziers all have one — behind a bounding-box reject and a y-bucket index over the
+ray-parity pieces. Every one of those is a *pure restructuring*: the double that comes
+out is bit-for-bit what a plain loop over the segment classes returns, held by golden
+bit-hashes taken from that loop plus batch-vs-scalar bit equality
+(`SketchRegionKernelTests`). Measured on the batch entry: **2.23×** on a stadium
+(arc-dominated) and **1.37×** on an all-bézier outline.
+
+Two of those kernels needed an argument rather than a transcription:
+
+- **Partial arcs decide in-sweep by a cross-product wedge test, not `Atan2`** — which has
+  no bit-exact vector form. With `c₀ = f × o` and `c₁ = g × o` against the sweep's two
+  boundary rays, in-sweep is `c₀ ≥ 0 && c₁ ≤ 0` up to a half turn and the same pair OR'd
+  beyond it (past π the *complement* is the narrow wedge; at exactly π the two forms
+  coincide). That decides the same predicate by different arithmetic, so the two agree
+  only away from the boundary — hence a **certainty band**: `c₀ = |o|·sin(δ)` and
+  `c₁ = |o|·sin(δ − span)`, so requiring both to exceed `1e-9·|o|` puts the point a
+  nanoradian off either boundary ray, five orders outside anything `Atan2`, the
+  subtraction and the reduction by the *double* `2*PI` can contribute. Any lane inside the
+  band sends its block back to the scalar path, so the result is **bit-identical for every
+  input** rather than a bounded deviation — and the inputs that most want that land in the
+  band by construction, since a segment endpoint shared bit-for-bit with its neighbour
+  sits exactly on a boundary ray.
+- **The bézier kernel masks the *write*, not the iteration.** Its Newton stage's one piece
+  of divergent control flow is a `break` on a vanishing derivative; a stopped lane keeps
+  its value because a sticky per-lane flag gates the write to the refined parameter, not
+  because iterating on would be harmless. It would not be: a vanishing `g′` makes the step
+  infinite and the clamp would turn that into 0 or 1.
+
 **Degeneracy guards scale with the sketch.** A sketch's units and scale are entirely the
 caller's choice — a micron seal groove and a metre weldment go through the same
 constructor — so its degeneracy tests are RELATIVE (`Sketch.RelativeDegeneracy`, 1e-12):
