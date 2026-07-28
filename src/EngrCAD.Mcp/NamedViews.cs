@@ -7,17 +7,16 @@ namespace EngrCAD.Mcp;
 /// <summary>
 /// Named camera poses for the <c>screenshot</c> tool — the viewer toolbar's
 /// Front/Back/Left/Right/Top/Bottom/Iso buttons, available headlessly.
-/// <para>The pose formulas mirror <c>ViewCubeMath.PoseFor</c> and
-/// <c>CameraMath.FrameDistance</c> in EngrCAD.Viewer, which are internal to that
-/// assembly. They are three lines of trigonometry each and are locked by tests here;
-/// if the viewer ever makes them public, delete this file and call them directly.</para>
+/// <para>This is a NAME TABLE, not pose math: the poses come from
+/// <see cref="ViewCubeMath.PoseFor"/> and the framing distance from
+/// <see cref="CameraMath.FrameDistance"/> — the same functions the window's toolbar,
+/// the view cube, and the browser client use, so all front ends agree about what
+/// "Front" means by construction. (Its predecessor, <c>StandardViews</c>, duplicated
+/// those formulas from the days they were internal to the viewer; the equivalence
+/// tests that warranted its deletion live on in <c>NamedViewsTests</c>.)</para>
 /// </summary>
-public static class StandardViews
+internal static class NamedViews
 {
-    /// <summary>Pitch clamp shared with the orbit camera (0.01 shy of the poles keeps
-    /// the LookAt up-vector non-degenerate) — <c>ViewCubeMath.PitchLimit</c>.</summary>
-    public const double PitchLimit = Math.PI / 2 - 0.01;
-
     /// <summary>Yaw used for the Top and Bottom views, where yaw is unconstrained: the
     /// Iso yaw, so a top view shows the model's front edge at the bottom of the frame.
     /// (The window keeps the camera's current yaw instead; there is no current yaw in
@@ -42,20 +41,11 @@ public static class StandardViews
     public static IReadOnlyList<string> Names { get; } =
         ["iso", "front", "back", "left", "right", "top", "bottom"];
 
-    /// <summary>Orbit yaw/pitch looking along <paramref name="direction"/> — the
-    /// mirror of <c>ViewCubeMath.PoseFor</c>.</summary>
-    public static (double Yaw, double Pitch) PoseFor(in Vector3d direction)
-    {
-        var d = direction.Normalized();
-        double pitch = Math.Clamp(Math.Asin(Math.Clamp(d.Z, -1, 1)), -PitchLimit, PitchLimit);
-        // Exact-zero horizontal component test (semantic: the +-Z views), squared scale.
-        double yaw = d.X * d.X + d.Y * d.Y < 1e-18 ? PoleYaw : Math.Atan2(d.Y, d.X);
-        return (yaw, pitch);
-    }
-
-    /// <summary>Auto-framing orbit distance for a scene of the given bounds — the
-    /// mirror of <c>CameraMath.FrameDistance</c>.</summary>
-    public static double FrameDistance(in Aabb bounds) => Math.Max(bounds.Size.Length * 1.25 + 1, 2);
+    /// <summary>Orbit yaw/pitch looking along <paramref name="direction"/> — the shared
+    /// pose function with <see cref="PoleYaw"/> standing in for the window's current
+    /// yaw at the poles.</summary>
+    public static (double Yaw, double Pitch) PoseFor(in Vector3d direction) =>
+        ViewCubeMath.PoseFor(direction, currentYaw: PoleYaw);
 
     /// <summary>
     /// The camera for a named view over the given instances: the standard pose at the
@@ -75,6 +65,6 @@ public static class StandardViews
             bounds = bounds.Union(instance.Bounds(quality));
         var (yaw, pitch) = PoseFor(direction);
         return new CameraState(yaw, pitch,
-            FrameDistance(bounds), bounds.IsEmpty ? Vector3d.Zero : bounds.Center);
+            CameraMath.FrameDistance(bounds), bounds.IsEmpty ? Vector3d.Zero : bounds.Center);
     }
 }

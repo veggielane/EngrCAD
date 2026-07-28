@@ -5,26 +5,27 @@ using Xunit;
 namespace EngrCAD.Mcp.Tests;
 
 /// <summary>
-/// The named camera poses. <see cref="StandardViews"/> mirrors the viewer's internal
-/// <c>ViewCubeMath.PoseFor</c> / <c>CameraMath.FrameDistance</c>, so these assertions
-/// are against the values documented there — if the viewer's convention ever changes,
-/// these fail rather than the screenshots quietly drifting.
+/// The named camera poses. <see cref="NamedViews"/> is a name table over the shared
+/// <c>ViewCubeMath.PoseFor</c> / <c>CameraMath.FrameDistance</c>; the toolbar-value
+/// locks pin the CONVENTION (what "Front" means) and the equivalence tests are the
+/// tripwire against anyone reintroducing a local copy of the pose formulas — they
+/// are the tests that warranted deleting the old <c>StandardViews</c> mirror.
 /// </summary>
-public class StandardViewsTests
+public class NamedViewsTests
 {
     [Fact]
     public void Front_right_and_iso_reproduce_the_toolbar_poses()
     {
-        var (frontYaw, frontPitch) = StandardViews.PoseFor(StandardViews.DirectionFor("front")!.Value);
+        var (frontYaw, frontPitch) = NamedViews.PoseFor(NamedViews.DirectionFor("front")!.Value);
         Assert.Equal(-Math.PI / 2, frontYaw, 12);
         Assert.Equal(0, frontPitch, 12);
 
-        var (rightYaw, rightPitch) = StandardViews.PoseFor(StandardViews.DirectionFor("right")!.Value);
+        var (rightYaw, rightPitch) = NamedViews.PoseFor(NamedViews.DirectionFor("right")!.Value);
         Assert.Equal(0, rightYaw, 12);
         Assert.Equal(0, rightPitch, 12);
 
         // The toolbar's Iso is the front-right-top corner (1, -1, 1).
-        var (isoYaw, isoPitch) = StandardViews.PoseFor(StandardViews.DirectionFor("iso")!.Value);
+        var (isoYaw, isoPitch) = NamedViews.PoseFor(NamedViews.DirectionFor("iso")!.Value);
         Assert.Equal(-Math.PI / 4, isoYaw, 12);
         Assert.Equal(Math.Asin(1 / Math.Sqrt(3)), isoPitch, 12);
     }
@@ -32,19 +33,19 @@ public class StandardViewsTests
     [Fact]
     public void Top_and_bottom_clamp_the_pitch_and_take_the_pole_yaw()
     {
-        var (topYaw, topPitch) = StandardViews.PoseFor(StandardViews.DirectionFor("top")!.Value);
-        Assert.Equal(StandardViews.PoleYaw, topYaw, 12);
-        Assert.Equal(StandardViews.PitchLimit, topPitch, 12);
+        var (topYaw, topPitch) = NamedViews.PoseFor(NamedViews.DirectionFor("top")!.Value);
+        Assert.Equal(NamedViews.PoleYaw, topYaw, 12);
+        Assert.Equal(CameraMath.PitchLimit, topPitch, 12);
 
-        var (_, bottomPitch) = StandardViews.PoseFor(StandardViews.DirectionFor("bottom")!.Value);
-        Assert.Equal(-StandardViews.PitchLimit, bottomPitch, 12);
+        var (_, bottomPitch) = NamedViews.PoseFor(NamedViews.DirectionFor("bottom")!.Value);
+        Assert.Equal(-CameraMath.PitchLimit, bottomPitch, 12);
     }
 
     [Fact]
     public void An_unknown_view_name_is_rejected()
     {
-        Assert.Null(StandardViews.DirectionFor("sideways"));
-        Assert.Throws<ArgumentException>(() => StandardViews.For("sideways", [], null));
+        Assert.Null(NamedViews.DirectionFor("sideways"));
+        Assert.Throws<ArgumentException>(() => NamedViews.For("sideways", [], null));
     }
 
     [Fact]
@@ -54,18 +55,18 @@ public class StandardViewsTests
         var instances = scene.AllInstances.ToList();
         var bounds = instances.Aggregate(Aabb.Empty, (b, i) => b.Union(i.Bounds(TestScenes.Coarse)));
 
-        var camera = StandardViews.For("front", instances, TestScenes.Coarse);
+        var camera = NamedViews.For("front", instances, TestScenes.Coarse);
 
         Assert.NotNull(camera);
         Assert.Equal(bounds.Center.X, camera.Target.X, 9);
-        Assert.Equal(StandardViews.FrameDistance(bounds), camera.Distance, 9);
+        Assert.Equal(CameraMath.FrameDistance(bounds), camera.Distance, 9);
         Assert.True(camera.Distance > bounds.Size.Length, "the framing distance must clear the scene");
     }
 
     [Fact]
     public void The_default_view_leaves_framing_to_the_renderer()
     {
-        Assert.Null(StandardViews.For("default", [], null));
+        Assert.Null(NamedViews.For("default", [], null));
     }
 
     // ---- equivalence against the now-public shared math ----
@@ -78,13 +79,13 @@ public class StandardViewsTests
     [Fact]
     public void Every_named_pose_is_bit_identical_to_ViewCubeMath()
     {
-        foreach (string view in StandardViews.Names)
+        foreach (string view in NamedViews.Names)
         {
-            var direction = StandardViews.DirectionFor(view)!.Value;
-            var mirror = StandardViews.PoseFor(direction);
+            var direction = NamedViews.DirectionFor(view)!.Value;
+            var mirror = NamedViews.PoseFor(direction);
             // The window passes its CURRENT yaw for the pole views; the headless
             // renderer has none, which is exactly what PoleYaw stands in for.
-            var shared = ViewCubeMath.PoseFor(direction, currentYaw: StandardViews.PoleYaw);
+            var shared = ViewCubeMath.PoseFor(direction, currentYaw: NamedViews.PoleYaw);
             Assert.Equal(shared.Yaw, mirror.Yaw);       // exact, not tolerance
             Assert.Equal(shared.Pitch, mirror.Pitch);
         }
@@ -93,7 +94,7 @@ public class StandardViewsTests
     [Fact]
     public void PitchLimit_and_FrameDistance_are_bit_identical_to_CameraMath()
     {
-        Assert.Equal(CameraMath.PitchLimit, StandardViews.PitchLimit);
+        Assert.Equal(CameraMath.PitchLimit, CameraMath.PitchLimit);
 
         foreach (var bounds in (Aabb[])
         [
@@ -103,7 +104,7 @@ public class StandardViewsTests
             Aabb.Empty,
         ])
         {
-            Assert.Equal(CameraMath.FrameDistance(bounds), StandardViews.FrameDistance(bounds));
+            Assert.Equal(CameraMath.FrameDistance(bounds), CameraMath.FrameDistance(bounds));
         }
     }
 }

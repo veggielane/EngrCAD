@@ -142,6 +142,7 @@ program's source and discards them.
 
 ## Known limits (v1)
 
-- The camera pose formulas mirror the viewer's internal `ViewCubeMath.PoseFor` and
-  `CameraMath.FrameDistance` (`StandardViews.cs`, locked by tests) because those are
-  internal to `EngrCAD.Viewer`. If they are ever made public, delete that file.
+- The named-view poses route through the shared `ViewCubeMath.PoseFor` /
+  `CameraMath.FrameDistance` in `EngrCAD.Viewer.Core` (`NamedViews.cs` is only the
+  name table), so the toolbar, the view cube, the browser client and `screenshot`
+  cannot disagree about what "Front" means.

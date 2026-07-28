@@ -268,8 +268,8 @@ public sealed class SceneTools(SceneSession session)
             return Error("Pass either a named view or explicit camera parameters, not both.");
         if (!explicitCamera && view is not null
             && !view.Equals("default", StringComparison.OrdinalIgnoreCase)
-            && StandardViews.DirectionFor(view) is null)
-            return Error($"Unknown view '{view}' — use one of: {string.Join(", ", StandardViews.Names)}.");
+            && NamedViews.DirectionFor(view) is null)
+            return Error($"Unknown view '{view}' — use one of: {string.Join(", ", NamedViews.Names)}.");
         if (cameraEye is not null && (cameraYaw is not null || cameraPitch is not null || cameraDistance is not null))
             return Error("cameraEye already fixes the pose — do not combine it with "
                        + "cameraYaw/cameraPitch/cameraDistance.");
@@ -297,7 +297,7 @@ public sealed class SceneTools(SceneSession session)
             PrepareGeometry(tab, part, instances);
             camera = explicitCamera
                 ? ExplicitCamera(cameraYaw, cameraPitch, cameraDistance, cameraTarget, cameraEye, instances)
-                : StandardViews.For(view ?? "iso", instances, Session.Quality);
+                : NamedViews.For(view ?? "iso", instances, Session.Quality);
         }
         catch (ArgumentException e)
         {
@@ -378,16 +378,16 @@ public sealed class SceneTools(SceneSession session)
             var toEye = eye - target;
             if (toEye.Length <= 0)
                 throw new ArgumentException("cameraEye must not coincide with the target.");
-            var (yaw, pitch) = StandardViews.PoseFor(toEye);
+            var (yaw, pitch) = NamedViews.PoseFor(toEye);
             return new CameraState(yaw, pitch, toEye.Length, target);
         }
 
-        var isoPose = StandardViews.PoseFor(StandardViews.DirectionFor("iso")!.Value);
+        var isoPose = NamedViews.PoseFor(NamedViews.DirectionFor("iso")!.Value);
         return new CameraState(
             yawDegrees is { } y ? y * Math.PI / 180 : isoPose.Yaw,
             Math.Clamp(pitchDegrees is { } p ? p * Math.PI / 180 : isoPose.Pitch,
-                -StandardViews.PitchLimit, StandardViews.PitchLimit),
-            distance ?? StandardViews.FrameDistance(bounds),
+                -CameraMath.PitchLimit, CameraMath.PitchLimit),
+            distance ?? CameraMath.FrameDistance(bounds),
             target);
     }
 
@@ -868,7 +868,7 @@ public sealed class SceneTools(SceneSession session)
         try
         {
             Session.PreMesh(instances);
-            var camera = StandardViews.For("iso", instances, Session.Quality);
+            var camera = NamedViews.For("iso", instances, Session.Quality);
             lock (RenderGate)
                 OffscreenRenderer.RenderToImage(instances, path, width, height, camera);
             return Ok(new JsonObject
