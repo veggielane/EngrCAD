@@ -363,8 +363,122 @@ public sealed class Sketch
         double chordTolerance = DefaultChordTolerance) =>
         Region2dOffset.Offset(ToRegions(chordTolerance), delta, join, miterLimit, chordTolerance);
 
+    // ---- curved regions + EXACT 2D booleans ----
+
+    /// <summary>
+    /// The sketch as <see cref="CurvedRegion2d"/>s — the currency of the EXACT 2D booleans
+    /// and offset, and the way to keep a sketch's arcs through a boolean.
+    ///
+    /// <para><b>Fidelity contract.</b> Lines and circular arcs cross UNCHANGED: a bore stays
+    /// a circle, a slot end stays a semicircle, and a boolean of two such sketches has an
+    /// exact closed-form area. Béziers are the one thing still flattened, at
+    /// <paramref name="chordTolerance"/>, and deliberately so — the curved arrangement's
+    /// tangential tie-break is complete for lines and circles and would need an unbounded
+    /// jet for a third shape (see <c>CurvedArrangement2d</c>). A sketch with no Béziers goes
+    /// through this door losslessly; one with Béziers is exact except along them.</para>
+    ///
+    /// <para>Nesting is re-derived by <see cref="CurvedRegion2d.FromLoops"/>, so hole loops
+    /// are detected rather than declared, exactly as in <see cref="ToRegions(double)"/>.</para>
+    /// </summary>
+    public IReadOnlyList<CurvedRegion2d> ToCurvedRegions(double chordTolerance = DefaultChordTolerance)
+    {
+        var loops = new List<IReadOnlyList<CurvedEdge2d>>();
+        CollectCurvedLoops(this, chordTolerance, loops);
+        return CurvedRegion2d.FromLoops(loops);
+    }
+
+    /// <summary>Several sketches read as ONE bag of curved loops, sorted into regions by
+    /// containment — the curved twin of <see cref="ToRegions(IEnumerable{Sketch}, double)"/>.</summary>
+    public static IReadOnlyList<CurvedRegion2d> ToCurvedRegions(
+        IEnumerable<Sketch> loops, double chordTolerance = DefaultChordTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(loops);
+        var collected = new List<IReadOnlyList<CurvedEdge2d>>();
+        foreach (var sketch in loops)
+            CollectCurvedLoops(sketch, chordTolerance, collected);
+        return CurvedRegion2d.FromLoops(collected);
+    }
+
+    /// <summary>
+    /// A sketch from a curved region — the way BACK from an exact 2D boolean or offset into
+    /// the modelling vocabulary, so the result can be extruded, revolved or swept with its
+    /// arcs intact (B-Rep then gets exact NURBS arc profiles rather than a prism of chords).
+    /// Holes become hole sketches.
+    /// </summary>
+    /// <remarks>
+    /// Built on <see cref="FromCurves"/>, so closure, winding and degeneracy are validated
+    /// in exactly one place — the same "smallest bridge that works" rule as
+    /// <see cref="ToCurves"/>.
+    /// </remarks>
+    public static Sketch FromCurvedRegion(CurvedRegion2d region)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        var sketch = FromCurves([.. region.Outer.Select(edge => Curve2d.FromCurvedEdge(edge))]);
+        foreach (var hole in region.Holes)
+            sketch = sketch.WithHole(FromCurves([.. hole.Select(edge => Curve2d.FromCurvedEdge(edge))]));
+        return sketch;
+    }
+
+    /// <summary>Everything covered by this sketch or <paramref name="other"/>, with arcs
+    /// KEPT — see <see cref="ToCurvedRegions(double)"/> for the exact fidelity contract, and
+    /// <see cref="FromCurvedRegion"/> for the way back to a sketch.</summary>
+    public IReadOnlyList<CurvedRegion2d> UnionExact(Sketch other, double chordTolerance = DefaultChordTolerance) =>
+        CurvedRegion2dBoolean.Union(ToCurvedRegions(chordTolerance), Requires(other).ToCurvedRegions(chordTolerance));
+
+    /// <summary>Everything covered by both sketches, with arcs kept.</summary>
+    public IReadOnlyList<CurvedRegion2d> IntersectExact(Sketch other, double chordTolerance = DefaultChordTolerance) =>
+        CurvedRegion2dBoolean.Intersection(ToCurvedRegions(chordTolerance), Requires(other).ToCurvedRegions(chordTolerance));
+
+    /// <summary>This sketch with <paramref name="other"/> cut away, with arcs kept.</summary>
+    public IReadOnlyList<CurvedRegion2d> SubtractExact(Sketch other, double chordTolerance = DefaultChordTolerance) =>
+        CurvedRegion2dBoolean.Difference(ToCurvedRegions(chordTolerance), Requires(other).ToCurvedRegions(chordTolerance));
+
+    /// <summary>
+    /// This sketch grown or shrunk by a constant distance, with arcs kept — and with
+    /// <see cref="OffsetJoin.Round"/> corners as EXACT arcs rather than the inscribed
+    /// polygonal fans <see cref="Offset"/> produces.
+    /// </summary>
+    public IReadOnlyList<CurvedRegion2d> OffsetExact(
+        double delta, OffsetJoin join = OffsetJoin.Round,
+        double miterLimit = Region2dOffset.DefaultMiterLimit,
+        double chordTolerance = DefaultChordTolerance) =>
+        CurvedRegion2dOffset.Offset(ToCurvedRegions(chordTolerance), delta, join, miterLimit);
+
     private static Sketch Requires(Sketch other) =>
         other ?? throw new ArgumentNullException(nameof(other));
+
+    private static void CollectCurvedLoops(
+        Sketch sketch, double chordTolerance, List<IReadOnlyList<CurvedEdge2d>> into)
+    {
+        if (!(chordTolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(chordTolerance), "Chord tolerance must be positive.");
+        into.Add(CurvedLoop(sketch.Segments, chordTolerance));
+        foreach (var hole in sketch.Holes)
+            into.Add(CurvedLoop(hole.Segments, chordTolerance));
+    }
+
+    /// <summary>One sketch loop as arrangement edges: lines and arcs verbatim, anything else
+    /// (a Bézier) flattened to inscribed chords at <paramref name="chordTolerance"/>.</summary>
+    private static IReadOnlyList<CurvedEdge2d> CurvedLoop(
+        IReadOnlyList<SketchSegment> segments, double chordTolerance)
+    {
+        var edges = new List<CurvedEdge2d>(segments.Count);
+        var scratch = new List<Vector2d>();
+        foreach (var segment in segments)
+        {
+            if (segment.ToCurve2d().TryToCurvedEdge(out var edge))
+            {
+                edges.Add(edge);
+                continue;
+            }
+            scratch.Clear();
+            segment.Flatten(chordTolerance, scratch);   // start inclusive, end EXCLUSIVE
+            scratch.Add(segment.End);
+            for (int k = 0; k + 1 < scratch.Count; k++)
+                edges.Add(CurvedEdge2d.Line(scratch[k], scratch[k + 1]));
+        }
+        return edges;
+    }
 
     private static void CollectLoops(Sketch sketch, double chordTolerance, List<IReadOnlyList<Vector2d>> into)
     {
