@@ -597,6 +597,22 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   5% — where genuine Gaussian curvature makes some distortion unavoidable.
   `referenceDirection` fixes the +u axis (pass one whenever orientation matters).
   Deterministic.
+- **`MeshIcp`** — point-to-plane iterative closest point (Besl–McKay iteration,
+  Chen–Medioni metric): aligns a point set or a mesh's vertices to a target mesh.
+  Correspondences from `MeshProjectionTarget` (BVH closest point + winning-triangle
+  normal — the oriented projection face-aligned remeshing already paid for), the
+  small-angle 6×6 normal equations assembled **about the correspondence centroid** for
+  conditioning and solved through Core's `SparseCholesky`. Point-to-plane deliberately:
+  the point metric penalizes tangential sliding even when surfaces already touch and
+  zig-zags; the plane metric lets correspondences slide and converges in a handful of
+  iterations. **Refuses loudly rather than regularizing** (the `MateSolver` convention):
+  all-planar correspondences leave 3 DOF free, the 6×6 goes singular, and the result
+  reports `Converged = false` instead of a Tikhonov-damped arbitrary minimum — pinned by
+  a test. `MaxCorrespondenceDistance` rejects outliers for partial overlaps; the
+  reported RMS is measured at the FINAL pose (the loop's residual lags one increment).
+  Deterministic. Landing it also closed a Core todo: `SymmetricEigen3` is now public
+  there with both orderings, and this project's near-verbatim `JacobiEigen3` copy in
+  `MassProperties.cs` is deleted (`Principal()` calls Core's ascending solve).
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with

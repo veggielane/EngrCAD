@@ -290,8 +290,11 @@ concerns.
     solid's planar faces, or one the caller already has) keeps the layering intact. Cost is
     O(E² · h) — measured 3.6 / 22 / 122 ms for 18 / 42 / 78-vertex hulls on 8 cores, with
     the edge loop parallelized deterministically (own slot per index, in-order reduction).
-  - All built on an internal cyclic-Jacobi `SymmetricEigen3` (3×3 symmetric
-    eigen-decomposition, unconditionally convergent).
+  - All built on **`SymmetricEigen3`** (cyclic-Jacobi 3×3 symmetric eigen-decomposition,
+    unconditionally convergent) — now public with **both orderings**
+    (`SolveDescending` for fitting's dominant-first convention, `SolveAscending` for the
+    principal-inertia convention), which is what let `EngrCAD.Mesh` delete the
+    near-verbatim internal copy it carried just to re-sort.
 - **`Solvers`** (namespace `EngrCAD.Core.Solvers`) — a small sparse linear-algebra
   library for symmetric positive-definite systems: the numerical substrate for the mesh
   engine's Laplacian smoothing/deformation, and deliberately dependency-free and

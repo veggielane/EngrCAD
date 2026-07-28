@@ -189,7 +189,7 @@ public readonly struct MassProperties
     public PrincipalInertia Principal()
     {
         var i = Inertia;
-        var (values, vectors) = JacobiEigen3.SolveAscending(i.Xx, i.Xy, i.Xz, i.Yy, i.Yz, i.Zz);
+        var (values, vectors) = SymmetricEigen3.SolveAscending(i.Xx, i.Xy, i.Xz, i.Yy, i.Yz, i.Zz);
         // Frame3d.FromOrthonormal defines Z = X × Y, so the frame is right-handed whatever
         // signs the eigensolver produced; the third moment belongs to that axis either way
         // (an eigenvector and its negation span the same principal direction).
@@ -467,96 +467,4 @@ public static class MeshMassProperties
     /// <inheritdoc cref="Compute(HalfEdgeMesh, double, bool)"/>
     public static MassProperties MassProperties(this HalfEdgeMesh mesh, double density = 1.0, bool requireClosed = true) =>
         Compute(mesh, density, requireClosed);
-}
-
-/// <summary>
-/// Eigen-decomposition of a symmetric 3×3 matrix by cyclic Jacobi rotations, sorted
-/// ascending (the principal-inertia convention).
-/// </summary>
-/// <remarks>
-/// A deliberate near-copy of <c>EngrCAD.Core</c>'s internal <c>SymmetricEigen3</c>, which
-/// sorts descending and is not visible outside Core. If that type is ever made public,
-/// delete this one.
-/// </remarks>
-internal static class JacobiEigen3
-{
-    public static (double[] Values, Vector3d[] Vectors) SolveAscending(
-        double xx, double xy, double xz, double yy, double yz, double zz)
-    {
-        Span<double> a = [xx, xy, xz, yy, yz, zz];      // a00 a01 a02 a11 a12 a22
-        Span<double> v = [1, 0, 0, 0, 1, 0, 0, 0, 1];   // row-major identity
-
-        for (int sweep = 0; sweep < 50; sweep++)
-        {
-            double off = a[1] * a[1] + a[2] * a[2] + a[4] * a[4];
-            double scale = a[0] * a[0] + a[3] * a[3] + a[5] * a[5];
-            // Relative ~machine-epsilon² stop condition on squared entries: an algorithmic
-            // convergence test, not a geometric tolerance.
-            if (off <= 1e-30 * Math.Max(scale, 1e-300))
-                break;
-            Rotate(a, v, 0, 1);
-            Rotate(a, v, 0, 2);
-            Rotate(a, v, 1, 2);
-        }
-
-        Span<double> values = [a[0], a[3], a[5]];
-        Span<int> order = [0, 1, 2];
-        for (int i = 1; i < 3; i++)
-        {
-            for (int j = i; j > 0 && values[order[j]] < values[order[j - 1]]; j--)
-                (order[j], order[j - 1]) = (order[j - 1], order[j]);
-        }
-
-        var outValues = new double[3];
-        var outVectors = new Vector3d[3];
-        for (int i = 0; i < 3; i++)
-        {
-            int c = order[i];
-            outValues[i] = values[c];
-            outVectors[i] = new Vector3d(v[c], v[3 + c], v[6 + c]);
-        }
-        return (outValues, outVectors);
-    }
-
-    private static void Rotate(Span<double> a, Span<double> v, int p, int q)
-    {
-        static int I(int r, int c) => (r, c) switch
-        {
-            (0, 0) => 0, (0, 1) => 1, (0, 2) => 2,
-            (1, 1) => 3, (1, 2) => 4, (2, 2) => 5,
-            _ => throw new InvalidOperationException(),
-        };
-
-        double apq = a[I(p, q)];
-        // Exact-zero guard: the rotation is the identity (and theta would divide by zero)
-        // only when the off-diagonal entry is bit-zero — deliberate ==.
-        if (apq == 0)
-            return;
-        double app = a[I(p, p)];
-        double aqq = a[I(q, q)];
-
-        double theta = (aqq - app) / (2 * apq);
-        // sign(0) = 0 would zero the rotation; the standard Jacobi convention takes +1.
-        double t = Math.Sign(theta == 0 ? 1 : theta) / (Math.Abs(theta) + Math.Sqrt(theta * theta + 1));
-        double c = 1 / Math.Sqrt(t * t + 1);
-        double s = t * c;
-
-        a[I(p, p)] = app - t * apq;
-        a[I(q, q)] = aqq + t * apq;
-        a[I(p, q)] = 0;
-
-        int r = 3 - p - q;   // the remaining index
-        double arp = a[I(Math.Min(r, p), Math.Max(r, p))];
-        double arq = a[I(Math.Min(r, q), Math.Max(r, q))];
-        a[I(Math.Min(r, p), Math.Max(r, p))] = c * arp - s * arq;
-        a[I(Math.Min(r, q), Math.Max(r, q))] = s * arp + c * arq;
-
-        for (int row = 0; row < 3; row++)
-        {
-            double vp = v[3 * row + p];
-            double vq = v[3 * row + q];
-            v[3 * row + p] = c * vp - s * vq;
-            v[3 * row + q] = s * vp + c * vq;
-        }
-    }
 }
