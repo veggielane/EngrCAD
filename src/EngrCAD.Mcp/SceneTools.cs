@@ -206,6 +206,19 @@ public sealed class SceneTools(SceneSession session)
     /// cuts the model open along that axis.</param>
     /// <param name="sectionOffset">Offset of the section plane along its axis;
     /// omitting it means no section.</param>
+    /// <param name="sectionPlanes">Up to 4 general section planes as [nx, ny, nz,
+    /// offset] rows — two perpendicular planes make the classic quarter cut, three an
+    /// octant. Mutually exclusive with <paramref name="sectionAxis"/>.</param>
+    /// <param name="sectionCombine">How several planes combine: "intersection" (the
+    /// quarter/octant cutaway, default) or "union" (clip beyond any plane).</param>
+    /// <param name="cameraYaw">Explicit orbit yaw in degrees (0 looks along −X toward
+    /// +X; the iso view is −45). Mutually exclusive with <paramref name="view"/>.</param>
+    /// <param name="cameraPitch">Explicit orbit pitch in degrees (positive looks down).</param>
+    /// <param name="cameraDistance">Explicit orbit distance; omitted = auto-framed.</param>
+    /// <param name="cameraTarget">Orbit target [x, y, z]; omitted = scene centre.</param>
+    /// <param name="cameraEye">Eye position [x, y, z] — the pose is derived from
+    /// eye→target (the orbit camera is Z-up and cannot roll). Mutually exclusive with
+    /// <paramref name="cameraYaw"/>/<paramref name="cameraPitch"/>/<paramref name="cameraDistance"/>.</param>
     /// <param name="width">Image width in pixels (default 1280).</param>
     /// <param name="height">Image height in pixels (default 800).</param>
     /// <param name="ambientOcclusion">Baked ambient occlusion (default on).</param>
@@ -220,6 +233,24 @@ public sealed class SceneTools(SceneSession session)
         string? sectionAxis = null,
         [Description("Position of the section plane along its axis. Omit for no section.")]
         double? sectionOffset = null,
+        [Description("Up to 4 general section planes, each [nx, ny, nz, offset] (keep the point where "
+                   + "normal . p > offset). Two perpendicular planes = quarter cut, three = octant. "
+                   + "Use INSTEAD of sectionAxis/sectionOffset.")]
+        double[][]? sectionPlanes = null,
+        [Description("How several sectionPlanes combine: intersection (quarter/octant cutaway, "
+                   + "default) or union (clip beyond any plane).")]
+        string? sectionCombine = null,
+        [Description("Explicit camera: orbit yaw in degrees. Use instead of 'view'.")]
+        double? cameraYaw = null,
+        [Description("Explicit camera: orbit pitch in degrees (positive looks down from above).")]
+        double? cameraPitch = null,
+        [Description("Explicit camera: orbit distance from the target. Omit to auto-frame.")]
+        double? cameraDistance = null,
+        [Description("Explicit camera: orbit target [x, y, z]. Omit for the scene centre.")]
+        double[]? cameraTarget = null,
+        [Description("Explicit camera: eye position [x, y, z]; pose derived from eye toward target. "
+                   + "Use instead of cameraYaw/cameraPitch/cameraDistance.")]
+        double[]? cameraEye = null,
         [Description("Image width in pixels, 16-4096 (default 1280).")] int width = 1280,
         [Description("Image height in pixels, 16-4096 (default 800).")] int height = 800,
         [Description("Baked ambient occlusion — depth shading in pockets and bores (default true).")]
@@ -231,11 +262,24 @@ public sealed class SceneTools(SceneSession session)
             return Error("width and height must be between 16 and 4096 pixels.");
         if (!TryResolveStyle(style, out var viewStyle, out string? styleError))
             return Error(styleError);
-        if (view is not null && !view.Equals("default", StringComparison.OrdinalIgnoreCase)
+        bool explicitCamera = cameraYaw is not null || cameraPitch is not null
+            || cameraDistance is not null || cameraTarget is not null || cameraEye is not null;
+        if (view is not null && explicitCamera)
+            return Error("Pass either a named view or explicit camera parameters, not both.");
+        if (!explicitCamera && view is not null
+            && !view.Equals("default", StringComparison.OrdinalIgnoreCase)
             && StandardViews.DirectionFor(view) is null)
             return Error($"Unknown view '{view}' — use one of: {string.Join(", ", StandardViews.Names)}.");
+        if (cameraEye is not null && (cameraYaw is not null || cameraPitch is not null || cameraDistance is not null))
+            return Error("cameraEye already fixes the pose — do not combine it with "
+                       + "cameraYaw/cameraPitch/cameraDistance.");
         if (!TryResolveSection(sectionAxis, sectionOffset, out var axis, out double? offset, out string? sectionError))
             return Error(sectionError);
+        if (!TryResolveSectionPlanes(sectionPlanes, sectionCombine, out var planes, out var combine,
+                out string? planesError))
+            return Error(planesError);
+        if (planes is not null && offset is not null)
+            return Error("Pass either sectionPlanes or sectionAxis/sectionOffset, not both.");
         if (!TryResolveInstances(tab, part, out var instances, out string? scopeError))
             return Error(scopeError);
         if (instances.Count == 0)
@@ -251,7 +295,13 @@ public sealed class SceneTools(SceneSession session)
         try
         {
             PrepareGeometry(tab, part, instances);
-            camera = StandardViews.For(view ?? "iso", instances, Session.Quality);
+            camera = explicitCamera
+                ? ExplicitCamera(cameraYaw, cameraPitch, cameraDistance, cameraTarget, cameraEye, instances)
+                : StandardViews.For(view ?? "iso", instances, Session.Quality);
+        }
+        catch (ArgumentException e)
+        {
+            return Error(e.Message);
         }
         catch (Exception e)
         {
@@ -267,7 +317,8 @@ public sealed class SceneTools(SceneSession session)
             lock (RenderGate)
             {
                 OffscreenRenderer.RenderToImage(instances, temporary, width, height, camera,
-                    furniture: true, viewStyle, axis, offset, ambientOcclusion);
+                    furniture: true, viewStyle, axis, offset, ambientOcclusion,
+                    sectionPlanes: planes, sectionCombine: combine);
             }
             png = File.ReadAllBytes(temporary);
         }
@@ -283,7 +334,10 @@ public sealed class SceneTools(SceneSession session)
         string scope = part is not null ? $"part '{part}'" : tab is not null ? $"tab '{tab}'" : "scene";
         string sectionText = offset is { } o
             ? string.Create(CultureInfo.InvariantCulture, $", section {axis.ToString().ToLowerInvariant()} at {o:G6}")
-            : "";
+            : planes is { } p
+                ? $", {p.Count} section plane(s) ({combine.ToString().ToLowerInvariant()})"
+                : "";
+        string viewText = explicitCamera ? "explicit camera" : $"{view ?? "iso"} view";
         return new CallToolResult
         {
             Content =
@@ -291,11 +345,101 @@ public sealed class SceneTools(SceneSession session)
                 ImageContentBlock.FromBytes(png, "image/png"),
                 new TextContentBlock
                 {
-                    Text = $"{scope}, {view ?? "iso"} view, {viewStyle.ToString().ToLowerInvariant()}"
+                    Text = $"{scope}, {viewText}, {viewStyle.ToString().ToLowerInvariant()}"
                          + $"{sectionText} — {width}x{height}, {instances.Count} instance(s).",
                 },
             ],
         };
+    }
+
+    /// <summary>Builds the orbit camera from explicit parameters. Yaw/pitch arrive in
+    /// degrees (assistant-friendly); an eye position fixes pose AND distance toward the
+    /// target. Anything omitted falls back to the auto-framed iso equivalent: iso pose,
+    /// framing distance, scene centre.</summary>
+    private CameraState ExplicitCamera(
+        double? yawDegrees, double? pitchDegrees, double? distance,
+        double[]? targetXyz, double[]? eyeXyz, IReadOnlyList<PartInstance> instances)
+    {
+        if (targetXyz is not null && targetXyz.Length != 3)
+            throw new ArgumentException("cameraTarget must be [x, y, z].");
+        if (eyeXyz is not null && eyeXyz.Length != 3)
+            throw new ArgumentException("cameraEye must be [x, y, z].");
+
+        var bounds = Aabb.Empty;
+        foreach (var instance in instances)
+            bounds = bounds.Union(instance.Bounds(Session.Quality));
+        var target = targetXyz is not null
+            ? new Vector3d(targetXyz[0], targetXyz[1], targetXyz[2])
+            : bounds.IsEmpty ? Vector3d.Zero : bounds.Center;
+
+        if (eyeXyz is not null)
+        {
+            var eye = new Vector3d(eyeXyz[0], eyeXyz[1], eyeXyz[2]);
+            var toEye = eye - target;
+            if (toEye.Length <= 0)
+                throw new ArgumentException("cameraEye must not coincide with the target.");
+            var (yaw, pitch) = StandardViews.PoseFor(toEye);
+            return new CameraState(yaw, pitch, toEye.Length, target);
+        }
+
+        var isoPose = StandardViews.PoseFor(StandardViews.DirectionFor("iso")!.Value);
+        return new CameraState(
+            yawDegrees is { } y ? y * Math.PI / 180 : isoPose.Yaw,
+            Math.Clamp(pitchDegrees is { } p ? p * Math.PI / 180 : isoPose.Pitch,
+                -StandardViews.PitchLimit, StandardViews.PitchLimit),
+            distance ?? StandardViews.FrameDistance(bounds),
+            target);
+    }
+
+    private static bool TryResolveSectionPlanes(
+        double[][]? rows, string? combineName,
+        out IReadOnlyList<SectionPlane>? planes, out SectionCombine combine, out string? error)
+    {
+        planes = null;
+        combine = SectionCombine.Intersection;
+        error = null;
+        switch (combineName?.ToLowerInvariant())
+        {
+            case null or "" or "intersection": break;
+            case "union": combine = SectionCombine.Union; break;
+            default:
+                error = $"Unknown sectionCombine '{combineName}' — use intersection or union.";
+                return false;
+        }
+        if (rows is null or { Length: 0 })
+        {
+            if (combineName is not null && rows is null)
+            {
+                error = "sectionCombine needs sectionPlanes.";
+                return false;
+            }
+            return true;
+        }
+        if (rows.Length > ViewerShaders.MaxSectionPlanes)
+        {
+            error = $"At most {ViewerShaders.MaxSectionPlanes} section planes are supported.";
+            return false;
+        }
+        var list = new List<SectionPlane>(rows.Length);
+        foreach (var row in rows)
+        {
+            if (row is not { Length: 4 })
+            {
+                error = "Each section plane must be [nx, ny, nz, offset].";
+                return false;
+            }
+            var normal = new Vector3d(row[0], row[1], row[2]);
+            if (normal.Length <= 0)
+            {
+                error = "A section plane's normal must be non-zero.";
+                return false;
+            }
+            // The clip rule is dot(world, normal) > offset, so normalizing the normal
+            // must rescale the offset to keep the same geometric plane.
+            list.Add(new SectionPlane(normal / normal.Length, row[3] / normal.Length));
+        }
+        planes = list;
+        return true;
     }
 
     /// <summary>
@@ -306,10 +450,16 @@ public sealed class SceneTools(SceneSession session)
     public CallToolResult Export(
         [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .png).")]
         string path,
-        [Description("Export only this tab (omit for the whole scene).")] string? tab = null)
+        [Description("Export only this tab (omit for the whole scene).")] string? tab = null,
+        [Description("Image width in pixels for .png exports, 16-4096 (default 1280).")]
+        int width = 1280,
+        [Description("Image height in pixels for .png exports, 16-4096 (default 800).")]
+        int height = 800)
     {
         if (string.IsNullOrWhiteSpace(path))
             return Error("export needs a file path ending in .step, .stl, .obj, or .png.");
+        if (width is < 16 or > 4096 || height is < 16 or > 4096)
+            return Error("width and height must be between 16 and 4096 pixels.");
         if (!TryResolveInstances(tab, part: null, out var instances, out string? scopeError))
             return Error(scopeError);
         if (instances.Count == 0)
@@ -319,7 +469,7 @@ public sealed class SceneTools(SceneSession session)
         if (extension == ".png")
         {
             return EngrCad.CanRenderToImage
-                ? ExportPng(path, instances)
+                ? ExportPng(path, instances, width, height)
                 : Error("Offscreen rendering is not available on this machine "
                       + $"({OffscreenRenderer.UnavailableReason ?? "no GL/EGL context"}); "
                       + "export .step, .stl, or .obj instead.");
@@ -713,18 +863,20 @@ public sealed class SceneTools(SceneSession session)
 
     // ---- export helpers ----
 
-    private CallToolResult ExportPng(string path, IReadOnlyList<PartInstance> instances)
+    private CallToolResult ExportPng(string path, IReadOnlyList<PartInstance> instances, int width, int height)
     {
         try
         {
             Session.PreMesh(instances);
             var camera = StandardViews.For("iso", instances, Session.Quality);
             lock (RenderGate)
-                OffscreenRenderer.RenderToImage(instances, path, 1280, 800, camera);
+                OffscreenRenderer.RenderToImage(instances, path, width, height, camera);
             return Ok(new JsonObject
             {
                 ["wrote"] = Path.GetFullPath(path),
                 ["format"] = "PNG",
+                ["width"] = width,
+                ["height"] = height,
                 ["instances"] = instances.Count,
             });
         }

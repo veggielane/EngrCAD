@@ -137,9 +137,12 @@ public static class EngrCadMcpServer
                 Title = "Render the model",
                 Description = "Renders the model headlessly and returns a PNG image — use it to "
                             + "SEE the design. Supports the standard CAD views (iso, front, back, "
-                            + "left, right, top, bottom), the display styles (shaded-edges, "
-                            + "shaded, wireframe, points), and a section plane (sectionAxis + "
-                            + "sectionOffset) that cuts the model open so interiors, bores and "
+                            + "left, right, top, bottom) or an explicit camera (cameraYaw/"
+                            + "cameraPitch in degrees + cameraDistance/cameraTarget, or cameraEye), "
+                            + "the display styles (shaded-edges, shaded, wireframe, points), one "
+                            + "axis section plane (sectionAxis + sectionOffset) or up to four "
+                            + "general planes (sectionPlanes + sectionCombine — two perpendicular "
+                            + "planes make the classic quarter cutaway) so interiors, bores and "
                             + "wall thicknesses are visible. Narrow to one tab or part when a "
                             + "scene is busy. Needs a GPU/ANGLE context; if that is missing it "
                             + "returns an error and every other tool keeps working.",
@@ -155,7 +158,7 @@ public static class EngrCadMcpServer
                             + "extension: .step (exact B-Rep, one file per part — the CAD "
                             + "interchange format), .stl or .obj (meshes, instances merged with "
                             + "their transforms — for slicers and 3D printing), or .png (a "
-                            + "render). Writes to the filesystem.",
+                            + "render; width/height set the image size). Writes to the filesystem.",
                 ReadOnly = false,
                 Destructive = true,
                 Idempotent = true,

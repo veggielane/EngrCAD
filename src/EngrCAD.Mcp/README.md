@@ -48,8 +48,8 @@ This is a library entry point, not a generic host.
 | `list_tabs` | Tabs with part/assembly/instance counts. | free |
 | `list_parts` | Every distinct part: name, tab, geometry kind, occurrence paths, display mode, colour, annotation count, whether it has an exact B-Rep route. | free |
 | `describe_part` | One part in full: faces, vertices, closed, volume, surface area, local and world bounds, placement, annotations, and the **construction tree** (`Part.ConstructionTree()` — how the part was built, step by step). | meshes that one part |
-| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom), display styles (shaded-edges/shaded/wireframe/points), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open, size, and an optional tab/part filter. | meshes what it renders |
-| `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png`. | meshes what it writes |
+| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom) **or an explicit camera** (`cameraYaw`/`cameraPitch` in degrees + `cameraDistance`/`cameraTarget`, or `cameraEye` — the orbit camera is Z-up, no roll), display styles (shaded-edges/shaded/wireframe/points), one axis section plane (`sectionAxis` + `sectionOffset`) **or up to 4 general planes** (`sectionPlanes` as `[nx, ny, nz, offset]` rows + `sectionCombine` intersection/union — two perpendicular planes are the classic quarter cutaway), size, and an optional tab/part filter. | meshes what it renders |
+| `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png` (`width`/`height` set the image size). | meshes what it writes |
 | `set_param` | Edits one `[Param]` value on a feature of a history-backed part and **regenerates**. The result is the regeneration report (per-feature applied/cached/suppressed/failed/skipped with timings). A failed regeneration keeps the part's previous geometry and names the failing feature; the edit stays applied so it can be corrected — `FeatureHistory`'s own validation-first / failure-keeps-prefix semantics, surfaced verbatim. | regenerates (no meshing) |
 | `suppress_feature` / `unsuppress_feature` | Toggles a feature's suppression (a suppressed feature passes the body through untouched — a hole feature's bores disappear) and regenerates. Same result shape as `set_param`. | regenerates (no meshing) |
 | `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits**: the program's source is the truth. | free |
@@ -133,9 +133,6 @@ program's source and discards them.
 
 ## Known limits (v1)
 
-- One section plane per screenshot (the viewer supports up to four, including quarter
-  and octant cuts).
-- Named views only, no explicit yaw/pitch/distance camera.
 - The camera pose formulas mirror the viewer's internal `ViewCubeMath.PoseFor` and
   `CameraMath.FrameDistance` (`StandardViews.cs`, locked by tests) because those are
   internal to `EngrCAD.Viewer`. If they are ever made public, delete that file.
