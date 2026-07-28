@@ -117,7 +117,28 @@ operations. Depends only on `EngrCAD.Core`.
   `Line3d` + rational-arc `NurbsCurve` pieces (STEP-exportable, far lighter than a
   polyline edge). Three things worth knowing:
   - **Adoption is opt-in and the deviation is always reported.** Nothing in the kernel
-    fits biarcs implicitly — `SurfaceIntersection` still returns `PolylineCurve3d` — and
+    fits biarcs implicitly — `SurfaceIntersection.Intersect` still returns
+    `PolylineCurve3d`, and the boolean pipeline still consumes it. Two OPT-IN doors exist
+    for consumers that want light analytic geometry rather than weldable topology:
+    **`SurfaceIntersection.FitAnalytic(curves, tolerance)`** returns one `AnalyticFit` per
+    input saying whether the curve was fitted, what the fit cost, and why it was refused
+    (a genuine space curve comes back as `NotPlanar`, never silently flattened); an
+    unfitted entry carries the original curve, so concatenating every entry's curves is
+    always correct. **`StepWriter.Options.ArcFitTolerance`** (default null = off) makes the
+    exporter fit curves with no analytic STEP form — traced polyline edges, RMF rails,
+    `TransformedCurve(NurbsCurve)` — instead of SAMPLING them into a degree-1 B-spline,
+    and `StepWriter.Write(solid, options)` returns a `Result` carrying the worst adopted
+    deviation plus the fitted/sampled curve counts. The chain is emitted as ONE degree-2
+    rational B-spline rather than a `COMPOSITE_CURVE`: consecutive rational quadratic
+    Béziers over double interior knots ARE a degree-2 B-spline (exactly how
+    `NurbsCurve.Arc` builds a multi-quadrant arc), and a straight piece is the same form
+    with control points p₀, (p₀+p₁)/2, p₁ at unit weights — which reproduces the line
+    exactly, parameterization included. That keeps the file inside the entity set
+    `StepReader` already parses. **Why the boolean pipeline must not adopt these**: a
+    traced polyline is exact only at its VERTICES and the whole splitting machinery is
+    built on that (`FaceGeometry.ExactSampleParameters`); replacing an edge's carrier with
+    a fitted arc moves every point on it by up to the fit tolerance, decades past the 1e-9
+    weld tier.
     `BiArcChain*.MaxDeviation` is the largest distance from an INPUT SAMPLE to the fit
     (for 3D, √(in-plane² + out-of-plane²), so it includes the flattening). It measures the
     given points only and says nothing about the true curve between them; that is a

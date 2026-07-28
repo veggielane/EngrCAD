@@ -14,6 +14,55 @@ namespace EngrCAD.BRep;
 /// </summary>
 public static class SurfaceIntersection
 {
+    /// <summary>
+    /// OPT-IN post-pass: re-expresses traced <see cref="PolylineCurve3d"/> results as exact
+    /// <see cref="Line3d"/> and rational-arc chains where a biarc fit meets the caller's
+    /// tolerance. Curves that are already analytic pass through untouched.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>Nothing in the kernel calls this.</b> <see cref="Intersect"/> still returns
+    /// polylines, and the boolean pipeline still consumes them, deliberately: a traced
+    /// polyline is exact only at its VERTICES, and the whole splitting machinery is built
+    /// around that fact (<c>FaceGeometry.ExactSampleParameters</c>). Replacing an edge's
+    /// carrier with a fitted arc moves every point on it by up to the fit tolerance, which
+    /// is orders of magnitude past the 1e-9 weld tier — so adoption is the CALLER's
+    /// decision, made against the caller's own tolerance, for consumers that want light
+    /// analytic geometry (STEP export, drawing views, path output) rather than weldable
+    /// topology.</para>
+    /// <para>Every outcome is reported rather than assumed: <see cref="AnalyticFit.Status"/>
+    /// says why a curve was not fitted (a non-planar space curve is REFUSED, never silently
+    /// flattened) and <see cref="AnalyticFit.Deviation"/> says what the accepted fit cost.
+    /// The deviation measures the traced SAMPLES, which says nothing about the true
+    /// intersection between them — that is a property of the tracer's step, not of the fit.</para>
+    /// </remarks>
+    public static IReadOnlyList<AnalyticFit> FitAnalytic(IReadOnlyList<Curve3d> curves, double tolerance)
+    {
+        ArgumentNullException.ThrowIfNull(curves);
+        if (!(tolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(tolerance), "Fit tolerance must be positive.");
+
+        var results = new List<AnalyticFit>(curves.Count);
+        foreach (var curve in curves)
+        {
+            if (curve is not PolylineCurve3d polyline)
+            {
+                // Already exact; a "fit" would only be able to make it worse.
+                results.Add(new AnalyticFit(curve, [curve], 0, BiArcFitStatus.Success, Fitted: false));
+                continue;
+            }
+            var status = BiArcFit.TryFitPolyline(polyline.Points, tolerance, out var chain);
+            if (status != BiArcFitStatus.Success || chain.MaxDeviation > tolerance)
+            {
+                results.Add(new AnalyticFit(
+                    curve, [curve],
+                    status == BiArcFitStatus.Success ? chain.MaxDeviation : double.NaN, status, Fitted: false));
+                continue;
+            }
+            results.Add(new AnalyticFit(curve, chain.Curves, chain.MaxDeviation, status, Fitted: true));
+        }
+        return results;
+    }
+
     public static IReadOnlyList<Curve3d> Intersect(Surface a, Surface b, in Aabb region)
     {
         if (region.IsEmpty)
@@ -1026,3 +1075,23 @@ public static class SurfaceIntersection
         return true;
     }
 }
+
+/// <summary>
+/// What <see cref="SurfaceIntersection.FitAnalytic"/> did to one intersection curve.
+/// </summary>
+/// <param name="Source">The curve as the tracer produced it.</param>
+/// <param name="Curves">
+/// The pieces to use: the fitted <see cref="Line3d"/>/arc chain when <paramref name="Fitted"/>
+/// is true, otherwise the single unchanged <paramref name="Source"/> curve — so a caller that
+/// simply concatenates every entry's curves gets a correct result whatever happened.
+/// </param>
+/// <param name="Deviation">
+/// The largest distance from an input SAMPLE to the fit (NaN when no fit was produced).
+/// It measures the samples only and says nothing about the true curve between them.
+/// </param>
+/// <param name="Status">Why a fit was refused; <see cref="BiArcFitStatus.NotPlanar"/> for a
+/// genuine space curve, which is never silently flattened.</param>
+/// <param name="Fitted">False when the source curve was kept — already analytic, refused, or
+/// outside the tolerance.</param>
+public sealed record AnalyticFit(
+    Curve3d Source, IReadOnlyList<Curve3d> Curves, double Deviation, BiArcFitStatus Status, bool Fitted);

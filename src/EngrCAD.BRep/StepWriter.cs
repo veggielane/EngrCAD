@@ -18,9 +18,51 @@ namespace EngrCAD.BRep;
 /// </summary>
 public static class StepWriter
 {
+    /// <summary>
+    /// Opt-in export settings. Everything here is OFF by default, so the bytes an existing
+    /// caller gets are unchanged.
+    /// </summary>
+    /// <param name="ArcFitTolerance">
+    /// When set, curves with no analytic STEP form — traced <see cref="PolylineCurve3d"/>
+    /// edges, RMF rails, <c>TransformedCurve(NurbsCurve)</c> — are fitted with a biarc chain
+    /// (<see cref="BiArcFit"/>) instead of being SAMPLED into a degree-1 B-spline, provided
+    /// the fit's deviation clears this tolerance. A bore rim traced at display resolution
+    /// then exports as two exact rational arcs rather than a 200-control-point polyline.
+    /// A curve whose fit misses the tolerance, or which is a genuine space curve, falls back
+    /// to sampling exactly as before — the export never fails over a fit.
+    /// </param>
+    public sealed record Options(double? ArcFitTolerance = null);
+
+    /// <summary>What an export actually did, for callers who need to record it.</summary>
+    /// <param name="Text">The STEP file contents.</param>
+    /// <param name="ArcFitDeviation">The worst deviation of any ADOPTED arc fit (0 when none
+    /// were adopted, including when arc fitting was off).</param>
+    /// <param name="ArcFitCount">How many curves were exported as fitted arc chains.</param>
+    /// <param name="SampledCurveCount">How many curves still fell back to degree-1 sampling —
+    /// the honest count of what the file approximates.</param>
+    public sealed record Result(string Text, double ArcFitDeviation, int ArcFitCount, int SampledCurveCount);
+
     public static void WriteFile(BrepSolid solid, string path, string name = "EngrCAD part")
     {
         File.WriteAllText(path, Write(solid, name));
+    }
+
+    /// <summary>
+    /// Exports with <see cref="Options"/> and reports what the export approximated. The
+    /// no-options path (<see cref="Write(BrepSolid, string)"/>) is byte-for-byte what it
+    /// always was.
+    /// </summary>
+    public static Result Write(BrepSolid solid, Options options, string name = "EngrCAD part")
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        var w = new Writer(options);
+        w.EmitHeaderAndContext(name);
+        var shells = solid.Shells.Select(s => w.Shell(s)).ToList();
+        int brep = w.Emit($"MANIFOLD_SOLID_BREP('{Writer.Text(name)}',#{shells[0]})");
+        int representation = w.Emit(
+            $"ADVANCED_BREP_SHAPE_REPRESENTATION('',(#{brep}),#{w.GeometricContext})");
+        w.Emit($"SHAPE_DEFINITION_REPRESENTATION(#{w.ProductDefinitionShape},#{representation})");
+        return new Result(w.Finish(), w.ArcFitDeviation, w.ArcFitCount, w.SampledCurveCount);
     }
 
     public static string Write(BrepSolid solid, string name = "EngrCAD part")
@@ -112,7 +154,7 @@ public static class StepWriter
         File.WriteAllText(path, WriteAssembly(instances, name));
     }
 
-    private sealed class Writer
+    private sealed class Writer(Options? options = null)
     {
         private readonly StringBuilder _data = new();
         private int _next = 1;
@@ -121,6 +163,15 @@ public static class StepWriter
 
         public int GeometricContext { get; private set; }
         public int ProductDefinitionShape { get; private set; }
+
+        /// <summary>Worst deviation of any ADOPTED arc fit.</summary>
+        public double ArcFitDeviation { get; private set; }
+
+        /// <summary>Curves exported as fitted arc chains.</summary>
+        public int ArcFitCount { get; private set; }
+
+        /// <summary>Curves that still fell back to degree-1 sampling.</summary>
+        public int SampledCurveCount { get; private set; }
 
         public int Emit(string entity)
         {
@@ -316,20 +367,133 @@ public static class StepWriter
                 case NurbsCurve nurbs:
                     return BsplineCurve(nurbs.Degree, nurbs.ControlPoints, nurbs.Weights, nurbs.Knots);
                 case PolylineCurve3d polyline:
-                    return PolylineAsBspline(polyline.Points);
+                    return TryArcFit(polyline.Points, out int fittedPolyline)
+                        ? fittedPolyline
+                        : PolylineAsBspline(polyline.Points);
                 default:
                 {
-                    // Anything else (RMF rails, exotic wrappers): sample to a polyline.
+                    // Anything else (RMF rails, TransformedCurve(NurbsCurve), exotic
+                    // wrappers): sample to a polyline — or, with Options.ArcFitTolerance
+                    // set, fit exact arcs to those samples first.
                     var samples = new Vector3d[33];
                     for (int i = 0; i < samples.Length; i++)
                         samples[i] = curve.PointAt(curve.Domain.ParameterAt(i / (double)(samples.Length - 1)));
-                    return PolylineAsBspline(samples);
+                    return TryArcFit(samples, out int fittedSamples) ? fittedSamples : PolylineAsBspline(samples);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Opt-in: exports a biarc fit of <paramref name="points"/> instead of the degree-1
+        /// sampled polyline, when <see cref="Options.ArcFitTolerance"/> is set and the fit
+        /// clears it. Returns false — and costs nothing but the attempt — otherwise.
+        /// </summary>
+        /// <remarks>
+        /// A STEP EDGE_CURVE references ONE curve, so the chain is emitted as a single
+        /// degree-2 RATIONAL B-spline rather than a COMPOSITE_CURVE: consecutive rational
+        /// quadratic Bézier segments joined at double interior knots ARE a degree-2 B-spline
+        /// (it is exactly how <see cref="NurbsCurve.Arc"/> builds a multi-quadrant arc), and
+        /// a straight piece is the same form with control points p0, (p0+p1)/2, p1 and unit
+        /// weights — which reproduces the line exactly, parameterization included. That keeps
+        /// the file inside the entity set <c>StepReader</c> already parses, where a composite
+        /// curve would not be.
+        /// </remarks>
+        private bool TryArcFit(IReadOnlyList<Vector3d> points, out int id)
+        {
+            id = 0;
+            double? tolerance = options?.ArcFitTolerance;
+            if (tolerance is not > 0 || points.Count < 2)
+                return false;
+            if (BiArcFit.TryFitPolyline(points, tolerance.Value, out var chain) != BiArcFitStatus.Success
+                || chain.MaxDeviation > tolerance.Value)
+                return false;
+
+            // A one-piece chain is an ordinary analytic curve; let the normal path emit it
+            // (a full-turn circle becomes CIRCLE, a straight run becomes LINE).
+            if (chain.Curves.Count == 1)
+            {
+                id = Curve(chain.Curves[0]);
+                Adopted(chain.MaxDeviation);
+                return true;
+            }
+
+            var control = new List<Vector3d>();
+            var weights = new List<double>();
+            foreach (var piece in chain.Curves)
+            {
+                if (!TryBezierTriples(piece, out var triples))
+                    return false;
+                foreach (var (p0, c, w, p1) in triples)
+                {
+                    // The junction point is contributed once, by the EARLIER piece: biarc
+                    // chains reproduce shared points to round-off, and one of the two
+                    // spellings has to win.
+                    if (control.Count == 0)
+                    {
+                        control.Add(p0);
+                        weights.Add(1);
+                    }
+                    control.Add(c);
+                    weights.Add(w);
+                    control.Add(p1);
+                    weights.Add(1);
+                }
+            }
+
+            int segments = (control.Count - 1) / 2;
+            var knots = new List<double> { 0, 0, 0 };
+            for (int i = 1; i < segments; i++)
+            {
+                knots.Add(i);
+                knots.Add(i);
+            }
+            knots.Add(segments);
+            knots.Add(segments);
+            knots.Add(segments);
+
+            id = BsplineCurve(2, control, weights, knots);
+            Adopted(chain.MaxDeviation);
+            return true;
+        }
+
+        private void Adopted(double deviation)
+        {
+            ArcFitCount++;
+            ArcFitDeviation = Math.Max(ArcFitDeviation, deviation);
+        }
+
+        /// <summary>
+        /// A fitted chain piece as a run of rational quadratic Bézier segments
+        /// (start, control, weight, end). A <see cref="Line3d"/> becomes the unit-weight
+        /// triple whose control point is the chord midpoint — exactly the line, linearly
+        /// parameterized. A rational arc is ALREADY such a run: <see cref="NurbsCurve.Arc"/>
+        /// emits control points P₀, C₀, P₁, C₁, P₂ … over double interior knots.
+        /// </summary>
+        private static bool TryBezierTriples(
+            Curve3d piece, out List<(Vector3d Start, Vector3d Control, double Weight, Vector3d End)> triples)
+        {
+            triples = [];
+            switch (piece)
+            {
+                case Line3d line:
+                    triples.Add((line.Start, (line.Start + line.End) * 0.5, 1, line.End));
+                    return true;
+                case NurbsCurve { Degree: 2 } arc when arc.ControlPoints.Count % 2 == 1:
+                    for (int i = 0; i + 2 < arc.ControlPoints.Count; i += 2)
+                    {
+                        triples.Add((
+                            arc.ControlPoints[i], arc.ControlPoints[i + 1],
+                            arc.Weights[i + 1], arc.ControlPoints[i + 2]));
+                    }
+                    return triples.Count > 0;
+                default:
+                    return false; // anything else stays on the sampled path
             }
         }
 
         private int PolylineAsBspline(IReadOnlyList<Vector3d> points)
         {
+            SampledCurveCount++;
             // Degree-1 clamped B-spline: knots 0..n-1 with doubled ends.
             var knots = new List<double> { 0 };
             for (int i = 0; i < points.Count; i++)
