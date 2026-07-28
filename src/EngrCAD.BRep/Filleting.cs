@@ -925,9 +925,15 @@ public static class Filleting
                     continue;
                 if (fillet && (previous.Arc is not null || edges[i].Arc is not null))
                     throw new NotSupportedException(
-                        "A fillet rim's sharp corners must join two straight edges (the exact blend is " +
-                        "the two bands' miter ellipse); a sharp corner at an arc has no exact conic — " +
-                        "make the rim tangent-continuous there, or chamfer.");
+                        $"The rim corner at {edges[i].Start} joins an arc sharply, and that blend is " +
+                        "a torus-cylinder intersection — not a conic, so there is no exact miter to build (straight-" +
+                        "straight corners miter on the exact bicylinder ellipse). Three exact ways out: " +
+                        "make the rim tangent-continuous there (enlarge the arc until it meets the " +
+                        "neighbours tangentially, or add a corner arc to the sketch); chamfer this face " +
+                        "instead (straight strips and cone bands miter); or accept an approximate blend " +
+                        "explicitly via the implicit route (Shape.From(shape.ToImplicit())). A traced, " +
+                        "chordal corner curve is deliberately not built here: it would bake a fixed " +
+                        "sampling floor into a primary feature's B-Rep.");
                 if (variable && (previous.Arc is not null || edges[i].Arc is not null))
                     throw new NotSupportedException(
                         "A variable chamfer's sharp corners must join two straight edges: the miter of a " +

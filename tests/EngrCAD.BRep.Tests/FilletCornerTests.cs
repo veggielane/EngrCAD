@@ -143,7 +143,11 @@ public class FilletCornerTests
         var top = wedge.PlanarFacesWithNormal(Vector3d.UnitZ).Single();
 
         var exception = Assert.Throws<NotSupportedException>(() => Filleting.FilletRim(wedge, top, 0.2));
-        Assert.Contains("sharp corner at an arc", exception.Message);
+        // The refusal is a documented POLICY (design.md): it locates the corner and
+        // names the exact ways out rather than tracing an approximate corner curve.
+        Assert.Contains("not a conic", exception.Message);
+        Assert.Contains("tangent-continuous", exception.Message);
+        Assert.Contains("implicit", exception.Message);
     }
 
     [Fact]

@@ -124,7 +124,8 @@ public class FilletChamferTests
         var sketch = Sketch.Start(0, 0).LineTo(2, 0).ArcTo(new Vector2d(0, 2), 2, clockwise: false).Close();
         var shape = Shape.Extrude(sketch, 1).Fillet(0.2, Top);
         var exception = Assert.Throws<NotSupportedException>(() => shape.ToBrep());
-        Assert.Contains("sharp corner at an arc", exception.Message);
+        Assert.Contains("not a conic", exception.Message);
+        Assert.Contains("tangent-continuous", exception.Message);
     }
 
     [Fact]

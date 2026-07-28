@@ -1414,8 +1414,27 @@ for `in`-parameters being illegal in expression trees.
   NURBS whose v-sections are true circles, G1 with both neighbours. But two such bands
   meet in the intersection of two non-cylindrical surfaces, which is not a conic, so there
   is no exact miter to weld them on. Variable-*setback* chamfers escape this (the corner
-  segment is a boundary ruling of both bilinear strips) and are therefore the cheaper next
-  step, not the harder one.
+  segment is a boundary ruling of both strips) and are implemented: the law is evaluated
+  at rim corners and interpolates linearly along each edge, and two small theorems keep
+  everything exact — a linearly varying perpendicular inset of a straight edge is still a
+  straight *line*, and a constant top:side ratio keeps a strip's four corner points
+  coplanar (s₀·d₁ = d₀·s₁), so the strips are planes, not merely bilinear patches. Arcs
+  take the law only where it is constant along the arc, because a circle offset by a
+  varying amount is an Archimedean-style spiral with no exact B-Rep form.
+- **Sharp corners at ARC rim edges stay refused — a policy, not a gap.** The blend there
+  is torus ∩ cylinder (or torus ∩ torus), which is not a conic: there is no exact corner
+  curve to build, only a traced `PolylineCurve3d` with honest chordal error. The tracer
+  route was considered and declined for the DEFAULT surgery: this kernel's brand is that
+  construction operations are exact and approximation is always an explicit, labeled
+  choice (the same rule that makes `BrepBoolean` refuse rather than silently fall back to
+  the implicit route). Baking a traced polyline into a *primary feature's* B-Rep would
+  put a fixed, non-refining sampling floor under every downstream tessellation — the
+  cross-drilled housing's breakout curves show exactly what that costs — for a corner the
+  designer can instead make exact by construction. The refusal therefore names the three
+  exact escapes: make the rim tangent-continuous there (enlarge the arc to reach
+  tangency, or insert a corner arc in the sketch), chamfer that face instead, or accept
+  an approximate blend explicitly through the implicit representation. If a traced
+  corner is ever added it must be opt-in and labeled, never the default.
 - **STEP export** (`StepWriter`, AP214): topology maps one-to-one to
   `MANIFOLD_SOLID_BREP`; analytic surfaces and curves export exactly (including rational
   B-splines via the complex-instance form); wrapper curves simplify to analytic forms or
