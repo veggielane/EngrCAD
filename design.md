@@ -826,7 +826,13 @@ Design decisions:
     re-resolves from scratch. This is the deliberate opposite of `Mates`, which pins its
     references once at construction because a mate is a numerical constraint, not a
     query — the eager/lazy split is a property of the consumer, so it is chosen at the
-    call site rather than legislated.
+    call site rather than legislated. `MateGeometry` now takes `FaceRef`/`AxisRef`
+    overloads that make the eager choice explicit — same vocabulary, resolved once at
+    construction, with the reference's `Descriptor` carried on the `MateRef` — which is
+    what made mates serializable (`MateSet.SaveMates` writes the descriptor; loading
+    re-resolves it eagerly, so construction time is load time; a lambda-backed selector
+    saves its opaque marker and loads from pinned coordinates with a warning, matching
+    `LoadParameters`' opaque contract).
   - **Validation resolves before `Apply`, all-or-nothing, naming the property.**
     `Feature.ValidateInputs` reflects over declared `GeometryRef` properties (no
     per-feature boilerplate) and `FeatureHistory` reports a resolution failure as
@@ -980,6 +986,33 @@ for `in`-parameters being illegal in expression trees.
   worse. Angle and perpendicular mates have a genuine singular start (d/dθ cos θ = 0 at
   θ = 0); that is the derivative of a cosine, not a bug to engineer around, so the solver
   detects it and names the cause.
+- **Mates across assembly levels: pick the variables by TARGET, parameterize them in
+  WORLD space, and the chain rule costs nothing.** Three decisions make the multi-level
+  solve small instead of general. (1) *Variable selection*: the unknowns are exactly the
+  occurrences the mates target — the deepest link of each reference's occurrence chain —
+  never "everything along the chain", which would hand the solver a gauge freedom (move
+  the carrier or move the bolt inside it) that LM would resolve arbitrarily. Ancestors
+  stay inputs unless some other mate targets them, in which case the general Jacobian
+  covers the coupling for free. (2) *Jacobian composition*: a variable is a world-space
+  rigid perturbation of one occurrence (rotation about its composed world origin), and
+  simultaneous perturbations of a chain compose as Δ_ancestor ∘ Δ_target ∘ W — so the
+  chain rule through the frame chain is NOT a product of derivative matrices, it is the
+  one-level formulas (unit axes; axis × (point − origin)) with the moment arm read off
+  each free link's composed world origin. The nonlinear update honors the same
+  parameterization: apply the delta to the pre-step world frame and pull back through the
+  pre-step ancestor frame (`moved.Then(ancestor.Inverse())`), ancestors snapshotted
+  before any pose is written so a free ancestor and its free descendant read one
+  consistent linearization. One-level chains keep their dedicated arithmetic and stay
+  bit-identical to the single-level solver. (3) *The rigidity rule*: a sub-assembly no
+  mate reaches into contributes no variables, so it stays rigid with zero code — and its
+  internal mates need no re-solve because nothing inside it moved relative to itself.
+  The one refusal that keeps the scheme honest: an `Occurrence.Frame` inside a
+  sub-assembly is ONE object however many times the sub-assembly is placed, so a deep
+  target whose owning assembly has multiple placements is rejected naming them (moving it
+  would silently move geometry the mate never mentioned); a *chain*, by contrast, always
+  names a unique placement, which is why `MateRef` carries the chain and why a bare deep
+  `Occurrence` reference stays invalid. Per-instance internal DOF ("flexible
+  sub-assemblies") is the follow-up, not a patch on this scheme.
 - **STEP assemblies share products the way the display path shares parts.** Reference
   identity on the solid gives one PRODUCT and N occurrences; posing the geometry and
   writing it N times would throw away the structure the format exists to carry.

@@ -143,6 +143,85 @@ public sealed class Assembly
         }
     }
 
+    /// <summary>
+    /// Resolves an occurrence path relative to this assembly ("clamp.2/bolt") to the
+    /// chain of occurrences it names, outermost first. Paths use the same '/'-separated
+    /// names <see cref="Flatten()"/> emits; a leading segment equal to this assembly's
+    /// own name is accepted and skipped (unless a direct occurrence shares that name,
+    /// in which case the occurrence wins), so a path copied from a
+    /// <see cref="PartInstance.Path"/> resolves as-is. Throws naming the level that
+    /// failed and what it does contain.
+    /// </summary>
+    public IReadOnlyList<Occurrence> ResolvePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            throw new ArgumentException("An occurrence path must be non-empty.", nameof(path));
+        string[] segments = path.Split('/');
+        // Flatten() roots its paths at the assembly's name; accept that spelling too.
+        int start = segments.Length > 1 && segments[0] == Name && _occurrences.All(o => o.Name != segments[0])
+            ? 1 : 0;
+        if (start == segments.Length)
+            throw new ArgumentException(
+                $"Occurrence path '{path}' names only the assembly itself, not an occurrence in it.", nameof(path));
+
+        var chain = new List<Occurrence>();
+        var current = this;
+        for (int i = start; i < segments.Length; i++)
+        {
+            if (current is null)
+                throw new ArgumentException(
+                    $"Occurrence path '{path}': '{chain[^1].Name}' places a part, so nothing named " +
+                    $"'{segments[i]}' can sit beneath it.", nameof(path));
+            var next = current.Occurrences.FirstOrDefault(o => o.Name == segments[i])
+                ?? throw new ArgumentException(
+                    $"Occurrence path '{path}': assembly '{current.Name}' has no occurrence named " +
+                    $"'{segments[i]}'. It contains: {string.Join(", ", current.Occurrences.Select(o => o.Name))}.",
+                    nameof(path));
+            chain.Add(next);
+            current = next.SubAssembly;
+        }
+        return chain;
+    }
+
+    /// <summary>The occurrence an occurrence path names — the last link of
+    /// <see cref="ResolvePath"/>.</summary>
+    public Occurrence FindOccurrence(string path) => ResolvePath(path)[^1];
+
+    /// <summary>Every path (rooted at this assembly's name, the
+    /// <see cref="Flatten()"/> spelling) at which <paramref name="assembly"/> is placed
+    /// in this subtree — the aliasing probe for cross-level mates: a sub-assembly's
+    /// internal frames are ONE object however many times it is placed, so moving one
+    /// moves every placement listed here.</summary>
+    internal List<string> PlacementsOf(Assembly assembly)
+    {
+        var placements = new List<string>();
+        CollectPlacements(assembly, Name, placements);
+        return placements;
+    }
+
+    private void CollectPlacements(Assembly target, string prefix, List<string> into)
+    {
+        if (ReferenceEquals(this, target))
+            into.Add(prefix);
+        foreach (var occurrence in _occurrences)
+            occurrence.SubAssembly?.CollectPlacements(target, $"{prefix}/{occurrence.Name}", into);
+    }
+
+    /// <summary>The path (relative, '/'-separated occurrence names) of the first
+    /// placement of <paramref name="occurrence"/> in this subtree, or null when it is
+    /// not placed here. Depth-first in occurrence order, so the answer is deterministic.</summary>
+    internal string? PathTo(Occurrence occurrence)
+    {
+        foreach (var candidate in _occurrences)
+        {
+            if (ReferenceEquals(candidate, occurrence))
+                return candidate.Name;
+            if (candidate.SubAssembly?.PathTo(occurrence) is { } nested)
+                return $"{candidate.Name}/{nested}";
+        }
+        return null;
+    }
+
     /// <summary>True when <paramref name="assembly"/> appears anywhere in this subtree.</summary>
     internal bool Contains(Assembly assembly)
     {

@@ -561,12 +561,34 @@ public sealed class Tab
     /// </summary>
     public IReadOnlyList<PartInstance> Instances(double explode = 0)
     {
+        AssignColors();
         var instances = new List<PartInstance>(_parts.Count);
         foreach (var part in _parts)
             instances.Add(new PartInstance(part, part.Transform, part.Name));
         foreach (var assembly in _assemblies)
             assembly.FlattenInto(Frame3d.WorldXY, assembly.Name, instances, explode);
         return instances;
+    }
+
+    /// <summary>
+    /// Palette colors for parts that arrived AFTER their container did — a part added
+    /// to an assembly after <see cref="Add(Assembly)"/> has no color until the tab next
+    /// flattens, so every flatten sweeps for colorless parts first.
+    /// <para><b>The color-stability rule</b>: a color, once assigned, never changes
+    /// (assignment is <c>??=</c> and the palette cursor only advances), and latecomers
+    /// take the NEXT palette entries in the tab's own display order — loose parts
+    /// first, then each assembly's distinct parts depth-first. So adding a part later
+    /// can never reshuffle an existing part's color; it can only consume a fresh one.</para>
+    /// </summary>
+    private void AssignColors()
+    {
+        foreach (var part in _parts)
+            part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+        foreach (var assembly in _assemblies)
+        {
+            foreach (var part in assembly.DistinctParts())
+                part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+        }
     }
 
     /// <summary>Derives explode offsets for every assembly in this tab

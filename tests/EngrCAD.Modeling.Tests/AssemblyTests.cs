@@ -184,6 +184,36 @@ public class AssemblyTests
     }
 
     [Fact]
+    public void TabInstances_RetroAssignsPaletteColors_WithoutReshuffling()
+    {
+        var scene = new Scene();
+        var tab = scene.AddTab("t");
+        var assembly = new Assembly("vise");
+        var jaw = BoxPart("jaw");
+        assembly.Add(jaw);
+        tab.Add(assembly);
+        var jawColor = jaw.Color;
+        Assert.NotNull(jawColor);
+
+        // A part added AFTER the assembly joined the tab has no color until the tab
+        // next flattens; the sweep hands it the NEXT palette entry and moves nothing
+        // else (the color-stability rule: assignment is ??= and the cursor only
+        // advances, so latecomers can never reshuffle earlier parts).
+        var screw = BoxPart("screw");
+        assembly.Add(screw);
+        Assert.Null(screw.Color);
+        tab.Instances();
+        Assert.NotNull(screw.Color);
+        Assert.Equal(jawColor, jaw.Color);
+        Assert.NotEqual(jawColor, screw.Color);
+
+        // Idempotent: a second flatten changes nothing.
+        var assigned = screw.Color;
+        tab.Instances();
+        Assert.Equal(assigned, screw.Color);
+    }
+
+    [Fact]
     public void TabInstances_LoosePartsFirst_UsePartTransformAndName()
     {
         var scene = new Scene();

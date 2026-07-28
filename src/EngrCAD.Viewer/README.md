@@ -308,8 +308,13 @@ Dark-themed layout around one shared GL viewport:
   Avalonia). Persistent face-selector dimensions are authored in code in v1.
 - **Model tree** (left): the current tab's loose parts and **assembly hierarchies** —
   assembly/sub-assembly header rows with their occurrences indented one level per
-  depth (always expanded in v1; the tree walks the tab exactly like
-  `Tab.Instances()`, so row order matches viewport instance indices). Visibility
+  depth (the tree walks the tab exactly like `Tab.Instances()`, so row order matches
+  viewport instance indices). Assembly rows carry a **disclosure triangle**
+  (default expanded, state remembered per assembly path across rebuilds/tab
+  switches); collapsing is pure UI state — the subtree's rows are still built and
+  registered so viewport visibility and instance indices never shift, they are just
+  not attached to the panel — which is why collapsing an assembly hides nothing in
+  the viewport and re-expanding restores exactly what was there. Visibility
   checkboxes exist at every level: a part row toggles that instance, an assembly row
   hides its whole subtree (effective visibility = own checkbox AND all ancestors;
   unchecking a parent does not touch the children's own state). Visibility is

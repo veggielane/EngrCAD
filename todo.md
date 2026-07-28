@@ -341,7 +341,9 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 ## Mechanisms (kinematics)
 
 Motion, not forces — assemblies that *move*. The substrate already exists: `MateSolver`
-constrains occurrence poses with Levenberg–Marquardt over an **analytic** Jacobian and
+constrains occurrence poses with Levenberg–Marquardt over an **analytic** Jacobian —
+now ACROSS assembly levels (occurrence-path references, chain-rule columns for free
+ancestors, per-occurrence DOF in `OccurrenceFreedoms`) — and
 already reports remaining DOF from a rank-revealing diagonally pivoted Cholesky of JᵀJ.
 That report is the whole insight — **a fully-constrained assembly is static, and a
 mechanism is the same mate system with DOF > 0, driven.** None of this needs a second
@@ -974,20 +976,19 @@ stdout guarded, geometry evaluated lazily). Remaining:
   `Shape` API's own selector overloads still take raw `Func`s — `FaceSetRef.AsSelector`
   bridges them, but `Shape.Fillet(radius, FaceSetRef)` overloads would let a design
   outside a feature history use the same vocabulary, and `Draft`/`Shelling`'s per-face
-  predicates could take one too. And `Mates`' eagerly pinned references could be
-  *expressed* as `GeometryRef`s (resolved once at construction, which is a consumer
-  choice, not a different vocabulary) so a mate could serialize alongside features.
-- [ ] **Assemblies follow-ups** (v2 landed: BOM, exploded views, mates, STEP assembly
-  export + import) — true GPU instanced drawing (matrix buffer, one draw per part), tree
-  expand/collapse, per-instance color/display-mode overrides, retro-assign palette colors
-  when parts are added to an assembly after `Tab.Add`, **mates ACROSS assembly levels**
-  (v1 constrains one level; a sub-assembly is one rigid body), mate
-  persistence/serialization alongside `SaveParameters`, and an **explode-path renderer**
-  (the dashed leader lines drafting standards draw between an exploded part and its seat).
-  Note that **mates ACROSS assembly levels is a prerequisite for most real mechanisms** —
-  a linkage whose members are sub-assemblies cannot be jointed at all while a
-  sub-assembly is one rigid body — so that item and the Mechanisms section above should
-  be scheduled together.
+  predicates could take one too.
+- [ ] **Assemblies follow-ups** (v2 landed: BOM, exploded views, mates — now ACROSS
+  assembly levels with typed `FaceRef`/`AxisRef` references and
+  `SaveMates`/`LoadMates` persistence — STEP assembly export + import, tree
+  expand/collapse, retro-assigned palette colors) — true GPU instanced drawing (matrix
+  buffer, one draw per part), per-instance color/display-mode overrides, an
+  **explode-path renderer** (the dashed leader lines drafting standards draw between an
+  exploded part and its seat), and **flexible sub-assemblies**: a deep mate target
+  inside a multiply-placed sub-assembly is refused today because its internal frame is
+  one shared object — per-instance internal DOF (Onshape's "flexible" instances) needs
+  instance-specific frame overlays on the flatten seam, a real design task. Mechanisms
+  (above) can now assume cross-level mates exist: a linkage whose members are
+  sub-assemblies is jointable via occurrence paths.
 - [ ] **Standard component library — breadth and fidelity** (v1 landed:
   `HardwareComponent` + `ComponentFeature` + `ComponentAssembly`; ISO 4762 SHCS, Tappex
   Trisert, ISO 2338 dowel; the full two-body fastener stack). Follow-ups: more families
