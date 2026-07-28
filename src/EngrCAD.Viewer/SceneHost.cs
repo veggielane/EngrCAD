@@ -348,6 +348,10 @@ internal sealed class SceneHost
         ToolTip.SetTip(bom, "Bill of materials for this tab (quantities per part; CSV saved beside it)");
         toolbar.Children.Add(bom);
 
+        var check = ToolButton("Check", ShowSceneReport);
+        ToolTip.SetTip(check, "Model validation report: per-part volume, bounds, watertightness");
+        toolbar.Children.Add(check);
+
         toolbar.Children.Add(new Border { Width = 8 });
         var capture = ToolButton("Capture", () => Viewport.SaveScreenshot());
         ToolTip.SetTip(capture, "Save the current view as a PNG (path appears in the status bar)");
@@ -805,6 +809,47 @@ internal sealed class SceneHost
         _statusText.Text = saved is null
             ? $"BOM: {bom.LineCount} item(s), {bom.TotalQuantity} occurrence(s)"
             : $"BOM: {bom.LineCount} item(s), {bom.TotalQuantity} occurrence(s) — wrote {saved}";
+    }
+
+    // ---- model validation report ----
+
+    /// <summary>Shows the scene's validation report (per-part volume/bounds/
+    /// watertightness — the assert/echo analog) in a window, ShowBom's pattern.
+    /// Meshing is cached, so a displayed scene reports instantly; a part that cannot
+    /// mesh becomes a named note, not a crash (<see cref="SceneReport"/>).</summary>
+    private void ShowSceneReport()
+    {
+        if (_scene is not { } scene)
+        {
+            _statusText.Text = "Check: no scene";
+            return;
+        }
+
+        var report = SceneReport.Create(scene, scene.ResolveQuality(EngrCad.CurrentOptions.Quality));
+        new Window
+        {
+            Title = "Model validation report",
+            Width = 860,
+            Height = 460,
+            Background = PanelBrush,
+            Content = new ScrollViewer
+            {
+                Padding = new Thickness(16),
+                HorizontalScrollBarVisibility = Avalonia.Controls.Primitives.ScrollBarVisibility.Auto,
+                Content = new TextBlock
+                {
+                    Text = report.ToText(),
+                    FontFamily = new FontFamily("Consolas, Menlo, monospace"),
+                    FontSize = 12,
+                    Foreground = BrightText,
+                    TextWrapping = TextWrapping.NoWrap,
+                },
+            },
+        }.Show();
+
+        _statusText.Text = report.AllClean
+            ? $"Check: {report.Parts.Count} part(s), all clean"
+            : $"Check: {report.Parts.Count} part(s), {report.WarningCount} note(s)";
     }
 
     // ---- on-demand meshing callbacks (all on the UI thread) ----
@@ -1321,11 +1366,16 @@ internal sealed class SceneHost
 
     /// <summary>Effective visibility per instance: its own checkbox AND every ancestor
     /// assembly checkbox — unchecking a parent hides the subtree without touching the
-    /// children's own check state.</summary>
+    /// children's own check state — AND the part-level debug modifiers
+    /// (<see cref="DebugFilter"/>: Hidden parts never show; when any part in the tab
+    /// is Isolated, only isolated parts show).</summary>
     private bool[] EffectiveVisibility()
     {
         var visible = new bool[_instances.Count];
         Array.Fill(visible, true);
+        bool anyIsolated = _currentTabContent is { } tab && DebugFilter.AnyIsolated(tab.AllParts);
+        for (int i = 0; i < _instances.Count; i++)
+            visible[i] = DebugFilter.IsShown(_instances[i].Part, anyIsolated);
         foreach (var row in _partRows)
         {
             if (row.Index < 0 || row.Index >= visible.Length)
@@ -1333,7 +1383,7 @@ internal sealed class SceneHost
             bool shown = row.Own.IsChecked ?? true;
             foreach (var ancestor in row.Ancestors)
                 shown &= ancestor.IsChecked ?? true;
-            visible[row.Index] = shown;
+            visible[row.Index] &= shown;
         }
         return visible;
     }

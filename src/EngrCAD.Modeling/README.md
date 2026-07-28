@@ -1261,6 +1261,22 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".
 
+## Debug modifiers & the validation report
+
+Part-level debug flags (the OpenSCAD `%`/`*`/`!` analog): `Part.Ghost` (rendered
+translucent via `Part.EffectiveDisplayMode` — the property every render path reads —
+but excluded from geometry exports), `Part.Hidden` (neither rendered nor exported),
+`Part.Isolated` (when any part in scope is isolated, only isolated parts
+show/export). The rules live in ONE place, `DebugFilter`
+(`IsShown`/`IsExported`/`Shown`/`Exported`), shared by the window, offscreen
+renders, `--export`, and the MCP tools — with no flags set every filter is the
+identity, so nothing changes until you ask. `SceneReport.Create(scene)` is the
+`assert`/`echo` analog: per part — kind, face count, watertightness (open meshes
+flagged with their boundary-loop count), volume (closed meshes only), surface area,
+world bounds — plus notes for meshing failures (named, not thrown) and active debug
+flags; `ToText()` is the aligned table the viewer's **Check** button shows, and
+`AllClean` is the one-line assertion for scripts.
+
 ## 2D interchange (DXF & SVG)
 
 `DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE with

@@ -773,9 +773,11 @@ public sealed class ViewportControl : OpenGlControlBase
     }
 
     /// <summary>The global-style x part-mode precedence, resolved by
-    /// <see cref="RenderModes.Resolve"/> (shared with the offscreen pass).</summary>
+    /// <see cref="RenderModes.Resolve"/> (shared with the offscreen pass).
+    /// EffectiveDisplayMode, not DisplayMode: a Ghost part renders translucent in
+    /// every front end (the debug-modifier contract).</summary>
     private EffectiveMode EffectiveModeOf(int index) =>
-        RenderModes.Resolve(_viewStyle, _instances[index].Part.DisplayMode);
+        RenderModes.Resolve(_viewStyle, _instances[index].Part.EffectiveDisplayMode);
 
     /// <summary>
     /// Draws SDF iso-distance contours on the section plane for parts with an implicit

@@ -100,6 +100,35 @@ public class RunTests
     }
 
     [Fact]
+    public void Export_HonorsDebugModifiers()
+    {
+        // Three boxes: one normal, one Hidden (* analog), one Ghost (% analog) — only
+        // the normal one may reach the file (8 corner vertices in the merged OBJ).
+        var path = TempFile(".obj");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], () =>
+            {
+                var scene = new Scene();
+                scene.Add(new Part("keep", MeshPrimitives.Box(1, 1, 1)));
+                scene.Add(new Part("hidden", MeshPrimitives.Box(1, 1, 1),
+                    transform: Matrix4d.CreateTranslation((5, 0, 0)))).Hidden = true;
+                scene.Add(new Part("ghost", MeshPrimitives.Box(1, 1, 1),
+                    transform: Matrix4d.CreateTranslation((10, 0, 0)))).Ghost = true;
+                return scene;
+            });
+            Assert.Equal(0, code);
+            var lines = File.ReadAllLines(path);
+            Assert.Equal(8, lines.Count(l => l.StartsWith("v ")));
+            Assert.Single(lines, l => l.StartsWith("o "));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ExportOff_WritesAMergedOffFile()
     {
         var path = TempFile(".off");

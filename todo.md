@@ -532,8 +532,10 @@ export — is recorded in CLAUDE.md):
   angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
   the follow-on is re-resolving against the on-screen pixel size of a radius when the
   camera zooms, which needs re-tessellation plumbing in the viewer.
-- [ ] Debug modifiers (`#`/`%`/`!`/`*`) — per-body display flags (ghost/isolate/hide;
-  highlight exists via selection)
+- [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
+  + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
+  stays the selection mechanism): web viewport honors Ghost (EffectiveDisplayMode)
+  but not yet Hidden/Isolated visibility; tree rows could gray hidden parts.
 - [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
   is the *expensive* cousin of the Animation section above and deliberately separate:
   that one moves poses and the camera only, which is why it can animate with matrices
@@ -542,8 +544,6 @@ export — is recorded in CLAUDE.md):
   deferred"): shape is `Func<double, Scene>` + offline frame bake, the work is
   prefix/identity caching across frames, and it should be built only when a concrete
   model needs morphing geometry.
-- [ ] model-validation report (volumes, bounds, manifoldness per body) in the viewer —
-  the `assert/echo` analog
 - [ ] **DXF/SVG follow-ups** (v1 ✅ landed — `DxfDocument` LINE/ARC/CIRCLE/LWPOLYLINE
   with layers both ways, exact bulge arcs; `SvgDrawing` visible/hidden/section line
   classes over Section/Silhouette/Sketch): DXF SPLINE entities (cubic béziers now

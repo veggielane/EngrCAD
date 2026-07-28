@@ -69,7 +69,14 @@ Dark-themed layout around one shared GL viewport:
   toggle with an **X/Y/Z axis cycler** button beside it (see below), an **Annot**
   toggle (3D annotations, on by default — see below), a **Measure** toggle
   (interactive dimensioning — see below), an **Explode** toggle with a factor slider
-  (see below), and a **BOM** button (see below).
+  (see below), a **BOM** button (see below), and a **Check** button (the model
+  validation report — `SceneReport` in Modeling: per-part watertightness, volume,
+  area, bounds, with notes for open meshes, meshing failures and active debug
+  modifiers, shown in a window BOM-style). Part-level **debug modifiers**
+  (`Part.Ghost`/`Hidden`/`Isolated`, rules in Modeling's `DebugFilter`) are honored
+  by the viewport and every render/export path: ghosts draw translucent via
+  `Part.EffectiveDisplayMode`, hidden parts are skipped by `EffectiveVisibility`,
+  and an active isolate shows only isolated parts.
 - **Ambient occlusion** (`ViewportControl.AmbientOcclusion`, the toolbar **AO**
   toggle, `EngrCadOptions.AmbientOcclusion` / `.WithAmbientOcclusion(...)` /
   `--ao on|off`; **on by default**): pockets, blind holes, rib roots and the contact

@@ -92,6 +92,30 @@ public sealed class Part
     /// </summary>
     public bool ClippedBySection { get; set; } = true;
 
+    // ---- debug display modifiers (the OpenSCAD #/%/!/* analog, part-level) ----
+
+    /// <summary>Debug modifier (OpenSCAD <c>*</c> disable): the part is not rendered
+    /// and not exported. Unlike removing it from the scene, it keeps its tree row (a
+    /// viewer may re-show it) and its palette color. See <see cref="DebugFilter"/> for
+    /// the rules viewers and exporters share.</summary>
+    public bool Hidden { get; set; }
+
+    /// <summary>Debug modifier (OpenSCAD <c>%</c> background): rendered translucent
+    /// for reference, but EXCLUDED from geometry exports — scaffolding you want to see
+    /// but never print. <see cref="EffectiveDisplayMode"/> resolves it.</summary>
+    public bool Ghost { get; set; }
+
+    /// <summary>Debug modifier (OpenSCAD <c>!</c> root): when ANY part in scope has
+    /// this set, only isolated parts are shown/exported. Scope is the tab in the
+    /// viewer and the scene for headless render/export (<see cref="DebugFilter"/>).</summary>
+    public bool Isolated { get; set; }
+
+    /// <summary>What a renderer should draw this part as: <see cref="DisplayMode"/>,
+    /// with <see cref="Ghost"/> forcing <see cref="Modeling.DisplayMode.Translucent"/>.
+    /// Every render path (window, offscreen, web) reads THIS, never the raw mode, so
+    /// ghosting cannot fork between front ends.</summary>
+    public DisplayMode EffectiveDisplayMode => Ghost ? DisplayMode.Translucent : DisplayMode;
+
     public Matrix4d Transform { get; set; } = Matrix4d.Identity;
 
     private readonly Lock _meshLock = new();

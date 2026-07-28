@@ -282,6 +282,9 @@ public sealed class SceneTools(SceneSession session)
             return Error("Pass either sectionPlanes or sectionAxis/sectionOffset, not both.");
         if (!TryResolveInstances(tab, part, out var instances, out string? scopeError))
             return Error(scopeError);
+        // Debug modifiers: Hidden parts (and non-isolated parts under an active
+        // isolate) don't render; Ghost parts render translucent.
+        instances = DebugFilter.Shown(instances);
         if (instances.Count == 0)
             return Error("Nothing to render: the scene (or the requested tab/part) has no parts.");
 
@@ -470,11 +473,17 @@ public sealed class SceneTools(SceneSession session)
         if (extension == ".png")
         {
             return EngrCad.CanRenderToImage
-                ? ExportPng(path, instances, width, height)
+                ? ExportPng(path, DebugFilter.Shown(instances), width, height)
                 : Error("Offscreen rendering is not available on this machine "
                       + $"({OffscreenRenderer.UnavailableReason ?? "no GL/EGL context"}); "
                       + "export .step, .stl, or .obj instead.");
         }
+
+        // Debug modifiers: Hidden and Ghost parts never reach a geometry export;
+        // an active isolate exports only isolated parts (see DebugFilter).
+        instances = DebugFilter.Exported(instances);
+        if (instances.Count == 0)
+            return Error("Nothing to export: every part is hidden or ghosted by debug modifiers.");
 
         try
         {
