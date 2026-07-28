@@ -215,9 +215,14 @@ engines.
     an open mesh.
 
     Remaining gaps: pole-bounded single-chain bands with holes and |winding| > 1 loops
-    are refused (they used to fall back to the grid), a rung sampled at more than two
-    points falls to the ear clipper rather than being fanned, and a hole straddling every
-    possible seam (covering a full period in u) is unsupported.
+    are refused (they used to fall back to the grid), and a hole straddling every
+    possible seam (covering a full period in u) is unsupported. **Neither refusal is
+    reachable from the `Shape` API** — a latitude cut does give a sphere a pole-bounded
+    cap, but drilling it off-axis makes the boolean re-split so the bore's rim lands on
+    the two-ring band below; cutting lower, or the same on a cone or a torus, fails
+    earlier in the boolean; and |winding| > 1 needs a helical intersection curve, which is
+    refused before tessellation. `TrimmedFaceRefusalTests` locks that verdict and drives
+    both refusals directly on hand-built faces so the messages cannot rot.
 
     **Whole-corpus quality gate.** `TessellationCorpusQualityTests` audits 21 named
     constructions — drilled plates, cross-drills, spherical cavities, threaded rods and

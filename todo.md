@@ -113,12 +113,19 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     exactly uv-collinear boundary run would hit the identical forced fan. Nothing in the
     suite or the docs exercises it, so the slab sweep was deliberately not widened to it —
     but the mechanism is now understood, and this is where it would resurface.
-- [ ] **Trimmed-face refusals are now loud — find out what they refuse.** Two documented
-  gaps used to fall back to the grid silently and now throw: pole-bounded single-chain
-  bands with holes, and |winding| > 1 loops. Nothing in the suite or the docs hits them,
-  so we do not know whether they are reachable from the `Shape` API at all. Build a repro
-  for each (a drilled sphere pole cap; a band cut so its loop wraps twice) and either
-  support them or refuse them at construction time in `Shape`.
+- ~~**Trimmed-face refusals are now loud — find out what they refuse.**~~ ✅ **answered**
+  — **neither is reachable from the `Shape` API today**, and `TrimmedFaceRefusalTests`
+  locks that verdict along with the constructions tried and what stops each one earlier.
+  A latitude cut DOES give a sphere a pole-bounded cap with a single winding loop, but
+  drilling that cap off-axis does not put a hole in it: the boolean re-splits so the
+  bore's rim lands on the two-ring band below, which the slab sweep already handles —
+  which is why the pole-bounded-with-holes tier has never been needed. Cutting the cap
+  lower, or the same on a cone or a torus, fails earlier in the boolean ("produced an
+  unclosed solid"). |winding| > 1 needs a curve wrapping a periodic surface twice, which
+  only a helical intersection produces, and those are refused before tessellation
+  (`Cylinder − ExternalThread` throws `ShapeConversionException`; a threaded pocket in a
+  sphere throws `BrepBooleanException`). Both refusals stay as backstops and are now
+  exercised directly on hand-built faces, so the messages cannot rot.
 - ~~**A per-face triangle-quality assertion for the whole tessellator.**~~ ✅ **done** —
   `TessellationCorpusQualityTests` + the shared `TessellationQuality` audit, over 21
   constructions at three densities. It caught three real defects on its first run, and
@@ -155,6 +162,20 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5 — the trimmed side-face triangulation differs from a
   planar cap's (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
+- [ ] **A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by
+  ~5e-5, and the cause is now known: it is not the triangulation.** The bore's rim on
+  that face is a **57-sample `PolylineCurve3d` baked in by the marching tracer** at
+  boolean time, because plane-as-a-bounded-extrusion ∩ cylinder is not one of
+  `SurfaceIntersection`'s analytic pairs — while the same hole drilled into the top cap,
+  where the rim is an exact `Circle3d`, lands within **1e-13**. The fixed 57-gon is a
+  floor no sampling density can lower, so the error does not converge and even changes
+  sign as the analytic reference's n-gon crosses it: **−7.4e-4 / −5.3e-5 / +4.7e-5 /
+  +6.5e-5 at 32/64/128/256** segments (cap: 1.8e-14 / 1.6e-13 / 1.7e-13 / 6.4e-14). The
+  fix belongs in `SurfaceIntersection`, which already has the analytic plane∩cylinder
+  circle and simply does not recognise the plane when it arrives as an `ExtrudedSurface`
+  over a `Line3d` — the same promotion `TryPlanarPatch` does for the boolean's own
+  section curves. Documented in
+  `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`.
 - [ ] **The planar earcut emits an occasional zero-area facet.** `PolygonTriangulator`
   filters EXACTLY collinear vertices, but boundary samples of a straight edge that came
   through a boolean are collinear only to a few ulps, so a run of them survives the filter

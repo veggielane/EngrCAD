@@ -1,0 +1,190 @@
+using EngrCAD.BRep;
+using EngrCAD.Core;
+using EngrCAD.Modeling;
+using Xunit;
+
+namespace EngrCAD.Interop.Tests;
+
+/// <summary>
+/// The two winding structures <see cref="TrimmedFaceTessellator"/> refuses outright — a
+/// pole-bounded single-chain band carrying hole loops, and a loop that winds the periodic
+/// direction more than once — and the question the backlog asked about them: are they
+/// reachable at all?
+/// <para><b>Verdict: not from the <c>Shape</c> API today.</b> Both are blocked upstream,
+/// by the exact B-Rep boolean rather than by the tessellator, and the tests below record
+/// the constructions tried and what stops each one. That makes the refusals a backstop
+/// rather than a live gap — but a backstop that must still fire correctly, so the other
+/// two tests here drive hand-built faces of exactly those shapes and assert the message.
+/// </para>
+/// </summary>
+public class TrimmedFaceRefusalTests
+{
+    private const double Radius = 10;
+
+    /// <summary>A sphere as a full revolve of a pole-to-pole meridian about +Z.</summary>
+    private static RevolvedSurface Sphere() => new(
+        new CurveSegment(
+            new Circle3d(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitZ, Radius),
+            -Math.PI / 2, Math.PI / 2),
+        Vector3d.Zero, Vector3d.UnitZ);
+
+    private static Vector3d On(double u, double lat) => new(
+        Radius * Math.Cos(lat) * Math.Cos(u), Radius * Math.Cos(lat) * Math.Sin(u), Radius * Math.Sin(lat));
+
+    /// <summary>A closed loop made of one closed polyline edge through the given points.</summary>
+    private static BrepLoop ClosedLoop(IReadOnlyList<Vector3d> points)
+    {
+        var curve = new PolylineCurve3d(points, isClosed: true);
+        var vertex = new BrepVertex(points[0]);
+        return new BrepLoop([new BrepCoedge(new BrepEdge(curve, curve.Domain, vertex, vertex), true)]);
+    }
+
+    private static string Refusal(BrepFace face)
+    {
+        var edgePolylines = new Dictionary<BrepEdge, List<Vector3d>>();
+        foreach (var loop in face.Loops)
+        {
+            foreach (var coedge in loop.Coedges)
+                edgePolylines[coedge.Edge] = BRepTessellator.SampleEdge(coedge.Edge, 32, 24);
+        }
+        var polygons = new List<IReadOnlyList<Vector3d>>();
+        Assert.False(
+            TrimmedFaceTessellator.TryTessellate(face, edgePolylines, 32, 24, polygons, out string? why),
+            "the tessellator accepted a winding structure it is documented to refuse");
+        Assert.Empty(polygons); // a refusal must not touch the caller's output
+        return why!;
+    }
+
+    /// <summary>
+    /// A pole-bounded cap (one winding loop, the far v row degenerate) that also carries a
+    /// hole: <see cref="TrimmedFaceTessellator"/> has no tier for it — the band-with-holes
+    /// path needs TWO ring chains to unroll between — so it refuses instead of falling back
+    /// to the natural grid, which covers the whole sphere rather than this face.
+    /// </summary>
+    [Fact]
+    public void PoleBoundedBandWithAHole_RefusesLoudly()
+    {
+        var equator = Enumerable.Range(0, 48).Select(i => On(2 * Math.PI * i / 48, 0)).ToList();
+        var hole = Enumerable.Range(0, 24)
+            .Select(i => On(0.3 * Math.Cos(2 * Math.PI * i / 24), 0.8 + 0.15 * Math.Sin(2 * Math.PI * i / 24)))
+            .ToList();
+
+        var why = Refusal(new BrepFace(Sphere(), [ClosedLoop(equator), ClosedLoop(hole)]));
+        Assert.Contains("winding structure is unsupported", why);
+    }
+
+    /// <summary>
+    /// A loop winding the periodic direction twice — a closed curve that goes round the
+    /// sphere twice, rising and falling so it closes on itself. Pullback unwraps u along
+    /// the loop, so the total is 2 and the tessellator refuses by name.
+    /// </summary>
+    [Fact]
+    public void LoopWindingThePeriodTwice_RefusesByName()
+    {
+        // u = 4*pi*t, lat = 0.3*cos(2*pi*t): at t -> 1 the curve returns to its start
+        // point (u back to 0 mod 2*pi, lat back to 0.3) having wrapped u twice.
+        var doubleWrap = Enumerable.Range(0, 192)
+            .Select(i =>
+            {
+                double t = i / 192.0;
+                return On(4 * Math.PI * t, 0.3 * Math.Cos(2 * Math.PI * t));
+            })
+            .ToList();
+
+        var why = Refusal(new BrepFace(Sphere(), [ClosedLoop(doubleWrap)]));
+        Assert.Contains("winds the periodic direction 2 times", why);
+    }
+
+    /// <summary>
+    /// The reachability verdict, as a test so it cannot rot: every construction that ought
+    /// to produce one of the two refused structures is stopped EARLIER, by the exact B-Rep
+    /// boolean. Each entry names what the construction was trying to make.
+    /// <para>The two that do build are the interesting half of the record: a latitude cut
+    /// does give a sphere a pole-bounded cap with a single winding loop, and drilling it
+    /// off-axis does not put a hole IN that cap — the boolean re-splits so the bore's rim
+    /// lands on the two-ring band below, which the slab sweep already handles. That is why
+    /// the pole-bounded-with-holes tier has never been needed.</para>
+    /// </summary>
+    [Theory]
+    // A pole cap that also carries a hole. The bore lands on the band, not the cap.
+    [InlineData("cap with off-axis bore", true)]
+    [InlineData("cap with two bores", true)]
+    // Cutting the cap lower, or on a cone or a torus, makes the boolean fail first.
+    [InlineData("cap cut low with bore", false)]
+    [InlineData("cone cut with bore", false)]
+    [InlineData("torus cut with bore", false)]
+    // A doubly-winding loop needs a helical intersection curve on a periodic surface.
+    [InlineData("threaded pocket in a sphere", false)]
+    public void ConstructionsThatWouldReachARefusal_AreStoppedEarlierOrDoNotReachIt(
+        string name, bool builds)
+    {
+        BrepSolid Build() => name switch
+        {
+            "cap with off-axis bore" => (Shape.Sphere(10)
+                - Shape.Box(40, 40, 40).Translate((0, 0, -25))
+                - Shape.Cylinder(2, 40).Translate((5, 0, -20))).ToBrep(),
+            "cap with two bores" => (Shape.Sphere(10)
+                - Shape.Box(40, 40, 40).Translate((0, 0, -25))
+                - Shape.Cylinder(1.5, 40).Translate((5, 0, -20))
+                - Shape.Cylinder(1.5, 40).Translate((-5, 0, -20))).ToBrep(),
+            "cap cut low with bore" => (Shape.Sphere(10)
+                - Shape.Box(40, 40, 40).Translate((0, 0, -28))
+                - Shape.Cylinder(2, 40).Translate((6, 0, -20))).ToBrep(),
+            "cone cut with bore" => (Shape.Cone(10, 0, 20)
+                - Shape.Box(40, 40, 40).Translate((0, 0, 34))
+                - Shape.Cylinder(1.5, 60).Translate((4, 0, -30))).ToBrep(),
+            "torus cut with bore" => (Shape.Torus(12, 4)
+                - Shape.Box(60, 60, 20).Translate((0, 0, 12))
+                - Shape.Cylinder(1.5, 40).Translate((12, 0, -20))).ToBrep(),
+            _ => Shape.Sphere(10)
+                .ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], 6,
+                    SketchPlane.At((0, 0, 10), Vector3d.UnitX, Vector3d.UnitY)).ToBrep(),
+        };
+
+        if (!builds)
+        {
+            // Stopped by the boolean's own two-manifold check, which names the operation
+            // and locates a crack — the loud refusal one layer up.
+            var blocked = Assert.ThrowsAny<Exception>(Build);
+            Assert.Contains("unclosed solid", blocked.Message);
+            return;
+        }
+
+        // It builds — so it must also tessellate, through tiers that already exist.
+        var solid = Build();
+        var report = TessellationQuality.Audit(solid, 32, 24);
+        Assert.Equal(0, report.Folds);
+        Assert.True(report.WorstDot > 0.99, $"{name}: worst normal agreement {report.WorstDot}");
+
+        // And no face carries the refused structure: a winding loop together with a hole.
+        foreach (var face in solid.Faces)
+        {
+            double period = FaceGeometry.PeriodU(face.Surface);
+            if (period <= 0)
+                continue;
+            var windings = face.Loops.Select(loop => Winding(face.Surface, loop, period, solid)).ToList();
+            Assert.False(
+                windings.Count(w => w != 0) == 1 && windings.Contains(0),
+                $"{name} produced a pole-bounded band with holes after all — the tier is now needed");
+            Assert.DoesNotContain(windings, w => Math.Abs(w) > 1);
+        }
+    }
+
+    private static int Winding(Surface surface, BrepLoop loop, double period, BrepSolid solid)
+    {
+        var edgePolylines = new Dictionary<BrepEdge, List<Vector3d>>();
+        foreach (var edge in solid.Edges)
+            edgePolylines[edge] = BRepTessellator.SampleEdge(edge, 32, 24);
+
+        var uv = new List<Vector2d>();
+        foreach (var p in BRepTessellator.LoopPolyline(loop, edgePolylines))
+        {
+            if (!surface.TryProjectPoint(p, out var q, FaceGeometry.InverseEvaluationTolerance))
+                continue;
+            if (uv.Count > 0)
+                q = new Vector2d(q.X + period * Math.Round((uv[^1].X - q.X) / period), q.Y);
+            uv.Add(q);
+        }
+        return uv.Count == 0 ? 0 : (int)Math.Round((uv[^1].X - uv[0].X) / period);
+    }
+}
