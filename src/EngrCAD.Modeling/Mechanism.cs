@@ -116,6 +116,47 @@ public sealed partial class MotionStudy
 public sealed class MechanismException(string message) : InvalidOperationException(message);
 
 /// <summary>
+/// The Grübler/Kutzbach mobility formula beside the solver's measured rank — a
+/// CROSS-CHECK, not a source of truth. The formula predicts DOF from joint counts
+/// (M = 6·moving − Σ(6 − fᵢ) − couplings); the solver measures the actual rank of the
+/// constraint Jacobian. <b>Disagreement is informative rather than an error</b>:
+/// overconstrained-but-mobile linkages — a planar four-bar built in space, Bennett's
+/// linkage, the Sarrus linkage — are precisely where the formula lies and the rank is
+/// right, because redundant constraints consume no motion the rank can see.
+/// </summary>
+/// <param name="MovingBodies">Occurrences the mates actually move.</param>
+/// <param name="JointCount">Joints in the mechanism (raw mates are outside the
+/// formula's vocabulary and are flagged in <see cref="Notes"/>).</param>
+/// <param name="JointFreedoms">Σ fᵢ over the joints' nominal DOF.</param>
+/// <param name="CouplingCount">Higher-pair couplings, one predicted DOF each.</param>
+/// <param name="PredictedDegreesOfFreedom">Kutzbach's answer.</param>
+/// <param name="MeasuredDegreesOfFreedom">The solver's rank-based answer at the
+/// current pose (meaningful at an assembled pose).</param>
+public sealed record MobilityReport(
+    int MovingBodies,
+    int JointCount,
+    int JointFreedoms,
+    int CouplingCount,
+    int PredictedDegreesOfFreedom,
+    int MeasuredDegreesOfFreedom)
+{
+    /// <summary>Caveats: raw mates the formula cannot count, and the standard reading
+    /// of a disagreement.</summary>
+    public IReadOnlyList<string> Notes { get; init; } = [];
+
+    /// <summary>True when formula and measurement coincide.</summary>
+    public bool Agrees => PredictedDegreesOfFreedom == MeasuredDegreesOfFreedom;
+
+    public override string ToString() =>
+        $"mobility: Grübler/Kutzbach predicts {PredictedDegreesOfFreedom} DOF " +
+        $"({MovingBodies} moving bodies, {JointCount} joints carrying {JointFreedoms} freedoms" +
+        (CouplingCount > 0 ? $", {CouplingCount} couplings" : "") +
+        $"); the solver measures {MeasuredDegreesOfFreedom}" +
+        (Agrees ? " — they agree" : " — the RANK is the truth (redundant constraints fool the formula)") +
+        string.Concat(Notes.Select(n => "\n  · " + n));
+}
+
+/// <summary>
 /// An <see cref="Assembly"/> with <see cref="Joint"/>s: the same mate system, driven.
 /// A fully-constrained assembly is static; a mechanism is a mate system with DOF &gt; 0
 /// plus a <see cref="MechanismDriver"/> consuming them — so this class owns no second
@@ -563,6 +604,44 @@ public sealed class Mechanism
                 (joint.B.Path is { } b && deficient.Contains(b)))
                 yield return joint.Name;
         }
+    }
+
+    /// <summary>
+    /// The Grübler/Kutzbach mobility count beside the solver's measured rank at the
+    /// CURRENT pose (call after <see cref="Assemble"/> — rank is a property of a
+    /// configuration). Nothing is moved. Disagreement is reported, not thrown — see
+    /// <see cref="MobilityReport"/> for why the rank is the truthful side.
+    /// </summary>
+    public MobilityReport Mobility(MateSolverSettings? settings = null)
+    {
+        var probe = Mates.TrySolve(new MateSolverSettings
+        {
+            MaxIterations = 0,
+            Tolerance = (settings ?? new MateSolverSettings()).Tolerance,
+        }, _couplings);
+
+        int moving = probe.FreeDegreesOfFreedom / 6;
+        int jointFreedoms = _joints.Sum(j => j.NominalDegreesOfFreedom);
+        // Kutzbach: each joint removes (6 − f); each higher-pair coupling removes 1.
+        // A screw's pitch coupling is already inside its nominal f = 1, so only the
+        // explicit pair couplings count here.
+        int predicted = 6 * moving
+            - _joints.Sum(j => 6 - j.NominalDegreesOfFreedom)
+            - _pairCouplings.Count;
+
+        var notes = new List<string>();
+        int rawMates = Mates.Mates.Count - _joints.Sum(j => j.Mates.Count);
+        if (rawMates > 0)
+            notes.Add($"{rawMates} raw mate{(rawMates == 1 ? "" : "s")} outside the joints are invisible " +
+                      "to the formula (it counts joints, not constraint rows)");
+        if (predicted != probe.RemainingDegreesOfFreedom)
+            notes.Add("overconstrained-but-mobile linkages (a planar linkage built in space, Bennett, " +
+                      "Sarrus) are exactly where the formula lies and the measured rank is right");
+
+        return new MobilityReport(
+            moving, _joints.Count, jointFreedoms, _pairCouplings.Count,
+            predicted, probe.RemainingDegreesOfFreedom)
+        { Notes = notes };
     }
 
     private void CommitJointStates()
