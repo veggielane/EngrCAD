@@ -543,8 +543,7 @@ public static class OffscreenRenderer
         // in it) is destroyed by the EglContext dispose in Render.
     }
 
-    /// <summary>The viewer's first-visit framing: default yaw/pitch, distance from bounds.</summary>
-    private static CameraState DefaultCamera(in Aabb bounds) => bounds.IsEmpty
-        ? new CameraState(0.7, 0.45, 15.0, (0, 0, 0))
-        : new CameraState(0.7, 0.45, CameraMath.FrameDistance(bounds), bounds.Center);
+    /// <summary>The viewer's first-visit framing — one source of truth in
+    /// <see cref="CameraMath.DefaultCamera"/> (turntable tracks base on it too).</summary>
+    private static CameraState DefaultCamera(in Aabb bounds) => CameraMath.DefaultCamera(bounds);
 }

@@ -19,6 +19,7 @@ scene.Add(new Part("demo", Shape.Sphere(10)));
 | Fence | Meaning |
 | --- | --- |
 | ` ```csharp render:<id> ` | Executed. Must end with a variable **`scene`** of type `Scene` in scope; the generator renders it to `examples/images/<id>.png`, and the same page must reference that image (`![alt](images/<id>.png)`). |
+| ` ```csharp animate:<id> ` | Executed. Must define `scene`, and may define an **`animation`** (`Animation`); without one it gets a default 4-second turntable. Rendered to an **APNG** at `examples/images/<id>.png` — an APNG *is* a PNG, so the reference rule is unchanged and browsers just play it. Mind the build time and committed size: every frame is an offscreen render, so keep `frames:` modest. |
 | ` ```csharp run:<id> ` | Executed for correctness only — no screenshot. Use for exports, queries, and other non-visual examples. Throw on unexpected results so regressions fail the build. |
 | ` ```csharp ` | Display-only. Not executed — use sparingly, for fragments that cannot stand alone (project files, switch tables, viewer-interactive calls like `EngrCad.Show`). |
 
@@ -37,6 +38,10 @@ planes instead of boolean-cut fakes:
 | --- | --- |
 | `style:<points\|wireframe\|shaded\|shaded-edges>` | Global view style for the screenshot (default `shaded-edges`). |
 | `section:<x\|y\|z>,<offset>` | Renders with a real axis-aligned section plane at the offset (SDF-routed parts get their isoline overlay on the cut). Repeat with `;` for a quarter or octant cut: `section:x,0;y,0`. |
+
+`animate:` fences take `style:<name>` and `frames:<2..120>` (default 24). The
+snippet's `animation` variable (and `camera`, when there is no camera track) rides
+the same declared-variable convention as `render:` fences.
 
 Unknown options fail the build.
 

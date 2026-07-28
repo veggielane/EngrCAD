@@ -566,6 +566,16 @@ public static class CameraMath
     public static double FrameDistance(in Aabb bounds) => Math.Max(bounds.Size.Length * 1.25 + 1, 2);
 
     /// <summary>
+    /// The viewer's first-visit framing — the default yaw/pitch every front end starts
+    /// at (offscreen renders with a null camera, the window's initial pose, turntable
+    /// bases), distance from the bounds. One function so "the default view" cannot mean
+    /// different angles in different front ends.
+    /// </summary>
+    public static CameraState DefaultCamera(in Aabb bounds) => bounds.IsEmpty
+        ? new CameraState(0.7, 0.45, 15.0, (0, 0, 0))
+        : new CameraState(0.7, 0.45, FrameDistance(bounds), bounds.Center);
+
+    /// <summary>
     /// Zoom-out limit: generous multiple of the scene size (the frustum scales with the
     /// distance, so the cap only stops the scene shrinking to nothing).
     /// </summary>

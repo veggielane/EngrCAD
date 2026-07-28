@@ -70,6 +70,17 @@ public sealed class EngrCadOptions
     public double Explode { get; set; }
 
     /// <summary>
+    /// Builds the window's <see cref="Viewer.Animation"/> for a scene — played by the
+    /// toolbar transport (play/pause/loop/scrub) and re-invoked per live reload with
+    /// the fresh scene, so tracks always reference current occurrences. A factory
+    /// rather than an instance because tracks capture the scene they pose, and the
+    /// scene is remade by every hot reload; null (or a factory returning null) shows
+    /// no transport. Invoked OFF the UI thread — track construction may read bounds
+    /// (mesh parts), the same rule <c>Scene.PreMesh</c> follows.
+    /// </summary>
+    public Func<Scene, Animation?>? Animation { get; set; }
+
+    /// <summary>
     /// Several section planes for headless renders — two perpendicular planes are the
     /// classic quarter cut, three an octant. When set it wins over
     /// <see cref="SectionAxis"/>/<see cref="SectionOffset"/>; null (the default) keeps
@@ -277,6 +288,16 @@ public sealed class EngrCadBuilder
         if (factor < 0)
             throw new ArgumentOutOfRangeException(nameof(factor), "An explode factor cannot be negative.");
         Options.Explode = factor;
+        return this;
+    }
+
+    /// <summary>Gives the window an animation to play (toolbar transport:
+    /// play/pause/loop/scrub). The factory runs per scene — including per live reload —
+    /// off the UI thread. See <see cref="EngrCadOptions.Animation"/>.</summary>
+    public EngrCadBuilder WithAnimation(Func<Scene, Animation?> animation)
+    {
+        ArgumentNullException.ThrowIfNull(animation);
+        Options.Animation = animation;
         return this;
     }
 

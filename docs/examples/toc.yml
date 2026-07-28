@@ -44,6 +44,8 @@
   href: components.md
 - name: Mechanisms
   href: mechanisms.md
+- name: Animation
+  href: animation.md
 - name: Viewer
   href: viewer.md
 - name: In the browser (WebAssembly)

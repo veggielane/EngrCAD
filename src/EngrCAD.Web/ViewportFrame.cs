@@ -653,10 +653,10 @@ public static class ViewportFrame
             uniforms["uHighlight"] = strength;
     }
 
-    /// <summary>Auto-framing pose for a scene: the viewer's first-visit iso view.</summary>
-    public static CameraState DefaultCamera(in Aabb bounds) => bounds.IsEmpty
-        ? new CameraState(0.7, 0.45, 15.0, Vector3d.Zero)
-        : new CameraState(0.7, 0.45, CameraMath.FrameDistance(bounds), bounds.Center);
+    /// <summary>Auto-framing pose for a scene: the viewer's first-visit iso view —
+    /// one source of truth in <see cref="CameraMath.DefaultCamera"/> (this was the
+    /// third re-typing of yaw 0.7 / pitch 0.45, exactly the fork it exists to end).</summary>
+    public static CameraState DefaultCamera(in Aabb bounds) => CameraMath.DefaultCamera(bounds);
 
     private static DrawCall Line(
         string key, float[] model, float[] color, int first, int count, bool unclip = false)

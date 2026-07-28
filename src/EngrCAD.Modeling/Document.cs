@@ -622,6 +622,21 @@ public sealed class Tab
         return instances;
     }
 
+    /// <summary>The tab flattened with a PER-OCCURRENCE explode factor (see
+    /// <see cref="Assembly.Flatten(Func{Occurrence, double})"/>) — the sequenced-explode
+    /// substrate. Same walk, same instance count and order as the scalar overload.</summary>
+    public IReadOnlyList<PartInstance> Instances(Func<Occurrence, double> explodeOf)
+    {
+        ArgumentNullException.ThrowIfNull(explodeOf);
+        AssignColors();
+        var instances = new List<PartInstance>(_parts.Count);
+        foreach (var part in _parts)
+            instances.Add(new PartInstance(part, part.Transform, part.Name));
+        foreach (var assembly in _assemblies)
+            assembly.FlattenInto(Frame3d.WorldXY, assembly.Name, instances, explodeOf);
+        return instances;
+    }
+
     /// <summary>
     /// Palette colors for parts that arrived AFTER their container did — a part added
     /// to an assembly after <see cref="Add(Assembly)"/> has no color until the tab next
@@ -753,6 +768,11 @@ public sealed class Scene
     /// (0 assembled → 1 fully exploded).</summary>
     public IEnumerable<PartInstance> Instances(double explode = 0) =>
         _tabs.SelectMany(t => t.Instances(explode));
+
+    /// <summary>Every posed part instance across all tabs, with a per-occurrence
+    /// explode factor (see <see cref="Assembly.Flatten(Func{Occurrence, double})"/>).</summary>
+    public IEnumerable<PartInstance> Instances(Func<Occurrence, double> explodeOf) =>
+        _tabs.SelectMany(t => t.Instances(explodeOf));
 
     /// <summary>Derives explode offsets for every assembly in the scene
     /// (<see cref="Assembly.AutoExplode"/>). Off the render thread: it needs bounds.</summary>

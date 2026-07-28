@@ -450,6 +450,58 @@ Headless has the same knob and therefore the same result by construction:
 the design has not set them; a zero factor never touches the document, and an exploded
 render at factor 0 is byte-identical to a plain one.
 
+## Animation playback
+
+The toolbar grows a transport — **Play/Pause**, **Loop**, and a time scrubber — when
+the host gives the window an animation: `EngrCad.Configure().WithAnimation(scene =>
+new Animation(...)...)`. The factory runs per scene, INCLUDING per live reload (tracks
+pose the occurrences they captured, and a hot reload remakes the scene), on a
+background task because track construction may read bounds and mesh parts — the same
+rule `AutoExplode` follows; a stale result is dropped by comparing the scene reference,
+the TabMeshLoader generation lesson one token cheaper.
+
+The layering rule: **evaluation and transport state live in `EngrCAD.Viewer.Core`**
+(`Animation.At(t)` is pure; `AnimationPlayback` is the play/pause/loop/seek machine),
+and `SceneHost` owns only a `DispatcherTimer` and the widgets. Each tick advances the
+clock by REAL elapsed time (not the timer interval, so playback speed is honest under
+load), evaluates the sample, and applies it: pose tracks re-pose the current tab's
+instances **matched by occurrence path** (a whole-scene track may carry other tabs'
+instances — ignored; unmatched instances keep their document pose) through the same
+`SetInstancePoses` matrices-only route the explode slider uses, and camera tracks set
+`Viewport.Camera`. Scrubbing while paused renders the same frames playback would — one
+evaluation path, which is the point. The web viewport gets the same reuse for free when
+its transport lands (filed in todo.md).
+
+## Animated export
+
+`animation.RenderApng(scene, path, frames, width, height, camera?)` renders the same
+pure `Animation.At(t)` the window scrubs, frame by frame through `OffscreenRenderer`,
+into an **APNG** — `ApngWriter` is three chunk types (`acTL`/`fcTL`/`fdAT`) over the
+machinery `PngWriter` already had, dependency-free, lossless and full colour (a shaded
+CAD render is mostly smooth gradients, exactly what GIF's 256 colours band on). Every
+frame is a full-size replace and each frame's data is its own complete zlib
+datastream; the first frame is the PNG default image, so a non-APNG viewer shows a
+valid still, and the file is written as `.png` because it *is* one. Per-frame delay =
+`Duration / frames` (playback time matches the animation), infinite loop; `loop: true`
+samples `t = i/frames` so a turntable's last frame is not a duplicate of its first,
+`loop: false` samples `t = i/(frames−1)` so the final pose is shown exactly. With no
+camera track, the clip uses ONE camera framed over the union of the first and last
+frames' bounds — never per-frame framing (a camera chasing the geometry is unusable,
+the explode slider's lesson). `animation.RenderFrames(scene, directory, ...)` always
+offers the **PNG frame sequence** (`frame-0000.png` …), the zero-risk escape hatch
+into ffmpeg for MP4/WebM, which no dependency-free encoder reaches.
+
+`animation.RenderGif(...)` is second, because GIF is what pastes everywhere — and that
+is its only virtue here. `GifWriter` is a per-frame median-cut quantizer + GIF-variant
+LZW, dependency-free; **expect banding on shaded renders** (256 colours, no alpha: the
+background gradient, smooth shading and AO band visibly, and dithering — deliberately
+not done — would fight the clean look). Wireframe or flat-shaded clips GIF far better.
+Quantizer detail worth keeping: the median-cut PARTITION is the pixel mapping (every
+distinct colour lands in one box whose palette entry is the box average), so no
+nearest-palette search exists to disagree with the split, and an image with ≤256
+distinct colours reproduces exactly. The LZW encoder is locked by a round-trip against
+an independently written decoder, including the 4096-entry table reset.
+
 ## Bill of materials
 
 The **BOM** toolbar button shows the current tab's parts list — quantities per distinct

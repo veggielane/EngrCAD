@@ -27,8 +27,36 @@ internal static class PngWriter
             throw new ArgumentException(
                 $"Expected {width * height * 4} bytes for {width}x{height} RGBA, got {rgba.Length}.", nameof(rgba));
 
-        // Raw image stream for the deflate payload: each scanline prefixed by the
-        // filter-type byte 0 (None), rows top-down.
+        using var output = new MemoryStream();
+        output.Write([137, 80, 78, 71, 13, 10, 26, 10]); // PNG signature
+        WriteIhdr(output, width, height);
+        WriteChunk(output, "IDAT",
+            Compress(BuildRawScanlines(width, height, rgba, flipVertically, forceOpaque)));
+        WriteChunk(output, "IEND", []);
+        return output.ToArray();
+    }
+
+    /// <summary>The IHDR this encoder always writes: 8-bit RGBA, deflate, filter
+    /// method 0, no interlace. Shared with <see cref="ApngWriter"/>, whose frames must
+    /// match the IHDR bit-for-bit in format.</summary>
+    internal static void WriteIhdr(MemoryStream output, int width, int height)
+    {
+        Span<byte> ihdr = stackalloc byte[13];
+        BinaryPrimitives.WriteInt32BigEndian(ihdr, width);
+        BinaryPrimitives.WriteInt32BigEndian(ihdr[4..], height);
+        ihdr[8] = 8;  // bit depth
+        ihdr[9] = 6;  // color type: truecolor with alpha
+        ihdr[10] = 0; // compression: deflate
+        ihdr[11] = 0; // filter method 0
+        ihdr[12] = 0; // no interlace
+        WriteChunk(output, "IHDR", ihdr);
+    }
+
+    /// <summary>Raw image stream for the deflate payload: each scanline prefixed by the
+    /// filter-type byte 0 (None), rows top-down.</summary>
+    internal static byte[] BuildRawScanlines(
+        int width, int height, ReadOnlySpan<byte> rgba, bool flipVertically, bool forceOpaque)
+    {
         int stride = width * 4;
         var raw = new byte[(stride + 1) * height];
         for (int y = 0; y < height; y++)
@@ -43,29 +71,18 @@ internal static class PngWriter
                     raw[alpha] = 255;
             }
         }
+        return raw;
+    }
 
-        using var output = new MemoryStream();
-        output.Write([137, 80, 78, 71, 13, 10, 26, 10]); // PNG signature
-
-        Span<byte> ihdr = stackalloc byte[13];
-        BinaryPrimitives.WriteInt32BigEndian(ihdr, width);
-        BinaryPrimitives.WriteInt32BigEndian(ihdr[4..], height);
-        ihdr[8] = 8;  // bit depth
-        ihdr[9] = 6;  // color type: truecolor with alpha
-        ihdr[10] = 0; // compression: deflate
-        ihdr[11] = 0; // filter method 0
-        ihdr[12] = 0; // no interlace
-        WriteChunk(output, "IHDR", ihdr);
-
-        using (var compressed = new MemoryStream())
-        {
-            using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
-                zlib.Write(raw);
-            WriteChunk(output, "IDAT", compressed.GetBuffer().AsSpan(0, (int)compressed.Length));
-        }
-
-        WriteChunk(output, "IEND", []);
-        return output.ToArray();
+    /// <summary>One complete zlib datastream over <paramref name="raw"/> — the payload
+    /// of an IDAT, and of an APNG frame's fdAT sequence (each frame's data is its own
+    /// complete datastream per the APNG spec).</summary>
+    internal static byte[] Compress(ReadOnlySpan<byte> raw)
+    {
+        using var compressed = new MemoryStream();
+        using (var zlib = new ZLibStream(compressed, CompressionLevel.Fastest, leaveOpen: true))
+            zlib.Write(raw);
+        return compressed.ToArray();
     }
 
     /// <summary>Encodes <paramref name="rgbaTopDown"/> (top row first) and writes it to
@@ -79,7 +96,7 @@ internal static class PngWriter
         File.WriteAllBytes(path, png);
     }
 
-    private static void WriteChunk(MemoryStream output, string type, ReadOnlySpan<byte> data)
+    internal static void WriteChunk(MemoryStream output, string type, ReadOnlySpan<byte> data)
     {
         Span<byte> word = stackalloc byte[4];
         BinaryPrimitives.WriteInt32BigEndian(word, data.Length);
