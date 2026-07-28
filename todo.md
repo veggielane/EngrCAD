@@ -327,16 +327,23 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   `BoreCrossingTheWallsEdge_FabricatesNoCircle`). Clipping the conic to the patch would
   produce arcs whose endpoints must weld to the face boundary — that is the real work.
 
-## Deformation / analysis (new territory, lower priority)
+## Deformation / analysis follow-ups
 
-- [ ] **Laplacian smoothing & deformation** — `LaplacianMeshSmoother`,
-  `LaplacianMeshDeformer` (handle-based), backed by `SparseSymmetricCG` /
-  `CholeskyDecomposition` / `PackedSparseMatrix`. A solvers mini-library would also
-  serve future constraint solving in sketches and the FEA items below.
-- [ ] **Local parameterization / curves-on-mesh** — `MeshLocalParam` (discrete
-  exponential map), `MeshIsoCurves` (iso-contours of a scalar field on a mesh),
-  `DijkstraGraphDistance` (approximate geodesics). Enables engraving/wrapping features.
-- [ ] **ICP registration** — `MeshICP` for aligning imported scans to models.
+The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
+`SparseSymmetricCG` / `SparseCholesky`; mesh engine: `LaplacianMeshSmoother`,
+`LaplacianMeshDeformer`, `MeshLocalParam`, `MeshIsoCurves`, `DijkstraGraphDistance`,
+`MeshIcp`). Residuals:
+
+- [ ] **AMD/RCM fill-reducing ordering for `SparseCholesky`** — natural ordering was
+  measured sufficient at deformation-ROI scale (≤ ~14k unknowns; see design.md §2), but
+  FEA-scale stiffness systems will need it (62.5k unknowns: 1.6 s factor vs 24.5 ms CG).
+- [ ] **Shape-level exposure of smoothing/deformation** — the tools are kernel-only
+  (`EngrCAD.Mesh`); a `Shape.Smoothed(...)` graph node (mesh-Native, implicit-Bridged
+  via `MeshSdf`, B-Rep-Impossible — the `Remeshed` precedent) plus docs-site example
+  pages is the user-facing follow-up, owed when it lands per the docs rule.
+- [ ] **Decal/engraving pipeline over the exp map** — `MeshLocalParam` gives per-vertex
+  (u, v); wrapping a `Sketch`/glyph outline through it onto a curved surface (project
+  curves into uv, map back, imprint) is the feature it was built to enable.
 
 ## Mechanisms (kinematics)
 
@@ -493,8 +500,9 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
 - [ ] **FEA: structural (linear static)** — small-strain linear elasticity on tet
   meshes: element stiffness (linear + quadratic tets), assembly into sparse symmetric
   systems, boundary conditions from tagged B-Rep faces (fixed supports, loads:
-  force/pressure/gravity), solve (start with the `SparseSymmetricCG`/Cholesky solvers
-  from the deformation item — shared solver mini-library), derive stress/strain (von
+  force/pressure/gravity), solve (start with `EngrCAD.Core.Solvers`' ✅-landed
+  `SparseSymmetricCG`/`SparseCholesky` — note the AMD-ordering follow-up above, which
+  FEA-scale systems will need), derive stress/strain (von
   Mises), display as color fields + deformed-shape overlay in the viewer. Modal
   analysis as a follow-on (eigen-solver).
 - [ ] **FEA: thermal (steady-state + transient)** — heat conduction on the same tet
@@ -663,11 +671,9 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   *after* trimmed parameter-space boundaries become exact, since the domain scan is the
   accuracy limit, not the quadrature. Would make analytic primitives exact rather than
   1e-7.
-- [ ] **Move `SymmetricEigen3` from internal to public in EngrCAD.Core** and delete the
-  duplicated cyclic-Jacobi solver in `EngrCAD.Mesh/MassProperties.cs`. Core's sorts
-  descending, `MassProperties.Principal()` wants ascending — expose both orderings or
-  sort at the call site. Also consider moving `SymmetricTensor3` to Core, where a
-  symmetric 3×3 type belongs.
+- [ ] **Move `SymmetricTensor3` to Core**, where a symmetric 3×3 type belongs (residual
+  of the ✅-landed `SymmetricEigen3` publicization — Core now exposes both orderings and
+  the Mesh project's duplicated Jacobi solver is deleted).
 - [ ] **Per-part material in the document model** — `Part.MassProperties(density)` takes
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,

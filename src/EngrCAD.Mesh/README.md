@@ -527,6 +527,92 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   one-sided rather than convergent: a 1-Lipschitz lower bound puts the surface at least
   `|d|` away in every direction, so the step can never cross it, but `|d|` need not
   decrease near a CSG difference's fictitious faces. See that project's README.
+- **`LaplacianMeshSmoother`** — global implicit Laplacian smoothing: one sparse solve of
+  (M + λL)·x′ = M·x per coordinate (Desbrun-style implicit fairing) over the **cotangent**
+  Laplacian (Meyer et al. / Botsch–Sorkine) with lumped barycentric mass, boundary always
+  pinned bit-identically, backed by Core's `SparseCholesky`. λ = `TimeStep` · h̄² with h̄
+  the mean edge length, so the step size is **dimensionless and scale-free** — the same
+  options smooth the same amount at 1e-5 and metre scale.
+  - **Not the remesher's smoothing pass, on purpose.** `Remesher` runs local explicit
+    double-buffered relaxation between topology operations, with projection preserving the
+    shape — its job is triangle *quality*. This class changes the *geometry* (fairing,
+    denoising) with fixed topology, and the implicit solve reaches equilibrium against the
+    pinned boundary in one step where the explicit scheme diffuses one ring per pass.
+  - Robustness rules, all in the repo's scale-free style: a cotangent contribution from a
+    triangle whose height is below 1e-13 × its longest edge (the sliver measure
+    `PolygonTriangulator` uses) makes the whole edge fall back to the **uniform weight 1**
+    (the degenerate-cotangent fallback); a negative cotangent *sum* (obtuse-dominated
+    edge) is sign-clamped to 0 so L stays positive semi-definite and the solve honest; a
+    massless vertex gets the mean vertex area so M stays positive definite.
+    `LaplacianWeighting.Uniform` selects combinatorial weights outright.
+  - Deterministic (mesh-order assembly + deterministic solver): identical inputs give
+    bit-identical output, and a planar mesh stays planar **exactly** (the out-of-plane
+    system is 0 = 0, and substituting a zero vector is zero) — both pinned by tests.
+- **`LaplacianMeshDeformer`** — handle-based Laplacian surface editing: minimizes the
+  bi-Laplacian bending energy ‖L·(x − x₀)‖² plus **soft** positional constraints as
+  weighted rows ((L² + W)·x = L²·x₀ + W·c per coordinate, `SparseCholesky`), with the
+  boundary and any `PinVertex`ed vertices substituted as **hard** constraints that stay
+  bit-identical. Soft handles are the point: a hard handle transmits C⁰ (a cone at the
+  handle) where a weighted row lets the bending energy round the transition — and the
+  weight trade-off is scale-free because the cotangent Laplacian is dimensionless. The
+  extremes are pinned by tests: w = 1e6 interpolates to &lt; 1e-6, w = 1e-4 barely moves
+  the vertex. `DeformRegion(mesh, selection, handles)` is the ROI form: extract via
+  `MeshRegionOperator`, deform with the rim pinned (the deformer's boundary pinning IS
+  the seam contract — bit-identical rim, so reinsertion welds by exact equality),
+  reinsert; everything outside the region survives bit-for-bit. With no handles the
+  input mesh itself is returned (the energy's exact minimizer). Deterministic.
+- **`DijkstraGraphDistance`** — single/multi-source Dijkstra over the edge graph
+  (weights = Euclidean edge lengths) on Core's `IndexPriorityQueue`: the standard
+  approximate geodesic, deliberately named "graph distance" because edge paths
+  *overestimate* the true geodesic (up to ~8% on a regular triangulation's worst
+  direction — a sphere test pins the bound). Seeds may carry initial distance offsets;
+  `maxDistance` limits the search radius (beyond it vertices report +∞, never a
+  half-relaxed value); exposes `NearestSeed`/`Predecessor`/`PathToSeed` and
+  `SettledOrder` — the ascending-distance settle order the discrete exponential map
+  propagates in. Deterministic.
+- **`MeshIsoCurves`** — iso-contours of a per-vertex scalar field as ordered polylines
+  (g3 `MeshIsoCurves`): marching triangles with exact linear interpolation along edges.
+  The crossing on each undirected edge is computed **once, from the edge's lower-indexed
+  vertex** — the boolean seam lesson applied here, so both adjacent triangles share the
+  endpoint bit-identically (the contract `SdfContours` documents) — and chaining is
+  **combinatorial** (segments meet at mesh edges; an edge has at most two faces, so
+  successors are unique), which is stronger than equality chaining. Contours run with
+  the below-level region on their LEFT in the mesh's orientation; closed loops set
+  `IsClosed` instead of repeating a point; the strict inside rule (`value < level`)
+  makes at-level vertices outside, drops zero-length segments by exact equality, and
+  carries the marching-squares node caveat: a contour through a vertex may split chains
+  there. Deterministic.
+- **`MeshLocalParam`** — local surface parameterization by a **discrete exponential
+  map** (Schmidt, Grimm &amp; Wyvill 2006): per-vertex (u, v) around a seed within a
+  geodesic radius — the decal/engraving/wrapping enabler. Vertices are visited in
+  `DijkstraGraphDistance`'s settle order and each takes the **upwind average** of its
+  already-mapped neighbours' predictions (uv_k plus the 3D step expressed in k's
+  parallel-transported tangent frame), with the seed frame transported vertex-to-vertex
+  by the minimal rotation between vertex normals — computed in the trig-free Rodrigues
+  form `v·c + (axis × v) + axis·(axis·v)/(1 + c)`, exact and stable for every c &gt; −1
+  because (1 − c)/sin² = 1/(1 + c). Behaviour is pinned by tests at all three curvature
+  regimes: **exact** on a plane (transport is the identity, predictions telescope,
+  ≤ 1e-9), **≤ 2% distortion** unrolling a developable tube against its exact
+  development, and on a 35° sphere cap the radial coordinate tracks the geodesic within
+  5% — where genuine Gaussian curvature makes some distortion unavoidable.
+  `referenceDirection` fixes the +u axis (pass one whenever orientation matters).
+  Deterministic.
+- **`MeshIcp`** — point-to-plane iterative closest point (Besl–McKay iteration,
+  Chen–Medioni metric): aligns a point set or a mesh's vertices to a target mesh.
+  Correspondences from `MeshProjectionTarget` (BVH closest point + winning-triangle
+  normal — the oriented projection face-aligned remeshing already paid for), the
+  small-angle 6×6 normal equations assembled **about the correspondence centroid** for
+  conditioning and solved through Core's `SparseCholesky`. Point-to-plane deliberately:
+  the point metric penalizes tangential sliding even when surfaces already touch and
+  zig-zags; the plane metric lets correspondences slide and converges in a handful of
+  iterations. **Refuses loudly rather than regularizing** (the `MateSolver` convention):
+  all-planar correspondences leave 3 DOF free, the 6×6 goes singular, and the result
+  reports `Converged = false` instead of a Tikhonov-damped arbitrary minimum — pinned by
+  a test. `MaxCorrespondenceDistance` rejects outliers for partial overlaps; the
+  reported RMS is measured at the FINAL pose (the loop's residual lags one increment).
+  Deterministic. Landing it also closed a Core todo: `SymmetricEigen3` is now public
+  there with both orderings, and this project's near-verbatim `JacobiEigen3` copy in
+  `MassProperties.cs` is deleted (`Principal()` calls Core's ascending solve).
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with
