@@ -481,6 +481,26 @@ operations. Depends only on `EngrCAD.Core`.
     unbounded `PlaneSurface` still takes the main switch verbatim, so nothing in the
     boolean pipeline's regression surface changed route.
 
+  **Cylinder promotion needs the WHOLE circle** (`Promote` / `WrapsWholeCylinder`). An
+  extrusion of a full circle along its axis IS a `CylinderSurface`, and promoting it is
+  what gives drilled bores exact analytic rim circles. An extrusion of an ARC is not —
+  it is a bounded patch on that cylinder — so the guard samples the ACTUAL generator and
+  requires both that every sample sit on the candidate cylinder and that the accumulated
+  swept angle be a full turn. **The angular half is load-bearing, not belt-and-braces**:
+  a rounded rectangle's corner is a quarter arc extruded, every point of which lies on
+  the full cylinder, so the previous start-point-only guard promoted it and the kernel
+  then reported intersections around 270° of surface the face does not carry. Measured
+  consequence: on a 60 × 40 × 10 plate with Ø12 corners, a THROUGH counterbore anywhere —
+  dead centre, 27.8 mm from every corner, as well as the reported Ø8 hole 10 mm from a
+  corner — failed with `Open splitting curves must start and end outside the face`,
+  because the fabricated far side of a corner cylinder crossed the tool's band and the
+  tracer's open curve ended strictly inside it. Tightening the face-bounds prefilter could
+  not have separated that pair (the two AABBs touch at a corner, and the prefilter is
+  deliberately conservative-over — see todo.md). With the guard in place the same drill is
+  a plain hole, and the near-corner and dead-centre placements remove volumes agreeing to
+  2.6e-10. A quarter-arc corner now also sections against a parallel plane as the exact
+  translated ARC (via the generator-translate path) instead of a whole fabricated circle.
+
   These replaced the marching tracer for these pairs, which was the root cause of
   "subtracting a straight-edged sketch extrusion silently produces an open mesh": the
   tracer breaks the step *after* its parameters leave the domain, so its polyline stopped

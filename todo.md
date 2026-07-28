@@ -1068,16 +1068,16 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   builder over the retained document model; `#load` library conventions for shared
   `.csx` component files; a `dotnet tool` packaging of the script runner so
   `engrcad model.csx` works without the repo.
-- [ ] **B-Rep boolean: near-miss parallel-cylinder pairs produce an open-curve
-  refusal.** Found by a Ø8 counterbore drilled 10 mm from a rounded-rect plate's Ø12
-  corner: the tool cylinder and the corner quarter-cylinder do not intersect on their
-  actual face DOMAINS, but their carriers do (parallel axes 5.66 apart, radii 4+6),
-  the face-bounds prefilter cannot separate AABBs that touch at one corner, and the
-  analytic parallel-cylinder intersection emits carrier lines that end inside the
-  face — `FaceSplitter.SplitByCurve` then throws "Open splitting curves must start
-  and end outside the face" for a boolean that geometrically is a plain hole. Clip
-  the analytic lines against BOTH faces' domains (or reject the pair when the clipped
-  curve is empty) before handing them to the splitter.
+- [ ] **Bounded planar carriers clip; unbounded ones only clip to the query region.**
+  Two `PlaneSurface` faces meeting at an angle produce a line spanning the whole
+  region, so a boss's wall imprints its footprint edge ACROSS the host's entire top
+  face instead of just the shared rim — topologically fine (the splitter keeps only
+  the interior stretches and every fragment classifies correctly), but a flush union
+  leaves the host's top face in more pieces than it needs. `SolidFactory.MakeBox`
+  builds `PlaneSurface` faces; sketch extrusions already get the bounded-parallelogram
+  treatment. Options: give `MakeBox` bounded carriers, or pass `Intersect` a per-pair
+  region (the two faces' bounds, expanded) instead of the whole-model one — the latter
+  touches every pair in the boolean pipeline, so it needs the corpus gate behind it.
 - [ ] **Logging follow-ups** (`ILogger` adoption ✅; kernel extension ✅ landed —
   Interop and BRep take the abstractions reference, weighed per project: optional
   trailing `ILogger` on `BrepBoolean` ops (event 80, sub-steps threaded through),
