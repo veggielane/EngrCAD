@@ -20,30 +20,35 @@ public enum ScrewSeating
 /// counterbore that seats the head; anchoring one in a far body drills that body's
 /// coarse-pitch tap-drill pilot.
 ///
-/// <para><b>Fidelity (v1).</b> The body is a single exact solid of revolution: a
+/// <para><b>Fidelity.</b> The body is a single exact solid of revolution: a
 /// cylindrical head of diameter dk and height k on a plain cylindrical shank of the
-/// nominal diameter. There is <b>no hex socket recess and no modeled thread</b> — model
+/// nominal diameter. The hexagon socket recess is <b>opt-in</b> (the
+/// <c>hexSocket</c> constructor flag — an exact pocket subtraction, see
+/// <see cref="HexSocketRecess"/>); there is <b>no modeled thread</b> — model
 /// real threads with <see cref="Shape.ExternalThread(ThreadSpec, double, double, bool)"/>
 /// when you need them. The dimensions that matter for fit (clearance, counterbore, tap
 /// drill, head diameter, head height, length) are the standard ones.</para>
 /// </summary>
 public sealed class SocketHeadCapScrew : HardwareComponent
 {
-    // ISO 4762 nominal head diameter dk. The head height is k = d exactly (that IS the
-    // standard's rule for this family), so only dk needs a table.
+    // ISO 4762 nominal head diameter dk, hex socket across-flats s, and key engagement
+    // depth t. The head height is k = d exactly (that IS the standard's rule for this
+    // family), so only these three need a table.
     // VERIFY against your supplier's datasheet before production use — head diameters
     // vary between the ISO 4762 and older DIN 912 revisions for some sizes.
-    private static readonly Dictionary<double, double> HeadDiameters = new()
+    private sealed record Row(double HeadDiameter, double SocketAcrossFlats, double SocketDepth);
+
+    private static readonly Dictionary<double, Row> Table = new()
     {
-        [2.0] = 3.8,
-        [2.5] = 4.5,
-        [3.0] = 5.5,
-        [4.0] = 7.0,
-        [5.0] = 8.5,
-        [6.0] = 10.0,
-        [8.0] = 13.0,
-        [10.0] = 16.0,
-        [12.0] = 18.0,
+        [2.0] = new(3.8, 1.5, 1.0),
+        [2.5] = new(4.5, 2.0, 1.1),
+        [3.0] = new(5.5, 2.5, 1.3),
+        [4.0] = new(7.0, 3.0, 2.0),
+        [5.0] = new(8.5, 4.0, 2.5),
+        [6.0] = new(10.0, 5.0, 3.0),
+        [8.0] = new(13.0, 6.0, 4.0),
+        [10.0] = new(16.0, 8.0, 5.0),
+        [12.0] = new(18.0, 10.0, 6.0),
     };
 
     private readonly HoleSpec _hostHole;
@@ -52,15 +57,22 @@ public sealed class SocketHeadCapScrew : HardwareComponent
     /// <param name="length">Shank length under the head — how ISO 4762 lengths are measured.</param>
     /// <param name="seating">Whether the head stands proud or sits in a counterbore.</param>
     /// <param name="fit">ISO 273 clearance fit of the through hole.</param>
+    /// <param name="hexSocket">Model the hexagon socket recess in the head top. Opt-in:
+    /// the recess is exact (its rim lies in a planar head top, so the subtraction is the
+    /// same exact pocket case as sketch pockets — see <see cref="HexSocketRecess"/> for
+    /// why the socketed body is rebuilt from cylinder primitives) but costs two booleans
+    /// per catalogue item at lowering time, and most assemblies never look into a screw
+    /// head.</param>
     public SocketHeadCapScrew(
         double size, double length,
         ScrewSeating seating = ScrewSeating.Counterbored,
-        ClearanceFit fit = ClearanceFit.Normal)
+        ClearanceFit fit = ClearanceFit.Normal,
+        bool hexSocket = false)
     {
-        if (!HeadDiameters.TryGetValue(size, out double headDiameter))
+        if (!Table.TryGetValue(size, out var row))
             throw new ArgumentOutOfRangeException(nameof(size),
                 $"M{size:g3} is not in the ISO 4762 table (available: " +
-                $"{string.Join(", ", HeadDiameters.Keys.OrderBy(k => k).Select(k => $"M{k:g3}"))}).");
+                $"{string.Join(", ", Table.Keys.OrderBy(k => k).Select(k => $"M{k:g3}"))}).");
         if (length <= 0)
             throw new ArgumentOutOfRangeException(nameof(length));
 
@@ -68,7 +80,10 @@ public sealed class SocketHeadCapScrew : HardwareComponent
         Length = length;
         Seating = seating;
         Fit = fit;
-        HeadDiameter = headDiameter;
+        HeadDiameter = row.HeadDiameter;
+        HexSocket = hexSocket;
+        SocketAcrossFlats = row.SocketAcrossFlats;
+        SocketDepth = row.SocketDepth;
         Thread = StandardThreads.Metric(size);
         _hostHole = seating == ScrewSeating.Counterbored
             ? StandardHoles.Counterbored(size, fit)
@@ -93,8 +108,20 @@ public sealed class SocketHeadCapScrew : HardwareComponent
     /// <summary>ISO 4762 head height k, which equals the nominal diameter.</summary>
     public double HeadHeight => Size;
 
+    /// <summary>Whether the body models the hexagon socket recess.</summary>
+    public bool HexSocket { get; }
+
+    /// <summary>Hex socket across-flats s (the key size).</summary>
+    public double SocketAcrossFlats { get; }
+
+    /// <summary>Hex socket key engagement depth t.</summary>
+    public double SocketDepth { get; }
+
     /// <summary>The coarse-pitch thread this screw carries (ISO 261/262).</summary>
     public ThreadSpec Thread { get; }
+
+    /// <inheritdoc />
+    public override ThreadSpec? CarriesThread => Thread;
 
     /// <summary>The hole recipe this screw cuts in the body it passes through.</summary>
     public HoleSpec HostHole => _hostHole;
@@ -113,18 +140,35 @@ public sealed class SocketHeadCapScrew : HardwareComponent
     {
         double headRadius = HeadDiameter / 2;
         double shankRadius = Size / 2;
-        // One axis-touching full-turn revolve (exact in every representation): head
-        // above the bearing face at z = 0, shank below it.
-        var profile = Sketch.Polygon(
-        [
-            new(0, HeadHeight),
-            new(headRadius, HeadHeight),
-            new(headRadius, 0),
-            new(shankRadius, 0),
-            new(shankRadius, -Length),
-            new(0, -Length),
-        ]);
-        return Shape.Revolve(profile);
+        if (!HexSocket)
+        {
+            // One axis-touching full-turn revolve (exact in every representation): head
+            // above the bearing face at z = 0, shank below it.
+            var profile = Sketch.Polygon(
+            [
+                new(0, HeadHeight),
+                new(headRadius, HeadHeight),
+                new(headRadius, 0),
+                new(shankRadius, 0),
+                new(shankRadius, -Length),
+                new(0, -Length),
+            ]);
+            return Shape.Revolve(profile);
+        }
+
+        // The socketed body cannot pocket the revolve: a full-turn revolve's cap is a
+        // RevolvedSurface with a POLE at the axis, and the hex rim would wrap that pole —
+        // machinery the exact boolean does not have (see HexSocketRecess). So it is built
+        // from primitives whose caps are PLANES: head cylinder minus the exact hex pocket,
+        // unioned with a shank that overlaps INTO the head (a transverse circle seam,
+        // never a coplanar pair), stopping halfway below the pocket floor. Identical
+        // geometry, one extra boolean per catalogue item.
+        double overlap = (HeadHeight - SocketDepth) / 2;
+        var head = Shape.Cylinder(headRadius, HeadHeight).Translate(0, 0, HeadHeight / 2);
+        var socketed = HexSocketRecess.Cut(head, SocketAcrossFlats, SocketDepth, HeadHeight);
+        var shank = Shape.Cylinder(shankRadius, Length + overlap)
+            .Translate(0, 0, (overlap - Length) / 2);
+        return socketed | shank;
     }
 
     /// <summary>Clearance hole (plus counterbore when counterbored), through the host.</summary>
@@ -196,6 +240,15 @@ public sealed class ThreadedInsert : HardwareComponent
     public override double InsertedLength => BodyLength;
 
     public override PartColor Color => Palette.Brass;
+
+    /// <summary>The installed insert IS a thread provider: a screw can anchor into a
+    /// placed insert instead of cutting its own tap pilot (see
+    /// <see cref="ComponentAssembly.PlaceThrough(HardwareComponent, IReadOnlyList{Vector2d}, SketchPlane, ComponentAssembly, SketchPlane, ComponentFeature)"/>).</summary>
+    public override ThreadSpec? ProvidesThread => Thread;
+
+    /// <summary>A screw reaching past the insert's body bottoms out in the unthreaded
+    /// pilot clearance below it, so engagement is capped at the body length.</summary>
+    public override double? MaximumEngagement => BodyLength;
 
     protected override Shape BuildBody()
     {
@@ -321,20 +374,23 @@ public sealed class DowelPin : HardwareComponent
 
 /// <summary>
 /// The standard component catalogue — real hardware whose placement both prepares the
-/// host and assembles itself (see <see cref="HardwareComponent"/>). v1 is deliberately
-/// small and correct rather than broad: one screw family, one insert, one pin. The
-/// dimensions come from the same datasheet-driven tables as <see cref="StandardHoles"/>
-/// and <see cref="StandardThreads"/>, and anything transcribed rather than derived from
-/// a stated formula carries a verify-against-the-datasheet warning.
+/// host and assembles itself (see <see cref="HardwareComponent"/>). Three screw families
+/// (socket head, button head, countersunk), a threaded insert, a dowel pin, hex nuts,
+/// plain washers, and a deep-groove ball bearing family (the second half lives in
+/// <c>StandardHardware.cs</c>). The dimensions come from the same datasheet-driven tables
+/// as <see cref="StandardHoles"/> and <see cref="StandardThreads"/>, and anything
+/// transcribed rather than derived from a stated formula carries a
+/// verify-against-the-datasheet warning.
 /// </summary>
-public static class StandardComponents
+public static partial class StandardComponents
 {
     /// <summary>A hexagon socket head cap screw (ISO 4762 / DIN 912).</summary>
     public static SocketHeadCapScrew CapScrew(
         double size, double length,
         ScrewSeating seating = ScrewSeating.Counterbored,
-        ClearanceFit fit = ClearanceFit.Normal) =>
-        new(size, length, seating, fit);
+        ClearanceFit fit = ClearanceFit.Normal,
+        bool hexSocket = false) =>
+        new(size, length, seating, fit, hexSocket);
 
     /// <summary>A Tappex Trisert® self-tapping threaded insert (⚠ verify the table).</summary>
     public static ThreadedInsert TrisertInsert(double size) => new(size);

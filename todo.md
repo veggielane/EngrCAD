@@ -974,14 +974,18 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   instance-specific frame overlays on the flatten seam, a real design task. Mechanisms
   (above) can now assume cross-level mates exist: a linkage whose members are
   sub-assemblies is jointable via occurrence paths.
-- [ ] **Standard component library — breadth and fidelity** (v1 landed:
-  `HardwareComponent` + `ComponentFeature` + `ComponentAssembly`; ISO 4762 SHCS, Tappex
-  Trisert, ISO 2338 dowel; the full two-body fastener stack). Follow-ups: more families
-  (ISO 7380 button, ISO 10642 csk, nuts, washers, bearings); higher body fidelity (hex
-  socket recesses, a modeled thread on the shank via `Shape.ExternalThread`,
-  knurled/flanged inserts, ISO 2338's crowned pin ends); and stacks that anchor into a
-  *placed component* — today `PlaceThrough` always cuts the screw's own tapped pilot in
-  the far body, so anchoring into an insert means placing the insert separately.
+- [ ] **Standard component library — remaining fidelity** (breadth landed: ISO 7380
+  button, ISO 10642 csk, ISO 4032 nuts, ISO 7089 washers, 60x deep groove bearings,
+  the opt-in exact hex socket on `CapScrew`, and `PlaceThrough(..., anchorInto:)`
+  anchoring into a placed insert or nut with engagement/thread/point checks).
+  Remaining: a modeled thread on the shank via `Shape.ExternalThread`; knurled/flanged
+  inserts; ISO 2338's crowned pin ends; **hex sockets for csk heads** — the head top is
+  planar but the primitive rebuild puts cone and shank tangent along a shared rim, so
+  it needs either tangent-union support in the exact boolean or planar ⊥-axis caps on
+  full-turn revolves (the cap is a `RevolvedSurface` with a pole today, which is also
+  why the socketed cap screw is rebuilt from cylinder primitives); washer/nut stack
+  seating (a screw seated ON a placed washer rather than on the face); bearing shaft
+  seats (`PrepareAnchor` cutting the shaft's seat when bearings join a stack).
 - [ ] **Frame3d enabled next steps** (the `TopPlane` behaviour question is settled: both
   conventions are now expressible — `PlaneRef.TopPlane` keeps world (0,0,z) origins,
   `PlaneRef.OnTopFace` gives the face's own frame — so it is a per-feature choice rather

@@ -108,6 +108,94 @@ public sealed class ComponentAssembly
         ComponentAssembly anchor,
         SketchPlane anchorFace)
     {
+        double engagement = StackEngagement(component, points, face, anchor, anchorFace);
+
+        var near = Place(component, points, face);
+        var axis = face.Normal;
+        var anchorPoints = points.Select(p => Project(face.ToWorld(p), anchorFace, axis)).ToList();
+        anchor.History.Add(new ComponentFeature(component, anchorPoints)
+        {
+            Face = anchorFace,
+            Role = ComponentRole.Anchor,
+            Depth = component.AnchorDepth(engagement),
+            Assemble = false,
+            Name = $"{component.Designation} anchor",
+        });
+        return near;
+    }
+
+    /// <summary>
+    /// The fastener stack anchored into a PLACED thread provider — an insert or a nut
+    /// already placed on <paramref name="anchor"/> — instead of cutting the screw's own
+    /// tap pilot. The far body gets NO new preparation (the provider's placement already
+    /// cut its pilot or clearance); what this overload adds is the checking: the provider
+    /// must actually provide the thread the screw carries
+    /// (<see cref="HardwareComponent.ProvidesThread"/> vs
+    /// <see cref="HardwareComponent.CarriesThread"/>), the engagement — measured to
+    /// <paramref name="anchorFace"/>, the face the provider seats on — must satisfy the
+    /// provider's <see cref="HardwareComponent.MinimumEngagement"/> (a nut wants the screw
+    /// through its full height) and <see cref="HardwareComponent.MaximumEngagement"/> (a
+    /// blind insert bottoms out), and each placement point must project onto one of the
+    /// provider's own points, so a screw cannot silently miss its insert.
+    /// </summary>
+    /// <param name="anchorFace">The face the PROVIDER seats on: the mate face for an
+    /// insert, the far body's outer face for a nut.</param>
+    /// <param name="anchorInto">The provider's placement on <paramref name="anchor"/>
+    /// (the feature <see cref="Place"/> returned).</param>
+    /// <remarks>The point check runs only when the provider's seating face is explicit;
+    /// a provider seated by a semantic reference (<c>PlaneRef.TopPlane</c>) resolves per
+    /// regeneration, so its points cannot be checked at call time and are trusted.</remarks>
+    public ComponentFeature PlaceThrough(
+        HardwareComponent component,
+        IReadOnlyList<Vector2d> points,
+        SketchPlane face,
+        ComponentAssembly anchor,
+        SketchPlane anchorFace,
+        ComponentFeature anchorInto)
+    {
+        ArgumentNullException.ThrowIfNull(anchorInto);
+        double engagement = StackEngagement(component, points, face, anchor, anchorFace);
+
+        if (!anchor.History.Features.Any(f => ReferenceEquals(f, anchorInto)))
+            throw new ArgumentException(
+                "That placement is not part of the anchor body's model.", nameof(anchorInto));
+
+        var provider = anchorInto.Component;
+        var provided = provider.ProvidesThread
+            ?? throw new ArgumentException(
+                $"{provider.Designation} provides no thread to anchor into.", nameof(anchorInto));
+        var carried = component.CarriesThread
+            ?? throw new ArgumentException(
+                $"{component.Designation} carries no thread to engage {provider.Designation}.",
+                nameof(component));
+        if (provided.Designation != carried.Designation)
+            throw new ArgumentException(
+                $"Thread mismatch: {component.Designation} carries {carried.Designation} but " +
+                $"{provider.Designation} provides {provided.Designation}.", nameof(anchorInto));
+
+        if (provider.MinimumEngagement is { } minimum && engagement < minimum)
+            throw new ArgumentException(
+                $"{component.Designation} engages only {engagement:g4} of {provider.Designation}, " +
+                $"which needs at least {minimum:g4} — use a longer component.", nameof(component));
+        if (provider.MaximumEngagement is { } maximum && engagement > maximum)
+            throw new ArgumentException(
+                $"{component.Designation} would engage {engagement:g4} but {provider.Designation} " +
+                $"accepts at most {maximum:g4} — it bottoms out. Use a shorter component.",
+                nameof(component));
+
+        ValidateAnchorPoints(points, face, anchorFace, anchorInto);
+        return Place(component, points, face);
+    }
+
+    /// <summary>Shared stack validation: two distinct bodies, parallel faces, positive
+    /// grip, positive engagement. Returns the engagement below the anchor face.</summary>
+    private double StackEngagement(
+        HardwareComponent component,
+        IReadOnlyList<Vector2d> points,
+        in SketchPlane face,
+        ComponentAssembly anchor,
+        in SketchPlane anchorFace)
+    {
         ArgumentNullException.ThrowIfNull(component);
         ArgumentNullException.ThrowIfNull(anchor);
         ArgumentNullException.ThrowIfNull(points);
@@ -137,18 +225,40 @@ public sealed class ComponentAssembly
             throw new ArgumentException(
                 $"{component.Designation} reaches {component.InsertedLength:g4} below its seat but the " +
                 $"anchor face is {grip:g4} away — nothing engages. Use a longer component.", nameof(component));
+        return engagement;
+    }
 
-        var near = Place(component, points, face);
-        var anchorPoints = points.Select(p => Project(face.ToWorld(p), anchorFace, axis)).ToList();
-        anchor.History.Add(new ComponentFeature(component, anchorPoints)
+    /// <summary>Each fastener point must project onto one of the provider's placement
+    /// points (weld tier — both sets are exactly-constructed coordinates). Skipped when
+    /// the provider's face is a semantic reference resolved per regeneration.</summary>
+    private static void ValidateAnchorPoints(
+        IReadOnlyList<Vector2d> points,
+        in SketchPlane face,
+        in SketchPlane anchorFace,
+        ComponentFeature anchorInto)
+    {
+        if (anchorInto.Face.RequiresBody)
+            return;
+        var providerPlane = anchorInto.Face.Resolve(new FeatureContext(null), nameof(ComponentFeature.Face));
+
+        var axis = face.Normal;
+        // The provider must actually be seated on the anchor face this stack measures to.
+        if (Math.Abs(providerPlane.Normal.Dot(axis)) < 1 - 1e-9
+            || Math.Abs((providerPlane.Origin - anchorFace.Origin).Dot(axis)) > 1e-9)
+            throw new ArgumentException(
+                $"{anchorInto.Component.Designation} is not seated on the anchor face — a stack " +
+                "must anchor into a provider on the face it measures engagement to.", nameof(anchorInto));
+
+        foreach (var point in points)
         {
-            Face = anchorFace,
-            Role = ComponentRole.Anchor,
-            Depth = component.AnchorDepth(engagement),
-            Assemble = false,
-            Name = $"{component.Designation} anchor",
-        });
-        return near;
+            var projected = Project(face.ToWorld(point), providerPlane, axis);
+            if (!anchorInto.Points.Any(p => (p - projected).Length < 1e-9))
+                throw new ArgumentException(
+                    $"No {anchorInto.Component.Designation} at projected point " +
+                    $"({projected.X:g6}, {projected.Y:g6}) — the fastener would miss the provider. " +
+                    $"Provider points: {string.Join(", ", anchorInto.Points.Select(p => $"({p.X:g6}, {p.Y:g6})"))}.",
+                    nameof(points));
+        }
     }
 
     /// <summary>Suppresses (or restores) a placement: the host loses its bore AND the
