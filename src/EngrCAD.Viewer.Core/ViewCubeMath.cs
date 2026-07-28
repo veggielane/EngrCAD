@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
 
@@ -193,27 +194,21 @@ public static class ViewCubeMath
 
     /// <summary>The standard view names every front end offers (toolbar buttons,
     /// <c>screenshot</c>'s named views, the remote-control <c>set_view</c> method), in
-    /// discovery order.</summary>
-    public static IReadOnlyList<string> StandardViewNames { get; } =
-        ["iso", "front", "back", "left", "right", "top", "bottom"];
+    /// discovery order. Delegates to <see cref="StandardViews.Names"/> — see
+    /// <see cref="DirectionFor"/>.</summary>
+    public static IReadOnlyList<string> StandardViewNames => StandardViews.Names;
 
     /// <summary>
     /// The view direction (target toward eye) of a standard view name, or null for an
-    /// unknown name — the name table behind every front end's named views, kept beside
-    /// <see cref="PoseFor"/> so no consumer re-types the vectors. "iso" is the
-    /// toolbar's front-right-top corner.
+    /// unknown name — the name table behind every front end's named views.
+    ///
+    /// <para>The vectors themselves live in <see cref="StandardViews"/>, one layer
+    /// down in the modelling assembly, because a DRAWING SHEET needs the same table
+    /// and is built with no viewer in the room: a sheet's front view and this
+    /// widget's Front button must be the same direction, and the only way to
+    /// guarantee that is to read one table.</para>
     /// </summary>
-    public static Vector3d? DirectionFor(string view) => view.ToLowerInvariant() switch
-    {
-        "front" => new Vector3d(0, -1, 0),
-        "back" => new Vector3d(0, 1, 0),
-        "left" => new Vector3d(-1, 0, 0),
-        "right" => new Vector3d(1, 0, 0),
-        "top" => new Vector3d(0, 0, 1),
-        "bottom" => new Vector3d(0, 0, -1),
-        "iso" => new Vector3d(1, -1, 1),
-        _ => null,
-    };
+    public static Vector3d? DirectionFor(string view) => StandardViews.DirectionFor(view);
 
     /// <summary>Human-readable name of a hit direction ("front", "front-right-top").</summary>
     public static string Label(in Vector3d direction)

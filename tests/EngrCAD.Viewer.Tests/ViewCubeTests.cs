@@ -442,4 +442,52 @@ public class ViewCubeTests
     [InlineData(-1, 1, -1, "back-left-bottom")]
     public void HitDirectionsNameThemselves(double x, double y, double z, string expected) =>
         Assert.Equal(expected, ViewCubeMath.Label(new Vector3d(x, y, z)));
+
+    /// <summary>
+    /// The widget and a DRAWING SHEET must mean the same thing by "front". They can only
+    /// be sure of that by reading one table, so the vectors live in
+    /// <c>EngrCAD.Modeling.StandardViews</c> (beneath both) and this is the assertion
+    /// that the delegation is real — read FROM the source, never re-typed here, because
+    /// a copied table agrees with a broken implementation as happily as a correct one.
+    /// </summary>
+    [Fact]
+    public void StandardViewTableIsTheModellingLayers()
+    {
+        Assert.Equal(EngrCAD.Modeling.StandardViews.Names, ViewCubeMath.StandardViewNames);
+        foreach (string name in ViewCubeMath.StandardViewNames)
+        {
+            Assert.Equal(
+                EngrCAD.Modeling.StandardViews.DirectionFor(name),
+                ViewCubeMath.DirectionFor(name));
+        }
+        Assert.Null(ViewCubeMath.DirectionFor("sideways"));
+    }
+
+    /// <summary>
+    /// A drawing view's sheet frame looks along the cube's direction EXACTLY; the orbit
+    /// camera's own pose for the same name is that direction clamped
+    /// <see cref="ViewCubeMath.PitchLimit"/> shy of the pole, which is a property of a
+    /// LookAt up vector and not a disagreement about what "top" means. Pinning both
+    /// halves is what makes the difference legible instead of a mystery 5e-5.
+    /// </summary>
+    [Theory]
+    [InlineData("front")]
+    [InlineData("back")]
+    [InlineData("left")]
+    [InlineData("right")]
+    [InlineData("top")]
+    [InlineData("bottom")]
+    public void SheetFrameLooksAlongTheCubesDirection(string name)
+    {
+        var direction = ViewCubeMath.DirectionFor(name)!.Value;
+        var sheet = EngrCAD.Modeling.StandardViews.SheetFrame(direction);
+        Assert.Equal(1, direction.Normalized().Dot(sheet.Z), 12);
+
+        var (yaw, pitch) = ViewCubeMath.PoseFor(direction, 0);
+        double clamped = ViewCubeMath.ViewDirection(yaw, pitch).Dot(sheet.Z);
+        // The whole gap is the pitch clamp: at most (pi/2 - PitchLimit) of angle, and
+        // exactly zero for the four horizontal views.
+        Assert.True(clamped >= Math.Cos(Math.PI / 2 - ViewCubeMath.PitchLimit) - 1e-12,
+            $"'{name}' camera direction is {Math.Acos(clamped):G3} rad off the sheet frame");
+    }
 }

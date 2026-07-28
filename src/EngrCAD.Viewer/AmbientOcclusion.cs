@@ -362,8 +362,11 @@ internal static class AmbientOcclusion
             {
                 foreach (int triangle in node.Items)
                 {
-                    if (RayTriangle(ray, Vertex(render, triangle, 0), Vertex(render, triangle, 1),
-                            Vertex(render, triangle, 2), out double t) && t < nearest)
+                    // t in (0, 1): the ray direction IS the search radius, so a hit
+                    // beyond its tip is outside the hemisphere sample's reach.
+                    if (Intersect3d.RayTriangle(ray, Vertex(render, triangle, 0),
+                            Vertex(render, triangle, 1), Vertex(render, triangle, 2), out double t)
+                        && t > 0 && t < nearest)
                         nearest = t;
                 }
             }
@@ -414,35 +417,4 @@ internal static class AmbientOcclusion
         return new Vector3d(mesh.Positions[i * 3], mesh.Positions[i * 3 + 1], mesh.Positions[i * 3 + 2]);
     }
 
-    /// <summary>
-    /// Moller-Trumbore any-hit test; t is in units of the (unnormalized) ray direction,
-    /// so a hit inside the search radius has t &lt; 1. Deliberately separate from the
-    /// picking copy in <see cref="ViewportControl"/>: that one wants the nearest hit and
-    /// a world point for the measure tool, this one only asks whether a hemisphere ray
-    /// escapes.
-    /// </summary>
-    private static bool RayTriangle(
-        in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
-    {
-        t = 0;
-        var e1 = b - a;
-        var e2 = c - a;
-        var p = ray.Direction.Cross(e2);
-        double determinant = e1.Dot(p);
-        // Round-off-scale parallel-ray guard (a shading estimate, not model geometry:
-        // a missed edge-on triangle costs a fraction of one vertex's occlusion).
-        if (Math.Abs(determinant) < 1e-15)
-            return false;
-        double inverse = 1.0 / determinant;
-        var s = ray.Origin - a;
-        double u = s.Dot(p) * inverse;
-        if (u < 0 || u > 1)
-            return false;
-        var q = s.Cross(e1);
-        double v = ray.Direction.Dot(q) * inverse;
-        if (v < 0 || u + v > 1)
-            return false;
-        t = e2.Dot(q) * inverse;
-        return t > 0 && t < 1;
-    }
 }
