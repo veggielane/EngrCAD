@@ -143,6 +143,7 @@ public sealed class Mechanism
 {
     private readonly List<Joint> _joints = [];
     private readonly List<AuxiliaryConstraint> _couplings = [];
+    private readonly List<Coupling> _pairCouplings = [];
 
     public Mechanism(Assembly assembly)
     {
@@ -160,6 +161,9 @@ public sealed class Mechanism
 
     /// <summary>The joints, in the order added.</summary>
     public IReadOnlyList<Joint> Joints => _joints;
+
+    /// <summary>The higher-pair couplings (gears, belts, cams), in the order added.</summary>
+    public IReadOnlyList<Coupling> Couplings => _pairCouplings;
 
     /// <summary>Pins an occurrence — the mechanism's frame/datum (chainable).</summary>
     public Mechanism Ground(Occurrence occurrence)
@@ -198,6 +202,23 @@ public sealed class Mechanism
     public Mechanism Add(Mate mate)
     {
         Mates.Add(mate);
+        return this;
+    }
+
+    /// <summary>Adds a higher-pair coupling (gear, belt, cam) between joints already
+    /// in this mechanism — one more residual row, no new solver.</summary>
+    public Mechanism Add(Coupling coupling)
+    {
+        ArgumentNullException.ThrowIfNull(coupling);
+        foreach (var joint in coupling.Joints)
+        {
+            if (!_joints.Contains(joint))
+                throw new ArgumentException(
+                    $"Coupling '{coupling.Name}' references joint '{joint.Name}', which has not been " +
+                    "added to this mechanism. Add the joint first.", nameof(coupling));
+        }
+        _couplings.Add(coupling.Constraint);
+        _pairCouplings.Add(coupling);
         return this;
     }
 
