@@ -32,11 +32,13 @@ namespace EngrCAD.Fea;
 /// faces fall out as the boundary with no tie to break.</para>
 ///
 /// <para><b>Recovery is verified, not assumed.</b> Every boundary face must lie inside a
-/// surface patch; one that does not is named — with its coordinates and the patch it failed
-/// against — after the refinement budget runs out. Refinement is red (four-way) subdivision
-/// of the offending patches' sub-triangles, so every child is SIMILAR to its parent: shape
-/// never degrades and circumradii halve per level, which is what makes the loop converge
-/// rather than merely usually converge.</para>
+/// surface patch; one that does not is named — with its coordinates and the surface tags it
+/// touches — once the refinement budget runs out. The response is Ruppert's ENCROACHMENT
+/// rule: red (four-way) subdivision of exactly the sub-triangles whose diametral ball
+/// contains an offending vertex. Red subdivision makes every child SIMILAR to its parent, so
+/// shape never degrades and circumradii halve per level, which is what makes the loop
+/// converge rather than merely usually converge; and encroachment keeps the response LOCAL,
+/// which is what stops one bad face cascading a whole box face per round.</para>
 ///
 /// <para><b>Surface fidelity contract.</b> Boundary Steiner points are edge midpoints
 /// computed in double precision, so they lie on the input surface to round-off rather than
@@ -196,7 +198,7 @@ public static class TetMesher
 
             if (options.RefineQuality)
             {
-                RefineQuality(label, region);
+                RefineQuality(label);
                 (label, region) = Recover();
             }
             progress?.Report(0.85);
@@ -311,13 +313,21 @@ public static class TetMesher
                 if (round >= options.MaxRecoveryRounds)
                 {
                     var worst = offending[0];
+                    var nearbyTags = new SortedSet<int>();
+                    foreach (int v in (int[])[worst.V0, worst.V1, worst.V2])
+                        if (v < _vertexPatches.Count)
+                            foreach (int p in _vertexPatches[v])
+                                nearbyTags.Add(_patches[p].Tag);
+
                     throw new TetMeshException(
                         $"Boundary recovery did not converge after {options.MaxRecoveryRounds} rounds: " +
                         $"{offending.Count} faces separate the interior from the exterior without lying " +
                         $"on the input surface. The first spans {_points[worst.V0]} / {_points[worst.V1]} " +
-                        $"/ {_points[worst.V2]}. A tetrahedron straddles the boundary there, which is " +
-                        "usually a sliver triangle or a near-tangential pair of surfaces; remesh the " +
-                        "surface (Remesher.Remesh) before tetrahedralizing.");
+                        $"/ {_points[worst.V2]}, touching surface tag(s) " +
+                        $"{(nearbyTags.Count > 0 ? string.Join(", ", nearbyTags) : "none")}. A tetrahedron " +
+                        "straddles the boundary there, which is usually a sliver triangle or a " +
+                        "near-tangential pair of surfaces; remesh the surface (Remesher.Remesh) before " +
+                        "tetrahedralizing.");
                 }
 
                 SplitEncroached(offending);
@@ -673,7 +683,7 @@ public static class TetMesher
             }
         }
 
-        private void RefineQuality(Side[] label, int[] region)
+        private void RefineQuality(Side[] label)
         {
             for (int pass = 0; pass < 24; pass++)
             {
@@ -726,7 +736,7 @@ public static class TetMesher
                 if (encroached.Count > 0)
                 {
                     SplitSubTriangles(encroached);
-                    (label, region) = Classify();
+                    (label, _) = Classify();
                     continue;
                 }
 
@@ -806,7 +816,7 @@ public static class TetMesher
                 // classification pass over every element, which at refinement scale dominated
                 // the whole mesher. The boundary is re-verified ONCE after the loop, where a
                 // disturbance would still be caught and repaired.
-                (label, region) = Classify();
+                (label, _) = Classify();
             }
         }
 

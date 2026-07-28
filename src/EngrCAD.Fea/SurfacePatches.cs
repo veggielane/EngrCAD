@@ -33,10 +33,8 @@ internal sealed class SurfacePatch
     /// <summary>Indices of the input triangles making up this patch.</summary>
     public List<int> Triangles { get; } = [];
 
-    /// <summary>The patch's total area.</summary>
-    public double Area { get; set; }
-
-    /// <summary>The tag every triangle in this patch shares.</summary>
+    /// <summary>The tag every triangle in this patch shares — the invariant that keeps
+    /// boundary-condition attribution honest, and what a recovery failure names.</summary>
     public int Tag { get; init; }
 }
 
@@ -58,13 +56,11 @@ internal static class SurfacePatches
     {
         int n = triangles.Count;
         var normals = new Vector3d[n];
-        var areas = new double[n];
         for (int i = 0; i < n; i++)
         {
             var t = triangles[i];
             var raw = (positions[t[1]] - positions[t[0]]).Cross(positions[t[2]] - positions[t[0]]);
             double length = raw.Length;
-            areas[i] = 0.5 * length;
             normals[i] = length > 0 ? raw / length : new Vector3d(0, 0, 1);
         }
 
@@ -131,7 +127,6 @@ internal static class SurfacePatches
                 result.Add(patch);
             }
             patch.Triangles.Add(i);
-            patch.Area += areas[i];
         }
         return result;
     }

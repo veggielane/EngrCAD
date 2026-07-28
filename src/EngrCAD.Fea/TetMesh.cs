@@ -200,6 +200,85 @@ public sealed class TetMesh
         return EngrCAD.Mesh.HalfEdgeMesh.Build(positions, faces);
     }
 
+    /// <summary>Vertex indices of a tetrahedron's four faces, wound OUTWARD for the mesh's
+    /// positive-orientation convention. Face i is the face opposite vertex i.</summary>
+    private static readonly int[][] FaceTable =
+    [
+        [1, 2, 3],
+        [0, 3, 2],
+        [0, 1, 3],
+        [0, 2, 1],
+    ];
+
+    /// <summary>
+    /// The outer surface of a SUBSET of the elements — the cutaway view. Every face used by
+    /// exactly one selected element is emitted in that element's outward winding, so the
+    /// result is a closed manifold whenever the selection is (and the interior elements a
+    /// section plane exposes become visible geometry rather than an abstraction).
+    /// </summary>
+    /// <param name="includeTet">Predicate on element index.</param>
+    /// <returns>A surface mesh of the selected elements' boundary.</returns>
+    public EngrCAD.Mesh.HalfEdgeMesh SurfaceOf(Func<int, bool> includeTet)
+    {
+        ArgumentNullException.ThrowIfNull(includeTet);
+
+        var selected = new bool[TetCount];
+        for (int t = 0; t < TetCount; t++)
+            selected[t] = includeTet(t);
+
+        // Count how many SELECTED elements use each face; a face used once is on the cut.
+        var usage = new Dictionary<(int, int, int), int>();
+        for (int t = 0; t < TetCount; t++)
+        {
+            if (!selected[t])
+                continue;
+            var tet = GetTet(t);
+            for (int f = 0; f < 4; f++)
+            {
+                var key = SortedKey(tet[FaceTable[f][0]], tet[FaceTable[f][1]], tet[FaceTable[f][2]]);
+                usage[key] = usage.GetValueOrDefault(key) + 1;
+            }
+        }
+
+        var map = new Dictionary<int, int>();
+        var positions = new List<Vector3d>();
+        var faces = new List<int[]>();
+
+        int Map(int v)
+        {
+            if (map.TryGetValue(v, out int mapped))
+                return mapped;
+            mapped = positions.Count;
+            map[v] = mapped;
+            positions.Add(_positions[v]);
+            return mapped;
+        }
+
+        for (int t = 0; t < TetCount; t++)
+        {
+            if (!selected[t])
+                continue;
+            var tet = GetTet(t);
+            for (int f = 0; f < 4; f++)
+            {
+                int a = tet[FaceTable[f][0]], b = tet[FaceTable[f][1]], c = tet[FaceTable[f][2]];
+                if (usage[SortedKey(a, b, c)] != 1)
+                    continue;
+                faces.Add([Map(a), Map(b), Map(c)]);
+            }
+        }
+
+        return EngrCAD.Mesh.HalfEdgeMesh.Build(positions, faces);
+    }
+
+    private static (int, int, int) SortedKey(int a, int b, int c)
+    {
+        if (a > b) (a, b) = (b, a);
+        if (b > c) (b, c) = (c, b);
+        if (a > b) (a, b) = (b, a);
+        return (a, b, c);
+    }
+
     /// <summary>Six times the signed volume of a tetrahedron, as a plain double.</summary>
     internal static double SignedVolume(in Vector3d a, in Vector3d b, in Vector3d c, in Vector3d d)
     {

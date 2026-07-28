@@ -90,10 +90,10 @@ two interior-facing faces fall out as the boundary with no tie to break.
   therefore a sum of positive terms with no cancellation.
 - **Surface fidelity**: boundary Steiner points are edge midpoints computed in double
   precision, so they lie on the input surface to round-off rather than exactly. The enclosed
-  volume matches the input surface's to relative round-off — measured 6e-16 to 4.4e-14 across
-  the fixtures, well inside the 1e-9 the FEA consumer needs. What refinement changes is the
-  *faceting*: a boundary facet is a piece of an input triangle, and
-  `TetFacet.SourceTriangle` names which one, so face tags survive refinement.
+  volume matches the input surface's to relative round-off — measured **1.8e-15 to 1.1e-13**
+  across the benchmark cases (up to 234 335 elements), well inside the 1e-9 an FEA consumer
+  needs. What refinement changes is the *faceting*: a boundary facet is a piece of an input
+  triangle, and `TetFacet.SourceTriangle` names which one, so face tags survive refinement.
 - **Determinism**: fixed Morton insertion order, deterministic walks, no RNG anywhere. Two
   runs on the same input produce bit-identical output including element order.
 - **Refusals name what failed**: an open or inward-wound surface, an unrecoverable patch (with
@@ -113,6 +113,28 @@ is what governs the stiffness matrix's conditioning and is the number that sees 
 `RadiusEdgeRatio` defaults to exactly **2.0** because that is the bound below which Delaunay
 refinement is not guaranteed to terminate; smaller values are allowed, and the Steiner budget
 is what catches them.
+
+**Refinement is not a quality option on curved bodies — it is what makes the mesh usable at
+all.** A tessellated sphere's vertices are *all exactly cospherical*, so a tetrahedralization
+built from them alone has no interior vertices: every element spans the body and the result
+is slivers by construction. Measured on a Ø20 UV sphere at 48×24 (win-x64, Release):
+
+| | elements | mean min-dihedral | max radius-edge | slivers < 10° |
+| --- | ---: | ---: | ---: | ---: |
+| conforming only | 3 402 | 5.5° | 58.6 | 85.9% |
+| `RefineQuality`, size 2.5 | 14 583 | 39.8° | 4.71 | 4.8% |
+
+Throughput and quality with refinement, on a 20³ box (win-x64, i9-9900K, Release):
+
+| target size | elements | ms | tets/s | mean min-dihedral | max radius-edge | slivers |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2.0 | 40 593 | 504 | 80 522 | 44.4° | 1.82 | 1.0% |
+| 1.2 | 170 921 | 2 880 | 59 346 | 46.2° | 1.88 | 0.7% |
+| 0.8 | 234 335 | 7 430 | 31 539 | 40.8° | 2.33 | 1.6% |
+
+Boundary recovery costs **zero rounds** on every well-formed surface in the set, so the cost
+is the Delaunay build plus classification. Run the numbers yourself with
+`ENGRCAD_BENCH=1` and `--filter FullyQualifiedName~TetMesherBenchmark` in Release.
 
 Dihedral angles are computed as `atan2(|n1 × n2|, n1 · n2)` on **raw** (unnormalized) face
 normals — exact at any magnitude, no normalization and no epsilon anywhere. That is the same

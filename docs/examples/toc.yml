@@ -40,6 +40,8 @@
   href: remeshing.md
 - name: Tessellation quality
   href: quality.md
+- name: Tetrahedral meshing (FEA)
+  href: fea-meshing.md
 - name: Three representations
   href: representations.md
 - name: Exports
