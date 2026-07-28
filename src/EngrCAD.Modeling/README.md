@@ -930,6 +930,13 @@ var pulledApart = stack.Flatten(explode: 1);  // or tab.Instances(0.4), scene.In
 - Viewer: an **Explode** toggle plus a factor slider (disabled for a tab with no
   assemblies). Headless: `EngrCad.RenderToImage(..., explode: 1)`,
   `--explode <factor>`, and `EngrCad.Configure().WithExplode(f)`.
+- **Per-occurrence factors**: `Assembly.Flatten(Func<Occurrence, double>)` /
+  `Tab.Instances(Func<Occurrence, double>)` / `Scene.Instances(Func<Occurrence,
+  double>)` ask the delegate once per occurrence — the sequenced explode's substrate
+  (fasteners back out before the cover lifts; `ExplodeTrack.Stagger` in
+  `EngrCAD.Viewer.Core` drives it along an animation timeline). Same walk as the
+  scalar overload, so instance count/order are unchanged and a factor of exactly 0
+  leaves that occurrence's frame bit-for-bit untouched.
 
 ### Mates (constraints)
 

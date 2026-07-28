@@ -9,7 +9,9 @@ concerns.
 - **Math types** (`readonly struct`, zero-allocation): `Vector2d`, `Vector3d` (implicitly
   convertible from tuples: `(1, 2, 3)`), `Matrix4d` (row-major storage, column-vector
   convention: `p' = M·p`, so `A*B` applies `B` first), `Quaterniond` (Hamilton product
-  matching matrix composition order), `Aabb`, `Ray3d`, `Interval`.
+  matching matrix composition order; `Slerp` shortest-arc; `FromRotationMatrix` —
+  Shepperd's branch-on-the-largest extraction, so near-half-turn rotations lose no
+  precision, result normalized), `Aabb`, `Ray3d`, `Interval`.
 - **`Frame3d`** — right-handed rigid coordinate frame (origin + orthonormal X/Y/Z,
   Z = X × Y). World↔local maps for points, vectors, and rays; `Then` composition and
   exact transpose `Inverse`; `ToMatrix()` (column-vector convention); `Renormalized()`

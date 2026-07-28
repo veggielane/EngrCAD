@@ -60,6 +60,53 @@ public readonly struct Quaterniond : IEquatable<Quaterniond>
         return v + W * t + u.Cross(t);
     }
 
+    /// <summary>
+    /// The unit rotation quaternion of <paramref name="m"/>'s upper-left 3×3, which must
+    /// be a pure rotation (orthonormal, det +1) up to round-off. Shepperd's method:
+    /// branch on the largest of the trace and the three diagonal entries so the divisor
+    /// is never small — every branch's square root argument is at least 1 for the branch
+    /// that wins, so no orientation loses precision. The result is normalized, so a
+    /// nearly-rigid input yields the nearest unit quaternion rather than a drifting one.
+    /// </summary>
+    public static Quaterniond FromRotationMatrix(in Matrix4d m)
+    {
+        double trace = m.M11 + m.M22 + m.M33;
+        double x, y, z, w;
+        if (trace > m.M11 && trace > m.M22 && trace > m.M33)
+        {
+            double s = Math.Sqrt(trace + 1.0) * 2; // 4w
+            w = 0.25 * s;
+            x = (m.M32 - m.M23) / s;
+            y = (m.M13 - m.M31) / s;
+            z = (m.M21 - m.M12) / s;
+        }
+        else if (m.M11 >= m.M22 && m.M11 >= m.M33)
+        {
+            double s = Math.Sqrt(1.0 + m.M11 - m.M22 - m.M33) * 2; // 4x
+            w = (m.M32 - m.M23) / s;
+            x = 0.25 * s;
+            y = (m.M12 + m.M21) / s;
+            z = (m.M13 + m.M31) / s;
+        }
+        else if (m.M22 >= m.M33)
+        {
+            double s = Math.Sqrt(1.0 + m.M22 - m.M11 - m.M33) * 2; // 4y
+            w = (m.M13 - m.M31) / s;
+            x = (m.M12 + m.M21) / s;
+            y = 0.25 * s;
+            z = (m.M23 + m.M32) / s;
+        }
+        else
+        {
+            double s = Math.Sqrt(1.0 + m.M33 - m.M11 - m.M22) * 2; // 4z
+            w = (m.M21 - m.M12) / s;
+            x = (m.M13 + m.M31) / s;
+            y = (m.M23 + m.M32) / s;
+            z = 0.25 * s;
+        }
+        return new Quaterniond(x, y, z, w).Normalized();
+    }
+
     /// <summary>Rotation matrix equivalent, assuming this quaternion is unit length.</summary>
     public Matrix4d ToMatrix()
     {

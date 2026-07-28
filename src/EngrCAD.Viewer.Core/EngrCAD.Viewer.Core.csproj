@@ -6,6 +6,9 @@
     <RootNamespace>EngrCAD.Viewer</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Viewer.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- Core for the math structs, Mesh for the half-edge walk WireframeEdges does,
          Modeling for DisplayMode (RenderModes.Resolve's precedence rule is stated in
          terms of it) and the Part/PartInstance surface TabMeshLoader and the pure

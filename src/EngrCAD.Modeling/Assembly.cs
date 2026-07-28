@@ -282,6 +282,23 @@ public sealed class Assembly
         return instances;
     }
 
+    /// <summary>
+    /// Flattens with a PER-OCCURRENCE explode factor: <paramref name="explodeOf"/> is
+    /// asked once per occurrence (parts and sub-assemblies alike) for the factor scaling
+    /// that occurrence's <see cref="Occurrence.ExplodeOffset"/>. This is the sequenced
+    /// explode's substrate — fasteners can back out before the cover lifts — and it is
+    /// the SAME walk as the scalar overload, so instance count and order are identical
+    /// whatever the factors, and a factor of exactly 0 leaves that occurrence's frame
+    /// bit-for-bit untouched.
+    /// </summary>
+    public IReadOnlyList<PartInstance> Flatten(Func<Occurrence, double> explodeOf)
+    {
+        ArgumentNullException.ThrowIfNull(explodeOf);
+        var instances = new List<PartInstance>();
+        FlattenInto(Frame3d.WorldXY, Name, instances, explodeOf);
+        return instances;
+    }
+
     internal void FlattenInto(
         in Frame3d parentWorld, string parentPath, List<PartInstance> into, double explode = 0)
     {
@@ -293,6 +310,21 @@ public sealed class Assembly
                 into.Add(new PartInstance(part, world.ToMatrix() * part.Transform, path));
             else
                 occurrence.SubAssembly!.FlattenInto(world, path, into, explode);
+        }
+    }
+
+    internal void FlattenInto(
+        in Frame3d parentWorld, string parentPath, List<PartInstance> into,
+        Func<Occurrence, double> explodeOf)
+    {
+        foreach (var occurrence in _occurrences)
+        {
+            var world = Posed(occurrence, explodeOf(occurrence)).Then(parentWorld);
+            string path = $"{parentPath}/{occurrence.Name}";
+            if (occurrence.Part is { } part)
+                into.Add(new PartInstance(part, world.ToMatrix() * part.Transform, path));
+            else
+                occurrence.SubAssembly!.FlattenInto(world, path, into, explodeOf);
         }
     }
 
