@@ -299,7 +299,28 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     *rotated* box: an axis-aligned one at a round offset has integer coordinates whose
     products cancel exactly and hide the effect entirely.)
 - **`PolygonTriangulator`** — 2D triangulation with holes; a faithful port of mapbox
-  earcut (minus z-order hashing).
+  earcut (minus z-order hashing), with one deliberate departure: **an ear thinner than
+  round-off is deferred, not clipped, while any other ear remains.**
+  - Earcut's `FilterPoints` drops *exactly* collinear vertices, but boundary samples of a
+    straight edge that arrived through a boolean are collinear only to a few ulps, so a run
+    of them survives and one is eventually clipped as a sliver — a facet whose normal
+    direction is decided by the last bits of its vertices, which near a tangency is not
+    merely useless but actively wrong.
+  - **Deferring is the third option, and the correct one.** Refusing such a corner outright
+    would leave the ring untriangulated, and removing the facet afterwards is impossible —
+    the middle sample of the run belongs to no other triangle, so dropping it opens a
+    T-junction against the neighbouring face (a guarded drop in `BRepTessellator` was built
+    and measured to do nothing, for exactly that reason). But that same vertex is a fine
+    corner of a FAT triangle once its neighbours are consumed, so preferring any other ear
+    **reroutes the diagonal** instead of eating the run.
+  - Sliver-ness is a HEIGHT (twice the area over the longest edge) at `1e-13 ×` the
+    polygon's extent — the scale-free tier, and the same measure the tessellation audit
+    counts degenerate facets with, so the two agree on what a sliver is. The preference
+    cannot change what a polygon with no slivers produces, and it cannot fail: if a full
+    sweep finds nothing but slivers, they are taken. Result:
+    `TessellationCorpusQualityTests.Corpus_EmitsNoDegenerateFacets` now pins **zero** across
+    the whole corpus at every density, where it used to pin "at most one, and only from a
+    planar face".
 - **`HoleFiller`** — hole filling for open meshes, construct-new (g3 `SimpleHoleFiller` /
   `PlanarHoleFiller` / `AutoHoleFill` dispatch). Boundary half-edges are wound opposite
   their interior twins, so fill faces that follow the boundary walk order supply exactly

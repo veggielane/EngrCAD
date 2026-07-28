@@ -67,19 +67,16 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   only ever projects near-surface points, but it is why this must not be offered as a
   general closest-point query. A real one would need the field's own structure (a CSG walk
   that knows which branch is a real face there), not more iterations.
-- [ ] **Continuation ("surface-following") Surface Nets** — the slab-streaming sampler
-  fixed the *memory* wall (peak is O(n²) now, so resolution 1024 is reachable) but still
-  evaluates every grid corner. `MarchingCubesPro`'s idea of only visiting cells near the
-  discovered surface is the remaining win, and the slab walk is a natural place to hang it.
-- [ ] **Packet nearest-triangle query for `MeshSdf`** — 74–85% of a mesh narrow band's
-  wall clock is inside `Bvh.Nearest`. *Seeding* the branch and bound with the previous
-  coherent sample was built, verified bit-identical and measured at only 1.12–1.20× (a
-  nearest-first search is already its own seed) — see `MeshSdfBatchTests` for the numbers
-  and the reverted approach; **don't redo it**. The untried lever is a packet query: one
-  traversal per coherent block collecting the candidate triangles for all its points at
-  once, then a short per-point scan, which attacks node-test cost rather than the initial
-  bound. Needs care over tie-breaking (equidistant triangles must resolve to the same one
-  `Bvh.Nearest` picks) and a fallback when the candidate list blows up.
+- [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
+  74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
+  real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a
+  *packet* query measured 0.30–0.86× on the point layout the batch seam actually delivers
+  (`MeshSdfPacketBenchmark`): a packet's shared bound is governed by the group's diameter,
+  and every bulk consumer generates points z-fastest, so the groups are collinear rows.
+  Pruning on squared distances throughout is 0.94–0.99×. A third attempt needs a lever that
+  is neither the initial bound nor the traversal amortization — e.g. giving the batch
+  contract a way to say "these points form a compact block", which the 1.45× measured on a
+  2³ block would then be reachable through.
 - [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`).
   - ~~A **rung sampled at more than two points** (a curved cross edge)~~ and ~~a band
     whose two chains **meet at a point** (a rung of zero steps)~~ ✅ **both done** — not
@@ -183,20 +180,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   over a `Line3d` — the same promotion `TryPlanarPatch` does for the boolean's own
   section curves. Documented in
   `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`.
-- [ ] **The planar earcut emits an occasional zero-area facet.** `PolygonTriangulator`
-  filters EXACTLY collinear vertices, but boundary samples of a straight edge that came
-  through a boolean are collinear only to a few ulps, so a run of them survives the filter
-  and one is eventually clipped as a degenerate ear. Measured: a Bézier-engraved plate
-  emits one (area 5.6e-17 in a face of area 165; cross product 4.4e-16 over 1.07-long
-  chords) at 32 and 48 segments and none at 16/96/192; a three-hole drilled plate emits
-  one at 96. Harmless to closure and volume, and **not fixable in `BRepTessellator`** — a
-  guarded drop was built and measured to do nothing, because the middle sample belongs to
-  no other triangle, so dropping the facet would drop a shared boundary vertex and open a
-  T-junction. The fix is in the triangulator: give such a vertex a thin-but-real triangle
-  against a far vertex instead of a degenerate one against its two neighbours.
-  `TessellationCorpusQualityTests.Corpus_EmitsDegenerateFacetsOnlyFromThePlanarEarcut`
-  pins the structural claim meanwhile (no trimmed or grid tier ever emits one, and never
-  more than one per face).
 ## Core (EngrCAD.Core)
 
 - [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
@@ -217,14 +200,14 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   (Freeman–Shapira). That is FALSE in 3D — the regular tetrahedron on alternate corners
   of [−1,1]³ fits its cube at volume 8 while every face-flush candidate measures 16.
   The shipped implementation follows O'Rourke instead.
-- [ ] **Core follow-ups** — `ProgressCancel` through the mesh booleans (`MeshMeshCut` +
-  the classify/emit phases), `BRepTessellator`, and `Part.GetMesh` → `Tessellate` ✅ all
-  landed; `MeshSdf`/winding builds were measured (21.8 ms / 29.2 ms on 32 040 triangles)
-  and deliberately declined, since a build is one indivisible call. Remaining:
-  intersection-segment queries over `Bvh.QueryOverlap` pairs (the triangle–triangle
-  layer belongs to EngrCAD.Mesh); routing `FaceSplitter`'s planar tracing through
-  `Arrangement2d` (deferred — boolean-critical); optionally migrate
-  `MeshWindingNumber` onto `Bvh`'s per-node ranges.
+- [ ] **Exact tangents for `FaceSplitter`'s arrangement tracing.** `DepartureAngle` and
+  `ArrivalAngle` take the chord to a point 2% along the edge, and the tightest-turn
+  comparison then needs a `1e-12` angular guard to tolerate the approximation. Every
+  analytic curve now overrides `Curve3d.DerivativeAt`, so the chord could become a true
+  tangent pulled back through the surface's Jacobian. Needs surface partials at the node and
+  a decision about singular Jacobians (poles). This is the change worth making instead of
+  routing the tracing through `Arrangement2d` — see the assessment in design.md §5 for why
+  that one is a no.
 - [ ] **`Region2dBoolean.ContainedIn` is still O(cells × operand vertices)** — the next
   quadratic term after the clearance scan (now BVH-backed: a union of 120 overlapping
   32-gons went 436.2 → 93.6 ms, its classification phase 367.7 → 8.8 ms) and the

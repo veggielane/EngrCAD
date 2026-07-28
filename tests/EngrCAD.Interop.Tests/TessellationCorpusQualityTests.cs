@@ -236,35 +236,38 @@ public class TessellationCorpusQualityTests
     }
 
     /// <summary>
-    /// Degenerate facets — thinner than round-off, so their normal direction is decided by
-    /// the last bits of their vertices — come from ONE place, and this pins which.
+    /// <b>No facet is degenerate.</b> A facet thinner than round-off carries no orientation
+    /// — its normal direction is decided by the last bits of its vertices — which near a
+    /// tangency makes it not merely useless but actively wrong.
     /// <para>Every trimmed tier and every grid path refuses to emit one by construction
-    /// (<c>IsEar</c>, <c>AddOriented</c> and <c>ZipBand</c> all reject exactly-zero uv
-    /// area). The planar earcut does not: it filters EXACTLY collinear vertices, while
-    /// boundary samples of a straight edge that arrived through a boolean are collinear
-    /// only to a few ulps, so a run of them survives the filter and one is eventually
-    /// clipped as a zero-area ear. Measured: a Bézier-engraved plate emits one such facet
-    /// (area 5.6e-17 in a face of area 165, three vertices collinear to a cross product of
-    /// 4.4e-16 over 1.07-long chords) at 32 and 48 segments and none at 16, 96 or 192; a
-    /// three-hole drilled plate emits one at 96. Harmless to closure and volume, and NOT
-    /// removable here — the middle sample belongs to no other triangle, so dropping the
-    /// facet would drop a shared boundary vertex and open a T-junction against the
-    /// neighbouring face. The fix belongs in the triangulator (see todo.md).</para>
-    /// <para>So the assertion is the structural one: slivers only ever come from planar
-    /// faces, and never more than one per face.</para>
+    /// (<c>IsEar</c>, <c>AddOriented</c> and <c>ZipBand</c> all reject exactly-zero uv area).
+    /// The planar earcut used to be the one exception, and this test used to pin that as a
+    /// structural claim — "slivers only ever come from planar faces, never more than one per
+    /// face" — because the defect was diagnosed as unfixable HERE: the middle sample of a
+    /// nearly-collinear run belongs to no other triangle, so dropping the facet afterwards
+    /// would open a T-junction against the neighbouring face.</para>
+    /// <para>That diagnosis was right about the symptom and wrong about the options. Earcut
+    /// filters EXACTLY collinear vertices, while boundary samples of a straight edge that
+    /// arrived through a boolean are collinear only to a few ulps, so a run of them survives
+    /// and one is eventually clipped as a sliver (measured: a Bézier-engraved plate emitted
+    /// one facet of area 5.6e-17 in a face of area 165 at 32 and 48 segments; a three-hole
+    /// drilled plate one at 96). The third option is neither clipping nor removing but
+    /// <b>deferring</b>: <c>PolygonTriangulator</c> now prefers any other ear, and by the
+    /// time the run's neighbours are consumed that same vertex is a corner of a FAT
+    /// triangle. The diagonal is rerouted rather than the facet deleted, so nothing is
+    /// dropped and the count is zero across the whole corpus at every density.</para>
     /// </summary>
     [Theory]
     [MemberData(nameof(Corpus))]
-    public void Corpus_EmitsDegenerateFacetsOnlyFromThePlanarEarcut(string name)
+    public void Corpus_EmitsNoDegenerateFacets(string name)
     {
         var solid = Build(name);
         foreach (var (segmentsPerCircle, curveSamples) in Densities)
         {
             var report = TessellationQuality.Audit(solid, segmentsPerCircle, curveSamples);
             string where = $"{name} at {segmentsPerCircle}/{curveSamples}: {report.Describe()}";
-            Assert.Equal(
-                report.SliverFamilies.Where(f => f != nameof(PlaneSurface)), []);
-            Assert.True(report.WorstFaceSlivers <= 1, $"a face emitted several slivers — {where}");
+            Assert.Equal(0, report.Slivers);
+            Assert.Equal(report.SliverFamilies, []);
         }
     }
 

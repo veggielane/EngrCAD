@@ -10,9 +10,38 @@ namespace EngrCAD.Mesh;
 /// normalized counter-clockwise in the 2D plane regardless of input orientation.
 /// Exactly-collinear input vertices are filtered by the algorithm and may not appear in
 /// any triangle.
+/// <para>
+/// One deliberate departure from the port: an ear thinner than round-off is <b>deferred</b>
+/// rather than clipped while any other ear remains — see <see cref="SliverHeight"/>.
+/// </para>
 /// </summary>
 public static class PolygonTriangulator
 {
+    /// <summary>
+    /// How thin a candidate ear may be before it is deferred, as a HEIGHT (twice the area
+    /// over the longest edge) relative to the polygon's own extent. Scale-free, and the
+    /// same 1e-13 tier the tessellation audit uses to count degenerate facets, so the two
+    /// agree on what a sliver is.
+    /// <para>
+    /// <b>Why deferral and not rejection.</b> Earcut's <c>FilterPoints</c> drops EXACTLY
+    /// collinear vertices, but boundary samples of a straight edge that arrived through a
+    /// boolean are collinear only to a few ulps, so a run of them survives the filter. Every
+    /// corner inside such a run is a sliver, and refusing them outright would leave the ring
+    /// untriangulated — while clipping one emits a facet whose normal direction is decided
+    /// by the last bits of its vertices, which near a tangency is not merely useless but
+    /// actively wrong. Deferring is the third option and the correct one: the middle of a
+    /// collinear run is a fine vertex of a FAT triangle once its neighbours are consumed, so
+    /// preferring any other ear reroutes the diagonal instead of eating the run. Removing
+    /// the facet afterwards is not an option — the middle sample belongs to no other
+    /// triangle, so dropping it opens a T-junction against the neighbouring face.
+    /// </para>
+    /// <para>
+    /// The preference cannot change the answer for a polygon that has no slivers, and it
+    /// cannot fail: if a full sweep finds nothing but slivers, they are taken.
+    /// </para>
+    /// </summary>
+    private const double SliverHeight = 1e-13;
+
     public static List<(int A, int B, int C)> Triangulate(IReadOnlyList<Vector2d> polygon)
     {
         if (polygon.Count < 3)
@@ -73,7 +102,7 @@ public static class PolygonTriangulator
         if (ringEnds.Count > 1)
             outerNode = EliminateHoles(points, ringEnds, outerNode);
 
-        EarcutLinked(outerNode, triangles, 0);
+        EarcutLinked(outerNode, triangles, 0, SliverHeight * Extent(points));
 
         // Normalize to CCW in standard orientation for downstream consumers.
         for (int t = 0; t < triangles.Count; t++)
@@ -85,6 +114,22 @@ public static class PolygonTriangulator
         triangles.RemoveAll(t =>
             Math.Abs((points[t.Item2] - points[t.Item1]).Cross(points[t.Item3] - points[t.Item1])) <= 0);
         return triangles;
+    }
+
+    /// <summary>The polygon's longest bounding-box side — the scale every degeneracy guard
+    /// here is relative to.</summary>
+    private static double Extent(IReadOnlyList<Vector2d> points)
+    {
+        double minX = double.PositiveInfinity, minY = double.PositiveInfinity;
+        double maxX = double.NegativeInfinity, maxY = double.NegativeInfinity;
+        foreach (var p in points)
+        {
+            minX = Math.Min(minX, p.X);
+            minY = Math.Min(minY, p.Y);
+            maxX = Math.Max(maxX, p.X);
+            maxY = Math.Max(maxY, p.Y);
+        }
+        return Math.Max(maxX - minX, maxY - minY);
     }
 
     /// <summary>Links a ring [start, end) into a circular list, oriented per <paramref name="clockwise"/> (earcut's convention).</summary>
@@ -178,12 +223,19 @@ public static class PolygonTriangulator
         return end;
     }
 
-    private static void EarcutLinked(Node? ear, List<(int, int, int)> triangles, int pass)
+    private static void EarcutLinked(
+        Node? ear, List<(int, int, int)> triangles, int pass, double sliverHeight)
     {
         if (ear is null)
             return;
 
         var stop = ear;
+        // Sliver ears are skipped while any other ear remains (see SliverHeight). Permissive
+        // mode is entered only when a full sweep has found nothing else, and once entered it
+        // stays: by then the ring IS the collinear run, so re-tightening would only buy
+        // another O(n) sweep per corner. That bounds the extra work at one sweep per call.
+        bool allowSlivers = false;
+        bool deferred = false;
         while (ear!.Prev != ear.Next)
         {
             var prev = ear.Prev;
@@ -191,33 +243,66 @@ public static class PolygonTriangulator
 
             if (IsEar(ear))
             {
-                triangles.Add((prev.I, ear.I, next.I));
-                RemoveNode(ear);
-                ear = next.Next;
-                stop = next.Next;
-                continue;
+                if (allowSlivers || !IsSliver(ear, sliverHeight))
+                {
+                    triangles.Add((prev.I, ear.I, next.I));
+                    RemoveNode(ear);
+                    ear = next.Next;
+                    stop = next.Next;
+                    continue;
+                }
+                deferred = true;
             }
 
             ear = next;
             if (ear == stop)
             {
+                if (deferred && !allowSlivers)
+                {
+                    // Every ear left in this ring is a sliver, so take them after all —
+                    // the preference is a preference, never a refusal.
+                    allowSlivers = true;
+                    deferred = false;
+                    continue;
+                }
+
                 // No ear in a full loop: escalate through earcut's recovery ladder.
                 if (pass == 0)
                 {
-                    EarcutLinked(FilterPoints(ear), triangles, 1);
+                    EarcutLinked(FilterPoints(ear), triangles, 1, sliverHeight);
                 }
                 else if (pass == 1)
                 {
                     ear = CureLocalIntersections(FilterPoints(ear)!, triangles);
-                    EarcutLinked(ear, triangles, 2);
+                    EarcutLinked(ear, triangles, 2, sliverHeight);
                 }
                 else if (pass == 2)
                 {
-                    SplitEarcut(ear, triangles);
+                    SplitEarcut(ear, triangles, sliverHeight);
                 }
                 break;
             }
         }
+    }
+
+    /// <summary>
+    /// Whether clipping this corner would emit a facet thinner than round-off. Measured as
+    /// the triangle's HEIGHT — twice its area over its longest edge — against
+    /// <paramref name="sliverHeight"/>, which the caller has already scaled by the polygon's
+    /// extent. Comparing the area itself would be scale-dependent (an area is quadratic in
+    /// scale), and comparing it to a fixed epsilon is the exact mistake the epsilon ladder
+    /// exists to prevent.
+    /// </summary>
+    private static bool IsSliver(Node ear, double sliverHeight)
+    {
+        var a = ear.Prev;
+        var c = ear.Next;
+        double longest = Math.Max(
+            Distance(a, ear), Math.Max(Distance(ear, c), Distance(c, a)));
+        return longest <= 0 || Math.Abs(Area(a, ear, c)) / longest <= sliverHeight;
+
+        static double Distance(Node p, Node q) => Math.Sqrt(
+            (p.X - q.X) * (p.X - q.X) + (p.Y - q.Y) * (p.Y - q.Y));
     }
 
     private static bool IsEar(Node ear)
@@ -277,7 +362,7 @@ public static class PolygonTriangulator
     }
 
     /// <summary>Last resort: split the remaining polygon along a valid diagonal and recurse.</summary>
-    private static void SplitEarcut(Node start, List<(int, int, int)> triangles)
+    private static void SplitEarcut(Node start, List<(int, int, int)> triangles, double sliverHeight)
     {
         var a = start;
         do
@@ -290,8 +375,8 @@ public static class PolygonTriangulator
                     var c = SplitPolygon(a, b);
                     a = FilterPoints(a, a.Next)!;
                     c = FilterPoints(c, c.Next)!;
-                    EarcutLinked(a, triangles, 0);
-                    EarcutLinked(c, triangles, 0);
+                    EarcutLinked(a, triangles, 0, sliverHeight);
+                    EarcutLinked(c, triangles, 0, sliverHeight);
                     return;
                 }
                 b = b.Next;
