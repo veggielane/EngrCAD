@@ -208,10 +208,13 @@ public class DraftTests
     {
         var block = Block();
 
-        // Curved faces.
+        // Curved faces ABOUT the pull direction now taper exactly (see CurvedDraftTests);
+        // what stays refused is a curved face on any other axis, whose drafted carrier is not
+        // a surface of any family this kernel builds.
         var cylinder = SolidFactory.MakeCylinder(3, 5);
+        Draft.Apply(cylinder, Vector3d.Zero, Vector3d.UnitZ, Ten).Validate();
         Assert.Throws<NotSupportedException>(() =>
-            Draft.Apply(cylinder, Vector3d.Zero, Vector3d.UnitZ, Ten));
+            Draft.Apply(SolidFactory.MakeCylinder(3, 5), Vector3d.Zero, Vector3d.UnitX, Ten));
 
         // Caps with holes.
         var plate = Profile.FromPoints([(-5, -5, 0), (5, -5, 0), (5, 5, 0), (-5, 5, 0)]);

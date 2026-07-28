@@ -292,7 +292,16 @@ internal readonly struct ImplicitSurface
     private static ImplicitSurface? TryFitProfileLine(
         in ImplicitSurface template, ReadOnlySpan<Vector2d> profile, double extent)
     {
-        var direction = profile[^1] - profile[0];
+        // The FARTHEST sample, not the last one: a CLOSED generator (a full circle extruded
+        // into a cylinder, a torus's minor circle) returns to its start, so the end-to-end
+        // chord is zero and both fits below would report degeneracy on the commonest input
+        // there is.
+        var direction = Vector2d.Zero;
+        for (int i = 1; i < profile.Length; i++)
+        {
+            if ((profile[i] - profile[0]).Length > direction.Length)
+                direction = profile[i] - profile[0];
+        }
         if (direction.Length <= 1e-13 * extent)
             return null;
         direction /= direction.Length;
@@ -310,9 +319,11 @@ internal readonly struct ImplicitSurface
     private static ImplicitSurface? TryFitProfileCircle(
         in ImplicitSurface template, ReadOnlySpan<Vector2d> profile, double extent)
     {
+        // Thirds, not (first, middle, last): a closed generator's last sample IS its first,
+        // which makes the circumcircle degenerate on every cylinder and every torus.
         var a = profile[0];
-        var b = profile[profile.Length / 2];
-        var c = profile[^1];
+        var b = profile[profile.Length / 3];
+        var c = profile[2 * profile.Length / 3];
         double area2 = (b.X - a.X) * (c.Y - a.Y) - (b.Y - a.Y) * (c.X - a.X);
         // Scale-free collinearity guard: twice an AREA, so the threshold is quadratic in the
         // profile's own extent.

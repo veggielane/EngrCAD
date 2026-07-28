@@ -138,9 +138,15 @@ public class ShellingTests
     [Fact]
     public void Shelling_RejectsWhatItCannotDoExactly()
     {
-        // Curved faces.
-        Assert.Throws<NotSupportedException>(() => Shelling.Shell(SolidFactory.MakeCylinder(3, 5), 0.5));
-        Assert.Throws<NotSupportedException>(() => Shelling.Offset(SolidFactory.MakeSphere(2), 0.5));
+        // Curved faces are NO LONGER refused (see CurvedShellingTests) — a cylinder shells and
+        // a sphere offsets exactly. What stays refused is a curved carrier with no exact
+        // offset of its own family: a swept surface's parallel is not a sweep.
+        Shelling.Shell(SolidFactory.MakeCylinder(3, 5), 0.5).Validate();
+        Shelling.Offset(SolidFactory.MakeSphere(2), 0.5).Validate();
+        var pipe = SolidFactory.Sweep(
+            Profile.FromPoints([(0, -1, 0), (0, 1, 0), (0, 1, 2), (0, -1, 2)]),
+            new NurbsCurve(1, [(0, 0, 0), (10, 0, 0)], null, [0, 0, 1, 1]));
+        Assert.Throws<NotSupportedException>(() => Shelling.Offset(pipe, 0.2));
 
         // Adjacent openings.
         var block = Block();

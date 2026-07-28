@@ -194,7 +194,7 @@ public class SurfaceCornerTests
         var b = new PlaneSurface((0, 0, 1), Vector3d.UnitX, Vector3d.UnitY);
         var c = new PlaneSurface((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
         Assert.False(SurfaceCorner.TrySolvePoint([a, b, c], (0, 0, 0), out _, out var reason));
-        Assert.Contains("not a point", reason);
+        Assert.Contains("do not meet in a point", reason);
     }
 
     // ---- corner curves, and the exactness brand ----

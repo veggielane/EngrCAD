@@ -308,10 +308,11 @@ internal readonly struct CircularArc
     public Curve3d Rebuild(double radius)
     {
         var circle = new Circle3d(Circle.Center, Circle.XDirection, Circle.YDirection, radius);
+        bool wholeTurn = Math.Abs(Math.Abs(Sweep) - 2 * Math.PI) < 1e-9;
         switch (Source)
         {
             // A whole circle: the closed carrier itself, domain and all.
-            case Circle3d when FrameAdopted:
+            case Circle3d when FrameAdopted && wholeTurn:
                 return circle;
             // A trimmed circle keeps its base parameters, which ARE angles — the rule every
             // corner patch and every revolve generator depends on.
@@ -337,10 +338,19 @@ internal readonly struct CircularArc
     /// points at the curve's START, which is what makes a rebuilt rational arc reproduce the
     /// source's parameterization.
     /// </summary>
-    public static bool TryFit(Curve3d curve, out CircularArc arc)
+    public static bool TryFit(Curve3d curve, out CircularArc arc) =>
+        TryFit(curve, curve.Domain, out arc);
+
+    /// <summary>
+    /// The fit over an explicit parameter range. An EDGE carries its own domain and it is
+    /// routinely narrower than its carrier's: a partial revolve's rail is a whole
+    /// <see cref="Circle3d"/> used over a quarter turn, and fitting the carrier's domain
+    /// instead would report a full-turn sweep and rebuild the rim as a closed circle.
+    /// </summary>
+    public static bool TryFit(Curve3d curve, in Interval range, out CircularArc arc)
     {
         arc = default;
-        var domain = curve.Domain;
+        var domain = range;
         if (!double.IsFinite(domain.Length) || domain.Length <= 0)
             return false;
 

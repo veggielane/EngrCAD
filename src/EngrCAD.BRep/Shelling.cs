@@ -15,13 +15,21 @@ namespace EngrCAD.BRep;
 /// <b>rim</b> face (the removed face's loop as its outer boundary, the inner opening as its
 /// hole) instead of a wall — the classic tray or box-with-a-lid-off.</para>
 ///
-/// <para><b>What is rejected.</b> Curved faces. Exact offsets of cylinders and surfaces of
-/// revolution are within reach (a cylinder offsets to a cylinder, a revolve to the revolve
-/// of an <see cref="OffsetCurve3d"/> generator), but their <i>corners</i> need
-/// surface–surface re-intersection rather than a three-plane solve, so v1 refuses them
-/// loudly rather than approximating. Also rejected: vertices where more than three faces
-/// meet (the offset corner is over-determined), adjacent openings (their rim would have
-/// zero width), multi-shell inputs, and an offset that locally folds the solid.</para>
+/// <para><b>Curved faces work too, and are equally exact.</b> A cylinder offsets to a
+/// cylinder, a cone to a cone, a torus to a torus — <see cref="SurfaceOffset"/> keeps every
+/// carrier in its own family — and the <i>corners</i> that used to block this are now solved
+/// by <see cref="SurfaceCorner"/>: an exact root, not an approximation. A curved solid takes
+/// a separate code path from the polyhedral one, deliberately, so polyhedral output stays bit
+/// for bit what it was. Curved rim edges are CONSTRUCTED (a concentric circle about the
+/// original's own axis and phase) and then VERIFIED against both offset carriers, rather than
+/// intersected and hoped for; a rim the construction cannot reproduce is refused by name.</para>
+///
+/// <para><b>What is rejected.</b> Curved faces with no exact offset (swept and NURBS
+/// surfaces); non-circular curved edges, whose offset is not a curve of the same family;
+/// vertices where more than three faces meet on a CURVED body (the polyhedral tier refuses
+/// them too, and the least-squares corner they would need is filed rather than guessed);
+/// adjacent openings (their rim would have zero width); multi-shell inputs; and an offset that
+/// locally folds the solid.</para>
 ///
 /// <para><b>What is NOT checked.</b> Local folding is caught — a collapsed or reversed edge,
 /// a loop that turned inside out — but a thickness larger than a distant feature can still
@@ -29,7 +37,7 @@ namespace EngrCAD.BRep;
 /// contract OCCT offers, and the same one <see cref="OffsetCurve3d"/> already documents for
 /// curves.</para>
 /// </summary>
-public static class Shelling
+public static partial class Shelling
 {
     /// <summary>
     /// Offsets every face of a polyhedral solid by <paramref name="distance"/> along its
@@ -38,6 +46,8 @@ public static class Shelling
     /// </summary>
     public static BrepSolid Offset(BrepSolid solid, double distance)
     {
+        if (CarrierBody.IsCurved(solid))
+            return CarrierBody.Recognize(solid).Offset(distance);
         var polyhedron = Polyhedron.Recognize(solid);
         var offsets = new double[polyhedron.Faces.Length];
         Array.Fill(offsets, distance);
@@ -91,6 +101,8 @@ public static class Shelling
         BrepSolid solid, Func<BrepFace, double> thickness, Func<BrepFace, bool>? openingSelector = null)
     {
         ArgumentNullException.ThrowIfNull(thickness);
+        if (CarrierBody.IsCurved(solid))
+            return CarrierBody.Recognize(solid).Shell(thickness, openingSelector);
         var polyhedron = Polyhedron.Recognize(solid);
         int faceCount = polyhedron.Faces.Length;
 

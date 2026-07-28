@@ -87,8 +87,22 @@ public static class SurfaceCorner
     /// <summary>
     /// The point where <paramref name="surfaces"/> meet, nearest <paramref name="seed"/>.
     /// Exactly three planes take the algebraic path; anything else with a closed-form implicit
-    /// distance Newtons onto the root. More than three surfaces are over-determined and solved
-    /// in the least-squares sense — the residual then says whether they genuinely meet.
+    /// distance Newtons onto the root.
+    ///
+    /// <para><b>The carriers routinely do not pin a point, and that is not an error.</b> A
+    /// SEAM vertex has two incident faces because a closed rim edge starts and ends there, and
+    /// a TANGENT junction has three faces of which two are the same carrier — a pipe elbow's
+    /// profile circle split into two arcs offsets to two halves of ONE circle, and a sphere's
+    /// two hemispheres to one sphere. So the step taken here is the MINIMUM-NORM one: the
+    /// corner moves only within the span of its carriers' normals, which makes the answer "the
+    /// nearest point of the carriers' common locus" and reduces to the unique intersection
+    /// whenever there is one. That single rule reproduces every hand-written special case — a
+    /// cylinder's seam stays in its seam half-plane, an elbow's junction keeps its angle on the
+    /// offset profile circle, a sphere's equator moves radially — because in each the normal
+    /// span is exactly the direction the geometry is free to move in.</para>
+    ///
+    /// <para>More than three independent carriers are over-determined and solved in the
+    /// least-squares sense; the residual then says whether they genuinely meet.</para>
     /// </summary>
     public static bool TrySolvePoint(
         IReadOnlyList<Surface> surfaces, in Vector3d seed, out CornerPoint corner, out string? reason)
@@ -96,9 +110,9 @@ public static class SurfaceCorner
         ArgumentNullException.ThrowIfNull(surfaces);
         corner = default;
         reason = null;
-        if (surfaces.Count < 3)
+        if (surfaces.Count == 0)
         {
-            reason = $"a corner needs at least three carriers; {surfaces.Count} were given";
+            reason = "a corner needs at least one carrier; none were given";
             return false;
         }
 
@@ -107,7 +121,7 @@ public static class SurfaceCorner
         {
             if (!TryIntersectPlanes(a, b, c, out var point))
             {
-                reason = "three plane carriers are parallel or tangent, so the corner is not a point";
+                reason = "three plane carriers are parallel or tangent, so they do not meet in a point";
                 return false;
             }
             corner = new CornerPoint(point, PlaneResidual(surfaces, point), CornerTier.Planar);
@@ -130,7 +144,8 @@ public static class SurfaceCorner
         {
             if (!NewtonStep(fields, p, out var step))
             {
-                reason = "the carriers' normals are linearly dependent at the corner, so it is not a point";
+                reason = "the carriers carry no usable normal at the seed, so the corner cannot be stepped " +
+                         "toward";
                 return false;
             }
             p += step;
@@ -143,8 +158,8 @@ public static class SurfaceCorner
             residual = Math.Max(residual, Math.Abs(field.Evaluate(p, out _)));
         if (!double.IsFinite(residual) || residual > Math.Sqrt(ConvergenceTolerance))
         {
-            reason = $"the corner solve did not converge (residual {residual:E3}); the carriers may not " +
-                     "meet near the seed";
+            reason = $"the corner solve did not converge (residual {residual:E3}); the carriers do not meet " +
+                     "in a point near the seed";
             return false;
         }
         corner = new CornerPoint(p, residual, CornerTier.Analytic);
@@ -283,57 +298,116 @@ public static class SurfaceCorner
     }
 
     /// <summary>
-    /// One Newton step toward the common root: each carrier contributes the linearized
-    /// equation ∇f·δ = −f, i.e. "move onto my tangent plane". Three carriers give a square
-    /// system solved by Cramer; more give the normal equations, which is the least-squares
-    /// answer an over-determined corner deserves — the residual afterwards says whether the
-    /// carriers really met.
+    /// One MINIMUM-NORM Newton step toward the common root: each carrier contributes the
+    /// linearized equation ∇f·δ = −f, i.e. "move onto my tangent plane", and the step is taken
+    /// inside the span of the gradients so the corner never drifts along a direction none of
+    /// its carriers constrains.
+    ///
+    /// <para>The reduction is Gram–Schmidt on the gradients followed by the normal equations
+    /// in that basis, so a rank-3 system is the ordinary least-squares step and a rank-2 or
+    /// rank-1 one is the same step confined to the plane or line the geometry is free in.
+    /// Doing it this way rather than by adding synthetic constraint planes is what makes seam
+    /// vertices, tangent junctions and ordinary corners ONE case.</para>
     /// </summary>
     private static bool NewtonStep(ImplicitSurface[] fields, in Vector3d point, out Vector3d step)
     {
         step = default;
-        if (fields.Length == 3)
-        {
-            var n0 = default(Vector3d);
-            var n1 = default(Vector3d);
-            var n2 = default(Vector3d);
-            double f0 = fields[0].Evaluate(point, out n0);
-            double f1 = fields[1].Evaluate(point, out n1);
-            double f2 = fields[2].Evaluate(point, out n2);
-            return TryIntersectPlanes(
-                (point - n0 * f0, n0), (point - n1 * f1, n1), (point - n2 * f2, n2), out var target)
-                && Finite(target - point, out step);
-        }
+        Span<Vector3d> gradients = stackalloc Vector3d[fields.Length];
+        Span<double> values = stackalloc double[fields.Length];
+        for (int i = 0; i < fields.Length; i++)
+            values[i] = fields[i].Evaluate(point, out gradients[i]);
 
-        // JᵀJ δ = −Jᵀf over unit gradients: a 3x3 symmetric system.
-        double a11 = 0, a12 = 0, a13 = 0, a22 = 0, a23 = 0, a33 = 0;
-        double b1 = 0, b2 = 0, b3 = 0;
-        foreach (var field in fields)
+        // Orthonormal basis of the gradients' span. The rank test is on unit vectors, so the
+        // threshold is scale-free — an angle, not a model tolerance.
+        Span<Vector3d> basis = stackalloc Vector3d[3];
+        int rank = 0;
+        for (int i = 0; i < fields.Length && rank < 3; i++)
         {
-            double f = field.Evaluate(point, out var n);
-            a11 += n.X * n.X; a12 += n.X * n.Y; a13 += n.X * n.Z;
-            a22 += n.Y * n.Y; a23 += n.Y * n.Z; a33 += n.Z * n.Z;
-            b1 -= n.X * f; b2 -= n.Y * f; b3 -= n.Z * f;
+            var residual = gradients[i];
+            for (int k = 0; k < rank; k++)
+                residual -= basis[k] * residual.Dot(basis[k]);
+            if (residual.Length > 1e-7 && residual.TryNormalize(Tolerance.Default, out var unit))
+                basis[rank++] = unit;
         }
-        var row0 = new Vector3d(a11, a12, a13);
-        var row1 = new Vector3d(a12, a22, a23);
-        var row2 = new Vector3d(a13, a23, a33);
-        double determinant = row0.Dot(row1.Cross(row2));
-        // Gram determinant of unit gradients: a scale-free rank test, not a model tolerance.
-        if (Math.Abs(determinant) < 1e-12)
+        if (rank == 0)
             return false;
-        var rhs = new Vector3d(b1, b2, b3);
-        var solution = new Vector3d(
-            rhs.Dot(row1.Cross(row2)),
-            row0.Dot(rhs.Cross(row2)),
-            row0.Dot(row1.Cross(rhs))) / determinant;
-        return Finite(solution, out step);
 
-        static bool Finite(in Vector3d value, out Vector3d step)
+        // Normal equations in the reduced basis: A c = b with A[i,j] = Σ (n·e_i)(n·e_j).
+        Span<double> a = stackalloc double[9];
+        Span<double> b = stackalloc double[3];
+        for (int f = 0; f < fields.Length; f++)
         {
-            step = value;
-            return double.IsFinite(value.X) && double.IsFinite(value.Y) && double.IsFinite(value.Z);
+            for (int i = 0; i < rank; i++)
+            {
+                double projected = gradients[f].Dot(basis[i]);
+                b[i] -= projected * values[f];
+                for (int j = 0; j < rank; j++)
+                    a[i * 3 + j] += projected * gradients[f].Dot(basis[j]);
+            }
         }
+        if (!SolveSmall(a, b, rank, out double c0, out double c1, out double c2))
+            return false;
+
+        var solution = basis[0] * c0;
+        if (rank > 1)
+            solution += basis[1] * c1;
+        if (rank > 2)
+            solution += basis[2] * c2;
+        step = solution;
+        return double.IsFinite(solution.X) && double.IsFinite(solution.Y) && double.IsFinite(solution.Z);
+    }
+
+    /// <summary>Gaussian elimination on a symmetric positive-definite system of order 1–3.</summary>
+    private static bool SolveSmall(Span<double> a, Span<double> b, int n, out double x0, out double x1, out double x2)
+    {
+        x0 = x1 = x2 = 0;
+        Span<double> matrix = stackalloc double[9];
+        a.CopyTo(matrix);
+        Span<double> rhs = stackalloc double[3];
+        b.CopyTo(rhs);
+        double scale = 0;
+        for (int i = 0; i < n; i++)
+            scale = Math.Max(scale, Math.Abs(matrix[i * 3 + i]));
+        // Relative pivot floor: the entries are sums of squared direction cosines, so a pivot
+        // this small means the basis vector carries no constraint at all.
+        if (scale <= 0)
+            return false;
+        for (int i = 0; i < n; i++)
+        {
+            int pivot = i;
+            for (int r = i + 1; r < n; r++)
+            {
+                if (Math.Abs(matrix[r * 3 + i]) > Math.Abs(matrix[pivot * 3 + i]))
+                    pivot = r;
+            }
+            if (Math.Abs(matrix[pivot * 3 + i]) < 1e-12 * scale)
+                return false;
+            if (pivot != i)
+            {
+                for (int k = 0; k < n; k++)
+                    (matrix[i * 3 + k], matrix[pivot * 3 + k]) = (matrix[pivot * 3 + k], matrix[i * 3 + k]);
+                (rhs[i], rhs[pivot]) = (rhs[pivot], rhs[i]);
+            }
+            for (int r = i + 1; r < n; r++)
+            {
+                double factor = matrix[r * 3 + i] / matrix[i * 3 + i];
+                for (int k = i; k < n; k++)
+                    matrix[r * 3 + k] -= factor * matrix[i * 3 + k];
+                rhs[r] -= factor * rhs[i];
+            }
+        }
+        Span<double> solution = stackalloc double[3];
+        for (int i = n - 1; i >= 0; i--)
+        {
+            double sum = rhs[i];
+            for (int k = i + 1; k < n; k++)
+                sum -= matrix[i * 3 + k] * solution[k];
+            solution[i] = sum / matrix[i * 3 + i];
+        }
+        x0 = solution[0];
+        x1 = solution[1];
+        x2 = solution[2];
+        return true;
     }
 
     /// <summary>
