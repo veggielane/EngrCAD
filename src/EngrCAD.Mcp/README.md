@@ -140,6 +140,19 @@ then clears the part's cached mesh/solid/edges/annotations so every later tool s
 the edited model. Edits live in the running session only — `reload` re-runs the
 program's source and discards them.
 
+One protocol fact the round-trip test paid to learn: **the server dispatches
+requests concurrently**, as MCP allows. A client that edits and then reads must
+await the edit's response before sending the read, or the read can observe the
+pre-edit model (real assistant clients already work this way; a hand-rolled driver
+must too).
+
+The no-GL error path is testable (and forcible) via the `ENGRCAD_NO_GL=1`
+environment variable — `screenshot`/`.png` export then return an `isError` result
+naming the constraint while every other tool keeps working. The seam exists because
+the GL probe is a process-wide `Lazy` over a real EGL context, so a GPU-less
+machine can only be simulated in a child process; it doubles as an operational kill
+switch for broken drivers.
+
 ## Known limits (v1)
 
 - The named-view poses route through the shared `ViewCubeMath.PoseFor` /
