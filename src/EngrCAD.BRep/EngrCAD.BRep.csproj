@@ -9,4 +9,10 @@
     <!-- The internal Part 21 parser (StepParser) gets direct tokenizer-level tests. -->
     <InternalsVisibleTo Include="EngrCAD.BRep.Tests" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Abstractions ONLY (no provider, no UI dependency — the kernel rule holds):
+         STEP import takes an optional ILogger for timing/diagnosis. The import's
+         findings stay in StepReadResult.Diagnostics — data the caller acts on. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
+  </ItemGroup>
 </Project>

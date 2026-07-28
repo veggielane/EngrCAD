@@ -2,7 +2,14 @@
 
 Conversions between the three geometry representations. References `EngrCAD.Mesh`,
 `EngrCAD.Implicit`, and `EngrCAD.BRep` — the only kernel project allowed to depend on all
-engines.
+engines. Also `Microsoft.Extensions.Logging.Abstractions` (abstractions ONLY — no
+provider, no UI): the long operations — `BrepBoolean.Union/Intersection/Difference`,
+`BRepTessellator.Tessellate`, the `MeshSdf` constructors — take an **optional trailing
+`ILogger`** for timing/diagnosis (`KernelLog.cs`, stable event IDs **80** boolean /
+**81** tessellation / **82** mesh-SDF build; a boolean passes its logger to its own
+sub-steps, which log at Debug under its Information completion). Null is the default
+and costs one branch; every operation's findings remain return values or exceptions —
+logging complements them, never replaces them.
 
 ## The conversion triangle
 

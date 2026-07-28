@@ -39,10 +39,11 @@ public static class BRepTessellator
     /// </param>
     public static HalfEdgeMesh Tessellate(
         BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24,
-        ProgressCancel? progress = null)
+        ProgressCancel? progress = null, Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         if (segmentsPerCircle < 3) throw new ArgumentOutOfRangeException(nameof(segmentsPerCircle));
         if (curveSamples < 2) throw new ArgumentOutOfRangeException(nameof(curveSamples));
+        var stopwatch = logger is null ? null : System.Diagnostics.Stopwatch.StartNew();
 
         // Coarse phase weights, honest rather than precise: sampling every edge, then the
         // faces (much the larger share — trimmed faces ear-clip and refine), then one
@@ -78,6 +79,9 @@ public static class BRepTessellator
         // must weld is constructed exactly, so this must NOT be loosened to hide cracks.
         var mesh = MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
         progress?.Report(1);
+        if (logger is not null)
+            KernelLog.TessellationCompleted(logger, solid.Faces.Count(), mesh.FaceCount,
+                stopwatch!.Elapsed.TotalMilliseconds);
         return mesh;
     }
 

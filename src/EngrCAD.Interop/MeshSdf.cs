@@ -48,14 +48,17 @@ public sealed class MeshSdf : Sdf
     private readonly Bvh _bvh;
     private readonly Aabb _bounds;
 
-    public MeshSdf(HalfEdgeMesh mesh) : this(mesh, MeshSignSource.Pseudonormal)
+    public MeshSdf(HalfEdgeMesh mesh, Microsoft.Extensions.Logging.ILogger? logger = null)
+        : this(mesh, MeshSignSource.Pseudonormal, logger)
     {
     }
 
-    public MeshSdf(HalfEdgeMesh mesh, MeshSignSource signSource)
+    public MeshSdf(HalfEdgeMesh mesh, MeshSignSource signSource,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         if (signSource == MeshSignSource.Pseudonormal && !mesh.IsClosed)
             throw new ArgumentException("A signed distance field requires a closed mesh.", nameof(mesh));
+        var stopwatch = logger is null ? null : System.Diagnostics.Stopwatch.StartNew();
 
         var triangulated = mesh.Triangulated();
         int faceCount = triangulated.FaceCount;
@@ -129,6 +132,8 @@ public sealed class MeshSdf : Sdf
 
         _bvh = Bvh.Build(boxes);
         _bounds = triangulated.ComputeBounds();
+        if (logger is not null)
+            KernelLog.MeshSdfBuilt(logger, faceCount, signSource, stopwatch!.Elapsed.TotalMilliseconds);
     }
 
     public override Aabb Bounds => _bounds;

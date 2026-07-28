@@ -698,7 +698,11 @@ operations. Depends only on `EngrCAD.Core`.
   floor silently rejected slightly-off-axis rims on large geometry, leaving generators
   untrimmed), and near-miss rejections emit a diagnostic instead of failing silently.
   Units: millimetres assumed; other declared length units produce a diagnostic, not
-  scaling.
+  scaling. `Read`/`ReadFile` take an **optional trailing `ILogger`**
+  (`Microsoft.Extensions.Logging.Abstractions` — abstractions only, this project's one
+  package dependency; `KernelLog.cs`, stable event ID **90**) that reports counts and
+  timing; the import's real findings stay in `StepReadResult.Diagnostics`, data the
+  caller acts on — logging complements them, never replaces them.
 
 ### Named epsilon tiers
 

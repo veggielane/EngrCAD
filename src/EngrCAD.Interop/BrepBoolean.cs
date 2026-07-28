@@ -28,21 +28,27 @@ public sealed class BrepBooleanException(string message) : Exception(message);
 /// </summary>
 public static class BrepBoolean
 {
-    public static BrepSolid Union(BrepSolid a, BrepSolid b) =>
-        Execute(a, b, "Union", keepAOutside: true, keepBOutside: true, reverseB: false);
+    public static BrepSolid Union(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
+        Execute(a, b, "Union", keepAOutside: true, keepBOutside: true, reverseB: false, logger);
 
-    public static BrepSolid Intersection(BrepSolid a, BrepSolid b) =>
-        Execute(a, b, "Intersection", keepAOutside: false, keepBOutside: false, reverseB: false);
+    public static BrepSolid Intersection(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
+        Execute(a, b, "Intersection", keepAOutside: false, keepBOutside: false, reverseB: false, logger);
 
-    public static BrepSolid Difference(BrepSolid a, BrepSolid b) =>
-        Execute(a, b, "Difference", keepAOutside: true, keepBOutside: false, reverseB: true);
+    public static BrepSolid Difference(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
+        Execute(a, b, "Difference", keepAOutside: true, keepBOutside: false, reverseB: true, logger);
 
     private static BrepSolid Execute(
-        BrepSolid a, BrepSolid b, string operation, bool keepAOutside, bool keepBOutside, bool reverseB)
+        BrepSolid a, BrepSolid b, string operation, bool keepAOutside, bool keepBOutside, bool reverseB,
+        Microsoft.Extensions.Logging.ILogger? logger = null)
     {
+        // Timing is opt-in observation only: every finding of the operation itself stays
+        // a return value or an exception (BrepBooleanException names its own facts).
+        var stopwatch = logger is null ? null : System.Diagnostics.Stopwatch.StartNew();
+        int facesA = a.Faces.Count(), facesB = b.Faces.Count();
+
         // Classification geometry is captured before any splitting mutates the inputs.
-        var sdfA = new MeshSdf(BRepTessellator.Tessellate(a));
-        var sdfB = new MeshSdf(BRepTessellator.Tessellate(b));
+        var sdfA = new MeshSdf(BRepTessellator.Tessellate(a, logger: logger), logger: logger);
+        var sdfB = new MeshSdf(BRepTessellator.Tessellate(b, logger: logger), logger: logger);
         var bounds = sdfA.Bounds.Union(sdfB.Bounds);
         var region = bounds.Expanded(bounds.Size[bounds.LongestAxis] * 0.1 + 0.1);
 
@@ -90,7 +96,11 @@ public static class BrepBoolean
                 shells.AddRange(reverseB ? b.Shells.Select(CloneReversedShell) : b.Shells);
             if (shells.Count == 0)
                 throw new InvalidOperationException("Boolean result is empty.");
-            return Verified(new BrepSolid(shells), operation);
+            var disjoint = Verified(new BrepSolid(shells), operation);
+            if (logger is not null)
+                KernelLog.BooleanCompleted(logger, operation, facesA, facesB,
+                    disjoint.Faces.Count(), stopwatch!.Elapsed.TotalMilliseconds);
+            return disjoint;
         }
 
         var kept = new List<BrepFace>();
@@ -109,7 +119,11 @@ public static class BrepBoolean
         if (kept.Count == 0)
             throw new InvalidOperationException("Boolean result is empty.");
         TopologyEditor.SealSeams(kept);
-        return Verified(new BrepSolid([new BrepShell(kept)]), operation);
+        var verified = Verified(new BrepSolid([new BrepShell(kept)]), operation);
+        if (logger is not null)
+            KernelLog.BooleanCompleted(logger, operation, facesA, facesB,
+                verified.Faces.Count(), stopwatch!.Elapsed.TotalMilliseconds);
+        return verified;
     }
 
     /// <summary>
