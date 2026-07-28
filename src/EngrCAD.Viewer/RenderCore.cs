@@ -21,8 +21,9 @@ internal static class ViewerPrograms
 {
     /// <summary>
     /// Compiles and links a program from full sources (header already prepended).
-    /// <paramref name="bindAttributes"/> pins aPos/aNormal/aOcclusion to locations
-    /// 0/1/2 (binding a name the shader does not declare is legal and ignored).
+    /// <paramref name="bindAttributes"/> pins aPos/aNormal/aOcclusion/aFieldColor to
+    /// locations 0/1/2/3 (binding a name the shader does not declare is legal and
+    /// ignored).
     /// </summary>
     public static uint LinkProgram(GL gl, string vertexSource, string fragmentSource, bool bindAttributes)
     {
@@ -36,6 +37,7 @@ internal static class ViewerPrograms
             gl.BindAttribLocation(program, 0, "aPos");
             gl.BindAttribLocation(program, 1, "aNormal");
             gl.BindAttribLocation(program, 2, "aOcclusion");
+            gl.BindAttribLocation(program, 3, "aFieldColor");
         }
         gl.LinkProgram(program);
         gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int linked);
@@ -128,13 +130,25 @@ internal static class RenderUploads
     /// </summary>
     public static void SetDefaultOcclusion(GL gl) => gl.VertexAttrib1(2, 1f);
 
+    /// <summary>
+    /// The field colour every mesh VAO reads when it has no field-colour buffer:
+    /// attribute 3's array stays disabled, so the shader sees this context-wide
+    /// constant. Set once per render pass alongside
+    /// <see cref="SetDefaultOcclusion"/> — the shader's uFieldColor strength is 0 for
+    /// such a part, so the value only has to be finite, but white keeps a mistake
+    /// looking like "no field" instead of "black part".
+    /// </summary>
+    public static void SetDefaultFieldColor(GL gl) => gl.VertexAttrib3(
+        3, FieldRendering.NeutralColor.R, FieldRendering.NeutralColor.G, FieldRendering.NeutralColor.B);
+
     /// <summary>Uploads a render mesh as interleaved position+normal with an index
     /// buffer, matching the mesh program's attribute layout. A non-null
     /// <paramref name="occlusion"/> (one baked value per vertex) is uploaded into its
     /// own buffer as attribute 2; otherwise that array stays disabled and the constant
-    /// from <see cref="SetDefaultOcclusion"/> applies.</summary>
-    public static unsafe (uint Vao, uint Vbo, uint Ebo, uint AoVbo) UploadMesh(
-        GL gl, RenderMesh mesh, float[]? occlusion = null)
+    /// from <see cref="SetDefaultOcclusion"/> applies. <paramref name="fieldColors"/>
+    /// (three floats per vertex) rides attribute 3 under the identical rule.</summary>
+    public static unsafe (uint Vao, uint Vbo, uint Ebo, uint AoVbo, uint FieldVbo) UploadMesh(
+        GL gl, RenderMesh mesh, float[]? occlusion = null, float[]? fieldColors = null)
     {
         var interleaved = new float[mesh.VertexCount * 6];
         for (int v = 0; v < mesh.VertexCount; v++)
@@ -160,8 +174,9 @@ internal static class RenderUploads
         gl.EnableVertexAttribArray(1);
         gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
         uint aoVbo = occlusion is null ? 0 : UploadOcclusion(gl, vao, occlusion);
+        uint fieldVbo = fieldColors is null ? 0 : UploadFieldColors(gl, vao, fieldColors);
         gl.BindVertexArray(0);
-        return (vao, vbo, ebo, aoVbo);
+        return (vao, vbo, ebo, aoVbo, fieldVbo);
     }
 
     /// <summary>
@@ -180,5 +195,23 @@ internal static class RenderUploads
         gl.EnableVertexAttribArray(2);
         gl.VertexAttribPointer(2, 1, VertexAttribPointerType.Float, false, sizeof(float), (void*)0);
         return aoVbo;
+    }
+
+    /// <summary>
+    /// Attaches a mesh VAO's field-colour attribute buffer — three floats per vertex at
+    /// attribute 3, the occlusion buffer's exact twin. Separate from the interleaved
+    /// position/normal buffer so switching a result on, or changing its colour map,
+    /// re-uploads only the colours. Returns the new buffer id; leaves the VAO bound
+    /// (callers unbind).
+    /// </summary>
+    public static unsafe uint UploadFieldColors(GL gl, uint vao, float[] colors)
+    {
+        gl.BindVertexArray(vao);
+        uint vbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, colors, BufferUsageARB.StaticDraw);
+        gl.EnableVertexAttribArray(3);
+        gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        return vbo;
     }
 }

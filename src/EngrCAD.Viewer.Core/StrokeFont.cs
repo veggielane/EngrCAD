@@ -158,6 +158,10 @@ public static class StrokeFont
         ['/'] = [[0.06, 0, 0.54, 1]],
         ['('] = [[0.44, 1, 0.28, 0.78, 0.22, 0.5, 0.28, 0.22, 0.44, 0]],
         [')'] = [[0.16, 1, 0.32, 0.78, 0.38, 0.5, 0.32, 0.22, 0.16, 0]],
+        // Square brackets: the engineering convention for a unit label ("STRESS [MPA]"),
+        // which the field legend's title uses.
+        ['['] = [[0.44, 1, 0.22, 1, 0.22, 0, 0.44, 0]],
+        [']'] = [[0.16, 1, 0.38, 1, 0.38, 0, 0.16, 0]],
 
         // ---- dimension symbols (keys kept as escapes; source stays ASCII) ----
         // degree sign: a small raised circle

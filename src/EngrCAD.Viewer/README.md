@@ -72,7 +72,8 @@ Dark-themed layout around one shared GL viewport:
   and the view centre — the minimal toolbar affordance for planes the axis model
   cannot express; `[`/`]` still nudge it along its own normal, and hosts keep the
   full `ViewportControl.SectionPlanes` API), an **Annot**
-  toggle (3D annotations, on by default — see below), a **Measure** toggle
+  toggle (3D annotations, on by default — see below), a **Fields** toggle
+  (simulation results, on by default — see below), a **Measure** toggle
   (interactive dimensioning — see below), an **Explode** toggle with a factor slider
   (see below), a **BOM** button (see below), and a **Check** button (the model
   validation report — `SceneReport` in Modeling: per-part watertightness, volume,
@@ -496,6 +497,45 @@ view, where `Tab.Instances(factor)` returns the same parts in the same order at 
 factor — going through `SetInstances` there would delete and re-upload every buffer on
 each slider tick. It validates the list part-for-part and falls back to a full
 `SetInstances` if the document changed underneath (a live reload mid-animation).
+
+## Simulation results (colour maps, legend, deformed shape)
+
+A part that carries `MeshField` results and states a `Part.FieldDisplay` (both in
+EngrCAD.Modeling) is drawn through a colour map, with a legend and — where the display
+asks for it — displaced by a displacement result with the original ghosted behind it.
+The toolbar **Fields** toggle (on by default) switches it off, `RenderToImage(…,
+fields: false)` does the same headlessly, and the properties panel shows the part's
+results, which one is displayed, its min/max and the deformation scale.
+
+**Colour is a vertex attribute, deformation is geometry** — and the two behave
+differently on purpose:
+
+- Colours ride `aFieldColor` (attribute 3) under the exact rule baked occlusion follows:
+  a mesh uploaded with no colour buffer reads a context constant, the shader's
+  `uFieldColor` strength is 0, and `mix(uColor, vFieldColor, 0.0)` is `uColor` bit for
+  bit. **A part with no results therefore renders byte-identically** to before field
+  display existed — proved by the docs suite (all 87 rendered PNGs unchanged across the
+  shader change), not merely intended.
+- A deformed shape is different geometry, not a different pose, so it cannot ride the
+  matrices-only `SetInstancePoses` path the exploded view and the animation transport
+  use. It **re-uploads**, deliberately and explicitly, which is why `ShowFields` is a
+  mode switch and not something on the animation path. Facet normals are recomputed from
+  the displaced positions (carrying the originals over would make the deformed shape look
+  exactly like the original), the undeformed shape draws as an extra translucent body at
+  `FieldRendering.GhostAlpha`, and a deformed part gets **no feature-edge overlay** — its
+  exact B-Rep edges describe geometry that has moved.
+
+Picking follows what is drawn: a deformed part's pick BVH is built over the displaced
+mesh, so a click selects it where it is on screen.
+
+The **legend** is `FieldLegend` (EngrCAD.Viewer.Core) drawn by `FieldLegendLayer` — a
+colour bar of flat-coloured bands, tick numbers and a title in the stroke font, on the
+left edge (the cube owns the top-right, the meshing panel the bottom centre), depth test
+off. Unlike the view cube it **is** drawn in headless renders: a legend is documentation,
+the same argument that puts dimensions in a docs render, and a colour plot without its
+scale is a picture of nothing in particular. One legend, from the first visible part that
+resolves a display — several parts on different scales under one bar would be a legend
+that lies, which is what an explicit `FieldDisplay.Range` is for.
 
 ## Exploded views
 

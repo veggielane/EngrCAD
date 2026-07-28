@@ -142,6 +142,10 @@ public static class EngrCad
     /// flattening the window animates, so an exploded render and an exploded viewport
     /// agree by construction; the offsets come from <c>Assembly.AutoExplode</c> (called
     /// here when nothing has set them yet).</para>
+    /// <para><paramref name="fields"/> (default true) draws parts that carry simulation
+    /// results through their <c>Part.FieldDisplay</c> — colour map, legend and deformed
+    /// shape. False renders every part in its own colour and undeformed, which is how a
+    /// geometry figure is taken of a model that also carries results.</para>
     /// </summary>
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
@@ -151,7 +155,8 @@ public static class EngrCad
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         ConstructionPreviewRequest? preview = null,
-        double explode = 0)
+        double explode = 0,
+        bool fields = true)
     {
         scene.PreMesh(); // tessellate before touching GL
         // Exact-zero semantic test: only an explode ASKED FOR derives offsets, so a plain
@@ -170,7 +175,7 @@ public static class EngrCad
             : (null, Matrix4d.Identity);
         OffscreenRenderer.RenderToImage(instances, path, width, height, camera,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, segments, world);
+            sectionPlanes, sectionCombine, segments, world, fields);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL

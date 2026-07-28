@@ -26,7 +26,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uAlpha, _uAmbientOcclusion;
+    private int _uAlpha, _uAmbientOcclusion, _uFieldColor;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
     private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
@@ -50,7 +50,8 @@ public sealed class ViewportControl : OpenGlControlBase
     // ambient occlusion on can backfill occlusion buffers without re-uploading geometry.
     private readonly record struct PartBuffers(
         Part Part, uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo,
-        uint WireVao, uint WireVbo, uint AoVbo);
+        uint WireVao, uint WireVbo, uint AoVbo, uint FieldVbo,
+        uint GhostVao, uint GhostVbo, uint GhostEbo);
 
     private readonly List<PartBuffers> _gpuBuffers = [];
 
@@ -76,7 +77,10 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly record struct GpuMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
-        uint WireVao, uint WireVbo, int WireVertexCount, Vector3d WorldCenter);
+        uint WireVao, uint WireVbo, int WireVertexCount, Vector3d WorldCenter,
+        // Field display: whether this instance's mesh carries a field-colour buffer,
+        // and the undeformed shape's buffers when a deformed one is being shown.
+        bool FieldColored, uint GhostVao, int GhostIndexCount);
 
     // CPU-side pick data per object: triangles plus a BVH over them, in object space
     // (PickMesh, EngrCAD.Viewer.Core — the browser client raycasts through the same
@@ -106,6 +110,10 @@ public sealed class ViewportControl : OpenGlControlBase
     // Construction-tree preview overlay (self-contained in PreviewLayer.cs; this class
     // feeds one line batch, draws, and releases it).
     private readonly PreviewLayer _preview = new();
+
+    // Field-display colour bar (self-contained in FieldLegendLayer.cs, geometry from the
+    // shared FieldLegend).
+    private readonly FieldLegendLayer _legend = new();
 
     /// <summary>
     /// Replaces the displayed parts (one tab's worth of loose parts, each posed by its
@@ -256,9 +264,14 @@ public sealed class ViewportControl : OpenGlControlBase
         _meshSection = new SectionUniforms(_gl, _program);
         _uAlpha = _gl.GetUniformLocation(_program, "uAlpha");
         _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
+        _uFieldColor = _gl.GetUniformLocation(_program, "uFieldColor");
         // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
         // the GL default for a disabled attribute is 0, which would shade parts black.
         RenderUploads.SetDefaultOcclusion(_gl);
+        // Same rule for the field-colour attribute: a part with no results reads this
+        // constant, and its uFieldColor strength is 0, so it renders exactly as before
+        // field display existed.
+        RenderUploads.SetDefaultFieldColor(_gl);
 
         _lineProgram = CompileLineProgram(_gl);
         _uLineModel = _gl.GetUniformLocation(_lineProgram, "uModel");
@@ -288,7 +301,8 @@ public sealed class ViewportControl : OpenGlControlBase
     private readonly record struct SharedMesh(
         uint Vao, uint Vbo, uint Ebo, int IndexCount,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
-        uint WireVao, uint WireVbo, int WireVertexCount, PickMesh Pick, uint AoVbo);
+        uint WireVao, uint WireVbo, int WireVertexCount, PickMesh Pick, uint AoVbo,
+        bool FieldColored, uint GhostVao, int GhostIndexCount);
 
     /// <summary>Uploads an instance list, replacing existing GPU resources. Each
     /// distinct part is prepared and uploaded once (cached display mesh → RenderMesh,
@@ -327,7 +341,8 @@ public sealed class ViewportControl : OpenGlControlBase
                     s.Vao, s.Vbo, s.Ebo, s.IndexCount, instance.World, (color.R, color.G, color.B),
                     s.EdgeVao, s.EdgeVbo, s.EdgeVertexCount,
                     s.WireVao, s.WireVbo, s.WireVertexCount,
-                    worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center));
+                    worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
+                    s.FieldColored, s.GhostVao, s.GhostIndexCount));
                 _pickData.Add(s.Pick);
                 _visible.Add(visible is null || i >= visible.Count || visible[i]);
                 _instances.Add(instance);
@@ -359,26 +374,63 @@ public sealed class ViewportControl : OpenGlControlBase
     {
         var mesh = part.GetMesh();
         var render = RenderMesh.CreateFlat(mesh);
+        // Simulation results, if the part shows any: a colour buffer for attribute 3
+        // and, for a deformed-shape display, a displaced mesh that REPLACES the
+        // uploaded geometry (a displaced shape is different geometry, not a different
+        // pose — this is the one place the viewport deliberately re-uploads).
+        FieldMeshData? field = null;
+        if (_showFields)
+        {
+            if (FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out string? fieldError))
+                field = built;
+            else if (fieldError is not null)
+                ShowStatus(fieldError);   // a display asked for and not honourable, named
+        }
+        var drawn = field?.Deformed ?? render;
+
         // B-Rep-backed parts get their edge overlay from the ACTUAL B-Rep edges
         // (exact circles stay smooth at coarse tessellation); others fall back to
         // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
-        var featureEdges = part.GetFeatureEdges();
+        // A DEFORMED part gets none: those edges describe geometry that has moved, and
+        // drawing them over the displaced shape would be a wrong outline rather than a
+        // coarse one.
+        var featureEdges = field?.Deformed is null
+            ? part.GetFeatureEdges()
+            : [];
         var wireEdges = WireframeEdges.Extract(mesh);
         // Baked per-vertex occlusion, but ONLY if it is already cached: TryGet never
         // bakes, so this upload can never stall the render thread. An uncached part goes
         // up without an occlusion buffer, which reads the constant 1.0 and is exactly the
         // flat-lit shading; the background bake (StartOcclusionBake) then publishes its
         // result and BackfillOcclusion attaches it on a later frame.
-        var (vao, vbo, ebo, aoVbo) = RenderUploads.UploadMesh(gl, render,
-            _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null);
+        var (vao, vbo, ebo, aoVbo, fieldVbo) = RenderUploads.UploadMesh(gl, drawn,
+            _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null,
+            field?.Colors);
         var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
         var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
-        _gpuBuffers.Add(new PartBuffers(part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo));
 
-        return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
+        // The undeformed shape, ghosted behind the deformed one — the comparison IS the
+        // point of a deformed-shape plot. Its own buffers, no colours and no pick data:
+        // it is a reference outline, not a pickable body.
+        uint ghostVao = 0, ghostVbo = 0, ghostEbo = 0;
+        int ghostIndexCount = 0;
+        if (field is { ShowGhost: true })
+        {
+            (ghostVao, ghostVbo, ghostEbo, _, _) = RenderUploads.UploadMesh(gl, render);
+            ghostIndexCount = render.Indices.Length;
+        }
+
+        _gpuBuffers.Add(new PartBuffers(
+            part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo, fieldVbo,
+            ghostVao, ghostVbo, ghostEbo));
+
+        return new SharedMesh(vao, vbo, ebo, drawn.Indices.Length,
             edgeVao, edgeVbo, featureEdges.Count * 2,
             wireVao, wireVbo, wireEdges.Count * 2,
-            PickMesh.Build(render), aoVbo);
+            // Picking follows what is DRAWN: a click on a deformed part must select it
+            // where it is on screen, not where its undeformed shape used to be.
+            PickMesh.Build(drawn), aoVbo,
+            field is not null, ghostVao, ghostIndexCount);
     }
 
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
@@ -395,6 +447,14 @@ public sealed class ViewportControl : OpenGlControlBase
             gl.DeleteVertexArray(b.WireVao);
             if (b.AoVbo != 0)
                 gl.DeleteBuffer(b.AoVbo);
+            if (b.FieldVbo != 0)
+                gl.DeleteBuffer(b.FieldVbo);
+            if (b.GhostVao != 0)
+            {
+                gl.DeleteBuffer(b.GhostVbo);
+                gl.DeleteBuffer(b.GhostEbo);
+                gl.DeleteVertexArray(b.GhostVao);
+            }
         }
         _gpuBuffers.Clear();
     }
@@ -503,6 +563,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _sectionContours.Release(_gl);
         _annotations.Release(_gl);
         _preview.Release(_gl);
+        _legend.Release(_gl);
         _meshes.Clear();
         if (_gridVbo != 0)
         {
@@ -747,6 +808,12 @@ public sealed class ViewportControl : OpenGlControlBase
                 }
             }
         }
+        // Undeformed ghosts, after the opaque and translucent fills: the reference shape
+        // behind a deformed-shape plot, drawn through the SAME blend/depth-mask
+        // machinery translucent parts use (fainter alpha, since it is an outline rather
+        // than a see-through body) and never field-coloured.
+        DrawFieldGhosts(gl, matrix, anyPlanes);
+
         // Section-plane SDF isolines, after everything else so they read as an
         // overlay on the cut (depth test still applies; the polygon-offset fills
         // lose to coincident lines, same as feature edges).
@@ -764,6 +831,13 @@ public sealed class ViewportControl : OpenGlControlBase
         // its plane, or an intermediate operation's edges) drawn over the model, so a
         // rollback view reads against the finished part.
         _preview.Draw(gl, _lineProgram, _uLineModel, _uLineColor, _uLineSectionEnabled, matrix);
+
+        // Field-display colour bar, with the annotations and before the view cube: it
+        // is documentation about what the colours mean, so it belongs on top of the
+        // model and under the orientation widget.
+        _legend.Draw(gl, ActiveFieldDisplay, width, height, scaling, new LineProgramHandles(
+            _lineProgram, _uLineModel, _uLineView, _uLineProj, _uLineColor, _uLineSectionEnabled));
+
         gl.BindVertexArray(0);
 
         // View-cube hook 2: the orientation widget draws last, over everything, into
@@ -1083,12 +1157,57 @@ public sealed class ViewportControl : OpenGlControlBase
         CameraMath.WriteColumnMajor(m.Model, matrix);
         gl.UniformMatrix4(_uModel, 1, false, matrix);
         gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
+        // Per-draw, because it is per part: a field-coloured part reads its own colour
+        // buffer, everything else stays at the neutral 0 and renders exactly as it did
+        // before field display existed.
+        gl.Uniform1(_uFieldColor, m.FieldColored ? FieldRendering.Strength : 0f);
         // One shader knob for both states: 1.0 = selection gold, 0.35 = the fainter
         // hover tint; a hovered selected part just shows selection (Highlight.Strength,
         // shared with the browser client so both mean the same thing by "selected").
         gl.Uniform1(_uHighlight, Highlight.Strength(index, _selected, _hovered));
         gl.BindVertexArray(m.Vao);
         gl.DrawElements(PrimitiveType.Triangles, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
+    }
+
+    /// <summary>
+    /// Draws the undeformed shape of every visible deformed part, ghosted. Its own pass
+    /// after the opaque and translucent fills, with depth writes off so it never hides
+    /// the result it sits behind; the geometry carries no colour buffer and the field
+    /// strength is forced to 0, so it draws in the part's own colour.
+    /// </summary>
+    private unsafe void DrawFieldGhosts(GL gl, Span<float> matrix, bool anyPlanes)
+    {
+        bool any = false;
+        for (int i = 0; i < _meshes.Count; i++)
+        {
+            if (!_visible[i] || _meshes[i].GhostVao == 0)
+                continue;
+            if (!any)
+            {
+                any = true;
+                gl.UseProgram(_program);
+                gl.Uniform1(_uFieldColor, 0f);
+                gl.Uniform1(_uHighlight, 0f);
+                gl.Uniform1(_uAlpha, FieldRendering.GhostAlpha);
+                gl.Enable(EnableCap.Blend);
+                gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+                gl.DepthMask(false);
+            }
+            var m = _meshes[i];
+            SectionFor(_meshSection, gl, i, anyPlanes);
+            CameraMath.WriteColumnMajor(m.Model, matrix);
+            gl.UniformMatrix4(_uModel, 1, false, matrix);
+            gl.Uniform3(_uColor, m.Color.R, m.Color.G, m.Color.B);
+            gl.BindVertexArray(m.GhostVao);
+            gl.DrawElements(
+                PrimitiveType.Triangles, (uint)m.GhostIndexCount, DrawElementsType.UnsignedInt, (void*)0);
+        }
+        if (any)
+        {
+            gl.DepthMask(true);
+            gl.Disable(EnableCap.Blend);
+            gl.Uniform1(_uAlpha, 1f);
+        }
     }
 
     private void DrawFeatureEdges(GL gl, int index, Span<float> matrix)
@@ -1421,6 +1540,62 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             _viewStyle = value;
             RequestNextFrameRendering();
+        }
+    }
+
+    private bool _showFields = true;
+
+    /// <summary>
+    /// Whether parts that carry simulation results are drawn through their
+    /// <c>Part.FieldDisplay</c> (default true — a scene that states a field display
+    /// shows it). Switching it off returns every part to its own colour and undeformed
+    /// shape.
+    /// <para>Unlike the other view toggles this one <b>re-uploads</b>: colours are a
+    /// vertex attribute and a deformed shape is different geometry, not a different
+    /// pose. That is deliberate and it is why this is a mode switch rather than
+    /// something on the animation path.</para>
+    /// </summary>
+    public bool ShowFields
+    {
+        get => _showFields;
+        set
+        {
+            if (_showFields == value)
+                return;
+            _showFields = value;
+            lock (_sceneLock)
+            {
+                if (_instances.Count > 0)
+                    _pending = ([.. _instances], false, [.. _visible]);
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
+        }
+    }
+
+    /// <summary>
+    /// The field display currently shown, if any — the first visible instance whose
+    /// part resolves one. Hosts read it for the legend and the min/max readout; it is
+    /// null when nothing shows a field (or <see cref="ShowFields"/> is off).
+    /// <para>Deliberately ONE display rather than a per-part list: the legend is a
+    /// single scale, and several parts on different scales under one bar would be a
+    /// legend that lies. Parts sharing a scale is what an explicit
+    /// <c>FieldDisplay.Range</c> is for.</para>
+    /// </summary>
+    public ResolvedFieldDisplay? ActiveFieldDisplay
+    {
+        get
+        {
+            if (!_showFields)
+                return null;
+            lock (_sceneLock)
+            {
+                for (int i = 0; i < _instances.Count; i++)
+                {
+                    if (_visible[i] && _instances[i].Part.TryResolveFieldDisplay(out var resolved, out _))
+                        return resolved;
+                }
+            }
+            return null;
         }
     }
 
