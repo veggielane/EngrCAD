@@ -483,11 +483,26 @@ to a grid ~4500 ULPs wide collapses those pairs to identical doubles, the arrang
 dedupes them as coincident edges, and no sliver is ever built. It is nine orders below the
 chord tolerance a polygonal region carries anyway.
 
-**Known limitation**: in near-tangent views (a torus seen side-on, where every quad is
-almost edge-on) the 2D boolean can still leave a **pinhole** of ~1e-7 of the outline area.
-Areas are correct to 6 significant figures and order-independent; only the hole COUNT is
-unreliable there, so filter holes by area if that matters. The residual cause is cell
-classification in `Region2dBoolean` at near-tangency, not the silhouette.
+**The near-tangency "pinhole" is REAL GEOMETRY, not a boolean defect** — a finding that
+overturned this file's own earlier diagnosis, and worth keeping because the wrong answer
+was so plausible. A 64x48-tessellated torus seen side-on returns one hole of 1.45e-5 (about
+2.4e-7 of the outline), and the standing explanation was cell misclassification in
+`Region2dBoolean` at near-tangency. It is not: **780 of 780 probe points inside that hole
+are covered by ZERO facets** of the mesh, tested with the exact `Orient2d` predicate over
+every triangle, so the union the boolean returned is the correct union of what it was
+given. What has the hole is the *tessellated solid's own shadow*. In the band
+|z| in [r*cos(pi/n_minor), r] — the minor polygon's scallop, 4.28e-3 deep at n = 48 — the
+discrete tube only reaches that height near its minor-polygon VERTICES, and the major
+discretization breaks that thin band into lenses that need not overlap. The hole measured
+1.16e-3 deep, a quarter of the scallop.
+
+It is also not systematic: sweeping the density gives holes at 64x48 and none at 32x24,
+96x72, 128x96, 64x96 or 128x48, because whether two neighbouring lenses overlap is an
+alignment question. **A silhouette is the shadow of the mesh you give it, not of the
+surface you meant** — the same rule the remesher's feature detection follows — so filter
+holes by area if you want the smooth body's answer, and refine the tessellation if you want
+the discrete one to converge onto it. `TorusSilhouette_AlongTheAxisIsAnAnnulus_AcrossTheAxisIsSolid`
+now asserts the strong form: every hole it finds is uncovered by every facet.
 
 ## Mass properties (`BrepMassProperties`)
 
