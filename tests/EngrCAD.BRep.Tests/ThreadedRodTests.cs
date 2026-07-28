@@ -110,4 +110,94 @@ public class ThreadedRodTests
         Assert.Throws<ArgumentException>(() => SolidFactory.MakeThreadedRod(
             [new Vector2d(0, 0), new Vector2d(2, 0.5)], Pitch, 10));
     }
+
+    // ---- left-hand threads ----
+
+    [Fact]
+    public void LeftHandRod_HasTheSameTopologyAndSatisfiesEuler()
+    {
+        var rod = SolidFactory.MakeThreadedRod(
+            IsoProfile(MajorRadius, MinorRadius, Pitch), Pitch, 10, null, leftHand: true);
+        rod.Validate();
+
+        // Handedness changes no counts: the same K bands, K rails and 2K cap cuts.
+        Assert.Equal(8, rod.Vertices.Count());
+        Assert.Equal(12, rod.Edges.Count());
+        Assert.Equal(6, rod.Faces.Count());
+        Assert.True(rod.SatisfiesEulerFormula(genus: 0));
+    }
+
+    [Fact]
+    public void LeftHandRod_DescendsAsThePhaseAdvances()
+    {
+        var rod = SolidFactory.MakeThreadedRod(
+            IsoProfile(MajorRadius, MinorRadius, Pitch), Pitch, 10, null, leftHand: true);
+        var band = rod.Faces.Select(f => f.Surface).OfType<HelicalSurface>().First();
+
+        Assert.Equal(-Pitch, band.Pitch, 12);
+        // One full turn of phase drops the band by exactly one pitch — the definition.
+        Assert.Equal(-Pitch, band.PointAt(2 * Math.PI, 0).Z - band.PointAt(0, 0).Z, 12);
+    }
+
+    [Fact]
+    public void LeftHandRod_IsTheExactMirrorOfTheRightHandOne()
+    {
+        // The identity the whole construction rests on, and the one the Shape compiler
+        // uses to lower Mirror(thread): reflecting across a plane CONTAINING the axis
+        // maps phase u to −u, which is exactly what negating the axial rate does.
+        var profile = IsoProfile(MajorRadius, MinorRadius, Pitch);
+        var right = SolidFactory.MakeThreadedRod(profile, Pitch, 10);
+        var left = SolidFactory.MakeThreadedRod(profile, Pitch, 10, null, leftHand: true);
+
+        var rightBands = right.Faces.Where(f => f.Surface is HelicalSurface).ToList();
+        var leftBands = left.Faces.Where(f => f.Surface is HelicalSurface).ToList();
+        Assert.Equal(rightBands.Count, leftBands.Count);
+        for (int b = 0; b < rightBands.Count; b++)
+        {
+            var a = (HelicalSurface)rightBands[b].Surface;
+            var c = (HelicalSurface)leftBands[b].Surface;
+            Assert.Equal(-a.DomainU.End, c.DomainU.Start, 12);
+            Assert.Equal(-a.DomainU.Start, c.DomainU.End, 12);
+            for (int i = 0; i <= 24; i++)
+            {
+                double u = a.DomainU.ParameterAt(i / 24.0);
+                foreach (double v in (ReadOnlySpan<double>)[0, 0.5, 1])
+                {
+                    var p = a.PointAt(u, v);
+                    // Bit-exact: the reflected right-hand point IS the left-hand
+                    // evaluation, term for term — no tolerance is involved.
+                    Assert.Equal(new Vector3d(p.X, -p.Y, p.Z), c.PointAt(-u, v));
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void LeftHandRod_CapCutsSpanTheSameArcsInReverse()
+    {
+        // The cap cuts are the other half of the mirror: each spiral runs over the
+        // negated u-interval, so the chain that closes a cap traverses the same phases
+        // the other way round. This is what forces the cap loops' chain ORDER to flip.
+        var profile = IsoProfile(MajorRadius, MinorRadius, Pitch);
+        var right = SolidFactory.MakeThreadedRod(profile, Pitch, 10);
+        var left = SolidFactory.MakeThreadedRod(profile, Pitch, 10, null, leftHand: true);
+
+        static List<SpiralArc3d> Cuts(BrepSolid solid, bool top) =>
+            [.. solid.Faces
+                .First(f => f.Surface is PlaneSurface plane && (plane.Origin.Z > 0) == top)
+                .OuterLoop.Coedges.Select(c => c.Edge.Curve).OfType<SpiralArc3d>()];
+
+        foreach (bool top in (ReadOnlySpan<bool>)[false, true])
+        {
+            var r = Cuts(right, top);
+            var l = Cuts(left, top);
+            Assert.Equal(4, r.Count);
+            Assert.Equal(4, l.Count);
+            // Same set of phase intervals, negated. Compare as sorted spans so the
+            // chain order (which legitimately differs) does not enter.
+            var rSpans = r.Select(a => (Math.Round(-a.Domain.End, 9), Math.Round(-a.Domain.Start, 9))).OrderBy(t => t).ToList();
+            var lSpans = l.Select(a => (Math.Round(a.Domain.Start, 9), Math.Round(a.Domain.End, 9))).OrderBy(t => t).ToList();
+            Assert.Equal(rSpans, lSpans);
+        }
+    }
 }

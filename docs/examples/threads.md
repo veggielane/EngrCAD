@@ -6,8 +6,7 @@ the ISO 261/262 coarse-pitch series **M2–M12** with the **ISO 68-1 basic profi
 the 60° symmetric V whose dimensions all follow from the nominal diameter d and pitch
 P via the fundamental triangle height H = (√3/2)·P — crest flat P/8 at the major
 diameter, root flat P/4 at the minor diameter d − (5/4)·H, thread depth 5H/8. A
-custom `ThreadSpec(nominalDiameter, pitch)` covers anything outside the catalog;
-right-hand threads only.
+custom `ThreadSpec(nominalDiameter, pitch)` covers anything outside the catalog.
 
 `StandardThreads.Fine(size)` gives the first-choice ISO 261 **fine** pitch of the same
 sizes, and `Metric(size, pitch)` names a second- or third-choice one:
@@ -149,6 +148,40 @@ var tapped = Shape.Box(20, 20, 8)
 var brep = tapped.ToBrep();                       // B-Rep-native threaded hole
 if (!tapped.CanConvertTo(TargetRep.Brep))
     throw new Exception("zero-clearance threaded holes are B-Rep-native");
+```
+
+## Left-hand threads
+
+`spec.LeftHanded()` winds the same profile the other way. Every diameter is shared —
+handedness is not a different thread — the designation becomes `M8×1.25-LH`, and
+`ThreadCallout` picks that up on its own:
+
+```csharp render:thread-left-hand
+// A handed pair, drawn with a deliberately coarse 5 mm lead so the two helices spiral
+// visibly opposite ways. The left-hand stud is Native in every representation,
+// because it is exactly the mirror image of its right-hand twin.
+var coarse = new ThreadSpec(nominalDiameter: 12, pitch: 5);
+var right = Shape.ExternalThread(coarse, 20, chamferEnds: false);
+var left = Shape.ExternalThread(coarse.LeftHanded(), 20, chamferEnds: false);
+
+var scene = new Scene();
+scene.Add(new Part("right-hand", right, Palette.Steel, Matrix4d.CreateTranslation((-9, 0, 0))));
+scene.Add(new Part("left-hand", left, Palette.Copper, Matrix4d.CreateTranslation((9, 0, 0))));
+```
+
+![Two coarse-lead studs side by side whose helices spiral in opposite directions](images/thread-left-hand.png)
+
+Because a left-hand thread IS the mirror image, **mirroring a thread is Native too**
+rather than refused: the compiler recognizes that a reflection across a plane containing
+the axis is precisely the handedness flip, so `Mirror` leaves an ordinary rigid placement
+of a rod wound the other way. Mirroring twice comes back right-handed.
+
+```csharp run:thread-mirror
+var stud = Shape.ExternalThread(8, length: 12, chamferEnds: false);
+var handedPair = stud.Mirror(Vector3d.UnitX);          // the left-hand twin
+handedPair.ToBrep().Validate();
+if (!handedPair.CanConvertTo(TargetRep.Brep))
+    throw new Exception("a mirrored thread is the left-hand thread, and is B-Rep-native");
 ```
 
 One boundary to know: downstream B-Rep booleans can cut a modeled thread only with

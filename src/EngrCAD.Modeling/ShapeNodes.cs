@@ -578,7 +578,8 @@ internal sealed class ThreadShape(ThreadSpec spec, double length, double profile
     internal Sdf ToSdf() => Sdf.Thread(
         spec.MajorDiameter / 2, spec.MinorDiameter / 2, spec.Pitch,
         spec.CrestFlatWidth, spec.RootFlatWidth, length,
-        profileOffset, startChamfer: chamferLength, endChamfer: chamferLength);
+        profileOffset, startChamfer: chamferLength, endChamfer: chamferLength,
+        leftHand: spec.LeftHand);
 
     internal override string Describe() => $"Thread({spec.Designation}, L={length:g4})";
 }

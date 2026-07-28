@@ -205,12 +205,16 @@ public abstract class Sdf
     /// <paramref name="startChamfer"/>/<paramref name="endChamfer"/> cut 45° cones at
     /// z = 0 / z = length ending at radius majorRadius + profileOffset − chamfer.</para>
     /// </summary>
+    /// <param name="leftHand">Wind the thread left-handed — the exact mirror image of
+    /// the right-hand form (the helical phase reads z + P·θ/2π instead of z − P·θ/2π),
+    /// so every fidelity guarantee above holds unchanged.</param>
     public static Sdf Thread(
         double majorRadius, double minorRadius, double pitch,
         double crestWidth, double rootWidth, double length,
-        double profileOffset = 0, double startChamfer = 0, double endChamfer = 0) =>
+        double profileOffset = 0, double startChamfer = 0, double endChamfer = 0,
+        bool leftHand = false) =>
         new ThreadSdf(majorRadius, minorRadius, pitch, crestWidth, rootWidth, length,
-            profileOffset, startChamfer, endChamfer);
+            profileOffset, startChamfer, endChamfer, leftHand);
 
     // ---- combinators ----
 

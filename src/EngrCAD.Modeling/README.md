@@ -516,6 +516,26 @@ truncating the internal crests as tapping does) plus a modeled thread void per p
 offsets perpendicular to its own boundary): the external thread *shrinks*, the internal
 void *grows*; default 0, typical FDM 0.1–0.25 mm, capped at half the thread depth.
 
+**Left-hand threads**: `spec.LeftHanded()` (or `WithHandedness(bool)`) winds the same
+profile the other way — every diameter is shared, so handedness is not a different
+thread — and the designation becomes `M8×1.25-LH`, which `ThreadCallout` picks up
+automatically. It is **Native in all three representations**, because a left-hand thread
+is exactly the mirror image of its right-hand twin: the implicit field flips one sign in
+the helical phase (bit-for-bit the mirrored right-hand field), and the B-Rep factory
+takes a signed axial rate. **`Mirror` of a thread is therefore Native too, not
+Impossible** — the compiler writes a mirrored placement as m = (m·FlipY)·FlipY, where
+FlipY is the axis-containing reflection that IS the handedness flip, leaving a proper
+similarity to place a rod of the opposite handedness; `Mirror(Mirror(x))` comes back
+right-handed. The refusal that remains is a genuinely different one: a sheared or
+non-uniformly scaled placement cannot re-place a helix at all.
+
+One measured artifact worth knowing: a mirrored (or left-hand) rod tessellates to the
+SAME vertices as the mirror of its right-hand twin but with a systematically ~3× larger
+volume deficit at the same density, because a grid quad's diagonal is chosen by corner
+ORDER (`HalfEdgeMesh.Triangulated` fans from corner 0) and mirroring a sheared band's
+cells swaps which diagonal that picks. Both converge quadratically onto the same
+analytic volume, so it is a discretization constant, not a drift.
+
 Threads are **implicit-native** (`Sdf.Thread`: exact sign, documented approximate
 distance). **External threads are also B-Rep-native** when the basic profile is
 unmodified — zero clearance and `chamferEnds: false` — via

@@ -71,10 +71,31 @@ public class ThreadShapeTests
         Assert.True(Math.Abs(movedMesh.Volume() - 8 * expected) / (8 * expected) < 0.01,
             $"scaled volume {movedMesh.Volume():g6} vs analytic {8 * expected:g6}");
 
-        // A mirrored placement would be a left-hand thread: honest Impossible.
+        // A mirrored placement IS a left-hand thread, which the factory now builds — so
+        // this is Native where it used to be an honest Impossible. Mirroring through the
+        // plane normal to Z also flips the rod's own axis, so the result spans
+        // z ∈ [−length, 0]; the volume is unchanged, a reflection being an isometry.
         var mirrored = Shape.ExternalThread(M8, length, chamferEnds: false)
             .Mirror(Vector3d.Zero, Vector3d.UnitZ);
-        Assert.False(mirrored.Explain(TargetRep.Brep).IsConvertible);
+        Assert.True(mirrored.Explain(TargetRep.Brep).IsConvertible);
+        var mirroredBrep = mirrored.ToBrep();
+        mirroredBrep.Validate();
+        var mirroredMesh = EngrCAD.Interop.BRepTessellator.Tessellate(mirroredBrep);
+        Assert.True(mirroredMesh.IsClosed);
+        // A wider band than the unmirrored case above, for a reason worth knowing: the
+        // mirrored rod's tessellation has the SAME vertices as the mirror of the
+        // unmirrored one (measured: 0 of 131 200 differ at 1e-9) but a systematically
+        // 3x larger volume deficit, because a grid quad's diagonal is chosen by CORNER
+        // ORDER — the fan in HalfEdgeMesh.Triangulated starts at corner 0 — and mirroring
+        // a sheared band's cells swaps which diagonal that picks. Both converge
+        // quadratically onto the same analytic volume (LeftHandThreadTests pins that),
+        // so this is a discretization constant, not an error that stops shrinking.
+        Assert.True(Math.Abs(mirroredMesh.Volume() - expected) / expected < 0.025,
+            $"mirrored volume {mirroredMesh.Volume():g6} vs analytic {expected:g6}");
+        double minZ = mirroredMesh.Vertices.Min(v => v.Position.Z);
+        double maxZ = mirroredMesh.Vertices.Max(v => v.Position.Z);
+        Assert.InRange(minZ, -length - 1e-9, -length + 1e-9);
+        Assert.InRange(maxZ, -1e-9, 1e-9);
     }
 
     [Fact]

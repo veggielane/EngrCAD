@@ -44,6 +44,10 @@ internal sealed class ThreadSdf : Sdf
     private readonly double _majorRadius;
     private readonly double _minorRadius;
     private readonly double _pitch;
+    // +1 right-hand, −1 left-hand. The ONLY difference between the two: the helical
+    // phase reads z − h·P·θ/2π, so a left-hand thread is the exact mirror image of its
+    // right-hand twin (θ → −θ) and the profile arithmetic below is untouched.
+    private readonly double _handedness;
     private readonly double _length;
     private readonly double _crestHalfWidth; // u where the crest flat ends
     private readonly double _rootStart;      // u where the root flat begins
@@ -61,7 +65,7 @@ internal sealed class ThreadSdf : Sdf
     public ThreadSdf(
         double majorRadius, double minorRadius, double pitch,
         double crestWidth, double rootWidth, double length,
-        double profileOffset, double startChamfer, double endChamfer)
+        double profileOffset, double startChamfer, double endChamfer, bool leftHand = false)
     {
         if (!(minorRadius > 0) || !(majorRadius > minorRadius))
             throw new ArgumentOutOfRangeException(nameof(majorRadius),
@@ -86,6 +90,7 @@ internal sealed class ThreadSdf : Sdf
         _majorRadius = majorRadius;
         _minorRadius = minorRadius;
         _pitch = pitch;
+        _handedness = leftHand ? -1 : 1;
         _length = length;
         _crestHalfWidth = crestWidth / 2;
         _rootStart = pitch / 2 - rootWidth / 2;
@@ -110,7 +115,7 @@ internal sealed class ThreadSdf : Sdf
         double theta = Math.Atan2(p.Y, p.X);
         // Helical phase; θ's 2π jump across the −x half-plane shifts w by exactly one
         // pitch, which the nearest-period wrap absorbs — u is continuous off the axis.
-        double w = p.Z - _pitch * theta / (2 * Math.PI);
+        double w = p.Z - _handedness * _pitch * theta / (2 * Math.PI);
         double u = Math.Abs(w - _pitch * Math.Round(w / _pitch)); // [0, pitch/2]
 
         double side = (SignedProfileDistance(u, r) - _profileOffset) * _cosLead;

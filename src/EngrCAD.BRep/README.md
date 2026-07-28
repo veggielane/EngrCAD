@@ -307,9 +307,27 @@ operations. Depends only on `EngrCAD.Core`.
     corner's phase (rails start on the z = 0 cap plane), and the flat caps are disks
     bounded by the closed chain of K `SpiralArc3d` cuts covering one full turn. Any
     positive length works (no whole-turn constraint — rails just end at different
-    phases). Right-hand only (positive pitch). V = 2K, E = 3K, F = L = K + 2 ⇒
+    phases). V = 2K, E = 3K, F = L = K + 2 ⇒
     Euler–Poincaré 0 at genus 0. Exact volume for ANY length:
     L·(2π/P)·∫₀^P ½R(s)² ds (the full angular sweep at each z washes out the phase).
+
+    **`leftHand: true`** winds the same profile the other way. It is not a second
+    construction: the axial rate becomes −P/2π and every formula here already carries the
+    signed rate, so a rail's phase u runs DOWN as z runs up and three consequences follow
+    mechanically — a rail's helix is anchored on the TOP cap (`Helix3d`'s domain always
+    starts at its own frame's plane, so a descending rail must start there), the u = min
+    and u = max edges of a band swap which cap they are, and both cap loops chain the
+    other way round. Counts, Euler and the volume formula are unchanged. The result is
+    the EXACT mirror of the right-hand rod: measured 0 residual on every band surface and
+    9e-15 at the vertices (helix trigonometry).
+
+    **A left-hand rod is not a right-hand rod on some other frame.** Every right-handed
+    frame is a rotation of every other, so no choice of pose can flip handedness — it has
+    to enter the arithmetic. (Two flipped axes is a rotation, which is the trap: `FlipY`
+    alone is the reflection, `FlipY·FlipZ` is a half-turn about X.) The Shape compiler
+    uses the mirror identity in reverse to lower `Mirror(thread)`: writing
+    m = (m·FlipY)·FlipY leaves a proper similarity placing a rod of the opposite
+    handedness, which is why a mirrored thread is Native rather than refused.
 
 - **`Draft`** — draft angles (OCCT `BRepOffsetAPI_DraftAngle`), the moulding/casting taper:
   `Draft.Apply(solid, neutralOrigin, pullDirection, angle, faceSelector?)` (or the

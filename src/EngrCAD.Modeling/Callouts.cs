@@ -57,8 +57,10 @@ public static class HoleCallout
 /// </summary>
 public static class ThreadCallout
 {
-    /// <summary>The callout text: the spec's designation ("M6&#x00D7;1"), with
-    /// " &#x21A7;depth" appended for blind threads (null depth = through/rod).</summary>
+    /// <summary>The callout text: the spec's designation ("M6&#x00D7;1", or
+    /// "M6&#x00D7;1-LH" for a left-hand thread — the designation carries the handedness,
+    /// so the callout needs no rule of its own), with " &#x21A7;depth" appended for blind
+    /// threads (null depth = through/rod).</summary>
     public static string Text(ThreadSpec spec, double? depth = null)
     {
         ArgumentNullException.ThrowIfNull(spec);

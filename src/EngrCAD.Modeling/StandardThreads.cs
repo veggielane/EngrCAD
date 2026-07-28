@@ -16,18 +16,22 @@ namespace EngrCAD.Modeling;
 /// This is the shared <em>basic</em> profile: design-profile refinements (external root
 /// rounding, allowance classes 6g/6H) are not modeled — 3D-printing fit is handled by
 /// the explicit clearance parameter on <see cref="Shape.ExternalThread(ThreadSpec, double, double, bool)"/>
-/// and <see cref="Shape.ThreadedHole"/> instead. Right-hand threads only.
+/// and <see cref="Shape.ThreadedHole"/> instead. <see cref="LeftHand"/> selects the
+/// winding direction; the profile is identical either way.
 /// </summary>
 public sealed class ThreadSpec
 {
     /// <summary>Creates a custom metric-style 60° thread spec. Prefer
-    /// <see cref="StandardThreads.Metric"/> for catalog sizes.</summary>
+    /// <see cref="StandardThreads.Metric(double)"/> for catalog sizes.</summary>
     /// <param name="nominalDiameter">Major diameter d (the "M" size).</param>
     /// <param name="pitch">Thread pitch P (axial advance per turn).</param>
     /// <param name="tapDrillDiameter">Tap-drill (pilot) diameter; defaults to the
     /// common rule of thumb d − P when omitted.</param>
-    public ThreadSpec(double nominalDiameter, double pitch, double? tapDrillDiameter = null)
+    /// <param name="leftHand">Wind the thread left-handed; the default is right-hand.</param>
+    public ThreadSpec(
+        double nominalDiameter, double pitch, double? tapDrillDiameter = null, bool leftHand = false)
     {
+        LeftHand = leftHand;
         if (pitch <= 0)
             throw new ArgumentOutOfRangeException(nameof(pitch));
         if (nominalDiameter <= 1.25 * pitch * Math.Sqrt(3) / 2)
@@ -49,8 +53,24 @@ public sealed class ThreadSpec
     public double Pitch { get; }
 
     /// <summary>Pilot-hole diameter for cutting this thread (from the catalog table for
-    /// <see cref="StandardThreads.Metric"/> sizes, else d − P).</summary>
+    /// <see cref="StandardThreads.Metric(double)"/> sizes, else d − P).</summary>
     public double TapDrillDiameter { get; }
+
+    /// <summary>
+    /// Left-hand winding. The profile and every derived diameter are identical to the
+    /// right-hand thread's — only the helix's sense changes — so a left-hand thread is
+    /// the exact mirror image of its right-hand twin and is Native in every
+    /// representation the right-hand one is.
+    /// </summary>
+    public bool LeftHand { get; }
+
+    /// <summary>This thread wound the other way (see <see cref="LeftHand"/>).</summary>
+    public ThreadSpec WithHandedness(bool leftHand) =>
+        leftHand == LeftHand ? this : new ThreadSpec(NominalDiameter, Pitch, TapDrillDiameter, leftHand);
+
+    /// <summary>Shorthand for <c>WithHandedness(true)</c>:
+    /// <c>StandardThreads.Metric(8).LeftHanded()</c> is an M8×1.25-LH.</summary>
+    public ThreadSpec LeftHanded() => WithHandedness(true);
 
     /// <summary>Fundamental triangle height H = (√3/2)·P (ISO 68-1).</summary>
     public double FundamentalHeight => Pitch * Math.Sqrt(3) / 2;
@@ -73,8 +93,9 @@ public sealed class ThreadSpec
     /// <summary>Axial width of the root flat (at the minor diameter): P/4.</summary>
     public double RootFlatWidth => Pitch / 4;
 
-    /// <summary>The thread designation, e.g. "M8×1.25".</summary>
-    public string Designation => $"M{NominalDiameter:g4}×{Pitch:g4}";
+    /// <summary>The thread designation, e.g. "M8×1.25" — "M8×1.25-LH" when left-handed
+    /// (ISO 261 marks the exception, never the right-hand default).</summary>
+    public string Designation => $"M{NominalDiameter:g4}×{Pitch:g4}" + (LeftHand ? "-LH" : "");
 
     public override string ToString() => Designation;
 }

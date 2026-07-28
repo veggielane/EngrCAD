@@ -136,14 +136,14 @@ internal static class ShapeCompiler
                 ClassifyBrep(drill.Expanded, m, entries);
                 break;
             case ThreadShape thread:
-                // Native only for the unmodified basic profile under proper similarity
-                // placements: the boolean-free helical sweep is exact, but chamfer
-                // cones and distance-field profile offsets have no B-Rep counterpart
-                // yet, and a mirrored thread is left-handed — each reported truthfully
-                // rather than lowered to silently different geometry.
-                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                // Native for the unmodified basic profile under any similarity placement,
+                // mirrored included — a mirrored thread IS the left-hand thread, and the
+                // factory builds either handedness. Chamfer cones and distance-field
+                // profile offsets still have no B-Rep counterpart and are reported
+                // truthfully rather than lowered to silently different geometry.
+                if (!TryDecomposeThreadPlacement(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "a mirrored, sheared, or non-uniformly scaled placement cannot re-place a helical thread exactly (a mirrored thread is left-handed)"));
+                        "a sheared or non-uniformly scaled placement cannot re-place a helical thread exactly"));
                 else if (thread.ChamferLength > 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "end chamfers have no B-Rep form yet (the 45° cone ∩ helical-band cut is future surface-intersection work) — pass chamferEnds: false, or use ToMesh/ToImplicit"));
@@ -539,7 +539,9 @@ internal static class ShapeCompiler
                 // bottom→top: crest flat (P/8 at the major radius), descending flank
                 // (5P/16 axially), root flat (P/4 at the minor radius), ascending flank
                 // wrapping to the next crest.
-                Decompose(m, shape, out var rotation, out var translation, out double scale);
+                if (!TryDecomposeThreadPlacement(
+                        m, out var rotation, out var translation, out double scale, out bool reflected))
+                    throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
                 var spec = thread.Spec;
                 double pitch = spec.Pitch * scale;
                 double rMajor = spec.MajorDiameter / 2 * scale;
@@ -552,7 +554,7 @@ internal static class ShapeCompiler
                     new Vector2d(rMajor, pitch / 16),
                     new Vector2d(rMinor, 3 * pitch / 8),
                     new Vector2d(rMinor, 5 * pitch / 8),
-                ], pitch, thread.Length * scale, frame);
+                ], pitch, thread.Length * scale, frame, spec.LeftHand ^ reflected);
             }
 
             case ThreadedHoleShape hole when hole.Clearance == 0:
@@ -617,7 +619,8 @@ internal static class ShapeCompiler
                     var yAxis = -effective.TransformVector(Vector3d.UnitY).Normalized();
                     var frame = Frame3d.FromOrthonormal(origin, xAxis, yAxis);
                     var tool = SolidFactory.MakeThreadedRod(
-                        scaledCorners, pitch * scale, (hole.Depth + overshoot) * scale, frame);
+                        scaledCorners, pitch * scale, (hole.Depth + overshoot) * scale, frame,
+                        spec.LeftHand);
                     body = BrepBoolean.Difference(body, tool);
                 }
                 return body;
@@ -1071,6 +1074,40 @@ internal static class ShapeCompiler
         }
         reflected = true;
         return (m * FlipZ).TryDecomposeRigidUniformScale(out rotation, out translation, out scale);
+    }
+
+    private static readonly Matrix4d FlipY = Matrix4d.CreateScale(new Vector3d(1, -1, 1));
+
+    /// <summary>
+    /// Decomposes a thread's placement, mirrored placements included:
+    /// m = T·R·S, or m = T·R·S·FlipY when <paramref name="reflected"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>The reflected branch is what makes <c>Mirror(thread)</c> exact rather than
+    /// Impossible, and it rests on one identity: <b>reflecting a right-hand thread across
+    /// a plane CONTAINING its axis gives the left-hand thread with the SAME profile on
+    /// the SAME frame</b> (the reflection maps the helical phase θ to −θ, which is
+    /// exactly what negating the axial rate does). So writing m = (m·FlipY)·FlipY —
+    /// where FlipY is that axis-containing reflection in the rod's own local frame, and
+    /// m·FlipY is proper because both determinants are negative — leaves a plain rigid
+    /// similarity to place a rod of the opposite handedness. Measured: the factory's
+    /// left-hand rod matches the reflected right-hand one to 0 on the band surfaces and
+    /// 9e-15 at the vertices (helix trigonometry).</para>
+    /// <para>FlipY, not the <see cref="FlipZ"/> the implicit path uses: FlipZ reverses
+    /// the rod's own axis, which would move the caps and reverse the profile's axial
+    /// order, where FlipY leaves the axis and the profile alone. Any two reflections
+    /// differ by a rotation, so choosing the convenient one costs nothing.</para>
+    /// </remarks>
+    private static bool TryDecomposeThreadPlacement(
+        in Matrix4d m, out Quaterniond rotation, out Vector3d translation, out double scale, out bool reflected)
+    {
+        if (m.TryDecomposeRigidUniformScale(out rotation, out translation, out scale))
+        {
+            reflected = false;
+            return true;
+        }
+        reflected = true;
+        return (m * FlipY).TryDecomposeRigidUniformScale(out rotation, out translation, out scale);
     }
 
     private static void DecomposeSimilarity(
