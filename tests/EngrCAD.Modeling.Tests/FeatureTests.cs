@@ -204,6 +204,57 @@ public class FeatureTests
     }
 
     [Fact]
+    public void PartRegenerate_SwapsGeometryAndClearsEveryCache()
+    {
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(20, 10)) { Name = "Base", Height = 6 });
+        var part = history.ToPart("plate");
+
+        // Prime the caches the regenerate must clear.
+        double before = part.GetMesh().Volume();
+        Assert.NotNull(part.TryGetSolid());
+        Assert.NotNull(part.ConstructionTree());
+        Assert.Equal(20 * 10 * 6, before, 9);
+
+        history.LoadParameters("""{ "Base": { "Height": 12 } }""");
+        var result = part.Regenerate();
+
+        Assert.True(result.Succeeded, result.ToString());
+        Assert.Same(result.Body, part.Geometry);              // the fresh body is live
+        Assert.False(part.HasMesh);                           // mesh cache cleared
+        Assert.Equal(20 * 10 * 12, part.GetMesh().Volume(), 9);
+        // The tree was rebuilt: the Height parameter row shows the new value.
+        var heightRow = part.ConstructionTree()!.Children[0].Children.Single(c => c.Label == "Height");
+        Assert.Contains("12", heightRow.Detail);
+    }
+
+    [Fact]
+    public void PartRegenerate_FailureKeepsThePreviousGeometry()
+    {
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(20, 10)) { Name = "Base", Height = 6 });
+        var part = history.ToPart("plate");
+        var geometryBefore = part.Geometry;
+        double before = part.GetMesh().Volume();
+
+        history.LoadParameters("""{ "Base": { "Height": -1 } }""");   // violates Min
+        var result = part.Regenerate();
+
+        Assert.False(result.Succeeded);
+        Assert.Same(geometryBefore, part.Geometry);           // untouched
+        Assert.True(part.HasMesh);                            // caches untouched too
+        Assert.Equal(before, part.GetMesh().Volume(), 9);
+    }
+
+    [Fact]
+    public void PartRegenerate_RequiresAHistory()
+    {
+        var part = new Part("box", Shape.Box(1, 1, 1));
+        var exception = Assert.Throws<InvalidOperationException>(() => part.Regenerate());
+        Assert.Contains("no feature history", exception.Message);
+    }
+
+    [Fact]
     public void DuplicateNames_GetSuffixes()
     {
         var history = new FeatureHistory();

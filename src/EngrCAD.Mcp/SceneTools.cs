@@ -362,6 +362,209 @@ public sealed class SceneTools(SceneSession session)
         }
     }
 
+    // ---- write tools: parametric editing through FeatureHistory ----
+
+    /// <summary>
+    /// Sets one <c>[Param]</c> value on a feature of a history-backed part and
+    /// regenerates. The tool result IS the <see cref="RegenerationResult"/>: per-feature
+    /// outcomes (applied/cached/suppressed/failed/skipped) with timings. Regeneration
+    /// semantics are <see cref="FeatureHistory"/>'s own — validation first, a failure
+    /// keeps the last good prefix and skips the rest — and on failure the part
+    /// additionally keeps its previous complete geometry, which the error text says.
+    /// </summary>
+    public CallToolResult SetParam(
+        [Description("Part name (must have a parametric feature history); \"tab/part\" also works.")]
+        string part,
+        [Description("Feature name as shown in the construction tree (\"Boss\", \"Boss.2\", ...).")]
+        string feature,
+        [Description("Parameter (property) name on that feature, e.g. \"Height\".")]
+        string param,
+        [Description("New value as JSON: number, boolean, string/enum name, or [x,y]/[x,y,z] vector.")]
+        JsonElement value,
+        [Description("Tab to look in, when the same part name exists in several.")] string? tab = null)
+    {
+        if (!TryResolveFeature(part, tab, feature, out var found, out var error))
+            return Error(error);
+        var (target, history, resolved) = found;
+
+        var parameter = resolved.Parameters.FirstOrDefault(
+            p => string.Equals(p.Name, param, StringComparison.Ordinal));
+        if (parameter is null)
+        {
+            return Error($"Feature '{feature}' has no parameter named '{param}'. "
+                       + $"Parameters: {DescribeParameters(resolved)}.");
+        }
+
+        // One (feature, param, value) override through the SAME JSON seam SaveParameters/
+        // LoadParameters use, so accepted spellings cannot drift between file and tool.
+        string overrideJson = new JsonObject
+        {
+            [feature] = new JsonObject { [param] = JsonNode.Parse(value.GetRawText()) },
+        }.ToJsonString();
+        var warnings = history.LoadParameters(overrideJson);
+        if (warnings.Count > 0)
+        {
+            // Feature and param were pre-validated, so a warning here is a value that
+            // did not convert (wrong JSON shape for the parameter's type).
+            return Error($"Could not set {feature}.{param} (type {TypeName(parameter.Type)}): "
+                       + string.Join("; ", warnings));
+        }
+
+        return Regenerated(target, new JsonObject
+        {
+            ["part"] = target.Name,
+            ["feature"] = feature,
+            ["param"] = param,
+            ["value"] = JsonNode.Parse(value.GetRawText()),
+        });
+    }
+
+    /// <summary>Suppresses a feature (it passes the body through untouched) and
+    /// regenerates — the headless twin of unticking it in a feature tree. Suppressing a
+    /// placement-style feature removes everything it contributed.</summary>
+    public CallToolResult SuppressFeature(
+        [Description("Part name (must have a parametric feature history); \"tab/part\" also works.")]
+        string part,
+        [Description("Feature name as shown in the construction tree.")] string feature,
+        [Description("Tab to look in, when the same part name exists in several.")] string? tab = null)
+        => SetSuppression(part, tab, feature, suppressed: true);
+
+    /// <summary>Un-suppresses a feature and regenerates (see <see cref="SuppressFeature"/>).</summary>
+    public CallToolResult UnsuppressFeature(
+        [Description("Part name (must have a parametric feature history); \"tab/part\" also works.")]
+        string part,
+        [Description("Feature name as shown in the construction tree.")] string feature,
+        [Description("Tab to look in, when the same part name exists in several.")] string? tab = null)
+        => SetSuppression(part, tab, feature, suppressed: false);
+
+    private CallToolResult SetSuppression(string part, string? tab, string feature, bool suppressed)
+    {
+        if (!TryResolveFeature(part, tab, feature, out var found, out var error))
+            return Error(error);
+        var (target, _, resolved) = found;
+        resolved.Suppressed = suppressed;
+        return Regenerated(target, new JsonObject
+        {
+            ["part"] = target.Name,
+            ["feature"] = feature,
+            ["suppressed"] = suppressed,
+        });
+    }
+
+    /// <summary>Runs <see cref="Part.Regenerate"/> and shapes the outcome: success is an
+    /// Ok payload carrying the per-feature statuses; a failed regeneration is an
+    /// <c>IsError</c> result that still carries them, plus the fact that the part kept
+    /// its previous geometry (the edit itself stays applied, exactly as in a feature
+    /// tree — fix the value, or set it back, and regenerate again).</summary>
+    private CallToolResult Regenerated(Part part, JsonObject payload)
+    {
+        RegenerationResult result;
+        try
+        {
+            result = part.Regenerate();
+        }
+        catch (Exception e)
+        {
+            return Error($"Regeneration threw: {e.GetType().Name}: {e.Message}");
+        }
+
+        bool geometryUpdated = result.Succeeded && result.Body is not null;
+        payload["generation"] = geometryUpdated ? Session.NoteMutation() : Session.Generation;
+        payload["succeeded"] = result.Succeeded;
+        payload["geometryUpdated"] = geometryUpdated;
+        var features = new JsonArray();
+        foreach (var status in result.Statuses)
+        {
+            var entry = new JsonObject
+            {
+                ["name"] = status.Name,
+                ["outcome"] = status.Outcome.ToString().ToLowerInvariant(),
+                ["elapsedMs"] = Math.Round(status.Elapsed.TotalMilliseconds, 1),
+            };
+            if (status.Error is { } statusError)
+                entry["error"] = statusError;
+            features.Add(entry);
+        }
+        payload["features"] = features;
+
+        if (!result.Succeeded)
+        {
+            var failed = result.Statuses.Where(s => s.Outcome == FeatureOutcome.Failed).ToList();
+            payload["note"] = "The part keeps its previous geometry; the parameter change stays "
+                            + "applied, so fix or revert it and regenerate (any edit regenerates).";
+            return new CallToolResult
+            {
+                IsError = true,
+                StructuredContent = JsonSerializer.SerializeToElement(payload),
+                Content =
+                [
+                    new TextContentBlock
+                    {
+                        Text = $"Regeneration failed at "
+                             + string.Join("; ", failed.Select(f => $"{f.Name}: {f.Error}"))
+                             + $" — the part keeps its previous geometry. Full statuses:\n"
+                             + payload.ToJsonString(Json),
+                    },
+                ],
+            };
+        }
+        return Ok(payload);
+    }
+
+    private bool TryResolveFeature(
+        string part, string? tab, string feature,
+        out (Part Part, FeatureHistory History, Feature Feature) found, out string? error)
+    {
+        found = default;
+        if (Session.FindPart(part, tab) is not { } match)
+        {
+            error = UnknownPart(part, tab);
+            return false;
+        }
+        if (match.Part.History is not { } history)
+        {
+            var withHistories = Session.Scene.Tabs
+                .SelectMany(t => t.AllParts.Where(p => p.History is not null).Select(p => $"{t.Name}/{p.Name}"))
+                .ToList();
+            error = $"Part '{match.Part.Name}' has no parametric feature history — only "
+                  + "history-backed parts can be edited. "
+                  + (withHistories.Count > 0
+                      ? $"Parts with histories: {string.Join(", ", withHistories)}."
+                      : "No part in this scene has one; edit the model's source and call reload instead.");
+            return false;
+        }
+        var resolved = history.Features.FirstOrDefault(
+            f => string.Equals(history.NameOf(f), feature, StringComparison.Ordinal));
+        if (resolved is null)
+        {
+            error = $"Part '{match.Part.Name}' has no feature named '{feature}'. Features: "
+                  + string.Join(", ", history.Features.Select(history.NameOf)) + ".";
+            return false;
+        }
+        found = (match.Part, history, resolved);
+        error = null;
+        return true;
+    }
+
+    private static string DescribeParameters(Feature feature) =>
+        string.Join(", ", feature.Parameters.Select(p =>
+        {
+            string range = double.IsNegativeInfinity(p.Min) && double.IsPositiveInfinity(p.Max)
+                ? ""
+                : string.Create(CultureInfo.InvariantCulture, $" in [{p.Min:G6}, {p.Max:G6}]");
+            return $"{p.Name} ({TypeName(p.Type)}{range})";
+        }));
+
+    private static string TypeName(Type type) => type switch
+    {
+        _ when type == typeof(double) || type == typeof(float) => "number",
+        _ when type == typeof(int) || type == typeof(long) => "integer",
+        _ when type == typeof(bool) => "boolean",
+        _ when type == typeof(string) => "string",
+        _ when type.IsEnum => $"enum {type.Name}",
+        _ => type.Name,
+    };
+
     /// <summary>Re-invokes the design program's scene factory and swaps the result in —
     /// what a <c>dotnet watch</c> hot reload does to the viewer. A factory that throws
     /// leaves the previous scene untouched and reports the error.</summary>

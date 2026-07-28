@@ -29,8 +29,12 @@ public static class EngrCadMcpServer
         measurable facts — volume, surface area, bounding box — plus the construction
         tree, which is how the part was built, step by step.
 
-        Nothing here modifies the design: to change the model, edit its source. reload
-        re-runs the program's scene factory so edits show up without restarting.
+        Parts built from a parametric feature history (their construction tree lists
+        features with parameter values) can be DRIVEN: set_param edits a [Param] value
+        and regenerates, suppress_feature/unsuppress_feature toggle a feature. These
+        edits live in the running session only — the program's source is the truth, so
+        to change the design permanently, edit its source; reload re-runs the scene
+        factory (discarding session edits) so source edits show up without restarting.
         """;
 
     /// <summary>
@@ -154,6 +158,48 @@ public static class EngrCadMcpServer
                             + "render). Writes to the filesystem.",
                 ReadOnly = false,
                 Destructive = true,
+                Idempotent = true,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.SetParam, new McpServerToolCreateOptions
+            {
+                Name = "set_param",
+                Title = "Set a feature parameter",
+                Description = "Edits one [Param] value on a feature of a history-backed part "
+                            + "(the parts whose construction tree lists features) and regenerates "
+                            + "the model. The result is the regeneration report: per-feature "
+                            + "outcomes and timings. A failed regeneration keeps the part's "
+                            + "previous geometry and names the failing feature; the edit stays "
+                            + "applied so it can be corrected and regenerated. reload discards "
+                            + "these edits — the program's source is still the truth.",
+                ReadOnly = false,
+                Destructive = false,
+                Idempotent = true,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.SuppressFeature, new McpServerToolCreateOptions
+            {
+                Name = "suppress_feature",
+                Title = "Suppress a feature",
+                Description = "Suppresses a feature of a history-backed part (it passes the body "
+                            + "through untouched — a hole feature's bores disappear) and "
+                            + "regenerates. Same result shape and failure semantics as set_param.",
+                ReadOnly = false,
+                Destructive = false,
+                Idempotent = true,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.UnsuppressFeature, new McpServerToolCreateOptions
+            {
+                Name = "unsuppress_feature",
+                Title = "Unsuppress a feature",
+                Description = "Re-enables a suppressed feature and regenerates (the inverse of "
+                            + "suppress_feature).",
+                ReadOnly = false,
+                Destructive = false,
                 Idempotent = true,
                 OpenWorld = false,
             }),

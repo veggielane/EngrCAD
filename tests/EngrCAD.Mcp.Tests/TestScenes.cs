@@ -27,6 +27,35 @@ internal static class TestScenes
         return scene;
     }
 
+    /// <summary>Plate footprint / base height — ground truth for the write-tool tests
+    /// (a rectangle extrusion's volume is exactly width x depth x height).</summary>
+    internal const double PlateWidth = 20;
+    internal const double PlateDepth = 10;
+    internal const double PlateHeight = 6;
+
+    /// <summary>
+    /// A scene whose "plate" part is built from a <see cref="FeatureHistory"/> — the
+    /// fixture for the write tools: a rectangle extrusion ("Base", Height editable)
+    /// plus a boss ("Boss", suppressible). The optional counting SDF rides in a second
+    /// tab so laziness stays observable.
+    /// </summary>
+    internal static Scene Parametric(Sdf? blob = null)
+    {
+        var scene = new Scene(Coarse);
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(PlateWidth, PlateDepth))
+        {
+            Name = "Base",
+            Height = PlateHeight,
+        });
+        // A boss that pokes through the plate whatever the primitives' centering
+        // conventions are: a tall box crossing z = 0.
+        history.Add(new BooleanFeature(Shape.Box(4, 4, 40)) { Name = "Boss" });
+        scene.AddTab("Model").Add(history.ToPart("plate"));
+        scene.AddTab("field").Add(new Part("blob", blob ?? Sdf.Sphere(5)));
+        return scene;
+    }
+
     /// <summary>An SDF that counts evaluations — the laziness probe. If a tool that
     /// should not touch geometry has touched it, <see cref="Evaluations"/> is non-zero.</summary>
     internal sealed class CountingSdf : Sdf

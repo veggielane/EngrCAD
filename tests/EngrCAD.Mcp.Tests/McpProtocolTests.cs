@@ -68,7 +68,8 @@ public class McpProtocolTests
         {
             var tools = await client.ListToolsAsync();
             Assert.Equal(
-                ["describe_part", "export", "list_parts", "list_tabs", "reload", "screenshot"],
+                ["describe_part", "export", "list_parts", "list_tabs", "reload", "screenshot",
+                 "set_param", "suppress_feature", "unsuppress_feature"],
                 tools.Select(t => t.Name).Order());
 
             var screenshot = tools.Single(t => t.Name == "screenshot");

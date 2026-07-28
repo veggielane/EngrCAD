@@ -50,7 +50,9 @@ This is a library entry point, not a generic host.
 | `describe_part` | One part in full: faces, vertices, closed, volume, surface area, local and world bounds, placement, annotations, and the **construction tree** (`Part.ConstructionTree()` — how the part was built, step by step). | meshes that one part |
 | `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom), display styles (shaded-edges/shaded/wireframe/points), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open, size, and an optional tab/part filter. | meshes what it renders |
 | `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png`. | meshes what it writes |
-| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. | free |
+| `set_param` | Edits one `[Param]` value on a feature of a history-backed part and **regenerates**. The result is the regeneration report (per-feature applied/cached/suppressed/failed/skipped with timings). A failed regeneration keeps the part's previous geometry and names the failing feature; the edit stays applied so it can be corrected — `FeatureHistory`'s own validation-first / failure-keeps-prefix semantics, surfaced verbatim. | regenerates (no meshing) |
+| `suppress_feature` / `unsuppress_feature` | Toggles a feature's suppression (a suppressed feature passes the body through untouched — a hole feature's bores disappear) and regenerates. Same result shape as `set_param`. | regenerates (no meshing) |
+| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits**: the program's source is the truth. | free |
 
 Plus one resource, `engrcad://scene`: the whole document as JSON (tabs, parts,
 geometry kinds), cheap enough to read on every turn.
@@ -114,10 +116,23 @@ await EngrCadMcpServer.RunAsync(input, output, tools, "my bracket", cancellation
 `CallToolResult`, which is why the tool tests need no client, transport, or process at
 all.
 
+## Parametric editing
+
+The write tools work on **history-backed parts** — parts created from a
+`FeatureHistory` (`history.ToPart(...)` or `new Part(name, history)`); `list_parts`
+marks them with `hasConstructionTree` and `describe_part` shows the feature list with
+current parameter values. There is no separate registration seam: `Part.History` *is*
+the seam, so a design that already builds parts from histories is editable with no
+extra wiring. `set_param` goes through the same JSON conversion as
+`FeatureHistory.SaveParameters`/`LoadParameters`, so the accepted value spellings
+cannot drift between the parameter file and the tool. A successful edit bumps the
+session `generation`, telling clients their earlier reads are stale; `Part.Regenerate`
+then clears the part's cached mesh/solid/edges/annotations so every later tool sees
+the edited model. Edits live in the running session only — `reload` re-runs the
+program's source and discards them.
+
 ## Known limits (v1)
 
-- **Read-only.** Nothing here edits the model; to change it, edit its source and call
-  `reload`. Parameter editing through `FeatureHistory` is the obvious next step.
 - One section plane per screenshot (the viewer supports up to four, including quarter
   and octant cuts).
 - Named views only, no explicit yaw/pitch/distance camera.

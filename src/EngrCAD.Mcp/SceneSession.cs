@@ -51,11 +51,21 @@ public sealed class SceneSession
         get { lock (_gate) return _scene; }
     }
 
-    /// <summary>Increments on every successful <see cref="Reload"/> — the cheap
+    /// <summary>Increments on every successful <see cref="Reload"/> and on every
+    /// geometry-changing edit (<see cref="NoteMutation"/>) — the cheap
     /// "is what I saw still current?" token for clients.</summary>
     public int Generation
     {
         get { lock (_gate) return _generation; }
+    }
+
+    /// <summary>Bumps <see cref="Generation"/> after a tool changed the model in place
+    /// (a parameter edit, a suppression toggle) so clients can tell their earlier
+    /// reads are stale. Returns the new generation.</summary>
+    public int NoteMutation()
+    {
+        lock (_gate)
+            return ++_generation;
     }
 
     /// <summary>The mesh quality this session displays and exports at: the scene's own

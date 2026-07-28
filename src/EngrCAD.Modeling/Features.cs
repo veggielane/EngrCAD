@@ -56,8 +56,11 @@ public abstract class Feature
         init => _name = value;
     }
 
-    /// <summary>Suppressed features pass the body through untouched.</summary>
-    public bool Suppressed { get; init; }
+    /// <summary>Suppressed features pass the body through untouched. Settable —
+    /// suppression is orchestration, not a geometry input, and toggling it is part of
+    /// editing a history (the regeneration cache key includes it, so a toggle
+    /// invalidates exactly the affected prefix).</summary>
+    public bool Suppressed { get; set; }
 
     public abstract Shape Apply(FeatureContext context);
 
