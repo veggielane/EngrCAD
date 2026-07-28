@@ -22,6 +22,8 @@
   href: threads.md
 - name: Chamfer & fillet
   href: chamfer-fillet.md
+- name: Loft, draft & shell
+  href: loft-draft-shell.md
 - name: Parametric features
   href: features.md
 - name: Geometry inputs for features
