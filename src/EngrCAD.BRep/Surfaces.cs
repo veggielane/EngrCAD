@@ -53,8 +53,11 @@ public abstract class Surface
         if (!double.IsFinite(domainU.Length) || !double.IsFinite(domainV.Length))
             return false;
 
+        var target = point; // local copy: `in` parameters cannot be captured by local functions
         const int seedResolution = 16;
-        double bestU = domainU.Mid, bestV = domainV.Mid, bestDistance = double.PositiveInfinity;
+        var distances = new double[(seedResolution + 1) * (seedResolution + 1)];
+        int bestI = 0, bestJ = 0;
+        double bestDistance = double.PositiveInfinity;
         for (int i = 0; i <= seedResolution; i++)
         {
             for (int j = 0; j <= seedResolution; j++)
@@ -62,11 +65,12 @@ public abstract class Surface
                 double su = domainU.ParameterAt((double)i / seedResolution);
                 double sv = domainV.ParameterAt((double)j / seedResolution);
                 double d = PointAt(su, sv).DistanceSquaredTo(point);
+                distances[i * (seedResolution + 1) + j] = d;
                 if (d < bestDistance)
                 {
                     bestDistance = d;
-                    bestU = su;
-                    bestV = sv;
+                    bestI = i;
+                    bestJ = j;
                 }
             }
         }
@@ -79,34 +83,96 @@ public abstract class Surface
             ? domainU.Start + (((x - domainU.Start) % periodU) + periodU) % periodU
             : domainU.Clamp(x);
 
-        double u = bestU, v = bestV;
-        double hu = Math.Max(1e-7, domainU.Length * 1e-7);
-        double hv = Math.Max(1e-7, domainV.Length * 1e-7);
-        for (int iteration = 0; iteration < 25; iteration++)
+        bool Refine(double seedU, double seedV, ref Vector2d found)
         {
-            var residual = PointAt(u, v) - point;
-            if (residual.Length < tolerance)
+            double u = seedU, v = seedV;
+            double hu = Math.Max(1e-7, domainU.Length * 1e-7);
+            double hv = Math.Max(1e-7, domainV.Length * 1e-7);
+            for (int iteration = 0; iteration < 25; iteration++)
             {
-                uv = new Vector2d(u, v);
+                var residual = PointAt(u, v) - target;
+                if (residual.Length < tolerance)
+                {
+                    found = new Vector2d(u, v);
+                    return true;
+                }
+                var du = (PointAt(WrapU(u + hu), v) - PointAt(WrapU(u - hu), v)) / (2 * hu);
+                var dv = (PointAt(u, domainV.Clamp(v + hv)) - PointAt(u, domainV.Clamp(v - hv))) / (2 * hv);
+
+                // Normal equations for the 2-unknown least squares step, lightly damped.
+                double a11 = du.Dot(du) + 1e-12, a12 = du.Dot(dv), a22 = dv.Dot(dv) + 1e-12;
+                double b1 = -du.Dot(residual), b2 = -dv.Dot(residual);
+                double det = a11 * a22 - a12 * a12;
+                // Near-underflow degenerate-Jacobian guard, not a geometric tolerance.
+                if (Math.Abs(det) < 1e-30)
+                    return false;
+                u = WrapU(u + (b1 * a22 - b2 * a12) / det);
+                v = domainV.Clamp(v + (b2 * a11 - b1 * a12) / det);
+            }
+            if ((PointAt(u, v) - target).Length < tolerance)
+            {
+                found = new Vector2d(u, v);
                 return true;
             }
-            var du = (PointAt(WrapU(u + hu), v) - PointAt(WrapU(u - hu), v)) / (2 * hu);
-            var dv = (PointAt(u, domainV.Clamp(v + hv)) - PointAt(u, domainV.Clamp(v - hv))) / (2 * hv);
-
-            // Normal equations for the 2-unknown least squares step, lightly damped.
-            double a11 = du.Dot(du) + 1e-12, a12 = du.Dot(dv), a22 = dv.Dot(dv) + 1e-12;
-            double b1 = -du.Dot(residual), b2 = -dv.Dot(residual);
-            double det = a11 * a22 - a12 * a12;
-            // Near-underflow degenerate-Jacobian guard, not a geometric tolerance.
-            if (Math.Abs(det) < 1e-30)
-                return false;
-            u = WrapU(u + (b1 * a22 - b2 * a12) / det);
-            v = domainV.Clamp(v + (b2 * a11 - b1 * a12) / det);
+            return false;
         }
-        if ((PointAt(u, v) - point).Length < tolerance)
-        {
-            uv = new Vector2d(u, v);
+
+        // The global-best seed goes FIRST, alone: every call the single-seed
+        // implementation used to satisfy takes exactly the same iteration and returns
+        // bit-identical parameters.
+        double SeedU(int i) => domainU.ParameterAt((double)i / seedResolution);
+        double SeedV(int j) => domainV.ParameterAt((double)j / seedResolution);
+        if (Refine(SeedU(bestI), SeedV(bestJ), ref uv))
             return true;
+
+        // The swept-surface lesson, ported to the 2D grid: a surface can fold two
+        // branches closer together than one seed interval, so the sampled distance shows
+        // ONE broad minimum straddling both and Newton from the global best descends to
+        // the wrong branch. Refine from every LOCAL minimum of the grid and its
+        // neighbours — purely combinatorial, no epsilon — taking the first seed that
+        // converges. Cost only ever paid when the fast path above has already failed.
+        double At(int i, int j) => distances[i * (seedResolution + 1) + j];
+        bool IsLocalMinimum(int i, int j)
+        {
+            double d = At(i, j);
+            for (int di = -1; di <= 1; di++)
+            {
+                for (int dj = -1; dj <= 1; dj++)
+                {
+                    int ni = i + di, nj = j + dj;
+                    if (ni < 0 || nj < 0 || ni > seedResolution || nj > seedResolution)
+                        continue;
+                    if (At(ni, nj) < d)
+                        return false;
+                }
+            }
+            return true;
+        }
+
+        var tried = new bool[distances.Length];
+        tried[bestI * (seedResolution + 1) + bestJ] = true;
+        for (int i = 0; i <= seedResolution; i++)
+        {
+            for (int j = 0; j <= seedResolution; j++)
+            {
+                if (!IsLocalMinimum(i, j))
+                    continue;
+                for (int di = -1; di <= 1; di++)
+                {
+                    for (int dj = -1; dj <= 1; dj++)
+                    {
+                        int ni = i + di, nj = j + dj;
+                        if (ni < 0 || nj < 0 || ni > seedResolution || nj > seedResolution)
+                            continue;
+                        int index = ni * (seedResolution + 1) + nj;
+                        if (tried[index])
+                            continue;
+                        tried[index] = true;
+                        if (Refine(SeedU(ni), SeedV(nj), ref uv))
+                            return true;
+                    }
+                }
+            }
         }
         return false;
     }

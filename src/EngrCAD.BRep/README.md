@@ -244,7 +244,21 @@ operations. Depends only on `EngrCAD.Core`.
   `SweptSurface.SolveGeneratorParameter` for why refinement starts from every local
   minimum *and its neighbours* — a sliver profile hides two branches inside one seed
   interval, and single-seed refinement silently returns the mirrored parameter.
-  `NurbsSurface` still uses the base grid, legitimately: no such reduction exists.
+  `NurbsSurface` still uses the base grid, legitimately: no such reduction exists —
+  and **the base grid itself is now multi-seeded**: after the GLOBAL-best seed (tried
+  first and alone, so every call the single-seed implementation used to satisfy takes
+  the identical iteration and returns bit-identical parameters), refinement runs from
+  every LOCAL minimum of the 17×17 grid and its 8 neighbours, first success wins. A
+  folded NURBS hairpin (branches 0.08 apart under a ~2-unit seed interval) measured
+  **80/205** round-trip failures single-seeded and 0 multi-seeded. The fixture lesson:
+  a MIRROR-SYMMETRIC hairpin is secretly benign — every wrong-branch seed has a
+  same-branch mirror at the identical tangential offset minus the perpendicular
+  penalty, so the argmin can never land on the wrong branch; hostility needs
+  asymmetric branch parameterizations. The 1D overrides above now also DEFER to this
+  base grid when their reduction fails (a heavily aliased generator where no 1D seed's
+  basin contains the answer but a damped 2D step wanders in), so "the override is
+  never worse than the base" holds by construction rather than by luck — locked by
+  `SweptSeedSelectionTests.NeitherOverrideEverDoesWorseThanTheGenericGridSearch`.
 - **Topology**: `BrepSolid → BrepShell → BrepFace → BrepLoop → BrepCoedge → BrepEdge →
   BrepVertex`. Faces are built so surface normals point outward and loops run CCW around
   them (first loop outer, rest holes). `Validate()` checks loop chaining and two-manifold
