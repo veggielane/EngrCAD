@@ -212,6 +212,22 @@ public class StepAssemblyTests
     }
 
     [Fact]
+    public void MirroredPlacementsAreRefusedByName()
+    {
+        // A reflection passes every orthonormality test (unit, perpendicular axes) but
+        // is improper: AXIS2 axes are right-handed by definition, so writing it would
+        // silently re-pose the part un-mirrored on the way back in.
+        var block = SolidFactory.MakeBox(new Aabb((0, 0, 0), (2, 2, 2)));
+        var mirrored = Matrix4d.CreateScale(new Vector3d(-1, 1, 1));
+
+        var exception = Assert.Throws<NotSupportedException>(() => StepWriter.WriteAssembly(
+            [new StepInstance("block", "rig/block", block, mirrored)], "rig"));
+
+        Assert.Contains("rig/block", exception.Message);
+        Assert.Contains("mirrored", exception.Message);
+    }
+
+    [Fact]
     public void NamesWithApostrophesAreEscaped()
     {
         var block = SolidFactory.MakeBox(new Aabb((0, 0, 0), (2, 2, 2)));

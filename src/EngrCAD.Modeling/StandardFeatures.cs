@@ -30,6 +30,11 @@ public sealed class ExtrudeSketchFeature(Sketch sketch) : Feature
         var solid = Shape.Extrude(sketch, Height, Plane.Resolve(context, nameof(Plane)));
         return context.Body is null ? solid : context.Body | solid;
     }
+
+    /// <summary>The sketch, exactly, through the public curve vocabulary — what makes
+    /// this feature reconstructible from <see cref="FeatureHistory.SaveHistory"/>.</summary>
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveInputs() =>
+        new System.Text.Json.Nodes.JsonObject { ["sketch"] = InputJson.SaveSketch(sketch) };
 }
 
 /// <summary>Revolves a sketch (full turn by default); unions with the body.</summary>
@@ -53,6 +58,10 @@ public sealed class RevolveSketchFeature(Sketch sketch) : Feature
         var solid = Shape.Revolve(sketch, Angle, Plane.Resolve(context, nameof(Plane)));
         return context.Body is null ? solid : context.Body | solid;
     }
+
+    /// <inheritdoc cref="ExtrudeSketchFeature.SaveInputs"/>
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveInputs() =>
+        new System.Text.Json.Nodes.JsonObject { ["sketch"] = InputJson.SaveSketch(sketch) };
 }
 
 /// <summary>Drills one hole spec at a list of points on a plane (defaults to the
@@ -77,6 +86,15 @@ public sealed class HoleFeature(HoleSpec hole, IReadOnlyList<Vector2d> points) :
     public override Shape Apply(FeatureContext context) =>
         (context.Body ?? throw new InvalidOperationException("HoleFeature needs a body to drill."))
             .Drill(hole, points, Depth, Plane.Resolve(context, nameof(Plane)));
+
+    /// <summary>The hole recipe and its points — what makes this feature
+    /// reconstructible from <see cref="FeatureHistory.SaveHistory"/>.</summary>
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveInputs() =>
+        new System.Text.Json.Nodes.JsonObject
+        {
+            ["hole"] = InputJson.SaveHoleSpec(hole),
+            ["points"] = InputJson.SavePoints(points),
+        };
 }
 
 /// <summary>Fillets the rims of the selected planar faces (the top faces by default).</summary>

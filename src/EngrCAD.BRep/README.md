@@ -803,6 +803,18 @@ operations. Depends only on `EngrCAD.Core`.
   merging shells a component spans) — skipped bit-stably when the partition already
   matches.
 
+  Writer-side placements go through `Frame3d`: a `Placement(Frame3d)` overload
+  mirrors the reader's `Axis2` (`Frame3d.FromZX`) — STEP stores origin + Z + X and both
+  sides derive Y right-handed, so frames round-trip by construction — and the matrix
+  path refuses **mirrored (improper) instance transforms by name** (they pass every
+  orthonormality test, but a left-handed triple would silently re-pose the part
+  un-mirrored on read-back) while still emitting the matrix's own columns so the
+  written text is ULP-stable. `Read`/`ReadFile` take an **optional trailing `ILogger`**
+  (`Microsoft.Extensions.Logging.Abstractions` — abstractions only, this project's one
+  package dependency; `KernelLog.cs`, stable event ID **90**) that reports counts and
+  timing; the import's real findings stay in `StepReadResult.Diagnostics`, data the
+  caller acts on — logging complements them, never replaces them.
+
 ### Named epsilon tiers
 
 The epsilon ladder documented in `CLAUDE.md` has two named B-Rep constants, both on

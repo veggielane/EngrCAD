@@ -347,6 +347,35 @@ Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, pa
 `FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
 (the cached prefix output), which the construction tree below previews.
 
+### The feature registry and whole-history persistence
+
+`FeatureRegistry` (`FeatureRegistry.cs`) is type discovery for UI insertion and the
+construction side of persistence. `registry.All` lists every known feature type with
+`[Param]` metadata (names, types, ranges, units — no instance needed) and an honest
+`CanCreate`/`Reason` pair; `TryCreate(name, inputs)` builds one from data.
+`FeatureHistory.SaveHistory()` writes the WHOLE history — ordered records of type,
+name, suppression, **constructor inputs** (`Feature.SaveInputs`, a virtual returning
+the feature's non-`[Param]` data in JSON) and `[Param]` values (the same value
+vocabulary as `SaveParameters`, extracted into `SerializeValue`/`ApplyParameters` so
+the two files cannot drift) — and `FeatureHistory.LoadHistory(json, registry?,
+resolveOpaque?)` rebuilds it, returning the history plus one warning per record it
+could not fully restore (`Complete` = no warnings; the saved file is a fixed point
+under save → load → save).
+
+What is data-constructible: `[Param]`-only features (fillet/chamfer rims, patterns)
+via their parameterless constructors; `HoleFeature` (its `HoleSpec` serializes kind +
+factory arguments and `WithTipAngle`); and `ExtrudeSketchFeature` /
+`RevolveSketchFeature`, because **a `Sketch` serializes exactly through the public
+`Curve2d` vocabulary** (`ToCurves`/`FromCurves` — lines, arcs, Béziers, hole loops;
+nothing flattened, `InputJson` in `FeatureRegistry.cs`). What cannot, and why:
+`BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
+`VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
+`HardwareComponent` is a code object), and `FromFunc` lambdas — `SaveHistory` still
+writes their type/name/parameters so the file is an honest record, and `LoadHistory`
+skips each with a warning naming it unless the caller's `resolveOpaque` hook supplies
+the instance. User feature classes join with `Register<T>()` (parameterless) or
+`Register(type, factory)` paired with a `SaveInputs` override.
+
 ### Geometry inputs (`GeometryRefs.cs`)
 
 Between-feature geometry references are **semantic queries** over the regenerated
@@ -1262,19 +1291,35 @@ scene.AddTab("hardware").Add(build.ToAssembly("bracket"));
 
 A `HardwareComponent` carries three things: its own parametric `Body` (a `Shape`), a
 seating convention, and a **host preparation** — the cut the target body needs
-(`Prepare`, and `PrepareAnchor` for the far body of a stack). The catalogue is
-deliberately small and correct rather than broad:
+(`Prepare`, and `PrepareAnchor` for the far body of a stack):
 
-| Component | Host preparation | Body (v1 fidelity) |
+| Component | Host preparation | Body fidelity |
 | --- | --- | --- |
-| `StandardComponents.CapScrew(size, length, seating, fit)` — ISO 4762 SHCS | ISO 273 clearance hole, plus the DIN 974 counterbore when `ScrewSeating.Counterbored` (the default); as an anchor, the coarse tap-drill pilot plus two pitches of runout | head cylinder (dk, k = d) on a plain shank, one exact revolve — **no hex socket, no modeled thread** (use `Shape.ExternalThread`) |
-| `StandardComponents.TrisertInsert(size)` — Tappex Trisert® | the catalogue pilot bore (`StandardHoles.Trisert`) at `TrisertMinimumDepth` | plain sleeve bored to the thread's minor diameter — no knurl, no flange |
+| `StandardComponents.CapScrew(size, length, seating, fit, hexSocket)` — ISO 4762 SHCS | ISO 273 clearance hole, plus the DIN 974 counterbore when `ScrewSeating.Counterbored` (the default); as an anchor, the coarse tap-drill pilot plus two pitches of runout | head cylinder (dk, k = d) on a plain shank, one exact revolve; hex socket recess **opt-in** (exact — see below); **no modeled thread** (use `Shape.ExternalThread`) |
+| `StandardComponents.ButtonScrew(size, length, fit)` — ISO 7380-1 | ISO 273 clearance hole (button heads bear on the face); anchors like the cap screw | exact spherical-cap dome (the profile carries the arc) + shank, one revolve — no socket (dome rim, see below) |
+| `StandardComponents.CskScrew(size, length, fit)` — ISO 10642 | 90° countersunk clearance hole (`StandardHoles.Countersunk`); anchors like the cap screw | sharp 90° cone + shank, one revolve; head diameter **derived** via `StandardHoles.CountersunkHeadDiameter` so screw and hole agree by construction; lengths are OVERALL; seating datum = the flush head top (`SeatDepth` 0) |
+| `StandardComponents.Nut(size, fit)` — ISO 4032 | the bolt's ISO 273 clearance hole — a nut implies a through bolt, and a nutted joint taps nothing | exact hex prism bored to the nominal diameter; `ProvidesThread` with `MinimumEngagement` = its height |
+| `StandardComponents.Washer(size)` — ISO 7089 | **nothing** (deliberate no-op — the hole belongs to the screw the washer spaces) | exact annular disk |
+| `StandardComponents.Bearing(code)` — 608-style deep groove | flat-bottomed press-fit pocket: OD diameter, one width deep, bearing seats flush (nominal-size press fit, as the dowel) | two exact concentric rings (radial thirds: ring, gap, ring), a disjoint multi-shell union — no balls, cage or shields |
+| `StandardComponents.TrisertInsert(size)` — Tappex Trisert® | the catalogue pilot bore (`StandardHoles.Trisert`) at `TrisertMinimumDepth` | plain sleeve bored to the thread's minor diameter — no knurl, no flange; `ProvidesThread` with `MaximumEngagement` = its body length |
 | `StandardComponents.Dowel(diameter, length, inserted)` — ISO 2338 m6 | reamed hole at the **nominal** diameter, just past the inserted length (both bodies of a stack) | cylinder with 45° end chamfers rather than the standard's crowned ends |
 
-⚠ ISO 4762 head diameters and the Trisert table are transcribed, not derived — both
-carry a verify-against-the-datasheet warning in the source. Head height (k = d), the
-thread profile and the clearance/counterbore/tap-drill sizes all come from formulas or
-tables already in `StandardHoles`/`StandardThreads`.
+⚠ Every transcribed table — ISO 4762/7380 head and socket dimensions, ISO 4032 nuts,
+ISO 7089 washers, the bearing boundary dimensions, the Trisert columns — carries a
+verify-against-the-datasheet warning in the source. Head height (k = d for SHCS, the 90°
+cone for csk), the thread profile and the clearance/counterbore/countersink/tap-drill
+sizes all come from formulas or tables already in `StandardHoles`/`StandardThreads`.
+
+**The hex socket recess is the assessed exception to the one-exact-revolve doctrine**
+(`HexSocketRecess` in `StandardHardware.cs`). A hex is not a revolve, so it must be a
+boolean, and it is offered only where that boolean is exact: a pocket whose rim lies in
+a PLANAR face (the sketch-pocket case). Three findings scope it to the cap screw alone:
+a full-turn revolve's flat cap is a `RevolvedSurface` with a pole — the hex rim would
+wrap the pole, which the exact boolean lacks — so the socketed cap screw is **rebuilt
+from cylinder primitives** (planar caps; shank overlapped into the head so every boolean
+is transverse); a countersunk head's primitive rebuild would make cone and shank tangent
+along a shared rim (refused by the v1 boolean; filed in todo.md); and a button head's
+socket would rim on the dome (a traced curve, not exact).
 
 **The local frame is one rule.** A component's `Body` is modeled with **+Z out of the
 host** and the origin at its *seating datum* — the surface it bears on (a cap screw's
@@ -1331,8 +1376,19 @@ Placement points are **projected** onto the anchor face along the fastener axis,
 2D axes need not match the seating face's; non-parallel faces, an anchor above the seat
 and a component too short to reach are all rejected with the numbers in the message. The
 screw is placed **once** (on the near body) — the far half carries `Assemble = false`.
-To anchor into an insert rather than a tapped hole, place the insert on the far body
-itself and use `Place` on the near one.
+
+**Anchoring into a placed component.** The `anchorInto` overload of `PlaceThrough` takes
+the placement of a thread PROVIDER — an insert or a nut placed on the far body earlier —
+and cuts the far body **nothing new** (the provider's placement already made its pilot
+or clearance). What it adds is the checking: the provider must actually provide the
+thread the screw carries (`ProvidesThread` vs `CarriesThread`, by designation), the
+engagement — measured to `anchorFace`, the face the provider seats on — must satisfy the
+provider's `MinimumEngagement` (a nut wants the bolt through its full height) and
+`MaximumEngagement` (a blind insert bottoms out), and each fastener point must project
+onto one of the provider's own points at the weld tier, so a screw cannot silently miss
+its insert. The point check runs only when the provider's seating face is explicit; a
+semantic face (`PlaneRef.TopPlane`) resolves per regeneration and is trusted, documented
+on the overload.
 
 ## Mechanisms (kinematics)
 

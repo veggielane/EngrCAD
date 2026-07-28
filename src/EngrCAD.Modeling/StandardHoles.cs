@@ -72,6 +72,12 @@ public static class StandardHoles
         return HoleSpec.Countersink(Bore(row, fit), row.CountersinkDiameter);
     }
 
+    /// <summary>ISO 10642 countersunk head diameter dk for this size — derived from the
+    /// SAME countersink column <see cref="Countersunk"/> uses (the hole is head + 0.4
+    /// allowance), so a placed <see cref="CountersunkScrew"/> is flush by construction
+    /// rather than by a second table that could drift from the first.</summary>
+    public static double CountersunkHeadDiameter(double size) => Row(size).CountersinkDiameter - 0.4;
+
     /// <summary>Coarse-thread tap pilot hole (threads themselves are not modeled).</summary>
     public static HoleSpec Tapped(double size) => HoleSpec.Simple(Row(size).TapDrill);
 

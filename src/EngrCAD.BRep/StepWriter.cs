@@ -195,15 +195,26 @@ public static class StepWriter
         private int Placement(in Vector3d origin, in Vector3d z, in Vector3d x) =>
             Emit($"AXIS2_PLACEMENT_3D('',#{Point(origin)},#{Direction(z)},#{Direction(x)})");
 
+        /// <summary>
+        /// An AXIS2_PLACEMENT_3D from a <see cref="Frame3d"/> — the writer-side mirror
+        /// of <c>StepReader</c>'s <c>Axis2</c> (<see cref="Frame3d.FromZX"/>): STEP
+        /// stores origin + Z + X, and Y is the convention's derived (right-handed) axis
+        /// on both sides, so a frame round-trips by construction.
+        /// </summary>
+        public int Placement(in Frame3d frame) => Placement(frame.Origin, frame.Z, frame.X);
+
         /// <summary>The identity placement every shape representation is anchored to —
         /// also the "from" end of an assembly occurrence's transformation.</summary>
-        public int OriginPlacement() => Placement(Vector3d.Zero, Vector3d.UnitZ, Vector3d.UnitX);
+        public int OriginPlacement() => Placement(Frame3d.WorldXY);
 
         /// <summary>
         /// A rigid world matrix as an AXIS2_PLACEMENT_3D. A STEP placement is an origin
         /// plus two orthonormal directions and has no room for scale or shear, so a
         /// non-rigid instance transform is refused by name instead of being written as
-        /// though it were rigid.
+        /// though it were rigid — and a MIRRORED (improper) one is refused too: it
+        /// passes every orthonormality test, but AXIS2 axes are right-handed by
+        /// definition (both this reader and every other derive Y = Z × X), so writing a
+        /// left-handed triple would silently re-pose the part un-mirrored.
         /// </summary>
         public int Placement(string what, in Matrix4d world)
         {
@@ -223,6 +234,17 @@ public static class StepWriter
                     "AXIS2_PLACEMENT cannot express. Bake the scale into the part's geometry, or " +
                     "export that part on its own.");
             }
+            // Sign test on a triple product of near-unit vectors: exactly ±1 up to
+            // machine epsilon, so reading the sign needs no tolerance.
+            if (x.Cross(y).Dot(z) < 0)
+            {
+                throw new NotSupportedException(
+                    $"'{what}' is placed by a mirrored (improper) transform, which a STEP " +
+                    "AXIS2_PLACEMENT cannot express — its Y axis is derived right-handed. Bake the " +
+                    "mirror into the part's geometry (Shape.Mirror), or export that part on its own.");
+            }
+            // The emitted directions stay the matrix's own columns (never re-derived
+            // through a cross product), so the written text is stable to the last ULP.
             return Placement(world.TransformPoint(Vector3d.Zero), z, x);
         }
 

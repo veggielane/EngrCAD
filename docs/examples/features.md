@@ -89,3 +89,44 @@ Standard features (`ExtrudeSketchFeature`, `RevolveSketchFeature`, `HoleFeature`
 features) cover simple histories out of the box. Their geometry inputs — the drilling
 plane, the rim faces, the pattern axis — are [typed
 references](geometry-inputs.md) that round-trip through the same JSON.
+
+## The feature registry and whole-history JSON
+
+`SaveParameters` re-tunes an existing history; **`SaveHistory` / `LoadHistory` rebuild
+the history itself** — ordered records of type, name, suppression, constructor inputs
+and `[Param]` values. The construction side is `FeatureRegistry`: it lists every known
+feature type with its parameter metadata (the UI-insertion catalogue) and says honestly
+which are **data-constructible** — `[Param]`-only features (fillets, chamfers,
+patterns) construct directly, and holes and sketch extrude/revolves reconstruct from
+their saved inputs (sketches serialize through the exact public `Curve2d` vocabulary,
+so lines, arcs and Béziers round-trip with nothing flattened).
+
+```csharp run:feature-history-roundtrip
+var plate = Sketch.RoundedRectangle(40, 30, 5);
+var history = new FeatureHistory();
+history.Add(new ExtrudeSketchFeature(plate) { Height = 8, Name = "Plate" });
+history.Add(new HoleFeature(StandardHoles.Counterbored(5), [new(-12, 0), new(12, 0)])
+    { Depth = 9, Name = "Bolt holes" });
+history.Add(new ChamferRimFeature { Setback = 0.5 });
+
+string json = history.SaveHistory();
+var loaded = FeatureHistory.LoadHistory(json);      // FeatureRegistry.Default
+if (!loaded.Complete) throw new Exception(string.Join("; ", loaded.Warnings));
+
+// The loaded model IS the model — same regeneration, same geometry...
+double a = history.Regenerate().Body!.ToMesh().Volume();
+double b = loaded.History.Regenerate().Body!.ToMesh().Volume();
+if (a != b) throw new Exception("round-trip changed the geometry");
+// ...and the file is a fixed point: save -> load -> save is byte-identical.
+if (loaded.History.SaveHistory() != json) throw new Exception("unstable serialized form");
+```
+
+Your own `[Param]`-only feature classes join with
+`registry.Register<MyFeature>()` (or `Register(type, factory)` plus a
+`Feature.SaveInputs` override for constructor inputs). **What cannot round-trip, and
+why:** `BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
+`VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
+`HardwareComponent` is a code object), and `Feature.FromFunc` lambdas. `SaveHistory`
+still *writes* them — type, name, parameters — and `LoadHistory` either skips them
+with a warning naming each, or hands the record to your `resolveOpaque` hook to supply
+the instance.

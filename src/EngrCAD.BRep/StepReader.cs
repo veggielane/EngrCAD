@@ -62,9 +62,20 @@ public sealed class StepReadResult
 /// </summary>
 public static class StepReader
 {
-    public static StepReadResult ReadFile(string path) => Read(File.ReadAllText(path));
+    public static StepReadResult ReadFile(string path, Microsoft.Extensions.Logging.ILogger? logger = null) =>
+        Read(File.ReadAllText(path), logger);
 
-    public static StepReadResult Read(string text) => new Builder(StepParser.Parse(text)).Build();
+    public static StepReadResult Read(string text, Microsoft.Extensions.Logging.ILogger? logger = null)
+    {
+        // Opt-in timing only: the import's findings stay in StepReadResult.Diagnostics —
+        // data the caller acts on — and logging never replaces them.
+        var stopwatch = logger is null ? null : System.Diagnostics.Stopwatch.StartNew();
+        var result = new Builder(StepParser.Parse(text)).Build();
+        if (logger is not null)
+            KernelLog.StepImported(logger, result.Solids.Count, result.Instances.Count,
+                result.Diagnostics.Count, stopwatch!.Elapsed.TotalMilliseconds);
+        return result;
+    }
 
     private sealed class Builder(StepFile file)
     {

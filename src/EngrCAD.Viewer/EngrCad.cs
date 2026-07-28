@@ -395,6 +395,16 @@ public static class EngrCad
 
     // ---- hot reload ----
 
+    /// <summary>
+    /// For hosts whose model SOURCE is data rather than compiled code — a .csx script
+    /// runner watching its file, a parameter-file watcher: re-invokes the live scene
+    /// factory exactly as a <c>dotnet watch</c> hot-reload patch does (same debounce,
+    /// same keep-the-last-good-scene error path, same camera preservation). A no-op
+    /// unless a <see cref="ShowLive"/> window is active, so callers may signal
+    /// unconditionally.
+    /// </summary>
+    public static void NotifySourceChanged() => OnHotReload();
+
     /// <summary>Called by <see cref="HotReloadHandler"/> after dotnet watch patches code.</summary>
     internal static void OnHotReload()
     {

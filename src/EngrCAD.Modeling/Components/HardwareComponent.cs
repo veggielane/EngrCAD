@@ -183,6 +183,27 @@ public abstract class HardwareComponent
     /// <summary>Display color of the component's part.</summary>
     public virtual PartColor Color => Palette.Steel;
 
+    /// <summary>The external thread this component carries into a mate (a screw's), or
+    /// null for components that thread into nothing (dowels, washers, bearings).</summary>
+    public virtual ThreadSpec? CarriesThread => null;
+
+    /// <summary>The internal thread the INSTALLED component provides for a mating screw —
+    /// an insert's or a nut's — or null. A provider can be the far end of a fastener
+    /// stack: the <c>anchorInto</c> overload of
+    /// <see cref="ComponentAssembly.PlaceThrough(HardwareComponent, IReadOnlyList{Vector2d}, SketchPlane, ComponentAssembly, SketchPlane, ComponentFeature)"/>
+    /// anchors a screw into a previously placed provider instead of cutting the screw's
+    /// own tap pilot.</summary>
+    public virtual ThreadSpec? ProvidesThread => null;
+
+    /// <summary>Minimum thread engagement a mating screw must reach into this provider —
+    /// a nut needs its full height — or null for no requirement.</summary>
+    public virtual double? MinimumEngagement => null;
+
+    /// <summary>Maximum engagement this provider can accept before the screw bottoms out
+    /// (a blind insert's body length), or null for unlimited (a nut lets the screw
+    /// protrude past it, as ISO 4032 nuts are meant to).</summary>
+    public virtual double? MaximumEngagement => null;
+
     /// <summary>The component's geometry in its own frame (see the class remarks),
     /// built once and cached.</summary>
     public Shape Body

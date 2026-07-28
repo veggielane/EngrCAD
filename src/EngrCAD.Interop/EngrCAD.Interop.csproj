@@ -10,4 +10,11 @@
     <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
     <ProjectReference Include="..\EngrCAD.BRep\EngrCAD.BRep.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- Abstractions ONLY (no provider, no UI dependency — the kernel rule holds):
+         long operations (booleans, tessellation, MeshSdf builds) take an optional
+         ILogger for timing/diagnosis. Results stay return values; logging complements
+         them, never replaces them. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.7" />
+  </ItemGroup>
 </Project>

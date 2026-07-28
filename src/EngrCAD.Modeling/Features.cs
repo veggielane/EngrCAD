@@ -160,6 +160,17 @@ public abstract class Feature
         return failures ?? (IReadOnlyList<string>)[];
     }
 
+    /// <summary>
+    /// Serializes this feature's CONSTRUCTOR inputs — the non-<c>[Param]</c> data it was
+    /// built from (a hole spec, a sketch, placement points) — or null when it has none
+    /// or they have no serialized form (a lambda, a <see cref="Shape"/> graph, a
+    /// catalogue component). Paired with a <see cref="FeatureRegistry"/> factory, this
+    /// is what makes a feature reconstructible from
+    /// <see cref="FeatureHistory.SaveHistory"/> JSON; <c>[Param]</c> values are saved
+    /// separately and never belong here.
+    /// </summary>
+    protected internal virtual System.Text.Json.Nodes.JsonNode? SaveInputs() => null;
+
     /// <summary>One-off feature from a lambda (no declared parameters — a fresh
     /// instance per history build, so it re-runs whenever upstream changes).</summary>
     public static Feature FromFunc(string name, Func<FeatureContext, Shape> apply) =>
