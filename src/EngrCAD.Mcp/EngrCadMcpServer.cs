@@ -99,6 +99,8 @@ public static class EngrCadMcpServer
                             + "assemblies, and placed instances each holds. Costs nothing — no "
                             + "geometry is evaluated.",
                 ReadOnly = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.ListTabs,
                 OpenWorld = false,
             }),
 
@@ -113,6 +115,8 @@ public static class EngrCadMcpServer
                             + "(STEP-exportable). Start here. For volumes, areas and bounds — "
                             + "which require tessellation — call describe_part on one part.",
                 ReadOnly = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.ListParts,
                 OpenWorld = false,
             }),
 
@@ -128,6 +132,8 @@ public static class EngrCadMcpServer
                             + "parameter values). This is the only listing tool that tessellates, "
                             + "and it tessellates just the named part.",
                 ReadOnly = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.DescribePart,
                 OpenWorld = false,
             }),
 
@@ -162,6 +168,8 @@ public static class EngrCadMcpServer
                 ReadOnly = false,
                 Destructive = true,
                 Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Export,
                 OpenWorld = false,
             }),
 
@@ -179,6 +187,8 @@ public static class EngrCadMcpServer
                 ReadOnly = false,
                 Destructive = false,
                 Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Regeneration,
                 OpenWorld = false,
             }),
 
@@ -192,6 +202,8 @@ public static class EngrCadMcpServer
                 ReadOnly = false,
                 Destructive = false,
                 Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Regeneration,
                 OpenWorld = false,
             }),
 
@@ -204,6 +216,8 @@ public static class EngrCadMcpServer
                 ReadOnly = false,
                 Destructive = false,
                 Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Regeneration,
                 OpenWorld = false,
             }),
 
@@ -217,6 +231,8 @@ public static class EngrCadMcpServer
                             + "scene stays and the error is reported.",
                 ReadOnly = false,
                 Idempotent = false,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Reload,
                 OpenWorld = false,
             }),
         ];

@@ -1030,9 +1030,14 @@ public sealed class SceneTools(SceneSession session)
         $"No tab named '{tab}'. Tabs in this scene: "
         + $"{string.Join(", ", Session.Scene.Tabs.Select(t => t.Name))}.";
 
+    /// <summary>A success result carrying the payload twice, deliberately: as
+    /// structured content (for clients that consume the declared output schema) AND as
+    /// the pretty-printed text block (for clients that predate structured content).
+    /// One JsonObject feeds both, so they cannot disagree.</summary>
     private static CallToolResult Ok(JsonObject payload) => new()
     {
         Content = [new TextContentBlock { Text = payload.ToJsonString(Json) }],
+        StructuredContent = JsonSerializer.SerializeToElement(payload),
     };
 
     private static CallToolResult Error(string? message) => new()

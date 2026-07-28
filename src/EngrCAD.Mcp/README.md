@@ -61,6 +61,15 @@ Failures come back as `isError` results with a readable message — "No part nam
 'flage'. Parts in this scene: Model/flange, …" — never as protocol errors. An
 assistant should be able to correct itself and carry on.
 
+**Results are structured content.** Every JSON-returning tool declares an output
+schema (`ToolSchemas.cs`, wired via the SDK's `UseStructuredContent` +
+`OutputSchema` — the explicit-schema form, because the tool methods return
+`CallToolResult` directly) and populates `structuredContent`, so clients consume
+typed JSON without parsing text blocks. The pretty-printed text block still rides
+along for older clients; one `JsonObject` feeds both, so they cannot disagree.
+`screenshot` is the deliberate exception — its result is an image content block,
+which structured content does not model.
+
 ## stdout is the protocol
 
 The stdio transport *is* standard output. One stray `Console.WriteLine` — from the
@@ -136,4 +145,3 @@ program's source and discards them.
 - The camera pose formulas mirror the viewer's internal `ViewCubeMath.PoseFor` and
   `CameraMath.FrameDistance` (`StandardViews.cs`, locked by tests) because those are
   internal to `EngrCAD.Viewer`. If they are ever made public, delete that file.
-- Results are JSON *text* content, not MCP structured content.
