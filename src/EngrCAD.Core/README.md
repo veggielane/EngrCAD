@@ -229,6 +229,25 @@ tangent-continuous joint (a line meeting an arc) raises no join primitive at all
 outward normals are equal, so the exact-zero cross test that already skipped straight-through
 vertices skips it too, and a stadium offsets to a four-edge stadium.
 
+**Numerical lesson: at a tangency the departure DIRECTION is round-off, so an exact
+predicate on it is confidently wrong.** The fan comparator sorts by the exact
+`Orient2dSign` of the two departure directions — and where two edges are tangent at the
+node, those directions differ only by arithmetic noise. Measured: a disc tangent to a
+plate's straight edge from outside gave the arc a departure of `(−1.22e-16, −1)`, whose x
+sign is nothing but the error in `sin(π)`, which put it on the wrong side of the plate's
+exactly vertical edge; the tightest-turn walk then closed **no face at all** and the union
+came back EMPTY. Only the curvature carries information there, so a second pass
+(`OrderTangentialRuns`) re-orders each cyclic run of tangentially tied departures by
+curvature. **The tie band is derived, not chosen**: a vertex may sit up to the snap
+tolerance from the true tangency point, and displacing a point by δ along a circle of
+radius r rotates its radial (hence its tangent) by δ/r = δ·|κ| — so the band is
+`snap·max(|κ₁|, |κ₂|)` plus a few-ulp arithmetic floor, which vanishes for two straight
+edges and leaves genuinely distinct line directions decided exactly. Runs are walked
+CYCLICALLY, because a tangency along the +x axis puts one departure at the very start of
+the fan and its partner at the very end. This is the same shape of finding design.md §5
+records for `FaceSplitter.DepartureAngle`: **Shewchuk exactness is exactness about the
+coordinates you hand it, and a tangent computed at a tangency is not one of them.**
+
 **Numerical lesson: a full-turn arc's END is its START, exactly.** Evaluating the end angle
 instead lands ~2e-16·r away, because `sin(2π)` is not 0 in doubles — and that gap is not
 cosmetic. A +x parity ray whose ordinate falls inside it counts the seam piece's two

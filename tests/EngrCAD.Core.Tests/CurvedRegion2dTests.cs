@@ -324,6 +324,45 @@ public class CurvedRegion2dTests
     }
 
     [Fact]
+    public void ADiscTangentToAStraightEdge_OrdersTheNodeByCURVATURE_NotByTheNoisyDirection()
+    {
+        // Regression for the tangency comparator. At an exact tangency the two departures'
+        // computed directions differ only by round-off - the arc leaving this node reads
+        // (-1.22e-16, -1), whose x sign is nothing but the error in sin(pi) - and the exact
+        // orientation predicate then makes a CONFIDENT WRONG decision about a quantity that
+        // carries no information. Before the curvature re-ordering pass, the tightest-turn
+        // walk closed no face at all and this union came back EMPTY.
+        var plate = Rectangle(0, 0, 20, 10);
+        var boss = CurvedRegion2d.Disc((24, 5), 4);   // touches x = 20 at exactly one point
+        var union = plate.Union(boss);
+        Assert.Equal(2, union.Count);
+        Assert.Equal(200 + Math.PI * 16, union.Sum(r => r.Area), 8);
+
+        // The mirror image exercises the other half-plane, and the vertical mirror the
+        // other sign of the arc's noise.
+        var left = CurvedRegion2dBoolean.Union(Rectangle(0, 0, 20, 10), CurvedRegion2d.Disc((-4, 5), 4));
+        Assert.Equal(200 + Math.PI * 16, left.Sum(r => r.Area), 8);
+        var below = CurvedRegion2dBoolean.Union(Rectangle(0, 0, 20, 10), CurvedRegion2d.Disc((10, -4), 4));
+        Assert.Equal(200 + Math.PI * 16, below.Sum(r => r.Area), 8);
+        var above = CurvedRegion2dBoolean.Union(Rectangle(0, 0, 20, 10), CurvedRegion2d.Disc((10, 14), 4));
+        Assert.Equal(200 + Math.PI * 16, above.Sum(r => r.Area), 8);
+    }
+
+    [Fact]
+    public void TwoDiscsTangentToOneLineAtTheSamePoint_AreOrderedByCurvature()
+    {
+        // Three curves through one node with a common tangent: a straight edge and two
+        // circles of different radii on the SAME side. Only the curvature separates them.
+        var plate = Rectangle(0, 0, 20, 10);
+        var small = CurvedRegion2d.Disc((22, 5), 2);
+        var large = CurvedRegion2d.Disc((26, 5), 6);
+        var union = CurvedRegion2dBoolean.UnionAll([plate, small, large]);
+        // The small disc sits entirely inside the large one (centres 4 apart, radii 2 and 6
+        // - internally tangent at x = 20), so the union is the plate plus the large disc.
+        Assert.Equal(200 + Math.PI * 36, union.Sum(r => r.Area), 7);
+    }
+
+    [Fact]
     public void ATangentChordThroughADisc_LeavesTheDiscWhole()
     {
         // The knife's edge is exactly tangent to the circle: nothing is removed.

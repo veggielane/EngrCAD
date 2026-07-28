@@ -351,8 +351,7 @@ public sealed class CurvedRegion2d
         }
 
         var contacts = new List<CurveIntersection2d.Contact>();
-        for (int i = 0; i < flat.Count; i++)
-        for (int j = i + 1; j < flat.Count; j++)
+        foreach (var (i, j) in CandidatePairs(flat))
         {
             var (li, ii, a) = flat[i];
             var (lj, ij, b) = flat[j];
@@ -382,6 +381,54 @@ public sealed class CurvedRegion2d
         static bool IsEndpoint(in CurvedEdge2d edge, in Vector2d point) =>
             edge.Start.DistanceTo(point) <= BoundaryTolerance || edge.End.DistanceTo(point) <= BoundaryTolerance;
     }
+
+    /// <summary>
+    /// Edge index pairs whose tight boxes overlap in x — a one-dimensional sweep, which is
+    /// all the broad phase this check needs: a crossing requires a shared point, so it
+    /// requires overlapping boxes. Below <see cref="BruteForceLimit"/> edges the all-pairs
+    /// scan beats sorting, exactly as <see cref="Region2dValidation"/> decides.
+    /// </summary>
+    private static IEnumerable<(int, int)> CandidatePairs(
+        List<(int Loop, int Index, CurvedEdge2d Edge)> flat)
+    {
+        int n = flat.Count;
+        if (n <= BruteForceLimit)
+        {
+            for (int i = 0; i < n; i++)
+            for (int j = i + 1; j < n; j++)
+                yield return (i, j);
+            yield break;
+        }
+
+        var boxes = new Aabb[n];
+        var order = new int[n];
+        var keys = new double[n];
+        for (int i = 0; i < n; i++)
+        {
+            boxes[i] = flat[i].Edge.Bounds();
+            order[i] = i;
+            keys[i] = boxes[i].Min.X;
+        }
+        Array.Sort(keys, order);
+
+        for (int a = 0; a < n; a++)
+        {
+            int i = order[a];
+            double reach = boxes[i].Max.X + BoundaryTolerance;
+            for (int b = a + 1; b < n && keys[b] <= reach; b++)
+            {
+                int j = order[b];
+                if (boxes[i].Min.Y - BoundaryTolerance <= boxes[j].Max.Y
+                    && boxes[j].Min.Y - BoundaryTolerance <= boxes[i].Max.Y)
+                {
+                    yield return i < j ? (i, j) : (j, i);
+                }
+            }
+        }
+    }
+
+    /// <summary>Edge count below which all-pairs crossing testing beats sorting.</summary>
+    private const int BruteForceLimit = 24;
 
     private static IReadOnlyList<CurvedEdge2d> Reverse(IReadOnlyList<CurvedEdge2d> loop)
     {

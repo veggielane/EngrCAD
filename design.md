@@ -495,6 +495,24 @@ by rounding. Snapping is area-neutral to O(τ^1.5) and always yields a valid arr
 equal tangents and different curvature, which the fan can rank. That is the same property
 that makes the tier complete, used a second time.
 
+**And the tangency policy has a second half, learned the hard way.** Snapping produces the
+node; ordering the edges *at* it is a separate problem, and the first implementation got it
+confidently wrong. The fan comparator sorts by the exact `Orient2dSign` of the two departure
+directions — but where two edges are tangent, those directions differ only by arithmetic
+noise, so the exact predicate decides a quantity that carries no information. A disc tangent
+to a plate's straight edge from outside gave the arc a departure of (−1.22e-16, −1), whose x
+sign is nothing but the error in `sin(π)`; that put it on the wrong side of the plate's
+exactly vertical edge, the tightest-turn walk closed **no face at all**, and the union came
+back EMPTY. `OrderTangentialRuns` re-orders each cyclic run of tangentially tied departures
+by curvature afterwards, and **the tie band is derived rather than chosen**: a vertex may sit
+up to the snap tolerance from the true tangency point, and displacing a point by δ along a
+circle of radius r rotates its radial — hence its tangent — by δ/r = δ·|κ|, so the band is
+`snap·max(|κ₁|, |κ₂|)` plus a few-ulp floor. That floor is all that remains for two straight
+edges, so genuinely distinct line directions are still decided exactly and a near-parallel
+pair keeps the orientation sign's answer. This is §5's `DepartureAngle` note in new clothes:
+**Shewchuk exactness is exactness about the coordinates you hand it**, and a tangent computed
+at a tangency is not one of them.
+
 **What changed in the classification proof.** The straight interior sample takes the
 boundary-edge midpoint with the greatest clearance and pushes half of it along the inward
 normal; the disk of that clearance meets no other edge, so the pushed point is interior. For
