@@ -87,6 +87,11 @@
     /// bounds, the desktop's default when the toggle first goes on.</summary>
     [Parameter] public double? SectionOffset { get; set; }
 
+    /// <summary>The view cube in the top-right corner (on, as on the desktop): clicks
+    /// animate to the face/edge/corner view, dragging on it orbits and rotate-snaps to
+    /// the nearest standard orientation on release, hovering brightens the target.</summary>
+    [Parameter] public bool ShowViewCube { get; set; } = true;
+
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
@@ -138,6 +143,13 @@
 
     private (bool Enabled, SectionAxis Axis, double? Offset) _shownSection = (false, SectionAxis.Z, null);
     private ViewportContours? _contours;
+
+    // View cube state: the hovered direction (drives the face brighten), whether the
+    // current drag started on the cube's screen region (arms rotate-snap on release),
+    // and a token that cancels an in-flight pose animation when the user takes over.
+    private Vector3d? _cubeHover;
+    private bool _pressOnCube;
+    private int _cameraAnimation;
     // Parts whose implicit lowering failed and was already reported (the failure is
     // cached on the Part, so without this every rebuild repeats the status line —
     // the same dedupe the desktop SectionContourRenderer keeps).
@@ -353,6 +365,77 @@
         await PumpAsync();
     }
 
+    // ---- view cube ----
+    //
+    // The pure halves are all shared (ViewCubeMath for region/hit/pose/snap,
+    // ViewCubeAnimation for the 250 ms smoothstep transition, ViewCubeGeometry for the
+    // arrays uploaded at init); this component only routes pointer events and runs the
+    // animation loop, exactly the division the desktop's ViewCube keeps.
+
+    /// <summary>The hovered cube direction (components in {-1,0,1}), or null.</summary>
+    public Vector3d? CubeHover => _cubeHover;
+
+    /// <summary>
+    /// Routes a click through the view cube: returns true when the position lies inside
+    /// the cube's screen region — the region CLAIMS the click, so parts behind the
+    /// widget are never picked through it (the desktop rule). When the cube itself was
+    /// hit, animates to the face/edge/corner view and reports its name. Public for the
+    /// reason the desktop's <c>ViewCubeClick</c> is: a state only reachable through a
+    /// real pointer event is a state nothing checks.
+    /// </summary>
+    public async Task<bool> ViewCubeClickAsync(double x, double y)
+    {
+        var (width, height) = _lastSize;
+        if (!ShowViewCube
+            || !ViewCubeMath.TryMapToRegion(x, y, width, height, out double u, out double v))
+            return false;
+        if (ViewCubeMath.TryHit(_camera.Yaw, _camera.Pitch, u, v, out var direction))
+        {
+            await ReportAsync($"view {ViewCubeMath.Label(direction)}");
+            var (yaw, pitch) = ViewCubeMath.PoseFor(direction, _camera.Yaw);
+            await AnimateCameraAsync(yaw, pitch);
+        }
+        return true;
+    }
+
+    /// <summary>Rotate-snap: settles the camera onto the standard orientation nearest
+    /// the current pose, the way commercial cubes finish a drag on the widget. Runs
+    /// when a drag that STARTED on the cube ends, so free orbiting elsewhere in the
+    /// viewport is untouched. Idempotent on an already-snapped pose.</summary>
+    public async Task SnapToNearestViewAsync()
+    {
+        var direction = ViewCubeMath.NearestStandardDirection(_camera.Yaw, _camera.Pitch);
+        await ReportAsync($"view {ViewCubeMath.Label(direction)}");
+        var (yaw, pitch) = ViewCubeMath.PoseFor(direction, _camera.Yaw);
+        await AnimateCameraAsync(yaw, pitch);
+    }
+
+    /// <summary>
+    /// The eased pose transition — <c>ViewCubeAnimation</c>, whose default duration IS
+    /// the product's 250 ms smoothstep, driven by a cooperative loop. A press or a
+    /// newer animation bumps the token and the stale loop stops writing, so the user
+    /// always wins over an animation.
+    /// </summary>
+    private async Task AnimateCameraAsync(double targetYaw, double targetPitch)
+    {
+        int token = ++_cameraAnimation;
+        var animation = new ViewCubeAnimation(_camera.Yaw, _camera.Pitch, targetYaw, targetPitch);
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (true)
+        {
+            var (yaw, pitch, done) = animation.Evaluate(
+                System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalSeconds);
+            if (token != _cameraAnimation)
+                return;
+            _camera = _camera with { Yaw = yaw, Pitch = pitch };
+            _userMovedCamera = true;
+            await PumpAsync();
+            if (done)
+                return;
+            await Task.Delay(16);
+        }
+    }
+
     /// <summary>
     /// Runs one pick at a viewport-space position (CSS pixels from the canvas's top-left)
     /// and returns what was under it, WITHOUT changing the selection. Public because it is
@@ -414,6 +497,15 @@
                 await _gl.CreateProgramAsync(ViewportFrame.BackgroundProgram,
                     header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment,
                     bindAttributes: false);
+                // The view cube's geometry, uploaded once: the SAME arrays the desktop
+                // widget uploads (ViewCubeGeometry), drawn through the line program —
+                // fills in mode "triangles", edges and stroke-font labels as lines.
+                await _gl.UploadLineVerticesAsync(
+                    ViewportFrame.CubeFillsKey, ViewCubeGeometry.BuildFillVertices());
+                await _gl.UploadLineVerticesAsync(
+                    ViewportFrame.CubeEdgesKey, ViewCubeGeometry.BuildEdgeVertices());
+                await _gl.UploadLineVerticesAsync(
+                    ViewportFrame.CubeLabelsKey, ViewCubeGeometry.BuildLabelVertices());
             }
             catch (WebGlUnavailableException e)
             {
@@ -787,7 +879,8 @@
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
                 _selected, _hovered,
-                sectionPlanes: ActiveSectionPlanes(), contours: _contours));
+                sectionPlanes: ActiveSectionPlanes(), contours: _contours,
+                cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null));
         }
         catch (JSDisconnectedException)
         {
@@ -873,7 +966,18 @@
         _moved = false;
         _lastX = _pressX = e.OffsetX;
         _lastY = _pressY = e.OffsetY;
+        _cameraAnimation++;   // the user takes over from any pose animation in flight
+        // Remember whether the drag STARTED on the cube's screen region: that is what
+        // arms rotate-snap on release (the desktop's rule), so orbiting from anywhere
+        // else stays free.
+        _pressOnCube = ShowViewCube && ViewCubeMath.TryMapToRegion(
+            e.OffsetX, e.OffsetY, _lastSize.Width, _lastSize.Height, out _, out _);
         await SetHoveredAsync(-1);   // a press ends hover, as it does on the desktop
+        if (_cubeHover is not null)
+        {
+            _cubeHover = null;
+            await PumpAsync();
+        }
         _hoverThrottle.Reset();
         // Capture, so a drag that leaves the canvas keeps orbiting. The desktop viewer
         // solves the same problem by handling input at the window level.
@@ -884,7 +988,7 @@
     private Task OnPointerMove(PointerEventArgs e)
     {
         if (!_dragging || e.Buttons == 0)
-            return Picking ? UpdateHoverAsync(e.OffsetX, e.OffsetY) : Task.CompletedTask;
+            return HoverMoveAsync(e.OffsetX, e.OffsetY);
 
         double dx = e.OffsetX - _lastX;
         double dy = e.OffsetY - _lastY;
@@ -907,13 +1011,58 @@
     {
         bool wasDragging = _dragging;
         _dragging = false;
+        bool pressOnCube = _pressOnCube;
+        _pressOnCube = false;
         // Click-vs-drag discrimination, the desktop's rule and its threshold: a release
-        // within 4 pixels of the press is a click that picks; anything farther was an
+        // within 4 pixels of the press is a click; anything farther was an
         // orbit/pan/zoom drag. Reusing HoverThrottle's distance is deliberate — the two
         // answer the same question about what counts as pointer travel.
-        if (wasDragging && Picking && !_moved && !Travelled(e.OffsetX - _pressX, e.OffsetY - _pressY))
+        bool clicked = !_moved && !Travelled(e.OffsetX - _pressX, e.OffsetY - _pressY);
+        if (wasDragging && pressOnCube)
+        {
+            _hoverThrottle.Reset();
+            if (clicked)
+                await ViewCubeClickAsync(e.OffsetX, e.OffsetY);   // the region claims the click
+            else
+                await SnapToNearestViewAsync();   // a drag that started on the cube snaps
+            return;
+        }
+        if (wasDragging && Picking && clicked)
             await PickAndSelectAsync(e.OffsetX, e.OffsetY);
         _hoverThrottle.Reset();   // the next move re-picks immediately
+    }
+
+    /// <summary>
+    /// A pointer move with no drag: over the cube's region, cube-face hover replaces
+    /// model hover (the desktop suppresses model hover there too, and the widget's own
+    /// hit test needs no throttle — it is a handful of flops); elsewhere, the model
+    /// hover raycast behind the shared <c>HoverThrottle</c>.
+    /// </summary>
+    private async Task HoverMoveAsync(double x, double y)
+    {
+        var (width, height) = _lastSize;
+        if (ShowViewCube && ViewCubeMath.TryMapToRegion(x, y, width, height, out double u, out double v))
+        {
+            Vector3d? hover =
+                ViewCubeMath.TryHit(_camera.Yaw, _camera.Pitch, u, v, out var direction)
+                    ? direction
+                    : null;
+            bool changed = !Nullable.Equals(hover, _cubeHover);
+            _cubeHover = hover;
+            _hoverThrottle.Reset();
+            if (_hovered != -1)
+                await SetHoveredAsync(-1);
+            else if (changed)
+                await PumpAsync();
+            return;
+        }
+        if (_cubeHover is not null)
+        {
+            _cubeHover = null;
+            await PumpAsync();
+        }
+        if (Picking)
+            await UpdateHoverAsync(x, y);
     }
 
     private void OnPointerCancel(PointerEventArgs e) => _dragging = false;

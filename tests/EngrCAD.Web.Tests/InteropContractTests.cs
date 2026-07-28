@@ -39,6 +39,8 @@ public class InteropContractTests
                 DepthTest = false,
                 Cull = false,
                 PolygonOffset = [1f, 1f],
+                Viewport = [0, 0, 10, 10],
+                ClearDepth = true,
                 Uniforms = new Dictionary<string, object> { ["uColor"] = new[] { 1f, 0f, 0f } },
             },
         ],

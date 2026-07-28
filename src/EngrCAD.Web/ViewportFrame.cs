@@ -69,6 +69,19 @@ public readonly record struct ViewportContours(
     string NegativeKey, int NegativeVertexCount);
 
 /// <summary>
+/// The view cube's frame inputs: the canvas size (CSS pixels — the region maths is in
+/// DIPs, scaled to framebuffer pixels by the frame's <c>pixelScale</c>) and the hovered
+/// direction, if any. The geometry itself is the shared <c>ViewCubeGeometry</c> arrays,
+/// uploaded once under <see cref="ViewportFrame.CubeFillsKey"/> and friends.
+/// </summary>
+/// <param name="CanvasWidth">Canvas width in CSS pixels.</param>
+/// <param name="CanvasHeight">Canvas height in CSS pixels.</param>
+/// <param name="Hover">Hovered cube direction (components in {-1,0,1}), or null. Every
+/// face contributing a component brightens — the shared hover rule.</param>
+public readonly record struct ViewportCube(
+    double CanvasWidth, double CanvasHeight, Vector3d? Hover = null);
+
+/// <summary>
 /// Turns a posed instance list into the <see cref="FrameDescription"/> the WebGL2 client
 /// draws — the browser's counterpart of <c>ViewportControl.OnOpenGlRender</c> and
 /// <c>OffscreenRenderer.Draw</c>, and the reason those two do not gain a third divergent
@@ -114,6 +127,21 @@ public static class ViewportFrame
 
     /// <inheritdoc cref="MeshProgram"/>
     public const string BackgroundProgram = "background";
+
+    /// <summary>Upload key of the view cube's face fills (<c>ViewCubeGeometry.BuildFillVertices</c>,
+    /// drawn per face through the line program in mode "triangles").</summary>
+    public const string CubeFillsKey = "@cube.fills";
+
+    /// <summary>Upload key of the view cube's 12 edges.</summary>
+    public const string CubeEdgesKey = "@cube.edges";
+
+    /// <summary>Upload key of the view cube's stroke-font labels.</summary>
+    public const string CubeLabelsKey = "@cube.labels";
+
+    // Vertex counts of the cube's shared uploads, derived from the geometry builders
+    // themselves so a glyph change cannot silently truncate a draw.
+    private static readonly int CubeEdgeVertexCount = ViewCubeGeometry.BuildEdgeVertices().Length / 3;
+    private static readonly int CubeLabelVertexCount = ViewCubeGeometry.BuildLabelVertices().Length / 3;
 
     /// <summary>Clear colour behind the gradient — the viewport's, to the byte
     /// (<c>ViewportControl.OnOpenGlRender</c> and <c>OffscreenRenderer.Draw</c> both
@@ -172,6 +200,9 @@ public static class ViewportFrame
     /// sections are active, after everything else so they read as an overlay: signed
     /// families first, then d = 0 last so the gold cross-section wins any overdraw —
     /// the desktop renderer's order, with the shared <c>SectionContours</c> palette.</param>
+    /// <param name="cube">The view cube, or null. Drawn last of all (the desktop rule:
+    /// the cube is window chrome sitting on top of everything), into its own top-right
+    /// sub-viewport with the depth buffer cleared first.</param>
     public static FrameDescription Build(
         IReadOnlyList<ViewportInstance> instances,
         CameraState camera,
@@ -184,7 +215,8 @@ public static class ViewportFrame
         int hovered = -1,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        ViewportContours? contours = null)
+        ViewportContours? contours = null,
+        ViewportCube? cube = null)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -397,7 +429,104 @@ public static class ViewportFrame
                     first: 0, count: iso.ZeroVertexCount, unclip: true));
         }
 
+        // Pass 6: the view cube, last of all — it is window chrome and sits on top of
+        // everything, exactly as the desktop draws it at the end of its render pass.
+        if (cube is { } widget)
+            AppendViewCube(draws, widget, camera, pixelScale, sectionActive);
+
         return new FrameDescription { Clear = ClearColor, Shared = shared, Draws = draws };
+    }
+
+    /// <summary>
+    /// The view cube's draws: face fills (per face, for their colours, with the shared
+    /// hover-brighten rule), the 12 edges, and the stroke-font labels — all through the
+    /// line program into a top-right sub-viewport, with the depth buffer cleared before
+    /// the first draw so the cube overlays the finished scene. Region maths, the ortho
+    /// mini-projection and the palette are all the shared <see cref="ViewCubeMath"/> /
+    /// <see cref="ViewCubeGeometry"/> — the region rect here is the desktop's
+    /// <c>ViewCube.Draw</c> transcribed, including its too-small-to-draw guard.
+    /// </summary>
+    private static void AppendViewCube(
+        List<DrawCall> draws, in ViewportCube cube, CameraState camera,
+        double pixelScale, bool sectionActive)
+    {
+        int sizePx = (int)Math.Round(ViewCubeMath.RegionSizeDip * pixelScale);
+        int marginPx = (int)Math.Round(ViewCubeMath.RegionMarginDip * pixelScale);
+        int x = (int)Math.Round(cube.CanvasWidth * pixelScale) - sizePx - marginPx;
+        int y = (int)Math.Round(cube.CanvasHeight * pixelScale) - sizePx - marginPx;
+        if (sizePx < 16 || x < 0 || y < 0)
+            return; // viewport too small for the widget (the desktop's guard)
+
+        int[] viewport = [x, y, sizePx, sizePx];
+        var identity = ColumnMajor(Matrix4d.Identity);
+        var eye = CameraMath.Eye(camera.Yaw, camera.Pitch, ViewCubeMath.EyeDistance, Vector3d.Zero);
+        var view = ColumnMajor(CameraMath.LookAt(eye, Vector3d.Zero, Vector3d.UnitZ));
+        // Always orthographic, independent of the main projection — standard for
+        // orientation widgets, and it matches ViewCubeMath.TryHit's ortho pick ray.
+        var projection = ColumnMajor(
+            CameraMath.Orthographic(ViewCubeMath.OrthoHalfExtent, 1, 0.5, 8));
+
+        for (int face = 0; face < ViewCubeGeometry.Faces.Count; face++)
+        {
+            var color = ViewCubeGeometry.Faces[face].Color;
+            if (cube.Hover is { } hover && hover.Dot(ViewCubeGeometry.Faces[face].Normal) > 0.5)
+                color = ViewCubeGeometry.Brightened(color);
+            draws.Add(new DrawCall
+            {
+                Program = LineProgram,
+                Geometry = CubeFillsKey,
+                Mode = "triangles",
+                First = face * ViewCubeGeometry.VerticesPerFace,
+                Count = ViewCubeGeometry.VerticesPerFace,
+                Cull = false,
+                // Fills pushed back slightly so edges and labels win the depth test
+                // cleanly — the same trick as the scene's feature-edge overlay.
+                PolygonOffset = [1f, 1f],
+                // The depth clear that makes the cube an overlay, once, before its
+                // first draw (glClear ignores the viewport rect).
+                ClearDepth = face == 0,
+                Viewport = viewport,
+                Uniforms = CubeUniforms(identity, view, projection, Rgb(color), sectionActive),
+            });
+        }
+
+        draws.Add(new DrawCall
+        {
+            Program = LineProgram,
+            Geometry = CubeEdgesKey,
+            First = 0,
+            Count = CubeEdgeVertexCount,
+            Cull = false,
+            Viewport = viewport,
+            Uniforms = CubeUniforms(identity, view, projection, Rgb(ViewCubeGeometry.EdgeColor), sectionActive),
+        });
+        draws.Add(new DrawCall
+        {
+            Program = LineProgram,
+            Geometry = CubeLabelsKey,
+            First = 0,
+            Count = CubeLabelVertexCount,
+            Cull = false,
+            Viewport = viewport,
+            Uniforms = CubeUniforms(identity, view, projection, Rgb(ViewCubeGeometry.LabelColor), sectionActive),
+        });
+    }
+
+    /// <summary>A cube draw's uniforms: its own view/projection over an identity model,
+    /// never section-clipped (widget chrome — the desktop flips the same uniform).</summary>
+    private static Dictionary<string, object> CubeUniforms(
+        float[] model, float[] view, float[] projection, float[] color, bool sectionActive)
+    {
+        var uniforms = new Dictionary<string, object>
+        {
+            ["uModel"] = model,
+            ["uView"] = view,
+            ["uProj"] = projection,
+            ["uColor"] = color,
+        };
+        if (sectionActive)
+            uniforms["uSectionEnabled"] = 0f;
+        return uniforms;
     }
 
     private static void AppendTranslucent(

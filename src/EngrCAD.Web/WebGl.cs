@@ -54,6 +54,16 @@ public sealed class DrawCall
     /// <summary>Polygon offset (factor, units) — the fills-behind-edges trick the
     /// desktop viewer uses so a feature-edge overlay does not z-fight its own surface.</summary>
     [JsonPropertyName("polygonOffset")] public float[]? PolygonOffset { get; init; }
+
+    /// <summary>Framebuffer-pixel viewport rect <c>[x, y, w, h]</c> for this draw
+    /// (default: the whole canvas). The view cube draws into its own top-right
+    /// sub-viewport, exactly as the desktop widget does.</summary>
+    [JsonPropertyName("viewport")] public int[]? Viewport { get; init; }
+
+    /// <summary>Clears the depth buffer before this draw — what makes an overlay (the
+    /// view cube) win against the finished scene. <c>glClear</c> ignores the viewport
+    /// rect, so the flag is safe wherever the draw sits after the scene's own draws.</summary>
+    [JsonPropertyName("clearDepth")] public bool ClearDepth { get; init; }
 }
 
 /// <summary>

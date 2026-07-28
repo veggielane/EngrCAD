@@ -271,6 +271,7 @@ function drawFrame(ctx, frame) {
     const gl = ctx.gl;
 
     resize(ctx);
+    const fullViewport = [0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight];
     const [r, g, b] = frame.clear;
     gl.clearColor(r, g, b, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
@@ -304,6 +305,13 @@ function drawFrame(ctx, frame) {
             gl.disable(gl.POLYGON_OFFSET_FILL);
         }
 
+        // Depth clear + per-draw viewport, both decided in C# (the view cube's overlay
+        // trick). glClear ignores the viewport rect, so the order matches the desktop:
+        // clear first, then narrow the viewport for the draw.
+        if (call.clearDepth) gl.clear(gl.DEPTH_BUFFER_BIT);
+        const vp = call.viewport ?? fullViewport;
+        gl.viewport(vp[0], vp[1], vp[2], vp[3]);
+
         // No geometry key: the shader generates its own vertices from gl_VertexID (the
         // background gradient's fullscreen triangle). The count comes from C# like
         // everything else.
@@ -326,9 +334,13 @@ function drawFrame(ctx, frame) {
         const line = ctx.lines.get(call.geometry);
         if (line) {
             // first/count let one buffer serve several draws: the three world axes are
-            // consecutive vertex pairs in a single upload, coloured separately.
+            // consecutive vertex pairs in a single upload, coloured separately. Mode
+            // 'triangles' draws position-only fills through the same layout (the view
+            // cube's faces, drawn per face for their colour - the desktop does the
+            // same through its line program).
             gl.bindVertexArray(line.vao);
-            gl.drawArrays(gl.LINES, call.first ?? 0, call.count ?? line.vertexCount);
+            const mode = call.mode === 'triangles' ? gl.TRIANGLES : gl.LINES;
+            gl.drawArrays(mode, call.first ?? 0, call.count ?? line.vertexCount);
             continue;
         }
         throw new Error(`No geometry '${call.geometry}'`);
