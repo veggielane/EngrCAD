@@ -159,6 +159,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   or — the one that matches "the base triangulation must carry the accuracy" — inserting
   the natural grid's interior v rows into the band before triangulating, which the
   v-simple structure between two u-monotone chains makes well defined. No Delaunay flips.
+  **The evidence now argues for the second.** The 94 → 2 784 measurement above says
+  refinement degrades a base mesh that was already good, so a better bisection RULE is
+  treating the symptom; and repro (3) fails before refinement runs at all, which no
+  refinement scheme can fix. Note also that this is not a niche accuracy item: the drilled
+  sphere is 27x the triangle count the grid asks for, so it is a cost item too. Expect the
+  work to touch every trimmed face, so budget a full re-verification of the 52 rendered
+  docs PNGs alongside the corpus gate.
   Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5 — the trimmed side-face triangulation differs from a
   planar cap's (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
