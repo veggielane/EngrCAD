@@ -147,6 +147,27 @@ public sealed class Profile
             [.. region.Holes.Select(hole => Place(hole, frame))]);
     }
 
+    /// <summary>
+    /// A chain of exact 2D curves placed on a plane as an exact <see cref="Profile"/> — the
+    /// curve-family counterpart of <see cref="FromRegion"/>, which is polygonal. Lines stay
+    /// lines, arcs stay arcs and NURBS stay NURBS (<see cref="Curve2d.ToCurve3d"/>), so a
+    /// profile built this way extrudes and revolves to exact analytic faces.
+    /// </summary>
+    /// <remarks>
+    /// This is the SMALLEST bridge that works: the chain is handed to the ordinary
+    /// constructor, so closure, planarity, winding and degeneracy are validated exactly once
+    /// and in one place. There is deliberately no 2D-side re-implementation of those checks —
+    /// a second copy would be a second answer.
+    /// </remarks>
+    public static Profile FromCurves(IReadOnlyList<Curve2d> curves, Frame3d? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(curves);
+        if (curves.Count == 0)
+            throw new ArgumentException("A profile needs at least one curve.", nameof(curves));
+        var frame = plane ?? Frame3d.WorldXY;
+        return new Profile([.. curves.Select(c => c.ToCurve3d(frame))]);
+    }
+
     /// <summary>One closed 2D loop as a polygonal profile on a plane (the region's 2D x/y
     /// become the frame's X/Y). The loop closes implicitly — do not repeat the first point.
     ///

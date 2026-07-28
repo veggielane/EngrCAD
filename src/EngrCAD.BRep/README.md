@@ -97,6 +97,20 @@ operations. Depends only on `EngrCAD.Core`.
   `Arc2d` and sample-plus-Newton elsewhere — and because every candidate is a real point
   ON the curve, the generic path can only ever OVER-estimate, which is the safe direction
   for a fitting error metric.
+  **`Curve2d.ToCurve3d(plane)`** places a 2D curve on a `Frame3d` as an EXACT `Curve3d` — the
+  bridge into the topology vocabulary, consumed by `Profile.FromCurves(curves, plane?)`. It is
+  ABSTRACT for the same reason the derivatives are: every conversion is exact and there must
+  be no sampled fallback for a new type to inherit by accident. Lines become `Line3d`,
+  Béziers become the equivalent Bézier-knot `NurbsCurve` (a re-expression, same control
+  points), `NurbsCurve2d` keeps its degree/knots/weights so a rational arc stays an exact arc,
+  and arcs lift exactly as sketch arcs already did — a full turn to a `Circle3d` on the arc's
+  own start radial (parameter following the SIGNED sweep), anything less to a `CurveSegment`
+  over a circle on the frame's axes, so `Underlying` stays the `Circle3d` downstream
+  classification depends on and a negative sweep arrives as a decreasing parameter range
+  rather than a reversal wrapper. `Profile.FromCurves` hands the lifted chain to the ordinary
+  `Profile` constructor, so closure, planarity and winding are validated in exactly one place;
+  `Sketch.ToCurves`/`Sketch.FromCurves` close the loop on the Modeling side. See design.md §5
+  for why the bridge is deliberately this small.
 - **Biarc fitting** (`BiArcFit`, `BiArc2d`, `BiArcChain2d`/`BiArcChain3d`): two
   tangent-continuous arcs through a point+tangent pair, plus tolerance-driven chains
   through a polyline and a 3D wrapper that turns a PLANAR traced polyline into exact

@@ -176,6 +176,70 @@ public sealed class Sketch
             .Close();
     }
 
+    /// <summary>
+    /// The outer loop as an exact chain of <see cref="Curve2d"/>s — lines, arcs with their
+    /// SIGNED sweep, and cubic Béziers. Nothing is flattened (contrast
+    /// <see cref="ToRegions(double)"/>), so this is the lossless way out of the sketch
+    /// vocabulary into the 2D curve family: fit a biarc chain, measure an arc length, offset
+    /// one segment, hand a chain to <c>Profile.FromCurves</c>.
+    /// </summary>
+    /// <remarks>
+    /// Hole loops are reached by their own sketches: a hole is a <see cref="Sketch"/>, and
+    /// <see cref="WithHole"/> puts one back. That is the whole bridge — deliberately the
+    /// smallest API that lets the two vocabularies meet, with no second copy of closure,
+    /// winding or degeneracy validation on the 2D-curve side.
+    /// </remarks>
+    public IReadOnlyList<Curve2d> ToCurves() => [.. Segments.Select(s => s.ToCurve2d())];
+
+    /// <summary>
+    /// A sketch from a closed chain of exact 2D curves — the inverse of
+    /// <see cref="ToCurves"/>. Lines, arcs and quadratic/cubic Béziers map to sketch
+    /// segments exactly (a quadratic is elevated to the equivalent cubic, as
+    /// <see cref="SketchBuilder.QuadraticTo"/> does); anything else is REFUSED by name,
+    /// because a sketch segment vocabulary that quietly sampled a general NURBS would make
+    /// every downstream "exact" claim false.
+    /// </summary>
+    /// <remarks>
+    /// Validation is the ordinary <see cref="Sketch"/> constructor's — closure at the weld
+    /// tier, enclosed area relative to the extent, winding normalization — so there is
+    /// exactly one place those rules live.
+    /// </remarks>
+    public static Sketch FromCurves(IReadOnlyList<Curve2d> curves)
+    {
+        ArgumentNullException.ThrowIfNull(curves);
+        if (curves.Count == 0)
+            throw new ArgumentException("A sketch needs at least one curve.", nameof(curves));
+        var segments = new List<SketchSegment>(curves.Count);
+        for (int i = 0; i < curves.Count; i++)
+            segments.Add(ToSegment(curves[i], i));
+        return new Sketch(segments, []);
+    }
+
+    private static SketchSegment ToSegment(Curve2d curve, int index) => curve switch
+    {
+        Line2d line => new LineSeg(line.Start, line.End),
+        Arc2d arc => new ArcSeg(arc.Center, arc.Radius, arc.StartAngle, arc.SweepAngle),
+        BezierCurve2d { Degree: 3 } cubic => new CubicSeg(
+            cubic.ControlPoints[0], cubic.ControlPoints[1], cubic.ControlPoints[2], cubic.ControlPoints[3]),
+        BezierCurve2d { Degree: 2 } quadratic => Elevate(quadratic),
+        _ => throw new ArgumentException(
+            $"Curve {index} is a {curve.GetType().Name}, which has no exact sketch segment. "
+            + "Sketches carry lines, circular arcs and cubic Beziers; convert or approximate it "
+            + "deliberately before building a sketch from it."),
+    };
+
+    /// <summary>A quadratic Bézier as the EXACTLY equivalent cubic (degree elevation is a
+    /// closed form, not an approximation) — the same arithmetic
+    /// <see cref="SketchBuilder.QuadraticTo"/> uses.</summary>
+    private static CubicSeg Elevate(BezierCurve2d quadratic)
+    {
+        var start = quadratic.ControlPoints[0];
+        var control = quadratic.ControlPoints[1];
+        var end = quadratic.ControlPoints[2];
+        return new CubicSeg(
+            start, start + (control - start) * (2.0 / 3.0), end + (control - end) * (2.0 / 3.0), end);
+    }
+
     /// <summary>The sketch with an inner region removed (parity handles the rest).</summary>
     public Sketch WithHole(Sketch inner)
     {

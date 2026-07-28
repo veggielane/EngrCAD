@@ -194,8 +194,21 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   `WithHole` needed. (`Region2d.FromLoops` is the classifier: even containment depth =
   outer, odd = hole of its deepest container, so an island inside a hole is its own
   region.)
+  A self-intersecting outline is now REFUSED here rather than producing garbage — a loop
+  that crosses itself has no interior, so its area, its containment and every boolean below
+  it would depend on an arbitrary fill rule (Core's `Region2dValidation`; the message names
+  the loop and where it crosses).
 - `Union` / `Intersect` / `Subtract` on sketches (and on `Region2d`) run Core's
   arrangement-based `Region2dBoolean`.
+- **`sketch.ToCurves()` / `Sketch.FromCurves(curves)`** are the LOSSLESS door, in contrast to
+  the regions above: the outer loop as an exact `Curve2d` chain (lines, arcs with their
+  signed sweep, cubic Béziers) and back again, with nothing flattened. Use them to fit a
+  biarc chain, measure an arc length, or hand a chain to `Profile.FromCurves` for an exact
+  analytic profile that never touched a polygon. `FromCurves` refuses a general
+  `NurbsCurve2d` by name (a sketch that quietly sampled one would make every downstream
+  "exact" claim false) and elevates a quadratic Bézier to the equivalent cubic exactly.
+  Hole loops travel as their own sketches — `WithHole` puts them back — which is the whole
+  bridge; see design.md §5 for why it is deliberately this small.
 - **`sketch.Offset(delta, join, miterLimit, chordTolerance)`** grows (positive) or shrinks
   (negative) the sketch by a constant distance — OpenSCAD's `offset()`, and the geometry
   behind clearance fits, wall shells, pocket stock and cutter compensation. `OffsetJoin`

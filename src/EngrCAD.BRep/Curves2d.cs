@@ -28,6 +28,27 @@ public abstract class Curve2d
     /// <summary>Exact second derivative d²C/dt².</summary>
     public abstract Vector2d SecondDerivativeAt(double t);
 
+    /// <summary>
+    /// The same curve placed on <paramref name="plane"/> as an EXACT <see cref="Curve3d"/>
+    /// (the region's 2D x/y become the frame's X/Y) — the bridge from the sketch-plane
+    /// vocabulary into the topology one, used by <see cref="Profile.FromCurves"/>.
+    /// </summary>
+    /// <remarks>
+    /// Abstract for the same reason the derivatives are: every conversion here is exact and
+    /// there must be no sampled fallback for a new 2D type to inherit by accident. Nothing
+    /// is flattened, so a chain of lines and arcs becomes a chain of <see cref="Line3d"/>
+    /// and trimmed <see cref="Circle3d"/> segments, not a polyline — which is the whole
+    /// point of having a 2D curve family beside the polygonal <c>Region2d</c> one.
+    /// </remarks>
+    public abstract Curve3d ToCurve3d(in Frame3d plane);
+
+    /// <summary>The curve on the world XY plane (z = 0).</summary>
+    public Curve3d ToCurve3d() => ToCurve3d(Frame3d.WorldXY);
+
+    /// <summary>Lifts a sketch-plane point onto a placement frame.</summary>
+    private protected static Vector3d Lift(in Frame3d plane, in Vector2d point) =>
+        plane.ToWorld(new Vector3d(point.X, point.Y, 0));
+
     /// <summary>Unit tangent from the exact derivative.</summary>
     public virtual Vector2d TangentAt(double t)
     {
@@ -290,6 +311,8 @@ public sealed class Line2d(Vector2d start, Vector2d end) : Curve2d
         double t = Math.Clamp((point - start).Dot(direction) / lengthSquared, 0, 1);
         return start + direction * t;
     }
+
+    public override Curve3d ToCurve3d(in Frame3d plane) => new Line3d(Lift(plane, start), Lift(plane, end));
 }
 
 /// <summary>
@@ -353,6 +376,30 @@ public sealed class Arc2d : Curve2d
 
     /// <summary>The same arc traversed the other way (start and end swap, sweep negates).</summary>
     public Arc2d Reversed() => new(Center, Radius, StartAngle + SweepAngle, -SweepAngle);
+
+    /// <summary>
+    /// Exact, and built the SAME way a sketch arc is: a full turn becomes a
+    /// <see cref="Circle3d"/> whose frame is rotated to the arc's own start radial (so the
+    /// curve parameter follows the signed sweep), anything less becomes a
+    /// <see cref="CurveSegment"/> over a circle on the placement frame's own axes. Keeping
+    /// the trimmed form means downstream classification — `BrepQueries.IsCircular`, rim
+    /// features, cylinder promotion — sees the same `Underlying` circle it always has, and a
+    /// NEGATIVE sweep is expressed as a decreasing parameter range rather than a reversal
+    /// wrapper, which is exactly the intrinsic-orientation property `Arc2d` exists for.
+    /// </summary>
+    public override Curve3d ToCurve3d(in Frame3d plane)
+    {
+        var center = Lift(plane, Center);
+        if (IsClosed)
+        {
+            double cos = Math.Cos(StartAngle), sin = Math.Sin(StartAngle);
+            var x = plane.ToWorldVector(new Vector3d(cos, sin, 0));
+            var perpendicular = plane.ToWorldVector(new Vector3d(-sin, cos, 0));
+            return new Circle3d(center, x, SweepAngle > 0 ? perpendicular : -perpendicular, Radius);
+        }
+        var circle = new Circle3d(center, plane.X, plane.Y, Radius);
+        return new CurveSegment(circle, StartAngle, StartAngle + SweepAngle);
+    }
 
     /// <summary>Exact distance to the arc: radial when the foot lies inside the sweep, otherwise to the nearer end.</summary>
     public override double DistanceTo(in Vector2d point) => (NearestPoint(point) - point).Length;
@@ -479,6 +526,23 @@ public sealed class BezierCurve2d : Curve2d
         return first.Length < 2 ? Vector2d.Zero : DeCasteljau(Hodograph(first), t);
     }
 
+    /// <summary>
+    /// Exact: a degree-n Bézier IS a degree-n B-spline with a Bézier knot vector (n + 1
+    /// zeros then n + 1 ones) and unit weights, so this is a re-expression rather than a
+    /// conversion — the same control points, the same curve, every parameter unchanged.
+    /// </summary>
+    public override Curve3d ToCurve3d(in Frame3d plane)
+    {
+        int degree = Degree;
+        var points = new Vector3d[_controlPoints.Length];
+        for (int i = 0; i < points.Length; i++)
+            points[i] = Lift(plane, _controlPoints[i]);
+        var knots = new double[2 * (degree + 1)];
+        for (int i = degree + 1; i < knots.Length; i++)
+            knots[i] = 1;
+        return new NurbsCurve(degree, points, null, knots);
+    }
+
     /// <summary>Control points of the derivative curve: n·(P_{i+1} − P_i).</summary>
     private static Vector2d[] Hodograph(Vector2d[] points)
     {
@@ -580,6 +644,16 @@ public sealed class NurbsCurve2d : Curve2d
         for (int i = 0; i < points.Count; i++)
             lifted[i] = new Vector3d(points[i].X, points[i].Y, 0);
         return Flatten(NurbsCurve.InterpolatePoints(lifted, closed));
+    }
+
+    /// <summary>Exact: degree, knots and weights carry over untouched and only the control
+    /// points are lifted, so the rational arcs this type represents stay exact arcs.</summary>
+    public override Curve3d ToCurve3d(in Frame3d plane)
+    {
+        var points = new Vector3d[ControlPoints.Count];
+        for (int i = 0; i < points.Length; i++)
+            points[i] = Lift(plane, ControlPoints[i]);
+        return new NurbsCurve(Degree, points, Weights, Knots);
     }
 
     /// <summary>Drops the z coordinate of a planar 3D NURBS curve built on the z = 0 plane.</summary>

@@ -22,6 +22,15 @@ internal abstract class SketchSegment
     /// <summary>Exact curve in sketch-local coordinates (the XY plane, z = 0).</summary>
     public abstract Curve3d ToCurve();
 
+    /// <summary>
+    /// The same geometry in the 2D curve vocabulary — exact, never sampled. The two
+    /// families describe the same three shapes, so this is a re-expression: a
+    /// <c>LineSeg</c> IS a <see cref="Line2d"/>, an <c>ArcSeg</c>'s signed sweep IS an
+    /// <see cref="Arc2d"/>'s (both carry orientation intrinsically), and a cubic segment IS
+    /// a cubic <see cref="BezierCurve2d"/>.
+    /// </summary>
+    public abstract Curve2d ToCurve2d();
+
     public abstract double Distance(in Vector2d point);
 
     /// <summary>Splits into y-monotone pieces for robust even–odd parity.</summary>
@@ -62,6 +71,8 @@ internal sealed class LineSeg(Vector2d start, Vector2d end) : SketchSegment
         (Math.Max(start.X, end.X), Math.Max(start.Y, end.Y), 0));
 
     public override Curve3d ToCurve() => new Line3d((start.X, start.Y, 0), (end.X, end.Y, 0));
+
+    public override Curve2d ToCurve2d() => new Line2d(start, end);
 
     public override double Distance(in Vector2d point)
     {
@@ -161,6 +172,10 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
         var circle = new Circle3d(center3, Vector3d.UnitX, Vector3d.UnitY, radius);
         return new CurveSegment(circle, startAngle, startAngle + sweep);
     }
+
+    /// <summary>Direct: <see cref="Arc2d"/> carries the same signed sweep, so orientation
+    /// crosses the bridge as data rather than as a flag to be re-derived.</summary>
+    public override Curve2d ToCurve2d() => new Arc2d(center, radius, startAngle, sweep);
 
     public override double Distance(in Vector2d point)
     {
@@ -306,6 +321,8 @@ internal sealed class CubicSeg(Vector2d p0, Vector2d c1, Vector2d c2, Vector2d p
     public override Curve3d ToCurve() => new NurbsCurve(3,
         [(p0.X, p0.Y, 0), (c1.X, c1.Y, 0), (c2.X, c2.Y, 0), (p3.X, p3.Y, 0)],
         null, [0, 0, 0, 0, 1, 1, 1, 1]);
+
+    public override Curve2d ToCurve2d() => new BezierCurve2d(p0, c1, c2, p3);
 
     public override double Distance(in Vector2d point)
     {

@@ -342,6 +342,51 @@ Each engine uses the data structure its mathematics wants:
   periodic knot vector with wrapped control points, giving a C2 seam by construction.
   Two points degrade to a degree-1 chord.
 
+### Where the 2D curve family meets the sketch and the profile
+
+There are three vocabularies for the same planar geometry, and they exist for different
+reasons: `Curve2d` (exact analytic curves — the biarc fitter's currency), `Sketch`
+(a validated closed loop with a fluent builder — the user's vocabulary), and `Region2d`
+(polygons with holes — the arrangement-based boolean's currency, deliberately flattened).
+The bridges between them are chosen to be as small as possible, because every extra door is
+another place for closure, winding and degeneracy rules to be answered differently:
+
+- **`SketchSegment.ToCurve2d` / `Sketch.ToCurves`** — the way OUT of the sketch vocabulary.
+  It is a re-expression, not a conversion: a `LineSeg` IS a `Line2d`, a cubic segment IS a
+  cubic `BezierCurve2d`, and an `ArcSeg`'s signed sweep IS an `Arc2d`'s. That last one is the
+  reason the 2D family made sweeps signed in the first place — orientation crosses the bridge
+  as data rather than as a flag to be re-derived on the far side.
+- **`Sketch.FromCurves`** — the way back IN. It maps the three shapes a sketch can hold and
+  REFUSES anything else by name (a general `NurbsCurve2d`, a degree-4 Bézier). A quadratic
+  Bézier is elevated to the equivalent cubic, which is a closed form rather than an
+  approximation. Crucially it then hands the segments to the ordinary `Sketch` constructor,
+  so weld-tier closure, relative-degeneracy area and winding normalization are validated in
+  exactly one place. There is no 2D-curve-side copy of those rules; a second copy would be a
+  second answer.
+- **`Curve2d.ToCurve3d(plane)` / `Profile.FromCurves`** — the way into topology. `ToCurve3d`
+  is ABSTRACT on `Curve2d`, for the same reason the derivatives are: every conversion is
+  exact, and there must be no sampled fallback for a new 2D type to inherit by accident.
+  Arcs lift the way sketch arcs already did (a full turn becomes a `Circle3d` on the arc's
+  own start radial; anything less becomes a `CurveSegment` over a circle on the placement
+  frame's axes), so `BrepQueries` classification, rim features and cylinder promotion see the
+  `Underlying` circle they always have. `Profile.FromCurves` likewise just calls the ordinary
+  `Profile` constructor.
+
+The result is a lossless route from a drawn sketch to an exact analytic profile that never
+touches `Region2d` — which matters because going through a region is the one deliberately
+lossy step in the whole 2D pipeline.
+
+### Simplicity validation and simplification
+
+Two passes that look similar and are opposites. `Region2dValidation` REFUSES loops that are
+not simple: a self-crossing loop's interior depends on which fill rule you apply, so its
+area, containment and every boolean disagree silently. `PolylineSimplify` (Douglas–Peucker,
+2D and 3D) deliberately CREATES that risk in exchange for fewer points, which is why nothing
+in the kernel simplifies implicitly and why simplified loops handed to `Region2d` get the
+refusal for free. The tolerance in the first is not a tolerance at all — the decision is
+exact `Orient2dSign` — while the tolerance in the second is absolute and in model units,
+because it is a deviation the caller chose to accept rather than a degeneracy guard.
+
 ### Surface–surface intersection
 
 `SurfaceIntersection.Intersect(a, b, region)` is two-tiered:
