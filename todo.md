@@ -538,9 +538,13 @@ export — is recorded in CLAUDE.md):
   `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —
   decide a documented rule first); Adam7 interlaced PNGs; chunk CRC verification
   (currently structural failures only).
-- [ ] `minkowski()` — general Minkowski sum is hard; the important special case is
-  rounding, which we already have cheaply (SDF `Offset` ≡ sphere-Minkowski, and
-  `Filleting`). Document the equivalence; general polyhedron⊕polyhedron is low priority
+- ~~`minkowski()`~~ — resolved as documentation: `docs/examples/implicit.md` maps the
+  OpenSCAD recipes onto `Offset` (≡ sphere-Minkowski, exact as a field),
+  opening/closing compositions, and the exact B-Rep routes (`RoundEdges`/`Fillet`),
+  with convex⊕convex available via `Hull` over translated copies. General
+  polyhedron⊕polyhedron is **not planned** (convex decomposition + pairwise sums +
+  union — combinatorially explosive, and its engineering uses are better served by
+  `Offset` on the exact field).
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)
