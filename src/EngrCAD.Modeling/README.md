@@ -41,7 +41,10 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (rigid + uniform scale; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Union` / `Intersect` / `Subtract` | ✅ native (`BrepBoolean`) | ✅ native | ✅ (from B-Rep, else `MeshBoolean`) |
 | `SmoothUnion` / `SmoothIntersect` / `SmoothSubtract` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
-| `Offset` / `Shell` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
+| `Offset` / `Shell(t)` (SDF skin) | ❌ no B-Rep form (`Shell(t)`'s message names the exact overload) | ✅ native | 🔶 polygonized |
+| `Shell(t, openings)` (exact inward hollow) | ✅ native (rigid + uniform scale; polyhedral child — `Shelling.Shell`) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Draft(angle, neutral, pull, faces?)` | ✅ native (rigid + uniform scale; planar-faced prisms — `Draft.Apply`) | 🔶 bridged | ✅ native |
+| `RoundEdges(r)` (whole-solid rounding) | ✅ native (rigid + uniform scale; convex planar solids — `Filleting.FilletAllEdges`) | 🔶 bridged | ✅ native |
 | `Lattice` (gyroid & co.) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Chamfer` (planar-face rims) | ✅ native (miters; cone bands on circles) | 🔶 bridged | ✅ native |
 | `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
@@ -432,6 +435,39 @@ the same rotation-minimizing frames `Sweep` uses, scaled by `scale(s)` and rotat
 in-plane by `twist(s)` radians (s = 0 → 1 along the spine), the generated sections
 feeding `Loft` unchanged. Without laws prefer `Sweep`, whose swept surface is exact
 along the whole path — the law is what `LoftAlong` exists for.
+
+## Draft, shell and whole-solid rounding
+
+Three more OCCT-parity operations ride the same selector story as the rim features
+(queries over the *lowered* solid, so upstream transforms are visible and lengths scale
+with uniform scaling). All three are B-Rep-Native under rigid + uniform-scale
+placements, bridge implicit/mesh through the exact B-Rep, and refuse what they cannot
+do exactly BY NAME at lowering:
+
+```csharp
+var boss = Shape.Extrude(Sketch.Polygon(outline), 12)
+    .Draft(3, neutralOrigin: (0, 0, 0), pullDirection: Vector3d.UnitZ);   // release taper
+
+var tray = Shape.Box(60, 40, 20)
+    .Shell(2.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));            // open-top hollow
+
+var block = Shape.Box(30, 20, 12).RoundEdges(2);                          // box → 26 faces
+```
+
+- **`Draft(angleDegrees, neutralOrigin, pullDirection, faces?)`** (`Draft.Apply`)
+  rotates each selected side face's plane about its neutral line — exact, composable
+  (chain calls for per-face angles), planar-faced prisms only in v1. Geometry on the
+  neutral plane does not move: it is the parting line.
+- **`Shell(thickness, openings)`** (`Shelling.Shell`) hollows INWARD keeping the outer
+  surface exactly; opening faces are removed (tray), `openings: null` seals the cavity
+  as a second shell. **This is deliberately a different call from `Shell(thickness)`**,
+  the SDF onion `|d| − t/2` whose skin straddles the surface — two calls, two
+  geometries, never one call with representation-dependent walls. Polyhedral children
+  only in v1 (curved-face corners need surface–surface re-intersection; todo.md).
+- **`RoundEdges(radius)`** (`Filleting.FilletAllEdges`) rounds every convex edge and
+  corner in one boolean-free morphological opening — exact cylindrical bands and
+  spherical corner patches. Convex planar solids with 3-valent corners in v1;
+  concave edges and general trihedral corners are refused by name.
 
 ## Patterns
 

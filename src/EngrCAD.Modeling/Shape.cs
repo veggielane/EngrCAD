@@ -560,6 +560,39 @@ public abstract class Shape
             solid => Filleting.RimFacesFor(solid, edges(solid)));
     }
 
+    // ---- Draft (mould-release taper) ----
+
+    /// <summary>
+    /// Tapers side faces by <paramref name="angleDegrees"/> about the neutral plane
+    /// through <paramref name="neutralOrigin"/> perpendicular to
+    /// <paramref name="pullDirection"/> (the mould-opening direction) — OCCT's
+    /// <c>BRepOffsetAPI_DraftAngle</c>, via <see cref="Draft.Apply"/>. A positive angle
+    /// narrows the solid along the pull direction (the classic release taper), a
+    /// negative one widens it; geometry ON the neutral plane does not move, which is
+    /// what makes it the parting line.
+    /// <para><paramref name="faces"/> selects which side faces to taper (a query over
+    /// the lowered B-Rep, the same selector story as <see cref="Chamfer(double, Func{BrepSolid, IEnumerable{BrepFace}})"/>);
+    /// null drafts every side face. Per-face angles come from CHAINING drafts — the
+    /// operation is exact and composable, so
+    /// <c>shape.Draft(2, o, pull, left).Draft(5, o, pull, right)</c> is exact too.</para>
+    /// <para>Representation support: <b>B-Rep-Native</b> under rigid + uniform-scale
+    /// placements (exact plane rotation about each face's neutral line; the solid must
+    /// be a planar-faced prism about the pull direction — anything else is refused by
+    /// name at lowering). Implicit bridges through the tessellation; mesh comes from the
+    /// exact B-Rep.</para>
+    /// </summary>
+    public Shape Draft(
+        double angleDegrees, in Vector3d neutralOrigin, in Vector3d pullDirection,
+        Func<BrepSolid, IEnumerable<BrepFace>>? faces = null)
+    {
+        if (!double.IsFinite(angleDegrees) || Math.Abs(angleDegrees) >= 90)
+            throw new ArgumentOutOfRangeException(nameof(angleDegrees),
+                "The draft angle must be less than 90 degrees in magnitude.");
+        if (!pullDirection.TryNormalize(Tolerance.Default, out _))
+            throw new ArgumentException("The pull direction must be non-zero.", nameof(pullDirection));
+        return new DraftShape(this, angleDegrees * Math.PI / 180, neutralOrigin, pullDirection, faces);
+    }
+
     // ---- Patterns ----
 
     /// <summary>This shape unioned with <paramref name="count"/> − 1 copies stepped
@@ -752,7 +785,62 @@ public abstract class Shape
     public Shape SmoothSubtract(Shape other, double blend) => new SmoothShape(BooleanOp.Difference, this, other, blend);
 
     public Shape Offset(double distance) => new OffsetShape(this, distance);
+
+    /// <summary>
+    /// Hollow skin of the surface with the given total wall thickness — the SDF onion
+    /// <c>|d| − t/2</c>, centred ON the surface (half the wall inside, half outside).
+    /// Implicit-Native and B-Rep-Impossible. For the exact B-Rep hollow that keeps the
+    /// OUTER surface and thickens inward — with optional openings — use
+    /// <see cref="Shell(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/>; the two are
+    /// different geometry, which is why they are different calls rather than one call
+    /// with representation-dependent results.
+    /// </summary>
     public Shape Shell(double thickness) => new ShellShape(this, thickness);
+
+    /// <summary>
+    /// Hollows the solid to walls of <paramref name="thickness"/> — the exact B-Rep
+    /// shelling (OCCT's <c>BRepOffsetAPI_MakeThickSolid</c>, via
+    /// <see cref="Shelling.Shell"/>). The OUTER surface is kept exactly and the wall
+    /// thickens INWARD; faces selected by <paramref name="openings"/> are removed,
+    /// opening the cavity through them (the classic tray), and a null selector leaves
+    /// the cavity sealed as a second shell.
+    /// <para>Unlike <see cref="Shell(double)"/> — the SDF skin <c>|d| − t/2</c>, centred
+    /// on the surface — this overload does not grow the part: the outer boundary stays
+    /// put. That difference is representation-independent by design: this call is
+    /// B-Rep-Native (rigid + uniform-scale placements; the child must lower to a
+    /// polyhedral solid — planar faces, straight edges, 3-valent corners — anything else
+    /// refused by name at lowering) and bridges implicit/mesh through the exact shelled
+    /// B-Rep, so every representation shows the SAME walls.</para>
+    /// </summary>
+    public Shape Shell(double thickness, Func<BrepSolid, IEnumerable<BrepFace>>? openings)
+    {
+        if (!(thickness > 0))
+            throw new ArgumentOutOfRangeException(nameof(thickness), "Wall thickness must be positive.");
+        return new BrepShellShape(this, thickness, openings);
+    }
+
+    /// <summary>
+    /// Rounds EVERY convex edge and corner of the solid with one radius — the exact
+    /// morphological opening (K ⊖ B<sub>r</sub>) ⊕ B<sub>r</sub>
+    /// (<see cref="Filleting.FilletAllEdges"/>): each face keeps its own plane with a
+    /// shrunk boundary, each edge becomes an exact cylindrical band, each corner an
+    /// exact spherical patch (a box becomes 26 faces), boolean-free with nothing to
+    /// seal.
+    /// <para>Representation support: <b>B-Rep-Native</b> under rigid + uniform-scale
+    /// placements (the radius scales with the part). The child must lower to a solid
+    /// with planar faces, straight convex edges and 3-valent corners with one incident
+    /// face perpendicular to the other two — boxes, convex prisms, sheared boxes;
+    /// concave edges and general trihedral corners are refused by name at lowering
+    /// (todo.md carries the corner-patch follow-up). Implicit and mesh bridge through
+    /// the exact rounded B-Rep. For organic rounding of arbitrary shapes, the implicit
+    /// route (<see cref="Offset"/> composed −r then +r) remains available.</para>
+    /// </summary>
+    public Shape RoundEdges(double radius)
+    {
+        if (radius <= 0)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        return new RoundEdgesShape(this, radius);
+    }
 
     /// <summary>Intersects the shape with an infill pattern (e.g. <c>Sdf.Gyroid</c>).</summary>
     public Shape Lattice(Sdf pattern) => new LatticeShape(this, pattern);
