@@ -55,6 +55,27 @@ Each engine uses the data structure its mathematics wants:
 - **BVH** is the workhorse index (static, median split, flat nodes, stack traversal,
   branch-and-bound `Nearest`); the **Octree** exists for incrementally-changing content.
   Construction may allocate; queries must not (beyond the caller's results list).
+- **The sparse solver mini-library (`EngrCAD.Core.Solvers`) is shaped by three
+  decisions.** (a) **CSR with an optional symmetric-upper form**, because every consumer
+  in sight (Laplacian smoothing/deformation, the future sketch constraint solver, FEA
+  stiffness assembly) builds symmetric positive-definite operators finite-element style —
+  accumulate coefficient contributions, then solve — so the builder accumulates
+  duplicates and packs deterministically, and symmetric storage halves memory and
+  bandwidth by mirroring during multiply rather than storing both triangles.
+  (b) **Two solvers on purpose, split by right-hand-side count**: `SparseCholesky`
+  (up-looking, elimination tree + ereach) factors once and substitutes per RHS — the
+  Laplacian shape, where x/y/z share one operator and an interactive deformer re-solves
+  per drag — while Jacobi-preconditioned `SparseSymmetricCG` wins one-shot solves at
+  scale. Measured (Release, win-arm64, grid Laplacians): natural-order factorization is
+  4.7 ms at 2.5k unknowns and 133 ms at 14.4k, past which one-shot CG beats
+  factor+3-solves (62.5k: 24.5 ms vs 1.6 s) — so **natural ordering suffices at
+  deformation-ROI scale and AMD/RCM is deferred until FEA-scale systems exist**, a
+  measurement rather than an assumption. (c) **Convergence is a return value**
+  (`SparseSolveReport`), and failure is honest: CG breaks out on nonpositive curvature
+  instead of dividing by it, Cholesky throws naming the offending pivot column — the
+  repo's report-what-happened convention applied to numerics. The library is
+  deliberately dependency-free and mesh-agnostic (doubles + int indices), so the mesh
+  engine adapts to it, never the reverse.
 
 ## 3. Mesh engine
 
@@ -161,6 +182,31 @@ Each engine uses the data structure its mathematics wants:
   vertex is indistinguishable from one that removed it and inserted a new one nearby — and
   would be accepted as a refinement, welding a crack silently. Refinement is the feature;
   the presence check is what keeps it from being a hole in the contract.
+- **Deformation/analysis foundation (Laplacian tools, exp map, ICP)** — the design calls
+  worth recording. *Global implicit vs local explicit smoothing*: `LaplacianMeshSmoother`
+  solves (M + λL)x′ = Mx in one sparse solve and deliberately does NOT replace the
+  remesher's per-pass relaxation — the remesher equalizes triangle shape under a
+  projection target (geometry preserved), the smoother changes geometry with fixed
+  topology; both exist because they answer different questions. Its λ is
+  `TimeStep · h̄²` so the option is dimensionless (scale-free rule). *Cotangent
+  robustness*: a degenerate triangle's cotangent is noise, so the whole edge falls back
+  to uniform weight 1 under the 1e-13-relative sliver guard (the `PolygonTriangulator`
+  measure), and a negative cotangent SUM is sign-clamped to 0 — an indefinite L would
+  make the SPD solve dishonest, and clamping merely stops diffusion across that edge.
+  *Deformation is bi-Laplacian with SOFT handles*: `LaplacianMeshDeformer` minimizes
+  ‖L(x − x₀)‖² + Σw²‖x_h − c_h‖² because a hard handle transmits C⁰ (a cone); rims and
+  pins are hard-substituted and therefore bit-identical, which is exactly
+  `MeshRegionOperator`'s seam contract, so ROI deformation composes with reinsertion for
+  free. *The exp map rides Dijkstra*: `MeshLocalParam` (Schmidt-style DEM) averages
+  upwind predictions in `DijkstraGraphDistance`'s settle order, transporting the seed
+  frame by the trig-free minimal rotation `v·c + (axis×v) + axis(axis·v)/(1+c)` — stable
+  for every c > −1 since (1−c)/sin² = 1/(1+c). *ICP refuses rather than regularizes*:
+  point-to-plane normal equations go singular exactly when the pose is under-constrained
+  (all-planar correspondences), and `MeshIcp` reports `Converged = false` instead of
+  Tikhonov-damping toward an arbitrary minimum — `MateSolver`'s convention applied to
+  registration. `MeshIsoCurves` re-applies the boolean seam lesson in miniature: one
+  crossing per undirected edge, computed from the lower-indexed vertex, so adjacent
+  triangles share endpoints bit-identically and chains assemble combinatorially.
 
 ## 4. Implicit engine
 
