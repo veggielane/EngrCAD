@@ -472,6 +472,25 @@ instances — ignored; unmatched instances keep their document pose) through the
 evaluation path, which is the point. The web viewport gets the same reuse for free when
 its transport lands (filed in todo.md).
 
+## Animated export
+
+`animation.RenderApng(scene, path, frames, width, height, camera?)` renders the same
+pure `Animation.At(t)` the window scrubs, frame by frame through `OffscreenRenderer`,
+into an **APNG** — `ApngWriter` is three chunk types (`acTL`/`fcTL`/`fdAT`) over the
+machinery `PngWriter` already had, dependency-free, lossless and full colour (a shaded
+CAD render is mostly smooth gradients, exactly what GIF's 256 colours band on). Every
+frame is a full-size replace and each frame's data is its own complete zlib
+datastream; the first frame is the PNG default image, so a non-APNG viewer shows a
+valid still, and the file is written as `.png` because it *is* one. Per-frame delay =
+`Duration / frames` (playback time matches the animation), infinite loop; `loop: true`
+samples `t = i/frames` so a turntable's last frame is not a duplicate of its first,
+`loop: false` samples `t = i/(frames−1)` so the final pose is shown exactly. With no
+camera track, the clip uses ONE camera framed over the union of the first and last
+frames' bounds — never per-frame framing (a camera chasing the geometry is unusable,
+the explode slider's lesson). `animation.RenderFrames(scene, directory, ...)` always
+offers the **PNG frame sequence** (`frame-0000.png` …), the zero-risk escape hatch
+into ffmpeg for MP4/WebM, which no dependency-free encoder reaches.
+
 ## Bill of materials
 
 The **BOM** toolbar button shows the current tab's parts list — quantities per distinct
