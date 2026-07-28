@@ -698,6 +698,16 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   *after* trimmed parameter-space boundaries become exact, since the domain scan is the
   accuracy limit, not the quadrature. Would make analytic primitives exact rather than
   1e-7.
+- [ ] **`BrepSolid` one-call rigid transform** — `Transformed(Matrix4d)` rebuilding
+  topology (the `Clone()` walk) with per-type geometry mapping: plane/cylinder/sphere/
+  conic frames rigidly, extrude/revolve generators via `TransformedCurve` + mapped
+  axes, NURBS by control points (the affine rule the STEP exporter now uses), swept
+  surfaces by transformed path+profile. Assessed (task #11): well-bounded — the per-
+  type curve mapping already exists in `StepWriter.Simplify` and the Modeling compiler
+  bakes transforms per-type at lowering, so this is consolidation, not new math;
+  restrict to rigid (+uniform scale where the type allows) and refuse shear by name.
+  Nothing internal needs it today (lowering bakes transforms into construction
+  inputs), which is why it stayed behind the STEP/healing items.
 - [ ] **Per-part material in the document model** — `Part.MassProperties(density)` takes
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
