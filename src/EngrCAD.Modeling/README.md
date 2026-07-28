@@ -1159,6 +1159,73 @@ screw is placed **once** (on the near body) — the far half carries `Assemble =
 To anchor into an insert rather than a tapped hole, place the insert on the far body
 itself and use `Place` on the near one.
 
+## Mechanisms (kinematics)
+
+**A mechanism is the same mate system, driven** — the mate solver's DOF report is the
+whole insight: a fully-constrained assembly is static, and a mechanism is a mate
+system with DOF > 0 plus a driver consuming them. No second solver exists.
+
+- **Joints** (`Joints.cs`): `Joint.Revolute(1)/Prismatic(1)/Cylindrical(2)/
+  Spherical(3)/Planar(3)/Screw(1)/Fixed(0)` — each a NAMED combination of ordinary
+  mates built from the same `MateRef`s (explicit coordinates, `BrepQueries`
+  selectors, `FaceRef`/`AxisRef`, occurrence paths). Every joint's nominal DOF is
+  **asserted against the solver's measured rank** (`VerifyDegreesOfFreedom`, run by
+  `Mechanism.Add`) — a wrong definition fails immediately, by name. Axis joints carry
+  joint coordinates: `Angle` (right-handed about A's axis, **unwrapped** through full
+  turns by committed increments — the residual stays continuous within one solve
+  because state moves only when a converged solve commits) and `Displacement`, both
+  zero at construction; `Rebase()` re-zeroes after assembly. `WithLimits` puts hard
+  stops on revolute (degrees) / prismatic (length) joints — a converged pose past a
+  stop is rolled back completely and refused naming the joint.
+- **The solver extension** (`Couplings.cs`): an internal `AuxiliaryConstraint`
+  contributes residual rows plus ANALYTIC derivatives over evaluated mate-end world
+  geometry, appended beside the mates so the rank/DOF machinery counts them like any
+  rows. The screw pitch (z − z₀ = P·θ̂/2π) is one row; so are drivers and every
+  higher pair. With no extras the solver is bit-identical to the plain mate solve.
+- **Drivers and sweeps** (`Mechanism.cs`): a `MechanismDriver` pins one joint
+  variable (angle drivers are the wrap-free pair [c − cos τ, s − sin τ]; drivers on
+  variables the joint itself locks are refused); `SolveAt(t)` is the mate solve with
+  it fixed; `Sweep(from, to, frames)` is the motion study — **continuation is
+  load-bearing** (each step seeds from the previous converged pose, never the
+  assembled one — the four-bar elbow-flip lesson), steps adapt by halving (safe
+  because a failed solve writes nothing), and a sweep that cannot proceed reports the
+  parameter and leaves the last good pose. `MotionFrame`s carry flattened instances
+  only — poses, no geometry (the Animation input format).
+- **Singularities are named** (`the same rank machinery`): a stall runs a
+  zero-iteration rank probe with the threshold widened to 3% (a sweep stalls NEAR a
+  dead centre, where the Jacobian is almost, not exactly, deficient), compared
+  against the sweep-start probe — a dead centre names the driven joint and parameter
+  and refuses to guess a branch; a merely-unreachable target says "outside reach",
+  and the SAME pose driven from a different joint passes silently.
+- **Rates** (`MateSolverRates.cs`): `RatesAt(driver, t, rate, accel)` solves
+  J·q̇ = −∂C/∂t then J·q̈ = −r̈₀ with the second-order terms assembled
+  **analytically** (composed rigid flow: centripetal terms per free chain link plus
+  Coriolis cross terms between levels — never finite differences, the mate solver's
+  own doctrine). Per-occurrence world velocity/acceleration/angular rates and
+  per-joint coordinate rates; refused (naming the free DOF) when the driven system is
+  not fully constrained. Verified against the slider-crank closed form, velocity AND
+  acceleration.
+- **Higher pairs** (`HigherPairs.cs`): `Coupling.Gear/Belt/Ratio` (Δθ₂ = ∓ratio·Δθ₁,
+  one row, expressed on the coordinates' change since construction) and
+  `Coupling.Cam(cam, follower, CamLaw)`. A `CamLaw` carries lift, slope AND curvature;
+  `CamLaw.FromSketch` samples a radial profile's **exact** sketch signed distance
+  (outermost crossing, bisected) into a C² periodic spline whose own calculus feeds
+  the Jacobian — verified against the eccentric-circle cam's closed form.
+- **Interference & swept volume** (`MotionInterference.cs`):
+  `study.CheckInterference()` — instance-bounds broad phase, `MeshIntersection.Crosses`
+  narrow phase (transversal only: resting contact is not a clash), ranges per pair,
+  jointed pairs skipped by default (tessellated pins interpenetrate their bores),
+  exact mesh-boolean volumes opt-in per confirmed range. `study.SweptVolume(path)` /
+  `Shape.SweptOver(poses)` is a graph node: implicit-**Native** (child field lowered
+  once, placed per pose, unioned), mesh via Surface Nets, B-Rep honestly Impossible.
+- **Mobility** (`Mechanism.Mobility()`): Grübler/Kutzbach beside the measured rank,
+  disagreement informative not an error — the planar four-bar in space predicts −2
+  where the rank correctly measures 1 (Bennett/Sarrus are the textbook cases), and
+  raw mates outside the joint vocabulary are flagged as invisible to the formula.
+
+Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
+friction, contact dynamics — mechanisms answer "where does it go".
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for

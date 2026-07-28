@@ -897,6 +897,42 @@ Design decisions:
   which drill coordinates depend on — is unchanged; `PlaneRef.OnTopFace` is the
   face-frame variant, making the open behaviour question an *option* instead of a fork
   in the road.
+- **Mechanisms are the mate system, driven — the design calls worth recording.**
+  *No second solver*: the whole layer is one internal seam, `AuxiliaryConstraint` —
+  residual rows with ANALYTIC derivatives over evaluated mate-end world geometry,
+  appended beside the mates so the rank/DOF machinery counts them like any rows.
+  Screw pitch, gear/belt ratios, cam laws and drivers are all instances; with an
+  empty extras list the solver is the old code path exactly. *The driver's angle
+  encoding is the wrap-free pair* [c − cos τ, s − sin τ] (two rows, one constraint —
+  the solver's usual redundant rotational style): a θ̂ − τ row would jump by 2π when
+  an LM iterate crossed the wrap seam mid-solve and stall there, while cos/sin are
+  continuous for any target and iterate; the branch is picked by proximity, which is
+  exactly what continuation guarantees. *Unwrapped coordinates advance only on
+  commit*: θ̂ = accumulated + wrap(measured − lastCommitted), state mutated only
+  after a CONVERGED solve — inside one solve the residual is a continuous function
+  of the poses however many iterations probe it, and a failed solve leaves state and
+  frames alike. *Continuation is load-bearing* (seed from the previous converged
+  pose, never the assembled one — a four-bar otherwise flips elbow mid-sweep), and
+  it is the solver's write-nothing-on-failure contract that makes halving retries
+  free. *A dead centre belongs to the driven VARIABLE, not the pose*: the same
+  slider-crank pose that is singular driven from the slider is harmless driven from
+  the crank, so the diagnosis probes the DRIVEN system — a zero-iteration rank probe
+  with the threshold widened to 3% and compared against the sweep-start baseline
+  (a sweep stalls NEAR a dead centre, where the Jacobian is almost, not exactly,
+  deficient; the strict 1e-8 tier would never fire), and the widened number only
+  names WHY a sweep already stopped — the hard stop never depends on it.
+  *Accelerations are analytic because velocities were*: J·q̈ = −r̈₀ with r̈₀ from
+  the composed rigid flow x(t) = Δ₁(t)(Δ₂(t)(x)) — centripetal terms per free chain
+  link plus 2·ω_outer×(v_inner + ω_inner×r) cross terms — the same chain the
+  Jacobian columns read, verified against the slider-crank closed form in velocity
+  AND acceleration (finite differences would cap at 1e-8, the mate solver's own
+  doctrine). *Interference skips jointed pairs by default* because a pin modeled at
+  its bore's exact diameter interpenetrates once tessellated (polygon chords cross
+  where exact surfaces touch) — a permanent false positive; and clash means
+  TRANSVERSAL crossing only, so resting contact never reports. *A swept volume is a
+  graph NODE* (`Shape.SweptOver`), not a union of transformed shapes, so `Explain`
+  can say implicit-Native (child field lowered once, placed per pose) and B-Rep
+  honestly Impossible instead of attempting N-way B-Rep booleans of rotated copies.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

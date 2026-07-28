@@ -40,6 +40,8 @@
   href: assemblies.md
 - name: Standard components
   href: components.md
+- name: Mechanisms
+  href: mechanisms.md
 - name: Viewer
   href: viewer.md
 - name: In the browser (WebAssembly)

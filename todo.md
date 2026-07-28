@@ -347,68 +347,40 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 
 ## Mechanisms (kinematics)
 
-Motion, not forces — assemblies that *move*. The substrate already exists: `MateSolver`
-constrains occurrence poses with Levenberg–Marquardt over an **analytic** Jacobian —
-now ACROSS assembly levels (occurrence-path references, chain-rule columns for free
-ancestors, per-occurrence DOF in `OccurrenceFreedoms`) — and
-already reports remaining DOF from a rank-revealing diagonally pivoted Cholesky of JᵀJ.
-That report is the whole insight — **a fully-constrained assembly is static, and a
-mechanism is the same mate system with DOF > 0, driven.** None of this needs a second
-solver; it needs a vocabulary on top of one that works, plus a continuation loop around
-it.
+Mechanisms v1 landed (`Joints.cs`/`Mechanism.cs`/`Couplings.cs`/`HigherPairs.cs`/
+`MateSolverRates.cs`/`MotionInterference.cs`; docs `examples/mechanisms.md`): joints as
+a vocabulary over mates with DOF asserted against the solver's rank, drivers +
+continuation sweeps, named dead centres, analytic velocities/accelerations,
+gears/belts/cams, joint limits, interference over the sweep, swept volumes as Shape
+nodes, and Grübler/Kutzbach as a cross-check. Remaining follow-ups:
 
-- [ ] **Joints as a vocabulary over mates** — `Revolute` (1 DOF), `Prismatic` (1),
-  `Cylindrical` (2), `Spherical` (3), `Planar` (3), `Screw` (1, coupled
-  rotation/translation), `Fixed` (0). Each is a named combination of existing
-  `Concentric`/`Planar`/`Coincident`/`Angle` mates with a known nominal DOF, built from
-  the same `BrepQueries` selectors so a joint survives regeneration exactly as a mate
-  does. Joints become the user's language; mates stay the implementation. Assert each
-  joint's nominal DOF against what the solver measures at construction — that check is
-  nearly free and catches a wrong joint definition immediately.
-- [ ] **Drivers and the swept solve** — a driver pins one joint variable and consumes one
-  DOF, so `SolveAt(t)` is the existing mate solve with the driven variable fixed. **The
-  load-bearing detail is continuation**: seed each step from the PREVIOUS converged pose,
-  never from the assembled pose, or the solver changes branch mid-sweep (a four-bar flips
-  elbow-up to elbow-down and the motion tears). Adapt step size to the residual, and
-  report the parameter at which a sweep fails rather than stopping quietly.
-- [ ] **Singular configurations must be named, not stumbled into** — at a toggle point
-  the Jacobian loses rank and the mechanism can branch or lock. The mate solver already
-  knows this shape: it detects and names an `Angle`/`Perpendicular` mate whose directions
-  start exactly parallel, because d/dθ cos θ = 0 there and no first-order step exists. A
-  mechanism passing through dead centre is that same defect in motion — reuse the
-  diagnosis: report the parameter, name the joint, refuse to guess a branch.
-- [ ] **Velocities and accelerations are nearly free** — the analytic Jacobian is already
-  assembled, so joint velocities follow from solving J·q̇ = −∂C/∂t against the driver
-  column, and accelerations from one more solve carrying the J̇·q̇ term. Finite
-  differencing sampled poses is the obvious shortcut and the wrong one, for exactly the
-  reason the mate solver rejected finite-difference Jacobians: it caps accuracy near
-  1e-8, an order worse than the weld tier.
-- [ ] **Higher pairs: gears, belts, cams** — a gear ratio is a scalar coupling between
-  two joint variables (θ₂ = ∓(N₁/N₂)·θ₁), not a geometric mate; belts and chains are the
-  same equation with a pitch radius; a cam is a coupling defined by a profile curve, and
-  the sketch engine's `SketchRegion` distances are already exact so the follower
-  displacement can be too. All three slot into the residual vector beside the geometric
-  mates and need no new solver machinery.
-- [ ] **Joint limits** — min/max stops on revolute and prismatic joints. A sweep that
-  drives a joint past its stop should name it, in the refuse-loudly style the rest of the
-  solver already uses.
-- [ ] **Motion study** — sample the driver, produce poses per frame. This is one of the
-  three drivers feeding the Animation section below; see it for the timeline, the
-  pose-only rule and export.
-- [ ] **Interference over the sweep** — the engineering payoff. Per-step clash detection
-  between moving bodies on the existing per-part BVHs (`Bvh.QueryOverlap` is already the
-  exact boolean's broad phase), reporting the parameter range and the offending pair;
-  exact contact via `BrepBoolean.Intersection` volume only for pairs the broad phase
-  flags, since that is orders of magnitude dearer. **Swept volumes** are the natural
-  follow-on and a genuine `Shape` operation — cheap implicitly (min over sampled poses of
-  the transformed SDF, which is what the implicit engine is *for*), and hard enough in
-  B-Rep that it should probably stay Bridged.
-- [ ] **Grübler/Kutzbach as a cross-check, not a source of truth** — the mobility formula
-  predicts DOF from joint counts; the solver measures actual rank. **Disagreement is
-  informative rather than an error**: overconstrained-but-mobile linkages (Bennett,
-  Sarrus) are precisely where the formula lies and the rank is right. Report both, and
-  say which is which.
-- [ ] **Deliberately out of scope here**: forces, masses, friction, contact dynamics.
+- [ ] **Multiple simultaneous drivers** — `SolveAt` takes one driver; a 2-DOF mechanism
+  (a cylindrical joint, a robot with two actuated hinges) wants a set of
+  (driver, value) pairs per step. The residual machinery already supports N driver
+  rows; the missing part is the API and the sweep over a parameter vector.
+- [ ] **Joint/coupling persistence** — `MateSet.SaveMates` covers the mates but a
+  reloaded file loses the joint layer (coordinates, limits, couplings, derived
+  perpendicular references). Follow the FeatureHistory/mate conventions: a joints
+  section referencing joints' ends by the same descriptors mates use.
+- [ ] **Rack-and-pinion coupling** — z of one joint against θ of another
+  (Δz = r·Δθ): the screw row generalized across joints; ten lines in
+  `HigherPairs.cs` once someone needs it.
+- [ ] **Cam refinements** — roller-follower radius compensation (offset the law by the
+  roller radius along the profile normal), offset followers, and the classic
+  dwell-rise-dwell laws (cycloidal, modified trapezoid) as `CamLaw` factories
+  (trivial via `FromFunction`; the value is the catalogue, not the math).
+- [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
+  the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts
+  a `BrepBoolean.Intersection` of the posed solids would report the exact volume, at
+  the cost of a boolean between arbitrarily-rotated solids per range.
+- [ ] **Adaptive swept-volume sampling** — `SweptVolume` unions the sweep's uniform
+  frames; sampling by pose DELTA (bounded rotation × extent per step) would bound the
+  scallop error instead of inheriting the study's frame count.
+- [ ] **Flexible sub-assemblies in mechanisms** — inherited from the mates layer: a
+  deep occurrence whose owning sub-assembly is placed more than once is refused (one
+  shared frame). A mechanism inside a twice-placed sub-assembly needs per-placement
+  frame overlays first.
+- [ ] **Deliberately out of scope**: forces, masses, friction, contact dynamics.
   That is multibody *dynamics* and belongs with Simulation below — mechanisms answer
   "where does it go", not "what does it take". Mass properties already exist
   (`MeshMassProperties`/`BrepMassProperties` return inertia tensors about the centre of
@@ -733,12 +705,6 @@ where this project already points.
   without naming every intermediate. Worth prototyping against a real model before
   committing — C# `using` scopes and object initializers are not Python context
   managers, and a bad transliteration would be worse than the current fluent style.
-- [ ] **Joints** — build123d's `RigidJoint`/`RevoluteJoint`/`LinearJoint`/
-  `CylindricalJoint`/`BallJoint` with `connect_to` is the *same idea* as the Mechanisms
-  section above, and is worth reading before designing ours: it is a shipped, used
-  vocabulary for exactly the "joints as a layer over constraints" design proposed there.
-  Note the difference in ambition, though — theirs positions parts, ours needs to *drive*
-  them through a range, which is why the DOF reporting and continuation solve matter.
 - [ ] **2D sketch constraint solver** — CadQuery's `Sketch.constrain(...)/.solve()`.
   Already an open item in this backlog under sketching; noting it here because CadQuery
   is a concrete reference implementation to study rather than designing from scratch.
