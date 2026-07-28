@@ -263,9 +263,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   the exact-collinear pass landed), and `Region2d` self-intersection validation (a
   loop is checked against other loops but not against itself, so a self-intersecting
   outer loop produces garbage silently).
-- [ ] **2D sketch constraint solver** — sketching landed geometry-only by design; the
-  Onshape-style layer on top is constraints (coincident/tangent/parallel/dimensions)
-  solved variationally. Also future: elliptical arcs, sketch offset/thicken.
+- [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
+  `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
+  vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
+  AND branch selector, refuse-loudly with named contradictions/stationary points):
+  elliptical arcs in sketches; constraint serialization alongside feature history
+  (deliberately not v1 — it does not fall out of the `[Param]` descriptor pattern);
+  bézier constraints (tangency at bézier endpoints); point-on-arc/curve constraint.
 - [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
   but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
   polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`
@@ -714,9 +718,6 @@ where this project already points.
   without naming every intermediate. Worth prototyping against a real model before
   committing — C# `using` scopes and object initializers are not Python context
   managers, and a bad transliteration would be worse than the current fluent style.
-- [ ] **2D sketch constraint solver** — CadQuery's `Sketch.constrain(...)/.solve()`.
-  Already an open item in this backlog under sketching; noting it here because CadQuery
-  is a concrete reference implementation to study rather than designing from scratch.
 - [ ] **Drafting / dimensions** — build123d's `drafting` module (`Draft`,
   `DimensionLine`, `ExtensionLine`, `TechnicalDrawing`). We have 3D PMI annotations
   landed (`LinearDimension`, `RadialDimension`, `LeaderNote`, `DatumLabel` with
