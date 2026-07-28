@@ -53,8 +53,11 @@ public sealed class StepReadResult
 /// so both are recovered from the face's boundary: rail arcs give the angle, and rim
 /// circles re-trim the generator by bisecting its exact axial/radial profile (projection
 /// or distance-minimization would carry ~1e-7 error past the 1e-9 weld tolerance).
-/// Units: coordinates are read as-is with millimetres assumed; a diagnostic is emitted
-/// when the file declares a different length unit. Unknown entities are skipped with a
+/// Units: the declared LENGTH_UNIT is resolved (SI prefixes and CONVERSION_BASED_UNIT
+/// chains such as inches) and every length in the file — coordinates, vector magnitudes,
+/// radii — is scaled to millimetres on import, with a diagnostic reporting the factor;
+/// a unit that cannot be resolved falls back to reading coordinates unscaled
+/// (millimetres assumed), also with a diagnostic. Unknown entities are skipped with a
 /// diagnostic, not a crash; malformed Part 21 syntax throws <see cref="FormatException"/>.
 /// </summary>
 public static class StepReader
@@ -73,7 +76,7 @@ public static class StepReader
 
         public StepReadResult Build()
         {
-            CheckUnits();
+            ResolveUnits();
 
             var breps = file.Entities.Values
                 .Where(e => e.Find("MANIFOLD_SOLID_BREP") is not null)
@@ -612,15 +615,15 @@ public static class StepReader
         private Circle3d Circle(StepRecord record)
         {
             var frame = Axis2(record.Args[1].AsReference());
-            double radius = record.Args[2].AsNumber();
+            double radius = ToMillimetres(record.Args[2].AsNumber());
             return new Circle3d(frame.Origin, frame.X, frame.Y, radius);
         }
 
         private Ellipse3d Ellipse(StepRecord record)
         {
             var frame = Axis2(record.Args[1].AsReference());
-            double a = record.Args[2].AsNumber();
-            double b = record.Args[3].AsNumber();
+            double a = ToMillimetres(record.Args[2].AsNumber());
+            double b = ToMillimetres(record.Args[3].AsNumber());
             return new Ellipse3d(frame.Origin, frame.X * a, frame.Y * b);
         }
 
@@ -694,12 +697,12 @@ public static class StepReader
                 case "CYLINDRICAL_SURFACE":
                 {
                     var frame = Axis2(record.Args[1].AsReference());
-                    return new CylinderSurface(frame.Origin, frame.X, frame.Y, record.Args[2].AsNumber());
+                    return new CylinderSurface(frame.Origin, frame.X, frame.Y, ToMillimetres(record.Args[2].AsNumber()));
                 }
                 case "SPHERICAL_SURFACE":
                 {
                     var origin = Axis2(record.Args[1].AsReference()).Origin;
-                    return new SphereSurface(origin, record.Args[2].AsNumber());
+                    return new SphereSurface(origin, ToMillimetres(record.Args[2].AsNumber()));
                 }
                 case "SURFACE_OF_LINEAR_EXTRUSION":
                 {
@@ -712,6 +715,31 @@ public static class StepReader
                     var generator = Curve(record.Args[1].AsReference());
                     var (origin, direction) = Axis1(record.Args[2].AsReference());
                     return RecoverRevolvedSurface(generator, origin, direction, bounds, isReversed);
+                }
+                case "CONICAL_SURFACE":
+                {
+                    // Synthesized as a RevolvedSurface of a slanted line generator — the
+                    // same representation SolidFactory.MakeCone chose, so the whole
+                    // revolved-band machinery (projection, tessellation, intersection)
+                    // applies with no new surface type. ISO 10303-42: radius at the
+                    // placement plane, radius growing along +z at tan(semi_angle).
+                    var frame = Axis2(record.Args[1].AsReference());
+                    double radius = ToMillimetres(record.Args[2].AsNumber());
+                    double semiAngle = record.Args[3].AsNumber(); // radians (SI angle unit assumed)
+                    return RecoverConicalSurface(frame, radius, semiAngle, bounds, isReversed);
+                }
+                case "TOROIDAL_SURFACE":
+                {
+                    // Synthesized as a RevolvedSurface whose generator is the minor
+                    // circle in the frame's x-z plane; ISO 10303-42 parameterizes v from
+                    // the outer equator toward +z, which is exactly Circle3d(center,
+                    // frame.X, frame.Z, minor). Trims are recovered from the boundary by
+                    // the same rim/meridian rules as any revolved band.
+                    var frame = Axis2(record.Args[1].AsReference());
+                    double major = ToMillimetres(record.Args[2].AsNumber());
+                    double minor = ToMillimetres(record.Args[3].AsNumber());
+                    var generator = new Circle3d(frame.Origin + frame.X * major, frame.X, frame.Z, minor);
+                    return RecoverRevolvedSurface(generator, frame.Origin, frame.Z, bounds, isReversed);
                 }
                 default:
                     NoteSkip(entity, "surface");
@@ -806,7 +834,7 @@ public static class StepReader
             }
 
             double? angle = null;
-            var rims = new List<(double V, bool Sense)>();
+            var rims = new List<(double V, bool Sense, bool AxisAligned)>();
             foreach (var (edge, sense) in bounds.SelectMany(b => b.Pairs))
             {
                 if (edge.Curve is not Circle3d circle)
@@ -839,7 +867,8 @@ public static class StepReader
 
                 if (edge.IsClosedEdge)
                 {
-                    rims.Add((SolveGeneratorParameter(generator, circle.Radius, centerAxial, ProfileOf), sense));
+                    rims.Add((SolveGeneratorParameter(generator, circle.Radius, centerAxial, ProfileOf),
+                        sense, circle.Axis.Normalized().Dot(axis) > 0));
                 }
                 else
                 {
@@ -857,10 +886,35 @@ public static class StepReader
 
             if (angle is null && rims.Count >= 2)
             {
-                double v0 = rims.Min(r => r.V);
-                double v1 = rims.Max(r => r.V);
-                if (!(NearParameter(v0, domain.Start) && NearParameter(v1, domain.End)))
-                    trimmed = new CurveSegment(generator, v0, v1);
+                // A CLOSED generator bounded by two rims is genuinely ambiguous under
+                // min/max: the two rim parameters split the circle into two complementary
+                // halves and both faces of a split torus would get the SAME one. The rim
+                // coedge senses resolve it — under the outward-band convention the rim at
+                // the generator's start is traversed forward about the axis (a rim
+                // circle's own orientation folds in via its axis alignment), and reversed
+                // faces flip it — the same convention the single-rim pole case reads.
+                if (generator.IsClosed && rims.Count == 2
+                    && RimIsStart(rims[0]) != RimIsStart(rims[1]))
+                {
+                    var start = RimIsStart(rims[0]) ? rims[0] : rims[1];
+                    var end = RimIsStart(rims[0]) ? rims[1] : rims[0];
+                    double v0 = start.V;
+                    double v1 = end.V;
+                    if (v1 <= v0 + parameterTolerance)
+                        v1 += domain.Length; // the band wraps the generator's seam
+                    if (!(NearParameter(v0, domain.Start) && NearParameter(v1, domain.End)))
+                        trimmed = new CurveSegment(generator, v0, v1);
+                }
+                else
+                {
+                    double v0 = rims.Min(r => r.V);
+                    double v1 = rims.Max(r => r.V);
+                    if (!(NearParameter(v0, domain.Start) && NearParameter(v1, domain.End)))
+                        trimmed = new CurveSegment(generator, v0, v1);
+                }
+
+                bool RimIsStart((double V, bool Sense, bool AxisAligned) rim) =>
+                    (rim.Sense == rim.AxisAligned) != isReversed;
             }
             else if (angle is null && rims.Count == 1)
             {
@@ -917,6 +971,72 @@ public static class StepReader
             }
 
             return new RevolvedSurface(trimmed, origin, axis, angle ?? 2 * Math.PI);
+        }
+
+        /// <summary>
+        /// STEP's CONICAL_SURFACE as a <see cref="RevolvedSurface"/> of a slanted line
+        /// generator — the representation <c>SolidFactory.MakeCone</c> already uses, so no
+        /// new surface type is needed. The surface is unbounded along its axis, so the
+        /// generator line is built over the AXIAL RANGE of the face's own boundary
+        /// vertices (rims are axis-perpendicular, so their vertices sit at the rim's
+        /// axial position; rail vertices bound a partial band the same way), and the
+        /// ordinary revolved-band recovery then trims against rims/rails as usual. An
+        /// endpoint whose cone radius vanishes is snapped EXACTLY onto the axis: the pole
+        /// machinery tests generator ends at the 1e-9 weld tier, and a floating-point
+        /// apex ~1e-16·scale off-axis would read as a hair-thin rim instead of a pole.
+        /// </summary>
+        private Surface RecoverConicalSurface(
+            in Frame3d frame, double radius, double semiAngle,
+            List<(bool IsOuter, List<(BrepEdge Edge, bool Sense)> Pairs)> bounds, bool isReversed)
+        {
+            var origin = frame.Origin;
+            var axis = frame.Z;
+            var radialDirection = frame.X;
+            double slope = Math.Tan(semiAngle);
+            double scale = Math.Max(1, Math.Max(radius, origin.Length));
+
+            double min = double.PositiveInfinity, max = double.NegativeInfinity;
+            foreach (var (edge, _) in bounds.SelectMany(b => b.Pairs))
+            {
+                Span<Vector3d> ends = [edge.StartVertex.Position, edge.EndVertex.Position];
+                foreach (var p in ends)
+                {
+                    double axial = (p - origin).Dot(axis);
+                    min = Math.Min(min, axial);
+                    max = Math.Max(max, axial);
+                }
+            }
+            if (!double.IsFinite(min) || max - min <= 1e-9 * scale)
+            {
+                // Degenerate axial range: an apex cone's only vertex is its base rim's
+                // seam, and a face bounded by ONE rim can only be closed by the apex
+                // pole — so the generator runs from the rim to the apex (t = −radius/
+                // slope, the surface's natural boundary). A cylinder-degenerate cone
+                // (slope 0) has no apex; span a unit either side as a last resort.
+                double mid = double.IsFinite(min) ? 0.5 * (min + max) : 0;
+                double apexAxial = Math.Abs(slope) > 1e-12 ? -radius / slope : mid;
+                if (Math.Abs(apexAxial - mid) > 1e-9 * scale)
+                {
+                    min = Math.Min(mid, apexAxial);
+                    max = Math.Max(mid, apexAxial);
+                }
+                else
+                {
+                    min = mid - Math.Max(1, radius);
+                    max = mid + Math.Max(1, radius);
+                }
+            }
+
+            Vector3d PointOn(double axial)
+            {
+                double r = radius + axial * slope;
+                return Math.Abs(r) <= 1e-9 * scale
+                    ? origin + axis * axial // exact pole (see summary)
+                    : origin + axis * axial + radialDirection * r;
+            }
+
+            var generator = new Line3d(PointOn(min), PointOn(max));
+            return RecoverRevolvedSurface(generator, origin, axis, bounds, isReversed);
         }
 
         /// <summary>
@@ -1284,9 +1404,9 @@ public static class StepReader
                 ?? throw new NotSupportedException($"#{id} {entity.Keyword} is not a CARTESIAN_POINT.");
             var coordinates = record.Args[1].AsList();
             return new Vector3d(
-                coordinates.Count > 0 ? coordinates[0].AsNumber() : 0,
-                coordinates.Count > 1 ? coordinates[1].AsNumber() : 0,
-                coordinates.Count > 2 ? coordinates[2].AsNumber() : 0);
+                coordinates.Count > 0 ? ToMillimetres(coordinates[0].AsNumber()) : 0,
+                coordinates.Count > 1 ? ToMillimetres(coordinates[1].AsNumber()) : 0,
+                coordinates.Count > 2 ? ToMillimetres(coordinates[2].AsNumber()) : 0);
         }
 
         private Vector3d Direction(int id)
@@ -1306,7 +1426,7 @@ public static class StepReader
             var entity = file.Entity(id);
             var record = entity.Find("VECTOR")
                 ?? throw new NotSupportedException($"#{id} {entity.Keyword} is not a VECTOR.");
-            return Direction(record.Args[1].AsReference()) * record.Args[2].AsNumber();
+            return Direction(record.Args[1].AsReference()) * ToMillimetres(record.Args[2].AsNumber());
         }
 
         private Frame3d Axis2(int id)
@@ -1352,31 +1472,151 @@ public static class StepReader
             return phase < 0 ? phase + 2 * Math.PI : phase;
         }
 
-        // ---- diagnostics ----
+        // ---- units ----
 
-        private void CheckUnits()
+        /// <summary>Multiplier taking the file's lengths to millimetres (1 when the file is
+        /// already metric-mm, or when the unit could not be resolved).</summary>
+        private double _unitScale = 1.0;
+
+        /// <summary>A file length scaled to millimetres. The exact-== guard is a semantic
+        /// identity test (deliberately not the tolerance ladder): scale 1 must leave every
+        /// coordinate bit-identical to the pre-unit-scaling reader.</summary>
+        private double ToMillimetres(double length) => _unitScale == 1.0 ? length : length * _unitScale;
+
+        /// <summary>
+        /// Resolves the file's declared LENGTH_UNIT to a millimetre scale factor. The
+        /// authoritative units are the ones a GLOBAL_UNIT_ASSIGNED_CONTEXT references —
+        /// scanning ALL length-unit entities would be wrong for imperial files, whose
+        /// CONVERSION_BASED_UNIT('INCH', …) chain necessarily CONTAINS a metric base unit
+        /// entity that is not the file's unit. Falls back to the lone length-unit entity
+        /// when no context exists, and to unscaled-with-a-diagnostic when nothing resolves.
+        /// </summary>
+        private void ResolveUnits()
         {
-            foreach (var entity in file.Entities.Values)
+            var contextScales = new List<(double Scale, string Description)>();
+            foreach (var entity in file.Entities.Values.OrderBy(e => e.Id))
             {
-                bool isLengthUnit = entity.Find("LENGTH_UNIT") is not null;
-                if (!isLengthUnit)
+                if (entity.Find("GLOBAL_UNIT_ASSIGNED_CONTEXT") is not { Args.Count: > 0 } context
+                    || context.Args[0].Kind != StepValueKind.List)
                     continue;
-                if (entity.Find("SI_UNIT") is { } si)
+                foreach (var unitRef in context.Args[0].Items)
                 {
-                    string prefix = si.Args[0].Kind == StepValueKind.Enumeration ? si.Args[0].Text : "";
-                    string unit = si.Args.Count > 1 && si.Args[1].Kind == StepValueKind.Enumeration ? si.Args[1].Text : "";
-                    if (!(prefix.Equals("MILLI", StringComparison.OrdinalIgnoreCase) &&
-                          unit.Equals("METRE", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        Note($"Length unit is {prefix} {unit}; coordinates were read unscaled (millimetres assumed).");
-                    }
-                }
-                else
-                {
-                    Note($"Non-SI length unit #{entity.Id} {entity.Keyword}; coordinates were read unscaled (millimetres assumed).");
+                    if (unitRef.Kind != StepValueKind.Reference
+                        || !file.Entities.TryGetValue(unitRef.Reference, out var unit)
+                        || unit.Find("LENGTH_UNIT") is null)
+                        continue;
+                    if (TryLengthUnitScale(unit, depth: 0, out double scale, out string description))
+                        contextScales.Add((scale, description));
+                    else
+                        Note($"Unrecognized length unit #{unit.Id}; coordinates were read unscaled (millimetres assumed).");
                 }
             }
+
+            if (contextScales.Count == 0)
+            {
+                // No geometric context (fragmentary file): fall back to the length-unit
+                // entities themselves, skipping conversion BASE units (a unit is a base
+                // when some CONVERSION_BASED_UNIT's measure chain references it).
+                var conversionBases = new HashSet<int>();
+                foreach (var entity in file.Entities.Values)
+                {
+                    if (entity.Find("CONVERSION_BASED_UNIT") is not { Args.Count: >= 2 } cbu
+                        || cbu.Args[1].Kind != StepValueKind.Reference
+                        || !file.Entities.TryGetValue(cbu.Args[1].Reference, out var measure)
+                        || measure.Find("LENGTH_MEASURE_WITH_UNIT") is not { Args.Count: >= 2 } lmu
+                        || lmu.Args[1].Kind != StepValueKind.Reference)
+                        continue;
+                    conversionBases.Add(lmu.Args[1].Reference);
+                }
+                foreach (var entity in file.Entities.Values.OrderBy(e => e.Id))
+                {
+                    if (entity.Find("LENGTH_UNIT") is null || conversionBases.Contains(entity.Id))
+                        continue;
+                    if (TryLengthUnitScale(entity, depth: 0, out double scale, out string description))
+                        contextScales.Add((scale, description));
+                    else
+                        Note($"Unrecognized length unit #{entity.Id}; coordinates were read unscaled (millimetres assumed).");
+                }
+            }
+
+            if (contextScales.Count == 0)
+                return; // no declared unit at all: millimetres by convention, nothing to report
+
+            var (chosen, chosenDescription) = contextScales[0];
+            foreach (var (scale, description) in contextScales.Skip(1))
+            {
+                // Unit factors are exact table constants (1000, 25.4, …), so agreement is
+                // a relative machine-epsilon test, not the model-unit tolerance ladder.
+                if (Math.Abs(scale - chosen) > 1e-12 * chosen)
+                {
+                    Note($"The file declares conflicting length units ({chosenDescription} vs {description}); " +
+                         $"using the first.");
+                    break;
+                }
+            }
+            _unitScale = chosen;
+            if (_unitScale != 1.0) // exact ==: semantic identity test, see ToMillimetres
+                Note($"Length unit is {chosenDescription}; all lengths were scaled by {chosen:R} to millimetres.");
         }
+
+        /// <summary>Millimetre factor of one length-unit entity: SI prefixes in closed form,
+        /// CONVERSION_BASED_UNIT by multiplying down its measure chain (inch → 25.4 mm).</summary>
+        private bool TryLengthUnitScale(StepEntity entity, int depth, out double scale, out string description)
+        {
+            scale = 1.0;
+            description = "";
+            if (depth > 8)
+                return false; // conversion chains are 1–2 deep; anything deeper is a cycle
+
+            if (entity.Find("SI_UNIT") is { Args.Count: >= 2 } si)
+            {
+                string prefix = si.Args[0].Kind == StepValueKind.Enumeration ? si.Args[0].Text : "";
+                string unit = si.Args[1].Kind == StepValueKind.Enumeration ? si.Args[1].Text : "";
+                if (!unit.Equals("METRE", StringComparison.OrdinalIgnoreCase))
+                    return false;
+                double? prefixFactor = prefix.ToUpperInvariant() switch
+                {
+                    "" => 1.0,
+                    "EXA" => 1e18, "PETA" => 1e15, "TERA" => 1e12, "GIGA" => 1e9, "MEGA" => 1e6,
+                    "KILO" => 1e3, "HECTO" => 1e2, "DECA" => 1e1,
+                    "DECI" => 1e-1, "CENTI" => 1e-2, "MILLI" => 1e-3, "MICRO" => 1e-6,
+                    "NANO" => 1e-9, "PICO" => 1e-12, "FEMTO" => 1e-15, "ATTO" => 1e-18,
+                    _ => null,
+                };
+                if (prefixFactor is not { } factor)
+                    return false;
+                scale = factor * 1000.0; // metres → millimetres
+                description = prefix.Length > 0 ? $"{prefix} METRE".ToLowerInvariant() : "metre";
+                return true;
+            }
+
+            if (entity.Find("CONVERSION_BASED_UNIT") is { Args.Count: >= 2 } conversion
+                && conversion.Args[1].Kind == StepValueKind.Reference
+                && file.Entities.TryGetValue(conversion.Args[1].Reference, out var measureEntity)
+                && measureEntity.Find("LENGTH_MEASURE_WITH_UNIT") is { Args.Count: >= 2 } measure
+                && measure.Args[1].Kind == StepValueKind.Reference
+                && file.Entities.TryGetValue(measure.Args[1].Reference, out var baseUnit)
+                && TryLengthUnitScale(baseUnit, depth + 1, out double baseScale, out _))
+            {
+                double value;
+                try
+                {
+                    value = measure.Args[0].AsNumber();
+                }
+                catch (FormatException)
+                {
+                    return false;
+                }
+                scale = value * baseScale;
+                string name = conversion.Args[0].Kind == StepValueKind.Text ? conversion.Args[0].Text : "conversion-based";
+                description = $"{name} ({scale:R} mm)";
+                return true;
+            }
+
+            return false;
+        }
+
+        // ---- diagnostics ----
 
         private static bool IsRecoverable(Exception ex) =>
             ex is FormatException or NotSupportedException or ArgumentException or InvalidOperationException;

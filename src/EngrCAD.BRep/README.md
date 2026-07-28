@@ -697,8 +697,27 @@ operations. Depends only on `EngrCAD.Core`.
   files carry rounding noise proportional to their coordinates — an absolute 1e-6
   floor silently rejected slightly-off-axis rims on large geometry, leaving generators
   untrimmed), and near-miss rejections emit a diagnostic instead of failing silently.
-  Units: millimetres assumed; other declared length units produce a diagnostic, not
-  scaling.
+  **Units are resolved and scaled on import**: the LENGTH_UNIT a
+  `GLOBAL_UNIT_ASSIGNED_CONTEXT` references — never a bare scan of all length-unit
+  entities, because an imperial file's `CONVERSION_BASED_UNIT('INCH', …)` chain
+  necessarily *contains* a metric base-unit entity that is not the file's unit — is
+  resolved to a millimetre factor (SI prefixes closed-form; conversion chains
+  multiplied down, so inches scale by 25.4) and applied to every length read
+  (coordinates, vector magnitudes, radii); the factor is reported as a diagnostic, a
+  unit that cannot be resolved falls back to unscaled-with-a-diagnostic (millimetres
+  assumed), and scale 1 leaves every coordinate bit-identical (exact-== semantic
+  guard). **Foreign quadric surfaces synthesize onto the existing revolve machinery**:
+  `CONICAL_SURFACE` becomes a `RevolvedSurface` of a slanted line generator (the
+  `MakeCone` representation) built over the face's own boundary-vertex axial range —
+  an apex-degenerate range extends to the cone's natural apex, snapped EXACTLY onto
+  the axis so the pole machinery sees a pole and not a hair-thin rim — and
+  `TOROIDAL_SURFACE` becomes a revolve of the minor circle in the frame's x–z plane,
+  both trimmed by the ordinary rim/rail recovery. That recovery gained the missing
+  disambiguation for a CLOSED generator bounded by two rims (a split torus's two
+  bands see the SAME two junction circles, and min/max would hand both faces the same
+  half): the rim coedge senses say which rim is the generator's start — the same
+  outward-band convention the single-rim pole case reads — with the rim circle's own
+  axis alignment folded in.
 
 ### Named epsilon tiers
 
