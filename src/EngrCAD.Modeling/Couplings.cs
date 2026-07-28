@@ -174,6 +174,24 @@ internal static class JointArithmetic
     /// with s, c differentiated by the product rule on cross/dot forms.</summary>
     public static double AngleSecond(in EndMotion axisA, in EndMotion refA, in EndMotion refB)
     {
+        var (s, c, sd, cd, sdd, cdd) = PhaseMotion(axisA, refA, refB);
+        double n = s * s + c * c;
+        if (n <= 0)   // exact-zero guard: degenerate refs
+            return 0;
+        double nd = 2 * (s * sd + c * cd);
+        return ((c * sdd - s * cdd) * n - (c * sd - s * cd) * nd) / (n * n);
+    }
+
+    public static EndValue Value(in EndMotion motion) => new(motion.Point, motion.Direction);
+
+    public static EndDelta Rate(in EndMotion motion) => new(motion.Velocity, motion.DirectionRate);
+
+    /// <summary>The spin's phase pair s = (r_A × r_B)·d, c = r_A·r_B with first and
+    /// second time derivatives under the constant-rate flow (q̈ = 0) — the raw
+    /// ingredients drivers and <see cref="AngleSecond"/> share.</summary>
+    public static (double S, double C, double Sd, double Cd, double Sdd, double Cdd) PhaseMotion(
+        in EndMotion axisA, in EndMotion refA, in EndMotion refB)
+    {
         var d = axisA.Direction;
         var dd = axisA.DirectionRate;
         var ddd = axisA.DirectionAcceleration;
@@ -192,17 +210,116 @@ internal static class JointArithmetic
                    + 2 * (vra.Cross(rb) + ra.Cross(vrb)).Dot(dd)
                    + ra.Cross(rb).Dot(ddd);
         double cdd = ara.Dot(rb) + 2 * vra.Dot(vrb) + ra.Dot(arb);
+        return (s, c, sd, cd, sdd, cdd);
+    }
+}
 
-        double n = s * s + c * c;
-        if (n <= 0)   // exact-zero guard: degenerate refs
-            return 0;
-        double nd = 2 * (s * sd + c * cd);
-        return ((c * sdd - s * cdd) * n - (c * sd - s * cd) * nd) / (n * n);
+/// <summary>
+/// The residual a <see cref="MechanismDriver"/> pins one joint variable with. An angle
+/// target is encoded as the PAIR [c − cos τ, s − sin τ] (scaled to lengths): two rows
+/// carrying one constraint — the solver's usual redundant rotational encoding — chosen
+/// because it is continuous for ANY target and iterate, where a θ̂ − τ row would jump
+/// by 2π when an LM iterate crossed the wrap seam and stall the solve there. The
+/// branch (τ vs τ ± 2π) is picked by proximity, which is exactly what continuation
+/// guarantees: sweep steps stay below a half turn. A slide target is the plain length
+/// row z − z₀ − τ.
+/// </summary>
+internal sealed class DriverConstraint(AxisJoint joint, bool drivesAngle) : AuxiliaryConstraint
+{
+    /// <summary>The driven joint.</summary>
+    public AxisJoint Joint => joint;
+
+    /// <summary>True when the driven variable is the spin; false for the slide.</summary>
+    public bool DrivesAngle => drivesAngle;
+
+    /// <summary>The target value (unwrapped radians for an angle, model units for a
+    /// slide), measured from the joint's construction zero.</summary>
+    public double Target { get; set; }
+
+    /// <summary>dTarget/dt for velocity analysis (the driver is the only residual with
+    /// explicit time dependence).</summary>
+    public double TargetRate { get; set; }
+
+    /// <summary>d²Target/dt² for acceleration analysis.</summary>
+    public double TargetAcceleration { get; set; }
+
+    public override string Name =>
+        $"{joint.Name} drive {(drivesAngle ? "angle" : "slide")}";
+
+    public override int RowCount => drivesAngle ? 2 : 1;
+
+    public override IReadOnlyList<MateRef> Ends { get; } =
+        [joint.A, joint.B, joint.ReferenceA, joint.ReferenceB];
+
+    public override void Residual(ReadOnlySpan<EndValue> ends, double length, Span<double> rows)
+    {
+        if (drivesAngle)
+        {
+            double s = ends[2].Direction.Cross(ends[3].Direction).Dot(ends[0].Direction);
+            double c = ends[2].Direction.Dot(ends[3].Direction);
+            // The target is the unwrapped coordinate; the measured phase carries the
+            // reference offset the construction rebase absorbed, so aim for the
+            // measured value the target corresponds to.
+            double aim = joint.State.LastMeasuredAngle + (Target - joint.State.AccumulatedAngle);
+            rows[0] = (c - Math.Cos(aim)) * length;
+            rows[1] = (s - Math.Sin(aim)) * length;
+        }
+        else
+        {
+            rows[0] = JointArithmetic.Slide(ends[0], ends[1]) - joint.State.ReferenceSlide - Target;
+        }
     }
 
-    public static EndValue Value(in EndMotion motion) => new(motion.Point, motion.Direction);
+    public override void Derivative(
+        ReadOnlySpan<EndValue> ends, ReadOnlySpan<EndDelta> deltas, double length, Span<double> rows)
+    {
+        if (drivesAngle)
+        {
+            var d = ends[0].Direction;
+            var ra = ends[2].Direction;
+            var rb = ends[3].Direction;
+            double dc = deltas[2].Direction.Dot(rb) + ra.Dot(deltas[3].Direction);
+            double ds = (deltas[2].Direction.Cross(rb) + ra.Cross(deltas[3].Direction)).Dot(d)
+                      + ra.Cross(rb).Dot(deltas[0].Direction);
+            rows[0] = dc * length;
+            rows[1] = ds * length;
+        }
+        else
+        {
+            rows[0] = JointArithmetic.SlideDelta(ends[0], ends[1], deltas[0], deltas[1]);
+        }
+    }
 
-    public static EndDelta Rate(in EndMotion motion) => new(motion.Velocity, motion.DirectionRate);
+    public override void TimeDerivative(ReadOnlySpan<EndValue> ends, double length, Span<double> rows)
+    {
+        if (drivesAngle)
+        {
+            double aim = joint.State.LastMeasuredAngle + (Target - joint.State.AccumulatedAngle);
+            rows[0] = Math.Sin(aim) * TargetRate * length;
+            rows[1] = -Math.Cos(aim) * TargetRate * length;
+        }
+        else
+        {
+            rows[0] = -TargetRate;
+        }
+    }
+
+    public override void SecondOrder(
+        ReadOnlySpan<EndValue> ends, ReadOnlySpan<EndMotion> motion, double length, Span<double> rows)
+    {
+        if (drivesAngle)
+        {
+            var (_, _, _, _, sdd, cdd) = JointArithmetic.PhaseMotion(motion[0], motion[2], motion[3]);
+            double aim = joint.State.LastMeasuredAngle + (Target - joint.State.AccumulatedAngle);
+            // d²/dt²(−cos aim) = cos·τ̇² + sin·τ̈; d²/dt²(−sin aim) = sin·τ̇² − cos·τ̈.
+            rows[0] = (cdd + Math.Cos(aim) * TargetRate * TargetRate + Math.Sin(aim) * TargetAcceleration) * length;
+            rows[1] = (sdd + Math.Sin(aim) * TargetRate * TargetRate - Math.Cos(aim) * TargetAcceleration) * length;
+        }
+        else
+        {
+            rows[0] = JointArithmetic.SlideSecond(motion[0], motion[1]) - TargetAcceleration;
+        }
+    }
 }
 
 /// <summary>
