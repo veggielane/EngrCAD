@@ -1512,6 +1512,28 @@ for `in`-parameters being illegal in expression trees.
   logs while it builds is otherwise fatal, and that ordering is the whole trick. The
   limit is honest and documented: code that opens the standard-output handle itself, or
   writes to fd 1 natively, is beyond reach.
+- **Remote control of a running viewer is loopback TCP + newline JSON-RPC, served by
+  the viewer, bridged by MCP** (todo.md's option (b), decided over the alternatives):
+  stdio cannot serve a windowed app (option (a) is the separate headless server, which
+  exists), and hosting MCP's HTTP+SSE inside the GUI (option (c)) puts a web server in
+  the window for no gain while the bridge process already exists — it IS the MCP
+  server, launched with `--mcp --viewer <port>`. **TCP over a named pipe** because a
+  loopback socket is cross-platform, port 0 gives an ephemeral endpoint the viewer
+  reports itself, and the test suite can drive a real connection with nothing but a
+  `TcpClient`; newline-delimited JSON-RPC 2.0 because it is the same framing the MCP
+  stdio transport uses one layer up. The implementation is three separable layers
+  (`RemoteControl.cs`): `RemoteControlServer` (transport: framing, token gate, error
+  envelope — binds `IPAddress.Loopback` with deliberately no way to bind wider),
+  `RemoteViewerDispatcher` (the method vocabulary over `IRemoteViewer` — pure
+  translation), and `ViewportRemoteViewer` (the only layer that knows Avalonia:
+  every call marshals through `Dispatcher.UIThread`, and GL is never touched — a
+  screenshot rides `SaveScreenshot`'s capture-on-next-frame path). That layering is
+  what makes the stack testable without a window: transport and vocabulary are locked
+  headlessly over real sockets with a stub viewer, and only the thin
+  `ViewportRemoteViewer` wiring needs a live window. **Off by default, opt-in**
+  (`WithRemoteControl(port, token)` / `--rpc [port] [--rpc-token t]`), because the
+  endpoint moves cameras and writes files: loopback-only plus an optional
+  per-request token is the honest local posture, not security theater.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level

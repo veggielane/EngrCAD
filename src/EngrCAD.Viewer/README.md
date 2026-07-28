@@ -646,6 +646,27 @@ return EngrCad.Configure(options.Value)
 (Delegate/interface-typed properties are simply left unbound by configuration
 binding — set `Logger`/`OnViewportReady` in code.)
 
+## Remote control (drive a RUNNING window)
+
+Opt-in, off by default: `WithRemoteControl(port, token)` (or `--rpc [port]`, plus
+`--rpc-token <t>`) makes the viewer expose a **loopback-only** TCP endpoint carrying
+newline-delimited JSON-RPC 2.0 once the window opens — the actual port is reported in
+the log (event 70) and the status bar. Methods: `ping`, `list_parts`, `set_view`,
+`fit`, `set_section`, `set_display_mode`, `set_view_style`, `select_part`,
+`get_selection`, `measure`, `screenshot`. The MCP server bridges to it from a separate
+process (`EngrCadMcp.Run` with `--mcp --viewer <port>`), which is how an AI assistant
+drives the window the user is looking at.
+
+Three layers in `RemoteControl.cs`, separable on purpose: `RemoteControlServer`
+(transport: framing, the token gate, error envelopes — binds `IPAddress.Loopback`
+with no way to bind wider), `RemoteViewerDispatcher` (the method vocabulary over
+`IRemoteViewer`, pure translation), and `ViewportRemoteViewer` (the only layer that
+knows Avalonia — **every call marshals through `Dispatcher.UIThread`**, and GL is
+never touched from the RPC thread: `screenshot` rides
+`ViewportControl.SaveScreenshot`'s capture-on-next-frame path). Transport and
+vocabulary are locked by headless tests over real sockets with a stub viewer; only the
+thin `ViewportRemoteViewer` wiring needs a live window.
+
 ## Headless offscreen rendering (screenshots without a window)
 
 For tests and AI agents that need to *see* a scene without opening a window,

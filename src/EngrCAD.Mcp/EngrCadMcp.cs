@@ -26,6 +26,13 @@ public static class EngrCadMcp
     /// <summary>The switch that selects MCP-over-stdio mode.</summary>
     public const string Switch = "--mcp";
 
+    /// <summary>With <see cref="Switch"/>: <c>--viewer &lt;port&gt;</c> bridges to a
+    /// RUNNING viewer window's remote-control endpoint (the model started separately
+    /// with <c>--rpc &lt;port&gt;</c>), adding the live tools (set_view, fit,
+    /// set_section, set_display_mode, set_view_style, select_part, get_selection,
+    /// measure, viewer_screenshot). <c>--viewer-token</c> passes the shared token.</summary>
+    public const string ViewerSwitch = "--viewer";
+
     /// <summary>Standard main-method wrapper: <c>--mcp</c> serves the scene over the
     /// Model Context Protocol on stdio; anything else falls through to
     /// <see cref="EngrCad.Run"/>. Returns a process exit code.</summary>
@@ -41,9 +48,36 @@ public static class EngrCadMcp
         ArgumentNullException.ThrowIfNull(sceneFactory);
         ArgumentNullException.ThrowIfNull(options);
 
-        return args.Contains(Switch, StringComparer.Ordinal)
-            ? Serve(sceneFactory, options)
-            : EngrCad.Configure(options).Run(args, sceneFactory);
+        if (!args.Contains(Switch, StringComparer.Ordinal))
+            return EngrCad.Configure(options).Run(args, sceneFactory);
+
+        // --viewer <port> (+ --viewer-token <t>): bridge tools into a running window.
+        ViewerRpcClient? viewer = null;
+        int viewerIndex = Array.IndexOf(args, ViewerSwitch);
+        if (viewerIndex >= 0)
+        {
+            if (viewerIndex + 1 >= args.Length
+                || !int.TryParse(args[viewerIndex + 1], out int port) || port is <= 0 or > 65535)
+            {
+                (options.Logger ?? EngrCadLoggers.StandardError).LogError(
+                    "--viewer requires the port the viewer's --rpc endpoint reported (1-65535)");
+                return 2;
+            }
+            string? token = null;
+            int tokenIndex = Array.IndexOf(args, "--viewer-token");
+            if (tokenIndex >= 0)
+            {
+                if (tokenIndex + 1 >= args.Length)
+                {
+                    (options.Logger ?? EngrCadLoggers.StandardError).LogError(
+                        "--viewer-token requires the token value");
+                    return 2;
+                }
+                token = args[tokenIndex + 1];
+            }
+            viewer = new ViewerRpcClient(port, token);
+        }
+        return Serve(sceneFactory, options, viewer);
     }
 
     /// <summary>
@@ -56,7 +90,13 @@ public static class EngrCadMcp
     /// caller has not configured one. Building the scene happens after that
     /// redirection, so a model that prints while it builds cannot corrupt the stream.</para>
     /// </summary>
-    public static int Serve(Func<Scene> sceneFactory, EngrCadOptions options)
+    public static int Serve(Func<Scene> sceneFactory, EngrCadOptions options) =>
+        Serve(sceneFactory, options, viewer: null);
+
+    /// <summary><see cref="Serve(Func{Scene}, EngrCadOptions)"/> plus the optional
+    /// live-viewer bridge (<paramref name="viewer"/> points at a running window's
+    /// <c>--rpc</c> endpoint; the bridge tools are added to the served surface).</summary>
+    public static int Serve(Func<Scene> sceneFactory, EngrCadOptions options, ViewerRpcClient? viewer)
     {
         ArgumentNullException.ThrowIfNull(sceneFactory);
         ArgumentNullException.ThrowIfNull(options);
@@ -87,7 +127,8 @@ public static class EngrCadMcp
         try
         {
             EngrCadMcpServer.RunAsync(
-                Console.OpenStandardInput(), guard.ProtocolOutput, tools, options.Title)
+                Console.OpenStandardInput(), guard.ProtocolOutput, tools, options.Title,
+                viewer is null ? null : new ViewerTools(viewer))
                 .GetAwaiter().GetResult();
             return 0;
         }

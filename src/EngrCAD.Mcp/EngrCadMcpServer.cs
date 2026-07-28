@@ -40,14 +40,23 @@ public static class EngrCadMcpServer
     /// <summary>
     /// The protocol options for a server over <paramref name="tools"/>: server identity,
     /// instructions, the tool collection, and the <c>engrcad://scene</c> resource.
+    /// <paramref name="viewerTools"/>, when given, appends the live-viewer bridge tools
+    /// (the MCP process was told where a running window's remote-control endpoint
+    /// listens) — a plain headless session never advertises tools it cannot honor.
     /// </summary>
-    public static McpServerOptions BuildOptions(SceneTools tools, string title = "EngrCAD")
+    public static McpServerOptions BuildOptions(
+        SceneTools tools, string title = "EngrCAD", ViewerTools? viewerTools = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
 
         var toolCollection = new McpServerPrimitiveCollection<McpServerTool>();
         foreach (var tool in BuildTools(tools))
             toolCollection.Add(tool);
+        if (viewerTools is not null)
+        {
+            foreach (var tool in BuildViewerTools(viewerTools))
+                toolCollection.Add(tool);
+        }
 
         var resources = new McpServerResourceCollection
         {
@@ -239,13 +248,110 @@ public static class EngrCadMcpServer
     }
 
     /// <summary>
+    /// The live-viewer bridge tools, forwarding to a running window's remote-control
+    /// endpoint (see <c>RemoteControl.cs</c> in EngrCAD.Viewer). Named without a prefix
+    /// where no headless tool collides; the frame capture is <c>viewer_screenshot</c>
+    /// because <c>screenshot</c> is the headless render.
+    /// </summary>
+    public static IReadOnlyList<McpServerTool> BuildViewerTools(ViewerTools tools)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        return
+        [
+            McpServerTool.Create(tools.SetView, new McpServerToolCreateOptions
+            {
+                Name = "set_view",
+                Title = "Set the viewer's view",
+                Description = "Snaps the RUNNING viewer window to a standard view (iso, front, "
+                            + "back, left, right, top, bottom) — the toolbar buttons, remotely. "
+                            + "Distance and target are kept.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.Fit, new McpServerToolCreateOptions
+            {
+                Name = "fit",
+                Title = "Fit the viewer's camera",
+                Description = "Zoom-to-fit the running viewer on its visible parts.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SetSection, new McpServerToolCreateOptions
+            {
+                Name = "set_section",
+                Title = "Toggle the viewer's section cut",
+                Description = "Turns the running viewer's axis-aligned section cut on or off, "
+                            + "optionally choosing the axis (x/y/z) and plane offset.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SetViewStyle, new McpServerToolCreateOptions
+            {
+                Name = "set_view_style",
+                Title = "Set the viewer's global style",
+                Description = "Sets the running viewer's global view style: shaded-edges, shaded, "
+                            + "wireframe, or points (parts with explicit display modes still win).",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SetDisplayMode, new McpServerToolCreateOptions
+            {
+                Name = "set_display_mode",
+                Title = "Set one part's display mode",
+                Description = "Draws one part shaded, wireframe, or translucent in the running "
+                            + "viewer (by occurrence path, as list_parts reports them).",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SelectPart, new McpServerToolCreateOptions
+            {
+                Name = "select_part",
+                Title = "Select a part in the viewer",
+                Description = "Selects a part by occurrence path in the running viewer (gold "
+                            + "highlight + title bar), or clears the selection when no part is given.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.GetSelection, new McpServerToolCreateOptions
+            {
+                Name = "get_selection",
+                Title = "Read the viewer's selection",
+                Description = "The occurrence path the user (or a previous select_part) has "
+                            + "selected in the running viewer — how an assistant learns what "
+                            + "'this part' means.",
+                ReadOnly = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.Measure, new McpServerToolCreateOptions
+            {
+                Name = "measure",
+                Title = "Measure in the viewer",
+                Description = "Picks two surface points at viewport coordinates (DIPs) in the "
+                            + "running viewer, shows the transient dimension there, and returns "
+                            + "both world points and their distance.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.Screenshot, new McpServerToolCreateOptions
+            {
+                Name = "viewer_screenshot",
+                Title = "Capture the viewer window",
+                Description = "Asks the running viewer to save its NEXT rendered frame as a PNG "
+                            + "(the window's own capture path — GL is only touched inside the "
+                            + "render pass). The headless render is the separate screenshot tool.",
+                ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false,
+            }),
+        ];
+    }
+
+    /// <summary>
     /// Serves MCP over the given streams until the client disconnects or
     /// <paramref name="cancellationToken"/> fires. <paramref name="output"/> must carry
     /// protocol frames and nothing else — see <see cref="StdoutGuard"/>.
     /// </summary>
     public static async Task RunAsync(
         Stream input, Stream output, SceneTools tools, string title = "EngrCAD",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        await RunAsync(input, output, tools, title, viewerTools: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary><see cref="RunAsync(Stream, Stream, SceneTools, string, CancellationToken)"/>
+    /// plus the optional live-viewer bridge tools.</summary>
+    public static async Task RunAsync(
+        Stream input, Stream output, SceneTools tools, string title,
+        ViewerTools? viewerTools, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
@@ -256,7 +362,7 @@ public static class EngrCadMcpServer
         // code path — and it lets the caller hand us the stdout stream it captured
         // BEFORE Console.Out was redirected.
         await using var transport = new StreamServerTransport(input, output, serverName: title);
-        await using var server = McpServer.Create(transport, BuildOptions(tools, title));
+        await using var server = McpServer.Create(transport, BuildOptions(tools, title, viewerTools));
         await server.RunAsync(cancellationToken).ConfigureAwait(false);
     }
 }

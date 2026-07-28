@@ -104,6 +104,11 @@ internal static partial class Log
         Message = "--render requires a file path (.png)")]
     internal static partial void UsageRender(ILogger logger);
 
+    [LoggerMessage(EventId = 17, Level = LogLevel.Error,
+        Message = "--rpc takes an optional port 0-65535 (0 or omitted = ephemeral);"
+                + " --rpc-token requires the token value")]
+    internal static partial void UsageRpc(ILogger logger);
+
     // ---- headless export / render ----
 
     [LoggerMessage(EventId = 20, Level = LogLevel.Information,
@@ -173,4 +178,14 @@ internal static partial class Log
     [LoggerMessage(EventId = 50, Level = LogLevel.Error,
         Message = "part '{PartName}' failed to mesh: {Reason}")]
     internal static partial void PartFailedToMesh(ILogger logger, string partName, string reason);
+
+    // ---- remote control (70s; the MCP server owns the 60s) ----
+
+    [LoggerMessage(EventId = 70, Level = LogLevel.Information,
+        Message = "remote control listening on 127.0.0.1:{Port}{TokenNote}")]
+    internal static partial void RemoteControlListening(ILogger logger, int port, string tokenNote);
+
+    [LoggerMessage(EventId = 71, Level = LogLevel.Error,
+        Message = "remote control failed to start: {Reason}")]
+    internal static partial void RemoteControlFailed(ILogger logger, string reason);
 }

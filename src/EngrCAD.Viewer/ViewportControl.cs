@@ -861,6 +861,31 @@ public sealed class ViewportControl : OpenGlControlBase
         RequestNextFrameRendering();
     }
 
+    /// <summary>
+    /// One-shot measurement between two control-space positions: both points are
+    /// picked through the same raycast as measure-mode clicks, the transient dimension
+    /// is shown exactly as two clicks would show it, and the surface points plus their
+    /// distance are returned (null when either pick misses). UI thread, like all
+    /// picking — remote callers marshal. Any half-finished interactive measurement is
+    /// superseded.
+    /// </summary>
+    public (Vector3d A, Vector3d B, double Distance)? Measure(Point first, Point second)
+    {
+        int hitA = HitTest(first, out var a);
+        int hitB = HitTest(second, out var b);
+        _measureStart = null;   // supersede a pending interactive first click
+        if (hitA < 0 || hitB < 0)
+        {
+            Report("measure: no surface under one of the points");
+            return null;
+        }
+        var resolved = new LinearDimension(a, b).Resolve();
+        _annotations.SetTransient(resolved);
+        Report($"measure: {resolved.Text}");
+        RequestNextFrameRendering();
+        return (a, b, (b - a).Length);
+    }
+
     /// <summary>Clears the in-progress measure point and the transient dimension.</summary>
     private void ClearMeasurement()
     {
@@ -1142,6 +1167,30 @@ public sealed class ViewportControl : OpenGlControlBase
 
     /// <summary>Index of the selected part, −1 for none.</summary>
     public int Selected => _selected;
+
+    /// <summary>Occurrence path of the selected instance, null for none — the
+    /// name-shaped twin of <see cref="Selected"/> (remote hosts speak paths, not
+    /// indices, since indices are per-published-list).</summary>
+    public string? SelectedPath
+    {
+        get
+        {
+            lock (_sceneLock)
+                return _selected >= 0 && _selected < _instances.Count ? _instances[_selected].Path : null;
+        }
+    }
+
+    /// <summary>The displayed instances' occurrence paths, in instance order — the
+    /// index-to-name mapping for hosts that address parts by path (the model tree does
+    /// its own bookkeeping; the remote-control endpoint uses this).</summary>
+    public IReadOnlyList<string> InstancePaths
+    {
+        get
+        {
+            lock (_sceneLock)
+                return [.. _instances.Select(i => i.Path)];
+        }
+    }
 
     /// <summary>Sets the selection programmatically (tree clicks); does not raise
     /// <see cref="SelectionChanged"/>.</summary>

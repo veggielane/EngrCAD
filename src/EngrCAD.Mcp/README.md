@@ -57,6 +57,21 @@ This is a library entry point, not a generic host.
 Plus one resource, `engrcad://scene`: the whole document as JSON (tabs, parts,
 geometry kinds), cheap enough to read on every turn.
 
+## Driving a RUNNING viewer window
+
+Started with `--mcp --viewer <port>` (and `--viewer-token <t>` when the viewer set
+one), the server additionally bridges to a live window's remote-control endpoint —
+the model program runs separately with `--rpc <port>` (see the EngrCAD.Viewer README)
+— adding: `set_view`, `fit`, `set_section`, `set_view_style`, `set_display_mode`,
+`select_part`, `get_selection` (how an assistant learns what "this part" the user is
+pointing at means), `measure` (two viewport picks, returns the world points and
+distance, shows the transient dimension in the window), and `viewer_screenshot`
+(the window's own next-frame capture; the headless render stays `screenshot`).
+Without `--viewer` these tools are never advertised — a headless session does not
+offer tools it cannot honor. A dead or wrong endpoint is an `isError` naming the
+`--rpc` flag; connections are per-request, so a viewer restarted by `dotnet watch`
+just gets reconnected to.
+
 Failures come back as `isError` results with a readable message — "No part named
 'flage'. Parts in this scene: Model/flange, …" — never as protocol errors. An
 assistant should be able to correct itself and carry on.

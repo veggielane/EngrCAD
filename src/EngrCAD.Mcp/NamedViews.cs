@@ -24,22 +24,11 @@ internal static class NamedViews
     public const double PoleYaw = -Math.PI / 4;
 
     /// <summary>The view direction (target toward eye) of a named view, or null when
-    /// the name is not one of the standard views.</summary>
-    public static Vector3d? DirectionFor(string view) => view.ToLowerInvariant() switch
-    {
-        "front" => new Vector3d(0, -1, 0),
-        "back" => new Vector3d(0, 1, 0),
-        "left" => new Vector3d(-1, 0, 0),
-        "right" => new Vector3d(1, 0, 0),
-        "top" => new Vector3d(0, 0, 1),
-        "bottom" => new Vector3d(0, 0, -1),
-        "iso" => new Vector3d(1, -1, 1),
-        _ => null,
-    };
+    /// the name is not one of the standard views — the shared name table.</summary>
+    public static Vector3d? DirectionFor(string view) => ViewCubeMath.DirectionFor(view);
 
     /// <summary>The standard view names, for error messages and tool descriptions.</summary>
-    public static IReadOnlyList<string> Names { get; } =
-        ["iso", "front", "back", "left", "right", "top", "bottom"];
+    public static IReadOnlyList<string> Names => ViewCubeMath.StandardViewNames;
 
     /// <summary>Orbit yaw/pitch looking along <paramref name="direction"/> — the shared
     /// pose function with <see cref="PoleYaw"/> standing in for the window's current
