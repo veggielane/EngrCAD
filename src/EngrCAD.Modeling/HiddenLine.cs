@@ -574,7 +574,6 @@ public static class HiddenLineRemoval
         private Vector3d[] _normals = [];
         private Bvh _bvh = null!;
         private HalfEdgeMesh _mesh = null!;
-        private Matrix4d _world;
         private Matrix4d _edgeWorld;
         private Part _part = null!;
         private MeshQuality? _quality;
@@ -627,7 +626,6 @@ public static class HiddenLineRemoval
             var occluder = new Occluder
             {
                 _mesh = mesh,
-                _world = world,
                 // Feature edges come from the UNCUT part, so they keep the original
                 // placement and are clipped to the kept half-space afterwards; the mesh
                 // was already moved into world space by the cut.
