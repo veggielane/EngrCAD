@@ -200,6 +200,15 @@ public static class HoleFiller
     /// went in with, vertex for vertex, and the two halves weld by index. An extra rim vertex
     /// would be a T-junction.
     /// <para>
+    /// <see cref="RegionRemesher"/> does something that looks like this and is deliberately a
+    /// different operation: it extracts geometry the mesh <i>already has</i>, remeshes it and
+    /// puts it back, and its rim may be refined because
+    /// <see cref="MeshRegionOperator.Reinsert"/> carries the split into the neighbours. Here
+    /// there is nothing to extract — the patch does not exist yet — and the rim is barred from
+    /// splitting because the hole's neighbours are the surrounding mesh itself. The shared
+    /// machinery is the pinned rim; the difference is whether the region exists.
+    /// </para>
+    /// <para>
     /// Iterated Laplacian smoothing with a fixed boundary converges to the same membrane a
     /// linear solve would give; we take the iterations rather than carry a sparse solver.
     /// </para>

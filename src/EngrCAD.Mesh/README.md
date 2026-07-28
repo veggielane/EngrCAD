@@ -430,6 +430,27 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     erosion 9.7% → 3.8%. It needs an *oriented* target; triangles whose projection comes back
     unoriented fall back to closest-point placement, so an unoriented target degrades to
     `Vertex` rather than failing.
+- **`RegionRemesher`** — isotropic remeshing of one face selection, in place (g3's
+  `RegionRemesher`): `MeshRegionOperator.Extract` → remesh the patch with its seam pinned →
+  `Reinsert`. The rest of the model is untouched, which is what makes remeshing usable on a
+  real part where one bore wall wants 0.2 mm triangles and the plate does not want to be
+  touched at all. `Remesh(mesh, selection, options)` returns the whole model, the reinserted
+  selection (so edits chain) and the patch's own `RemeshResult`.
+  - Two settings are decided for the caller, both following from the seam contract.
+    `PreserveBoundary` is **forced on** — the rim is what the surrounding mesh welds to, so it
+    may gain vertices but never move — and a null `ProjectionTarget` defaults to one built
+    over the region **as extracted**. Without a target, smoothing is curvature flow and the
+    patch sinks away from the surface it belongs to, leaving a visible dent bounded by an
+    unmoved rim; "no projection" would be the wrong default, not the neutral one.
+  - The rim may be **refined**: with `SplitFixedEdges` left on, seam splits are carried into
+    the neighbouring faces by `Reinsert`, so a fine region can meet a coarse model without a
+    T-junction. Set it false to get the rim back vertex for vertex.
+  - `FixedVertices` are indices into the **base** mesh and are mapped through
+    `RegionToBaseVertex` — a caller has not seen the patch and should not have to index it.
+  - `HoleFiller.FillSmoothed` stays as it is and is a different operation: it builds a patch
+    that does not exist yet and must therefore bar its rim from splitting, since the hole's
+    neighbours are the surrounding mesh itself. The shared machinery is the pinned rim; the
+    difference is whether there is anything to extract.
 - **`IProjectionTarget` / `MeshProjectionTarget`** — the surface a remesh pulls vertices back
   onto. The interface has two members: `Project(point)` and an oriented
   `Project(point, out normal)` whose **default implementation reports a zero normal** — a
