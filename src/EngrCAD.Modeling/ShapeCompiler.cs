@@ -1250,8 +1250,11 @@ internal static class ShapeCompiler
 
     // ---------------------------------------------------------------------- helpers
 
-    private static HalfEdgeMesh Tessellate(BrepSolid solid, MeshQuality quality) =>
-        BRepTessellator.Tessellate(solid, quality.SegmentsPerCircle, quality.CurveSamples);
+    private static HalfEdgeMesh Tessellate(BrepSolid solid, MeshQuality quality)
+    {
+        var (segmentsPerCircle, curveSamples) = quality.ResolveSegments(solid);
+        return BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples);
+    }
 
     internal static HalfEdgeMesh TransformMesh(HalfEdgeMesh mesh, in Matrix4d m) =>
         mesh.Transformed(m);

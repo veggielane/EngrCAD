@@ -335,7 +335,12 @@ public sealed class Part
             // route): tessellate the ONE cached solid. This is exactly what
             // Shape.ToMesh does for such a graph — it just re-lowered every time.
             if (SolidCore() is { } solid)
-                return _mesh = BRepTessellator.Tessellate(solid, q.SegmentsPerCircle, q.CurveSamples, progress);
+            {
+                // Fixed counts, or the adaptive TessellationQuality resolution — the
+                // SAME resolution GetFeatureEdges uses, so overlay and fill agree.
+                var (segmentsPerCircle, curveSamples) = q.ResolveSegments(solid);
+                return _mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress);
+            }
             if (_solidError is { } error)
                 ExceptionDispatchInfo.Capture(error).Throw();   // same failure ToMesh would raise
 
@@ -488,10 +493,14 @@ public sealed class Part
             {
                 try
                 {
-                    return _featureEdges = BrepFeatureEdges.Extract(
-                        solid,
-                        Math.Max(96, q.SegmentsPerCircle),
-                        Math.Max(48, q.CurveSamples));
+                    // Under an adaptive quality the overlay uses EXACTLY the mesh's
+                    // resolved counts (one criterion drives both, so the smooth exact
+                    // edge cannot detach from the faceted fill it outlines); with fixed
+                    // counts it keeps the deliberately finer display resolution.
+                    var (segmentsPerCircle, curveSamples) = q.Tessellation is { } adaptive
+                        ? adaptive.ResolveFor(solid)
+                        : (Math.Max(96, q.SegmentsPerCircle), Math.Max(48, q.CurveSamples));
+                    return _featureEdges = BrepFeatureEdges.Extract(solid, segmentsPerCircle, curveSamples);
                 }
                 catch
                 {

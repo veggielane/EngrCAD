@@ -1266,6 +1266,20 @@ passed at construction, and `Scene.ResolveQuality(fallback)` /
 `Scene.PreMesh(fallback)` implement the precedence **explicit scene options >
 host fallback > `MeshQuality` defaults**.
 
+**Adaptive tessellation** (`TessellationQuality`, opt-in via
+`MeshQuality.Tessellation`): instead of a fixed count, state a criterion — max angle
+per segment (OpenSCAD `$fa`) and/or max chord deviation (OCCT linear deflection),
+clamped to `[MinSegments, MaxSegments]`. `SegmentsFor(radius)` is THE criterion;
+`ResolveFor(solid)` scans the solid's curvature radii (circular/elliptic edges,
+cylinder/sphere/revolved/extruded/swept surfaces) and resolves one count pair sized by
+the largest radius (the chord criterion binds there: n ≈ π·√(r/2d)). The load-bearing
+property: **`Part.GetMesh` and `Part.GetFeatureEdges` resolve through the same
+criterion**, so the exact edge overlay can no longer detach from the faceted fill on
+large rims (with fixed counts the overlay is deliberately finer at ≥ 96
+segments/circle, which is where the detachment came from). Null `Tessellation` keeps
+the fixed counts bit-for-bit; the SDF route's `SdfResolution` is deliberately
+untouched (a volumetric grid is not a per-radius quantity).
+
 ## Future work (todo.md)
 
 Sketch constraint solver (see todo.md), mesh→B-Rep import

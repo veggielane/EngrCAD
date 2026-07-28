@@ -22,6 +22,21 @@ public sealed class MeshQuality
     public int CurveSamples { get; set; } = 24;
     public int SdfResolution { get; set; } = 64;
 
+    /// <summary>
+    /// Opt-in adaptive tessellation: when set, B-Rep tessellation (and the feature-edge
+    /// overlay) resolve segment counts from the model's own curvature radii through
+    /// this criterion instead of the fixed <see cref="SegmentsPerCircle"/>/
+    /// <see cref="CurveSamples"/> — see <see cref="TessellationQuality"/>. Null (the
+    /// default) keeps the fixed counts exactly.
+    /// </summary>
+    public TessellationQuality? Tessellation { get; set; }
+
+    /// <summary>The (segmentsPerCircle, curveSamples) a B-Rep tessellation of
+    /// <paramref name="solid"/> should use under this quality — the fixed counts, or
+    /// the adaptive resolution when <see cref="Tessellation"/> is set.</summary>
+    internal (int SegmentsPerCircle, int CurveSamples) ResolveSegments(BrepSolid solid) =>
+        Tessellation?.ResolveFor(solid) ?? (SegmentsPerCircle, CurveSamples);
+
     internal static readonly MeshQuality Default = new();
 }
 

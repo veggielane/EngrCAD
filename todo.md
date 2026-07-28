@@ -528,10 +528,10 @@ export — is recorded in CLAUDE.md):
     (that section is an area, not a curve). A proper answer needs coplanar-face handling,
     the same gap as coplanar booleans.
 - [ ] `roof()` — straight-skeleton roof over a polygon; low priority
-- [ ] **`TessellationQuality` options type** — unify `segmentsPerCircle`/
-  `curveSamples`/`resolution` into one type (max angle, max chord deviation, min/max
-  segments) with **adaptive** curvature-based sampling ($fn/$fa/$fs, and OCCT's
-  deflection-based `BRepMesh` criterion)
+- [ ] **Camera-adaptive tessellation on zoom** — `TessellationQuality` ✅ landed (max
+  angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
+  the follow-on is re-resolving against the on-screen pixel size of a radius when the
+  camera zooms, which needs re-tessellation plumbing in the viewer.
 - [ ] Debug modifiers (`#`/`%`/`!`/`*`) — per-body display flags (ghost/isolate/hide;
   highlight exists via selection)
 - [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
@@ -776,16 +776,6 @@ where this project already points.
     ("±0.1" via `Label` today).
   - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
     STEP AP242 PMI export (far future).
-- [ ] **Chord-deviation tessellation for large parts** — investigated, and the obvious
-  premise was WRONG: a fixed 96 segments/circle for feature edges is scale-*free*
-  (relative sagitta 5.4e-4 at any radius) and a 400 mm flange's rim renders smooth at
-  whole-part framing. Zoomed onto a large rim, what actually shows is the **display
-  mesh** faceting at `SegmentsPerCircle`, with the exact edge overlay visibly
-  *detaching* from the fill it outlines — the edge is the accurate one, and raising its
-  count makes the detachment worse. The real fix is the existing **`TessellationQuality`**
-  item: one max-chord-deviation criterion driving the display mesh *and*
-  `BrepFeatureEdges` so they agree by construction. Camera-adaptive re-extraction on
-  zoom is the follow-on.
 - [ ] **Construction-tree follow-ups** (tree + per-node preview ✅ landed) — a
   **rollback bar** (drag a marker in the feature list; suppress below it),
   **suppress-from-tree**, and **`[Param]` editing** in the properties panel: all cheap
