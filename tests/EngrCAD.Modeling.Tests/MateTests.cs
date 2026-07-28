@@ -432,8 +432,10 @@ public class MateTests
 
         var mates = new MateSet(rig);
         var bad = Mate.Coincident(MateGeometry.Point(top, Vector3d.Zero), MateGeometry.Point(deep, Vector3d.Zero));
+        // A bare deep occurrence names a TYPE-level frame, not a placement; the fix is
+        // the occurrence-path overloads, and the message says so.
         var exception = Assert.Throws<ArgumentException>(() => mates.Add(bad));
-        Assert.Contains("one assembly level", exception.Message);
+        Assert.Contains("occurrence path", exception.Message);
         Assert.Throws<ArgumentException>(() => mates.Ground(deep));
     }
 

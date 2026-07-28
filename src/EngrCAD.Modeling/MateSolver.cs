@@ -24,6 +24,25 @@ public sealed class MateSolverSettings
     public bool RequireFullyConstrained { get; init; }
 }
 
+/// <summary>
+/// One movable occurrence's share of the DOF report: how many of its own six degrees of
+/// freedom the mate system's Jacobian SEES — the rank of the system restricted to that
+/// occurrence's six variables. An upper bound on how pinned it is: a mate coupling two
+/// occurrences constrains their RELATIVE motion, so block ranks can sum to more than
+/// the global rank (which stays the authoritative total).
+/// </summary>
+/// <param name="Path">The occurrence's path relative to the mate set's assembly
+/// ("clamp.2/bolt"; a direct occurrence is just its name).</param>
+/// <param name="ConstrainedDegreesOfFreedom">Rank of the occurrence's own 6-variable
+/// block of JᵀJ, via the same diagonally pivoted Cholesky as the global rank.</param>
+public sealed record MateOccurrenceFreedom(string Path, int ConstrainedDegreesOfFreedom)
+{
+    /// <summary>Degrees of freedom of this occurrence no mate can see (6 − constrained).</summary>
+    public int RemainingDegreesOfFreedom => 6 - ConstrainedDegreesOfFreedom;
+
+    public override string ToString() => $"{Path}: {ConstrainedDegreesOfFreedom}/6";
+}
+
 /// <summary>What a mate solve did, and what it could not do.</summary>
 /// <param name="Converged">Every residual fell below the tolerance.</param>
 /// <param name="Iterations">Levenberg–Marquardt steps taken.</param>
@@ -42,6 +61,11 @@ public sealed record MateSolveResult(
     int ConstrainedDegreesOfFreedom,
     IReadOnlyList<string> Diagnostics)
 {
+    /// <summary>The DOF report per movable occurrence — see
+    /// <see cref="MateOccurrenceFreedom"/> for what the per-occurrence number can and
+    /// cannot claim. Empty when nothing was free.</summary>
+    public IReadOnlyList<MateOccurrenceFreedom> OccurrenceFreedoms { get; init; } = [];
+
     /// <summary>Degrees of freedom the mates leave open (0 = fully constrained).</summary>
     public int RemainingDegreesOfFreedom => FreeDegreesOfFreedom - ConstrainedDegreesOfFreedom;
 
@@ -101,30 +125,41 @@ public sealed class MateSolveException(MateSolveResult result)
 ///
 /// <para><b>What it solves.</b> <see cref="Assembly.Flatten(double)"/> composes
 /// <see cref="Occurrence.Frame"/>s, and those frames are mutable — so mating is exactly
-/// "solve for the frames". The unknowns are the <b>direct</b> occurrences of this
-/// assembly that at least one mate mentions and that are not
+/// "solve for the frames". The unknowns are the occurrences the mates actually
+/// <em>target</em> (the deepest link of each reference's chain) that are not
 /// <see cref="Ground(Occurrence)">grounded</see>: six numbers each (translation plus a
-/// rotation increment about the occurrence's own origin). A nested sub-assembly is one
-/// rigid body, which is the correct semantics and needs no special case; mating INTO a
-/// sub-assembly's internals is not supported and is rejected loudly rather than
-/// silently ignored.</para>
+/// rotation increment about the occurrence's own origin). A nested sub-assembly no
+/// mate reaches into is one rigid body and needs no special case; a mate built from an
+/// occurrence path (<see cref="MateGeometry"/>'s <c>(Assembly, path, …)</c> overloads)
+/// reaches <b>across levels</b> — the deep occurrence's local frame becomes the
+/// unknown, its ancestors' frames compose as inputs, and any ancestor that is itself a
+/// mate target contributes its own chain-rule columns to the Jacobian. One refusal
+/// keeps that honest: a deep occurrence whose owning sub-assembly is placed more than
+/// once is ONE shared frame — moving it would move every placement — so the solve
+/// rejects it by name instead of quietly moving geometry the mate never mentioned.</para>
 ///
 /// <para><b>How.</b> Levenberg–Marquardt on the constraint residuals with an
 /// <b>analytic</b> Jacobian (finite differences would cap accuracy near 1e-8, an order
-/// worse than the weld tier this aims at). Angular residuals are multiplied by the
-/// assembly's characteristic length so every residual is a length and one linear
-/// tolerance is meaningful; the rotation variables are divided by the same length so
-/// every Jacobian column is O(1). Rank comes from a diagonally pivoted Cholesky of
-/// JᵀJ — a rank-revealing factorization for the symmetric positive-semidefinite matrix
-/// it is — which is what lets the deliberately redundant rotational residual encodings
-/// (3 rows carrying 2 constraints) be counted correctly.</para>
+/// worse than the weld tier this aims at). A variable is a world-space rigid
+/// perturbation of one occurrence (rotation taken about its composed world origin), so
+/// the chain rule through a frame chain stays the same two formulas — translation
+/// columns are the unit axes, rotation columns are <c>axis × (point − origin)</c> with
+/// the origin READ OFF THE CHAIN — rather than a product of derivative matrices.
+/// Angular residuals are multiplied by the assembly's characteristic length so every
+/// residual is a length and one linear tolerance is meaningful; the rotation variables
+/// are divided by the same length so every Jacobian column is O(1). Rank comes from a
+/// diagonally pivoted Cholesky of JᵀJ — a rank-revealing factorization for the
+/// symmetric positive-semidefinite matrix it is — which is what lets the deliberately
+/// redundant rotational residual encodings (3 rows carrying 2 constraints) be counted
+/// correctly; the same factorization on each occurrence's own 6×6 block yields the
+/// per-occurrence DOF report (<see cref="MateSolveResult.OccurrenceFreedoms"/>).</para>
 ///
 /// <para><b>Honesty rules.</b> A solve that does not converge writes NOTHING: the
 /// occurrence frames are restored, so a failed mate never leaves an assembly half-moved.
 /// The result always reports how many degrees of freedom the mates actually pinned, so
 /// an under-constrained assembly says so rather than pretending.</para>
 /// </summary>
-public sealed class MateSet
+public sealed partial class MateSet
 {
     private readonly List<Mate> _mates = [];
     private readonly HashSet<Occurrence> _grounded = [];
@@ -165,8 +200,19 @@ public sealed class MateSet
         if (!Assembly.Occurrences.Contains(occurrence))
             throw new ArgumentException(
                 $"Occurrence '{occurrence.Name}' is not a direct occurrence of assembly " +
-                $"'{Assembly.Name}'.", nameof(occurrence));
+                $"'{Assembly.Name}'. Ground a nested occurrence by its path: Ground(\"sub/{occurrence.Name}\").",
+                nameof(occurrence));
         _grounded.Add(occurrence);
+        return this;
+    }
+
+    /// <summary>Pins the occurrence an occurrence path names ("clamp.2/bolt") — the
+    /// cross-level form of <see cref="Ground(Occurrence)"/>. A grounded deep
+    /// occurrence's local frame is an input, so a chain through it still moves with any
+    /// free ancestors.</summary>
+    public MateSet Ground(string path)
+    {
+        _grounded.Add(Assembly.ResolvePath(path)[^1]);
         return this;
     }
 
@@ -174,11 +220,32 @@ public sealed class MateSet
     {
         if (reference.Occurrence is not { } occurrence)
             return;
+        if (reference.Ancestors is { } ancestors)
+        {
+            // A chained reference must descend from THIS assembly, link by link — a
+            // chain resolved against some other assembly would compose the wrong frames.
+            var expected = Assembly.Occurrences;
+            string walked = "";
+            foreach (var link in ancestors.Append(occurrence))
+            {
+                if (!expected.Contains(link))
+                    throw new ArgumentException(
+                        $"Mate '{mate.Name}' references occurrence '{link.Name}'" +
+                        (walked.Length == 0 ? "" : $" (below '{walked}')") +
+                        $", which does not descend from assembly '{Assembly.Name}' along that chain. " +
+                        "Build the reference from this assembly's own occurrence path " +
+                        "(Assembly.ResolvePath).", nameof(mate));
+                walked = walked.Length == 0 ? link.Name : $"{walked}/{link.Name}";
+                expected = link.SubAssembly?.Occurrences ?? [];
+            }
+            return;
+        }
         if (!Assembly.Occurrences.Contains(occurrence))
             throw new ArgumentException(
                 $"Mate '{mate.Name}' references occurrence '{occurrence.Name}', which is not a direct " +
-                $"occurrence of assembly '{Assembly.Name}'. Mates constrain one assembly level: build a " +
-                $"MateSet on the sub-assembly to arrange its own occurrences.", nameof(mate));
+                $"occurrence of assembly '{Assembly.Name}'. Reference nested geometry by its occurrence " +
+                $"path — MateGeometry.Point(assembly, \"sub/{occurrence.Name}\", …) — so the solver knows " +
+                "which placement it belongs to, or build a MateSet on the sub-assembly itself.", nameof(mate));
     }
 
     /// <summary>
@@ -221,6 +288,12 @@ public sealed class MateSet
     {
         private readonly List<Occurrence> _free = [];
         private readonly Dictionary<Occurrence, int> _block = [];
+
+        /// <summary>Each free occurrence's ancestor chain (outermost first; empty for a
+        /// direct occurrence) — the frames its pose composes through, and what
+        /// <see cref="Apply"/> pulls the world-space step back through.</summary>
+        private readonly Dictionary<Occurrence, Occurrence[]> _ancestors = [];
+
         private Frame3d[] _poses = [];
         private double _length = 1;     // characteristic length: residual/variable scaling
         private int _rows;
@@ -323,6 +396,21 @@ public sealed class MateSet
             NormalEquations(jacobian, residual, final, unusedGradient);
             int rank = Rank(final, _columns);
 
+            // Per-occurrence report: the rank of each occurrence's own 6×6 block of JᵀJ —
+            // how many of ITS motions the mates can see (an upper bound on pinning;
+            // the global rank above stays the authoritative total).
+            var freedoms = new List<MateOccurrenceFreedom>(_free.Count);
+            for (int b = 0; b < _free.Count; b++)
+            {
+                var block = new double[36];
+                for (int r = 0; r < 6; r++)
+                {
+                    for (int c = 0; c < 6; c++)
+                        block[r * 6 + c] = final[(b * 6 + r) * _columns + (b * 6 + c)];
+                }
+                freedoms.Add(new MateOccurrenceFreedom(PathOf(_free[b]), Rank(block, 6)));
+            }
+
             if (converged)
             {
                 for (int i = 0; i < _free.Count; i++)
@@ -352,9 +440,16 @@ public sealed class MateSet
 
             Note(diagnostics);
             if (_columns - rank > 0)
+            {
                 diagnostics.Add(FreedomNote(_columns - rank));
+                if (_free.Count > 1)
+                    diagnostics.Add(
+                        $"per occurrence, the mates see: {string.Join(", ", freedoms)} degrees of " +
+                        "freedom (an upper bound — a mate between two occurrences pins relative motion)");
+            }
 
-            return new MateSolveResult(converged, iteration, worst, _columns, rank, diagnostics);
+            return new MateSolveResult(converged, iteration, worst, _columns, rank, diagnostics)
+                { OccurrenceFreedoms = freedoms };
         }
 
         private void Register(in MateRef reference)
@@ -363,8 +458,35 @@ public sealed class MateSet
                 return;
             if (set.Grounded.Contains(occurrence) || _block.ContainsKey(occurrence))
                 return;
+            Occurrence[] ancestors = reference.Ancestors is { } chain ? [.. chain] : [];
+            if (ancestors.Length > 0)
+            {
+                // A sub-assembly's internal frames are ONE object however many times it
+                // is placed: moving this occurrence would move geometry in EVERY
+                // placement, most of which the mate never mentioned. Refuse by name
+                // rather than quietly aliasing.
+                var owner = ancestors[^1].SubAssembly!;
+                var placements = set.Assembly.PlacementsOf(owner);
+                if (placements.Count > 1)
+                    throw new InvalidOperationException(
+                        $"A mate targets '{reference.Path}', but assembly '{owner.Name}' is placed " +
+                        $"{placements.Count} times ({string.Join(", ", placements)}), and " +
+                        $"'{occurrence.Name}' is one shared frame across all of them — solving would move " +
+                        "every placement. Ground it, mate the sub-assembly occurrence itself, or give " +
+                        "each placement its own Assembly.");
+            }
             _block[occurrence] = _free.Count;
             _free.Add(occurrence);
+            _ancestors[occurrence] = ancestors;
+        }
+
+        /// <summary>An occurrence's path relative to the set's assembly, for reports.</summary>
+        private string PathOf(Occurrence occurrence)
+        {
+            var ancestors = _ancestors[occurrence];
+            return ancestors.Length == 0
+                ? occurrence.Name
+                : string.Join("/", ancestors.Select(o => o.Name).Append(occurrence.Name));
         }
 
         private void Note(List<string> diagnostics)
@@ -414,6 +536,12 @@ public sealed class MateSet
             {
                 length = Math.Max(length, mate.A.Point.Length);
                 length = Math.Max(length, mate.B.Point.Length);
+                // A deep reference's local point can be small while its chain carries it
+                // far out — the composed starting world point sees that scale.
+                if (mate.A.Ancestors is not null)
+                    length = Math.Max(length, Evaluate(mate.A).Point.Length);
+                if (mate.B.Ancestors is not null)
+                    length = Math.Max(length, Evaluate(mate.B).Point.Length);
             }
             foreach (var occurrence in set.Assembly.Occurrences)
                 length = Math.Max(length, occurrence.Frame.Origin.Length);
@@ -422,20 +550,77 @@ public sealed class MateSet
 
         // ---- residuals ----
 
-        private readonly record struct End(int Block, Vector3d Origin, Vector3d Point, Vector3d Direction);
+        /// <summary>One free occurrence a mate end's pose composes through: its variable
+        /// block and its composed WORLD origin — the moment arm of its rotation columns.</summary>
+        private readonly record struct Contribution(int Block, Vector3d Origin);
+
+        private readonly record struct End(Contribution[] Contributions, Vector3d Point, Vector3d Direction);
+
+        private static readonly Contribution[] NoContributions = [];
 
         private End Evaluate(in MateRef reference)
         {
             if (reference.Occurrence is not { } occurrence)
-                return new End(-1, Vector3d.Zero, reference.Point, reference.Direction);
-            bool free = _block.TryGetValue(occurrence, out int block);
-            var frame = free ? _poses[block] : occurrence.Frame;   // grounded: its frame is an input
+                return new End(NoContributions, reference.Point, reference.Direction);
+            if (reference.Ancestors is not { } ancestors)
+            {
+                // Direct occurrence: its local frame IS its world frame. Kept as its own
+                // arithmetic (no identity composition) so one-level solves stay
+                // bit-identical to the original single-level solver.
+                bool free = _block.TryGetValue(occurrence, out int block);
+                var frame = free ? _poses[block] : occurrence.Frame;   // grounded: an input
+                return new End(
+                    free ? [new Contribution(block, frame.Origin)] : NoContributions,
+                    frame.ToWorld(reference.Point),
+                    frame.ToWorldVector(reference.Direction));
+            }
+
+            // Cross-level: compose the chain outermost-first, collecting a Jacobian
+            // contribution for every link that is a solver variable — the chain rule
+            // through the frame chain, expressed as "which world origins can this end
+            // rotate about".
+            var contributions = new List<Contribution>(2);
+            Frame3d world = default;
+            bool first = true;
+            foreach (var link in ancestors)
+            {
+                world = Compose(link, world, first, contributions);
+                first = false;
+            }
+            world = Compose(occurrence, world, first, contributions);
             return new End(
-                free ? block : -1,
-                frame.Origin,
-                frame.ToWorld(reference.Point),
-                frame.ToWorldVector(reference.Direction));
+                [.. contributions],
+                world.ToWorld(reference.Point),
+                world.ToWorldVector(reference.Direction));
         }
+
+        /// <summary>Composes one chain link onto the running world frame, using the
+        /// working pose when the link is a variable, and records its contribution.</summary>
+        private Frame3d Compose(Occurrence link, in Frame3d parent, bool first, List<Contribution> contributions)
+        {
+            bool free = _block.TryGetValue(link, out int block);
+            var local = free ? _poses[block] : link.Frame;
+            var world = first ? local : local.Then(parent);
+            if (free)
+                contributions.Add(new Contribution(block, world.Origin));
+            return world;
+        }
+
+        /// <summary>A free occurrence's ancestor world frame from the CURRENT working
+        /// poses, or null for a direct occurrence.</summary>
+        private Frame3d? AncestorWorld(Occurrence occurrence)
+        {
+            var ancestors = _ancestors[occurrence];
+            if (ancestors.Length == 0)
+                return null;
+            var world = LocalPose(ancestors[0]);
+            for (int i = 1; i < ancestors.Length; i++)
+                world = LocalPose(ancestors[i]).Then(world);
+            return world;
+        }
+
+        private Frame3d LocalPose(Occurrence occurrence) =>
+            _block.TryGetValue(occurrence, out int block) ? _poses[block] : occurrence.Frame;
 
         /// <summary>Fills the residual vector and returns the largest absolute entry.</summary>
         private double Evaluate(double[] residual)
@@ -502,18 +687,26 @@ public sealed class MateSet
         /// <summary>Derivative of an end's world point and direction with respect to
         /// variable <paramref name="column"/>. Translation variables move the point and
         /// leave the direction; rotation variables (scaled by the characteristic length so
-        /// the columns are O(1)) rotate both about the occurrence's own origin.</summary>
+        /// the columns are O(1)) rotate both about the owning occurrence's composed WORLD
+        /// origin — for a cross-level end that is the chain rule: a perturbation of any
+        /// free link in the chain is a world-space rigid motion of everything below it,
+        /// so the formulas are the one-level ones with the moment arm read off the chain.
+        /// At most one contribution owns a given column (an occurrence appears once per
+        /// chain — cycles are rejected at Assembly.Add).</summary>
         private (Vector3d Point, Vector3d Direction) Derivative(in End end, int column)
         {
-            if (end.Block < 0)
-                return (Vector3d.Zero, Vector3d.Zero);
-            int local = column - end.Block * 6;
-            if (local < 0 || local >= 6)
-                return (Vector3d.Zero, Vector3d.Zero);
-            if (local < 3)
-                return (Unit(local), Vector3d.Zero);
-            var axis = Unit(local - 3);
-            return (axis.Cross(end.Point - end.Origin) / _length, axis.Cross(end.Direction) / _length);
+            foreach (var contribution in end.Contributions)
+            {
+                int local = column - contribution.Block * 6;
+                if (local < 0 || local >= 6)
+                    continue;
+                if (local < 3)
+                    return (Unit(local), Vector3d.Zero);
+                var axis = Unit(local - 3);
+                return (axis.Cross(end.Point - contribution.Origin) / _length,
+                        axis.Cross(end.Direction) / _length);
+            }
+            return (Vector3d.Zero, Vector3d.Zero);
         }
 
         private static Vector3d Unit(int index) => index switch
@@ -618,18 +811,40 @@ public sealed class MateSet
         }
 
         /// <summary>Moves the poses by −<paramref name="step"/> (the step solves
-        /// <c>A δ = Jᵀr</c>, and Gauss–Newton descends against the gradient).</summary>
+        /// <c>A δ = Jᵀr</c>, and Gauss–Newton descends against the gradient). A variable
+        /// is a WORLD-space perturbation, so a deep occurrence's step is applied to its
+        /// composed world frame and pulled back through its ancestors into the parent's
+        /// coordinates — where <see cref="Occurrence.Frame"/> lives. Ancestor frames are
+        /// snapshotted BEFORE any pose is written: an occurrence and its free ancestor
+        /// update in the same step, and both pullbacks must read one consistent pre-step
+        /// configuration (the linearization the Jacobian described).</summary>
         private void Apply(double[] step)
         {
+            var ancestorWorlds = new Frame3d?[_free.Count];
+            for (int i = 0; i < _free.Count; i++)
+                ancestorWorlds[i] = AncestorWorld(_free[i]);
+
             for (int i = 0; i < _free.Count; i++)
             {
-                var frame = _poses[i];
                 var translation = new Vector3d(-step[i * 6], -step[i * 6 + 1], -step[i * 6 + 2]);
                 // Rotation variables were scaled by the characteristic length; undo that
                 // to get the true rotation vector.
                 var rotation = new Vector3d(-step[i * 6 + 3], -step[i * 6 + 4], -step[i * 6 + 5]) / _length;
-                _poses[i] = Frame3d.FromXY(
-                    frame.Origin + translation, Rotate(frame.X, rotation), Rotate(frame.Y, rotation));
+
+                if (ancestorWorlds[i] is not { } ancestor)
+                {
+                    // Direct occurrence: local == world. Kept verbatim (no identity
+                    // composition) so one-level solves stay bit-identical.
+                    var frame = _poses[i];
+                    _poses[i] = Frame3d.FromXY(
+                        frame.Origin + translation, Rotate(frame.X, rotation), Rotate(frame.Y, rotation));
+                    continue;
+                }
+
+                var world = _poses[i].Then(ancestor);
+                var moved = Frame3d.FromXY(
+                    world.Origin + translation, Rotate(world.X, rotation), Rotate(world.Y, rotation));
+                _poses[i] = moved.Then(ancestor.Inverse());
             }
         }
 
