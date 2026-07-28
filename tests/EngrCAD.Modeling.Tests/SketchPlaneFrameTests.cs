@@ -115,20 +115,17 @@ public class SketchPlaneFrameTests
         solid.Validate();
         var mesh = BRepTessellator.Tessellate(solid, n, 24);
         Assert.True(mesh.IsClosed);
-        // Bores drilled into extruded side faces don't hit the inscribed-ngon volume
-        // exactly (verified pre-existing with a manually placed SketchPlane.At of the
-        // same pose, ~5e-5 here). The cause is now known and is NOT the triangulation:
-        // the bore's rim on this face is a 57-sample PolylineCurve3d baked in by the
-        // marching tracer at boolean time, because plane-as-bounded-extrusion meets
-        // cylinder is not one of SurfaceIntersection's analytic pairs, while the same
-        // hole drilled into the top cap — where the rim IS an exact Circle3d — lands
-        // within 1e-13. The rim's fixed 57-gon is a floor no sampling density can
-        // lower, which is why the error does not converge: -7.4e-4 / -5.3e-5 / +4.7e-5
-        // / +6.5e-5 at 32/64/128/256 segments, changing sign as the analytic reference's
-        // n-gon crosses it. Filed against SurfaceIntersection in todo.md. The bound
-        // still catches any misplacement of the face frame.
+        // Exact as an identity, like the same hole drilled into the top cap. It was not
+        // always: the bore's rim on this face used to be a 57-sample PolylineCurve3d
+        // baked in by the marching tracer at boolean time, because a plane arriving as a
+        // bounded extrusion was not one of SurfaceIntersection's analytic pairs. That
+        // fixed 57-gon was a floor no sampling density could lower, so the error did not
+        // converge — -7.4e-4 / -5.3e-5 / +4.7e-5 / +6.5e-5 at 32/64/128/256 segments,
+        // changing sign as the analytic reference's n-gon crossed it. Now the rim is the
+        // exact Circle3d the wall's plane genuinely carries and the same four densities
+        // read 7.1e-14 / 6.8e-14 / 4.3e-14 / -5.3e-14.
         double exact = 24 - NgonArea(n, 0.3) * 1; // blind flat-bottom hole into the side
-        Assert.True(Math.Abs(mesh.Volume() - exact) < 1e-4, $"volume {mesh.Volume()} vs {exact}");
+        Assert.True(Math.Abs(mesh.Volume() - exact) < 1e-12, $"volume {mesh.Volume()} vs {exact}");
     }
 
     [Fact]

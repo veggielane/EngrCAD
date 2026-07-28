@@ -92,8 +92,21 @@ public static class SurfaceIntersection
         // unclipped carrier line slices clean across neighbouring pockets (the trap that
         // breaks glyph-scale engraving). Two unbounded planes clip to the region only,
         // exactly as before.
-        if (TryPlanarPatch(a, out var patchA) && TryPlanarPatch(b, out var patchB))
+        bool planarA = TryPlanarPatch(a, out var patchA);
+        bool planarB = TryPlanarPatch(b, out var patchB);
+        if (planarA && planarB)
             return PlanarPatches(patchA, patchB, region);
+
+        // A bore drilled into an extruded SIDE wall meets its cylinder in exactly the
+        // circle the identical bore on a cap does — but only if the wall is recognized
+        // as the plane it is. Without this the rim came back as a fixed ~57-sample
+        // tracer polyline whose volume error no tessellation density could lower.
+        // BOUNDED patches only: an unbounded PlaneSurface keeps the switch path below
+        // verbatim, so nothing that worked before takes a new route.
+        if (planarA && patchA.Bounded && TryPatchQuadric(patchA, b, region, out var wallCurvesA))
+            return wallCurvesA;
+        if (planarB && patchB.Bounded && TryPatchQuadric(patchB, a, region, out var wallCurvesB))
+            return wallCurvesB;
 
         return (a, b) switch
         {
@@ -420,6 +433,96 @@ public static class SurfaceIntersection
         tMin = Math.Max(tMin, lo);
         tMax = Math.Min(tMax, hi);
         return tMin < tMax;
+    }
+
+    /// <summary>
+    /// A BOUNDED planar carrier meeting a quadric: the SAME exact analytic curves the main
+    /// dispatch would produce for a real <see cref="PlaneSurface"/>, accepted only when
+    /// they lie WHOLLY inside the patch's parallelogram. That is the drilled-side-wall case
+    /// — a bore's rim circle sits well inside the wall it pierces — and it is what makes a
+    /// side bore converge like a cap bore instead of flooring at the tracer's fixed sample
+    /// count (measured: a blind Ø0.6 bore in a 4×3×2 plate's side went from a −7.4e-4 …
+    /// +6.5e-5 wandering error at 32…256 segments to quadratic convergence).
+    /// </summary>
+    /// <remarks>
+    /// <para>The carrier cases mirror <see cref="Intersect"/>'s switch deliberately rather
+    /// than sharing code with it: the switch is the boolean pipeline's whole regression
+    /// surface, and an unbounded <see cref="PlaneSurface"/> must keep taking it verbatim.</para>
+    /// <para>Containment is decided EXACTLY, not by sampling: the patch coordinates (s, t)
+    /// are affine in the point, so on a conic each runs centre ± hypot(a, b) over the two
+    /// semi-axis images — a closed-form range. A conic that pokes out of the wall, and the
+    /// axis-parallel line pair, both return false and fall through to the marching tracer
+    /// exactly as before. Clipping a conic to the wall's rim would produce arcs whose
+    /// endpoints must weld to a face boundary; that is separate work, not a silent
+    /// side effect of this one.</para>
+    /// </remarks>
+    private static bool TryPatchQuadric(
+        in PlanarPatch patch, Surface other, in Aabb region, out List<Curve3d> curves)
+    {
+        var plane = patch.Plane;
+        switch (other)
+        {
+            case CylinderSurface cylinder:
+                curves = PlaneCylinder(plane, cylinder, region);
+                break;
+            case SphereSurface sphere:
+                curves = PlaneSphere(plane, sphere);
+                break;
+            // A bore's wall arrives as a full-turn revolve of a straight axis-parallel
+            // generator; PlaneRevolved keeps the generator's BOUNDED axial extent (no
+            // circle is invented above the bore's end) and phase-aligns to u = 0.
+            case RevolvedSurface revolved when IsPerpendicularFullTurn(plane, revolved):
+                curves = PlaneRevolved(plane, revolved);
+                break;
+            case RevolvedSurface revolved when TrySphereCarrier(revolved, out var carrier):
+                curves = PlaneSphere(plane, carrier);
+                break;
+            default:
+                curves = [];
+                return false;
+        }
+        if (curves.Count == 0)
+            return true; // the infinite plane misses the quadric, so the wall does too
+
+        var normal = patch.E1.Cross(patch.E2);
+        double scale = normal.LengthSquared;
+        // Degenerate parallelograms are rejected at construction; a division-by-zero
+        // backstop, not a model tolerance.
+        if (scale <= 0)
+            return false;
+        var sRow = patch.E2.Cross(normal) / scale;
+        var tRow = normal.Cross(patch.E1) / scale;
+
+        foreach (var curve in curves)
+        {
+            Vector3d centre, axisX, axisY;
+            switch (curve)
+            {
+                case Circle3d c:
+                    (centre, axisX, axisY) = (c.Center, c.XDirection * c.Radius, c.YDirection * c.Radius);
+                    break;
+                case Ellipse3d e:
+                    (centre, axisX, axisY) = (e.Center, e.SemiAxisX, e.SemiAxisY);
+                    break;
+                default:
+                    return false; // the axis-parallel line pair: defer to the tracer
+            }
+            var offset = centre - patch.Corner;
+            if (!WithinUnitRange(offset.Dot(sRow), axisX.Dot(sRow), axisY.Dot(sRow)) ||
+                !WithinUnitRange(offset.Dot(tRow), axisX.Dot(tRow), axisY.Dot(tRow)))
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Whether centre + a·cos θ + b·sin θ stays in [0, 1] for every θ — its exact range is
+    /// centre ± hypot(a, b).
+    /// </summary>
+    private static bool WithinUnitRange(double centre, double a, double b)
+    {
+        double amplitude = Math.Sqrt(a * a + b * b);
+        return centre - amplitude >= 0 && centre + amplitude <= 1;
     }
 
     /// <summary>

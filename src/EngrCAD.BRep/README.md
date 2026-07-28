@@ -396,6 +396,21 @@ operations. Depends only on `EngrCAD.Core`.
     query region AND to each bounded carrier's parallelogram (two slab clips in the
     patch's own (s, t) coordinates). Straightness is decided by SAMPLING the actual
     generator at the 1e-9 weld tier; `Underlying` is only a type hint.
+  - **A bounded planar carrier ∩ a quadric** (`TryPatchQuadric`) — the SAME exact curves
+    the main switch produces for a real `PlaneSurface` (cylinder, sphere, revolve ⊥ its
+    axis, sphere-carrier revolve), accepted only when the conic lies WHOLLY inside the
+    parallelogram. This is the drilled-side-wall case: a bore's rim on an extruded wall
+    used to come back as a fixed ~57-sample tracer polyline while the identical bore on a
+    flat cap got a `Circle3d`, so the wall bore's volume error *floored* — measured
+    −7.4e-4 / −5.3e-5 / +4.7e-5 / +6.5e-5 at 32/64/128/256 segments, wandering rather than
+    converging — and is now 7.1e-14 / 6.8e-14 / 4.3e-14 / −5.3e-14, exact as an identity.
+    **Containment is closed-form, not sampled**: the patch's (s, t) coordinates are affine
+    in the point, so on a conic each runs `centre ± hypot(a, b)` over the two semi-axis
+    images. A conic that pokes out of the wall, and the axis-parallel line pair, both
+    defer to the tracer — clipping a conic to the wall's rim would produce arcs whose ends
+    must weld to a face boundary, which is separate work. **BOUNDED patches only**: an
+    unbounded `PlaneSurface` still takes the main switch verbatim, so nothing in the
+    boolean pipeline's regression surface changed route.
 
   These replaced the marching tracer for these pairs, which was the root cause of
   "subtracting a straight-edged sketch extrusion silently produces an open mesh": the

@@ -398,6 +398,85 @@ public class SurfaceIntersectionTests
         Assert.Empty(SurfaceIntersection.Intersect(a, b, PlateRegion));
     }
 
+    // ---- bounded planar carriers meeting a quadric: the drilled side wall ----
+
+    // A wall in the plane y = -2.5 spanning x ∈ [-5, 5], z ∈ [1, 2.5].
+    private static ExtrudedSurface Wall() => PocketWall();
+
+    [Fact]
+    public void BoreThroughAnExtrudedWall_RimIsTheExactCircle()
+    {
+        // THE regression this path exists for. A bore drilled into an extruded SIDE face
+        // used to get a fixed ~57-sample tracer polyline for its rim while the identical
+        // bore on a flat cap got a Circle3d — a volume-error floor no tessellation
+        // density could lower. The wall IS a plane; the rim IS that plane's circle.
+        var wall = Wall();
+        var bore = new CylinderSurface((0, 0, 1.75), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+
+        var circle = Assert.IsType<Circle3d>(
+            Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion)));
+        Assert.Equal(0, circle.Center.DistanceTo((0, -2.5, 1.75)), 12);
+        Assert.Equal(0.3, circle.Radius, 12);
+        // Phase alignment survives: the circle keeps the CYLINDER's own frame, so the
+        // bore band's grid and this rim sample identical points.
+        Assert.Equal(0, circle.PointAt(0).DistanceTo((0.3, -2.5, 1.75)), 12);
+    }
+
+    [Fact]
+    public void BoreThroughAnExtrudedWall_RevolvedToolWallAlsoResolvesExactly()
+    {
+        // Drill tools are axis-touching REVOLVES, not extruded circles, so the revolved
+        // carrier is the case that actually fires in the Shape pipeline.
+        var wall = Wall();
+        var bore = new RevolvedSurface(
+            new Line3d((0.3, -2.5, 1.75), (0.3, -1.0, 1.75)), (0, -2.5, 1.75), Vector3d.UnitY,
+            2 * Math.PI);
+
+        var circle = Assert.IsType<Circle3d>(
+            Assert.Single(SurfaceIntersection.Intersect(wall, bore, PlateRegion)));
+        Assert.Equal(0, circle.Center.DistanceTo((0, -2.5, 1.75)), 12);
+        Assert.Equal(0.3, circle.Radius, 12);
+    }
+
+    [Fact]
+    public void BoreCrossingTheWallsEdge_FabricatesNoCircle()
+    {
+        // Containment is exact, and a conic that pokes out of the parallelogram must fall
+        // back rather than be silently clipped or — far worse — returned whole: an arc's
+        // ends would have to weld to the wall's own rim, which is separate work. (The
+        // tracer it defers to reports nothing here, its own pre-existing limitation on
+        // partial rims over a bounded extrusion; what this pins is that the analytic path
+        // does not paper over that with a circle the wall does not carry.)
+        var wall = Wall();
+        var bore = new CylinderSurface((4.9, 0, 1.75), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+
+        Assert.DoesNotContain(SurfaceIntersection.Intersect(wall, bore, PlateRegion), c => c is Circle3d);
+    }
+
+    [Fact]
+    public void BoreAboveTheWall_NoCurve()
+    {
+        // The plane the wall lies in still meets the cylinder, but the wall itself does
+        // not: the exact (s, t) range test rejects the circle, and the tracer finds
+        // nothing on the bounded surface either.
+        var wall = Wall();
+        var bore = new CylinderSurface((0, 0, 5), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+        Assert.Empty(SurfaceIntersection.Intersect(wall, bore, PlateRegion));
+    }
+
+    [Fact]
+    public void UnboundedPlaneMeetingACylinder_KeepsTheOriginalPath()
+    {
+        // The bounded-patch branch must never capture a real PlaneSurface: the boolean
+        // pipeline's whole regression surface runs through the main switch.
+        var plane = new PlaneSurface((0, -2.5, 0), Vector3d.UnitX, Vector3d.UnitZ);
+        var bore = new CylinderSurface((0, 0, 1.75), Vector3d.UnitX, Vector3d.UnitZ, 0.3);
+
+        var circle = Assert.IsType<Circle3d>(
+            Assert.Single(SurfaceIntersection.Intersect(plane, bore, PlateRegion)));
+        Assert.Equal(0.3, circle.Radius, 12);
+    }
+
     [Fact]
     public void ExtrudedCurvedGenerator_StillMarches()
     {
