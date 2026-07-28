@@ -395,7 +395,7 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     vertex count. Queued edge ids are recycled, so every pop re-validates *and* re-canonicalizes
     (a collapse merges edge pairs, so the survivor is generally named by the other half).
     Both stay fully deterministic: FIFO queues, fixed stride, no RNG.
-  - Measured (Release, win-arm64, `UvSphere(1, 96, 64)` = 12 096 faces → target 0.05, against
+  - Measured (Release, win-x64, `UvSphere(1, 96, 64)` = 12 096 faces → target 0.05, against
     a `MeshProjectionTarget` of itself; see `RemesherSchedulingBenchmark`): at 40 passes,
     sweep **777 ms**, queue **532 ms** (1.46×), queue + 4 fast-split passes **331 ms**
     (2.35×). **Neither feature pays on its own under sweep scheduling, and that is the

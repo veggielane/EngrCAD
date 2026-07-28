@@ -21,7 +21,7 @@ namespace EngrCAD.Mesh.Tests;
 /// binary's throughput by 3.7× across runs).
 /// </para>
 /// <para>
-/// Reference machine (win-arm64, .NET 10.0.302, Release, otherwise idle). Input is
+/// Reference machine (win-x64, .NET 10.0.302, Release, otherwise idle). Input is
 /// <c>UvSphere(1, 96, 64)</c> triangulated — 12 096 faces — remeshed to a target edge of
 /// 0.05 against a <see cref="MeshProjectionTarget"/> of itself:
 /// </para>
