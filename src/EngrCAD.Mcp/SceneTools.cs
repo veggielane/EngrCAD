@@ -206,6 +206,19 @@ public sealed class SceneTools(SceneSession session)
     /// cuts the model open along that axis.</param>
     /// <param name="sectionOffset">Offset of the section plane along its axis;
     /// omitting it means no section.</param>
+    /// <param name="sectionPlanes">Up to 4 general section planes as [nx, ny, nz,
+    /// offset] rows — two perpendicular planes make the classic quarter cut, three an
+    /// octant. Mutually exclusive with <paramref name="sectionAxis"/>.</param>
+    /// <param name="sectionCombine">How several planes combine: "intersection" (the
+    /// quarter/octant cutaway, default) or "union" (clip beyond any plane).</param>
+    /// <param name="cameraYaw">Explicit orbit yaw in degrees (0 looks along −X toward
+    /// +X; the iso view is −45). Mutually exclusive with <paramref name="view"/>.</param>
+    /// <param name="cameraPitch">Explicit orbit pitch in degrees (positive looks down).</param>
+    /// <param name="cameraDistance">Explicit orbit distance; omitted = auto-framed.</param>
+    /// <param name="cameraTarget">Orbit target [x, y, z]; omitted = scene centre.</param>
+    /// <param name="cameraEye">Eye position [x, y, z] — the pose is derived from
+    /// eye→target (the orbit camera is Z-up and cannot roll). Mutually exclusive with
+    /// <paramref name="cameraYaw"/>/<paramref name="cameraPitch"/>/<paramref name="cameraDistance"/>.</param>
     /// <param name="width">Image width in pixels (default 1280).</param>
     /// <param name="height">Image height in pixels (default 800).</param>
     /// <param name="ambientOcclusion">Baked ambient occlusion (default on).</param>
@@ -220,6 +233,24 @@ public sealed class SceneTools(SceneSession session)
         string? sectionAxis = null,
         [Description("Position of the section plane along its axis. Omit for no section.")]
         double? sectionOffset = null,
+        [Description("Up to 4 general section planes, each [nx, ny, nz, offset] (keep the point where "
+                   + "normal . p > offset). Two perpendicular planes = quarter cut, three = octant. "
+                   + "Use INSTEAD of sectionAxis/sectionOffset.")]
+        double[][]? sectionPlanes = null,
+        [Description("How several sectionPlanes combine: intersection (quarter/octant cutaway, "
+                   + "default) or union (clip beyond any plane).")]
+        string? sectionCombine = null,
+        [Description("Explicit camera: orbit yaw in degrees. Use instead of 'view'.")]
+        double? cameraYaw = null,
+        [Description("Explicit camera: orbit pitch in degrees (positive looks down from above).")]
+        double? cameraPitch = null,
+        [Description("Explicit camera: orbit distance from the target. Omit to auto-frame.")]
+        double? cameraDistance = null,
+        [Description("Explicit camera: orbit target [x, y, z]. Omit for the scene centre.")]
+        double[]? cameraTarget = null,
+        [Description("Explicit camera: eye position [x, y, z]; pose derived from eye toward target. "
+                   + "Use instead of cameraYaw/cameraPitch/cameraDistance.")]
+        double[]? cameraEye = null,
         [Description("Image width in pixels, 16-4096 (default 1280).")] int width = 1280,
         [Description("Image height in pixels, 16-4096 (default 800).")] int height = 800,
         [Description("Baked ambient occlusion — depth shading in pockets and bores (default true).")]
@@ -231,11 +262,24 @@ public sealed class SceneTools(SceneSession session)
             return Error("width and height must be between 16 and 4096 pixels.");
         if (!TryResolveStyle(style, out var viewStyle, out string? styleError))
             return Error(styleError);
-        if (view is not null && !view.Equals("default", StringComparison.OrdinalIgnoreCase)
-            && StandardViews.DirectionFor(view) is null)
-            return Error($"Unknown view '{view}' — use one of: {string.Join(", ", StandardViews.Names)}.");
+        bool explicitCamera = cameraYaw is not null || cameraPitch is not null
+            || cameraDistance is not null || cameraTarget is not null || cameraEye is not null;
+        if (view is not null && explicitCamera)
+            return Error("Pass either a named view or explicit camera parameters, not both.");
+        if (!explicitCamera && view is not null
+            && !view.Equals("default", StringComparison.OrdinalIgnoreCase)
+            && NamedViews.DirectionFor(view) is null)
+            return Error($"Unknown view '{view}' — use one of: {string.Join(", ", NamedViews.Names)}.");
+        if (cameraEye is not null && (cameraYaw is not null || cameraPitch is not null || cameraDistance is not null))
+            return Error("cameraEye already fixes the pose — do not combine it with "
+                       + "cameraYaw/cameraPitch/cameraDistance.");
         if (!TryResolveSection(sectionAxis, sectionOffset, out var axis, out double? offset, out string? sectionError))
             return Error(sectionError);
+        if (!TryResolveSectionPlanes(sectionPlanes, sectionCombine, out var planes, out var combine,
+                out string? planesError))
+            return Error(planesError);
+        if (planes is not null && offset is not null)
+            return Error("Pass either sectionPlanes or sectionAxis/sectionOffset, not both.");
         if (!TryResolveInstances(tab, part, out var instances, out string? scopeError))
             return Error(scopeError);
         if (instances.Count == 0)
@@ -251,7 +295,13 @@ public sealed class SceneTools(SceneSession session)
         try
         {
             PrepareGeometry(tab, part, instances);
-            camera = StandardViews.For(view ?? "iso", instances, Session.Quality);
+            camera = explicitCamera
+                ? ExplicitCamera(cameraYaw, cameraPitch, cameraDistance, cameraTarget, cameraEye, instances)
+                : NamedViews.For(view ?? "iso", instances, Session.Quality);
+        }
+        catch (ArgumentException e)
+        {
+            return Error(e.Message);
         }
         catch (Exception e)
         {
@@ -267,7 +317,8 @@ public sealed class SceneTools(SceneSession session)
             lock (RenderGate)
             {
                 OffscreenRenderer.RenderToImage(instances, temporary, width, height, camera,
-                    furniture: true, viewStyle, axis, offset, ambientOcclusion);
+                    furniture: true, viewStyle, axis, offset, ambientOcclusion,
+                    sectionPlanes: planes, sectionCombine: combine);
             }
             png = File.ReadAllBytes(temporary);
         }
@@ -283,7 +334,10 @@ public sealed class SceneTools(SceneSession session)
         string scope = part is not null ? $"part '{part}'" : tab is not null ? $"tab '{tab}'" : "scene";
         string sectionText = offset is { } o
             ? string.Create(CultureInfo.InvariantCulture, $", section {axis.ToString().ToLowerInvariant()} at {o:G6}")
-            : "";
+            : planes is { } p
+                ? $", {p.Count} section plane(s) ({combine.ToString().ToLowerInvariant()})"
+                : "";
+        string viewText = explicitCamera ? "explicit camera" : $"{view ?? "iso"} view";
         return new CallToolResult
         {
             Content =
@@ -291,11 +345,101 @@ public sealed class SceneTools(SceneSession session)
                 ImageContentBlock.FromBytes(png, "image/png"),
                 new TextContentBlock
                 {
-                    Text = $"{scope}, {view ?? "iso"} view, {viewStyle.ToString().ToLowerInvariant()}"
+                    Text = $"{scope}, {viewText}, {viewStyle.ToString().ToLowerInvariant()}"
                          + $"{sectionText} — {width}x{height}, {instances.Count} instance(s).",
                 },
             ],
         };
+    }
+
+    /// <summary>Builds the orbit camera from explicit parameters. Yaw/pitch arrive in
+    /// degrees (assistant-friendly); an eye position fixes pose AND distance toward the
+    /// target. Anything omitted falls back to the auto-framed iso equivalent: iso pose,
+    /// framing distance, scene centre.</summary>
+    private CameraState ExplicitCamera(
+        double? yawDegrees, double? pitchDegrees, double? distance,
+        double[]? targetXyz, double[]? eyeXyz, IReadOnlyList<PartInstance> instances)
+    {
+        if (targetXyz is not null && targetXyz.Length != 3)
+            throw new ArgumentException("cameraTarget must be [x, y, z].");
+        if (eyeXyz is not null && eyeXyz.Length != 3)
+            throw new ArgumentException("cameraEye must be [x, y, z].");
+
+        var bounds = Aabb.Empty;
+        foreach (var instance in instances)
+            bounds = bounds.Union(instance.Bounds(Session.Quality));
+        var target = targetXyz is not null
+            ? new Vector3d(targetXyz[0], targetXyz[1], targetXyz[2])
+            : bounds.IsEmpty ? Vector3d.Zero : bounds.Center;
+
+        if (eyeXyz is not null)
+        {
+            var eye = new Vector3d(eyeXyz[0], eyeXyz[1], eyeXyz[2]);
+            var toEye = eye - target;
+            if (toEye.Length <= 0)
+                throw new ArgumentException("cameraEye must not coincide with the target.");
+            var (yaw, pitch) = NamedViews.PoseFor(toEye);
+            return new CameraState(yaw, pitch, toEye.Length, target);
+        }
+
+        var isoPose = NamedViews.PoseFor(NamedViews.DirectionFor("iso")!.Value);
+        return new CameraState(
+            yawDegrees is { } y ? y * Math.PI / 180 : isoPose.Yaw,
+            Math.Clamp(pitchDegrees is { } p ? p * Math.PI / 180 : isoPose.Pitch,
+                -CameraMath.PitchLimit, CameraMath.PitchLimit),
+            distance ?? CameraMath.FrameDistance(bounds),
+            target);
+    }
+
+    private static bool TryResolveSectionPlanes(
+        double[][]? rows, string? combineName,
+        out IReadOnlyList<SectionPlane>? planes, out SectionCombine combine, out string? error)
+    {
+        planes = null;
+        combine = SectionCombine.Intersection;
+        error = null;
+        switch (combineName?.ToLowerInvariant())
+        {
+            case null or "" or "intersection": break;
+            case "union": combine = SectionCombine.Union; break;
+            default:
+                error = $"Unknown sectionCombine '{combineName}' — use intersection or union.";
+                return false;
+        }
+        if (rows is null or { Length: 0 })
+        {
+            if (combineName is not null && rows is null)
+            {
+                error = "sectionCombine needs sectionPlanes.";
+                return false;
+            }
+            return true;
+        }
+        if (rows.Length > ViewerShaders.MaxSectionPlanes)
+        {
+            error = $"At most {ViewerShaders.MaxSectionPlanes} section planes are supported.";
+            return false;
+        }
+        var list = new List<SectionPlane>(rows.Length);
+        foreach (var row in rows)
+        {
+            if (row is not { Length: 4 })
+            {
+                error = "Each section plane must be [nx, ny, nz, offset].";
+                return false;
+            }
+            var normal = new Vector3d(row[0], row[1], row[2]);
+            if (normal.Length <= 0)
+            {
+                error = "A section plane's normal must be non-zero.";
+                return false;
+            }
+            // The clip rule is dot(world, normal) > offset, so normalizing the normal
+            // must rescale the offset to keep the same geometric plane.
+            list.Add(new SectionPlane(normal / normal.Length, row[3] / normal.Length));
+        }
+        planes = list;
+        return true;
     }
 
     /// <summary>
@@ -306,10 +450,16 @@ public sealed class SceneTools(SceneSession session)
     public CallToolResult Export(
         [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .png).")]
         string path,
-        [Description("Export only this tab (omit for the whole scene).")] string? tab = null)
+        [Description("Export only this tab (omit for the whole scene).")] string? tab = null,
+        [Description("Image width in pixels for .png exports, 16-4096 (default 1280).")]
+        int width = 1280,
+        [Description("Image height in pixels for .png exports, 16-4096 (default 800).")]
+        int height = 800)
     {
         if (string.IsNullOrWhiteSpace(path))
             return Error("export needs a file path ending in .step, .stl, .obj, or .png.");
+        if (width is < 16 or > 4096 || height is < 16 or > 4096)
+            return Error("width and height must be between 16 and 4096 pixels.");
         if (!TryResolveInstances(tab, part: null, out var instances, out string? scopeError))
             return Error(scopeError);
         if (instances.Count == 0)
@@ -319,7 +469,7 @@ public sealed class SceneTools(SceneSession session)
         if (extension == ".png")
         {
             return EngrCad.CanRenderToImage
-                ? ExportPng(path, instances)
+                ? ExportPng(path, instances, width, height)
                 : Error("Offscreen rendering is not available on this machine "
                       + $"({OffscreenRenderer.UnavailableReason ?? "no GL/EGL context"}); "
                       + "export .step, .stl, or .obj instead.");
@@ -361,6 +511,209 @@ public sealed class SceneTools(SceneSession session)
             return Error($"Export failed: {e.GetType().Name}: {e.Message}");
         }
     }
+
+    // ---- write tools: parametric editing through FeatureHistory ----
+
+    /// <summary>
+    /// Sets one <c>[Param]</c> value on a feature of a history-backed part and
+    /// regenerates. The tool result IS the <see cref="RegenerationResult"/>: per-feature
+    /// outcomes (applied/cached/suppressed/failed/skipped) with timings. Regeneration
+    /// semantics are <see cref="FeatureHistory"/>'s own — validation first, a failure
+    /// keeps the last good prefix and skips the rest — and on failure the part
+    /// additionally keeps its previous complete geometry, which the error text says.
+    /// </summary>
+    public CallToolResult SetParam(
+        [Description("Part name (must have a parametric feature history); \"tab/part\" also works.")]
+        string part,
+        [Description("Feature name as shown in the construction tree (\"Boss\", \"Boss.2\", ...).")]
+        string feature,
+        [Description("Parameter (property) name on that feature, e.g. \"Height\".")]
+        string param,
+        [Description("New value as JSON: number, boolean, string/enum name, or [x,y]/[x,y,z] vector.")]
+        JsonElement value,
+        [Description("Tab to look in, when the same part name exists in several.")] string? tab = null)
+    {
+        if (!TryResolveFeature(part, tab, feature, out var found, out var error))
+            return Error(error);
+        var (target, history, resolved) = found;
+
+        var parameter = resolved.Parameters.FirstOrDefault(
+            p => string.Equals(p.Name, param, StringComparison.Ordinal));
+        if (parameter is null)
+        {
+            return Error($"Feature '{feature}' has no parameter named '{param}'. "
+                       + $"Parameters: {DescribeParameters(resolved)}.");
+        }
+
+        // One (feature, param, value) override through the SAME JSON seam SaveParameters/
+        // LoadParameters use, so accepted spellings cannot drift between file and tool.
+        string overrideJson = new JsonObject
+        {
+            [feature] = new JsonObject { [param] = JsonNode.Parse(value.GetRawText()) },
+        }.ToJsonString();
+        var warnings = history.LoadParameters(overrideJson);
+        if (warnings.Count > 0)
+        {
+            // Feature and param were pre-validated, so a warning here is a value that
+            // did not convert (wrong JSON shape for the parameter's type).
+            return Error($"Could not set {feature}.{param} (type {TypeName(parameter.Type)}): "
+                       + string.Join("; ", warnings));
+        }
+
+        return Regenerated(target, new JsonObject
+        {
+            ["part"] = target.Name,
+            ["feature"] = feature,
+            ["param"] = param,
+            ["value"] = JsonNode.Parse(value.GetRawText()),
+        });
+    }
+
+    /// <summary>Suppresses a feature (it passes the body through untouched) and
+    /// regenerates — the headless twin of unticking it in a feature tree. Suppressing a
+    /// placement-style feature removes everything it contributed.</summary>
+    public CallToolResult SuppressFeature(
+        [Description("Part name (must have a parametric feature history); \"tab/part\" also works.")]
+        string part,
+        [Description("Feature name as shown in the construction tree.")] string feature,
+        [Description("Tab to look in, when the same part name exists in several.")] string? tab = null)
+        => SetSuppression(part, tab, feature, suppressed: true);
+
+    /// <summary>Un-suppresses a feature and regenerates (see <see cref="SuppressFeature"/>).</summary>
+    public CallToolResult UnsuppressFeature(
+        [Description("Part name (must have a parametric feature history); \"tab/part\" also works.")]
+        string part,
+        [Description("Feature name as shown in the construction tree.")] string feature,
+        [Description("Tab to look in, when the same part name exists in several.")] string? tab = null)
+        => SetSuppression(part, tab, feature, suppressed: false);
+
+    private CallToolResult SetSuppression(string part, string? tab, string feature, bool suppressed)
+    {
+        if (!TryResolveFeature(part, tab, feature, out var found, out var error))
+            return Error(error);
+        var (target, _, resolved) = found;
+        resolved.Suppressed = suppressed;
+        return Regenerated(target, new JsonObject
+        {
+            ["part"] = target.Name,
+            ["feature"] = feature,
+            ["suppressed"] = suppressed,
+        });
+    }
+
+    /// <summary>Runs <see cref="Part.Regenerate"/> and shapes the outcome: success is an
+    /// Ok payload carrying the per-feature statuses; a failed regeneration is an
+    /// <c>IsError</c> result that still carries them, plus the fact that the part kept
+    /// its previous geometry (the edit itself stays applied, exactly as in a feature
+    /// tree — fix the value, or set it back, and regenerate again).</summary>
+    private CallToolResult Regenerated(Part part, JsonObject payload)
+    {
+        RegenerationResult result;
+        try
+        {
+            result = part.Regenerate();
+        }
+        catch (Exception e)
+        {
+            return Error($"Regeneration threw: {e.GetType().Name}: {e.Message}");
+        }
+
+        bool geometryUpdated = result.Succeeded && result.Body is not null;
+        payload["generation"] = geometryUpdated ? Session.NoteMutation() : Session.Generation;
+        payload["succeeded"] = result.Succeeded;
+        payload["geometryUpdated"] = geometryUpdated;
+        var features = new JsonArray();
+        foreach (var status in result.Statuses)
+        {
+            var entry = new JsonObject
+            {
+                ["name"] = status.Name,
+                ["outcome"] = status.Outcome.ToString().ToLowerInvariant(),
+                ["elapsedMs"] = Math.Round(status.Elapsed.TotalMilliseconds, 1),
+            };
+            if (status.Error is { } statusError)
+                entry["error"] = statusError;
+            features.Add(entry);
+        }
+        payload["features"] = features;
+
+        if (!result.Succeeded)
+        {
+            var failed = result.Statuses.Where(s => s.Outcome == FeatureOutcome.Failed).ToList();
+            payload["note"] = "The part keeps its previous geometry; the parameter change stays "
+                            + "applied, so fix or revert it and regenerate (any edit regenerates).";
+            return new CallToolResult
+            {
+                IsError = true,
+                StructuredContent = JsonSerializer.SerializeToElement(payload),
+                Content =
+                [
+                    new TextContentBlock
+                    {
+                        Text = $"Regeneration failed at "
+                             + string.Join("; ", failed.Select(f => $"{f.Name}: {f.Error}"))
+                             + $" — the part keeps its previous geometry. Full statuses:\n"
+                             + payload.ToJsonString(Json),
+                    },
+                ],
+            };
+        }
+        return Ok(payload);
+    }
+
+    private bool TryResolveFeature(
+        string part, string? tab, string feature,
+        out (Part Part, FeatureHistory History, Feature Feature) found, out string? error)
+    {
+        found = default;
+        if (Session.FindPart(part, tab) is not { } match)
+        {
+            error = UnknownPart(part, tab);
+            return false;
+        }
+        if (match.Part.History is not { } history)
+        {
+            var withHistories = Session.Scene.Tabs
+                .SelectMany(t => t.AllParts.Where(p => p.History is not null).Select(p => $"{t.Name}/{p.Name}"))
+                .ToList();
+            error = $"Part '{match.Part.Name}' has no parametric feature history — only "
+                  + "history-backed parts can be edited. "
+                  + (withHistories.Count > 0
+                      ? $"Parts with histories: {string.Join(", ", withHistories)}."
+                      : "No part in this scene has one; edit the model's source and call reload instead.");
+            return false;
+        }
+        var resolved = history.Features.FirstOrDefault(
+            f => string.Equals(history.NameOf(f), feature, StringComparison.Ordinal));
+        if (resolved is null)
+        {
+            error = $"Part '{match.Part.Name}' has no feature named '{feature}'. Features: "
+                  + string.Join(", ", history.Features.Select(history.NameOf)) + ".";
+            return false;
+        }
+        found = (match.Part, history, resolved);
+        error = null;
+        return true;
+    }
+
+    private static string DescribeParameters(Feature feature) =>
+        string.Join(", ", feature.Parameters.Select(p =>
+        {
+            string range = double.IsNegativeInfinity(p.Min) && double.IsPositiveInfinity(p.Max)
+                ? ""
+                : string.Create(CultureInfo.InvariantCulture, $" in [{p.Min:G6}, {p.Max:G6}]");
+            return $"{p.Name} ({TypeName(p.Type)}{range})";
+        }));
+
+    private static string TypeName(Type type) => type switch
+    {
+        _ when type == typeof(double) || type == typeof(float) => "number",
+        _ when type == typeof(int) || type == typeof(long) => "integer",
+        _ when type == typeof(bool) => "boolean",
+        _ when type == typeof(string) => "string",
+        _ when type.IsEnum => $"enum {type.Name}",
+        _ => type.Name,
+    };
 
     /// <summary>Re-invokes the design program's scene factory and swaps the result in —
     /// what a <c>dotnet watch</c> hot reload does to the viewer. A factory that throws
@@ -510,18 +863,20 @@ public sealed class SceneTools(SceneSession session)
 
     // ---- export helpers ----
 
-    private CallToolResult ExportPng(string path, IReadOnlyList<PartInstance> instances)
+    private CallToolResult ExportPng(string path, IReadOnlyList<PartInstance> instances, int width, int height)
     {
         try
         {
             Session.PreMesh(instances);
-            var camera = StandardViews.For("iso", instances, Session.Quality);
+            var camera = NamedViews.For("iso", instances, Session.Quality);
             lock (RenderGate)
-                OffscreenRenderer.RenderToImage(instances, path, 1280, 800, camera);
+                OffscreenRenderer.RenderToImage(instances, path, width, height, camera);
             return Ok(new JsonObject
             {
                 ["wrote"] = Path.GetFullPath(path),
                 ["format"] = "PNG",
+                ["width"] = width,
+                ["height"] = height,
                 ["instances"] = instances.Count,
             });
         }
@@ -675,9 +1030,14 @@ public sealed class SceneTools(SceneSession session)
         $"No tab named '{tab}'. Tabs in this scene: "
         + $"{string.Join(", ", Session.Scene.Tabs.Select(t => t.Name))}.";
 
+    /// <summary>A success result carrying the payload twice, deliberately: as
+    /// structured content (for clients that consume the declared output schema) AND as
+    /// the pretty-printed text block (for clients that predate structured content).
+    /// One JsonObject feeds both, so they cannot disagree.</summary>
     private static CallToolResult Ok(JsonObject payload) => new()
     {
         Content = [new TextContentBlock { Text = payload.ToJsonString(Json) }],
+        StructuredContent = JsonSerializer.SerializeToElement(payload),
     };
 
     private static CallToolResult Error(string? message) => new()

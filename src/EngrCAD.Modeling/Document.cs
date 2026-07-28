@@ -51,8 +51,10 @@ public sealed class Part
 {
     public string Name { get; }
 
-    /// <summary>The geometry the part was created from (Shape, BrepSolid, HalfEdgeMesh, or Sdf).</summary>
-    public object Geometry { get; }
+    /// <summary>The geometry the part was created from (Shape, BrepSolid, HalfEdgeMesh,
+    /// or Sdf). Fixed for directly built parts; a part with a <see cref="History"/> may
+    /// swap in a freshly regenerated body via <see cref="Regenerate"/>.</summary>
+    public object Geometry { get; private set; }
 
     /// <summary>The parametric history this part was regenerated from, when it came
     /// from one (<see cref="FeatureHistory.ToPart"/>); null for directly built parts.
@@ -140,6 +142,56 @@ public sealed class Part
         Color = color;
         if (transform is { } t)
             Transform = t;
+    }
+
+    /// <summary>
+    /// Re-runs this part's <see cref="History"/> and, when the regeneration fully
+    /// succeeds, swaps the fresh body in as <see cref="Geometry"/> and clears every
+    /// derived cache (display mesh, cached B-Rep/SDF lowerings, feature edges,
+    /// resolved annotations, construction tree) so the next consumer sees the edited
+    /// model. This is the seam parameter editing goes through — a host sets a
+    /// <c>[Param]</c> (or toggles <see cref="Feature.Suppressed"/>) and calls this.
+    /// <para><b>A failed regeneration changes nothing here.</b>
+    /// <see cref="FeatureHistory.Regenerate"/> itself keeps the last good prefix and
+    /// skips the rest; this part additionally keeps its previous complete geometry, so
+    /// a bad parameter value never leaves a half-regenerated body on screen. The
+    /// returned <see cref="RegenerationResult"/> names the failing feature either way.</para>
+    /// <para>Viewers that uploaded GPU buffers from the old mesh must republish after a
+    /// successful call — the caches are per part, not per consumer.</para>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The part has no history.</exception>
+    public RegenerationResult Regenerate()
+    {
+        if (History is null)
+            throw new InvalidOperationException(
+                $"Part '{Name}' has no feature history to regenerate — it was built directly from geometry.");
+
+        // Outside the locks: feature Apply bodies can be arbitrarily slow, and they
+        // read nothing from this part.
+        var result = History.Regenerate();
+        if (!result.Succeeded || result.Body is not { } body)
+            return result;
+
+        lock (_meshLock)
+        {
+            Geometry = body;
+            Volatile.Write(ref _mesh, null);   // pairs with HasMesh's lock-free probe
+            _solid = null;
+            _solidLowered = false;
+            _solidError = null;
+            _sdf = null;
+            _sdfLowered = false;
+            _sdfError = null;
+            _featureEdges = null;
+            _resolvedAnnotations = null;   // selector dimensions re-measure the new body
+        }
+        lock (_constructionLock)
+        {
+            // Feature rows carry [Param] values in their labels, so the tree is stale too.
+            _constructionTree = null;
+            _constructionTreeBuilt = false;
+        }
+        return result;
     }
 
     // ---- the exact solid, lowered ONCE per part ----

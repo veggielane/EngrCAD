@@ -29,21 +29,34 @@ public static class EngrCadMcpServer
         measurable facts — volume, surface area, bounding box — plus the construction
         tree, which is how the part was built, step by step.
 
-        Nothing here modifies the design: to change the model, edit its source. reload
-        re-runs the program's scene factory so edits show up without restarting.
+        Parts built from a parametric feature history (their construction tree lists
+        features with parameter values) can be DRIVEN: set_param edits a [Param] value
+        and regenerates, suppress_feature/unsuppress_feature toggle a feature. These
+        edits live in the running session only — the program's source is the truth, so
+        to change the design permanently, edit its source; reload re-runs the scene
+        factory (discarding session edits) so source edits show up without restarting.
         """;
 
     /// <summary>
     /// The protocol options for a server over <paramref name="tools"/>: server identity,
     /// instructions, the tool collection, and the <c>engrcad://scene</c> resource.
+    /// <paramref name="viewerTools"/>, when given, appends the live-viewer bridge tools
+    /// (the MCP process was told where a running window's remote-control endpoint
+    /// listens) — a plain headless session never advertises tools it cannot honor.
     /// </summary>
-    public static McpServerOptions BuildOptions(SceneTools tools, string title = "EngrCAD")
+    public static McpServerOptions BuildOptions(
+        SceneTools tools, string title = "EngrCAD", ViewerTools? viewerTools = null)
     {
         ArgumentNullException.ThrowIfNull(tools);
 
         var toolCollection = new McpServerPrimitiveCollection<McpServerTool>();
         foreach (var tool in BuildTools(tools))
             toolCollection.Add(tool);
+        if (viewerTools is not null)
+        {
+            foreach (var tool in BuildViewerTools(viewerTools))
+                toolCollection.Add(tool);
+        }
 
         var resources = new McpServerResourceCollection
         {
@@ -95,6 +108,8 @@ public static class EngrCadMcpServer
                             + "assemblies, and placed instances each holds. Costs nothing — no "
                             + "geometry is evaluated.",
                 ReadOnly = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.ListTabs,
                 OpenWorld = false,
             }),
 
@@ -109,6 +124,8 @@ public static class EngrCadMcpServer
                             + "(STEP-exportable). Start here. For volumes, areas and bounds — "
                             + "which require tessellation — call describe_part on one part.",
                 ReadOnly = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.ListParts,
                 OpenWorld = false,
             }),
 
@@ -124,6 +141,8 @@ public static class EngrCadMcpServer
                             + "parameter values). This is the only listing tool that tessellates, "
                             + "and it tessellates just the named part.",
                 ReadOnly = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.DescribePart,
                 OpenWorld = false,
             }),
 
@@ -133,9 +152,12 @@ public static class EngrCadMcpServer
                 Title = "Render the model",
                 Description = "Renders the model headlessly and returns a PNG image — use it to "
                             + "SEE the design. Supports the standard CAD views (iso, front, back, "
-                            + "left, right, top, bottom), the display styles (shaded-edges, "
-                            + "shaded, wireframe, points), and a section plane (sectionAxis + "
-                            + "sectionOffset) that cuts the model open so interiors, bores and "
+                            + "left, right, top, bottom) or an explicit camera (cameraYaw/"
+                            + "cameraPitch in degrees + cameraDistance/cameraTarget, or cameraEye), "
+                            + "the display styles (shaded-edges, shaded, wireframe, points), one "
+                            + "axis section plane (sectionAxis + sectionOffset) or up to four "
+                            + "general planes (sectionPlanes + sectionCombine — two perpendicular "
+                            + "planes make the classic quarter cutaway) so interiors, bores and "
                             + "wall thicknesses are visible. Narrow to one tab or part when a "
                             + "scene is busy. Needs a GPU/ANGLE context; if that is missing it "
                             + "returns an error and every other tool keeps working.",
@@ -151,10 +173,60 @@ public static class EngrCadMcpServer
                             + "extension: .step (exact B-Rep, one file per part — the CAD "
                             + "interchange format), .stl or .obj (meshes, instances merged with "
                             + "their transforms — for slicers and 3D printing), or .png (a "
-                            + "render). Writes to the filesystem.",
+                            + "render; width/height set the image size). Writes to the filesystem.",
                 ReadOnly = false,
                 Destructive = true,
                 Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Export,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.SetParam, new McpServerToolCreateOptions
+            {
+                Name = "set_param",
+                Title = "Set a feature parameter",
+                Description = "Edits one [Param] value on a feature of a history-backed part "
+                            + "(the parts whose construction tree lists features) and regenerates "
+                            + "the model. The result is the regeneration report: per-feature "
+                            + "outcomes and timings. A failed regeneration keeps the part's "
+                            + "previous geometry and names the failing feature; the edit stays "
+                            + "applied so it can be corrected and regenerated. reload discards "
+                            + "these edits — the program's source is still the truth.",
+                ReadOnly = false,
+                Destructive = false,
+                Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Regeneration,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.SuppressFeature, new McpServerToolCreateOptions
+            {
+                Name = "suppress_feature",
+                Title = "Suppress a feature",
+                Description = "Suppresses a feature of a history-backed part (it passes the body "
+                            + "through untouched — a hole feature's bores disappear) and "
+                            + "regenerates. Same result shape and failure semantics as set_param.",
+                ReadOnly = false,
+                Destructive = false,
+                Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Regeneration,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.UnsuppressFeature, new McpServerToolCreateOptions
+            {
+                Name = "unsuppress_feature",
+                Title = "Unsuppress a feature",
+                Description = "Re-enables a suppressed feature and regenerates (the inverse of "
+                            + "suppress_feature).",
+                ReadOnly = false,
+                Destructive = false,
+                Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Regeneration,
                 OpenWorld = false,
             }),
 
@@ -168,7 +240,98 @@ public static class EngrCadMcpServer
                             + "scene stays and the error is reported.",
                 ReadOnly = false,
                 Idempotent = false,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.Reload,
                 OpenWorld = false,
+            }),
+        ];
+    }
+
+    /// <summary>
+    /// The live-viewer bridge tools, forwarding to a running window's remote-control
+    /// endpoint (see <c>RemoteControl.cs</c> in EngrCAD.Viewer). Named without a prefix
+    /// where no headless tool collides; the frame capture is <c>viewer_screenshot</c>
+    /// because <c>screenshot</c> is the headless render.
+    /// </summary>
+    public static IReadOnlyList<McpServerTool> BuildViewerTools(ViewerTools tools)
+    {
+        ArgumentNullException.ThrowIfNull(tools);
+        return
+        [
+            McpServerTool.Create(tools.SetView, new McpServerToolCreateOptions
+            {
+                Name = "set_view",
+                Title = "Set the viewer's view",
+                Description = "Snaps the RUNNING viewer window to a standard view (iso, front, "
+                            + "back, left, right, top, bottom) — the toolbar buttons, remotely. "
+                            + "Distance and target are kept.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.Fit, new McpServerToolCreateOptions
+            {
+                Name = "fit",
+                Title = "Fit the viewer's camera",
+                Description = "Zoom-to-fit the running viewer on its visible parts.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SetSection, new McpServerToolCreateOptions
+            {
+                Name = "set_section",
+                Title = "Toggle the viewer's section cut",
+                Description = "Turns the running viewer's axis-aligned section cut on or off, "
+                            + "optionally choosing the axis (x/y/z) and plane offset.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SetViewStyle, new McpServerToolCreateOptions
+            {
+                Name = "set_view_style",
+                Title = "Set the viewer's global style",
+                Description = "Sets the running viewer's global view style: shaded-edges, shaded, "
+                            + "wireframe, or points (parts with explicit display modes still win).",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SetDisplayMode, new McpServerToolCreateOptions
+            {
+                Name = "set_display_mode",
+                Title = "Set one part's display mode",
+                Description = "Draws one part shaded, wireframe, or translucent in the running "
+                            + "viewer (by occurrence path, as list_parts reports them).",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.SelectPart, new McpServerToolCreateOptions
+            {
+                Name = "select_part",
+                Title = "Select a part in the viewer",
+                Description = "Selects a part by occurrence path in the running viewer (gold "
+                            + "highlight + title bar), or clears the selection when no part is given.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.GetSelection, new McpServerToolCreateOptions
+            {
+                Name = "get_selection",
+                Title = "Read the viewer's selection",
+                Description = "The occurrence path the user (or a previous select_part) has "
+                            + "selected in the running viewer — how an assistant learns what "
+                            + "'this part' means.",
+                ReadOnly = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.Measure, new McpServerToolCreateOptions
+            {
+                Name = "measure",
+                Title = "Measure in the viewer",
+                Description = "Picks two surface points at viewport coordinates (DIPs) in the "
+                            + "running viewer, shows the transient dimension there, and returns "
+                            + "both world points and their distance.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
+            McpServerTool.Create(tools.Screenshot, new McpServerToolCreateOptions
+            {
+                Name = "viewer_screenshot",
+                Title = "Capture the viewer window",
+                Description = "Asks the running viewer to save its NEXT rendered frame as a PNG "
+                            + "(the window's own capture path — GL is only touched inside the "
+                            + "render pass). The headless render is the separate screenshot tool.",
+                ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false,
             }),
         ];
     }
@@ -180,7 +343,15 @@ public static class EngrCadMcpServer
     /// </summary>
     public static async Task RunAsync(
         Stream input, Stream output, SceneTools tools, string title = "EngrCAD",
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        await RunAsync(input, output, tools, title, viewerTools: null, cancellationToken)
+            .ConfigureAwait(false);
+
+    /// <summary><see cref="RunAsync(Stream, Stream, SceneTools, string, CancellationToken)"/>
+    /// plus the optional live-viewer bridge tools.</summary>
+    public static async Task RunAsync(
+        Stream input, Stream output, SceneTools tools, string title,
+        ViewerTools? viewerTools, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
@@ -191,7 +362,7 @@ public static class EngrCadMcpServer
         // code path — and it lets the caller hand us the stdout stream it captured
         // BEFORE Console.Out was redirected.
         await using var transport = new StreamServerTransport(input, output, serverName: title);
-        await using var server = McpServer.Create(transport, BuildOptions(tools, title));
+        await using var server = McpServer.Create(transport, BuildOptions(tools, title, viewerTools));
         await server.RunAsync(cancellationToken).ConfigureAwait(false);
     }
 }

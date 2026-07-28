@@ -27,6 +27,12 @@ public static class OffscreenRenderer
 {
     private static readonly Lazy<string?> Availability = new(() =>
     {
+        // Operational kill switch AND the test seam for the no-GL error path: a
+        // GPU-less machine cannot be simulated in-process (the probe is a process-wide
+        // Lazy over a real EGL context), so tests — and users with a broken driver —
+        // force the unavailable path via the environment.
+        if (Environment.GetEnvironmentVariable("ENGRCAD_NO_GL") is "1" or "true")
+            return "offscreen GL disabled by ENGRCAD_NO_GL";
         try
         {
             var context = EglContext.TryCreate(4, 4, out var error);

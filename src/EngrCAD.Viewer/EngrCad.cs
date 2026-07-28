@@ -74,14 +74,50 @@ public static class EngrCad
         InitialScene = scene;
         WindowTitle = options.Title;
         var userReady = options.OnViewportReady;
-        OnViewportReady = hostReady is null && userReady is null
+        RemoteControlServer? remote = null;
+        Action<ViewportControl>? remoteReady = options.RemoteControl is { } rpc
+            ? viewport => remote = StartRemoteControl(viewport, rpc, options)
+            : null;
+        OnViewportReady = hostReady is null && userReady is null && remoteReady is null
             ? null
             : viewport =>
             {
                 hostReady?.Invoke(viewport); // internal plumbing (live loop) first
+                remoteReady?.Invoke(viewport);
                 userReady?.Invoke(viewport);
             };
-        BuildAvaloniaApp().StartWithClassicDesktopLifetime([]);
+        try
+        {
+            BuildAvaloniaApp().StartWithClassicDesktopLifetime([]);
+        }
+        finally
+        {
+            remote?.Dispose();
+        }
+    }
+
+    /// <summary>Starts the opt-in remote-control endpoint over the live viewport:
+    /// loopback-only JSON-RPC, every viewer mutation marshaled onto the UI thread by
+    /// <see cref="ViewportRemoteViewer"/>. Failure to bind is reported, never fatal —
+    /// a viewer without its remote is degraded, not broken.</summary>
+    private static RemoteControlServer? StartRemoteControl(
+        ViewportControl viewport, RemoteControlOptions rpc, EngrCadOptions options)
+    {
+        var log = EngrCadLoggers.Resolve(options);
+        try
+        {
+            var handler = RemoteViewerDispatcher.For(new ViewportRemoteViewer(viewport), options.Title);
+            var server = new RemoteControlServer(handler, rpc.Port, rpc.Token);
+            int port = server.Start();
+            Log.RemoteControlListening(log, port, rpc.Token is null ? "" : " (token required)");
+            viewport.ShowStatus($"remote control: 127.0.0.1:{port}");
+            return server;
+        }
+        catch (Exception e)
+        {
+            Log.RemoteControlFailed(log, $"{e.GetType().Name}: {e.Message}");
+            return null;
+        }
     }
 
     /// <summary>
@@ -284,6 +320,37 @@ public static class EngrCad
                 return 2;
             }
             options.LazyTabMeshing = lazy;
+        }
+
+        // --rpc [port] (+ --rpc-token <token>): opt-in remote control for the windowed
+        // modes. Loopback-only by construction; port 0/omitted = ephemeral (reported).
+        int rpcIndex = Array.IndexOf(args, "--rpc");
+        if (rpcIndex >= 0)
+        {
+            int rpcPort = 0;
+            if (rpcIndex + 1 < args.Length
+                && int.TryParse(args[rpcIndex + 1], NumberStyles.Integer, CultureInfo.InvariantCulture,
+                        out int parsedPort))
+            {
+                if (parsedPort is < 0 or > 65535)
+                {
+                    Log.UsageRpc(log);
+                    return 2;
+                }
+                rpcPort = parsedPort;
+            }
+            string? rpcToken = null;
+            int tokenIndex = Array.IndexOf(args, "--rpc-token");
+            if (tokenIndex >= 0)
+            {
+                if (tokenIndex + 1 >= args.Length)
+                {
+                    Log.UsageRpc(log);
+                    return 2;
+                }
+                rpcToken = args[tokenIndex + 1];
+            }
+            options.RemoteControl = new RemoteControlOptions { Port = rpcPort, Token = rpcToken };
         }
 
         int exportIndex = Array.IndexOf(args, "--export");

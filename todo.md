@@ -932,48 +932,37 @@ UI dependencies, which makes this unusually feasible.
 
 The **headless server ✅ landed** (`src/EngrCAD.Mcp`: `EngrCadMcp.Run` + `--mcp` over
 stdio — list/describe/screenshot/export/reload, PNG returned as an MCP image block,
-stdout guarded, geometry evaluated lazily). Remaining:
+stdout guarded, geometry evaluated lazily), and so have **write tools**
+(`set_param`/`suppress_feature`/`unsuppress_feature` over `Part.History` +
+`Part.Regenerate`), **screenshot's full option surface** (up to 4 section planes +
+combine, explicit camera, export sizes), **structured content** (output schemas +
+`structuredContent` on every JSON tool), the **StandardViews deletion** (poses route
+through `ViewCubeMath`/`CameraMath`; `NamedViews` is only the name table), the
+**forced no-GL error path** (`ENGRCAD_NO_GL`), and the **live-viewer RPC, option (b)**
+(`RemoteControl.cs` in EngrCAD.Viewer: loopback-only newline JSON-RPC behind
+`WithRemoteControl`/`--rpc`, token optional; `--mcp --viewer <port>` bridges
+set_view/fit/set_section/set_display_mode/set_view_style/select_part/get_selection/
+measure/viewer_screenshot; every mutation marshals through `Dispatcher.UIThread`, GL
+only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
 
-- [ ] **Write tools** — the v1 boundary is deliberately read-only; the natural next step
-  is editing `[Param]` values through `FeatureHistory` and regenerating, so an assistant
-  can *drive* a parametric model rather than only inspect it.
-- [ ] **`screenshot` takes only one section plane** — the viewer now does up to four with
-  quarter/octant combine, so plumb `SectionPlane[]` + `SectionCombine` through. Also: no
-  explicit camera (named views only), and `export` to `.png` is hardcoded 1280×800.
-- [ ] **Structured content** — results are JSON *text* blocks today; MCP structured
-  content (`UseStructuredContent` + output schemas) would let clients consume them
-  without parsing.
-- [ ] **Delete `src/EngrCAD.Mcp/StandardViews.cs`** — it mirrors `ViewCubeMath.PoseFor`
-  and `CameraMath.FrameDistance`, two copies of the pose maths. **The blocker is fully
-  gone**: `CameraMath` AND `ViewCubeMath` are both public in `EngrCAD.Viewer.Core` now
-  (render-model steps 1 and 2), so the duplicate can be deleted outright.
-- [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting — the
-  protocol was driven by hand and via the SDK's own client — and the no-GL error path on
-  a GPU-less machine.
-- [ ] **Live-viewer RPC** (the option (b)/(c) work, still open) — drive a *running*
-  window rather than rendering headlessly:
-  - **(b) RPC into a *running* viewer** — drive the live window: change the view, toggle
-    sections, select parts, grab the framebuffer. Needs a small transport (a **named
-    pipe** or a loopback socket carrying JSON-RPC) exposed by `EngrCAD.Viewer` behind an
-    opt-in flag (`EngrCadOptions.WithRemoteControl(...)` / `--rpc`), with the MCP server
-    as a separate process bridging to it.
-  - **(c) Viewer hosts MCP directly** over the HTTP+SSE transport on loopback — removes
-    the bridge hop, but puts a web server inside the GUI app; only worth it if (b)'s
-    extra process proves annoying. (stdio, the usual MCP transport, does not fit a
-    windowed app, which is why (b)/(c) differ from (a).)
-  Tools a *live* viewer adds beyond today's read-only set: `set_view`/`fit`,
-  `set_section`, `set_display_mode`/`set_view_style`, `select_part`/`get_selection`,
-  and `measure`.
-- [ ] **Non-negotiable constraints** (the viewer's existing rules, which an RPC layer is
-  very good at violating): every mutation must marshal onto the Avalonia UI thread
-  (`Dispatcher.UIThread.Post`) — the thread-safe seams are `ViewportControl.SetParts` /
-  `SetInstances` and the `Status` callback; **GL only inside the render pass**, so a
-  screenshot request must ride the existing `SaveScreenshot` capture-on-next-frame path
-  rather than touching GL from the RPC thread; and meshing stays off the UI thread as
-  always.
-- [ ] **Security**: loopback-only, **off by default**, opt-in flag, and consider a token —
-  this endpoint can load models and write files, so it is a local attack surface and
-  should never be on implicitly.
+- [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting —
+  the protocol was driven by hand and via the SDK's own client.
+- [ ] **The windowed RPC path needs one manual pass**: transport, vocabulary, and the
+  bridge are locked headlessly over real sockets with a stub viewer, but
+  `ViewportRemoteViewer` against a real window (UI-thread marshaling under a live
+  dispatcher, `SaveScreenshot` actually writing) has no automated test — drive
+  `samples/EngrCAD.LiveDemo --rpc` once per release, or build a windowed
+  integration test on the `SendInput` harness.
+- [ ] **`viewer_screenshot` returns a path, not pixels** — the capture lands on disk
+  via the window's next frame. Returning the PNG as an MCP image block needs a
+  completion signal from the render pass back to the RPC thread (the status callback
+  carries the path today); worth it if assistants use the tool blind.
+- [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
+  bridge process proves annoying in practice.
+- [ ] **Persisting session edits**: `set_param` edits die with the session by design
+  (source is the truth). A `save_parameters` tool writing
+  `FeatureHistory.SaveParameters` JSON next to the model would let an assistant hand
+  its tuning back to the user as a file.
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
 

@@ -115,6 +115,132 @@ public class StdioSessionTests
             Assert.Equal("2.0", (string?)Assert.IsType<JsonObject>(JsonNode.Parse(line))["jsonrpc"]);
     }
 
+    /// <summary>The whole editing loop over a real client-shaped session: read the
+    /// model, edit a parameter, SEE the change. This is the round trip an assistant
+    /// actually runs.</summary>
+    [SkippableFact]
+    public async Task SetParam_then_screenshot_round_trip_visibly_changes_the_model()
+    {
+        Skip.IfNot(Viewer.EngrCad.CanRenderToImage,
+            $"offscreen GL unavailable: {Viewer.OffscreenRenderer.UnavailableReason}");
+
+        var session = await RunSession(
+            [
+                Request(1, "initialize", new JsonObject
+                {
+                    ["protocolVersion"] = "2025-06-18",
+                    ["capabilities"] = new JsonObject(),
+                    ["clientInfo"] = new JsonObject { ["name"] = "engrcad-test", ["version"] = "1.0" },
+                }),
+                Notification("notifications/initialized"),
+                Request(2, "tools/call", new JsonObject
+                {
+                    ["name"] = "describe_part",
+                    ["arguments"] = new JsonObject { ["name"] = "plate", ["constructionTree"] = false },
+                }),
+                Request(3, "tools/call", new JsonObject
+                {
+                    ["name"] = "screenshot",
+                    ["arguments"] = new JsonObject
+                        { ["part"] = "plate", ["view"] = "front", ["width"] = 320, ["height"] = 240 },
+                }),
+                Request(4, "tools/call", new JsonObject
+                {
+                    ["name"] = "set_param",
+                    ["arguments"] = new JsonObject
+                    {
+                        ["part"] = "plate", ["feature"] = "Base", ["param"] = "Height", ["value"] = 12,
+                    },
+                }),
+                Request(5, "tools/call", new JsonObject
+                {
+                    ["name"] = "describe_part",
+                    ["arguments"] = new JsonObject { ["name"] = "plate", ["constructionTree"] = false },
+                }),
+                Request(6, "tools/call", new JsonObject
+                {
+                    ["name"] = "screenshot",
+                    ["arguments"] = new JsonObject
+                        { ["part"] = "plate", ["view"] = "front", ["width"] = 320, ["height"] = 240 },
+                }),
+            ],
+            expectedResponses: 6);
+
+        // Structured content crosses the wire: describe_part carries a typed payload
+        // beside its text block.
+        var before = session.Response(2)["result"]!;
+        Assert.NotNull(before["structuredContent"]);
+        double volumeBefore = (double)before["structuredContent"]!["volume"]!;
+
+        // The edit succeeded, reported as the structured regeneration report.
+        var edited = session.Response(4)["result"]!;
+        Assert.NotEqual(true, (bool?)edited["isError"]);
+        Assert.True((bool?)edited["structuredContent"]!["succeeded"]);
+        Assert.True((bool?)edited["structuredContent"]!["geometryUpdated"]);
+
+        // The model measurably changed: doubling the 20x10 base's height from 6 to 12
+        // adds (200 - boss footprint 16) x 6 to the union.
+        double volumeAfter = (double)session.Response(5)["result"]!["structuredContent"]!["volume"]!;
+        Assert.Equal((20 * 10 - 4 * 4) * 6, volumeAfter - volumeBefore, 6);
+
+        // And VISIBLY changed: same view, same size, different pixels.
+        byte[] pngBefore = PngOf(session.Response(3));
+        byte[] pngAfter = PngOf(session.Response(6));
+        Assert.NotEqual(pngBefore, pngAfter);
+    }
+
+    /// <summary>A GPU-less machine (forced via the ENGRCAD_NO_GL seam — the probe is a
+    /// process-wide Lazy over a real EGL context, so only a child process can exercise
+    /// it): screenshot returns an isError result NAMING the constraint, never a
+    /// protocol error, and every other tool keeps working.</summary>
+    [Fact]
+    public async Task Screenshot_without_GL_is_a_tool_error_naming_the_constraint()
+    {
+        var session = await RunSession(
+            [
+                Request(1, "initialize", new JsonObject
+                {
+                    ["protocolVersion"] = "2025-06-18",
+                    ["capabilities"] = new JsonObject(),
+                    ["clientInfo"] = new JsonObject { ["name"] = "engrcad-test", ["version"] = "1.0" },
+                }),
+                Notification("notifications/initialized"),
+                Request(2, "tools/call", new JsonObject
+                {
+                    ["name"] = "screenshot",
+                    ["arguments"] = new JsonObject { ["view"] = "iso" },
+                }),
+                Request(3, "tools/call", new JsonObject
+                {
+                    ["name"] = "list_parts",
+                    ["arguments"] = new JsonObject(),
+                }),
+            ],
+            expectedResponses: 3,
+            environment: new Dictionary<string, string> { ["ENGRCAD_NO_GL"] = "1" });
+
+        // A tool error, not a protocol error: the frame has a result, no error member.
+        var screenshot = session.Response(2);
+        Assert.Null(screenshot["error"]);
+        Assert.True((bool?)screenshot["result"]!["isError"]);
+        string message = Text(screenshot);
+        Assert.Contains("Offscreen rendering is not available", message);
+        Assert.Contains("ENGRCAD_NO_GL", message);          // names the actual constraint
+        Assert.Contains("Every other tool still works", message);
+
+        // And they do.
+        var parts = session.Response(3);
+        Assert.NotEqual(true, (bool?)parts["result"]!["isError"]);
+        Assert.Contains("plate", Text(parts));
+    }
+
+    private static byte[] PngOf(JsonObject response)
+    {
+        var content = Assert.IsType<JsonArray>(response["result"]!["content"]);
+        var image = content.OfType<JsonObject>().Single(b => (string?)b["type"] == "image");
+        return Convert.FromBase64String((string)image["data"]!);
+    }
+
     [Fact]
     public void StdoutGuard_diverts_console_writes_to_stderr_and_restores_on_dispose()
     {
@@ -171,7 +297,9 @@ public class StdioSessionTests
     private static string Notification(string method) =>
         new JsonObject { ["jsonrpc"] = "2.0", ["method"] = method }.ToJsonString();
 
-    private static async Task<Session> RunSession(string[] frames, int expectedResponses)
+    private static async Task<Session> RunSession(
+        string[] frames, int expectedResponses,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var start = new ProcessStartInfo(TestModelExecutable())
         {
@@ -183,6 +311,8 @@ public class StdioSessionTests
             StandardErrorEncoding = Encoding.UTF8,
         };
         start.ArgumentList.Add("--mcp");
+        foreach (var (key, value) in environment ?? new Dictionary<string, string>())
+            start.Environment[key] = value;
 
         using var process = Process.Start(start)
             ?? throw new InvalidOperationException("could not start the test model");
@@ -190,25 +320,40 @@ public class StdioSessionTests
 
         var stderr = process.StandardError.ReadToEndAsync(cts.Token);
         var lines = new List<string>();
+        var responses = new SemaphoreSlim(0);
         var reader = Task.Run(async () =>
         {
+            int seen = 0;
             while (await process.StandardOutput.ReadLineAsync(cts.Token) is { } line)
             {
                 if (line.Length == 0)
                     continue;   // framing keeps messages one per line; blank lines are not frames
-                lock (lines)
-                    lines.Add(line);
+                int total;
                 lock (lines)
                 {
-                    if (CountResponses(lines) >= expectedResponses)
-                        return;
+                    lines.Add(line);
+                    total = CountResponses(lines);
                 }
+                while (seen < total)
+                {
+                    seen++;
+                    responses.Release();
+                }
+                if (total >= expectedResponses)
+                    return;
             }
         }, cts.Token);
 
+        // Sequential on purpose: the server dispatches requests CONCURRENTLY (as the
+        // protocol allows), so a session mixing writes and reads must await each
+        // response before sending the next request — exactly what a real client does.
         foreach (string frame in frames)
+        {
             await process.StandardInput.WriteLineAsync(frame.AsMemory(), cts.Token);
-        await process.StandardInput.FlushAsync(cts.Token);
+            await process.StandardInput.FlushAsync(cts.Token);
+            if (JsonNode.Parse(frame) is JsonObject { } parsed && parsed["id"] is not null)
+                await responses.WaitAsync(cts.Token);
+        }
 
         await reader;
         process.StandardInput.Close();          // EOF on stdin ends the server

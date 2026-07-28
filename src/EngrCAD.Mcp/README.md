@@ -48,16 +48,42 @@ This is a library entry point, not a generic host.
 | `list_tabs` | Tabs with part/assembly/instance counts. | free |
 | `list_parts` | Every distinct part: name, tab, geometry kind, occurrence paths, display mode, colour, annotation count, whether it has an exact B-Rep route. | free |
 | `describe_part` | One part in full: faces, vertices, closed, volume, surface area, local and world bounds, placement, annotations, and the **construction tree** (`Part.ConstructionTree()` — how the part was built, step by step). | meshes that one part |
-| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom), display styles (shaded-edges/shaded/wireframe/points), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open, size, and an optional tab/part filter. | meshes what it renders |
-| `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png`. | meshes what it writes |
-| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. | free |
+| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom) **or an explicit camera** (`cameraYaw`/`cameraPitch` in degrees + `cameraDistance`/`cameraTarget`, or `cameraEye` — the orbit camera is Z-up, no roll), display styles (shaded-edges/shaded/wireframe/points), one axis section plane (`sectionAxis` + `sectionOffset`) **or up to 4 general planes** (`sectionPlanes` as `[nx, ny, nz, offset]` rows + `sectionCombine` intersection/union — two perpendicular planes are the classic quarter cutaway), size, and an optional tab/part filter. | meshes what it renders |
+| `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png` (`width`/`height` set the image size). | meshes what it writes |
+| `set_param` | Edits one `[Param]` value on a feature of a history-backed part and **regenerates**. The result is the regeneration report (per-feature applied/cached/suppressed/failed/skipped with timings). A failed regeneration keeps the part's previous geometry and names the failing feature; the edit stays applied so it can be corrected — `FeatureHistory`'s own validation-first / failure-keeps-prefix semantics, surfaced verbatim. | regenerates (no meshing) |
+| `suppress_feature` / `unsuppress_feature` | Toggles a feature's suppression (a suppressed feature passes the body through untouched — a hole feature's bores disappear) and regenerates. Same result shape as `set_param`. | regenerates (no meshing) |
+| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits**: the program's source is the truth. | free |
 
 Plus one resource, `engrcad://scene`: the whole document as JSON (tabs, parts,
 geometry kinds), cheap enough to read on every turn.
 
+## Driving a RUNNING viewer window
+
+Started with `--mcp --viewer <port>` (and `--viewer-token <t>` when the viewer set
+one), the server additionally bridges to a live window's remote-control endpoint —
+the model program runs separately with `--rpc <port>` (see the EngrCAD.Viewer README)
+— adding: `set_view`, `fit`, `set_section`, `set_view_style`, `set_display_mode`,
+`select_part`, `get_selection` (how an assistant learns what "this part" the user is
+pointing at means), `measure` (two viewport picks, returns the world points and
+distance, shows the transient dimension in the window), and `viewer_screenshot`
+(the window's own next-frame capture; the headless render stays `screenshot`).
+Without `--viewer` these tools are never advertised — a headless session does not
+offer tools it cannot honor. A dead or wrong endpoint is an `isError` naming the
+`--rpc` flag; connections are per-request, so a viewer restarted by `dotnet watch`
+just gets reconnected to.
+
 Failures come back as `isError` results with a readable message — "No part named
 'flage'. Parts in this scene: Model/flange, …" — never as protocol errors. An
 assistant should be able to correct itself and carry on.
+
+**Results are structured content.** Every JSON-returning tool declares an output
+schema (`ToolSchemas.cs`, wired via the SDK's `UseStructuredContent` +
+`OutputSchema` — the explicit-schema form, because the tool methods return
+`CallToolResult` directly) and populates `structuredContent`, so clients consume
+typed JSON without parsing text blocks. The pretty-printed text block still rides
+along for older clients; one `JsonObject` feeds both, so they cannot disagree.
+`screenshot` is the deliberate exception — its result is an image content block,
+which structured content does not model.
 
 ## stdout is the protocol
 
@@ -114,14 +140,37 @@ await EngrCadMcpServer.RunAsync(input, output, tools, "my bracket", cancellation
 `CallToolResult`, which is why the tool tests need no client, transport, or process at
 all.
 
+## Parametric editing
+
+The write tools work on **history-backed parts** — parts created from a
+`FeatureHistory` (`history.ToPart(...)` or `new Part(name, history)`); `list_parts`
+marks them with `hasConstructionTree` and `describe_part` shows the feature list with
+current parameter values. There is no separate registration seam: `Part.History` *is*
+the seam, so a design that already builds parts from histories is editable with no
+extra wiring. `set_param` goes through the same JSON conversion as
+`FeatureHistory.SaveParameters`/`LoadParameters`, so the accepted value spellings
+cannot drift between the parameter file and the tool. A successful edit bumps the
+session `generation`, telling clients their earlier reads are stale; `Part.Regenerate`
+then clears the part's cached mesh/solid/edges/annotations so every later tool sees
+the edited model. Edits live in the running session only — `reload` re-runs the
+program's source and discards them.
+
+One protocol fact the round-trip test paid to learn: **the server dispatches
+requests concurrently**, as MCP allows. A client that edits and then reads must
+await the edit's response before sending the read, or the read can observe the
+pre-edit model (real assistant clients already work this way; a hand-rolled driver
+must too).
+
+The no-GL error path is testable (and forcible) via the `ENGRCAD_NO_GL=1`
+environment variable — `screenshot`/`.png` export then return an `isError` result
+naming the constraint while every other tool keeps working. The seam exists because
+the GL probe is a process-wide `Lazy` over a real EGL context, so a GPU-less
+machine can only be simulated in a child process; it doubles as an operational kill
+switch for broken drivers.
+
 ## Known limits (v1)
 
-- **Read-only.** Nothing here edits the model; to change it, edit its source and call
-  `reload`. Parameter editing through `FeatureHistory` is the obvious next step.
-- One section plane per screenshot (the viewer supports up to four, including quarter
-  and octant cuts).
-- Named views only, no explicit yaw/pitch/distance camera.
-- The camera pose formulas mirror the viewer's internal `ViewCubeMath.PoseFor` and
-  `CameraMath.FrameDistance` (`StandardViews.cs`, locked by tests) because those are
-  internal to `EngrCAD.Viewer`. If they are ever made public, delete that file.
-- Results are JSON *text* content, not MCP structured content.
+- The named-view poses route through the shared `ViewCubeMath.PoseFor` /
+  `CameraMath.FrameDistance` in `EngrCAD.Viewer.Core` (`NamedViews.cs` is only the
+  name table), so the toolbar, the view cube, the browser client and `screenshot`
+  cannot disagree about what "Front" means.

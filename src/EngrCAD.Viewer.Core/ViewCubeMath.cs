@@ -191,6 +191,30 @@ public static class ViewCubeMath
     /// <summary>Smoothstep ease (C1 at both ends), clamped to [0,1].</summary>
     public static double Ease(double t) => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
 
+    /// <summary>The standard view names every front end offers (toolbar buttons,
+    /// <c>screenshot</c>'s named views, the remote-control <c>set_view</c> method), in
+    /// discovery order.</summary>
+    public static IReadOnlyList<string> StandardViewNames { get; } =
+        ["iso", "front", "back", "left", "right", "top", "bottom"];
+
+    /// <summary>
+    /// The view direction (target toward eye) of a standard view name, or null for an
+    /// unknown name — the name table behind every front end's named views, kept beside
+    /// <see cref="PoseFor"/> so no consumer re-types the vectors. "iso" is the
+    /// toolbar's front-right-top corner.
+    /// </summary>
+    public static Vector3d? DirectionFor(string view) => view.ToLowerInvariant() switch
+    {
+        "front" => new Vector3d(0, -1, 0),
+        "back" => new Vector3d(0, 1, 0),
+        "left" => new Vector3d(-1, 0, 0),
+        "right" => new Vector3d(1, 0, 0),
+        "top" => new Vector3d(0, 0, 1),
+        "bottom" => new Vector3d(0, 0, -1),
+        "iso" => new Vector3d(1, -1, 1),
+        _ => null,
+    };
+
     /// <summary>Human-readable name of a hit direction ("front", "front-right-top").</summary>
     public static string Label(in Vector3d direction)
     {

@@ -125,6 +125,18 @@ public sealed class EngrCadOptions
     /// always documented — or set this false.</para>
     /// </summary>
     public bool LazyTabMeshing { get; set; } = LazyTabMeshingDefault;
+
+    /// <summary>
+    /// Non-null enables the viewer's remote-control endpoint: newline-delimited
+    /// JSON-RPC 2.0 on a <b>loopback-only</b> TCP port (see <c>RemoteControl.cs</c> for
+    /// the vocabulary — set_view/fit/set_section/set_display_mode/set_view_style/
+    /// select_part/get_selection/measure/screenshot). <b>Off by default, deliberately</b>:
+    /// this endpoint moves the camera and writes screenshot files, so it must be asked
+    /// for (<see cref="EngrCadBuilder.WithRemoteControl"/> or <c>--rpc [port]</c>); an
+    /// optional token gates every request. Windowed modes only — headless paths have
+    /// the MCP server.
+    /// </summary>
+    public RemoteControlOptions? RemoteControl { get; set; }
 }
 
 /// <summary>
@@ -192,6 +204,20 @@ public sealed class EngrCadBuilder
     {
         ArgumentNullException.ThrowIfNull(factory);
         return WithLogger(factory.CreateLogger("EngrCAD"));
+    }
+
+    /// <summary>
+    /// Enables the loopback-only remote-control endpoint when a window opens (see
+    /// <see cref="EngrCadOptions.RemoteControl"/>). <paramref name="port"/> 0 picks an
+    /// ephemeral port, reported in the log and status bar; <paramref name="token"/>,
+    /// when set, must accompany every request.
+    /// </summary>
+    public EngrCadBuilder WithRemoteControl(int port = 0, string? token = null)
+    {
+        if (port is < 0 or > 65535)
+            throw new ArgumentOutOfRangeException(nameof(port), port, "Port must be 0..65535.");
+        Options.RemoteControl = new RemoteControlOptions { Port = port, Token = token };
+        return this;
     }
 
     /// <summary>Registers a callback invoked once the GL viewport exists.</summary>

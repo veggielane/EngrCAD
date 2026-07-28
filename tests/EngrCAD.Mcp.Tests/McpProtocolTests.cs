@@ -18,13 +18,13 @@ public class McpProtocolTests
     private static readonly TimeSpan Timeout = TimeSpan.FromMinutes(2);
 
     /// <summary>Runs <paramref name="body"/> against a live client connected to a
-    /// server serving the standard test scene.</summary>
-    private static async Task WithSession(Func<McpClient, Task> body)
+    /// server serving the standard test scene (or <paramref name="scene"/>).</summary>
+    private static async Task WithSession(Func<McpClient, Task> body, Modeling.Scene? scene = null)
     {
         using var cts = new CancellationTokenSource(Timeout);
         var toServer = new Pipe();
         var toClient = new Pipe();
-        var tools = new SceneTools(new SceneSession(TestScenes.Basic()));
+        var tools = new SceneTools(new SceneSession(scene ?? TestScenes.Basic()));
 
         var server = EngrCadMcpServer.RunAsync(
             toServer.Reader.AsStream(), toClient.Writer.AsStream(), tools, "test model", cts.Token);
@@ -68,7 +68,8 @@ public class McpProtocolTests
         {
             var tools = await client.ListToolsAsync();
             Assert.Equal(
-                ["describe_part", "export", "list_parts", "list_tabs", "reload", "screenshot"],
+                ["describe_part", "export", "list_parts", "list_tabs", "reload", "screenshot",
+                 "set_param", "suppress_feature", "unsuppress_feature"],
                 tools.Select(t => t.Name).Order());
 
             var screenshot = tools.Single(t => t.Name == "screenshot");
@@ -102,6 +103,63 @@ public class McpProtocolTests
                 "describe_part", new Dictionary<string, object?> { ["name"] = "pin" });
             Assert.Contains("\"closed\": true", TextOf(described));
         });
+    }
+
+    [Fact]
+    public async Task JsonTools_declare_output_schemas_and_return_structured_content()
+    {
+        await WithSession(async client =>
+        {
+            var tools = await client.ListToolsAsync();
+
+            // Every JSON-returning tool advertises an output schema; screenshot is an
+            // image and deliberately does not.
+            string[] structured = ["list_tabs", "list_parts", "describe_part", "export",
+                                   "reload", "set_param", "suppress_feature", "unsuppress_feature"];
+            foreach (string name in structured)
+            {
+                var tool = tools.Single(t => t.Name == name);
+                Assert.True(tool.ProtocolTool.OutputSchema is not null, $"'{name}' has no output schema");
+                Assert.Equal("object",
+                    tool.ProtocolTool.OutputSchema!.Value.GetProperty("type").GetString());
+            }
+            Assert.Null(tools.Single(t => t.Name == "screenshot").ProtocolTool.OutputSchema);
+
+            // structuredContent and the text block are the same payload, byte for byte
+            // of JSON meaning: one JsonObject feeds both.
+            var result = await client.CallToolAsync("list_parts");
+            Assert.NotNull(result.StructuredContent);
+            Assert.True(JsonNode.DeepEquals(
+                JsonNode.Parse(TextOf(result)),
+                JsonNode.Parse(result.StructuredContent!.Value.GetRawText())));
+
+            var parts = JsonNode.Parse(result.StructuredContent!.Value.GetRawText())!["parts"]!.AsArray();
+            Assert.Equal(3, parts.Count);
+        });
+    }
+
+    [Fact]
+    public async Task SetParam_over_the_protocol_returns_the_structured_regeneration_report()
+    {
+        await WithSession(async client =>
+        {
+            var result = await client.CallToolAsync("set_param", new Dictionary<string, object?>
+            {
+                ["part"] = "plate",
+                ["feature"] = "Base",
+                ["param"] = "Height",
+                ["value"] = 9,
+            });
+
+            Assert.False(result.IsError == true, TextOf(result));
+            Assert.NotNull(result.StructuredContent);
+            var report = JsonNode.Parse(result.StructuredContent!.Value.GetRawText())!.AsObject();
+            Assert.True((bool?)report["succeeded"]);
+            Assert.True((bool?)report["geometryUpdated"]);
+            Assert.Equal(9, (double?)report["value"]);
+            Assert.All(report["features"]!.AsArray(),
+                f => Assert.Equal("applied", (string?)f!["outcome"]));
+        }, TestScenes.Parametric());
     }
 
     [Fact]

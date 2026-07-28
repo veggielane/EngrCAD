@@ -27,6 +27,13 @@ static Scene BuildScene()
     model.Add(new Part("pin", Shape.Cylinder(2, 14),
         transform: Matrix4d.CreateTranslation(new Vector3d(-6, 0, 7))));
 
+    // A history-backed part so the write tools (set_param / suppress_feature) can be
+    // driven over a REAL stdio session: a rectangle extrusion plus a boss.
+    var history = new FeatureHistory();
+    history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(20, 10)) { Name = "Base", Height = 6 });
+    history.Add(new BooleanFeature(Shape.Box(4, 4, 40)) { Name = "Boss" });
+    model.Add(history.ToPart("plate", transform: Matrix4d.CreateTranslation(new Vector3d(0, 20, 0))));
+
     var field = scene.AddTab("field");
     field.Add(new Part("blob", Sdf.Sphere(5)));
 
