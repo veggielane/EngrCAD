@@ -647,6 +647,29 @@ public sealed class PolylineCurve3d : Curve3d
     public override Interval Domain => new(0, _cumulative[^1]);
     public override bool IsClosed => _isClosed;
 
+    /// <summary>
+    /// The same curve through a subset of its own vertices, dropping those within
+    /// <paramref name="tolerance"/> of the chord that replaces them
+    /// (<see cref="PolylineSimplify"/>, Douglas–Peucker). The marching tracer emits samples
+    /// at its march step, which says more about the step than about the curve, so a traced
+    /// arc typically keeps a handful of its hundreds of points.
+    /// </summary>
+    /// <remarks>
+    /// Retained points are bit-for-bit the originals, but the PARAMETERIZATION changes: a
+    /// polyline is chord-length parameterized, so dropping a vertex shortens the domain.
+    /// Anything holding parameters into this curve — a <c>CurveSegment</c>, a face's pulled
+    /// loop, a boolean's mandatory break — must be rebuilt, which is why nothing in the
+    /// pipeline simplifies implicitly.
+    /// </remarks>
+    public PolylineCurve3d Simplified(double tolerance)
+    {
+        var input = _isClosed ? _points[..^1] : _points;
+        var points = _isClosed
+            ? PolylineSimplify.SimplifyLoop(input, tolerance)
+            : PolylineSimplify.Simplify(input, tolerance);
+        return points.Count == input.Length ? this : new PolylineCurve3d(points, _isClosed);
+    }
+
     public override Vector3d PointAt(double t)
     {
         t = Domain.Clamp(t);

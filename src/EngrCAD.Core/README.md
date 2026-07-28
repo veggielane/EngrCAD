@@ -206,6 +206,28 @@ concerns.
   `ConvexHull2Tests.NearCollinear_MixedMagnitudeSlivers_*`. Hull output is now verified
   against BigInteger ground truth (`ExactReference`) rather than a tolerance: strictly
   convex, enclosing every input point, exactly.
+- **`PolylineSimplify`** — Douglas–Peucker simplification in 2D and 3D (g3's
+  `PolySimplification2` role): `Simplify` for open chains, `SimplifyLoop` for implicitly
+  closed ones, `MaxDeviation` to report what a simplification actually cost. It is the
+  INEXACT companion to `Region2d.WithoutCollinearVertices`, which drops only vertices that
+  provably change nothing — use this on traced intersection curves (`PolylineCurve3d
+  .Simplified`), imported profiles, and any polyline whose sample density says more about how
+  it was produced than about its shape. Guarantees: every dropped vertex is within the
+  tolerance of the retained chord that replaced it, measured to the SEGMENT (a spike that
+  doubles back along its own line is 0 from that line's extension and would vanish otherwise);
+  endpoints always kept; splitting always at the farthest vertex, so it is deterministic with
+  no ordering effects; and the output is a SUBSEQUENCE — retained points are bit-for-bit the
+  originals. Not guaranteed: topology. Two far-apart stretches of a wiggly loop can be pulled
+  onto each other, so a simplified loop may self-intersect where the input did not — which is
+  why nothing in the kernel simplifies implicitly and why `Region2dValidation` catches it for
+  callers who feed the result to `Region2d`. **The tolerance is absolute and in model units on
+  purpose**: it is a deviation the caller CHOOSES to accept, not a degeneracy guard, and only
+  the latter are relative per the epsilon ladder. The closed case cuts the loop at its first
+  vertex and the vertex farthest from it (the standard anchor pair, so a near-degenerate first
+  chord cannot decide the whole simplification) and never returns fewer than 3 points. The 2D
+  and 3D bodies share one recursion through a struct-constrained chord metric, the
+  `Bvh.Nearest<TMetric>` idiom — no interface dispatch, no boxing, and no second copy of
+  Douglas–Peucker to drift.
 - **`Arrangement2d` edge broad phase** — insertion used to test the new segment against
   EVERY existing edge, so a k-segment build was quadratic in exact-predicate calls (the
   workload `Region2dBoolean` feeds it: hundreds of chords per flattened loop). Edges are

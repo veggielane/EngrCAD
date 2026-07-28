@@ -47,6 +47,12 @@ operations. Depends only on `EngrCAD.Core`.
   the same arithmetic. `PhaseShiftedCurve` moves a closed curve's seam,
   P(t) = base(wrap(t + shift)) — how lofting aligns successive closed sections so the skin
   does not twist; `Underlying` forwards (a shifted circle still samples as a circle).
+  `PolylineCurve3d.Simplified(tolerance)` drops the samples the marching tracer's step
+  produced rather than the curve's shape (Core's `PolylineSimplify`, Douglas–Peucker):
+  retained vertices are bit-for-bit the originals, but a polyline is CHORD-LENGTH
+  parameterized, so the domain shortens and anything holding parameters into the curve — a
+  `CurveSegment`, a pulled face loop, a boolean's mandatory break — must be rebuilt. That is
+  why nothing in the pipeline simplifies implicitly.
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
