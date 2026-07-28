@@ -195,4 +195,98 @@ public class FilletChamferTests
         var mesh = shape.ToMesh();
         Assert.True(mesh.IsClosed);
     }
+
+    // ---- variable-setback chamfers ----
+
+    [Fact]
+    public void VariableChamfer_MatchesIndependentConvexHullExactly()
+    {
+        // Box (0,0,0)–(30,20,6) with law 1 + 0.05·x: every face of the result is an
+        // exact plane, so the solid IS the convex hull of its 12 vertices — 4 box
+        // bottom corners, 4 dropped side corners, 4 mitered top corners, all closed
+        // form. Two exact polyhedra, one volume.
+        var shape = Shape.Box(new Aabb((0, 0, 0), (30, 20, 6)))
+            .Chamfer(p => 1 + 0.05 * p.X, Top);
+        var solid = shape.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid);
+        Assert.True(mesh.IsClosed);
+
+        var hull = EngrCAD.Mesh.ConvexHull.Compute(
+        [
+            new(0, 0, 0), new(30, 0, 0), new(30, 20, 0), new(0, 20, 0),
+            // corner drops: setback at (0,0)=1, (30,0)=2.5, (30,20)=2.5, (0,20)=1.
+            new(0, 0, 5), new(30, 0, 3.5), new(30, 20, 3.5), new(0, 20, 5),
+            // miters: inset lines x=1, x=27.5, y=1+0.05x, y=17.5−0.05(x−30).
+            new(1, 1.05, 6), new(27.5, 2.375, 6), new(27.5, 17.625, 6), new(1, 18.95, 6),
+        ]);
+        double expected = hull.Volume();
+        Assert.True(Math.Abs(mesh.Volume() - expected) / expected < 1e-12,
+            $"volume {mesh.Volume()} vs hull {expected}");
+    }
+
+    [Fact]
+    public void VariableChamfer_OnSlotRim_KeepsArcsConstantAndTiltsTheStraights()
+    {
+        // A slot's end arcs both have endpoints at the same x, so a law in x is
+        // constant along each arc (exactly — the same X bits) while the straight
+        // edges' setbacks vary: cone bands and tilted planar strips together.
+        var shape = Shape.Extrude(Sketch.Slot(24, 8), 5)
+            .Chamfer(p => 0.8 + 0.03 * (p.X + 12), Top);
+        var solid = shape.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 64, 32);
+        Assert.True(mesh.IsClosed);
+
+        // Sanity envelope: more material than the max-constant chamfer, less than min.
+        double vMax = BRepTessellator.Tessellate(
+            Shape.Extrude(Sketch.Slot(24, 8), 5).Chamfer(0.8 + 0.03 * 24, Top).ToBrep(), 64, 32).Volume();
+        double vMin = BRepTessellator.Tessellate(
+            Shape.Extrude(Sketch.Slot(24, 8), 5).Chamfer(0.8, Top).ToBrep(), 64, 32).Volume();
+        Assert.InRange(mesh.Volume(), vMax, vMin);
+    }
+
+    [Fact]
+    public void VariableChamfer_LawVaryingAlongAnArc_IsRefusedAsSpiral()
+    {
+        var shape = Shape.Extrude(Sketch.Slot(24, 8), 5)
+            .Chamfer(p => 0.8 + 0.05 * (p.Y + 6), Top);
+        var error = Assert.Throws<NotSupportedException>(() => shape.ToBrep());
+        Assert.Contains("spiral", error.Message);
+    }
+
+    [Fact]
+    public void VariableChamfer_DescribesItselfAndStaysBrepNative()
+    {
+        var shape = Shape.Box(30, 20, 6).Chamfer(p => 1 + 0.02 * p.X, Top);
+        var report = shape.Explain(TargetRep.Brep);
+        Assert.True(report.IsConvertible);
+        Assert.Contains(report.Entries, e => e.Node.Contains("Chamfer(variable)"));
+
+        var atAngle = Shape.Box(30, 20, 6).ChamferAtAngle(p => 1 + 0.02 * p.X, 30, Top);
+        Assert.True(atAngle.Explain(TargetRep.Brep).IsConvertible);
+    }
+
+    [Fact]
+    public void VariableChamferEdges_ResolvesRimsAndLowers()
+    {
+        var shape = Shape.Box(30, 20, 6)
+            .ChamferEdges(p => 1 + 0.02 * p.X, s => Top(s).SelectMany(f => f.RimEdges()));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        Assert.True(BRepTessellator.Tessellate(solid).IsClosed);
+    }
+
+    [Fact]
+    public void VariableChamferRimFeature_RegeneratesThroughHistory()
+    {
+        var history = new FeatureHistory();
+        history.Add(new BooleanFeature(Shape.Box(new Aabb((0, 0, 0), (30, 20, 6)))));
+        history.Add(new VariableChamferRimFeature(p => 1 + 0.05 * p.X) { AngleDegrees = 45 });
+        var result = history.Regenerate();
+        Assert.True(result.Succeeded);
+        var solid = result.Body!.ToBrep();
+        solid.Validate();
+        Assert.True(BRepTessellator.Tessellate(solid).IsClosed);
+    }
 }

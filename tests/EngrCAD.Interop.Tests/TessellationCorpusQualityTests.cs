@@ -48,7 +48,8 @@ public class TessellationCorpusQualityTests
         "drilled plate", "cross-drilled housing", "spherical cavity",
         "threaded rod", "threaded hole",
         "loft", "shelled tray", "drafted boss",
-        "filleted box", "filleted L", "filleted hexagon", "chamfered box", "rounded box",
+        "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
+        "rounded box",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
         "sketch pocket", "engraved plate", "wedge",
     ];
@@ -113,6 +114,12 @@ public class TessellationCorpusQualityTests
             case "chamfered box":
                 return Shape.Box(30, 20, 6)
                     .Chamfer(1.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
+                    .ToBrep();
+            case "variable chamfer":
+                // A slot rim under a setback law in x: tilted planar strips on the
+                // straights, exact cone bands on the (locally constant) end arcs.
+                return Shape.Extrude(Sketch.Slot(24, 8), 5)
+                    .Chamfer(p => 0.8 + 0.03 * (p.X + 12), s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
                     .ToBrep();
             case "rounded box":
                 return Filleting.FilletAllEdges(SolidFactory.MakeBox(new Aabb((0, 0, 0), (20, 14, 8))), 2);

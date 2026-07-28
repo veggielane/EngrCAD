@@ -560,6 +560,43 @@ public abstract class Shape
             solid => Filleting.RimFacesFor(solid, edges(solid)));
     }
 
+    /// <summary>
+    /// VARIABLE-setback chamfer: <paramref name="setbackAt"/> is evaluated at each rim
+    /// corner of the LOWERED solid (transforms already baked, so the law reads final
+    /// coordinates and its result is used verbatim) and interpolates linearly along each
+    /// edge. Strips stay exact planes and sharp corners keep exact miters; arc rim edges
+    /// need the law constant along the arc, and a full circular rim needs it constant
+    /// everywhere — a circle offset by a varying amount is a spiral, which has no exact
+    /// B-Rep form. See <see cref="Filleting.ChamferRim(BrepSolid, BrepFace, Func{Vector3d, double})"/>.
+    /// </summary>
+    public Shape Chamfer(Func<Vector3d, double> setbackAt, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(setbackAt);
+        return new RimShape(this, fillet: false, 0, 0, faces, setbackAt, lawAngleDegrees: null);
+    }
+
+    /// <summary>Variable-setback chamfer at a constant angle from the face (the constant
+    /// angle is what keeps every strip planar); see <see cref="Chamfer(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepFace}})"/>.</summary>
+    public Shape ChamferAtAngle(
+        Func<Vector3d, double> setbackAt, double angleDegrees, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(setbackAt);
+        if (angleDegrees <= 0 || angleDegrees >= 90)
+            throw new ArgumentOutOfRangeException(nameof(angleDegrees),
+                "The chamfer angle is measured from the chamfered face and must lie strictly between 0° and 90°.");
+        return new RimShape(this, fillet: false, 0, 0, faces, setbackAt, angleDegrees);
+    }
+
+    /// <summary>Variable-setback chamfer of selected EDGES; the selection resolves to
+    /// complete rims exactly as <see cref="ChamferEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>.</summary>
+    public Shape ChamferEdges(
+        Func<Vector3d, double> setbackAt, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
+    {
+        ArgumentNullException.ThrowIfNull(setbackAt);
+        return new RimShape(this, fillet: false, 0, 0,
+            solid => Filleting.RimFacesFor(solid, edges(solid)), setbackAt, lawAngleDegrees: null);
+    }
+
     // ---- Draft (mould-release taper) ----
 
     /// <summary>

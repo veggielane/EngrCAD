@@ -620,10 +620,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     is the smallest failing example.
   - [ ] **Partial edge runs** — a band that stops mid-rim needs a termination surface
     (cliff, setback or vertex blend) and each exact one is a different surface.
-  - [ ] **Variable-SETBACK chamfers first, then variable-radius fillets.** The setback
-    case is cheap (the corner segment is a boundary ruling of both bilinear strips); the
-    radius case is blocked on the *corner*, not the band, and needs the same
-    non-conic-corner-curve machinery as curved-face shelling.
+  - [ ] **Variable-radius fillets** (variable-SETBACK chamfers ✅ landed — `ChamferRim`/
+    `ChamferRimAtAngle`/`ChamferEdges` law overloads + `Shape.Chamfer(setbackAt, faces)`
+    + `VariableChamferRimFeature`; strips stay exact planes because a constant top:side
+    ratio keeps the four corners coplanar). The radius case is blocked on the *corner*,
+    not the band, and needs the same non-conic-corner-curve machinery as curved-face
+    shelling.
   - [ ] **Sharp corners at ARC rim edges** (torus ∩ cylinder is not a conic).
 - [ ] **`StepReader`: trim a closed generator from meridian boundary arcs** —
   `FilletAllEdges` output EXPORTS correctly (a STEP `SURFACE_OF_REVOLUTION` is unbounded

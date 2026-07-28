@@ -284,17 +284,27 @@ internal sealed class RoundEdgesShape(Shape child, double radius) : Shape
     internal override string Describe() => $"RoundEdges(r={radius:g4})";
 }
 
-/// <summary>Rim chamfer/fillet applied to faces selected by a query on the lowered solid.</summary>
+/// <summary>Rim chamfer/fillet applied to faces selected by a query on the lowered solid.
+/// A non-null <paramref name="setbackLaw"/> is the VARIABLE chamfer (evaluated at rim
+/// corners on the lowered solid; <paramref name="lawAngleDegrees"/> null = the exactly
+/// symmetric side ratio 1, a value = that constant angle from the face).</summary>
 internal sealed class RimShape(
     Shape child, bool fillet, double amount, double sideAmount,
-    Func<BrepSolid, IEnumerable<BrepFace>> selector) : Shape
+    Func<BrepSolid, IEnumerable<BrepFace>> selector,
+    Func<Vector3d, double>? setbackLaw = null, double? lawAngleDegrees = null) : Shape
 {
     public Shape Child => child;
     public bool IsFillet => fillet;
     public double Amount => amount;
     public double SideAmount => sideAmount;
     public Func<BrepSolid, IEnumerable<BrepFace>> Selector => selector;
-    internal override string Describe() => fillet ? $"Fillet(r={amount:g4})" : $"Chamfer({amount:g4})";
+    public Func<Vector3d, double>? SetbackLaw => setbackLaw;
+    public double? LawAngleDegrees => lawAngleDegrees;
+    internal override string Describe() =>
+        fillet ? $"Fillet(r={amount:g4})"
+        : setbackLaw is not null
+            ? lawAngleDegrees is { } angle ? $"Chamfer(variable, {angle:0.###} deg)" : "Chamfer(variable)"
+            : $"Chamfer({amount:g4})";
 }
 
 /// <summary>

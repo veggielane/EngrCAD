@@ -555,9 +555,16 @@ internal static class ShapeCompiler
                         $"{rim.Describe()}: the face selector matched nothing on the lowered solid.");
                 foreach (var target in selected)
                 {
-                    solid = rim.IsFillet
-                        ? Filleting.FilletRim(solid, target, rim.Amount * featureScale)
-                        : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);
+                    // A setback LAW reads corner positions on the lowered solid — the
+                    // transforms are already baked into the geometry it sees — so its
+                    // result is used verbatim, never multiplied by the feature scale.
+                    solid = rim.SetbackLaw is { } law
+                        ? rim.LawAngleDegrees is { } lawAngle
+                            ? Filleting.ChamferRimAtAngle(solid, target, law, lawAngle)
+                            : Filleting.ChamferRim(solid, target, law)
+                        : rim.IsFillet
+                            ? Filleting.FilletRim(solid, target, rim.Amount * featureScale)
+                            : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);
                 }
                 return solid;
             }

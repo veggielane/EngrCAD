@@ -105,6 +105,39 @@ foreach (int angle in new[] { 20, 45, 70 })
 
 ![Three blocks chamfered at 20, 45 and 70 degrees from the top face](images/chamfer-angle.png)
 
+## Variable-setback chamfers
+
+`Chamfer(setbackAt, faceSelector)` takes a **law** instead of a number: it is evaluated
+at each rim corner (of the lowered solid, so transforms are visible) and the setback
+interpolates linearly along each edge. The result is still exact everywhere — a
+linearly varying inset of a straight edge is still a straight line, so miters stay
+exact intersections and every strip stays an exact plane:
+
+```csharp render:chamfer-variable
+// The chamfer grows from 0.8 at the left end of the slot to 1.4 at the right.
+var boss = Shape.Extrude(Sketch.Slot(36, 12), 8)
+    .Chamfer(p => 1.1 + 0.025 * p.X, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+
+var wedgeCut = Shape.Box(30, 20, 8)
+    .ChamferAtAngle(p => 1 + 0.08 * (p.X + 15), 60,
+        s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+
+var scene = new Scene();
+scene.Add(new Part("slot boss", boss, Palette.Steel,
+    Matrix4d.CreateTranslation((0, 14, 0))));
+scene.Add(new Part("wedge chamfer", wedgeCut, Palette.Brass,
+    Matrix4d.CreateTranslation((0, -14, 0))));
+```
+
+![A slot boss and a box whose top chamfers grow along x](images/chamfer-variable.png)
+
+Two rules keep it exact, both enforced loudly: an **arc** rim edge needs the law
+constant along the arc, and a **full circular rim** needs it constant everywhere — a
+circle offset by a varying amount is a spiral, which has no exact B-Rep form.
+`ChamferAtAngle(setbackAt, degrees, faces)` holds the angle constant along the rim,
+which is exactly what keeps the strips planar. (Variable-**radius** fillets remain
+refused: the corner miter of two variable bands is not a conic.)
+
 ## Rounding every edge at once
 
 `Filleting.FilletAllEdges` rounds **every** edge of a convex polyhedron in one call. It

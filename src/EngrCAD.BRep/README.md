@@ -534,6 +534,24 @@ operations. Depends only on `EngrCAD.Core`.
     (`ChamferRim`) or the "distance and angle" spelling `ChamferRimAtAngle(setback,
     degrees)` — setback measured IN the chamfered face, angle measured FROM it, 45° being
     the symmetric case.
+  - **Variable-setback chamfer** — `ChamferRim(solid, face, setbackAt)` /
+    `ChamferRimAtAngle(solid, face, setbackAt, degrees)` / `ChamferEdges(solid, edges,
+    setbackAt)` take a LAW `Func<Vector3d, double>` evaluated at each rim corner, linear
+    along each edge. Still exact everywhere, on two facts: a linearly varying
+    perpendicular inset of a straight edge is still a straight LINE (merely tilted), so
+    sharp corners keep exact line–line miters and the corner segment from mitered top
+    point to dropped bottom point is a boundary ruling of both adjacent strips; and a
+    constant top:side ratio (a constant angle) keeps each strip's four corner points
+    coplanar (`s₀·d₁ = d₀·s₁`), so every strip stays an exact PLANE — the strip's frame
+    just follows the tilted top boundary instead of the edge. Enforced restrictions,
+    both because a circle offset by a varying amount is a spiral with no exact B-Rep
+    form: an arc rim edge needs the law constant along the arc (its band remains the
+    exact cone), and a full circular rim needs it constant everywhere. Sharp corners
+    adjacent to an arc are refused under a law (the miter of a tilted line against a
+    concentric arc is not the arc's endpoint). A neighbour whose surface is
+    domain-driven is re-trimmed to the HIGHEST remaining rim corner, since a tilted rim
+    dips below a constant trim. Variable-RADIUS fillets stay refused — the corner, not
+    the band, is the blocker (see the future-work note below).
   - **Fillet** — a full circular rim becomes an exact quarter-torus (`FilletEdge`); a
     tangent-continuous chain of lines and arcs becomes quarter-cylinder and
     quarter-torus-segment bands sharing circular junction arcs; and a **sharp corner
@@ -682,8 +700,9 @@ termination surface — cliff, setback or vertex blend — that this engine does
 two equal-weight rational arcs is a degree-(2,1) NURBS whose v-sections are true circles,
 and it stays G1 with both neighbours — but the corner where two such bands meet is the
 intersection of two non-cylindrical surfaces, which is not a conic, so there is no exact
-miter to weld them on. Variable-SETBACK chamfers do not have that problem (the corner
-segment is a boundary ruling of both bilinear strips) and are the cheaper next step.
+miter to weld them on. (Variable-SETBACK chamfers do not have that problem — the corner
+segment is a boundary ruling of both strips — and are implemented; see `ChamferRim`'s
+law overloads above.)
 Loft gaps: sections must already be segment-compatible (no degree
 elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution

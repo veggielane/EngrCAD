@@ -17,6 +17,15 @@ namespace EngrCAD.BRep;
 /// sharp shared edge), and the miter is the only surface that closes that
 /// configuration: a spherical corner patch would leave the cross-section jumping from
 /// a rounded corner to a sharp one at the tangency plane.
+/// <para>Chamfers also come in a VARIABLE-setback form (<see
+/// cref="ChamferRim(BrepSolid, BrepFace, Func{Vector3d, double})"/>): a law evaluated at
+/// rim corners, linear along each edge. A linearly varying inset of a straight edge is
+/// still a straight line and a constant top:side ratio keeps each strip's four corners
+/// coplanar, so the strips stay exact planes and the miters exact intersections; arcs
+/// and full circles demand a locally constant law, because a circle offset by a varying
+/// amount is a spiral. Variable-RADIUS fillets stay refused: the bands themselves would
+/// be exact degree-(2,1) NURBS, but two such bands meet in a non-conic curve with no
+/// exact miter (the corner blocks it, not the band).</para>
 /// </summary>
 public static class Filleting
 {
@@ -63,6 +72,54 @@ public static class Filleting
             throw new ArgumentOutOfRangeException(nameof(angleDegrees),
                 "The chamfer angle is measured from the chamfered face and must lie strictly between 0° and 90°.");
         return ChamferRim(solid, face, setback, setback * Math.Tan(angleDegrees * Math.PI / 180));
+    }
+
+    /// <summary>
+    /// Variable-setback chamfer of the outer rim of a planar face: the law is evaluated
+    /// at each rim CORNER and the setback interpolates linearly between corner values
+    /// along each edge. The inset top boundary of a straight edge is then still a
+    /// straight LINE (merely tilted), so sharp corners keep exact miters — the corner
+    /// segment from the mitered top point to the dropped bottom point is a boundary
+    /// ruling of both adjacent strips — and every strip stays an exact plane, because a
+    /// symmetric (or constant-angle) law keeps the top and side offsets proportional.
+    /// Arc rim edges are accepted only where the law is constant along the arc (a circle
+    /// offset by a varying amount is a spiral, not a circle), and a full circular rim
+    /// only for an everywhere-constant law, for the same reason.
+    /// </summary>
+    public static BrepSolid ChamferRim(BrepSolid solid, BrepFace face, Func<Vector3d, double> setbackAt)
+    {
+        ArgumentNullException.ThrowIfNull(setbackAt);
+        // Side ratio exactly 1 — the symmetric chamfer — rather than Tan(45 deg),
+        // which is 1 minus an ulp.
+        return RimSurgeon.ApplyVariable(solid, face, setbackAt, 1.0);
+    }
+
+    /// <summary>
+    /// Variable-setback chamfer by a law measured IN the face and an angle measured FROM
+    /// it (see <see cref="ChamferRim(BrepSolid, BrepFace, Func{Vector3d, double})"/>).
+    /// The angle is constant along the rim, which is exactly what keeps every strip
+    /// planar: the side drop stays proportional to the top setback.
+    /// </summary>
+    public static BrepSolid ChamferRimAtAngle(
+        BrepSolid solid, BrepFace face, Func<Vector3d, double> setbackAt, double angleDegrees)
+    {
+        ArgumentNullException.ThrowIfNull(setbackAt);
+        if (angleDegrees <= 0 || angleDegrees >= 90)
+            throw new ArgumentOutOfRangeException(nameof(angleDegrees),
+                "The chamfer angle is measured from the chamfered face and must lie strictly between 0° and 90°.");
+        return RimSurgeon.ApplyVariable(solid, face, setbackAt, Math.Tan(angleDegrees * Math.PI / 180));
+    }
+
+    /// <summary>Variable-setback chamfer of a set of EDGES; the selection resolves to
+    /// complete rims exactly as <see cref="ChamferEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>.</summary>
+    public static BrepSolid ChamferEdges(
+        BrepSolid solid, IEnumerable<BrepEdge> edges, Func<Vector3d, double> setbackAt)
+    {
+        ArgumentNullException.ThrowIfNull(setbackAt);
+        var solidUnderConstruction = solid;
+        foreach (var face in RimFacesFor(solid, edges))
+            solidUnderConstruction = ChamferRim(solidUnderConstruction, face, setbackAt);
+        return solidUnderConstruction;
     }
 
     /// <summary>
@@ -603,7 +660,43 @@ public static class Filleting
                     ? FilletEdge(solid, rimEdge, top)
                     : ChamferCircularRim(solid, face, rimEdge, top, side, normal);
             }
-            return PolygonRim(solid, face, outer, top, side, fillet, normal);
+            return PolygonRim(solid, face, outer, top, side, fillet, normal, topLaw: null, sideRatio: 1);
+        }
+
+        /// <summary>Variable-setback chamfer entry: the law anchors at rim corners; a
+        /// full circular rim (no corners) is accepted only when the law is constant
+        /// around it, where it reduces to the exact cone band.</summary>
+        public static BrepSolid ApplyVariable(
+            BrepSolid solid, BrepFace face, Func<Vector3d, double> setbackAt, double sideRatio)
+        {
+            if (!face.IsPlanar(out _, out var normal))
+                throw new NotSupportedException("Rim features apply to planar faces.");
+            if (face.IsReversed)
+                throw new NotSupportedException("Rim features on reversed faces are not supported yet.");
+
+            var outer = OuterLoop(face);
+            if (outer.Coedges is [{ Edge: { IsClosedEdge: true } rimEdge }]
+                && rimEdge.Curve.Underlying is Circle3d)
+            {
+                var domain = rimEdge.Domain;
+                double reference = setbackAt(rimEdge.Curve.PointAt(domain.Start));
+                for (int i = 1; i < 8; i++)
+                {
+                    double sample = setbackAt(rimEdge.Curve.PointAt(domain.ParameterAt(i / 8.0)));
+                    // 1e-9 weld tier: "constant in effect" means the cone band's rings
+                    // land where an exactly-constant law would put them.
+                    if (Math.Abs(sample - reference) > Tolerance.Default.Linear)
+                        throw new NotSupportedException(
+                            "A variable setback on a full circular rim has no exact form (a circle offset " +
+                            "by a varying amount is a spiral, not a circle). Use a constant setback, or a " +
+                            "rim with corners for the law to anchor to.");
+                }
+                if (reference <= 0 || !double.IsFinite(reference))
+                    throw new ArgumentOutOfRangeException(nameof(setbackAt),
+                        $"The setback law must be positive and finite on the rim; it returned {reference}.");
+                return ChamferCircularRim(solid, face, rimEdge, reference, reference * sideRatio, normal);
+            }
+            return PolygonRim(solid, face, outer, 0, 0, fillet: false, normal, setbackAt, sideRatio);
         }
 
         private static BrepLoop OuterLoop(BrepFace face)
@@ -699,7 +792,8 @@ public static class Filleting
 
         private static BrepSolid PolygonRim(
             BrepSolid solid, BrepFace face, BrepLoop outer,
-            double top, double side, bool fillet, in Vector3d normal)
+            double top, double side, bool fillet, in Vector3d normal,
+            Func<Vector3d, double>? topLaw, double sideRatio)
         {
             var up = normal;
             int n = outer.Coedges.Count;
@@ -759,6 +853,37 @@ public static class Filleting
                         $"Rim loop does not chain: edge {i} ends at {edges[i].End} but edge {(i + 1) % n} starts at {edges[(i + 1) % n].Start}.");
             }
 
+            // Per-corner setbacks: corner i is the START of edge i. A null law is the
+            // uniform case and fills the arrays with the caller's constants, so every
+            // shared expression below computes bit-identical values to the pre-law code.
+            bool variable = topLaw is not null;
+            var topAt = new double[n];
+            var sideAt = new double[n];
+            for (int i = 0; i < n; i++)
+            {
+                topAt[i] = topLaw is null ? top : topLaw(edges[i].Start);
+                if (topAt[i] <= 0 || !double.IsFinite(topAt[i]))
+                    throw new ArgumentOutOfRangeException(nameof(topLaw),
+                        $"The setback law must be positive and finite at every rim corner; " +
+                        $"it returned {topAt[i]} at {edges[i].Start}.");
+                sideAt[i] = topLaw is null ? side : topAt[i] * sideRatio;
+            }
+            if (variable)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    if (edges[i].Arc is null)
+                        continue;
+                    int next = (i + 1) % n;
+                    // Weld tier: the concentric offset arc exists only for one value.
+                    if (Math.Abs(topAt[i] - topAt[next]) > Tolerance.Default.Linear)
+                        throw new NotSupportedException(
+                            $"An arc rim edge's setback must be constant along the arc (a circle offset by " +
+                            $"a varying amount is a spiral, not a circle); the law returned {topAt[i]} and " +
+                            $"{topAt[next]} at the ends of the arc starting at {edges[i].Start}.");
+                }
+            }
+
             // Interior loops (holes) must stay clear of the band: the shrunk boundary
             // may not cut through them.
             foreach (var holeLoop in face.Loops.Where(l => !ReferenceEquals(l, outer)))
@@ -778,7 +903,7 @@ public static class Filleting
                                     point.DistanceTo(e.Edge.Curve.PointAt(rimDomain.ParameterAt(r / 16.0))));
                             return best;
                         });
-                        if (clearance < top - 1e-9)
+                        if (clearance < topAt.Max() - 1e-9)
                             throw new NotSupportedException(
                                 "The rim feature would cut into an interior loop (hole); reduce the size or move the holes inward.");
                     }
@@ -796,13 +921,19 @@ public static class Filleting
             {
                 var previous = edges[(i + n - 1) % n];
                 mitered[i] = !IsSmoothCorner(previous, edges[i], up);
-                if (!fillet || !mitered[i])
+                if (!mitered[i])
                     continue;
-                if (previous.Arc is not null || edges[i].Arc is not null)
+                if (fillet && (previous.Arc is not null || edges[i].Arc is not null))
                     throw new NotSupportedException(
                         "A fillet rim's sharp corners must join two straight edges (the exact blend is " +
                         "the two bands' miter ellipse); a sharp corner at an arc has no exact conic — " +
                         "make the rim tangent-continuous there, or chamfer.");
+                if (variable && (previous.Arc is not null || edges[i].Arc is not null))
+                    throw new NotSupportedException(
+                        "A variable chamfer's sharp corners must join two straight edges: the miter of a " +
+                        "tilted inset line against a concentric offset arc is not the arc's own endpoint, " +
+                        "so the corner has no exact closure. Make the rim tangent-continuous there, or use " +
+                        "a constant setback.");
             }
 
             var topPoints = new Vector3d[n];
@@ -812,10 +943,13 @@ public static class Filleting
                 var previous = edges[(i + n - 1) % n];
                 var current = edges[i];
                 var corner = current.Start;
-                topPoints[i] = TopOffsetCorner(previous, current, corner, top, up, mitered[i]);
+                topPoints[i] = variable
+                    ? VariableTopCorner(previous, current, corner,
+                        topAt[(i + n - 1) % n], topAt[i], topAt[(i + 1) % n], up, mitered[i])
+                    : TopOffsetCorner(previous, current, corner, top, up, mitered[i]);
 
-                var dropA = corner + previous.DownDir * side;
-                var dropB = corner + current.DownDir * side;
+                var dropA = corner + previous.DownDir * sideAt[i];
+                var dropB = corner + current.DownDir * sideAt[i];
                 if (dropA.DistanceTo(dropB) > 1e-9)
                     throw new NotSupportedException(
                         "Rim corners must descend consistently on both neighbors (uniform side geometry).");
@@ -847,9 +981,9 @@ public static class Filleting
             {
                 int next = (i + 1) % n;
                 var info = edges[i];
-                topEdges[i] = OffsetEdge(info, topPoints[i], topPoints[next], top, up, atTop: true,
+                topEdges[i] = OffsetEdge(info, topPoints[i], topPoints[next], topAt[i], up, atTop: true,
                     topVertices[i], topVertices[next]);
-                bottomEdges[i] = OffsetEdge(info, bottomPoints[i], bottomPoints[next], side, up, atTop: false,
+                bottomEdges[i] = OffsetEdge(info, bottomPoints[i], bottomPoints[next], sideAt[i], up, atTop: false,
                     bottomVertices[i], bottomVertices[next]);
             }
             for (int i = 0; i < n; i++)
@@ -921,16 +1055,42 @@ public static class Filleting
                 ]);
                 bands.Add(new BrepFace(
                     BandSurface(edges[i], topPoints[i], bottomPoints[i], topPoints[next], bottomPoints[next],
-                        top, up, fillet, mitered[i], mitered[next]), [loop]));
+                        top, up, fillet, mitered[i], mitered[next], variable), [loop]));
             }
 
-            // Domain-driven neighbor surfaces must be trimmed to the lowered extent.
+            // Domain-driven neighbor surfaces must be trimmed to the lowered extent. A
+            // VARIABLE side drop tilts the lowered rim, so the trim must keep the
+            // HIGHEST remaining corner (trimming at a lower one would cut the surface
+            // below its own loop); for a uniform drop every corner is that corner, and
+            // the first is the pre-law behavior verbatim.
             var trims = new Dictionary<BrepFace, BrepFace>();
-            for (int i = 0; i < n; i++)
+            if (variable)
             {
-                if (!trims.ContainsKey(edges[i].Neighbor)
-                    && TrimNeighborBand(edges[i].Neighbor, bottomPoints[i]) is { } trimmedNeighbor)
-                    trims[edges[i].Neighbor] = trimmedNeighbor;
+                var highest = new Dictionary<BrepFace, Vector3d>();
+                for (int i = 0; i < n; i++)
+                {
+                    int next = (i + 1) % n;
+                    foreach (var candidate in new[] { bottomPoints[i], bottomPoints[next] })
+                    {
+                        if (!highest.TryGetValue(edges[i].Neighbor, out var current)
+                            || candidate.Dot(up) > current.Dot(up))
+                            highest[edges[i].Neighbor] = candidate;
+                    }
+                }
+                foreach (var (neighbor, point) in highest)
+                {
+                    if (TrimNeighborBand(neighbor, point) is { } trimmedNeighbor)
+                        trims[neighbor] = trimmedNeighbor;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    if (!trims.ContainsKey(edges[i].Neighbor)
+                        && TrimNeighborBand(edges[i].Neighbor, bottomPoints[i]) is { } trimmedNeighbor)
+                        trims[edges[i].Neighbor] = trimmedNeighbor;
+                }
             }
 
             var faces = solid.Faces
@@ -1023,6 +1183,50 @@ public static class Filleting
             return p1 + d1 * ((d * c - b * e) / denominator);
         }
 
+        /// <summary>
+        /// Top corner point under a per-corner setback law. Smooth corners share one
+        /// perpendicular offset (or the arc's exact radial); mitered corners intersect
+        /// the two edges' inset TOP LINES — each through the perpendicular offsets at
+        /// its own two corners, so a linearly varying setback tilts the line but keeps
+        /// it straight, and the miter stays an exact line–line intersection in the top
+        /// plane.
+        /// </summary>
+        private static Vector3d VariableTopCorner(
+            RimEdgeInfo previous, RimEdgeInfo current, in Vector3d corner,
+            double prevCornerAmount, double amount, double nextCornerAmount, in Vector3d up, bool miter)
+        {
+            var inPrev = up.Cross(TangentAtEnd(previous)).Normalized();
+            var inCurrent = up.Cross(TangentAtStart(current)).Normalized();
+            if (!miter)
+            {
+                // Arc corners offset exactly along the radial — the same rule as the
+                // uniform path, with this corner's own value.
+                var arcInfo = current.Arc is not null ? current : previous.Arc is not null ? previous : null;
+                if (arcInfo?.Arc is Circle3d arc)
+                {
+                    double newRadius = arc.Radius + (ConvexAboutUp(arcInfo, up) ? -amount : amount);
+                    return arc.Center + (corner - arc.Center) * (newRadius / arc.Radius);
+                }
+                return corner + inCurrent * amount;
+            }
+
+            // Straight-edge inward normals at the FAR corners: for a line the tangent is
+            // constant along the edge, so the end normals reuse the corner ones.
+            var p1 = corner + inPrev * amount;
+            var d1 = (p1 - (previous.Start + inPrev * prevCornerAmount)).Normalized();
+            var p2 = corner + inCurrent * amount;
+            var d2 = ((current.End + inCurrent * nextCornerAmount) - p2).Normalized();
+            var w = p2 - p1;
+            double a = d1.Dot(d1), b = d1.Dot(d2), c = d2.Dot(d2);
+            double d = d1.Dot(w), e = d2.Dot(w);
+            double denominator = a * c - b * b;
+            // Gram-determinant parallelism guard (unit-tangent scale, so ~angle²):
+            // round-off cutoff, not the model-unit tolerance.
+            if (Math.Abs(denominator) < 1e-15)
+                throw new NotSupportedException("Degenerate rim corner (parallel inset lines).");
+            return p1 + d1 * ((d * c - b * e) / denominator);
+        }
+
         /// <summary>New rim edge (top: inset; bottom: dropped), built in traversal
         /// direction — lines directly, arcs as concentric trimmed circles.</summary>
         private static BrepEdge OffsetEdge(
@@ -1078,7 +1282,8 @@ public static class Filleting
         private static Surface BandSurface(
             RimEdgeInfo info, in Vector3d topPoint, in Vector3d bottomPoint,
             in Vector3d topNext, in Vector3d bottomNext,
-            double amount, in Vector3d up, bool fillet, bool startMitered, bool endMitered)
+            double amount, in Vector3d up, bool fillet, bool startMitered, bool endMitered,
+            bool variable = false)
         {
             // Orientation notes: the tessellator's outward convention is ∂u × ∂v.
             // Revolved bands (∂u tangential along traversal) need bottom → top
@@ -1097,7 +1302,14 @@ public static class Filleting
 
             if (!fillet)
             {
-                var x = (info.End - info.Start).Normalized();
+                // The strip's frame x runs along the edge for the uniform case (the
+                // pre-law expression, kept verbatim) and along the TILTED top boundary
+                // for a variable setback — the strip is still an exact plane, because a
+                // constant top:side ratio keeps the four corner points coplanar
+                // (s0·d1 = d0·s1), but the edge direction itself leaves that plane.
+                var x = variable
+                    ? (topNext - topPoint).Normalized()
+                    : (info.End - info.Start).Normalized();
                 var toBottom = bottomPoint - topPoint;
                 var y = (toBottom - x * toBottom.Dot(x)).Normalized();
                 var strip = new PlaneSurface(topPoint, x, y);
