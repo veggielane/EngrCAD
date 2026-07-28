@@ -60,6 +60,7 @@ internal sealed class DelaunayTetrahedralization
     ];
 
     private readonly List<Vector3d> _points = [];
+    private readonly Dictionary<Vector3d, int> _pointIndex = [];
     private readonly List<int> _tetVerts = [];    // 4 per tet
     private readonly List<int> _tetNeighbours = []; // 4 per tet; neighbour i shares face i; -1 = none
     private readonly List<bool> _dead = [];
@@ -134,12 +135,11 @@ internal sealed class DelaunayTetrahedralization
         _points.AddRange(points);
         _firstArtificialVertex = points.Count;
 
-        var seen = new Dictionary<Vector3d, int>();
         for (int i = 0; i < points.Count; i++)
         {
-            if (!seen.TryAdd(points[i], i))
+            if (!_pointIndex.TryAdd(points[i], i))
                 throw new TetMeshException(
-                    $"Points {seen[points[i]]} and {i} are exactly coincident at {points[i]}. " +
+                    $"Points {_pointIndex[points[i]]} and {i} are exactly coincident at {points[i]}. " +
                     "Weld the input surface (MeshRepair.Clean) before meshing.");
         }
 
@@ -207,10 +207,38 @@ internal sealed class DelaunayTetrahedralization
     public void Insert(int vertex)
     {
         var p = _points[vertex];
-        int containing = Locate(p);
+        int containing = LocateTet(p);
         CollectCavity(containing, p);
         Retriangulate(vertex);
     }
+
+    /// <summary>
+    /// Appends <paramref name="point"/> to the vertex list and inserts it, returning its
+    /// index. A point exactly equal to an existing vertex returns that vertex's index and
+    /// changes nothing — refinement legitimately proposes a point that is already there,
+    /// and inserting a duplicate would build a degenerate cavity.
+    /// </summary>
+    public int AppendAndInsert(in Vector3d point)
+    {
+        if (_pointIndex.TryGetValue(point, out int existing))
+            return existing;
+
+        int index = _points.Count;
+        _points.Add(point);
+        _pointIndex[point] = index;
+        Insert(index);
+        return index;
+    }
+
+    /// <summary>True when <paramref name="point"/> is already a vertex of the triangulation.</summary>
+    public bool ContainsPoint(in Vector3d point) => _pointIndex.ContainsKey(point);
+
+    /// <summary>
+    /// The live tetrahedron whose closed region contains <paramref name="point"/>. Public
+    /// for classification, which needs to know which side of the domain a candidate
+    /// refinement point falls on.
+    /// </summary>
+    public int Locate(in Vector3d point) => LocateTet(point);
 
     /// <summary>
     /// Finds a live tetrahedron whose closed region contains <paramref name="p"/>, by a
@@ -222,7 +250,7 @@ internal sealed class DelaunayTetrahedralization
     /// the same answer, which is the only kind of fallback worth having. <see cref="WalkFallbacks"/>
     /// counts them so an unexpected rate is visible rather than merely slow.</para>
     /// </summary>
-    private int Locate(in Vector3d p)
+    private int LocateTet(in Vector3d p)
     {
         int current = _walkStart;
         if (_dead[current])
