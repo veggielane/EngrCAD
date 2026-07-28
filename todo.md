@@ -197,18 +197,6 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   `TessellationCorpusQualityTests.Corpus_EmitsDegenerateFacetsOnlyFromThePlanarEarcut`
   pins the structural claim meanwhile (no trimmed or grid tier ever emits one, and never
   more than one per face).
-- [ ] **`FilletAllEdges` corner patches carry vertices 2.6e-3 off their own surface at
-  fine density** (B-Rep side, found by the corpus gate). At 96/48 a rounded 20×14×8 box
-  has 70 vertices per spherical corner face — 176 vertex-instances over 37 644 facets, 34
-  of them in triangles with no projectable vertex at all — that fail pullback onto the
-  quarter-revolve they are drawn on, brute-force nearest surface point 2.6e-3 away (1.3e-4
-  of the model, three decades past the 1e-6 inverse-evaluation tier). Absent at 16/8 and
-  48/24. Orientation is unaffected (worst agreement 0.999866) and the mesh still welds
-  closed, which means the offending vertices are shared CONSISTENTLY between the patch and
-  its bands — so the error is in the edge curve the two faces share, not in the
-  tessellator. Locked as a documented exception in `KnownOffSurface`; fixing it must
-  update that table.
-
 ## Core (EngrCAD.Core)
 
 - [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
