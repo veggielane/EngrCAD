@@ -235,7 +235,8 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off</c> → headless export, no window (CI-friendly);
+    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off|.vtu</c> → headless export, no window (CI-friendly;
+    /// <c>.vtu</c> carries the parts' simulation results as point data for ParaView);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// <c>--render</c> additionally honors
     /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
@@ -624,6 +625,22 @@ public static class EngrCad
             case ".amf":
                 AmfWriter.WriteFile(ExportParts(instances, quality), path);
                 Log.WroteMeshFormat(log, path, instances.Count, "AMF");
+                return 0;
+
+            case ".vtu":
+                // VTK unstructured grid for ParaView: the geometry PLUS every part's
+                // simulation results. Arrays are the union of the parts' result names
+                // and a part lacking one contributes NaN (VtuWriter's rule), so the
+                // format name states how many arrays came out — a .vtu with none is a
+                // valid geometry file and the difference should be visible in the log.
+                VtuWriter.WriteFile(
+                    [.. instances.Select(i => (i.Part.GetMesh(quality), i.World, i.Part.Results))],
+                    path);
+                int arrays = instances
+                    .SelectMany(i => i.Part.Results.Select(f => f.Name))
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                Log.WroteMeshFormat(log, path, instances.Count, $"VTU, {arrays} result array(s)");
                 return 0;
 
             case ".step" or ".stp":

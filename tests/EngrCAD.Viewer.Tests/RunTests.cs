@@ -71,6 +71,44 @@ public class RunTests
     }
 
     [Fact]
+    public void ExportVtu_CarriesTheScenesSimulationResults()
+    {
+        var path = TempFile(".vtu");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], () =>
+            {
+                var scene = new Scene();
+                var plate = new Part("plate", Shape.Box(4, 3, 1));
+                scene.Add(plate);
+                var mesh = plate.GetMesh();
+                plate.AddResult(MeshField.Sample(mesh, "von Mises", "MPa", p => p.Z * 10));
+                plate.AddResult(MeshField.SampleVector(
+                    mesh, "displacement", "mm", p => new Vector3d(0, 0, p.X * 0.1)));
+                // A second part with NO results: its vertices must contribute NaN to the
+                // arrays rather than dropping them or inventing zeros.
+                scene.Add(new Part("jig", MeshPrimitives.Box(1, 1, 1),
+                    transform: Matrix4d.CreateTranslation((10, 0, 0))));
+                return scene;
+            });
+            Assert.Equal(0, code);
+
+            var root = System.Xml.Linq.XDocument.Load(path).Root!;
+            Assert.Equal("UnstructuredGrid", (string?)root.Attribute("type"));
+            var arrays = root.Descendants("PointData").Single().Elements("DataArray")
+                .ToDictionary(e => (string)e.Attribute("Name")!, e => e);
+            Assert.Equal(["von Mises", "displacement"], arrays.Keys);
+            Assert.Equal("3", (string?)arrays["displacement"].Attribute("NumberOfComponents"));
+            Assert.Contains("NaN", arrays["von Mises"].Value);
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void ExportStep_NonBrepScene_FailsWithExitCode()
     {
         var path = TempFile(".step");

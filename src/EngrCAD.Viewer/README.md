@@ -616,6 +616,16 @@ writes a CSV to the temp directory, reporting the path in the status bar (the sa
 EngrCAD.Modeling's `Bom`, over the same flattening the viewport renders; the viewer
 only renders the table.
 
+## VTU export (ParaView)
+
+`--export scene.vtu` writes a VTK XML unstructured grid: the flattened instances'
+geometry merged into one grid, plus every part's `MeshField` results as point-data
+arrays. Arrays are the **union** of the parts' result names, and a part that lacks one
+contributes `NaN` — dropping the array would lose the result that exists and zeros would
+show a fake safe region, while NaN is VTK's own "no value" (the writer's rule; see
+EngrCAD.Mesh's README). The log line states how many result arrays came out, so a `.vtu`
+of bare geometry is visibly different from one carrying a solve.
+
 ## STEP export of assemblies
 
 `--export part.step` now writes **one assembly file** when the scene has more than one
