@@ -51,6 +51,51 @@ rule, alongside a global view style (`ViewportControl.ViewStyle`, or
 left at the default follow the global style, explicitly non-default parts keep
 their own mode.
 
+## Debug modifiers (ghost, hide, isolate)
+
+Three part-level flags — the OpenSCAD `%`/`*`/`!` analog — mark parts while you
+debug a model, honored by the window, headless renders and every exporter through
+one shared rule set (`DebugFilter`):
+
+- **`part.Ghost = true`** (`%` background) — rendered translucent for reference,
+  **excluded from geometry exports**: jigs, envelopes, reference bodies you want to
+  see but never print.
+- **`part.Hidden = true`** (`*` disable) — not rendered, not exported, but still in
+  the model tree.
+- **`part.Isolated = true`** (`!` root) — when any part is isolated, only isolated
+  parts show and export.
+
+```csharp render:debug-ghost
+// The envelope is a ghost: visible as translucent context, absent from any
+// --export file. The bracket is the real part.
+var scene = new Scene();
+scene.Add(new Part("bracket", Shape.Box(40, 24, 8) - Shape.Cylinder(6, 20), Palette.Steel));
+var envelope = scene.Add(new Part("clearance envelope", Shape.Box(56, 40, 24), Palette.Sky));
+envelope.Ghost = true;
+```
+
+![A bracket inside a translucent ghosted clearance envelope](images/debug-ghost.png)
+
+## The validation report (Check)
+
+The toolbar's **Check** button — or `SceneReport.Create(scene)` in code, the
+`assert`/`echo` analog — reports every part's kind, face count, watertightness,
+volume, surface area and size, with notes naming anything suspicious: an open mesh
+(with its boundary-loop count), a part that failed to mesh (the exception becomes a
+named note, not a crash), a non-positive volume, active debug modifiers. Scripts
+assert on it:
+
+```csharp run:scene-report
+var scene = new Scene();
+scene.Add(new Part("plate", Shape.Box(60, 40, 8) - Shape.Cylinder(5, 20)));
+scene.Add(new Part("boss", Shape.Cylinder(8, 14)));
+
+var report = SceneReport.Create(scene);
+Console.WriteLine(report.ToText());
+if (!report.AllClean) throw new Exception("expected a clean model");
+if (report.Parts.Any(p => !p.Closed)) throw new Exception("everything should be watertight");
+```
+
 ## Section planes
 
 The toolbar's **Section** toggle clips everything beyond an axis-aligned plane —

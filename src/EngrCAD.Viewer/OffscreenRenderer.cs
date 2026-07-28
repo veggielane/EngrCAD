@@ -285,7 +285,9 @@ public static class OffscreenRenderer
         foreach (var instance in instances)
         {
             var part = instance.Part;
-            var mode = RenderModes.Resolve(style, part.DisplayMode);
+            // EffectiveDisplayMode, not DisplayMode: a Ghost part renders translucent
+            // in every front end (the debug-modifier contract).
+            var mode = RenderModes.Resolve(style, part.EffectiveDisplayMode);
             if (!uploaded.TryGetValue(part, out var shared))
             {
                 var mesh = part.GetMesh();

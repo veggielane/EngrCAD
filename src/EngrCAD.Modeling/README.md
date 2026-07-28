@@ -103,6 +103,12 @@ and participates in mesh booleans directly. The support table above tells you wh
 exits are lossless for the graph you've built — `Explain(target)` tells you for a
 specific shape.
 
+**File import**: `Shape.From(path)` reads .stl/.obj/.off through
+`MeshReader.ReadAndRepair` (weld, degenerate/duplicate removal, outward orientation,
+T-junction zip; hole filling opt-in via `fillHolesAndCracks`) and wraps the repaired
+mesh — the `out MeshRepairReport` overload reports what repair did. Docs:
+`docs/examples/import.md`.
+
 ## Sketching
 
 2D sketches — lines, circular arcs, cubic/quadratic béziers — drawn with a fluent
@@ -1308,6 +1314,38 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".
 
+## Debug modifiers & the validation report
+
+Part-level debug flags (the OpenSCAD `%`/`*`/`!` analog): `Part.Ghost` (rendered
+translucent via `Part.EffectiveDisplayMode` — the property every render path reads —
+but excluded from geometry exports), `Part.Hidden` (neither rendered nor exported),
+`Part.Isolated` (when any part in scope is isolated, only isolated parts
+show/export). The rules live in ONE place, `DebugFilter`
+(`IsShown`/`IsExported`/`Shown`/`Exported`), shared by the window, offscreen
+renders, `--export`, and the MCP tools — with no flags set every filter is the
+identity, so nothing changes until you ask. `SceneReport.Create(scene)` is the
+`assert`/`echo` analog: per part — kind, face count, watertightness (open meshes
+flagged with their boundary-loop count), volume (closed meshes only), surface area,
+world bounds — plus notes for meshing failures (named, not thrown) and active debug
+flags; `ToText()` is the aligned table the viewer's **Check** button shows, and
+`AllClean` is the one-line assertion for scripts.
+
+## 2D interchange (DXF & SVG)
+
+`DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE with
+layers): `Add(sketch, layer)` writes lines and arcs **exactly** (LWPOLYLINE bulge =
+tan(sweep/4) is an exact arc encoding; full-circle loops become CIRCLE; cubic béziers
+flatten at a stated chord tolerance — the one lossy mapping), and `ToSketches(out
+diagnostics)` comes back: closed polylines and circles directly, loose LINE/ARC
+entities chained end-to-end at the weld tier, anything unclosable *reported*, never
+invented (the `MeshReadResult` convention). Loop nesting is deliberately the caller's
+decision on import. `SvgDrawing` writes drawings from `Shape.Section`/`Silhouette`
+regions and exact sketches (SVG `A`/`C` commands — nothing flattened), with
+**line-class-driven styling** (`SvgLineClass.Visible`/`Hidden`/`Section` → solid /
+dashed / dash-dot groups per layer, the build123d edge-classification lesson);
+model space is y-up mm, flipped once at the root, 1 user unit = 1 mm. Docs:
+`docs/examples/dxf-svg.md`.
+
 ## Quality
 
 Bridges and mesh output honor `MeshQuality` (`SegmentsPerCircle`, `CurveSamples` for
@@ -1318,6 +1356,20 @@ scene that chose its own: `Scene.HasExplicitOptions` records whether options wer
 passed at construction, and `Scene.ResolveQuality(fallback)` /
 `Scene.PreMesh(fallback)` implement the precedence **explicit scene options >
 host fallback > `MeshQuality` defaults**.
+
+**Adaptive tessellation** (`TessellationQuality`, opt-in via
+`MeshQuality.Tessellation`): instead of a fixed count, state a criterion — max angle
+per segment (OpenSCAD `$fa`) and/or max chord deviation (OCCT linear deflection),
+clamped to `[MinSegments, MaxSegments]`. `SegmentsFor(radius)` is THE criterion;
+`ResolveFor(solid)` scans the solid's curvature radii (circular/elliptic edges,
+cylinder/sphere/revolved/extruded/swept surfaces) and resolves one count pair sized by
+the largest radius (the chord criterion binds there: n ≈ π·√(r/2d)). The load-bearing
+property: **`Part.GetMesh` and `Part.GetFeatureEdges` resolve through the same
+criterion**, so the exact edge overlay can no longer detach from the faceted fill on
+large rims (with fixed counts the overlay is deliberately finer at ≥ 96
+segments/circle, which is where the detachment came from). Null `Tessellation` keeps
+the fixed counts bit-for-bit; the SDF route's `SdfResolution` is deliberately
+untouched (a volumetric grid is not a per-radius quantity).
 
 ## Future work (todo.md)
 

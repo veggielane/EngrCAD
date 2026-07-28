@@ -1140,6 +1140,32 @@ for `in`-parameters being illegal in expression trees.
     independently written decoder. One camera per clip when no track drives it,
     framed over the union of first and last frame bounds — never per-frame framing
     (the explode slider's camera lesson).
+- **`$t` (time-parameterized GEOMETRY) — assessed and deliberately deferred.** OpenSCAD's
+  `$t` re-evaluates the model per frame, which is the one thing the Animation section
+  above is built never to do; this assessment records what it would actually take so the
+  decision is a design fact rather than a lingering question. (a) **The shape of the
+  feature is `Func<double, Scene>`**, not a track: geometry changing with t means the
+  instance count, meshes and pick BVHs all may change per frame, so none of the
+  matrix-only machinery (`SetInstancePoses`, APNG export's shared buffers, playback
+  scrubbing at interactive rates) applies — every frame is a full `Scene.PreMesh`. The
+  hot-reload loop already IS this pipeline for n = 1 (`SetScene` with camera preserved),
+  so the honest v1 is a frame-stepping export/preview over `t => scene`, reusing
+  `TabMeshLoader` per frame, NOT a live scrub. (b) **The cost model is the argument**:
+  a typical drilled-plate scene lowers+tessellates in ~1–10 s; at 30 frames even the
+  cheap end is a half-minute bake for one second of playback, so `$t` is an offline
+  RENDER feature (bake frames → APNG/frame sequence, where the per-frame camera rule
+  and writers already exist) and must never share the interactive transport UI, whose
+  scrub contract is "pure function, instant". (c) **Caching is where the real design
+  work lies**: a t-parameterized model usually varies few parameters, so the win is
+  `FeatureHistory`'s prefix caching (unchanged-prefix features reuse their bodies) plus
+  `Part` identity across frames for parts whose geometry did not change (bit-identical
+  parameter snapshot → reuse the cached mesh/buffers). Without that, every frame pays
+  the whole document; with it, a mechanism-plus-one-moving-boss model approaches
+  pose-animation cost. (d) **What it buys over the existing Animation**: morphing
+  geometry (a spring compressing, a bellows, parametric sweeps over time) — real, but
+  every rigid-body use case is already covered better by `MotionStudy`/`ExplodeTrack`.
+  Verdict: build it as a batch `RenderAnimation(Func<double, Scene>, frames, path)`
+  when a concrete model needs it; do not pre-build.
 - **Mates are a small dense nonlinear least-squares problem, deliberately.** Six unknowns
   per free occurrence, an analytic Jacobian, one global length scale making residuals and
   columns dimensionally uniform, and rank from a pivoted Cholesky. That is enough for the

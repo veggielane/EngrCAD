@@ -137,7 +137,7 @@ internal static partial class Log
     internal static partial void UnsupportedRenderFormat(ILogger logger, string extension);
 
     [LoggerMessage(EventId = 27, Level = LogLevel.Error,
-        Message = "Unsupported export format '{Extension}' — use .step, .stl, or .obj.")]
+        Message = "Unsupported export format '{Extension}' — use .step, .stl, .obj, .3mf, .amf, or .off.")]
     internal static partial void UnsupportedExportFormat(ILogger logger, string extension);
 
     [LoggerMessage(EventId = 28, Level = LogLevel.Error,
@@ -158,6 +158,13 @@ internal static partial class Log
         Message = "wrote {Path} (STEP assembly: {ProductCount} product(s), {InstanceCount} occurrence(s))")]
     internal static partial void WroteStepAssembly(
         ILogger logger, string path, int productCount, int instanceCount);
+
+    /// <summary>The mesh-format exports that carry a format name (3MF, AMF, OFF) — one
+    /// template rather than an event per extension.</summary>
+    [LoggerMessage(EventId = 32, Level = LogLevel.Information,
+        Message = "wrote {Path} ({InstanceCount} instance(s), {Format})")]
+    internal static partial void WroteMeshFormat(
+        ILogger logger, string path, int instanceCount, string format);
 
     // ---- live modeling loop ----
 

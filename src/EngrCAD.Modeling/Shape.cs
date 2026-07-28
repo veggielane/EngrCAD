@@ -22,6 +22,21 @@ public sealed class MeshQuality
     public int CurveSamples { get; set; } = 24;
     public int SdfResolution { get; set; } = 64;
 
+    /// <summary>
+    /// Opt-in adaptive tessellation: when set, B-Rep tessellation (and the feature-edge
+    /// overlay) resolve segment counts from the model's own curvature radii through
+    /// this criterion instead of the fixed <see cref="SegmentsPerCircle"/>/
+    /// <see cref="CurveSamples"/> — see <see cref="TessellationQuality"/>. Null (the
+    /// default) keeps the fixed counts exactly.
+    /// </summary>
+    public TessellationQuality? Tessellation { get; set; }
+
+    /// <summary>The (segmentsPerCircle, curveSamples) a B-Rep tessellation of
+    /// <paramref name="solid"/> should use under this quality — the fixed counts, or
+    /// the adaptive resolution when <see cref="Tessellation"/> is set.</summary>
+    internal (int SegmentsPerCircle, int CurveSamples) ResolveSegments(BrepSolid solid) =>
+        Tessellation?.ResolveFor(solid) ?? (SegmentsPerCircle, CurveSamples);
+
     internal static readonly MeshQuality Default = new();
 }
 
@@ -885,6 +900,35 @@ public abstract class Shape
     public static Shape From(BrepSolid solid) => new SourceShape(solid);
     public static Shape From(HalfEdgeMesh mesh) => new SourceShape(mesh);
     public static Shape From(Sdf sdf) => new SourceShape(sdf);
+
+    /// <summary>
+    /// Imports a mesh file (.stl, .obj, or .off) as a mesh-backed shape — the
+    /// user-facing wrapper over <see cref="MeshReader.ReadAndRepair"/>: the file is
+    /// read (dirty files weld rather than throw), run through the
+    /// <see cref="MeshRepair"/> pipeline (crack welding, degenerate/duplicate removal,
+    /// consistent outward orientation, T-junction zipping), and wrapped via
+    /// <see cref="From(HalfEdgeMesh)"/> so booleans, transforms and the implicit route
+    /// all work on it. Use the <c>out</c>-report overload to see what repair did.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Unrecognized file extension.</exception>
+    /// <exception cref="InvalidOperationException">The file's defects need topological
+    /// surgery beyond the repair pipeline.</exception>
+    public static Shape From(string path) => From(path, out _);
+
+    /// <summary><see cref="From(string)"/> with the repair report, and opt-in hole
+    /// filling: <paramref name="fillHolesAndCracks"/> runs the full
+    /// <see cref="MeshRepair.AutoRepair(MeshReadResult, MeshRepairOptions?)"/> dispatch
+    /// (pair-wise crack welding + hole filling). Off by default — closing holes invents
+    /// geometry, which an importer should only do when asked.</summary>
+    public static Shape From(
+        string path, out MeshRepairReport report, bool fillHolesAndCracks = false,
+        MeshRepairOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var (mesh, repairReport) = MeshReader.ReadAndRepair(path, options, fillHolesAndCracks);
+        report = repairReport;
+        return From(mesh);
+    }
 
     /// <summary>
     /// Heightmap terrain — OpenSCAD's <c>surface()</c>: the grid becomes a closed

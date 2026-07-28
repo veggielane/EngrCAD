@@ -736,7 +736,7 @@
             _drawn.Add(new ViewportInstance(
                 keys.Mesh, instance.World, part.Color ?? Palette.Steel,
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
-                part.DisplayMode,
+                part.EffectiveDisplayMode,   // Ghost renders translucent, same as desktop
                 keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices,
                 Visible: true, ClippedBySection: part.ClippedBySection));
             _drawnParts.Add(part);

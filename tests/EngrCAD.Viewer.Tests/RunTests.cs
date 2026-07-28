@@ -96,6 +96,90 @@ public class RunTests
     public void Export_MissingPathOrBadExtension_FailsWithUsageCode()
     {
         Assert.Equal(2, EngrCad.Run(["--export"], BracketScene));
-        Assert.Equal(2, EngrCad.Run(["--export", TempFile(".3mf")], BracketScene));
+        Assert.Equal(2, EngrCad.Run(["--export", TempFile(".xyz")], BracketScene));
+    }
+
+    [Fact]
+    public void Export_HonorsDebugModifiers()
+    {
+        // Three boxes: one normal, one Hidden (* analog), one Ghost (% analog) — only
+        // the normal one may reach the file (8 corner vertices in the merged OBJ).
+        var path = TempFile(".obj");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], () =>
+            {
+                var scene = new Scene();
+                scene.Add(new Part("keep", MeshPrimitives.Box(1, 1, 1)));
+                scene.Add(new Part("hidden", MeshPrimitives.Box(1, 1, 1),
+                    transform: Matrix4d.CreateTranslation((5, 0, 0)))).Hidden = true;
+                scene.Add(new Part("ghost", MeshPrimitives.Box(1, 1, 1),
+                    transform: Matrix4d.CreateTranslation((10, 0, 0)))).Ghost = true;
+                return scene;
+            });
+            Assert.Equal(0, code);
+            var lines = File.ReadAllLines(path);
+            Assert.Equal(8, lines.Count(l => l.StartsWith("v ")));
+            Assert.Single(lines, l => l.StartsWith("o "));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ExportOff_WritesAMergedOffFile()
+    {
+        var path = TempFile(".off");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], BracketScene);
+            Assert.Equal(0, code);
+            var result = MeshReader.ReadFile(path);
+            Assert.NotNull(result.Mesh);
+            Assert.True(result.Mesh!.IsClosed);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Export3mf_WritesAValidPackage()
+    {
+        var path = TempFile(".3mf");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], BracketScene);
+            Assert.Equal(0, code);
+            using var archive = System.IO.Compression.ZipFile.OpenRead(path);
+            Assert.NotNull(archive.GetEntry("3D/3dmodel.model"));
+            Assert.NotNull(archive.GetEntry("[Content_Types].xml"));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void ExportAmf_WritesObjectsWithNames()
+    {
+        var path = TempFile(".amf");
+        try
+        {
+            int code = EngrCad.Run(["--export", path], BracketScene);
+            Assert.Equal(0, code);
+            var document = System.Xml.Linq.XDocument.Load(path);
+            Assert.Equal("amf", document.Root!.Name.LocalName);
+            Assert.Contains(document.Root.Elements("object"),
+                o => o.Element("metadata")?.Value == "bracket");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

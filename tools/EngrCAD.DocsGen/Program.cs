@@ -203,7 +203,9 @@ var options = ScriptOptions.Default
         typeof(Shape).Assembly,
         // The viewer, so a snippet can declare `sectionPlanes`/`camera` (see below) --
         // SectionPlane and CameraState live there.
-        typeof(EngrCad).Assembly)
+        typeof(EngrCad).Assembly,
+        // ZipFile, so the exports page can open the 3MF package it just wrote.
+        typeof(System.IO.Compression.ZipFile).Assembly)
     .AddImports(
         "System", "System.IO", "System.Linq", "System.Collections.Generic",
         "EngrCAD.Core", "EngrCAD.Core.Geometry2", "EngrCAD.Mesh", "EngrCAD.Implicit",

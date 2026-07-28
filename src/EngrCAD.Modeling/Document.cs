@@ -92,6 +92,30 @@ public sealed class Part
     /// </summary>
     public bool ClippedBySection { get; set; } = true;
 
+    // ---- debug display modifiers (the OpenSCAD #/%/!/* analog, part-level) ----
+
+    /// <summary>Debug modifier (OpenSCAD <c>*</c> disable): the part is not rendered
+    /// and not exported. Unlike removing it from the scene, it keeps its tree row (a
+    /// viewer may re-show it) and its palette color. See <see cref="DebugFilter"/> for
+    /// the rules viewers and exporters share.</summary>
+    public bool Hidden { get; set; }
+
+    /// <summary>Debug modifier (OpenSCAD <c>%</c> background): rendered translucent
+    /// for reference, but EXCLUDED from geometry exports — scaffolding you want to see
+    /// but never print. <see cref="EffectiveDisplayMode"/> resolves it.</summary>
+    public bool Ghost { get; set; }
+
+    /// <summary>Debug modifier (OpenSCAD <c>!</c> root): when ANY part in scope has
+    /// this set, only isolated parts are shown/exported. Scope is the tab in the
+    /// viewer and the scene for headless render/export (<see cref="DebugFilter"/>).</summary>
+    public bool Isolated { get; set; }
+
+    /// <summary>What a renderer should draw this part as: <see cref="DisplayMode"/>,
+    /// with <see cref="Ghost"/> forcing <see cref="Modeling.DisplayMode.Translucent"/>.
+    /// Every render path (window, offscreen, web) reads THIS, never the raw mode, so
+    /// ghosting cannot fork between front ends.</summary>
+    public DisplayMode EffectiveDisplayMode => Ghost ? DisplayMode.Translucent : DisplayMode;
+
     public Matrix4d Transform { get; set; } = Matrix4d.Identity;
 
     private readonly Lock _meshLock = new();
@@ -335,7 +359,12 @@ public sealed class Part
             // route): tessellate the ONE cached solid. This is exactly what
             // Shape.ToMesh does for such a graph — it just re-lowered every time.
             if (SolidCore() is { } solid)
-                return _mesh = BRepTessellator.Tessellate(solid, q.SegmentsPerCircle, q.CurveSamples, progress);
+            {
+                // Fixed counts, or the adaptive TessellationQuality resolution — the
+                // SAME resolution GetFeatureEdges uses, so overlay and fill agree.
+                var (segmentsPerCircle, curveSamples) = q.ResolveSegments(solid);
+                return _mesh = BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress);
+            }
             if (_solidError is { } error)
                 ExceptionDispatchInfo.Capture(error).Throw();   // same failure ToMesh would raise
 
@@ -488,10 +517,14 @@ public sealed class Part
             {
                 try
                 {
-                    return _featureEdges = BrepFeatureEdges.Extract(
-                        solid,
-                        Math.Max(96, q.SegmentsPerCircle),
-                        Math.Max(48, q.CurveSamples));
+                    // Under an adaptive quality the overlay uses EXACTLY the mesh's
+                    // resolved counts (one criterion drives both, so the smooth exact
+                    // edge cannot detach from the faceted fill it outlines); with fixed
+                    // counts it keeps the deliberately finer display resolution.
+                    var (segmentsPerCircle, curveSamples) = q.Tessellation is { } adaptive
+                        ? adaptive.ResolveFor(solid)
+                        : (Math.Max(96, q.SegmentsPerCircle), Math.Max(48, q.CurveSamples));
+                    return _featureEdges = BrepFeatureEdges.Extract(solid, segmentsPerCircle, curveSamples);
                 }
                 catch
                 {

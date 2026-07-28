@@ -158,7 +158,10 @@ public static class EngrCad
         // render never touches the document.
         if (explode != 0)
             scene.AutoExplode();
-        var instances = scene.Instances(explode).ToList();
+        // Debug modifiers: Hidden parts (and non-isolated parts under an active
+        // isolate) are excluded; Ghost parts render translucent via
+        // EffectiveDisplayMode. With no flags set this is the identity.
+        var instances = DebugFilter.Shown([.. scene.Instances(explode)]);
         // Building the preview lowers geometry, so it happens HERE, on the caller's
         // thread, before the GL context exists — the headless mirror of the window's
         // background-task rule.
@@ -227,7 +230,7 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|path.obj</c> → headless export, no window (CI-friendly);
+    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off</c> → headless export, no window (CI-friendly);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// <c>--render</c> additionally honors
     /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
@@ -570,21 +573,46 @@ public static class EngrCad
         }
 
         var quality = scene.ResolveQuality(options.Quality);
+        // Debug modifiers: Hidden and Ghost parts never reach an export file, and an
+        // active isolate exports only isolated parts. With no flags this is the
+        // identity (same instances, same order).
+        var instances = DebugFilter.Exported([.. scene.AllInstances]);
+        if (instances.Count == 0)
+        {
+            Log.NothingToExport(log);
+            return 1;
+        }
         switch (Path.GetExtension(path).ToLowerInvariant())
         {
             case ".obj":
-                WriteMergedObj(scene, path, quality);
-                Log.WroteObj(log, path, scene.AllInstances.Count());
+                WriteMergedObj(instances, path, quality);
+                Log.WroteObj(log, path, instances.Count);
                 return 0;
 
             case ".stl":
                 StlWriter.WriteFile(
-                    [.. scene.AllInstances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
-                Log.WroteStl(log, path, scene.AllInstances.Count());
+                    [.. instances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
+                Log.WroteStl(log, path, instances.Count);
+                return 0;
+
+            case ".off":
+                OffWriter.WriteFile(
+                    [.. instances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
+                Log.WroteMeshFormat(log, path, instances.Count, "merged OFF");
+                return 0;
+
+            case ".3mf":
+                ThreeMfWriter.WriteFile(ExportParts(instances, quality), path);
+                Log.WroteMeshFormat(log, path, instances.Count, "3MF");
+                return 0;
+
+            case ".amf":
+                AmfWriter.WriteFile(ExportParts(instances, quality), path);
+                Log.WroteMeshFormat(log, path, instances.Count, "AMF");
                 return 0;
 
             case ".step" or ".stp":
-                return ExportStep(scene, path, log);
+                return ExportStep(scene, instances, path, log);
 
             default:
                 Log.UnsupportedExportFormat(log, Path.GetExtension(path));
@@ -600,11 +628,13 @@ public static class EngrCad
     /// referenced N times. A single-solid scene still writes the plain
     /// MANIFOLD_SOLID_BREP file it always did.
     /// </summary>
-    private static int ExportStep(Scene scene, string path, ILogger log)
+    private static int ExportStep(
+        Scene scene, IReadOnlyList<PartInstance> instances, string path, ILogger log)
     {
         // The parts' shared cached solids (Part.TryGetSolid) — the same lowering the
-        // display mesh and edge overlay used, not a fresh compile per export.
-        var plan = StepAssembly.Plan(scene);
+        // display mesh and edge overlay used, not a fresh compile per export. The
+        // instance list arrives already debug-filtered.
+        var plan = StepAssembly.Plan(instances);
         foreach (var (part, _) in plan.Skipped)
             Log.SkippingNonBrepPart(log, part.Name);
         if (plan.Instances.Count == 0)
@@ -627,14 +657,24 @@ public static class EngrCad
         return 0;
     }
 
+    /// <summary>The instances as named, posed, colored export parts — what the
+    /// part-aware mesh formats (3MF, AMF) consume. Names are instance paths, so an
+    /// assembly's occurrences stay distinguishable in a slicer's object list.</summary>
+    private static List<MeshExportPart> ExportParts(
+        IReadOnlyList<PartInstance> instances, MeshQuality quality) =>
+        [.. instances.Select(i => new MeshExportPart(
+            i.Part.GetMesh(quality), i.World, i.Path,
+            i.Part.Color is { } c ? (c.R, c.G, c.B) : null))];
+
     /// <summary>All part instances merged into one OBJ (assemblies flattened), with
     /// each instance's composed world transform applied.</summary>
-    private static void WriteMergedObj(Scene scene, string path, MeshQuality quality)
+    private static void WriteMergedObj(
+        IReadOnlyList<PartInstance> instances, string path, MeshQuality quality)
     {
         var culture = CultureInfo.InvariantCulture;
         using var writer = new StreamWriter(path);
         int offset = 1; // OBJ is 1-based
-        foreach (var instance in scene.AllInstances)
+        foreach (var instance in instances)
         {
             writer.WriteLine($"o {instance.Path.Replace(' ', '_')}");
             var (positions, faces) = instance.Part.GetMesh(quality).ToIndexed();

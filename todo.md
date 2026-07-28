@@ -532,24 +532,27 @@ export — is recorded in CLAUDE.md):
     (that section is an area, not a curve). A proper answer needs coplanar-face handling,
     the same gap as coplanar booleans.
 - [ ] `roof()` — straight-skeleton roof over a polygon; low priority
-- [ ] **`TessellationQuality` options type** — unify `segmentsPerCircle`/
-  `curveSamples`/`resolution` into one type (max angle, max chord deviation, min/max
-  segments) with **adaptive** curvature-based sampling ($fn/$fa/$fs, and OCCT's
-  deflection-based `BRepMesh` criterion)
-- [ ] Debug modifiers (`#`/`%`/`!`/`*`) — per-body display flags (ghost/isolate/hide;
-  highlight exists via selection)
+- [ ] **Camera-adaptive tessellation on zoom** — `TessellationQuality` ✅ landed (max
+  angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
+  the follow-on is re-resolving against the on-screen pixel size of a radius when the
+  camera zooms, which needs re-tessellation plumbing in the viewer.
+- [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
+  + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
+  stays the selection mechanism): web viewport honors Ghost (EffectiveDisplayMode)
+  but not yet Hidden/Isolated visibility; tree rows could gray hidden parts.
 - [ ] `$t` animation — time-parameterized models; viewer re-tessellates per frame. This
   is the *expensive* cousin of the Animation section above and deliberately separate:
   that one moves poses and the camera only, which is why it can animate with matrices
   alone; this one changes geometry, so every frame pays a full lower + tessellate.
-- [ ] model-validation report (volumes, bounds, manifoldness per body) in the viewer —
-  the `assert/echo` analog
-- [ ] export 3MF / AMF (zip+XML; 3MF is the modern printing format), OFF
-- [ ] `Shape.From(path)` import sugar — the engine layer ✅ landed (`MeshReader` STL/
-  OBJ/OFF + `MeshRepair.Clean` + `ReadAndRepair`); wrap it in Modeling for user-facing
-  import, then a docs-site example becomes executable (write-with-StlWriter →
-  dirty-in-memory → ReadAndRepair)
-- [ ] import/export DXF + SVG (2D profiles in/out; SVG also useful for drawings)
+  **Design assessment recorded in design.md** ("$t — assessed and deliberately
+  deferred"): shape is `Func<double, Scene>` + offline frame bake, the work is
+  prefix/identity caching across frames, and it should be built only when a concrete
+  model needs morphing geometry.
+- [ ] **DXF/SVG follow-ups** (v1 ✅ landed — `DxfDocument` LINE/ARC/CIRCLE/LWPOLYLINE
+  with layers both ways, exact bulge arcs; `SvgDrawing` visible/hidden/section line
+  classes over Section/Silhouette/Sketch): DXF SPLINE entities (cubic béziers now
+  flatten on export), hidden-line classification computed from the model (needs HLR —
+  today the caller says which class a curve set is), DXF units header ($INSUNITS).
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
@@ -724,12 +727,9 @@ where this project already points.
   auto-measuring selectors), so this is mostly a **2D drawing sheet** gap: dimensions
   laid out on a projected view rather than in model space. Pairs with the HLR item in the
   OCCT section — HLR gives the view, drafting gives the annotation on it.
-- [ ] **Exporter breadth** — between them: SVG and DXF with layers and line types
-  (visible/hidden), 3MF, glTF, VTK, VRML, AMF. DXF/SVG and 3MF are already open items
-  elsewhere in this file; the specific thing worth taking from build123d's `ExportSVG`/
-  `ExportDXF` is **line-type and layer control driven by edge classification** (visible
-  vs hidden vs section), which is what makes an exported drawing usable rather than a
-  flat soup of curves.
+- [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
+  `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
+  build123d's edge-classification line types); remaining: glTF, VTK, VRML.
 - [ ] **`pack`** — build123d's arrange-parts-on-a-build-plate helper (2D bin packing of
   part footprints). Small, self-contained, and immediately useful for 3D-print export of
   a multi-part assembly; `Shape.Silhouette` already produces the footprint it needs.
@@ -777,16 +777,6 @@ where this project already points.
     ("±0.1" via `Label` today).
   - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
     STEP AP242 PMI export (far future).
-- [ ] **Chord-deviation tessellation for large parts** — investigated, and the obvious
-  premise was WRONG: a fixed 96 segments/circle for feature edges is scale-*free*
-  (relative sagitta 5.4e-4 at any radius) and a 400 mm flange's rim renders smooth at
-  whole-part framing. Zoomed onto a large rim, what actually shows is the **display
-  mesh** faceting at `SegmentsPerCircle`, with the exact edge overlay visibly
-  *detaching* from the fill it outlines — the edge is the accurate one, and raising its
-  count makes the detachment worse. The real fix is the existing **`TessellationQuality`**
-  item: one max-chord-deviation criterion driving the display mesh *and*
-  `BrepFeatureEdges` so they agree by construction. Camera-adaptive re-extraction on
-  zoom is the follow-on.
 - [ ] **Construction-tree follow-ups** (tree + per-node preview ✅ landed) — a
   **rollback bar** (drag a marker in the feature list; suppress below it),
   **suppress-from-tree**, and **`[Param]` editing** in the properties panel: all cheap

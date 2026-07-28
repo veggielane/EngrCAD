@@ -282,6 +282,9 @@ public sealed class SceneTools(SceneSession session)
             return Error("Pass either sectionPlanes or sectionAxis/sectionOffset, not both.");
         if (!TryResolveInstances(tab, part, out var instances, out string? scopeError))
             return Error(scopeError);
+        // Debug modifiers: Hidden parts (and non-isolated parts under an active
+        // isolate) don't render; Ghost parts render translucent.
+        instances = DebugFilter.Shown(instances);
         if (instances.Count == 0)
             return Error("Nothing to render: the scene (or the requested tab/part) has no parts.");
 
@@ -444,11 +447,12 @@ public sealed class SceneTools(SceneSession session)
 
     /// <summary>
     /// Writes the scene to a file the caller names: <c>.step</c> (exact B-Rep, one file
-    /// per part), <c>.stl</c>/<c>.obj</c> (meshes, instances merged with their
-    /// transforms), or <c>.png</c> (a render).
+    /// per part), <c>.stl</c>/<c>.obj</c>/<c>.off</c> (meshes, instances merged with
+    /// their transforms), <c>.3mf</c>/<c>.amf</c> (per-instance objects with names and
+    /// colors), or <c>.png</c> (a render).
     /// </summary>
     public CallToolResult Export(
-        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .png).")]
+        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .3mf, .amf, .off, .png).")]
         string path,
         [Description("Export only this tab (omit for the whole scene).")] string? tab = null,
         [Description("Image width in pixels for .png exports, 16-4096 (default 1280).")]
@@ -469,11 +473,17 @@ public sealed class SceneTools(SceneSession session)
         if (extension == ".png")
         {
             return EngrCad.CanRenderToImage
-                ? ExportPng(path, instances, width, height)
+                ? ExportPng(path, DebugFilter.Shown(instances), width, height)
                 : Error("Offscreen rendering is not available on this machine "
                       + $"({OffscreenRenderer.UnavailableReason ?? "no GL/EGL context"}); "
                       + "export .step, .stl, or .obj instead.");
         }
+
+        // Debug modifiers: Hidden and Ghost parts never reach a geometry export;
+        // an active isolate exports only isolated parts (see DebugFilter).
+        instances = DebugFilter.Exported(instances);
+        if (instances.Count == 0)
+            return Error("Nothing to export: every part is hidden or ghosted by debug modifiers.");
 
         try
         {
@@ -498,12 +508,39 @@ public sealed class SceneTools(SceneSession session)
                         ["instances"] = instances.Count,
                     });
 
+                case ".off":
+                    OffWriter.WriteFile([.. instances.Select(i => (i.Part.GetMesh(quality), i.World))], path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "OFF (merged)",
+                        ["instances"] = instances.Count,
+                    });
+
+                case ".3mf":
+                    ThreeMfWriter.WriteFile(ExportMeshParts(instances, quality), path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "3MF",
+                        ["instances"] = instances.Count,
+                    });
+
+                case ".amf":
+                    AmfWriter.WriteFile(ExportMeshParts(instances, quality), path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "AMF",
+                        ["instances"] = instances.Count,
+                    });
+
                 case ".step" or ".stp":
                     return ExportStep(path, instances);
 
                 default:
                     return Error(
-                        $"Unsupported export format '{extension}' — use .step, .stl, .obj, or .png.");
+                        $"Unsupported export format '{extension}' — use .step, .stl, .obj, .3mf, .amf, .off, or .png.");
             }
         }
         catch (Exception e)
@@ -926,6 +963,14 @@ public sealed class SceneTools(SceneSession session)
             result["skipped"] = skipped;
         return Ok(result);
     }
+
+    /// <summary>The instances as named, posed, colored export parts — what the
+    /// part-aware mesh formats (3MF, AMF) consume; same shape as <c>--export</c>'s.</summary>
+    private static List<MeshExportPart> ExportMeshParts(
+        IReadOnlyList<PartInstance> instances, MeshQuality quality) =>
+        [.. instances.Select(i => new MeshExportPart(
+            i.Part.GetMesh(quality), i.World, i.Path,
+            i.Part.Color is { } c ? (c.R, c.G, c.B) : null))];
 
     /// <summary>All instances merged into one OBJ with their world transforms applied
     /// (the same output <c>--export .obj</c> produces).</summary>

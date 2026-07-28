@@ -6,6 +6,8 @@
   href: sketch-booleans.md
 - name: 2D views (offset, section, silhouette)
   href: 2d-views.md
+- name: DXF & SVG (2D interchange)
+  href: dxf-svg.md
 - name: Extrude, revolve, sweep
   href: extrude-revolve-sweep.md
 - name: Booleans
@@ -34,10 +36,14 @@
   href: annotations.md
 - name: Remeshing
   href: remeshing.md
+- name: Tessellation quality
+  href: quality.md
 - name: Three representations
   href: representations.md
 - name: Exports
   href: exports.md
+- name: Importing meshes
+  href: import.md
 - name: Assemblies
   href: assemblies.md
 - name: Standard components
