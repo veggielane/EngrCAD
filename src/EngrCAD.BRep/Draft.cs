@@ -50,9 +50,42 @@ public static class Draft
         double angle,
         Func<BrepFace, bool>? faceSelector = null)
     {
-        ArgumentNullException.ThrowIfNull(solid);
         if (Math.Abs(angle) >= Math.PI / 2 - 1e-9)
             throw new ArgumentOutOfRangeException(nameof(angle), "The draft angle must be less than 90 degrees.");
+        return ApplyCore(
+            solid, neutralOrigin, pullDirection,
+            faceSelector is null ? _ => angle : face => faceSelector(face) ? angle : null,
+            // With no selector every SIDE face drafts and the caps are never "selected";
+            // with one, naming a cap is an error the core detects.
+            checkCaps: faceSelector is not null);
+    }
+
+    /// <summary>
+    /// Per-face draft angles in ONE call: <paramref name="angleSelector"/> returns each
+    /// side face's angle in radians, or null to leave the face alone. One call rather
+    /// than a chain matters when adjacent faces get different angles — every corner is
+    /// solved once from its two final planes, which is exactly what chaining computes
+    /// too (the operation is closed-form and composable), just without re-recognizing
+    /// the prism per angle.
+    /// </summary>
+    public static BrepSolid Apply(
+        BrepSolid solid,
+        in Vector3d neutralOrigin,
+        in Vector3d pullDirection,
+        Func<BrepFace, double?> angleSelector)
+    {
+        ArgumentNullException.ThrowIfNull(angleSelector);
+        return ApplyCore(solid, neutralOrigin, pullDirection, angleSelector, checkCaps: true);
+    }
+
+    private static BrepSolid ApplyCore(
+        BrepSolid solid,
+        in Vector3d neutralOrigin,
+        in Vector3d pullDirection,
+        Func<BrepFace, double?> angleSelector,
+        bool checkCaps)
+    {
+        ArgumentNullException.ThrowIfNull(solid);
         if (!pullDirection.TryNormalize(Tolerance.Default, out var pull))
             throw new ArgumentException("The pull direction must be non-zero.", nameof(pullDirection));
 
@@ -61,28 +94,35 @@ public static class Draft
 
         // A selected cap is always an error, never a silent no-op: caps are the parting
         // faces and cannot be tapered, so naming one means the selector is wrong.
-        if (faceSelector is not null && (faceSelector(prism.BaseCap) || faceSelector(prism.TopCap)))
+        if (checkCaps && (angleSelector(prism.BaseCap) is not null || angleSelector(prism.TopCap) is not null))
             throw new ArgumentException(
                 "Draft selected a cap face (one perpendicular to the pull direction). Caps are the " +
-                "parting faces and stay put; select the side faces to taper.", nameof(faceSelector));
+                "parting faces and stay put; select the side faces to taper.", nameof(angleSelector));
 
         var planes = new (Vector3d Origin, Vector3d Normal)[prism.SideFaces.Length];
+        double largest = 0;
         bool anyDrafted = false;
         for (int i = 0; i < planes.Length; i++)
         {
             var face = prism.SideFaces[i];
             face.IsPlanar(out var faceOrigin, out var faceNormal);
-            if (faceSelector is not null && !faceSelector(face))
+            if (angleSelector(face) is not double faceAngle)
             {
                 planes[i] = (faceOrigin, faceNormal);
                 continue;
             }
-            planes[i] = TaperPlane(faceOrigin, faceNormal, origin, pull, angle);
+            if (Math.Abs(faceAngle) >= Math.PI / 2 - 1e-9)
+                throw new ArgumentOutOfRangeException(nameof(angleSelector),
+                    "A draft angle must be less than 90 degrees.");
+            planes[i] = TaperPlane(faceOrigin, faceNormal, origin, pull, faceAngle);
+            if (Math.Abs(faceAngle) > Math.Abs(largest))
+                largest = faceAngle;
             anyDrafted = true;
         }
 
-        if (faceSelector is not null && !anyDrafted)
-            throw new ArgumentException("Draft selected no side face of the solid.", nameof(faceSelector));
+        if (!anyDrafted)
+            throw new ArgumentException("Draft selected no side face of the solid.", nameof(angleSelector));
+        double angle = largest; // for the fold-rejection messages below
 
         int n = planes.Length;
         var baseCorners = new Vector3d[n];

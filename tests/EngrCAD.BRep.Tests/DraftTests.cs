@@ -239,4 +239,60 @@ public class DraftTests
         Assert.Throws<ArgumentException>(() =>
             Draft.Apply(Block(), Vector3d.Zero, Vector3d.Zero, Ten));
     }
+
+    [Fact]
+    public void Draft_PerFaceAngles_InOneCall_MatchesTheChainedResultExactly()
+    {
+        const double five = Math.PI / 36;
+
+        // One call with an angle selector: +X gets 10 degrees, -X gets 5, y faces stay.
+        double? Angles(BrepFace face) =>
+            !face.IsPlanar(out _, out var n) ? null
+            : n.X > 0.9 ? Ten
+            : n.X < -0.9 ? five
+            : null;
+        var oneCall = Draft.Apply(Block(), Vector3d.Zero, Vector3d.UnitZ, Angles);
+        oneCall.Validate();
+
+        // Every top corner: +X wall slides in by 10·tan(10°), -X by 10·tan(5°).
+        double inTen = 10 * Math.Tan(Ten), inFive = 10 * Math.Tan(five);
+        foreach (var vertex in oneCall.Vertices)
+        {
+            var p = vertex.Position;
+            double expected = p.Z > 5
+                ? (p.X > 0 ? 10 - inTen : -10 + inFive)
+                : (p.X > 0 ? 10 : -10);
+            Assert.Equal(expected, p.X, 12);
+            Assert.Equal(10, Math.Abs(p.Y), 12);
+        }
+
+        // The chained spelling computes the same corners (the operation is composable).
+        var block = Block();
+        var chained = Draft.Apply(block, Vector3d.Zero, Vector3d.UnitZ, Ten,
+            f => f.IsPlanar(out _, out var n) && n.X > 0.9);
+        chained = Draft.Apply(chained, Vector3d.Zero, Vector3d.UnitZ, five,
+            f => f.IsPlanar(out _, out var n) && n.X < -0.9);
+        var expectedPositions = chained.Vertices.Select(v => v.Position)
+            .OrderBy(p => (p.Z, p.Y, p.X)).ToList();
+        var actualPositions = oneCall.Vertices.Select(v => v.Position)
+            .OrderBy(p => (p.Z, p.Y, p.X)).ToList();
+        Assert.Equal(expectedPositions.Count, actualPositions.Count);
+        for (int i = 0; i < expectedPositions.Count; i++)
+            Assert.True(expectedPositions[i].AreEqual(actualPositions[i], new Tolerance(1e-12, 1e-12)));
+    }
+
+    [Fact]
+    public void Draft_PerFaceAngles_RejectsCapsAndEmptySelections()
+    {
+        // A selector that drafts a cap is an error, exactly as for the bool selector.
+        Assert.Throws<ArgumentException>(() =>
+            Draft.Apply(Block(), Vector3d.Zero, Vector3d.UnitZ, _ => (double?)Ten));
+        // Selecting nothing.
+        Assert.Throws<ArgumentException>(() =>
+            Draft.Apply(Block(), Vector3d.Zero, Vector3d.UnitZ, _ => (double?)null));
+        // A per-face angle at or past 90 degrees.
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Draft.Apply(Block(), Vector3d.Zero, Vector3d.UnitZ,
+                f => f.IsPlanar(out _, out var n) && n.X > 0.9 ? Math.PI / 2 : (double?)null));
+    }
 }

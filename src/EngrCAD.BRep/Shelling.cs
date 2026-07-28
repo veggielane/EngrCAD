@@ -76,6 +76,21 @@ public static class Shelling
     {
         if (!(thickness > 0))
             throw new ArgumentOutOfRangeException(nameof(thickness), "Wall thickness must be positive.");
+        return Shell(solid, _ => thickness, openingSelector);
+    }
+
+    /// <summary>
+    /// Shelling with a PER-FACE wall thickness: <paramref name="thickness"/> is asked
+    /// once per non-opening face (a thick base under thin walls, a reinforced boss
+    /// side). Nothing new is needed geometrically — each inner corner was already the
+    /// intersection of its three offset planes, and unequal offsets just move that
+    /// intersection — so the result stays exact; each returned thickness must be
+    /// positive.
+    /// </summary>
+    public static BrepSolid Shell(
+        BrepSolid solid, Func<BrepFace, double> thickness, Func<BrepFace, bool>? openingSelector = null)
+    {
+        ArgumentNullException.ThrowIfNull(thickness);
         var polyhedron = Polyhedron.Recognize(solid);
         int faceCount = polyhedron.Faces.Length;
 
@@ -109,7 +124,15 @@ public static class Shelling
         // Openings do not move: the cavity must reach exactly to the removed face's plane.
         var offsets = new double[faceCount];
         for (int f = 0; f < faceCount; f++)
-            offsets[f] = opening[f] ? 0 : -thickness;
+        {
+            if (opening[f])
+                continue;
+            double wall = thickness(polyhedron.Faces[f]);
+            if (!(wall > 0))
+                throw new ArgumentOutOfRangeException(nameof(thickness),
+                    $"Wall thickness must be positive; the selector returned {wall:g4} for a face.");
+            offsets[f] = -wall;
+        }
         var innerPositions = polyhedron.OffsetVertices(offsets);
         polyhedron.ValidateOffset(innerPositions, "inner");
 
@@ -150,7 +173,7 @@ public static class Shelling
 
             // The inner wall faces the cavity: same plane offset inward, normal flipped, and
             // every loop reversed to stay counter-clockwise about that flipped normal.
-            var innerPlane = polyhedron.OffsetPlane(f, -thickness);
+            var innerPlane = polyhedron.OffsetPlane(f, offsets[f]);
             innerFaces.Add(new BrepFace(
                 polyhedron.PlaneSurfaceFor(f, innerPlane, innerPositions, flipped: true),
                 polyhedron.MapLoops(f, innerEdges, reverse: true)));
