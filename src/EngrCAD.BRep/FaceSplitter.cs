@@ -485,17 +485,18 @@ public static class FaceSplitter
     }
 
     /// <summary>
-    /// Splits a two-loop band face (extruded closed generator) along a closed curve that
-    /// wraps the periodic direction at constant v — e.g. a bore wall cut by a plane. The
-    /// band becomes two bands with exactly reconstructed sub-surfaces, sharing one new
-    /// closed edge.
+    /// Splits a two-loop band face (extruded closed generator, full revolve, or plain
+    /// cylinder) along a closed curve that wraps the periodic direction at constant v —
+    /// e.g. a bore wall cut by a plane. The band becomes two bands with exactly
+    /// reconstructed sub-surfaces, sharing one new closed edge.
     /// </summary>
     private static IReadOnlyList<BrepFace> SplitBandByWrapCurve(
         BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, bool traversesPlusU)
     {
-        if (face.Surface is not (ExtrudedSurface or RevolvedSurface { IsFullTurn: true }))
+        if (face.Surface is not (ExtrudedSurface or CylinderSurface or RevolvedSurface { IsFullTurn: true }))
             throw new NotSupportedException(
-                "Period-wrapping split curves are only supported on extruded and fully revolved band faces yet.");
+                "Period-wrapping split curves are only supported on extruded, cylindrical and " +
+                "fully revolved band faces yet.");
         if (face.Loops.Count > 2)
             throw new NotSupportedException("Wrap-splitting expects a band face (at most two loops).");
 
@@ -509,6 +510,11 @@ public static class FaceSplitter
         var curveStart = curve.PointAt(curve.Domain.Start);
         switch (face.Surface)
         {
+            case CylinderSurface cylinder:
+                // v IS the axial coordinate, so the cut's height is exact in one dot
+                // product — there is no projection error to refine away.
+                vCut = (curveStart - cylinder.Origin).Dot(cylinder.Axis);
+                break;
             case RevolvedSurface revolvedBand:
             {
                 var generator = revolvedBand.Generator;
@@ -551,7 +557,18 @@ public static class FaceSplitter
             }
         }
 
+        var pulledLoops = FaceGeometry.PullLoops(face);
         var domainV = face.Surface.DomainV;
+        if (face.Surface is CylinderSurface)
+        {
+            // A cylinder is UNBOUNDED in v: its band is delimited by its ring loops, not
+            // by a surface domain, so the "cut coincides with a boundary ring" test has
+            // to read the rings (against an infinite domain it could never fire). This
+            // is the same fact that lets both sub-bands keep the whole cylinder below.
+            double lo = pulledLoops.Min(l => l.Average(p => p.Y));
+            double hi = pulledLoops.Max(l => l.Average(p => p.Y));
+            domainV = new Interval(lo, hi);
+        }
         double vTolerance = Math.Max(1e-9, domainV.Length * 1e-9);
         if (vCut <= domainV.Start + vTolerance || vCut >= domainV.End - vTolerance)
             return [face]; // the cut coincides with a boundary ring
@@ -559,7 +576,6 @@ public static class FaceSplitter
         // Pole-bounded bands (axis-touching revolves) can have a single loop; missing
         // rings simply contribute no loop to the corresponding sub-band.
         BrepLoop? bottomLoop = null, topLoop = null;
-        var pulledLoops = FaceGeometry.PullLoops(face);
         for (int i = 0; i < face.Loops.Count; i++)
         {
             if (pulledLoops[i].Average(p => p.Y) <= vCut)
@@ -574,6 +590,13 @@ public static class FaceSplitter
         Surface lowerSurface, upperSurface;
         switch (face.Surface)
         {
+            case CylinderSurface:
+                // Nothing to trim. A cylinder band tessellates from its RING LOOPS, not
+                // from a parameter grid, so shortening the loops IS the whole edit —
+                // exactly the opposite of the extruded and revolved cases below, whose
+                // grids ignore loops and therefore need their surfaces shortened too.
+                lowerSurface = upperSurface = face.Surface;
+                break;
             case ExtrudedSurface extruded:
                 lowerSurface = new ExtrudedSurface(extruded.Generator, extruded.Direction * vCut);
                 upperSurface = new ExtrudedSurface(
@@ -627,6 +650,20 @@ public static class FaceSplitter
     private static IReadOnlyList<BrepFace> SplitBandByNonPlanarWrapCurve(
         BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, bool traversesPlusU)
     {
+        // The constant-v case handles a raw CylinderSurface band, but this one cannot:
+        // its sub-bands keep the whole surface and rely on trimmed-face tessellation,
+        // which supports cylindrical faces only with NON-wrapping loops — and every
+        // fragment here is bounded by a wrapping cut. Refuse by name rather than let the
+        // split succeed and the mesh builder report a non-manifold edge three stages
+        // later. An extruded-circle band (what Drill and the Shape pipeline actually
+        // produce) takes the domain-driven path and does work.
+        if (face.Surface is CylinderSurface)
+            throw new NotSupportedException(
+                "A wrapping cut whose v varies (a cross-drill piercing a bore wall) is not supported on a " +
+                "plain CylinderSurface band yet: the sub-bands would need trimmed cylindrical tessellation " +
+                "with wrapping loops. Build the bore from an extruded circle (SolidFactory.Extrude / " +
+                "Shape.Drill), whose band takes the domain-driven path.");
+
         double cutMin = pulledCurve.Min(p => p.Uv.Y);
         double cutMax = pulledCurve.Max(p => p.Uv.Y);
         var pulledLoops = FaceGeometry.PullLoops(face);

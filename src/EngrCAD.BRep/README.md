@@ -450,12 +450,27 @@ operations. Depends only on `EngrCAD.Core`.
   vertices are not missed — interior segments as shared two-use edges, sub-faces traced
   by tightest-turn walking: clockwise for CCW-wound faces, counter-clockwise for
   reversed ones, `IsReversed` preserved throughout), and period-wrapping curves
-  (`SplitBandByWrapCurve`: constant-v cuts → two exactly re-surfaced sub-bands;
+  (`SplitBandByWrapCurve`: constant-v cuts → two exactly re-surfaced sub-bands, on
+  extruded, **cylindrical** and fully revolved bands alike;
   NON-planar wrapping cuts — the cylinder∩cylinder curves where a cross-drill pierces
   a bore — → `SplitBandByNonPlanarWrapCurve`: both sub-bands KEEP the original surface,
   since no parameter line exists to trim at, and rely on trimmed-face tessellation;
   loops go to the side of the cut their v-range lies on, overlapping ranges — tangent
-  configurations — throw). `TopologyEditor`
+  configurations — throw).
+
+  A plain `CylinderSurface` band differs from the other two in exactly two places, both
+  the same fact: **it tessellates from its RING LOOPS, not from a parameter grid**. So
+  both sub-bands keep the whole cylinder — shortening the loops IS the edit, where the
+  extruded and revolved cases must shorten their surfaces too because their grids ignore
+  loops — and vCut is `(cutStart − origin)·axis` exactly, one dot product with no
+  projection error to refine away. A cylinder is also unbounded in v, so the "the cut
+  coincides with a boundary ring" test reads the rings; against an infinite domain it
+  could never fire. The NON-planar case refuses on a cylinder BY NAME (its fragments
+  would need trimmed cylindrical tessellation with wrapping loops, which does not exist)
+  rather than splitting successfully and surfacing three stages later as a non-manifold
+  mesh edge. Bores from `Shape.Drill` and `SolidFactory.Extrude` are extruded circles
+  and take the domain-driven path, which is why this went unexercised for so long.
+  `TopologyEditor`
   supplies `SplitEdge` (patches every using loop) and `SealSeams` (boolean output
   sealing). **All coedge/curve sampling goes through
   `FaceGeometry.ExactSampleParameters`**: marching-tracer polylines are exact only at
