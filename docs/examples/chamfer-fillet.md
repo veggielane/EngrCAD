@@ -157,10 +157,28 @@ scene.Add(new Part("rounded box", rounded, Palette.Brass));
 
 There is no `Shape.RoundEdges` yet, so this drops down to the B-Rep API and comes back
 through `Shape.From` — see [dropping down](representations.md#dropping-down-to-the-engine-apis).
-It requires a **convex** solid whose vertices are 3-valent and where one incident face
-is perpendicular to the other two (boxes, convex prisms, sheared boxes). That condition
-is what keeps each corner patch an exact surface of revolution; a tetrahedron is refused
-by name.
+It requires a **convex** solid with 3-valent vertices. Corners where one incident face
+is perpendicular to the other two (boxes, prisms, sheared boxes) get an exact lune
+patch — a full-domain surface of revolution. **General trihedral corners** work too: a
+drafted block's corners have *no* face perpendicular to the other two, so each corner
+becomes a trimmed spherical-triangle patch whose two pole-tangent arcs are exact
+meridians of the patch's own revolve:
+
+```csharp render:fillet-all-edges-general
+var block = Shape.Box(24, 18, 12).ToBrep();
+var sides = new[] { Vector3d.UnitX, -Vector3d.UnitX, Vector3d.UnitY, -Vector3d.UnitY }
+    .SelectMany(n => block.PlanarFacesWithNormal(n)).ToList();
+var drafted = Draft.Apply(block, new Vector3d(0, 0, -6), Vector3d.UnitZ, 8 * Math.PI / 180,
+    f => sides.Any(g => ReferenceEquals(f, g)));
+var roundedDraft = Shape.From(Filleting.FilletAllEdges(drafted, 2.5));
+
+var scene = new Scene();
+scene.Add(new Part("rounded drafted block", roundedDraft, Palette.Steel));
+```
+
+![A drafted block with every edge rounded, its corners general trihedral patches](images/fillet-all-edges-general.png)
+
+Concave edges and higher-valence vertices are refused by name.
 
 ## Selectors, not IDs
 

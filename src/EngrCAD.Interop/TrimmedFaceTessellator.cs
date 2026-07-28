@@ -115,9 +115,14 @@ internal static class TrimmedFaceTessellator
         List<(int A, int B, int C)>? triangles;
         if (windings.All(w => w == 0))
         {
-            // A band between two paired boundary chains zips; anything else ear-clips.
+            // A pole-capped partial-sweep region (a whole-solid fillet's general corner
+            // patch) gets a structured grid FIRST — a strip zip would span its whole
+            // height with no interior rows and refinement is not a convergence
+            // mechanism; then a band between two paired boundary chains zips; anything
+            // else ear-clips.
             triangles =
-                TriangulateStrip(loopUv, loopPoints, stepU, stepV, uvAll, pointsAll, boundaryEdges)
+                TriangulatePoleGrid(surface, loopUv, loopPoints, stepV, uvAll, pointsAll, boundaryEdges)
+                ?? TriangulateStrip(loopUv, loopPoints, stepU, stepV, uvAll, pointsAll, boundaryEdges)
                 ?? TriangulateRegion(loopUv, loopPoints, period, uvAll, pointsAll, boundaryEdges);
         }
         else if (windings.Any(w => w == 0))
@@ -150,6 +155,222 @@ internal static class TrimmedFaceTessellator
         foreach (var (a, b, c) in triangles)
             polygons.Add([pointsAll[a], pointsAll[b], pointsAll[c]]);
         return true;
+    }
+
+    // ---- pole-capped partial-sweep regions: sheared column grid ----
+
+    /// <summary>
+    /// Triangulates a single-loop, non-wrapping region on a revolved surface whose loop
+    /// passes through the surface's POLE (the generator's on-axis end) — the shape of a
+    /// whole-solid fillet's GENERAL trihedral corner patch: two meridian side chains on
+    /// the u domain boundaries, a diagonal great-arc chain below, and the pole closing
+    /// the top. A strip zip triangulates this shape correctly but with every facet
+    /// spanning the region's whole height (no interior rows), which refinement cannot
+    /// repair — so this tier builds the interior STRUCTURED: one column per diagonal
+    /// boundary sample, interior rows invented at the natural v density (shared verbatim
+    /// between the two adjacent column zips, so the interior is watertight by index),
+    /// the meridian columns taking their rows verbatim from the shared edge polylines,
+    /// and a single one-step fan ring at the pole. Every cell spans about one natural
+    /// step each way, so the tessellation converges quadratically like a grid face.
+    /// <para>Returns null — leaving the shared arrays untouched — whenever the shape is
+    /// not this one: no pole on the loop, pole samples not contiguous, columns not
+    /// strictly ordered in u. Full-period pole caps (winding ±1) never reach here.</para>
+    /// </summary>
+    private static List<(int A, int B, int C)>? TriangulatePoleGrid(
+        Surface surface,
+        List<List<Vector2d>> loopUv,
+        List<List<Vector3d>> loopPoints,
+        double stepV,
+        List<Vector2d> uvAll,
+        List<Vector3d> pointsAll,
+        HashSet<(int, int)> boundaryEdges)
+    {
+        if (loopUv.Count != 1 || surface is not RevolvedSurface revolved)
+            return null;
+        // Pole = the generator's on-axis END (the whole-solid fillet convention;
+        // start-pole regions have no producer today and fall through).
+        double vPole = revolved.Generator.Domain.End;
+        var polePoint = revolved.Generator.PointAt(vPole);
+        var axisDirection = revolved.AxisDirection.Normalized();
+        var fromAxis = polePoint - revolved.AxisOrigin;
+        if ((fromAxis - axisDirection * fromAxis.Dot(axisDirection)).Length > Tolerance.Default.Linear)
+            return null;
+
+        var uv = loopUv[0];
+        var points = loopPoints[0];
+        int n = uv.Count;
+        if (n < 4 || !(double.IsFinite(stepV) && stepV > 0))
+            return null;
+
+        // Pole samples are identified by 3D position (their pulled-back u is arbitrary —
+        // azimuth is degenerate at a pole), and must form one contiguous cyclic group.
+        var isPole = new bool[n];
+        int poleCount = 0;
+        for (int i = 0; i < n; i++)
+        {
+            if (points[i].DistanceTo(polePoint) <= Tolerance.Default.Linear)
+            {
+                isPole[i] = true;
+                poleCount++;
+            }
+        }
+        if (poleCount == 0 || poleCount >= n - 2)
+            return null;
+        int runStart = -1;
+        for (int i = 0; i < n; i++)
+        {
+            if (isPole[i] && !isPole[(i + 1) % n])
+            {
+                runStart = (i + 1) % n;
+                break;
+            }
+        }
+        if (runStart < 0)
+            return null;
+        var run = new List<int>();
+        for (int i = runStart; !isPole[i]; i = (i + 1) % n)
+            run.Add(i);
+        if (run.Count + poleCount != n)
+            return null; // pole samples are not contiguous
+
+        // Orient the run so u increases from its first column to its last.
+        if (uv[run[0]].X > uv[run[^1]].X)
+            run.Reverse();
+
+        // Split the run into columns. The side chains (meridians) pull back to a
+        // CONSTANT u up to inverse-evaluation jitter; real column steps are about one
+        // natural u step. stepV is angular here (a revolve), so a fixed fraction of the
+        // run's own u extent separates the two cleanly and stays scale-free.
+        double uExtent = uv[run[^1]].X - uv[run[0]].X;
+        if (!(uExtent > 0))
+            return null;
+        double columnTolerance = uExtent * 1e-3;
+        var columns = new List<List<int>>();
+        foreach (var index in run)
+        {
+            if (columns.Count > 0 && Math.Abs(uv[index].X - uv[columns[^1][0]].X) <= columnTolerance)
+                columns[^1].Add(index);
+            else
+                columns.Add([index]);
+        }
+        if (columns.Count < 2)
+            return null;
+        for (int c = 1; c < columns.Count; c++)
+        {
+            if (uv[columns[c][0]].X <= uv[columns[c - 1][0]].X)
+                return null; // columns out of order: not this shape
+        }
+
+        // Emit the loop's own samples first (verbatim — they are shared geometry), the
+        // pole once, then the invented interior rows.
+        var loopIndex = new int[n];
+        for (int i = 0; i < n; i++)
+        {
+            if (isPole[i])
+                continue;
+            loopIndex[i] = uvAll.Count;
+            uvAll.Add(uv[i]);
+            pointsAll.Add(points[i]);
+        }
+        int apex = uvAll.Count;
+        uvAll.Add(new Vector2d(uv[run[0]].X + uExtent / 2, vPole));
+        pointsAll.Add(polePoint);
+        for (int i = 0; i < n; i++)
+        {
+            if (isPole[i])
+                loopIndex[i] = apex;
+        }
+
+        // Per-column ascending-v vertex lists ending at the shared apex. Boundary
+        // columns use their meridian samples verbatim; interior columns invent rows at
+        // the natural density (each row point is created once and reused by both
+        // adjacent column zips).
+        var columnLists = new List<List<int>>(columns.Count);
+        foreach (var column in columns)
+        {
+            var ascending = column.OrderBy(i => uv[i].Y).Select(i => loopIndex[i]).ToList();
+            if (column.Count == 1)
+            {
+                double baseV = uv[column[0]].Y;
+                double span = vPole - baseV;
+                if (!(span > 0))
+                    return null;
+                int rows = Math.Max(1, (int)Math.Ceiling(span / stepV));
+                double u = uv[column[0]].X;
+                for (int k = 1; k < rows; k++)
+                {
+                    var rowUv = new Vector2d(u, baseV + span * k / rows);
+                    ascending.Add(uvAll.Count);
+                    uvAll.Add(rowUv);
+                    pointsAll.Add(EvaluateAt(surface, 0, rowUv));
+                }
+            }
+            ascending.Add(apex);
+            columnLists.Add(ascending);
+        }
+
+        // Every original loop chord is shared geometry refinement must never split.
+        for (int i = 0; i < n; i++)
+        {
+            int a = loopIndex[i], b = loopIndex[(i + 1) % n];
+            if (a != b)
+                boundaryEdges.Add(EdgeKey(a, b));
+        }
+
+        // Zip adjacent columns bottom-to-apex; triangles are CCW by construction
+        // (left u < right u, v ascending).
+        var triangles = new List<(int A, int B, int C)>();
+        for (int c = 0; c + 1 < columnLists.Count; c++)
+        {
+            var left = columnLists[c];
+            var right = columnLists[c + 1];
+            int i = 0, j = 0;
+            while (i < left.Count - 1 || j < right.Count - 1)
+            {
+                bool advanceLeft;
+                if (i >= left.Count - 1)
+                    advanceLeft = false;
+                else if (j >= right.Count - 1)
+                    advanceLeft = true;
+                else
+                    advanceLeft = uvAll[left[i + 1]].Y <= uvAll[right[j + 1]].Y;
+
+                if (advanceLeft)
+                {
+                    Emit(left[i], right[j], left[i + 1]);
+                    i++;
+                }
+                else
+                {
+                    Emit(left[i], right[j], right[j + 1]);
+                    j++;
+                }
+            }
+        }
+        if (triangles.Count == 0)
+            return null;
+
+        // This grid is ALREADY at the natural density by construction, so exclude every
+        // edge it built from refinement. Refinement's uv metric divides du by one flat
+        // step, which near a pole overstates the 3D chord without bound (u compresses
+        // as the parallel circles shrink) — measured, it cascaded midpoints into the
+        // apex fan and half-step slivers into the last rows, at normal agreements the
+        // corpus floor rejects. Where the metric is honest the cells are within ~1.5
+        // steps, inside the three-step allowance, and they scale with the density, so
+        // convergence is the grid's own, not refinement's.
+        foreach (var (a, b, c) in triangles)
+        {
+            boundaryEdges.Add(EdgeKey(a, b));
+            boundaryEdges.Add(EdgeKey(b, c));
+            boundaryEdges.Add(EdgeKey(c, a));
+        }
+        return triangles;
+
+        void Emit(int a, int b, int c)
+        {
+            if (a != b && b != c && a != c)
+                triangles.Add((a, b, c));
+        }
     }
 
     // ---- non-wrapping bands: strip zipping between the paired boundary chains ----

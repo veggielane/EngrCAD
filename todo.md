@@ -613,11 +613,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
   whole-solid `FilletAllEdges` ✅ landed) — all of these are refused loudly today, so
   they are additions, not bug fixes:
-  - [ ] **General trihedral corner patches** — `FilletAllEdges` requires one incident
-    face perpendicular to the other two, which is exactly when the spherical triangle
-    reduces to a lune closed by an equatorial great circle (an exact surface of
-    revolution). The general case needs a trimmed spherical-triangle path. A tetrahedron
-    is the smallest failing example.
+  - [ ] **General corner machinery follow-up** — general trihedral corner patches
+    ✅ landed (`FilletAllEdges` now rounds tetrahedra and drafted blocks: a trimmed
+    spherical-triangle patch whose two pole-tangent arcs are exact meridians, plus a
+    dedicated `TriangulatePoleGrid` trimmed tier excluded from midpoint refinement).
+    Remaining: curved-face shelling corners and variable-radius fillet corners still
+    need the non-conic surface–surface corner curve.
   - [ ] **Partial edge runs** — a band that stops mid-rim needs a termination surface
     (cliff, setback or vertex blend) and each exact one is a different surface.
   - [ ] **Variable-radius fillets** (variable-SETBACK chamfers ✅ landed — `ChamferRim`/

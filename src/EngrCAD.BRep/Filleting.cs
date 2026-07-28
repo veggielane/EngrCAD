@@ -166,12 +166,12 @@ public static class Filleting
     /// classified or sealed.</para>
     /// <para>Restrictions, all checked and refused loudly: the solid must be a convex
     /// polyhedron (planar hole-free faces, straight edges, every edge convex) with
-    /// three-valent vertices, and at each vertex one of the three faces must be
-    /// perpendicular to the other two. That last one is what makes the corner patch an
-    /// exact surface of revolution — the spherical triangle is then the lune between two
-    /// meridians of that face's normal, closed by an equatorial great circle — and it
-    /// holds for every box and every convex prism. A general trihedral corner's spherical
-    /// triangle has no exact revolved form.</para>
+    /// three-valent vertices. Corners where one face is perpendicular to the other two
+    /// (every box and convex prism) get the exact LUNE — a full-domain surface of
+    /// revolution. GENERAL trihedral corners (a tetrahedron's, a drafted block's) get a
+    /// trimmed spherical-triangle patch: one face normal becomes the pole axis, the two
+    /// arcs meeting its tangency are exact meridians on the u domain boundaries, and
+    /// only the third arc trims the interior — see <see cref="GeneralCornerPatch"/>.</para>
     /// </summary>
     public static BrepSolid FilletAllEdges(BrepSolid solid, double radius)
     {
@@ -373,10 +373,7 @@ public static class Filleting
                     poleIndex = i;
             }
             if (poleIndex < 0)
-                throw new NotSupportedException(
-                    $"The corner at {vertex.Position} has no face perpendicular to its two neighbours, so its " +
-                    "spherical patch is a general spherical triangle with no exact surface of revolution. " +
-                    "Fillet the rims that do close exactly instead.");
+                return GeneralCornerPatch(vertex, normals, centre, radius, arcs);
 
             var pole = normals[poleIndex];
             var first = normals[(poleIndex + 1) % 3];
@@ -394,6 +391,99 @@ public static class Filleting
                 new Circle3d(centre, first, pole, radius), 0, Math.PI / 2);
             var surface = new RevolvedSurface(generator, centre, pole, sweep);
 
+            return new BrepFace(surface, [new BrepLoop(Chain(arcs, vertex))]);
+        }
+
+        /// <summary>
+        /// The GENERAL trihedral corner patch: a trimmed spherical triangle. When no
+        /// incident face is perpendicular to the other two, the patch is not a lune —
+        /// but it is still a region of the sphere about the eroded vertex, bounded by
+        /// the three great-circle arcs the bands already built. Pick one face normal as
+        /// the POLE axis: the two arcs that end at its tangency point are then exact
+        /// MERIDIANS of that axis (a great circle through the pole lies in a plane
+        /// containing the axis), so they land on the revolve's u = 0 and u = sweep
+        /// domain boundaries, the pole tangency is the v-top boundary, and only the
+        /// third (diagonal) arc genuinely trims the interior — a pole-bounded trimmed
+        /// face for the tessellator, not a new surface type.
+        /// <para>The generator's interior-side extent is NOT a weld boundary (nothing
+        /// meets the patch there), so it takes the diagonal's sampled elevation minimum
+        /// with a fixed angular margin; the three weld boundaries — both meridians and
+        /// the pole — are exact by construction. The pole is chosen to maximize the
+        /// worse-conditioned of the two azimuthal projections, and a diagonal whose
+        /// azimuth leaves the [0, sweep] wedge (a reflex corner wedge) is refused by
+        /// name rather than mis-trimmed.</para>
+        /// </summary>
+        private static BrepFace GeneralCornerPatch(
+            BrepVertex vertex, IReadOnlyList<Vector3d> normals,
+            in Vector3d centre, double radius, List<BrepCoedge> arcs)
+        {
+            int best = 0;
+            double bestScore = -1;
+            for (int i = 0; i < 3; i++)
+            {
+                double score = Math.Min(
+                    normals[i].Cross(normals[(i + 1) % 3]).Length,
+                    normals[i].Cross(normals[(i + 2) % 3]).Length);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = i;
+                }
+            }
+            // Scale-free degeneracy guard on unit normals (an area, so ~angle here).
+            if (bestScore < 1e-9)
+                throw new NotSupportedException(
+                    $"The corner at {vertex.Position} has two parallel face normals; its spherical patch " +
+                    "is degenerate.");
+
+            var pole = normals[best];
+            var n1 = normals[(best + 1) % 3];
+            var n2 = normals[(best + 2) % 3];
+            var x1 = (n1 - pole * pole.Dot(n1)).Normalized();
+            var x2 = (n2 - pole * pole.Dot(n2)).Normalized();
+            double sweep = Math.Atan2(x1.Cross(x2).Dot(pole), x1.Dot(x2));
+            if (sweep < 0)
+            {
+                (n1, n2) = (n2, n1);
+                (x1, x2) = (x2, x1);
+                sweep = -sweep;
+            }
+
+            // Generator elevation t: P(t) = centre + r·(x1·cos t + pole·sin t), so the
+            // n1 tangency sits at t1 = atan2(pole·n1, x1·n1) and the pole at t = π/2.
+            double t1 = Math.Atan2(pole.Dot(n1), x1.Dot(n1));
+            double t2 = Math.Atan2(pole.Dot(n2), x2.Dot(n2));
+            double tMin = Math.Min(t1, t2);
+
+            // The diagonal great arc n1 → n2 can dip below both endpoint elevations
+            // (its elevation is sinusoidal along the circle); sample it for the extent
+            // and validate its azimuth stays inside the wedge.
+            double omega = Math.Atan2(n1.Cross(n2).Length, n1.Dot(n2));
+            double sinOmega = Math.Sin(omega);
+            for (int k = 0; k <= 64; k++)
+            {
+                double s = k / 64.0;
+                var d = (n1 * Math.Sin((1 - s) * omega) + n2 * Math.Sin(s * omega)) / sinOmega;
+                var azimuthal = d - pole * pole.Dot(d);
+                double azimuth = Math.Atan2(x1.Cross(azimuthal).Dot(pole), x1.Dot(azimuthal));
+                if (azimuth < -1e-9 || azimuth > sweep + 1e-9)
+                    throw new NotSupportedException(
+                        $"The corner at {vertex.Position} subtends a reflex azimuth wedge about every " +
+                        "candidate pole; its spherical patch cannot be parameterized as one revolve.");
+                tMin = Math.Min(tMin, Math.Atan2(pole.Dot(d), azimuthal.Length));
+            }
+
+            // Fixed interior margin (radians): covers the ≤ (π/64)²/8 sampling sag and
+            // keeps every loop point strictly inside the domain for pullback/parity.
+            double startElevation = tMin - 0.05;
+            if (startElevation <= -Math.PI / 2 + 0.05)
+                throw new NotSupportedException(
+                    $"The corner at {vertex.Position} reaches the antipode of its own patch pole; " +
+                    "the corner is too oblique to round.");
+
+            var generator = new CurveSegment(
+                new Circle3d(centre, x1, pole, radius), startElevation, Math.PI / 2);
+            var surface = new RevolvedSurface(generator, centre, pole, sweep);
             return new BrepFace(surface, [new BrepLoop(Chain(arcs, vertex))]);
         }
 
@@ -802,49 +892,7 @@ public static class Filleting
 
             var edges = new List<RimEdgeInfo>(n);
             foreach (var use in outer.Coedges)
-            {
-                var edge = use.Edge;
-                if (edge.Uses.Count != 2)
-                    throw new NotSupportedException("Rim edges must be interior (two uses).");
-                var neighborUse = edge.Uses.First(u => !ReferenceEquals(u, use));
-                var neighbor = neighborUse.Loop.Face;
-                var start = edge.Curve.PointAt(use.SameSense ? edge.Domain.Start : edge.Domain.End);
-                var end = edge.Curve.PointAt(use.SameSense ? edge.Domain.End : edge.Domain.Start);
-
-                Vector3d downDir;
-                Circle3d? arc = null;
-                double arcStart = 0, arcSweep = 0;
-                if (edge.Curve.Underlying is Line3d)
-                {
-                    if (!neighbor.IsPlanar(out _, out var sideNormal))
-                        throw new NotSupportedException("Straight rim edges need planar neighbor faces.");
-                    if (fillet && Math.Abs(sideNormal.Dot(up)) > 1e-6)
-                        throw new NotSupportedException("Fillet rims need neighbors perpendicular to the face.");
-                    var raw = -up + sideNormal * up.Dot(sideNormal);
-                    if (!raw.TryNormalize(Tolerance.Default, out downDir))
-                        throw new NotSupportedException("A rim neighbor is parallel to the face.");
-                }
-                else if (edge.Curve.Underlying is Circle3d)
-                {
-                    if (!neighbor.IsCylindrical(out _, out var axis, out _)
-                        || !axis.IsParallelTo(up, Tolerance.Default))
-                        throw new NotSupportedException("Arc rim edges need coaxial cylindrical neighbor faces.");
-                    downDir = -up;
-                    var actual = ActualCircle(edge); // wrapper-immune geometry
-                    arc = actual;
-                    // start/end are already traversal-ordered and the midpoint is
-                    // direction-agnostic, so this span follows the loop directly.
-                    (arcStart, arcSweep) = ArcSpan(actual, start, end,
-                        edge.Curve.PointAt(edge.Domain.Mid));
-                }
-                else
-                {
-                    throw new NotSupportedException(
-                        "Rim edges must be lines or circular arcs (straighten or round other curves first).");
-                }
-
-                edges.Add(new RimEdgeInfo(use, edge, neighbor, neighborUse, start, end, downDir, arc, arcStart, arcSweep));
-            }
+                edges.Add(EdgeInfoFor(use, fillet, up));
 
             for (int i = 0; i < n; i++)
             {
@@ -1109,6 +1157,55 @@ public static class Filleting
         }
 
         // ---- helpers ----
+
+        /// <summary>Per-rim-edge geometry and validation, shared verbatim by the closed
+        /// rim path and the open (partial-run) path: neighbor resolution, traversal
+        /// endpoints, the descent direction into the neighbor, and wrapper-immune arc
+        /// geometry with the traversal-ordered span.</summary>
+        private static RimEdgeInfo EdgeInfoFor(BrepCoedge use, bool fillet, in Vector3d up)
+        {
+            var edge = use.Edge;
+            if (edge.Uses.Count != 2)
+                throw new NotSupportedException("Rim edges must be interior (two uses).");
+            var neighborUse = edge.Uses.First(u => !ReferenceEquals(u, use));
+            var neighbor = neighborUse.Loop.Face;
+            var start = edge.Curve.PointAt(use.SameSense ? edge.Domain.Start : edge.Domain.End);
+            var end = edge.Curve.PointAt(use.SameSense ? edge.Domain.End : edge.Domain.Start);
+
+            Vector3d downDir;
+            Circle3d? arc = null;
+            double arcStart = 0, arcSweep = 0;
+            if (edge.Curve.Underlying is Line3d)
+            {
+                if (!neighbor.IsPlanar(out _, out var sideNormal))
+                    throw new NotSupportedException("Straight rim edges need planar neighbor faces.");
+                if (fillet && Math.Abs(sideNormal.Dot(up)) > 1e-6)
+                    throw new NotSupportedException("Fillet rims need neighbors perpendicular to the face.");
+                var raw = -up + sideNormal * up.Dot(sideNormal);
+                if (!raw.TryNormalize(Tolerance.Default, out downDir))
+                    throw new NotSupportedException("A rim neighbor is parallel to the face.");
+            }
+            else if (edge.Curve.Underlying is Circle3d)
+            {
+                if (!neighbor.IsCylindrical(out _, out var axis, out _)
+                    || !axis.IsParallelTo(up, Tolerance.Default))
+                    throw new NotSupportedException("Arc rim edges need coaxial cylindrical neighbor faces.");
+                downDir = -up;
+                var actual = ActualCircle(edge); // wrapper-immune geometry
+                arc = actual;
+                // start/end are already traversal-ordered and the midpoint is
+                // direction-agnostic, so this span follows the loop directly.
+                (arcStart, arcSweep) = ArcSpan(actual, start, end,
+                    edge.Curve.PointAt(edge.Domain.Mid));
+            }
+            else
+            {
+                throw new NotSupportedException(
+                    "Rim edges must be lines or circular arcs (straighten or round other curves first).");
+            }
+
+            return new RimEdgeInfo(use, edge, neighbor, neighborUse, start, end, downDir, arc, arcStart, arcSweep);
+        }
 
         /// <summary>Signed angular span of an arc edge measured in the circle's own
         /// frame, resolved through the edge's midpoint (handles &gt; π sweeps).</summary>

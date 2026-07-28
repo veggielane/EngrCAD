@@ -141,6 +141,80 @@ public class FilletCornerVolumeTests
     }
 
     [Fact]
+    public void WholeSolidFillet_Tetrahedron_MatchesSteinerAndConverges()
+    {
+        // The general trihedral corner: a REGULAR tetrahedron (alternate cube corners)
+        // has no perpendicular face at any vertex, so all four corner patches are
+        // trimmed spherical triangles. Steiner's formula still holds — the exterior
+        // solid angles of a convex polytope's vertices sum to a full sphere:
+        // V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³, with θₑ the exterior dihedral
+        // π − arccos(1/3) on every edge.
+        Vector3d[] positions = [(10, 10, 10), (10, -10, -10), (-10, 10, -10), (-10, -10, 10)];
+        var tetrahedron = Polyhedron(positions, [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]]);
+        double r = 1.5;
+        var rounded = Filleting.FilletAllEdges(tetrahedron, r);
+        rounded.Validate();
+
+        // Steiner applies to the DILATION of the ERODED body K = T ⊖ B_r — a regular
+        // tetrahedron shrunk about its incentre by (ρ − r)/ρ, ρ = 10/√3 here.
+        double inradius = 10 / Math.Sqrt(3);
+        double shrink = (inradius - r) / inradius;
+        double edge = 20 * Math.Sqrt(2) * shrink;
+        double v0 = Math.Pow(20, 3) / 3 * shrink * shrink * shrink;
+        double a0 = Math.Sqrt(3) * edge * edge;             // 4 · (√3/4)a²
+        double exteriorDihedral = Math.PI - Math.Acos(1.0 / 3);
+        double expected = v0 + a0 * r
+            + r * r / 2 * (6 * edge * exteriorDihedral)
+            + 4.0 / 3 * Math.PI * r * r * r;
+
+        var mesh = BRepTessellator.Tessellate(rounded, 64, 64);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed, "rounded tetrahedron welded open");
+        Assert.Equal(2, mesh.EulerCharacteristic);
+        Assert.True(Math.Abs(mesh.Volume() - expected) / expected < 1e-4,
+            $"rounded tetrahedron volume {mesh.Volume()} vs Steiner {expected}");
+
+        double coarse = expected - BRepTessellator.Tessellate(rounded, 32, 32).Volume();
+        double fine = expected - BRepTessellator.Tessellate(rounded, 64, 64).Volume();
+        Assert.True(coarse > 0 && fine > 0,
+            $"inscribed facets stay inside the exact solid (got {coarse:E3} / {fine:E3})");
+        double ratio = coarse / fine;
+        Assert.True(ratio is > 3.0 and < 5.0, $"second-order convergence expected, got a ratio of {ratio}");
+    }
+
+    /// <summary>A convex polyhedron from positions and outward-CCW index loops
+    /// (mirrors the helper in EngrCAD.BRep.Tests.FilletAllEdgesTests; also used by the
+    /// corpus gate's rounded tetrahedron).</summary>
+    internal static BrepSolid Polyhedron(IReadOnlyList<Vector3d> positions, IReadOnlyList<int[]> loops)
+    {
+        var vertices = positions.Select(p => new BrepVertex(p)).ToArray();
+        var edges = new Dictionary<(int, int), BrepEdge>();
+        var faces = new List<BrepFace>();
+        foreach (var loop in loops)
+        {
+            var coedges = new List<BrepCoedge>(loop.Length);
+            for (int i = 0; i < loop.Length; i++)
+            {
+                int a = loop[i], b = loop[(i + 1) % loop.Length];
+                var key = a < b ? (a, b) : (b, a);
+                if (!edges.TryGetValue(key, out var edge))
+                {
+                    edge = new BrepEdge(
+                        new Line3d(vertices[key.Item1].Position, vertices[key.Item2].Position),
+                        Interval.Unit, vertices[key.Item1], vertices[key.Item2]);
+                    edges[key] = edge;
+                }
+                coedges.Add(new BrepCoedge(edge, key.Item1 == a));
+            }
+            var p0 = positions[loop[0]];
+            var normal = (positions[loop[1]] - p0).Cross(positions[loop[2]] - p0).Normalized();
+            var x = (positions[loop[1]] - p0).Normalized();
+            faces.Add(new BrepFace(new PlaneSurface(p0, x, normal.Cross(x)), [new BrepLoop(coedges)]));
+        }
+        return new BrepSolid([new BrepShell(faces)]);
+    }
+
+    [Fact]
     public void WholeSolidFillet_ConvergesQuadratically()
     {
         // Every face is on the natural grid path (the bands and corner patches are

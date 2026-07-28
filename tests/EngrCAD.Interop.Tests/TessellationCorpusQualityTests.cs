@@ -49,7 +49,7 @@ public class TessellationCorpusQualityTests
         "threaded rod", "threaded hole",
         "loft", "shelled tray", "drafted boss",
         "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
-        "rounded box",
+        "rounded box", "rounded tetrahedron",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
         "sketch pocket", "engraved plate", "wedge",
     ];
@@ -123,6 +123,14 @@ public class TessellationCorpusQualityTests
                     .ToBrep();
             case "rounded box":
                 return Filleting.FilletAllEdges(SolidFactory.MakeBox(new Aabb((0, 0, 0), (20, 14, 8))), 2);
+            case "rounded tetrahedron":
+                // Every corner is a GENERAL trihedral one: four trimmed spherical
+                // corner patches through the pole-grid tier.
+                return Filleting.FilletAllEdges(
+                    FilletCornerVolumeTests.Polyhedron(
+                        [(10, 10, 10), (10, -10, -10), (-10, 10, -10), (-10, -10, 10)],
+                        [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]]),
+                    2);
             case "revolved vase":
                 return Shape.Revolve(Sketch.Start(0, 0)
                     .LineTo(10, 0)

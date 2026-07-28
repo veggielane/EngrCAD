@@ -587,17 +587,31 @@ operations. Depends only on `EngrCAD.Core`.
     band about the ERODED edge line, and every vertex becomes a spherical patch on the
     ERODED vertex, bounded by great-circle arcs. Each curve is created once and handed to
     both of its faces, so senses follow mechanically and the result is manifold by
-    construction (a box gives 6 + 12 + 8 = 26 faces, 48 edges, 24 vertices). Every face is
-    FULL-DOMAIN, so it all tessellates on the natural grid and the volume converges
-    quadratically onto Steiner's formula
-    `V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³` — the last term because the eight octants
-    are exactly one ball. Refused loudly: concave edges (an opening cannot round them),
-    vertices of valence ≠ 3, and corners where no incident face is perpendicular to the
-    other two. That last restriction is what keeps the patch an exact surface of
-    revolution — the spherical triangle is then the lune between two meridians of that
-    face's normal, closed by an equatorial great circle — and it holds for every box, every
-    convex prism, and every sheared box. A general trihedral corner's spherical triangle
-    has no exact revolved form, and there is no other tessellable surface type for it.
+    construction (a box gives 6 + 12 + 8 = 26 faces, 48 edges, 24 vertices). Refused
+    loudly: concave edges (an opening cannot round them) and vertices of valence ≠ 3.
+    Corners where one incident face is perpendicular to the other two (every box, convex
+    prism and sheared box) keep the exact LUNE — the spherical triangle reduces to the
+    region between two meridians of that face's normal closed by an equatorial great
+    circle, a FULL-DOMAIN surface of revolution on the natural grid. **General trihedral
+    corners** (a tetrahedron's, a drafted block's) build a TRIMMED spherical-triangle
+    patch on the same sphere: pick one face normal as the pole axis — the two arcs that
+    end at its tangency are then exact MERIDIANS (a great circle through the pole lies in
+    a plane containing the axis), landing on the u = 0 / u = sweep domain boundaries, the
+    pole closes the top, and only the third (diagonal) arc genuinely trims the interior.
+    The generator's interior-side extent is not a weld boundary, so it takes the
+    diagonal's sampled elevation minimum with a fixed margin; the three weld boundaries
+    are exact by construction. Tessellation goes through a dedicated trimmed tier
+    (`TriangulatePoleGrid` in Interop): one column per diagonal boundary sample, interior
+    rows invented at the natural density and shared by index between adjacent column
+    zips, meridian columns verbatim from the shared edge polylines, one one-step fan
+    ring at the pole — and the whole grid EXCLUDED from midpoint refinement, because the
+    refiner's flat uv metric overstates u chords near a pole without bound (measured: it
+    cascaded midpoints into the apex fan at 16/8 and half-step slivers into the last rows
+    at 48/24, both rejected by the corpus floor; the tier's own cells are already at
+    natural density and converge quadratically — Steiner on a regular tetrahedron to
+    1e-4 with a 3.0–5.0 halving ratio). Volume converges onto Steiner's formula
+    `V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³` (dimensions of the ERODED body — the
+    last term because a convex polytope's exterior solid angles sum to one ball).
     <br/>All the corner arcs are `CurveSegment` over `Circle3d`, never rational NURBS arcs:
     the patch is a surface of revolution sampled at even ANGLES, so an arc parameterized
     any other way samples to different points and the patch stops welding to its band.
@@ -698,11 +712,10 @@ two spiral cuts) and take the same path.
 
 Coplanar/tangent boolean cases,
 NURBS surface export. Filleting gaps, all refused loudly rather than approximated:
-**spherical corner patches on non-perpendicular trihedral vertices** (`FilletAllEdges`
-covers the perpendicular ones — boxes, convex prisms — which is where an exact surface of
-revolution exists), **partial edge runs** (a band that stops mid-rim needs a
+**partial edge runs** (a band that stops mid-rim needs a
 termination surface — cliff, setback or vertex blend — that this engine does not build),
-**sharp corners at arc rim edges** (torus ∩ cylinder is not a conic), and
+**sharp corners at arc rim edges** (a documented policy — torus ∩ cylinder is not a
+conic; see the Filleting section), and
 **variable-radius fillets**: the band itself would be exact — a linear radius law between
 two equal-weight rational arcs is a degree-(2,1) NURBS whose v-sections are true circles,
 and it stays G1 with both neighbours — but the corner where two such bands meet is the
