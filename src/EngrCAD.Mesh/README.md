@@ -527,6 +527,27 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   one-sided rather than convergent: a 1-Lipschitz lower bound puts the surface at least
   `|d|` away in every direction, so the step can never cross it, but `|d|` need not
   decrease near a CSG difference's fictitious faces. See that project's README.
+- **`LaplacianMeshSmoother`** — global implicit Laplacian smoothing: one sparse solve of
+  (M + λL)·x′ = M·x per coordinate (Desbrun-style implicit fairing) over the **cotangent**
+  Laplacian (Meyer et al. / Botsch–Sorkine) with lumped barycentric mass, boundary always
+  pinned bit-identically, backed by Core's `SparseCholesky`. λ = `TimeStep` · h̄² with h̄
+  the mean edge length, so the step size is **dimensionless and scale-free** — the same
+  options smooth the same amount at 1e-5 and metre scale.
+  - **Not the remesher's smoothing pass, on purpose.** `Remesher` runs local explicit
+    double-buffered relaxation between topology operations, with projection preserving the
+    shape — its job is triangle *quality*. This class changes the *geometry* (fairing,
+    denoising) with fixed topology, and the implicit solve reaches equilibrium against the
+    pinned boundary in one step where the explicit scheme diffuses one ring per pass.
+  - Robustness rules, all in the repo's scale-free style: a cotangent contribution from a
+    triangle whose height is below 1e-13 × its longest edge (the sliver measure
+    `PolygonTriangulator` uses) makes the whole edge fall back to the **uniform weight 1**
+    (the degenerate-cotangent fallback); a negative cotangent *sum* (obtuse-dominated
+    edge) is sign-clamped to 0 so L stays positive semi-definite and the solve honest; a
+    massless vertex gets the mean vertex area so M stays positive definite.
+    `LaplacianWeighting.Uniform` selects combinatorial weights outright.
+  - Deterministic (mesh-order assembly + deterministic solver): identical inputs give
+    bit-identical output, and a planar mesh stays planar **exactly** (the out-of-plane
+    system is 0 = 0, and substituting a zero vector is zero) — both pinned by tests.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with
