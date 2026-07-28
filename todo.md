@@ -538,14 +538,17 @@ export — is recorded in CLAUDE.md):
   is the *expensive* cousin of the Animation section above and deliberately separate:
   that one moves poses and the camera only, which is why it can animate with matrices
   alone; this one changes geometry, so every frame pays a full lower + tessellate.
+  **Design assessment recorded in design.md** ("$t — assessed and deliberately
+  deferred"): shape is `Func<double, Scene>` + offline frame bake, the work is
+  prefix/identity caching across frames, and it should be built only when a concrete
+  model needs morphing geometry.
 - [ ] model-validation report (volumes, bounds, manifoldness per body) in the viewer —
   the `assert/echo` analog
-- [ ] export 3MF / AMF (zip+XML; 3MF is the modern printing format), OFF
-- [ ] `Shape.From(path)` import sugar — the engine layer ✅ landed (`MeshReader` STL/
-  OBJ/OFF + `MeshRepair.Clean` + `ReadAndRepair`); wrap it in Modeling for user-facing
-  import, then a docs-site example becomes executable (write-with-StlWriter →
-  dirty-in-memory → ReadAndRepair)
-- [ ] import/export DXF + SVG (2D profiles in/out; SVG also useful for drawings)
+- [ ] **DXF/SVG follow-ups** (v1 ✅ landed — `DxfDocument` LINE/ARC/CIRCLE/LWPOLYLINE
+  with layers both ways, exact bulge arcs; `SvgDrawing` visible/hidden/section line
+  classes over Section/Silhouette/Sketch): DXF SPLINE entities (cubic béziers now
+  flatten on export), hidden-line classification computed from the model (needs HLR —
+  today the caller says which class a curve set is), DXF units header ($INSUNITS).
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
@@ -723,12 +726,9 @@ where this project already points.
   auto-measuring selectors), so this is mostly a **2D drawing sheet** gap: dimensions
   laid out on a projected view rather than in model space. Pairs with the HLR item in the
   OCCT section — HLR gives the view, drafting gives the annotation on it.
-- [ ] **Exporter breadth** — between them: SVG and DXF with layers and line types
-  (visible/hidden), 3MF, glTF, VTK, VRML, AMF. DXF/SVG and 3MF are already open items
-  elsewhere in this file; the specific thing worth taking from build123d's `ExportSVG`/
-  `ExportDXF` is **line-type and layer control driven by edge classification** (visible
-  vs hidden vs section), which is what makes an exported drawing usable rather than a
-  flat soup of curves.
+- [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
+  `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
+  build123d's edge-classification line types); remaining: glTF, VTK, VRML.
 - [ ] **`pack`** — build123d's arrange-parts-on-a-build-plate helper (2D bin packing of
   part footprints). Small, self-contained, and immediately useful for 3D-print export of
   a multi-part assembly; `Shape.Silhouette` already produces the footprint it needs.
