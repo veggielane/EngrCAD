@@ -855,6 +855,28 @@ honest no) is recorded in design.md §6b with the comparison committed as
   would need Avalonia pointer capture plumbing for marginal gain); parameter fields are
   free-text through the JSON seam — typed editors (sliders for `Min`/`Max` ranges,
   enum dropdowns) would be the polish pass.
+- [ ] **Ambient-occlusion bake cost — three levers examined, two declined, don't redo
+  them.** The bake was 12.3 s on the demo scene and already saturates every core.
+  (a) **An any-hit early-out does not exist here**: occlusion accumulates as `1 − t`, so
+  it is a NEAREST-hit query and a boolean test is a different renderer (measured 0.055
+  darker over the occluded vertices; pinned by
+  `Occlusion_AttenuatesWithDISTANCE_NotJustHitOrMiss`). (b) **Nearer-child-first traversal
+  landed** — exact, bit-identical, but worth only **1.19× on a gyroid lattice and 1.04×
+  (nothing) on a smooth blob**, because an escaping ray never sets the pruning bound below
+  1 and most rays escape on ordinary CAD parts. (c) **Fewer rays changes renders**: 16 → 8
+  is 1.6–1.9× and moves 59 of the 87 docs PNGs. What is left, in rough order of promise:
+  - [ ] **Bake at fewer sample points and interpolate** — the cost is linear in vertex
+    GROUPS, and a flat render mesh has one group per position per smoothing group, which
+    on a tessellated curve is far more resolution than a half-strength vertex signal
+    needs. Merging near-coplanar groups within a distance tier would cut the ray count
+    without touching the ray's own cost. Changes output; needs the PNG oracle.
+  - [ ] **A cheaper hemisphere for the common case**: a first pass of 4 rays that returns
+    exactly 1.0 (fully open) could skip the remaining 12 — but only if "4 rays escaped"
+    implies the other 12 do, which it does not, so this needs a conservative bound
+    (e.g. an unoccluded cone) rather than a sample count.
+  - [ ] The **80k-triangle opt-out** is still a cliff: a part just over it renders flat
+    while its neighbour just under it does not. A budget expressed in rays × expected
+    per-ray cost would degrade instead of cutting off.
 - [ ] **Matcap shading — assessed, viable as a *procedural* shader variant** (idea
   stage; ambient occlusion landed). A matcap shades by sampling a lit-sphere image at
   the view-space normal — material-rich metal/clay looks with zero lights. What the

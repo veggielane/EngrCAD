@@ -122,6 +122,30 @@ Dark-themed layout around one shared GL viewport:
     per-ray cost climbs by an order of magnitude (a 100k-triangle gyroid measured
     ~10 s). Both rules are pure functions of the mesh, so they cannot make the window
     and the headless render disagree.
+  - *What the bake cost is made of, measured* (`AmbientOcclusionBenchmark`,
+    ENGRCAD_BENCH-gated; i9-9900K win-x64 Release, before/after builds **interleaved
+    within one sitting**, best of seven). Three levers were examined and the honest
+    verdict differs for each:
+    - **An any-hit early-out is NOT available.** Occlusion accumulates as `1 − t`, so a
+      hit darkens in proportion to how close it is; a boolean test would count every hit
+      alike and could abandon the traversal at the first one. That is a different
+      renderer, not a faster one — measured 0.055 darker over the vertices that see an
+      occluder at all, and pinned by
+      `AmbientOcclusionTests.Occlusion_AttenuatesWithDISTANCE_NotJustHitOrMiss` so it
+      cannot be reintroduced by accident.
+    - **Nearer-child-first traversal IS exact and is done**, along with widening each
+      triangle to `(corner, edge, edge)` doubles once per bake instead of re-reading the
+      float buffers on every ray-triangle test. Output is bit-identical (golden
+      fingerprints on four fixtures). The win is small and *predictably uneven*: a ray
+      that ESCAPES never sets the bound below 1, so ordering prunes nothing for it, and
+      the gain is proportional to how occluded the geometry is — **1.19× on a gyroid
+      lattice** (mean occlusion 0.70, 334 → 279 ms) and **1.04×, i.e. nothing, on a
+      smooth CSG blob** (mean occlusion 0.95, 118 → 114 ms).
+    - **Fewer rays is a change to what users see, not a speedup.** Halving 16 → 8 is
+      1.6–1.9× but moves per-vertex occlusion by up to 0.21–0.30, and rebuilding the docs
+      site at 8 rays changes **59 of the 87 rendered PNGs**. Doubling to 32 still moves it
+      by up to 0.04–0.13, so 16 is a chosen cost/quality point rather than a converged
+      estimate — which is worth knowing before anyone calls a ray-count change free.
   - *Headless is still eager*: `RenderToImage` bakes inline, because it is one-shot and
     must be deterministic. The streamed and the inline paths produce the **same floats**
     (same cache, same `Bake`), so window/offscreen parity holds — the window simply

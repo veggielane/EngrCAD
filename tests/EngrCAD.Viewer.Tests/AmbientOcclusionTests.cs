@@ -91,6 +91,47 @@ public class AmbientOcclusionTests
         Assert.True(wall > 0.75, $"unexpected: the through-bore wall darkened to {wall:F3}");
     }
 
+    /// <summary>
+    /// The bake is a NEAREST-hit query, not a boolean one, and this pins it so nobody
+    /// "optimizes" it into an any-hit early-out. Occlusion is accumulated as
+    /// <c>1 − t</c>, so a hit darkens in proportion to how close it is; a boolean test
+    /// would count every hit alike and could stop traversing at the first one, which is
+    /// far cheaper and a different renderer.
+    /// <para>The construction removes every confound: at a radius fraction of 1 the
+    /// search radius already equals the bounding diagonal, so no point of the mesh can be
+    /// further away than that and GROWING the radius cannot bring in a single extra
+    /// occluder. The occluder set is therefore identical in both bakes and only the
+    /// distances scale — under a boolean rule the two results would be EQUAL. They are
+    /// not: a bigger radius pushes every hit's normalized distance toward 0, so each
+    /// contributes closer to a full unit of occlusion and the mesh darkens.</para>
+    /// </summary>
+    [Fact]
+    public void Occlusion_AttenuatesWithDISTANCE_NotJustHitOrMiss()
+    {
+        var render = RenderMesh.CreateFlat(
+            new Part("p", Shape.Box(4, 4, 2) - Shape.Box(2, 2, 1).Translate(0, 0, 1)).GetMesh());
+        var tight = AmbientOcclusion.Bake(render, AmbientOcclusion.DefaultRays, radiusFraction: 1.0);
+        // A radius a thousand diagonals wide IS the boolean bake: every hit's t collapses
+        // to ~0, so each contributes a full unit of occlusion regardless of distance.
+        var wide = AmbientOcclusion.Bake(render, AmbientOcclusion.DefaultRays, radiusFraction: 1000.0);
+
+        // Averaged over the vertices that see an occluder at all — the ones the two rules
+        // can possibly disagree about. (Over the whole mesh the gap is diluted to 0.008 by
+        // the majority of vertices that are fully open under both.)
+        var occluded = Enumerable.Range(0, tight.Length).Where(v => tight[v] < 0.999f).ToList();
+        Assert.NotEmpty(occluded);
+        double meanTight = occluded.Average(v => (double)tight[v]);
+        double meanWide = occluded.Average(v => (double)wide[v]);
+        Assert.True(meanTight > meanWide + 0.02,
+            $"growing the search radius must darken a distance-attenuated bake " +
+            $"({meanWide:F4} vs {meanTight:F4} over {occluded.Count} occluded vertices); " +
+            "equal would mean the bake went boolean");
+        // ... and never the other way round on any single vertex: a larger radius scales
+        // every hit's t down, so every attenuation 1 - t grows.
+        for (int v = 0; v < tight.Length; v++)
+            Assert.True(wide[v] <= tight[v] + 1e-6, $"vertex {v} lightened at a larger radius");
+    }
+
     [Fact]
     public void Bake_IsDeterministic()
     {
