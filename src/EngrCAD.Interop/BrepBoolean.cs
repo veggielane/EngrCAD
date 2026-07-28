@@ -19,8 +19,10 @@ public sealed class BrepBooleanException(string message) : Exception(message);
 /// with subtracted-tool faces reversed. A hybrid-kernel operation by design: exact
 /// B-Rep surfaces and curves, mesh-backed point classification.
 ///
-/// v1 contract: input solids must intersect transversally (no coplanar/tangent face
-/// pairs); inputs are consumed (their faces are split in place). The result is sealed
+/// v1 contract: input solids may intersect transversally or share coincident PLANAR faces
+/// (<see cref="CoplanarFaces"/> — flush embossing, stacked plates, a pocket floor flush with
+/// a face); coincident or tangent CURVED faces are refused by name. Inputs are consumed
+/// (their faces are split in place). The result is sealed
 /// both geometrically and topologically (<see cref="TopologyEditor.SealSeams"/>), and
 /// every operation ENFORCES that before returning: a result that is not two-manifold
 /// throws <see cref="BrepBooleanException"/> rather than handing back a solid that
@@ -29,17 +31,17 @@ public sealed class BrepBooleanException(string message) : Exception(message);
 public static class BrepBoolean
 {
     public static BrepSolid Union(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
-        Execute(a, b, "Union", keepAOutside: true, keepBOutside: true, reverseB: false, logger);
+        Execute(a, b, "Union", keepAOutside: true, keepBOutside: true, reverseB: false, difference: false, logger);
 
     public static BrepSolid Intersection(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
-        Execute(a, b, "Intersection", keepAOutside: false, keepBOutside: false, reverseB: false, logger);
+        Execute(a, b, "Intersection", keepAOutside: false, keepBOutside: false, reverseB: false, difference: false, logger);
 
     public static BrepSolid Difference(BrepSolid a, BrepSolid b, Microsoft.Extensions.Logging.ILogger? logger = null) =>
-        Execute(a, b, "Difference", keepAOutside: true, keepBOutside: false, reverseB: true, logger);
+        Execute(a, b, "Difference", keepAOutside: true, keepBOutside: false, reverseB: true, difference: true, logger);
 
     private static BrepSolid Execute(
         BrepSolid a, BrepSolid b, string operation, bool keepAOutside, bool keepBOutside, bool reverseB,
-        Microsoft.Extensions.Logging.ILogger? logger = null)
+        bool difference, Microsoft.Extensions.Logging.ILogger? logger = null)
     {
         // Timing is opt-in observation only: every finding of the operation itself stays
         // a return value or an exception (BrepBooleanException names its own facts).
@@ -60,6 +62,13 @@ public static class BrepBoolean
         // value could only skip a genuinely-touching face pair, never corrupt geometry.
         var boundsA = curvesA.Keys.ToDictionary(f => f, f => f.Bounds().Expanded(1e-6));
         var boundsB = curvesB.Keys.ToDictionary(f => f, f => f.Bounds().Expanded(1e-6));
+        var planarA = CoplanarFaces.For(a);
+        var planarB = CoplanarFaces.For(b);
+        // Planes the two solids genuinely SHARE (same carrier, overlapping trims). Empty for
+        // every transversal input, which is what keeps this tier inert for existing models.
+        var sharedPlanes = new List<(Vector3d Origin, Vector3d Normal)>();
+        var coplanarPairs = new List<(BrepFace A, BrepFace B)>();
+        var pending = new List<(BrepFace A, BrepFace B, Curve3d Curve)>();
         foreach (var fa in curvesA.Keys)
         {
             foreach (var fb in curvesB.Keys)
@@ -69,23 +78,53 @@ public static class BrepBoolean
                 // either face never reach the splitter.
                 if (!boundsA[fa].Intersects(boundsB[fb]))
                     continue;
-                foreach (var curve in SurfaceIntersection.Intersect(fa.Surface, fb.Surface, region))
+                var curves = SurfaceIntersection.Intersect(fa.Surface, fb.Surface, region);
+                if (curves.Count == 0)
                 {
-                    // Identical carriers on repeated geometry (patterned faces sharing a
-                    // plane) produce the same curve once per pair; splitting a face
-                    // twice along the same curve breaks the arrangement tracer.
-                    if (!curvesA[fa].Any(existing => SameCurve(existing.Curve, curve)))
-                        curvesA[fa].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fb, curve))));
-                    if (!curvesB[fb].Any(existing => SameCurve(existing.Curve, curve)))
-                        curvesB[fb].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fa, curve))));
+                    // Two surfaces whose bounds overlap and which cross in NO curve either
+                    // miss each other or are coincident. Coincidence is the whole question
+                    // here, and it is decided before any splitting so a refusal is a clean
+                    // one (rim surgery's all-or-nothing rule, applied to booleans).
+                    SurveyCoincidence(fa, fb, sharedPlanes, coplanarPairs, operation);
+                    continue;
                 }
+                foreach (var curve in curves)
+                    pending.Add((fa, fb, curve));
             }
+        }
+
+        // Flush operands need two extra filters; both are gated on a shared plane actually
+        // existing, so a purely transversal boolean distributes its curves exactly as before.
+        bool flush = sharedPlanes.Count > 0;
+        foreach (var (fa, fb, curve) in pending)
+        {
+            bool usable = !flush || MeetBeyondAPoint(fa, fb);
+            // Identical carriers on repeated geometry (patterned faces sharing a plane)
+            // produce the same curve once per pair; splitting a face twice along the same
+            // curve breaks the arrangement tracer.
+            if (usable && (!flush || ReachesInterior(fa, curve)) &&
+                !curvesA[fa].Any(existing => SameCurve(existing.Curve, curve)))
+                curvesA[fa].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fb, curve))));
+            if (usable && (!flush || ReachesInterior(fb, curve)) &&
+                !curvesB[fb].Any(existing => SameCurve(existing.Curve, curve)))
+                curvesB[fb].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fa, curve))));
+        }
+        foreach (var (fa, fb) in coplanarPairs)
+        {
+            ImprintRim(curvesA[fa], fa, fb);
+            ImprintRim(curvesB[fb], fb, fa);
         }
 
         // Disjoint or fully nested operands: no intersection curves anywhere. Classify
         // whole bodies and combine shells — a multi-shell result for disjoint unions,
         // a cavity (reversed inner shell) for a fully swallowed Difference tool.
-        if (curvesA.Values.All(list => list.Count == 0))
+        //
+        // A shared plane disqualifies the fast path even when it leaves no curves. Two
+        // stacked plates of the SAME footprint intersect only along their own boundary
+        // edges, so every curve is dropped above and the operands look disjoint — they are
+        // not: they share a whole face, and taking the fast path returns them as two
+        // touching shells, which is precisely the fusion failure this tier exists to fix.
+        if (sharedPlanes.Count == 0 && curvesA.Values.All(list => list.Count == 0))
         {
             bool aInside = sdfB.Evaluate(ProbePoint(a.Faces.First())) < 0;
             bool bInside = sdfA.Evaluate(ProbePoint(b.Faces.First())) < 0;
@@ -106,14 +145,22 @@ public static class BrepBoolean
         var kept = new List<BrepFace>();
         foreach (var fragment in SplitAll(curvesA))
         {
-            bool inside = sdfB.Evaluate(ProbePoint(fragment)) < 0;
-            if (keepAOutside ? !inside : inside)
+            var probe = ProbePoint(fragment);
+            var coincidence = Coincident(fragment, probe, planarB, sharedPlanes);
+            bool keep = coincidence == Coincidence.None
+                ? (sdfB.Evaluate(probe) < 0) != keepAOutside
+                : CoplanarFaces.Keep(coincidence, difference, fromA: true);
+            if (keep)
                 kept.Add(fragment);
         }
         foreach (var fragment in SplitAll(curvesB))
         {
-            bool inside = sdfA.Evaluate(ProbePoint(fragment)) < 0;
-            if (keepBOutside ? !inside : inside)
+            var probe = ProbePoint(fragment);
+            var coincidence = Coincident(fragment, probe, planarA, sharedPlanes);
+            bool keep = coincidence == Coincidence.None
+                ? (sdfA.Evaluate(probe) < 0) != keepBOutside
+                : CoplanarFaces.Keep(coincidence, difference, fromA: false);
+            if (keep)
                 kept.Add(reverseB ? ReverseFace(fragment) : fragment);
         }
         if (kept.Count == 0)
@@ -150,8 +197,10 @@ public static class BrepBoolean
                 $"B-Rep {operation} produced an unclosed solid: {unpaired.Count} of {uses.Count} edges are " +
                 $"used by {string.Join('/', unpaired.Select(e => uses[e]).Distinct().Order())} face(s) instead " +
                 $"of 2, so the result has cracks (one runs through {sample.Curve.PointAt(sample.Domain.Mid)}). " +
-                "The usual causes are coplanar or tangent face pairs — unsupported input for the v1 exact " +
-                "boolean — or intersection curves that do not close into loops. Returning this solid would " +
+                "Coplanar PLANAR face pairs are supported (flush embossing, stacked plates, a pocket floor " +
+                "flush with a face); the usual remaining causes are coincident or tangent CURVED faces — a " +
+                "shaft in a bore of its own diameter, a band tangent to a wall — or intersection curves that " +
+                "do not close into loops. Returning this solid would " +
                 $"tessellate into an open mesh with no error, so it fails here instead. Unpaired: {detail}.");
         }
 
@@ -167,6 +216,277 @@ public static class BrepBoolean
             }
         }
         return result;
+    }
+
+    /// <summary>
+    /// Decides whether a face pair that produced no intersection curve is COINCIDENT, and
+    /// records the plane when it is. Two planar faces sharing a carrier whose trims genuinely
+    /// overlap are the supported case; coincident CURVED surface is refused here, by name,
+    /// rather than left to fail as an unclosed result three stages later.
+    /// <para>Overlap is probed from BOTH sides because either face may be the smaller one: an
+    /// emboss's underside sits inside its host's top face, while a host's pocket floor sits
+    /// inside the tool's. Two stacked plates' side walls are coplanar and meet along a single
+    /// line — neither probe lands inside the other, and they correctly stay ordinary
+    /// transversal faces.</para>
+    /// </summary>
+    private static void SurveyCoincidence(
+        BrepFace fa, BrepFace fb, List<(Vector3d Origin, Vector3d Normal)> sharedPlanes,
+        List<(BrepFace A, BrepFace B)> coplanarPairs, string operation)
+    {
+        bool planarA = fa.IsPlanar(out var originA, out var rawA);
+        bool planarB = fb.IsPlanar(out var originB, out var rawB);
+        if (planarA && planarB)
+        {
+            if (!rawA.TryNormalize(Tolerance.Default, out var na) ||
+                !rawB.TryNormalize(Tolerance.Default, out var nb) ||
+                !CoplanarFaces.SamePlane(originA, na, originB, nb))
+                return;
+            if (!OverlapInArea(fa, fb))
+                return; // coplanar carriers, disjoint trims — nothing is shared
+            if (!sharedPlanes.Any(p => CoplanarFaces.SamePlane(p.Origin, p.Normal, originA, na)))
+                sharedPlanes.Add((originA, na));
+            coplanarPairs.Add((fa, fb));
+            return;
+        }
+
+        // Coaxial equal-radius cylinders are the coincident-curved case that actually occurs
+        // (a shaft pressed into its own bore, a flange band tangent to a sheet). Named here
+        // because the alternative is a crack along the whole contact patch, reported by
+        // Verified as "unclosed" with no hint of which pair caused it.
+        if (fa.IsCylindrical(out var axisOriginA, out var axisA, out double radiusA) &&
+            fb.IsCylindrical(out var axisOriginB, out var axisB, out double radiusB) &&
+            axisA.IsParallelTo(axisB, Tolerance.Default) &&
+            Math.Abs(radiusA - radiusB) <= FaceGeometry.SeamTolerance)
+        {
+            var offset = axisOriginB - axisOriginA;
+            var separation = offset - axisA * offset.Dot(axisA);
+            if (separation.Length <= FaceGeometry.SeamTolerance)
+            {
+                throw new BrepBooleanException(
+                    $"B-Rep {operation} has coincident CYLINDRICAL faces: two radius-{radiusA:G6} " +
+                    $"bands share the axis through {axisOriginA} along {axisA}. The v1 exact boolean " +
+                    "handles coincident PLANAR faces (flush embossing, stacked plates, a pocket floor " +
+                    "flush with a face) but not coincident or tangent curved surface — deciding the " +
+                    "shared region's rim there needs surface–surface re-intersection the kernel does " +
+                    "not have. Offset one operand by a working clearance, or take the implicit route.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Imprints the shared region's rim onto a coplanar face, using the PARTNER face's own
+    /// boundary curves — which is what the rim is: the line where the other solid's boundary
+    /// leaves the shared plane.
+    ///
+    /// <para><b>Why the transversal path alone is not enough here.</b> The mesh boolean gets
+    /// this rim for free because a coplanar patch's neighbour is a transverse pair. In B-Rep
+    /// it usually arrives the same way — a <c>MakeBox</c> boss's wall is an unbounded
+    /// <c>PlaneSurface</c> and plane∩plane duly returns the rim line — but a SKETCH extrusion's
+    /// wall is a bounded patch, and <c>TryPlaneExtrudedSection</c> deliberately reports NO
+    /// section when the cutting plane is flush with the generator's rim (splitting the wall
+    /// there would fabricate zero-extent slivers). Embossed text is exactly that case: the
+    /// glyph's underside was dropped as coincident while the plate's top face was never
+    /// imprinted, and the result cracked along every letter's outline.</para>
+    ///
+    /// <para>Curves already covering a rim edge are left alone rather than doubled — splitting
+    /// a face twice along the same geometry breaks the arrangement tracer — and rim edges that
+    /// never reach this face's interior are skipped, so a partial overlap adds nothing the
+    /// transversal path did not already supply.</para>
+    ///
+    /// <para>Taking the partner's OWN curves is also the best possible weld: the new edges are
+    /// built on the very geometry the other solid already references, so
+    /// <c>SealSeams</c> pairs them by construction rather than by tolerance.</para>
+    /// </summary>
+    private static void ImprintRim(
+        List<(Curve3d Curve, IReadOnlyList<double> Breaks)> curves, BrepFace face, BrepFace partner)
+    {
+        foreach (var loop in partner.Loops)
+        {
+            foreach (var coedge in loop.Coedges)
+            {
+                var edge = coedge.Edge;
+                var rim = new CurveSegment(edge.Curve, edge.Domain.Start, edge.Domain.End);
+                if (!ReachesInterior(face, rim))
+                    continue;
+                if (curves.Any(existing => Covers(existing.Curve, rim)))
+                    continue;
+                curves.Add((rim, SeamBreaks(rim, FaceSplitter.CrossingParameters(partner, rim))));
+            }
+        }
+    }
+
+    /// <summary>Every exact sample of <paramref name="rim"/> lies on <paramref name="existing"/>
+    /// (measured against its sampled polyline), i.e. the face is already being split there.</summary>
+    private static bool Covers(Curve3d existing, Curve3d rim)
+    {
+        var parameters = FaceGeometry.ExactSampleParameters(
+            existing, existing.Domain.Start, existing.Domain.End, 24);
+        foreach (double t in FaceGeometry.ExactSampleParameters(rim, rim.Domain.Start, rim.Domain.End, 8))
+        {
+            var p = rim.PointAt(t);
+            double best = double.PositiveInfinity;
+            var previous = existing.PointAt(parameters[0]);
+            for (int i = 1; i < parameters.Count; i++)
+            {
+                var next = existing.PointAt(parameters[i]);
+                best = Math.Min(best, DistanceToSegment(p, previous, next));
+                previous = next;
+            }
+            if (best > FaceGeometry.SeamTolerance)
+                return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Whether two coplanar faces' trims genuinely overlap in AREA, sampled on a grid over
+    /// the box their bounds share. Every sample lies on the common plane by construction, so
+    /// the only question is the trims.
+    ///
+    /// <para><b>Centroids are not enough, and that is not a detail.</b> The first version asked
+    /// whether either face's probe point fell inside the other, which is true for an emboss
+    /// (its underside sits inside the host's top) but FALSE for two plates that overlap in a
+    /// strip — neither centroid is in the shared band, the coincidence went unseen, and the
+    /// whole flush tier stayed switched off for the case that most needs it.</para>
+    ///
+    /// <para>Sampling can still miss an overlap thinner than the grid. That direction is safe:
+    /// missing it leaves the boolean on its pre-existing path, which fails loudly rather than
+    /// producing wrong geometry.</para>
+    /// </summary>
+    private static bool OverlapInArea(BrepFace fa, BrepFace fb)
+    {
+        var box = fa.Bounds().Intersection(fb.Bounds());
+        if (box.IsEmpty)
+            return false;
+        var samplesX = AxisSamples(box.Min.X, box.Max.X);
+        var samplesY = AxisSamples(box.Min.Y, box.Max.Y);
+        var samplesZ = AxisSamples(box.Min.Z, box.Max.Z);
+        foreach (double x in samplesX)
+        {
+            foreach (double y in samplesY)
+            {
+                foreach (double z in samplesZ)
+                {
+                    var p = new Vector3d(x, y, z);
+                    if (FaceGeometry.Contains(fa, p) && FaceGeometry.Contains(fb, p))
+                        return true;
+                }
+            }
+        }
+        return false;
+
+        // A flat axis contributes its single value; the coplanar box is flat in one of them.
+        static double[] AxisSamples(double min, double max)
+        {
+            const int steps = 8;
+            if (max - min <= FaceGeometry.SeamTolerance)
+                return [(min + max) / 2];
+            var values = new double[steps - 1];
+            for (int i = 1; i < steps; i++)
+                values[i - 1] = min + (max - min) * i / steps;
+            return values;
+        }
+    }
+
+    /// <summary>
+    /// Whether two faces can share more than a single POINT, read off their bounds. A pair
+    /// whose bounds meet in one point can touch at most there, and a point cannot divide
+    /// either face, so the carrier curve through it is noise — <c>BrepQueries.Bounds</c> is
+    /// deliberately conservative-over, which is exactly what makes this sound.
+    ///
+    /// <para>Flush operands are full of such pairs: butting a boss against a plate puts the
+    /// boss's side wall corner-to-corner with the plate's, and the two carrier planes still
+    /// cross in a full line that runs clean through the plate's wall. The line is real; the
+    /// contact is not. On transversal input the same pairs are simply far apart, which is why
+    /// the boolean got this far without the rule.</para>
+    /// </summary>
+    private static bool MeetBeyondAPoint(BrepFace fa, BrepFace fb)
+    {
+        var overlap = fa.Bounds().Intersection(fb.Bounds());
+        if (overlap.IsEmpty)
+            return false;
+        var size = overlap.Size;
+        return Math.Max(size.X, Math.Max(size.Y, size.Z)) > FaceGeometry.SeamTolerance;
+    }
+
+    /// <summary>
+    /// Whether any exact sample of the curve lies STRICTLY inside the face — on its surface,
+    /// clear of its boundary by the seam tier, and inside its trim. Boundary proximity is
+    /// tested first because <see cref="FaceGeometry.Contains"/>' ray parity is decided by
+    /// rounding for a point sitting on the boundary itself.
+    /// </summary>
+    private static bool ReachesInterior(BrepFace face, Curve3d curve)
+    {
+        foreach (double t in FaceGeometry.ExactSampleParameters(curve, curve.Domain.Start, curve.Domain.End, 16))
+        {
+            var p = curve.PointAt(t);
+            if (!face.Surface.TryProjectPoint(p, out _, FaceGeometry.InverseEvaluationTolerance))
+                continue; // off this face's surface entirely
+            if (DistanceToBoundary(face, p) > FaceGeometry.SeamTolerance && FaceGeometry.Contains(face, p))
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Distance from a point to the face's boundary, measured against the boundary's sampled
+    /// POLYLINE rather than its samples — comparing against isolated sample points would call
+    /// a point sitting exactly on a straight edge "interior" whenever it happened to fall
+    /// between two of them (measured: a boss wall's own bottom rim read 0.125 away at 32
+    /// samples, so the degenerate split it was meant to suppress went ahead anyway).
+    /// <para>For a CURVED edge the chords lie inside the arc, so a point on the boundary can
+    /// read up to a sagitta away — which errs toward calling it interior, i.e. toward keeping
+    /// the curve, which is the pre-existing behaviour.</para>
+    /// </summary>
+    private static double DistanceToBoundary(BrepFace face, in Vector3d point)
+    {
+        const int boundarySamples = 32;
+        double best = double.PositiveInfinity;
+        foreach (var loop in face.Loops)
+        {
+            foreach (var coedge in loop.Coedges)
+            {
+                var edge = coedge.Edge;
+                var parameters = FaceGeometry.ExactSampleParameters(
+                    edge.Curve, edge.Domain.Start, edge.Domain.End, boundarySamples);
+                var previous = edge.Curve.PointAt(parameters[0]);
+                for (int i = 1; i < parameters.Count; i++)
+                {
+                    var next = edge.Curve.PointAt(parameters[i]);
+                    best = Math.Min(best, DistanceToSegment(point, previous, next));
+                    previous = next;
+                }
+            }
+        }
+        return best;
+    }
+
+    private static double DistanceToSegment(in Vector3d p, in Vector3d a, in Vector3d b)
+    {
+        var ab = b - a;
+        double lengthSquared = ab.LengthSquared;
+        // Exact-zero guard on a division, not a model tolerance: a degenerate sampling
+        // segment collapses to its own endpoint.
+        if (lengthSquared <= 0)
+            return p.DistanceTo(a);
+        double t = Math.Clamp((p - a).Dot(ab) / lengthSquared, 0, 1);
+        return p.DistanceTo(a + ab * t);
+    }
+
+    /// <summary>
+    /// Whether a split fragment lies on the other solid's coincident planar surface. Only
+    /// planar fragments can qualify, and only when a shared plane was surveyed — so this is a
+    /// no-op for transversal booleans.
+    /// </summary>
+    private static Coincidence Coincident(
+        BrepFace fragment, in Vector3d probe, CoplanarFaces other,
+        List<(Vector3d Origin, Vector3d Normal)> sharedPlanes)
+    {
+        if (sharedPlanes.Count == 0)
+            return Coincidence.None;
+        if (CoplanarFaces.OutwardNormal(fragment) is not { } normal)
+            return Coincidence.None;
+        return other.Classify(probe, normal);
     }
 
     private static IEnumerable<BrepFace> SplitAll(

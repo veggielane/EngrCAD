@@ -314,13 +314,20 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   like the cap bore. `CylinderSurface` **constant-v** wrap-split ✅ landed, exact at
   1.7e-15 relative. `CurveSegment`-over-polyline in `SampleEdge` and the `TraceFaces`
   2%/98% probes ✅ landed — both now route through
-  `FaceGeometry.ExactSampleParameters`/`IsPolylineBacked`.) — remaining:
+  `FaceGeometry.ExactSampleParameters`/`IsPolylineBacked`. **Coincident PLANAR faces** ✅
+  landed — flush embossing, stacked plates, butted blocks and flush pocket floors all
+  fuse into one solid (`CoplanarFaces.cs`, normal-agreement classification; design.md
+  §5). Cylinder promotion now requires a WHOLE turn ✅, which fixed near-miss pairs at a
+  rounded corner.) — remaining:
   a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of
   a side face) throws `Open splitting curves must start and end outside the face`;
-  flush/coplanar embossing does not fuse (the union leaves touching shells with the
-  right volume — sink the tool a fraction to fuse); equal-radius perpendicular cylinders
-  (tangent bicylinder: overlapping v-ranges rejected; the tracer's degenerate output
-  there is untested). Also still open: coplanar/tangent boolean cases generally.
+  equal-radius perpendicular cylinders (tangent bicylinder: overlapping v-ranges
+  rejected; the tracer's degenerate output there is untested); coincident or tangent
+  CURVED faces (a shaft in a bore of its own diameter) — refused BY NAME for coaxial
+  equal-radius cylinders, and the honest blocker is that the shared region's rim needs
+  the two trims re-intersected on a curved carrier, which is the SAME missing machinery
+  as curved shelling corners and general trihedral fillet patches, so the three should be
+  solved together.
 - [ ] **Trimmed cylindrical tessellation with WRAPPING loops** — the blocker behind the
   one wrap-split case still refused: a cross-drill piercing a plain `CylinderSurface`
   band makes a wrapping cut whose v varies, and its sub-bands keep the whole surface, so
@@ -678,8 +685,9 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   that returns fragment→host provenance without sealing, which is the modification
   history item again. *Glue* (merge coincident faces of touching solids without a
   boolean) is `ShapeHealing.SewDuplicateEdges` generalized from edges to overlapping
-  face REGIONS — needs the coplanar-overlap machinery the mesh boolean has and the
-  B-Rep boolean lacks; not cheap.
+  face REGIONS. The B-Rep boolean now HAS the planar half of that machinery
+  (`CoplanarFaces` — same-plane recognition, area-overlap sampling, normal-agreement
+  classification), so a planar *glue* is within reach; curved overlaps still are not.
 - [ ] Surface interpolation + least-squares approximation (`GeomAPI_PointsToBSpline`
   proper; curve interpolation exists). Assessed (task #11): the interpolation half is
   the tensor-product generalization of `NurbsCurve.InterpolatePoints` — chord-length

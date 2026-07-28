@@ -105,13 +105,11 @@ public class ScenePreMeshParallelTests
     [Fact]
     public void PartThatCannotLower_RethrowsTheOriginalException_NotAnAggregate()
     {
-        // Two crossing extrusions with identical z-extents: coplanar caps, which the v1
-        // exact boolean refuses. Sequentially PreMesh surfaced that exception directly;
-        // running in parallel must not wrap it in an AggregateException.
-        static Sketch Rect(double w, double h) => Sketch.Polygon(
-            [new(-w / 2, -h / 2), new(w / 2, -h / 2), new(w / 2, h / 2), new(-w / 2, h / 2)]);
-        var plane = SketchPlane.At((0, 0, -2), Vector3d.UnitX, Vector3d.UnitY);
-        var unclosable = Shape.Extrude(Rect(10, 10), 4, plane) | Shape.Extrude(Rect(4, 20), 4, plane);
+        // A bore that swallows a rounded corner and breaks out through both adjacent walls:
+        // a cut chain crossing a face boundary part-way, which the v1 exact boolean refuses.
+        // Sequentially PreMesh surfaced that exception directly; running in parallel must not
+        // wrap it in an AggregateException.
+        var unclosable = BooleanFailureTests.UnclosableBreakout();
 
         var scene = new Scene();
         scene.Add(new Part("fine", MeshPrimitives.Box(1, 1, 1)));

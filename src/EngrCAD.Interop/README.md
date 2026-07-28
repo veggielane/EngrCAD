@@ -306,8 +306,49 @@ logging complements them, never replaces them.
 - **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
   (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See
-  design.md §5. v1 handles transversal cases; inputs are consumed; output passes
-  `Validate()` with correct genus and exact volumes.
+  design.md §5. Transversal and coplanar-PLANAR cases are handled; inputs are consumed;
+  output passes `Validate()` with correct genus and exact volumes.
+  - **Coincident (flush) planar surface** (`CoplanarFaces.cs`) — flush embossing, stacked
+    plates, blocks butted together, a pocket floor flush with the host's own face. The
+    model is the mesh boolean's, translated: the shared region's rim is imprinted by the
+    ordinary TRANSVERSAL curves of the neighbouring faces, and the coincident fragments
+    are then classified by **normal agreement** instead of by an inside/outside probe,
+    which reads zero there and decides nothing (the B-Rep twin of the winding number
+    being ½ on a shared surface). Agreeing normals mean both solids lie on the same side,
+    so the surface bounds the union and the intersection and vanishes from the
+    difference; opposing normals mean the solids mate back to back, so union and
+    intersection bury it and only the difference keeps it. **Exactly one copy can ever
+    survive and it is always the FIRST solid's** — the asymmetry is deliberate and is
+    documented in design.md §5. Coincident CURVED surface (a shaft in a bore of its own
+    diameter) is refused BY NAME before any splitting.
+    - Three rules had to be added around the classification itself, and each was found by
+      a case that failed without it. **A curve that never reaches a face's INTERIOR must
+      not split it**: when two solids mate, each neighbour face's own boundary IS an
+      intersection curve (a boss's wall meets its host's top plane exactly along the
+      wall's bottom rim), and splitting a face along its own boundary is what the
+      arrangement tracer cannot close. **A pair whose bounds meet in a single POINT is
+      dropped**: butting a boss against a plate puts the two side walls corner to corner,
+      and their carrier planes still cross in a full line that runs clean through the
+      plate's wall — the line is real, the contact is not. **The disjoint fast path is
+      disqualified by a shared plane**: two stacked plates of the same footprint meet
+      only along their own boundary edges, so after the first rule every curve is gone and
+      the operands look disjoint, which returned them as two touching shells — precisely
+      the fusion failure this tier exists to fix. All three are gated on a shared plane
+      existing, so a purely transversal boolean takes exactly the path it took before.
+    - **The rim imprint has a second source, and it is needed.** The transversal path
+      supplies the rim for an unbounded `PlaneSurface` neighbour, but a sketch extrusion's
+      wall is a *bounded* patch and `TryPlaneExtrudedSection` deliberately reports NO
+      section when the cutting plane is flush with the generator's rim. Embossed text is
+      exactly that case, so a coplanar face also takes the partner face's OWN boundary
+      curves as rim curves (skipped where an existing curve already covers them, since
+      splitting twice along one curve breaks the tracer). Taking the partner's curves is
+      also the best possible weld: the new edges ride the geometry the other solid already
+      references, so `SealSeams` pairs them by construction rather than by tolerance.
+    - Coplanar overlap is decided by **sampling the shared area**, not by probing
+      centroids: two plates overlapping in a strip have neither centroid inside the other,
+      and the first version of the test missed exactly the case that most needs it. A miss
+      is safe in one direction only — it leaves the boolean on its pre-existing path,
+      which fails loudly rather than producing wrong geometry.
   - **The result is verified before it is returned.** Every operation checks that the
     assembled solid is two-manifold (each edge used by exactly two coedges, every loop
     chaining end-to-start) and throws `BrepBooleanException` otherwise, naming the
