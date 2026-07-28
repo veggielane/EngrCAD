@@ -16,6 +16,25 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   `Transformed(matrix)` maps every position through an affine matrix in one call;
   negative-determinant maps (mirrors) reverse face winding so closed solids stay
   outward-oriented with positive volume.
+  - **Three argument shapes, ONE construction path.** Beside `Build(positions, faces)`
+    there are two flat forms — `Build(positions, corners, faceStarts)` (ragged: face `f`
+    owns `corners[faceStarts[f]..faceStarts[f+1])`) and
+    `Build(positions, corners, verticesPerFace)` (uniform, for the quad grids
+    polygonizers emit) — and the loop-per-face overload flattens into the same core, so a
+    generator that already knows its counts stops allocating one array per face and no
+    second implementation can drift.
+  - **Twin resolution is a counting sort, not a hash table.** Every directed edge is filed
+    under `min(from, to)`, so an edge and its reverse always share a bucket and a bucket
+    holds only one vertex fan — three to six entries. One scan of it answers both
+    questions: an earlier entry with the same direction is the non-manifold duplicate, an
+    earlier entry with the opposite direction is the twin. Buckets fill in ascending
+    half-edge order, so "earlier" is a `break`, and the scan sees exactly the entries the
+    old `Dictionary<(int, int), int>` probe saw — including the order errors are detected
+    in, which is what keeps every exception message identical. Boundary half-edges key on
+    a lazily allocated per-vertex slot for the same reason (a second outgoing boundary
+    half-edge at one vertex IS the bow-tie). Measured on Surface Nets output: **3.3–3.7×**
+    on assembly (47.5 → 13.4 ms at 129 268 vertices), whole-polygonization 1.2–1.5×; see
+    `SurfaceNetsBenchmark.AssemblyShareByResolution`.
 - **Handles** (`Vertex`, `HalfEdge`, `Face`) — cheap struct wrappers designed for fluent
   LINQ traversal (`vertex.OutgoingHalfEdges()`, `face.AdjacentFaces()`, `face.Bounds`).
 - **`EditableMesh`** — the mutable companion (index-based, like g3's `DMesh3`;

@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Mesh;
@@ -186,9 +187,12 @@ public static class SurfaceNets
         // Quads are bucketed by the loop variable that was OUTERMOST in the dense version's
         // three emission passes, and concatenated at the end: that reproduces the dense
         // face ordering exactly while letting the passes run interleaved, slab by slab.
-        var facesX = new List<int[]>();
-        var facesY = new List<int[]>?[ny];
-        var facesZ = new List<int[]>?[nz];
+        // Each bucket is a FLAT index buffer, four entries per quad — a quad-per-array
+        // layout costs one heap allocation per face, which at resolution 256 is 131 000 of
+        // them for a mesh whose whole point is that it is grid-structured.
+        var facesX = new List<int>();
+        var facesY = new List<int>?[ny];
+        var facesZ = new List<int>?[nz];
 
         SampleSlabs(0, Math.Min(window, nx + 1));
         int available = Math.Min(window, nx + 1);
@@ -220,28 +224,41 @@ public static class SurfaceNets
         }
 
         progress?.ThrowIfCancelled();
-        var mesh = HalfEdgeMesh.Build(positions, AllFaces());
+        // Every face is a quad, so the half-edge builder takes the flat buffer directly:
+        // no per-face array, no interface dispatch per loop, and the twin pairing is a
+        // counting sort over the edges' lower endpoint rather than a hash table.
+        var mesh = HalfEdgeMesh.Build(positions, AllCorners(), verticesPerFace: 4);
         progress?.Report(1);
         return mesh;
 
-        IEnumerable<IReadOnlyList<int>> AllFaces()
+        int[] AllCorners()
         {
-            foreach (var face in facesX)
-                yield return face;
+            int total = facesX.Count;
+            foreach (var bucket in facesY)
+                total += bucket?.Count ?? 0;
+            foreach (var bucket in facesZ)
+                total += bucket?.Count ?? 0;
+
+            var all = new int[total];
+            int at = 0;
+            void Append(List<int> bucket)
+            {
+                CollectionsMarshal.AsSpan(bucket).CopyTo(all.AsSpan(at));
+                at += bucket.Count;
+            }
+
+            Append(facesX);
             foreach (var bucket in facesY)
             {
-                if (bucket is null)
-                    continue;
-                foreach (var face in bucket)
-                    yield return face;
+                if (bucket is not null)
+                    Append(bucket);
             }
             foreach (var bucket in facesZ)
             {
-                if (bucket is null)
-                    continue;
-                foreach (var face in bucket)
-                    yield return face;
+                if (bucket is not null)
+                    Append(bucket);
             }
+            return all;
         }
 
         // ---- per-slab work: cell vertices, then the three quad passes ----
@@ -462,7 +479,7 @@ public static class SurfaceNets
         // Each adjacent cell contributes the vertex of the component that contains its
         // local copy of the edge's inside endpoint.
         static void Emit(
-            List<int[]> into,
+            List<int> into,
             int[]? m0, int corner0, int[]? m1, int corner1,
             int[]? m2, int corner2, int[]? m3, int corner3, bool flip)
         {
@@ -471,7 +488,20 @@ public static class SurfaceNets
             int v0 = m0[corner0], v1 = m1[corner1], v2 = m2[corner2], v3 = m3[corner3];
             if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0)
                 return;
-            into.Add(flip ? [v3, v2, v1, v0] : [v0, v1, v2, v3]);
+            if (flip)
+            {
+                into.Add(v3);
+                into.Add(v2);
+                into.Add(v1);
+                into.Add(v0);
+            }
+            else
+            {
+                into.Add(v0);
+                into.Add(v1);
+                into.Add(v2);
+                into.Add(v3);
+            }
         }
     }
 }

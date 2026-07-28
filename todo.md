@@ -78,13 +78,20 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   only ever projects near-surface points, but it is why this must not be offered as a
   general closest-point query. A real one would need the field's own structure (a CSG walk
   that knows which branch is a real face there), not more iterations.
-- [ ] **Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.** With
-  `SurfaceCull` landed, at res 256 a one-sqrt/sample field polygonizes in 132.8 ms vs
-  129.3 ms for the real CSG field — evaluation is effectively free and
-  `HalfEdgeMesh.Build` alone is 39–48%, the rest per-cell component maps, quad lists and
-  the sample window. Further speedup belongs in assembly (e.g. building the half-edge
-  structure from the known grid adjacency instead of the generic manifold-validating
-  `Build`), not in the grid walk.
+- ~~**Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.**~~ ✅ **done, but
+  not the way this entry proposed.** The grid does NOT give twins for free: a dual edge is
+  a grid FACE and matching its up-to-four claimants needs a face table the streaming
+  window cannot hold. What worked was making the GENERIC builder fast — twin resolution as
+  a counting sort over each edge's lower endpoint instead of a `Dictionary<(int,int),int>`,
+  plus flat index buffers instead of one `int[4]` per quad — which serves every caller and
+  leaves one implementation rather than two and a cross-check. Assembly 3.3–3.7×, whole
+  polygonization 1.2–1.5×, allocation at res 256 145 → 103 MB, output bit-identical.
+  Residual:
+  - [ ] **The grid WALK is now the cost** (~175 ms of a 213 ms res-384 polygonize; assembly
+    is 15–18%). The named candidates are the per-cell `int[8]` component map (one heap
+    allocation per mixed cell — the same defect the quad arrays had), the crossing
+    interpolation, and the three quad passes re-reading `values` through `Corner()`.
+    Re-measure before choosing: that is what this entry's own history argues for.
 - [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
   74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
   real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a
