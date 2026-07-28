@@ -60,14 +60,16 @@ public sealed class Parabola3d : Curve3d
     /// Exact arc length over <see cref="Domain"/>. With s = t/(2f) the speed is
     /// |P′| = √(1 + s²), whose antiderivative is f·(s·√(1 + s²) + asinh s).
     /// </summary>
-    public double Length()
+    public double Length() => ArcLength();
+
+    /// <summary>Exact — the closed form above, so the quadrature tolerance is ignored.</summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12) =>
+        Antiderivative(to) - Antiderivative(from);
+
+    private double Antiderivative(double t)
     {
-        double Antiderivative(double t)
-        {
-            double s = t / (2 * FocalLength);
-            return FocalLength * (s * Math.Sqrt(1 + s * s) + Math.Asinh(s));
-        }
-        return Antiderivative(_domain.End) - Antiderivative(_domain.Start);
+        double s = t / (2 * FocalLength);
+        return FocalLength * (s * Math.Sqrt(1 + s * s) + Math.Asinh(s));
     }
 }
 
@@ -122,13 +124,22 @@ public sealed class Hyperbola3d : Curve3d
     /// closed form (it is an incomplete elliptic integral of the second kind), so this
     /// integrates the exact speed |P′| by adaptive Simpson quadrature to ~1e-12 relative.
     /// </summary>
+    /// <remarks>Kept as its own call rather than delegating to
+    /// <see cref="Curve3d.ArcLength(double)"/>: both integrate the same exact speed, but this
+    /// one's tolerance is relative to the INTEGRAL and the base class's is relative to the
+    /// CHORD, and on a hyperbola those differ by however much the branch bends.</remarks>
     public double Length() =>
         AdaptiveQuadrature.Integrate(t => DerivativeAt(t).Length, _domain.Start, _domain.End);
 }
 
-/// <summary>Adaptive Simpson quadrature for smooth positive integrands (arc lengths).</summary>
+/// <summary>
+/// Adaptive Simpson quadrature with Richardson extrapolation, for smooth positive
+/// integrands (arc lengths). One copy serves <see cref="Curve3d.ArcLength(double, double, double)"/>,
+/// <see cref="Curve2d.ArcLength(double, double, double)"/> and the conics' closed-form gaps.
+/// </summary>
 internal static class AdaptiveQuadrature
 {
+    /// <summary>Integrates to ~1e-12 relative to the integral's own magnitude.</summary>
     public static double Integrate(Func<double, double> f, double a, double b)
     {
         double fa = f(a), fb = f(b);
@@ -136,6 +147,17 @@ internal static class AdaptiveQuadrature
         double whole = Simpson(a, b, fa, fm, fb);
         double tolerance = Math.Max(1e-15, 1e-12 * Math.Abs(whole));
         return Refine(f, a, b, fa, fm, fb, whole, tolerance, depth: 40);
+    }
+
+    /// <summary>
+    /// Integrates to a caller-supplied ABSOLUTE tolerance — the arc-length callers scale it
+    /// by the chord themselves, which is what makes their relative tolerance scale-free.
+    /// </summary>
+    public static double Integrate(Func<double, double> f, double a, double b, double tolerance, int depth)
+    {
+        double fa = f(a), fb = f(b);
+        double m = 0.5 * (a + b), fm = f(m);
+        return Refine(f, a, b, fa, fm, fb, Simpson(a, b, fa, fm, fb), tolerance, depth);
     }
 
     private static double Simpson(double a, double b, double fa, double fm, double fb) =>

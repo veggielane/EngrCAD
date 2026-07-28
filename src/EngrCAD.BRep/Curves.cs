@@ -72,6 +72,83 @@ public abstract class Curve3d
     public Curve3d Reversed() => this is ReversedCurve r ? r.Base : new ReversedCurve(this);
 
     public Curve3d Transformed(in Matrix4d transform) => new TransformedCurve(this, transform);
+
+    // ---- arc length (mirrors the Curve2d family) ----
+
+    /// <summary>Arc length over the whole <see cref="Domain"/>.</summary>
+    public double ArcLength(double relativeTolerance = 1e-12) =>
+        ArcLength(Domain.Start, Domain.End, relativeTolerance);
+
+    /// <summary>
+    /// Arc length between two parameters (a negative direction returns a negative length),
+    /// by adaptive Simpson quadrature of the exact speed |C′(t)| with Richardson
+    /// extrapolation. <paramref name="relativeTolerance"/> is relative to the CHORD, so the
+    /// test is scale-free — an absolute quadrature epsilon would be meaningless at micron
+    /// or kilometre scale.
+    /// </summary>
+    /// <remarks>
+    /// Curves with a closed form override this and ignore the tolerance: straight segments,
+    /// circles, helices, parabolas and chord-length-parameterized polylines are all EXACT.
+    /// Everything else — NURBS above all — integrates, and its accuracy is therefore the
+    /// accuracy of <see cref="DerivativeAt"/>: on a curve that has not overridden the
+    /// finite-difference default the quadrature is honest about a derivative that is not.
+    /// </remarks>
+    public virtual double ArcLength(double from, double to, double relativeTolerance = 1e-12)
+    {
+        if (to < from)
+            return -ArcLength(to, from, relativeTolerance);
+        if (to <= from)
+            return 0;
+        double scale = Math.Max((PointAt(to) - PointAt(from)).Length, 1e-300);
+        return AdaptiveQuadrature.Integrate(
+            t => DerivativeAt(t).Length, from, to, scale * relativeTolerance, depth: 24);
+    }
+
+    /// <summary>
+    /// The parameter at arc length <paramref name="length"/> measured from
+    /// <see cref="Interval.Start"/> — the inverse of <see cref="ArcLength(double, double, double)"/>.
+    /// Lengths outside [0, total] clamp to the domain.
+    /// </summary>
+    /// <remarks>
+    /// A ROOT SOLVE (safeguarded Newton on L(t) − s = 0, whose derivative is the exact speed
+    /// |C′(t)|) with a bisection bracket, never a minimization: the STEP reader learned the
+    /// hard way that minimizing a squared residual stalls near √ε ≈ 1e-8, which is past the
+    /// weld tolerance. For repeated queries build an <see cref="ArcLengthTable3d"/> — this
+    /// re-integrates from the domain start on every call.
+    /// </remarks>
+    public double ParameterAtLength(double length, double relativeTolerance = 1e-12)
+    {
+        var domain = Domain;
+        if (length <= 0)
+            return domain.Start;
+        double total = ArcLength(relativeTolerance);
+        if (length >= total)
+            return domain.End;
+
+        double lo = domain.Start, hi = domain.End;
+        double t = domain.ParameterAt(length / total); // arc-length-proportional seed
+        double epsilon = Math.Max(total, 1e-300) * relativeTolerance;
+        for (int iteration = 0; iteration < 60; iteration++)
+        {
+            double f = ArcLength(domain.Start, t, relativeTolerance) - length;
+            if (Math.Abs(f) <= epsilon)
+                return t;
+            if (f > 0)
+                hi = t;
+            else
+                lo = t;
+            double speed = DerivativeAt(t).Length;
+            // Newton where the speed is usable, bisection otherwise or when Newton would
+            // leave the bracket — the bracket is what guarantees convergence.
+            double next = speed > 0 ? t - f / speed : (lo + hi) * 0.5;
+            if (!(next > lo && next < hi))
+                next = (lo + hi) * 0.5;
+            if (Math.Abs(next - t) <= domain.Length * 1e-15)
+                return next;
+            t = next;
+        }
+        return t;
+    }
 }
 
 /// <summary>The same geometry traversed backwards over the same domain.</summary>
@@ -91,6 +168,11 @@ public sealed class ReversedCurve(Curve3d baseCurve) : Curve3d
     // Chain rule with map′ = −1: odd derivatives flip sign, even ones don't.
     public override Vector3d DerivativeAt(double t) => -baseCurve.DerivativeAt(Map(t));
     public override Vector3d SecondDerivativeAt(double t) => baseCurve.SecondDerivativeAt(Map(t));
+
+    /// <summary>Forwarded to the base curve over the mirrored range, so a reversed exact
+    /// curve keeps its exact length rather than falling back to quadrature.</summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12) =>
+        -baseCurve.ArcLength(Map(from), Map(to), relativeTolerance);
 }
 
 /// <summary>A curve mapped through a rigid (or affine) transform.</summary>
@@ -128,6 +210,10 @@ public sealed class Line3d(Vector3d start, Vector3d end) : Curve3d
     public override Vector3d TangentAt(double t) => (end - start).Normalized();
     public override Vector3d DerivativeAt(double t) => end - start;
     public override Vector3d SecondDerivativeAt(double t) => Vector3d.Zero;
+
+    /// <summary>Exact: the speed is the constant |end − start| over the unit domain.</summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12) =>
+        (to - from) * (end - start).Length;
 }
 
 /// <summary>
@@ -160,6 +246,11 @@ public sealed class Circle3d(Vector3d center, Vector3d xDirection, Vector3d yDir
 
     public override Vector3d SecondDerivativeAt(double t) =>
         -xDirection * (radius * Math.Cos(t)) - yDirection * (radius * Math.Sin(t));
+
+    /// <summary>Exact: t is the angle and the x/y directions are unit, so the speed is the
+    /// constant radius and the arc length is r·Δt.</summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12) =>
+        (to - from) * radius;
 }
 
 /// <summary>
@@ -646,6 +737,15 @@ public sealed class PolylineCurve3d : Curve3d
 
     public override Interval Domain => new(0, _cumulative[^1]);
     public override bool IsClosed => _isClosed;
+
+    /// <summary>
+    /// Exact, and exactly the identity: a polyline IS parameterized by cumulative chord
+    /// length, so its parameter and its arc length are the same number. Quadrature would
+    /// integrate a piecewise-constant speed of 1 and return the same answer more slowly and
+    /// less accurately (the finite-difference speed straddles every vertex).
+    /// </summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12) =>
+        Domain.Clamp(to) - Domain.Clamp(from);
 
     /// <summary>
     /// The same curve through a subset of its own vertices, dropping those within

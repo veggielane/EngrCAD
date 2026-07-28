@@ -77,7 +77,11 @@ public sealed class Helix3d : Curve3d
 
     /// <summary>Exact arc length over <see cref="Domain"/>: the speed is the constant
     /// √(r² + (p/2π)²), so L = 2π·turns·√(r² + (p/2π)²) = turns·√((2πr)² + p²).</summary>
-    public double Length() => Domain.Length * Math.Sqrt(Radius * Radius + AxialRate * AxialRate);
+    public double Length() => ArcLength();
+
+    /// <summary>Exact — constant speed, so the quadrature tolerance is ignored.</summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12) =>
+        (to - from) * Math.Sqrt(Radius * Radius + AxialRate * AxialRate);
 
     /// <summary>Lead angle λ = atan(|p| / 2πr) — the angle between the tangent and the
     /// plane perpendicular to the axis (constant along the helix).</summary>

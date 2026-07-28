@@ -125,33 +125,12 @@ public abstract class Curve2d
         // Scale the tolerance by the chord: an absolute quadrature epsilon would be
         // meaningless at micron or kilometre scale (the relative-guard rule).
         double scale = Math.Max((PointAt(to) - PointAt(from)).Length, 1e-300);
-        return AdaptiveSimpson(from, to, scale * relativeTolerance, 24);
+        // One copy of adaptive Simpson serves both curve families (see AdaptiveQuadrature);
+        // the arithmetic is unchanged from the hand-rolled version this replaced.
+        return AdaptiveQuadrature.Integrate(Speed, from, to, scale * relativeTolerance, depth: 24);
     }
 
     private double Speed(double t) => DerivativeAt(t).Length;
-
-    private double AdaptiveSimpson(double a, double b, double epsilon, int depth)
-    {
-        double m = (a + b) * 0.5;
-        double fa = Speed(a), fm = Speed(m), fb = Speed(b);
-        double whole = (b - a) / 6 * (fa + 4 * fm + fb);
-        return Recurse(a, b, epsilon, whole, fa, fm, fb, depth);
-
-        double Recurse(double lo, double hi, double eps, double coarse,
-                       double flo, double fmid, double fhi, int remaining)
-        {
-            double mid = (lo + hi) * 0.5;
-            double lm = (lo + mid) * 0.5, rm = (mid + hi) * 0.5;
-            double flm = Speed(lm), frm = Speed(rm);
-            double left = (mid - lo) / 6 * (flo + 4 * flm + fmid);
-            double right = (hi - mid) / 6 * (fmid + 4 * frm + fhi);
-            double refined = left + right;
-            if (remaining <= 0 || Math.Abs(refined - coarse) <= 15 * eps)
-                return refined + (refined - coarse) / 15; // Richardson extrapolation
-            return Recurse(lo, mid, eps * 0.5, left, flo, flm, fmid, remaining - 1)
-                 + Recurse(mid, hi, eps * 0.5, right, fmid, frm, fhi, remaining - 1);
-        }
-    }
 
     /// <summary>
     /// The parameter at arc length <paramref name="length"/> measured from

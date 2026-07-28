@@ -47,6 +47,23 @@ operations. Depends only on `EngrCAD.Core`.
   the same arithmetic. `PhaseShiftedCurve` moves a closed curve's seam,
   P(t) = base(wrap(t + shift)) — how lofting aligns successive closed sections so the skin
   does not twist; `Underlying` forwards (a shifted circle still samples as a circle).
+  **Arc length** is `Curve3d.ArcLength(from, to)` (adaptive Simpson with Richardson
+  extrapolation over the exact speed |C′|, tolerance RELATIVE to the chord so it is
+  scale-free) and its inverse `ParameterAtLength` (safeguarded Newton on L(t) − s = 0 with a
+  bisection bracket — a ROOT solve, never a minimization, which stalls at √ε), with
+  `ArcLengthTable3d` caching a monotone table for resampling loops (`SampleByLength` spaces
+  points equally ALONG the curve, which uniform parameters on a varying-speed curve are not).
+  The virtual is overridden EXACTLY wherever a closed form exists — `Line3d` and `Helix3d`
+  have constant speed, `Circle3d`'s parameter is the angle, `Parabola3d` has the antiderivative
+  f·(s√(1+s²) + asinh s), a `PolylineCurve3d` IS parameterized by cumulative chord length so
+  its arc length is its parameter, and `ReversedCurve`/`CurveSegment` forward to their base so
+  a reversed or trimmed exact curve stays exact. `Helix3d.Length()`/`Parabola3d.Length()` now
+  delegate to the virtual rather than carrying second copies of the same formula.
+  Everything else integrates, and its accuracy is therefore the accuracy of `DerivativeAt` —
+  which is exact on every analytic curve and on NURBS, so a rational arc's length matches
+  r·sweep to 1e-8 despite an integrand that is far from constant in the NURBS parameter.
+  One copy of adaptive Simpson (`AdaptiveQuadrature`) now serves `Curve2d`, `Curve3d` and the
+  conics' closed-form gaps.
   `PolylineCurve3d.Simplified(tolerance)` drops the samples the marching tracer's step
   produced rather than the curve's shape (Core's `PolylineSimplify`, Douglas–Peucker):
   retained vertices are bit-for-bit the originals, but a polyline is CHORD-LENGTH

@@ -1168,4 +1168,19 @@ public sealed class CurveSegment(Curve3d baseCurve, double start, double end) : 
             s = d.Start + (s - d.Start) % d.Length;
         return baseCurve.PointAt(s);
     }
+
+    /// <summary>
+    /// Delegated to the base curve over the mapped range, so a segment of a circle or a line
+    /// inherits its EXACT length instead of quadrature over this type's finite-difference
+    /// derivative. A segment that runs past a closed base's domain end wraps, and the base's
+    /// arc length is not defined across that wrap, so those fall back to the base class.
+    /// </summary>
+    public override double ArcLength(double from, double to, double relativeTolerance = 1e-12)
+    {
+        var d = baseCurve.Domain;
+        double a = Map(from), b = Map(to);
+        if (a > d.End || b > d.End || a < d.Start || b < d.Start)
+            return base.ArcLength(from, to, relativeTolerance);
+        return baseCurve.ArcLength(a, b, relativeTolerance);
+    }
 }
