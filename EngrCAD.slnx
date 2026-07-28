@@ -7,6 +7,7 @@
     <Project Path="src/EngrCAD.BRep/EngrCAD.BRep.csproj" />
     <Project Path="src/EngrCAD.Interop/EngrCAD.Interop.csproj" />
     <Project Path="src/EngrCAD.Query/EngrCAD.Query.csproj" />
+    <Project Path="src/EngrCAD.Fea/EngrCAD.Fea.csproj" />
     <Project Path="src/EngrCAD.Modeling/EngrCAD.Modeling.csproj" />
     <Project Path="src/EngrCAD.Viewer.Core/EngrCAD.Viewer.Core.csproj" />
     <Project Path="src/EngrCAD.Viewer/EngrCAD.Viewer.csproj" />
@@ -29,6 +30,7 @@
     <Project Path="tests/EngrCAD.BRep.Tests/EngrCAD.BRep.Tests.csproj" />
     <Project Path="tests/EngrCAD.Interop.Tests/EngrCAD.Interop.Tests.csproj" />
     <Project Path="tests/EngrCAD.Query.Tests/EngrCAD.Query.Tests.csproj" />
+    <Project Path="tests/EngrCAD.Fea.Tests/EngrCAD.Fea.Tests.csproj" />
     <Project Path="tests/EngrCAD.Modeling.Tests/EngrCAD.Modeling.Tests.csproj" />
     <Project Path="tests/EngrCAD.Viewer.Tests/EngrCAD.Viewer.Tests.csproj" />
     <Project Path="tests/EngrCAD.Web.Tests/EngrCAD.Web.Tests.csproj" />

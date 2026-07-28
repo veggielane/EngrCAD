@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>EngrCAD simulation foundation: tetrahedral meshing (constrained Delaunay + refinement) with quality reporting, sizing fields, facet tagging and 10-node quadratic elements.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
+    <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="EngrCAD.Fea.Tests" />
+  </ItemGroup>
+</Project>
