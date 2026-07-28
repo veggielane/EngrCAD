@@ -698,9 +698,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   *after* trimmed parameter-space boundaries become exact, since the domain scan is the
   accuracy limit, not the quadrature. Would make analytic primitives exact rather than
   1e-7.
-- [ ] **Move `SymmetricTensor3` to Core**, where a symmetric 3×3 type belongs (residual
-  of the ✅-landed `SymmetricEigen3` publicization — Core now exposes both orderings and
-  the Mesh project's duplicated Jacobi solver is deleted).
 - [ ] **Per-part material in the document model** — `Part.MassProperties(density)` takes
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
