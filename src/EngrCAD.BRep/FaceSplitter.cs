@@ -938,13 +938,30 @@ public static class FaceSplitter
 
         Vector2d NodeUv(BrepVertex v) => ProjectNear(surface, v.Position, null, period);
 
+        // A probe parameter a little way in from one end of the edge, used only for the
+        // uv DIRECTION the tightest-turn walk sorts by. 2% / 98% along the domain is
+        // close enough to the node to read the curve's own departure — but a
+        // marching-tracer polyline is on its surface only at its VERTICES, so 2% along
+        // one lands mid-chord, a sagitta off the surface, and ProjectNear then returns a
+        // uv for a point the surface does not contain. Polyline-backed edges therefore
+        // probe at their nearest exact vertex parameter instead (the same rule the
+        // pullback and the tessellator use), falling back to the FAR endpoint when the
+        // edge is a single chord with no interior vertex — that vertex is on the surface
+        // by construction, and a chord's direction is its exact direction anyway.
+        double ProbeParameter(BrepEdge edge, bool fromStart)
+        {
+            var domain = edge.Domain;
+            if (!FaceGeometry.IsPolylineBacked(edge.Curve))
+                return domain.ParameterAt(fromStart ? 0.02 : 0.98);
+            var exact = FaceGeometry.ExactSampleParameters(edge.Curve, domain.Start, domain.End, 2);
+            if (exact.Count <= 2)
+                return fromStart ? domain.End : domain.Start;
+            return fromStart ? exact[1] : exact[^2];
+        }
+
         double DepartureAngle(BrepCoedge h)
         {
-            var domain = h.Edge.Domain;
-            double t0 = h.SameSense ? domain.Start : domain.End;
-            double t1 = h.SameSense
-                ? domain.ParameterAt(0.02)
-                : domain.ParameterAt(0.98);
+            double t1 = ProbeParameter(h.Edge, fromStart: h.SameSense);
             var origin = NodeUv(h.StartVertex);
             var next = ProjectNear(surface, h.Edge.Curve.PointAt(t1), origin, period);
             var d = next - origin;
@@ -953,10 +970,7 @@ public static class FaceSplitter
 
         double ArrivalAngle(BrepCoedge h)
         {
-            var domain = h.Edge.Domain;
-            double t1 = h.SameSense
-                ? domain.ParameterAt(0.98)
-                : domain.ParameterAt(0.02);
+            double t1 = ProbeParameter(h.Edge, fromStart: !h.SameSense);
             var node = NodeUv(h.EndVertex);
             var before = ProjectNear(surface, h.Edge.Curve.PointAt(t1), node, period);
             var d = node - before;

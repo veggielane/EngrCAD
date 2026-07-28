@@ -218,9 +218,13 @@ engines.
     The strip's own epsilon — how flat a step must be to count as a rung — is the 1e-6
     inverse-evaluation tier expressed **relatively**, `1e-6 × the loop's extent in that
     parameter`: u and v carry no model units, so an absolute epsilon there would be
-    meaningless. Marching-tracer polyline edges are sampled at their exact vertices
-    (`PolylineCurve3d.VertexParameters` — chordal midpoints sit off the surface and would
-    fail inverse evaluation).
+    meaningless. Marching-tracer polyline edges are sampled at their exact vertices —
+    chordal midpoints sit off the surface and would fail inverse evaluation. `SampleEdge`
+    asks `FaceGeometry.ExactSampleParameters` for those rather than reading
+    `PolylineCurve3d.VertexParameters` itself: its own copy of the test recognized only a
+    RAW polyline, so an edge whose curve is a `CurveSegment` wrapping one — what the face
+    splitter hands back after a cut — fell through to the uniform path with every interior
+    sample a sagitta off the surface.
 
     **A trimmed face that cannot be tessellated now refuses**, naming the surface type,
     where it sits, its loop shapes, the sample counts in force and the reason (failed

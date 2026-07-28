@@ -228,19 +228,21 @@ public static class BRepTessellator
 
         // Marching-tracer polylines lie on their surfaces only at their vertices
         // (chordal between): sample exactly those, or the trimmed path's inverse
-        // evaluation would reject mid-chord samples as off-surface.
-        if (edge.Curve is PolylineCurve3d polyline)
+        // evaluation would reject mid-chord samples as off-surface. Routed through
+        // FaceGeometry's rule rather than restated here — a CurveSegment WRAPPING a
+        // polyline (what the face splitter hands back after a cut) needs the base's
+        // vertices mapped through the segment's reparameterization, which the local
+        // version silently missed, dropping such edges onto the uniform path.
+        if (FaceGeometry.IsPolylineBacked(edge.Curve))
         {
-            var points = new List<Vector3d> { edge.Curve.PointAt(domain.Start) };
-            foreach (double t in polyline.VertexParameters)
-            {
-                // Parameter-space interiority guard (round-off scale): endpoint samples
-                // are added separately and must not duplicate.
-                if (t > domain.Start + 1e-12 && t < domain.End - 1e-12)
-                    points.Add(edge.Curve.PointAt(t));
-            }
-            if (!edge.IsClosedEdge)
-                points.Add(edge.Curve.PointAt(domain.End));
+            var parameters = FaceGeometry.ExactSampleParameters(
+                edge.Curve, domain.Start, domain.End, curveSamples);
+            // A closed polyline carries no duplicate endpoint.
+            if (edge.IsClosedEdge)
+                parameters.RemoveAt(parameters.Count - 1);
+            var points = new List<Vector3d>(parameters.Count);
+            foreach (double t in parameters)
+                points.Add(edge.Curve.PointAt(t));
             return points;
         }
 

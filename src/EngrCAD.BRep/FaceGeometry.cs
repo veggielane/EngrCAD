@@ -94,10 +94,30 @@ public static class FaceGeometry
     /// curves (raw, or wrapped in a reparameterizing <see cref="CurveSegment"/>) sample
     /// at vertex parameters; everything else samples uniformly.
     /// </summary>
-    internal static List<double> ExactSampleParameters(Curve3d curve, double start, double end, int uniformSamples)
+    /// <remarks>
+    /// <b>This is the single rule</b> — public so the tessellator, the face splitter's
+    /// tightest-turn probes and pullback all ask the same question instead of patching
+    /// the sagitta per call site, which is how the cross-drilled-bore defect got in.
+    /// <see cref="IsPolylineBacked"/> says whether a curve needs it.
+    /// </remarks>
+    /// <summary>
+    /// Whether <paramref name="curve"/> is a marching-tracer polyline (raw, or wrapped in
+    /// a reparameterizing <see cref="CurveSegment"/>) — i.e. exact only at its vertices,
+    /// so anything sampling it must go through
+    /// <see cref="ExactSampleParameters"/>.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately NOT a test on <see cref="Curve3d.Underlying"/>: a segment's underlying
+    /// curve is its base's, which says nothing about the parameter mapping this rule turns
+    /// on — and `Underlying` is a type hint, never a source of position.
+    /// </remarks>
+    public static bool IsPolylineBacked(Curve3d curve) =>
+        curve is PolylineCurve3d or CurveSegment { Base: PolylineCurve3d };
+
+    public static List<double> ExactSampleParameters(Curve3d curve, double start, double end, int uniformSamples)
     {
         var result = new List<double> { start };
-        double interiorEpsilon = Math.Max(1e-12, (end - start) * 1e-9);
+        double interiorEpsilon = Math.Max(1e-12, Math.Abs(end - start) * 1e-9);
         void AddInterior(double t)
         {
             if (t > start + interiorEpsilon && t < end - interiorEpsilon)

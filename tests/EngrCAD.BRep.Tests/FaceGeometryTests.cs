@@ -151,4 +151,69 @@ public class FaceGeometryTests
         Assert.True(Tolerance.Default.Linear < FaceGeometry.SeamTolerance);
         Assert.True(FaceGeometry.SeamTolerance < FaceGeometry.InverseEvaluationTolerance);
     }
+
+    // ---- the polyline-sampling rule ----
+
+    /// <summary>A quarter of a unit circle as the tracer would deliver it: exact at its
+    /// vertices, a chord (and a sagitta off the circle) between them.</summary>
+    private static PolylineCurve3d ArcPolyline(int segments = 8)
+    {
+        var points = new List<Vector3d>();
+        for (int i = 0; i <= segments; i++)
+        {
+            double a = Math.PI / 2 * i / segments;
+            points.Add(new Vector3d(Math.Cos(a), Math.Sin(a), 0));
+        }
+        return new PolylineCurve3d(points);
+    }
+
+    [Fact]
+    public void IsPolylineBacked_SeesThroughACurveSegment()
+    {
+        var polyline = ArcPolyline();
+        Assert.True(FaceGeometry.IsPolylineBacked(polyline));
+        Assert.True(FaceGeometry.IsPolylineBacked(new CurveSegment(polyline, 0.25, 0.75)));
+        // A segment of an ANALYTIC curve is exact everywhere and must not be captured;
+        // note its Underlying is the circle, which is why the test cannot be on that.
+        var arc = new CurveSegment(new Circle3d(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY, 1), 0, 1);
+        Assert.False(FaceGeometry.IsPolylineBacked(arc));
+        Assert.False(FaceGeometry.IsPolylineBacked(new Line3d((0, 0, 0), (1, 0, 0))));
+    }
+
+    [Fact]
+    public void ExactSampleParameters_OfASegmentLandOnTheBasesVertices()
+    {
+        // THE case this rule exists for: after a cut, the face splitter hands back a
+        // CurveSegment WRAPPING the traced polyline. Sampling it uniformly puts every
+        // interior sample mid-chord — a sagitta off the carrier surface — so pullback
+        // and tessellation silently disagree about where the edge is.
+        var polyline = ArcPolyline();
+        var segment = new CurveSegment(polyline, polyline.Domain.ParameterAt(0.25), polyline.Domain.ParameterAt(0.75));
+
+        var parameters = FaceGeometry.ExactSampleParameters(segment, 0, 1, uniformSamples: 24);
+
+        Assert.Equal(0, parameters[0], 12);
+        Assert.Equal(1, parameters[^1], 12);
+        Assert.True(parameters.Count > 2, "the half-arc spans interior vertices");
+        Assert.Equal(parameters.OrderBy(t => t), parameters); // ascending
+
+        // Every sample is exactly on the unit circle, which the polyline touches only at
+        // its vertices — the property that makes the rule load-bearing.
+        foreach (double t in parameters)
+            Assert.Equal(1.0, segment.PointAt(t).Length, 12);
+
+        // And a uniform sampling of the same segment is NOT: the check can see the bug.
+        double worst = 0;
+        for (int i = 1; i < 24; i++)
+            worst = Math.Max(worst, Math.Abs(segment.PointAt(i / 24.0).Length - 1));
+        Assert.True(worst > 1e-4, $"uniform samples should sit off the circle, worst {worst:E3}");
+    }
+
+    [Fact]
+    public void ExactSampleParameters_OfAnAnalyticCurveStayUniform()
+    {
+        var line = new Line3d((0, 0, 0), (3, 0, 0));
+        var parameters = FaceGeometry.ExactSampleParameters(line, 0, 1, uniformSamples: 4);
+        Assert.Equal([0, 0.25, 0.5, 0.75, 1], parameters.Select(t => Math.Round(t, 12)));
+    }
 }

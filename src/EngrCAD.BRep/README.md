@@ -466,7 +466,17 @@ operations. Depends only on `EngrCAD.Core`.
   `PullCurveRuns` silently produce zero runs so cross-drill splits never happened —
   hence polyline-backed curves (raw or reparameterized via `CurveSegment`, whose
   `BaseStart`/`BaseEnd` expose the mapping) sample at vertex parameters and everything
-  else uniformly. Closed curves interior to a face honor **mandatory seam breaks**
+  else uniformly. The rule and its predicate (`FaceGeometry.IsPolylineBacked`) are
+  **public**, and two more call sites now go through them rather than restating the
+  test — the tessellator's `SampleEdge`, whose local copy checked for a raw
+  `PolylineCurve3d` only and so dropped every `CurveSegment`-wrapped tracer curve onto
+  the uniform path, and `TraceFaces`' tightest-turn probes, which read a departure
+  direction 2% along an edge's domain and therefore read it from a point a sagitta off
+  the surface. Those probes now use the nearest exact vertex parameter, falling back to
+  the FAR endpoint for a single-chord edge (an on-surface vertex, and a chord's exact
+  direction). Note the predicate is deliberately not a test on `Underlying`: a segment's
+  underlying curve is its base's, which says nothing about the parameter mapping the
+  rule turns on. Closed curves interior to a face honor **mandatory seam breaks**
   (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`
   arcs, so a boolean's other side — which cuts the same circle at its own boundary
   crossings — pairs edge-for-edge in seam sealing). Open splitting curves may
