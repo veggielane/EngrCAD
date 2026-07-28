@@ -152,6 +152,174 @@ public abstract class Shape
     public static Shape Sweep(Sketch sketch, Curve3d path, SketchPlane? plane = null) =>
         new SweepShape(sketch, plane ?? SketchPlane.XY, path);
 
+    // ---- Loft (skin through sections) ----
+
+    /// <summary>
+    /// Skins a solid through two or more planar cross-sections — OCCT's
+    /// <c>BRepOffsetAPI_ThruSections</c>, via <see cref="SolidFactory.Loft"/>. Sections
+    /// must have matching segment counts (they correspond by segment index); winding
+    /// and starting segment are aligned automatically to the least-twist match, and the
+    /// first and last sections are capped, so the result is always a closed solid.
+    /// <para>Representation support: <b>B-Rep-Native</b> under rigid placements and
+    /// uniform scaling — the skin interpolates the placed sections exactly, and the
+    /// accumulated transform bakes into the section curves. Implicit lowering bridges
+    /// through the tessellation (the loft blend is defined on the B-Rep surface, not as
+    /// a field), and mesh comes from the exact B-Rep. A sheared placement is
+    /// B-Rep-Impossible: the loft's chord-length parameterization and least-twist
+    /// alignment are metric, so they do not commute with a shear.</para>
+    /// </summary>
+    /// <param name="sections">Two or more planar profiles, in loft order.</param>
+    /// <param name="style"><see cref="LoftStyle.Smooth"/> (one skin interpolating all
+    /// sections) or <see cref="LoftStyle.Ruled"/> (straight strips between consecutive
+    /// sections, each junction a real edge).</param>
+    public static Shape Loft(IReadOnlyList<Profile> sections, LoftStyle style = LoftStyle.Smooth)
+    {
+        ArgumentNullException.ThrowIfNull(sections);
+        ValidateLoftSections(sections);
+        return new LoftShape([.. sections], style);
+    }
+
+    /// <summary>
+    /// Lofts through sketches, each placed by its own <see cref="SketchPlane"/> — the
+    /// sketch-first spelling of <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/>,
+    /// matching the <see cref="Extrude(Sketch, double, SketchPlane?)"/> vocabulary.
+    /// Sketches with holes are rejected (lofting hole chains into an inner skin is a
+    /// documented follow-up — loft the outer boundaries and cut the hole afterwards).
+    /// </summary>
+    public static Shape Loft(
+        IReadOnlyList<(Sketch Sketch, SketchPlane Plane)> sections, LoftStyle style = LoftStyle.Smooth)
+    {
+        ArgumentNullException.ThrowIfNull(sections);
+        var profiles = new Profile[sections.Count];
+        for (int i = 0; i < sections.Count; i++)
+        {
+            var (sketch, plane) = sections[i];
+            ArgumentNullException.ThrowIfNull(sketch, nameof(sections));
+            if (sketch.Holes.Count > 0)
+                throw new NotSupportedException(
+                    $"Loft section {i} has holes; lofting hole chains into an inner skin is not " +
+                    "supported yet. Loft the outer boundaries and subtract the hole afterwards.");
+            profiles[i] = PlaceSketchProfile(sketch, plane);
+        }
+        ValidateLoftSections(profiles);
+        return new LoftShape(profiles, style);
+    }
+
+    /// <summary>
+    /// A loft whose sections are <b>generated along a spine</b> by an evolution law —
+    /// OCCT's pipe shell with a law: <paramref name="section"/> is carried along
+    /// <paramref name="spine"/> in rotation-minimizing frames (the same frames
+    /// <see cref="Sweep(Sketch, Curve3d, SketchPlane?)"/> uses), scaled by
+    /// <paramref name="scale"/>(s) and rotated in-plane by <paramref name="twist"/>(s)
+    /// radians, where s runs 0 → 1 along the spine. The generated sections feed
+    /// <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/> unchanged, so everything
+    /// said there (compatibility, representation support) applies verbatim.
+    /// <para>Without laws, prefer <see cref="Sweep(Sketch, Curve3d, SketchPlane?)"/> —
+    /// its swept surface is exact along the whole path, where a loft interpolates
+    /// <paramref name="sectionCount"/> stations and blends between them. The law is what
+    /// this operation exists for. The start frame's x axis is the spine start tangent's
+    /// arbitrary perpendicular (the codebase's single such convention); the twist law
+    /// rotates from there.</para>
+    /// </summary>
+    /// <param name="section">The 2D cross-section, in its own sketch coordinates
+    /// (origin rides ON the spine).</param>
+    /// <param name="spine">The path the sections are stationed along (open curves).</param>
+    /// <param name="sectionCount">How many stations to generate (≥ 2). More stations
+    /// follow the spine and the law more closely.</param>
+    /// <param name="scale">Uniform in-plane scale at s ∈ [0, 1]; null = 1 everywhere.
+    /// Must stay positive.</param>
+    /// <param name="twist">In-plane rotation in radians at s ∈ [0, 1]; null = none.</param>
+    /// <param name="style">Loft style for the generated sections.</param>
+    public static Shape LoftAlong(
+        Sketch section, Curve3d spine, int sectionCount = 8,
+        Func<double, double>? scale = null, Func<double, double>? twist = null,
+        LoftStyle style = LoftStyle.Smooth)
+    {
+        ArgumentNullException.ThrowIfNull(section);
+        ArgumentNullException.ThrowIfNull(spine);
+        if (sectionCount < 2)
+            throw new ArgumentOutOfRangeException(nameof(sectionCount), "A loft needs at least 2 sections.");
+        if (section.Holes.Count > 0)
+            throw new NotSupportedException(
+                "LoftAlong sections with holes are not supported yet (as for Loft); use the outer " +
+                "boundary and subtract the hole afterwards.");
+        if (spine.IsClosed)
+            throw new NotSupportedException(
+                "LoftAlong needs an open spine: a periodic loft closing back on its first section " +
+                "is not supported yet.");
+
+        var (outer, _) = section.ToProfiles();
+        // The rotation-minimizing frames come from the sweep machinery itself (only the
+        // path and the start x seed the frames — the generator argument is irrelevant to
+        // them), so a law-free LoftAlong stations its sections on the same frames a
+        // sweep would use.
+        var startTangent = spine.TangentAt(spine.Domain.Start);
+        var swept = new SweptSurface(
+            outer.Segments[0], spine, startTangent.ArbitraryPerpendicular(Tolerance.Default));
+
+        var profiles = new Profile[sectionCount];
+        for (int k = 0; k < sectionCount; k++)
+        {
+            double s = (double)k / (sectionCount - 1);
+            double factor = scale?.Invoke(s) ?? 1;
+            if (!(factor > 0))
+                throw new ArgumentOutOfRangeException(nameof(scale),
+                    $"The scale law must stay positive; it returned {factor:g4} at s = {s:g4}.");
+            var frame = swept.Frame(spine.Domain.ParameterAt(s));
+            var placement = frame.ToMatrix();
+            if (twist is not null)
+                placement *= Matrix4d.CreateRotationZ(twist(s));
+            if (factor != 1)
+                placement *= Matrix4d.CreateScale(factor);
+            profiles[k] = new Profile(
+                [.. outer.Segments.Select(c => (Curve3d)new TransformedCurve(c, placement))]);
+        }
+        return new LoftShape(profiles, style);
+    }
+
+    /// <summary>
+    /// Places a sketch's outer profile on a plane (holes must be rejected by the caller
+    /// first — loft sections carry no holes yet).
+    /// </summary>
+    private static Profile PlaceSketchProfile(Sketch sketch, SketchPlane plane)
+    {
+        var (outer, _) = sketch.ToProfiles();
+        var matrix = plane.ToMatrix();
+        if (matrix.Equals(Matrix4d.Identity))
+            return outer;
+        return new Profile([.. outer.Segments.Select(c => (Curve3d)new TransformedCurve(c, matrix))]);
+    }
+
+    /// <summary>
+    /// The structural checks <see cref="SolidFactory.Loft"/> would make at lowering,
+    /// run at construction so a bad section list fails at the call that built it.
+    /// </summary>
+    private static void ValidateLoftSections(IReadOnlyList<Profile> sections)
+    {
+        if (sections.Count < 2)
+            throw new ArgumentException("A loft needs at least 2 sections.", nameof(sections));
+        foreach (var section in sections)
+        {
+            if (section is null)
+                throw new ArgumentException("Loft sections must not be null.", nameof(sections));
+        }
+        bool singleClosed = sections[0].IsSingleClosedCurve;
+        int segmentCount = sections[0].Segments.Count;
+        for (int k = 1; k < sections.Count; k++)
+        {
+            if (sections[k].IsSingleClosedCurve != singleClosed)
+                throw new ArgumentException(
+                    "Loft sections must be all single closed curves or all segment chains; " +
+                    $"section 0 is {(singleClosed ? "a closed curve" : "a chain")} but section {k} is not.",
+                    nameof(sections));
+            if (sections[k].Segments.Count != segmentCount)
+                throw new ArgumentException(
+                    $"Loft sections must have the same segment count: section 0 has {segmentCount}, " +
+                    $"section {k} has {sections[k].Segments.Count}. Split the coarser section so the " +
+                    "segments correspond (sections match by segment index).", nameof(sections));
+        }
+    }
+
     /// <summary>
     /// Drills holes: one <paramref name="hole"/> at each 2D point on
     /// <paramref name="plane"/> (default world XY), cutting along −normal to

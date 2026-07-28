@@ -102,6 +102,16 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
                 break;
+            case LoftShape:
+                // Rigid + uniform only: the loft's chord-length parameterization and
+                // least-twist alignment are metric, so a shear would skin DIFFERENT
+                // in-between geometry than shearing the skin.
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "skinned through the placed sections (SolidFactory.Loft); section compatibility validates at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with the loft's chord-length parameterization"));
+                break;
             case BooleanShape b:
                 ClassifyBrep(b.A, m, entries);
                 ClassifyBrep(b.B, m, entries);
@@ -217,7 +227,7 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared subtree goes through a tessellated mesh SDF"));
                 break;
-            case ExtrudeShape or RevolveShape or SweepShape or RimShape:
+            case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -464,6 +474,15 @@ internal static class ShapeCompiler
                     TransformProfile(sweep.Profile!, m), path, TransformProfiles(sweep.Holes, m));
             }
 
+            case LoftShape loft:
+            {
+                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                var placed = new Profile[loft.Sections.Count];
+                for (int i = 0; i < placed.Length; i++)
+                    placed[i] = TransformProfile(loft.Sections[i], m);
+                return SolidFactory.Loft(placed, loft.Style);
+            }
+
             case BooleanShape boolean:
             {
                 var a = LowerBrep(boolean.A, m);
@@ -693,7 +712,7 @@ internal static class ShapeCompiler
                 return Place(Sdf.RevolvedRegion(new SketchRegion(sketch, forRevolution: true)), q, t, s);
             }
 
-            case ExtrudeShape or RevolveShape or SweepShape or RimShape:
+            case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 

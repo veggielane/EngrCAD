@@ -38,6 +38,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
+| `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (rigid + uniform scale; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Union` / `Intersect` / `Subtract` | ✅ native (`BrepBoolean`) | ✅ native | ✅ (from B-Rep, else `MeshBoolean`) |
 | `SmoothUnion` / `SmoothIntersect` / `SmoothSubtract` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Offset` / `Shell` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
@@ -398,6 +399,39 @@ torus-segment bands sharing junction arcs); round sharp sketch corners first. Bo
 B-Rep-native (implicit lowering bridges through the tessellation); selectors run on
 the *lowered* solid, so upstream transforms are visible and feature sizes scale with
 uniform scaling.
+
+## Loft
+
+`Shape.Loft(sections, style)` skins a closed solid through two or more planar
+cross-sections (`SolidFactory.Loft` under the hood — OCCT's `ThruSections`). Sections
+are sketches placed by `SketchPlane`s (the extrude/revolve/sweep vocabulary) or raw
+B-Rep `Profile`s; they must have matching segment counts (they correspond by segment
+index), winding and starting segment are auto-aligned to the least-twist match, and the
+ends are capped:
+
+```csharp
+var transition = Shape.Loft(
+[
+    (Sketch.Rectangle(10, 4), SketchPlane.XY),
+    (Sketch.Slot(8, 3), SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY)),
+]);                                       // LoftStyle.Smooth; .Ruled for straight strips
+```
+
+`LoftStyle.Smooth` interpolates ALL sections with one skin (intermediate sections leave
+no edge); `Ruled` runs straight strips between consecutive sections. **Support story**:
+B-Rep-Native under rigid placement + uniform scale — the transform bakes into the
+section curves and the skin interpolates them exactly. A sheared placement is
+B-Rep-Impossible (the loft's chord-length parameterization and least-twist alignment
+are metric, so they do not commute with a shear); implicit lowering bridges through the
+tessellation. Sections with holes, open (uncapped) skins and periodic lofts are refused
+by name — see todo.md for the follow-up assessments.
+
+**`Shape.LoftAlong(section, spine, sectionCount, scale, twist, style)`** is the
+evolution-law loft (OCCT's pipe shell with a law): one sketch carried along a spine in
+the same rotation-minimizing frames `Sweep` uses, scaled by `scale(s)` and rotated
+in-plane by `twist(s)` radians (s = 0 → 1 along the spine), the generated sections
+feeding `Loft` unchanged. Without laws prefer `Sweep`, whose swept surface is exact
+along the whole path — the law is what `LoftAlong` exists for.
 
 ## Patterns
 

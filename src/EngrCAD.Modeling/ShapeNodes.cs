@@ -104,6 +104,19 @@ internal sealed class WedgeShape : Shape
         $"Wedge({SizeX:g4}×{SizeY:g4}×{SizeZ:g4}, topX={TopX:g4}, offset={TopOffsetX:g4})";
 }
 
+/// <summary>
+/// A solid skinned through planar sections (<see cref="SolidFactory.Loft"/>). The
+/// sections are stored ALREADY PLACED in 3D (the sketch overloads bake their plane in at
+/// construction), so lowering only has to bake the accumulated graph transform into the
+/// section curves. A leaf in the operation graph: its inputs are profiles, not shapes.
+/// </summary>
+internal sealed class LoftShape(IReadOnlyList<Profile> sections, LoftStyle style) : Shape
+{
+    public IReadOnlyList<Profile> Sections => sections;
+    public LoftStyle Style => style;
+    internal override string Describe() => $"Loft({sections.Count} sections, {style})";
+}
+
 internal sealed class ExtrudeShape : Shape
 {
     public Profile? Profile { get; }
