@@ -944,7 +944,7 @@ internal static class ShapeCompiler
                 return LowerImplicit(sh.Child, m, quality).Shell(sh.Thickness * scale);
             case LatticeShape l:
                 return LowerImplicit(l.Child, m, quality)
-                    .Intersect(Place(l.Pattern, rotation, translation, scale));
+                    .Intersect(Place(l.Field, rotation, translation, scale));
 
             case HullShape:
                 // No SDF form: build the hull once in mesh land (with the transform

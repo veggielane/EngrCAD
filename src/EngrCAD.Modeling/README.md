@@ -485,6 +485,21 @@ tree, all representations). Disjoint results become valid multi-shell solids; a
 Difference tool swallowed whole becomes a cavity shell. For hole arrays, keep passing
 point lists to `Drill` — that stays the cheaper idiom.
 
+**Location sets** (`Locations.cs`): `LocationSet` is "place this feature at these N
+poses" as one immutable VALUE — `Grid(cx, cy, sx, sy)` (centred, x-fastest),
+`Polar(count, radius, startAngle, rotate)` (CCW, seam not repeated; each location
+carries its polar angle unless `rotate: false`), `PolarArc` (both ends included),
+`Hex(cx, cy, pitch)` (closest packing, centred by extents), `Linear(count, step)`,
+`At(points)`, composed by `Translate`/`Rotate`/`+`. One value feeds three consumers:
+`Shape.Drill(spec, locations, depth, plane?)`, `Shape.Pattern(locations, plane?)`
+(stamps the shape — modeled at the plane origin — at each location's point + rotation;
+for an origin-modeled shape `Pattern(Polar(n, r))` equals
+`Translate(r,0,0).PatternCircular(n, ...)` exactly, by conjugation), and
+`ComponentAssembly.Place(component, locations, face?)`. Serializable like
+`GeometryRef`s: `Descriptor` (`grid(3,2,10,8)`, `translate([5,0],hex(3,3,6))`) is the
+cache-key term `ToString` returns, and `LocationSet.Parse` reconstructs it — locations
+bit-for-bit, since parsing re-runs the same deterministic constructors.
+
 ## Holes
 
 `Shape.Drill` places one hole recipe at a list of 2D points on a plane, cutting along

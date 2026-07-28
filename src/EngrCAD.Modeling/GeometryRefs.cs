@@ -147,6 +147,8 @@ internal static class RefSyntax
 
     public static string Vector(in Vector3d v) => $"[{Number(v.X)},{Number(v.Y)},{Number(v.Z)}]";
 
+    public static string Vector2(in Vector2d v) => $"[{Number(v.X)},{Number(v.Y)}]";
+
     public static string Call(string name, params string[] arguments) =>
         arguments.Length == 0 ? name : $"{name}({string.Join(",", arguments)})";
 
@@ -219,6 +221,16 @@ internal sealed class RefLexer(string text)
         double z = ReadNumber();
         Expect(']');
         return new Vector3d(x, y, z);
+    }
+
+    public Vector2d ReadVector2()
+    {
+        Expect('[');
+        double x = ReadNumber();
+        Expect(',');
+        double y = ReadNumber();
+        Expect(']');
+        return new Vector2d(x, y);
     }
 
     public void ExpectEnd()

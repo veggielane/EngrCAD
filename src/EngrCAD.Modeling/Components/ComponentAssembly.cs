@@ -86,6 +86,20 @@ public sealed class ComponentAssembly
         return placement;
     }
 
+    /// <summary>The <see cref="LocationSet"/> spelling of
+    /// <see cref="Place(HardwareComponent, IReadOnlyList{Vector2d}, SketchPlane?, double)"/>
+    /// — a bolt circle or grid of fasteners as one value. Hardware bodies are
+    /// axisymmetric revolves, so location rotations are ignored.</summary>
+    public ComponentFeature Place(
+        HardwareComponent component,
+        LocationSet locations,
+        SketchPlane? face = null,
+        double depth = 0)
+    {
+        ArgumentNullException.ThrowIfNull(locations);
+        return Place(component, locations.Points, face, depth);
+    }
+
     /// <summary>
     /// The full fastener stack: places <paramref name="component"/> through THIS body and
     /// into <paramref name="anchor"/>'s, preparing both — a clearance hole (and

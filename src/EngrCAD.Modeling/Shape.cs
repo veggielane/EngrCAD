@@ -422,6 +422,16 @@ public abstract class Shape
             hole.ToolSilhouette(depth));
     }
 
+    /// <summary>Drills one <paramref name="hole"/> at each location of
+    /// <paramref name="locations"/> — the <see cref="LocationSet"/> spelling of
+    /// <see cref="Drill(HoleSpec, IReadOnlyList{Vector2d}, double, SketchPlane?)"/>.
+    /// A hole tool is axisymmetric, so location rotations are ignored.</summary>
+    public Shape Drill(HoleSpec hole, LocationSet locations, double depth, SketchPlane? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(locations);
+        return Drill(hole, locations.Points, depth, plane);
+    }
+
     // ---- Threads (modeled helical geometry) ----
 
     /// <summary>
@@ -718,6 +728,29 @@ public abstract class Shape
         var copies = new List<Shape>(count) { this };
         for (int i = 1; i < count; i++)
             copies.Add(Transform(back * Matrix4d.CreateFromAxisAngle(axis, step * i) * toOrigin));
+        return UnionTree(copies);
+    }
+
+    /// <summary>
+    /// This shape stamped once per location of <paramref name="locations"/> and unioned
+    /// (balanced tree, like the other patterns) — the general pattern every
+    /// <see cref="LocationSet"/> constructor feeds (grids, bolt circles, hex fields,
+    /// composed sets). The shape is interpreted as modeled at <paramref name="plane"/>'s
+    /// origin (default world XY): each copy is translated to the location's point and
+    /// rotated by its angle about the plane normal, in the plane's own coordinates.
+    /// <para>For a shape drawn at the plane origin,
+    /// <c>shape.Pattern(LocationSet.Polar(n, r))</c> equals
+    /// <c>shape.Translate(r, 0, 0).PatternCircular(n, origin, normal)</c> exactly — the
+    /// conjugation algebra is the same; the LocationSet spelling just separates WHERE
+    /// from WHAT.</para>
+    /// </summary>
+    public Shape Pattern(LocationSet locations, SketchPlane? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(locations);
+        var placement = plane ?? SketchPlane.XY;
+        var copies = new List<Shape>(locations.Count);
+        foreach (var location in locations)
+            copies.Add(Transform(LocationSet.PoseAt(location, placement)));
         return UnionTree(copies);
     }
 
