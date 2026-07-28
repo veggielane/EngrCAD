@@ -69,8 +69,22 @@ Each engine uses the data structure its mathematics wants:
   scale. Measured (Release, win-arm64, grid Laplacians): natural-order factorization is
   4.7 ms at 2.5k unknowns and 133 ms at 14.4k, past which one-shot CG beats
   factor+3-solves (62.5k: 24.5 ms vs 1.6 s) — so **natural ordering suffices at
-  deformation-ROI scale and AMD/RCM is deferred until FEA-scale systems exist**, a
-  measurement rather than an assumption. (c) **Convergence is a return value**
+  deformation-ROI scale**, a measurement rather than an assumption.
+  **AMD has since landed** (`SparseOrdering.Amd`, `AmdOrdering`) as an opt-in rather
+  than a default, and the reason it is opt-in is the one worth writing down: a
+  fill-reducing permutation changes the summation order, so an AMD solve is *not*
+  bit-identical to a natural one, and every committed number upstream was measured
+  natural. It is 4.6–13.4× on factor time and 3.5–8.3× on fill across 2D and 3D grid
+  Laplacians from 2.5k to 64k unknowns, and it never loses — ordering costs single-digit
+  milliseconds at 62 500 unknowns. **The direct-vs-iterative verdict turned out to depend
+  on the operator's conditioning far more than on its size**, which the original
+  measurement could not see because it only ever used L + I: that shift is strongly
+  diagonally dominant, so CG converges in an *n-independent* ~35 iterations. Drop it —
+  a pure Dirichlet Laplacian, the FEA regime — and at 62 500 unknowns CG needs 858
+  iterations (750 ms) against AMD's 221 ms factor plus 5.8 ms per solve, so the direct
+  solve wins on the FIRST right-hand side. In 3D the crossover is real but distant (52
+  right-hand sides at 13 824 unknowns), because 3D fill grows like n² however it is
+  ordered. Full table in the Core README. (c) **Convergence is a return value**
   (`SparseSolveReport`), and failure is honest: CG breaks out on nonpositive curvature
   instead of dividing by it, Cholesky throws naming the offending pivot column — the
   repo's report-what-happened convention applied to numerics. The library is

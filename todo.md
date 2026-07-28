@@ -343,9 +343,21 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 `LaplacianMeshDeformer`, `MeshLocalParam`, `MeshIsoCurves`, `DijkstraGraphDistance`,
 `MeshIcp`). Residuals:
 
-- [ ] **AMD/RCM fill-reducing ordering for `SparseCholesky`** — natural ordering was
-  measured sufficient at deformation-ROI scale (≤ ~14k unknowns; see design.md §2), but
-  FEA-scale stiffness systems will need it (62.5k unknowns: 1.6 s factor vs 24.5 ms CG).
+- ~~**AMD/RCM fill-reducing ordering for `SparseCholesky`**~~ ✅ **done** — AMD landed as
+  `SparseOrdering.Amd` (opt-in; a permutation changes the summation order, so it is not
+  bit-identical to the natural path every upstream number was measured on). 4.6–13.4× on
+  factor time, 3.5–8.3× on fill, never a loss; table in the Core README. RCM was not
+  implemented and should not be: AMD dominates it on every pattern here, and a second
+  ordering is a second thing to keep honest. Residuals worth knowing:
+  - [ ] **A supernodal/left-looking numeric factorization** is the next lever, not a
+    better ordering. AMD takes 3D 40³ (64k unknowns) from 125 s to 26 s, which is a real
+    4.8× and still unusable — the fill is 20.6M entries and the up-looking scalar loop
+    touches them one at a time. BLAS-3 dense blocks over the supernodes are the standard
+    answer and the only thing that closes that gap.
+  - [ ] **Nothing consumes `SparseOrdering.Amd` yet.** `LaplacianMeshSmoother`/
+    `LaplacianMeshDeformer`/`MeshIcp` still factor natural, deliberately: their committed
+    outputs are pinned bit-for-bit and switching would move them. Whoever wires FEA
+    assembly should pass `Amd` from the start and pin its own baselines.
 - [ ] **Shape-level exposure of smoothing/deformation** — the tools are kernel-only
   (`EngrCAD.Mesh`); a `Shape.Smoothed(...)` graph node (mesh-Native, implicit-Bridged
   via `MeshSdf`, B-Rep-Impossible — the `Remeshed` precedent) plus docs-site example
