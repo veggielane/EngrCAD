@@ -500,6 +500,31 @@ for an origin-modeled shape `Pattern(Polar(n, r))` equals
 cache-key term `ToString` returns, and `LocationSet.Parse` reconstructs it — locations
 bit-for-bit, since parsing re-runs the same deterministic constructors.
 
+## Extrude/cut until a face
+
+`shape.ExtrudeUntil(sketch, plane, Until.Next|Last)` (boss) and `CutUntil` (pocket) —
+build123d/CadQuery's `until=NEXT/LAST` (`ExtrudeUntil.cs`). Both extrude from the
+sketch plane along −normal (the `Drill` convention). The stop distance is resolved by
+probe rays from the profile's strict interior against the body's mesh
+(`UntilResolver`, an internal seam the tests pin directly): `Next` = the first surface
+met for a boss / the first EXIT for a cut (punch through the first wall, stop in the
+void); `Last` = the far boundary. **The robustness is the point**: the stop must be
+one plane perpendicular to the extrusion (hits clustering within 1e-6 × extent —
+planar stops tessellate exactly, genuine curves spread far wider), and anything else
+refuses loudly naming the candidates — hit clusters with ray counts for curved/slanted
+stops, the miss count for overhanging profiles, the probe point for tangent grazes
+(enter/exit alternation breaks). Ray–triangle tests use inclusive barycentric bounds
+(±1e-9, dimensionless) because a crossing on a shared mesh edge must register on at
+least one triangle — exclusive tests can drop it from both, and a ray that enters but
+never exits poisons the resolution. Overshoots follow the Drill never-coplanar rules:
+a `Next` boss reaches half the thinnest wall INTO the body (capped 2%), a `Next` cut
+half the gap into the void, a `Last` cut 2% past the far face, and a cut tool also
+clears the TOP by 2% when the plane sits on a body face (a submerged plane gets no top
+clearance — its tool top is interior, and extending it would cut above the plane).
+Only a `Last` boss ends exactly flush, documented as the coplanar-union case B-Rep may
+refuse. Resolution is EAGER (the `Bounds`/`Resized` policy); the result is ordinary
+extrude + boolean nodes, so `Explain` stays honest with no special case.
+
 ## Holes
 
 `Shape.Drill` places one hole recipe at a list of 2D points on a plane, cutting along

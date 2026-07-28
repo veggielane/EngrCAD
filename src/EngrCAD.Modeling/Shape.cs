@@ -432,6 +432,73 @@ public abstract class Shape
         return Drill(hole, locations.Points, depth, plane);
     }
 
+    // ---- Extrude/cut UNTIL a face of the body ----
+
+    /// <summary>
+    /// Adds a boss: extrudes <paramref name="sketch"/> from <paramref name="plane"/>
+    /// (default world XY) along −normal — toward the body, the <see cref="Drill"/>
+    /// convention — until it reaches this body, and unions it on. The
+    /// build123d/CadQuery <c>extrude(until=NEXT/LAST)</c> convenience.
+    ///
+    /// <para><b>How the stop is found (and when it refuses).</b> Probe rays from the
+    /// profile's interior are cast against this shape's mesh at
+    /// <paramref name="quality"/>; the stop must be ONE plane perpendicular to the
+    /// extrusion (hit distances clustering within 1e-6 of the body's extent — planar
+    /// stop faces tessellate exactly, so this is loose enough for meshing and far
+    /// tighter than any genuine curve). Anything else refuses loudly naming the
+    /// candidates: a curved or slanted stop face (the hit clusters and their ray
+    /// counts), a profile overhanging the body (how many rays missed), tangent grazes
+    /// (the ray that saw them). A flat extrusion cannot honestly "conform" to a curved
+    /// stop, so it does not guess.</para>
+    ///
+    /// <para><b>Resolution is eager</b> — the distance is measured at THIS call against
+    /// this shape (the <see cref="Bounds"/>/<see cref="Resized"/> policy); wrap the call
+    /// in a <see cref="Feature"/> for it to re-measure per regeneration. With
+    /// <see cref="Until.Next"/> the boss overshoots INTO the body by half the thinnest
+    /// wall (capped at 2%), so the union never sees coplanar faces; with
+    /// <see cref="Until.Last"/> the boss ends exactly FLUSH with the far face — if the
+    /// body has material beside the boss there, that union is a coplanar boolean, which
+    /// the B-Rep lowering may refuse (mesh and implicit handle it).</para>
+    /// </summary>
+    public Shape ExtrudeUntil(Sketch sketch, SketchPlane? plane, Until until, MeshQuality? quality = null)
+    {
+        var placement = plane ?? SketchPlane.XY;
+        var resolution = UntilResolver.Resolve(this, sketch, placement, until, cut: false, quality);
+        return this | ExtrudeBelow(sketch, placement, resolution.Height);
+    }
+
+    /// <summary>
+    /// Cuts with the profile until a face of the body: <see cref="Until.Next"/> punches
+    /// through the FIRST wall and stops in the void behind it (half the gap, capped at
+    /// 2% — never coplanar with the wall it exits); <see cref="Until.Last"/> cuts
+    /// through everything, overshooting the far face by 2% (the <see cref="Drill"/>
+    /// rule). Stop-plane resolution, honesty and eagerness are exactly as on
+    /// <see cref="ExtrudeUntil"/>.
+    /// </summary>
+    public Shape CutUntil(Sketch sketch, SketchPlane? plane, Until until, MeshQuality? quality = null)
+    {
+        var placement = plane ?? SketchPlane.XY;
+        var resolution = UntilResolver.Resolve(this, sketch, placement, until, cut: true, quality);
+        // The tool also clears the top (the Drill overshoot rule): with the sketch
+        // plane ON a body face, a tool starting exactly at the plane would leave its
+        // top face coplanar with the body's.
+        var raised = SketchPlane.At(
+            placement.Origin + placement.Normal * resolution.TopClearance,
+            placement.XAxis, placement.YAxis);
+        return this - ExtrudeBelow(sketch, raised, resolution.TopClearance + resolution.Height);
+    }
+
+    /// <summary>An extrusion of <paramref name="sketch"/> spanning from
+    /// <paramref name="plane"/> to <paramref name="depth"/> below it: the plane is
+    /// shifted down and the extrusion runs back up (+normal), so the sketch's own 2D
+    /// coordinates are untouched (flipping the plane would mirror them).</summary>
+    private static Shape ExtrudeBelow(Sketch sketch, SketchPlane plane, double depth)
+    {
+        var shifted = SketchPlane.At(
+            plane.Origin - plane.Normal * depth, plane.XAxis, plane.YAxis);
+        return Extrude(sketch, depth, shifted);
+    }
+
     // ---- Threads (modeled helical geometry) ----
 
     /// <summary>
