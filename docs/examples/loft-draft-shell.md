@@ -169,7 +169,8 @@ scene.Add(new Part("block", block));
 
 The tessellated volume converges quadratically onto Steiner's formula
 `V₀ + A₀r + (r²/2)Σℓθ + (4π/3)r³` for the eroded solid. Convex prisms and sheared
-boxes work; concave edges and general trihedral corners (a tetrahedron's) are refused
-by name — the corner-patch follow-up lives in todo.md. For organic rounding of
-arbitrary shapes, the implicit route (`Offset(-r)` then `Offset(+r)` on the field)
-remains available.
+boxes keep exact lune corner patches, and **general trihedral corners** (a
+tetrahedron's, a drafted block's) build trimmed spherical-triangle patches — see
+[chamfer & fillet](chamfer-fillet.md#rounding-every-edge-at-once). Concave edges and
+higher-valence vertices are refused by name. For organic rounding of arbitrary shapes,
+the implicit route (`Offset(-r)` then `Offset(+r)` on the field) remains available.

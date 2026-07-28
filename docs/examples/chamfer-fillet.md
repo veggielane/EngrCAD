@@ -175,8 +175,10 @@ scene.Add(new Part("rounded box", rounded, Palette.Brass));
 
 ![A box with every edge and corner rounded](images/fillet-all-edges.png)
 
-There is no `Shape.RoundEdges` yet, so this drops down to the B-Rep API and comes back
-through `Shape.From` — see [dropping down](representations.md#dropping-down-to-the-engine-apis).
+`Shape.RoundEdges(radius)` wires the same operation into the Shape graph — see
+[loft, draft & shell](loft-draft-shell.md); the examples here drop down to the kernel
+API and come back through `Shape.From` — see
+[dropping down](representations.md#dropping-down-to-the-engine-apis).
 It requires a **convex** solid with 3-valent vertices. Corners where one incident face
 is perpendicular to the other two (boxes, prisms, sheared boxes) get an exact lune
 patch — a full-domain surface of revolution. **General trihedral corners** work too: a

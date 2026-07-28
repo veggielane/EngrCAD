@@ -625,10 +625,22 @@ operations. Depends only on `EngrCAD.Core`.
     surfaces recover the same way from their congruent TRANSLATED end arcs. Never a
     distance minimization (which stalls at √ε, past weld tolerance). Closed NON-circular
     generators still keep the honest non-manifold diagnostic. Known gap:
-    `BrepBoolean` cannot yet cut a whole-solid fillet (a fragment's re-surfaced sub-band
-    loses the corner arcs from its domain); the solid itself is sound — every loop point
-    projects inside its own face's domain, which is a locked test — so this is a boolean
-    limitation, not a construction one. Mitered RIM fillets do cut correctly.
+    `BrepBoolean` can cut a whole-solid fillet through its PLANES (a centre drill is
+    exact — locked with a Steiner-minus-bore volume test) but not through an edge BAND.
+    The earlier "re-surfaced sub-band loses the corner arcs" diagnosis was WRONG; the
+    measured causes: the tool∩band tracer loop leaves the band's quarter domain and
+    closes on the extended carrier; the on-band runs' pseudo-samples now reach the
+    domain edge (extrapolation extends by however many local gaps it takes, capped —
+    one gap was measured falling short, leaving zero seeds), so crossing SEEDS exist —
+    but `RefineCrossing` demands a true 3D intersection to 1e-11 and a CHORDAL tracer
+    polyline sits a sagitta (~1e-4) off the exact tangency edge mid-chord: the curves
+    are skew, every seed is rejected, the band never splits, and the whole band
+    mis-classifies while its planar neighbours split — the result cracks along entire
+    tangency edges and the boolean refuses loudly (with the unpaired edges now itemized
+    in the message). The fix needs exact edge-vs-tool-surface crossings (the tracer
+    curve must carry its surface pair) plus crossing-snapped polyline segment ends on
+    BOTH solids, so the seam still welds by construction. Mitered RIM fillets cut
+    correctly.
   - **Selection** — by face (`FilletRim`/`ChamferRim`) or by EDGE (`FilletEdges`/
     `ChamferEdges`; `RimFacesFor` remains the complete-rims-only resolution). A complete
     planar face rim resolves to rim surgery; a **partial run** — a contiguous selection

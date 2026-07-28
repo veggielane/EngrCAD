@@ -127,6 +127,7 @@ public static class TopologyEditor
 /// </summary>
 public static class FaceSplitter
 {
+
     /// <summary>
     /// Deduplication window in <b>curve-parameter</b> space (not model units), used when
     /// merging crossings that name the same point: an endpoint hit reported by two
@@ -771,16 +772,43 @@ public static class FaceSplitter
 
         if (!fullyOnSurface)
         {
+            // Extrapolate by the local sample spacing (uniform for analytic curves, the
+            // adjacent vertex gap for polylines) — but by however many multiples it
+            // takes to LEAVE the surface's parameter domain, capped. One gap is not
+            // always enough: a tracer polyline's last on-surface vertex can sit almost
+            // a whole vertex spacing inside the boundary (measured on a rounded box's
+            // edge band against a drill: the bite curve's crossings of the band's
+            // tangency boundaries seeded nothing, the band never split, and the closed
+            // not-fully-on-surface curve fell through to a silent no-op — the whole
+            // face was then classified as one piece and the result cracked along the
+            // tangency lines). The pseudo-samples remain SEEDS only: every crossing
+            // they suggest is refined against the exact 3D geometry, and a seed that
+            // refines nowhere is discarded, so a longer reach cannot invent geometry.
+            var domainU = surface.DomainU;
+            var domainV = surface.DomainV;
+            bool Outside(in Vector2d uv) =>
+                (double.IsFinite(domainU.Start) && uv.X < domainU.Start - 1e-12) ||
+                (double.IsFinite(domainU.End) && uv.X > domainU.End + 1e-12) ||
+                (double.IsFinite(domainV.Start) && uv.Y < domainV.Start - 1e-12) ||
+                (double.IsFinite(domainV.End) && uv.Y > domainV.End + 1e-12);
+            (double, Vector2d) Extrapolated((double S, Vector2d Uv) anchor, (double S, Vector2d Uv) inner)
+            {
+                double gapS = anchor.S - inner.S;
+                var gapUv = anchor.Uv - inner.Uv;
+                double reach = 1;
+                for (; reach < 8; reach += 1)
+                {
+                    if (Outside(anchor.Uv + gapUv * reach))
+                        break;
+                }
+                return (anchor.S + gapS * reach, anchor.Uv + gapUv * reach);
+            }
             foreach (var run in runs)
             {
                 if (run.Count < 2)
                     continue;
-                // Extrapolate by the local sample spacing (uniform for analytic curves,
-                // the adjacent vertex gap for polylines).
-                var frontDelta = run[1].Item2 - run[0].Item2;
-                run.Insert(0, (run[0].Item1 - (run[1].Item1 - run[0].Item1), run[0].Item2 - frontDelta));
-                var backDelta = run[^1].Item2 - run[^2].Item2;
-                run.Add((run[^1].Item1 + (run[^1].Item1 - run[^2].Item1), run[^1].Item2 + backDelta));
+                run.Insert(0, Extrapolated(run[0], run[1]));
+                run.Add(Extrapolated(run[^1], run[^2]));
             }
         }
         return runs;

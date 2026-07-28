@@ -639,9 +639,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   round-trips manifold with zero diagnostics). A closed NURBS generator under a partial
   sweep still keeps the honest non-manifold diagnostic — recovering it needs projection,
   not congruence, and nothing exports one today.
-- [ ] **`BrepBoolean` on whole-solid fillets** — a fragment's re-surfaced sub-band loses
-  the corner arcs from its domain. The solid itself is sound (a locked test checks every
-  loop point projects inside its own face's domain), so this is a boolean limitation.
+- [ ] **`BrepBoolean` on whole-solid fillets: band-crossing tools** — centre drills
+  through the caps ✅ work (locked, Steiner-minus-bore exact). The band case is now
+  precisely diagnosed (the old "re-surfaced sub-band loses corner arcs" story was
+  wrong): the tool∩band tracer loop closes on the EXTENDED carrier; run pseudo-samples
+  now reach the domain edge (adaptive extrapolation ✅ landed — one local gap was
+  measured falling short, leaving zero crossing seeds), but `RefineCrossing` demands a
+  true 3D intersection to 1e-11 and a chordal tracer polyline is a sagitta (~1e-4) off
+  the exact tangency edge mid-chord — skew curves, every seed rejected, band never
+  splits, whole band mis-classifies, result cracks along entire tangency edges (refused
+  loudly; unpaired edges itemized). Remaining fix: tag tracer curves with their surface
+  pair, refine boundary crossings as exact edge∩other-surface root solves, and SNAP the
+  polyline segment ends to the exact crossing on BOTH solids (the segment endpoints are
+  seam geometry — a 1e-4 chordal end would open a pinhole at every crossing).
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
   as `Shape.Draft`): curved faces; caps with holes; a non-planar neutral surface.
 - [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall

@@ -1409,6 +1409,19 @@ for `in`-parameters being illegal in expression trees.
   different points, and the patch stops welding to its band. This is the same family of
   bug as the phase-alignment lessons elsewhere: two sides of a shared curve must agree on
   the *parameterization*, not merely on the point set.
+- **A general trihedral corner is a trimmed patch whose meridians are free.** Dropping
+  `FilletAllEdges`' perpendicularity restriction did not need a new surface type: pick
+  one face normal as the pole axis and the two great-circle arcs ending at its tangency
+  lie in planes containing the axis — exact meridians, i.e. u-domain boundaries of the
+  revolve — so only the third (diagonal) arc genuinely trims. The tessellation lesson is
+  the durable part: the trimmed tier meshes the region as a structured column grid at
+  natural density and **excludes every edge it builds from midpoint refinement**,
+  because the refiner's flat `du/stepU` metric overstates a 3D chord near a pole without
+  bound (u compresses as the parallels shrink) — measured, refinement cascaded midpoints
+  into the apex fan (52 folds at 16/8, worst −0.99) and half-step slivers into the last
+  rows (0.893 against a 0.924 floor at 48/24) on a base mesh that was already correct.
+  A uv metric is only a proxy for arc length; wherever the parameterization is
+  degenerate, refinement must defer to a base mesh built at honest density.
 - **Variable-radius fillets are blocked by the corner, not the band.** The band would be
   exact — a linear radius law between two equal-weight rational arcs is a degree-(2,1)
   NURBS whose v-sections are true circles, G1 with both neighbours. But two such bands
