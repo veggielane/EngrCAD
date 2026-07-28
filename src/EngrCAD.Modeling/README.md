@@ -235,6 +235,16 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   normal (`projection(cut = false)`) — a through hole survives as a hole, a blind pocket
   does not. Always from the mesh (a silhouette is the union of the projected faces), so
   fidelity and cost both follow the mesh quality; see the Interop README for the numbers.
+- **`Packing.Pack(parts, plateWidth, plateDepth, gap)`** (`Packing.cs`) — 2D bin packing
+  of silhouette footprints onto a build plate (build123d's `pack`): a deterministic
+  SHELF packer (deepest-first, then width, then input index — no randomness), gap
+  honored between parts and to the plate edges, placements returned in input order with
+  each part's measured footprint; `PackLayout.Apply`/`Packing.Arrange` return the
+  translated shapes (XY only — how a part sits in z is the model's business). Footprints
+  are `Shape.Silhouette` bounds, so an overhang wider than the base gets its room. A
+  layout that does not fit refuses loudly naming the first part that ran out of plate;
+  no rotation or concavity nesting in v1 (stated, not implied). Docs:
+  `docs/examples/packing.md` (packed-plate render + one-STL export).
 
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,

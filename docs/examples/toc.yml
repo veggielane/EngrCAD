@@ -40,6 +40,8 @@
   href: representations.md
 - name: Exports
   href: exports.md
+- name: Packing a build plate
+  href: packing.md
 - name: Assemblies
   href: assemblies.md
 - name: Standard components
