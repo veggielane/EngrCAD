@@ -1,4 +1,31 @@
 <div class="engrcad-scene @Class" style="@Frame">
+    @if (ShowToolbar)
+    {
+        <div style="display:flex; gap:4px; align-items:center; padding:4px 8px; background:#191b1f;
+                    border-bottom:1px solid #2a2d33; font:12px/1.4 'Segoe UI', system-ui, sans-serif">
+            <button type="button" style="@ButtonStyle(false)" title="Frame the whole scene"
+                    @onclick="() => _viewport?.FitAsync() ?? Task.CompletedTask">Fit</button>
+            <select value="@EffectiveStyle" title="Global view style"
+                    @onchange="OnStyleChanged" style="@SelectStyle">
+                <option value="@ViewStyle.Points">Points</option>
+                <option value="@ViewStyle.Wireframe">Wireframe</option>
+                <option value="@ViewStyle.Shaded">Shaded</option>
+                <option value="@ViewStyle.ShadedWithEdges">Shaded + edges</option>
+            </select>
+            <span style="flex:0 0 6px"></span>
+            <button type="button" style="@ButtonStyle(_section)" title="Section cut"
+                    @onclick="ToggleSectionAsync">Section</button>
+            @if (_section)
+            {
+                <button type="button" style="@ButtonStyle(false)" title="Cycle the section axis (re-centers)"
+                        @onclick="CycleSectionAxisAsync">@_sectionAxis</button>
+                <button type="button" style="@ButtonStyle(false)" title="Nudge the plane down the axis"
+                        @onclick="() => NudgeSectionAsync(-1)">-</button>
+                <button type="button" style="@ButtonStyle(false)" title="Nudge the plane up the axis"
+                        @onclick="() => NudgeSectionAsync(+1)">+</button>
+            }
+        </div>
+    }
     @if (Tabs.Count > 1)
     {
         <div style="display:flex; gap:2px; padding:4px 6px 0; background:#191b1f; border-bottom:1px solid #2a2d33">
@@ -40,7 +67,9 @@
         <div style="flex:1 1 auto; min-width:0; position:relative">
             <EngrCadViewport @ref="_viewport"
                              Scene="Scene" TabIndex="_tabIndex"
-                             Furniture="Furniture" ViewStyle="ViewStyle" Picking="Picking"
+                             Furniture="Furniture" ViewStyle="EffectiveStyle" Picking="Picking"
+                             SectionEnabled="_section" SectionAxis="_sectionAxis"
+                             SectionOffset="_sectionOffset"
                              Width="100%" Height="100%"
                              SelectionChanged="OnViewportSelectionChanged"
                              PartFailed="OnPartFailed"
@@ -81,6 +110,9 @@
     /// <summary>Click picking and hover in the viewport.</summary>
     [Parameter] public bool Picking { get; set; } = true;
 
+    /// <summary>Show the toolbar above the viewport (Fit, view style, sections).</summary>
+    [Parameter] public bool ShowToolbar { get; set; } = true;
+
     /// <summary>Show the model tree beside the viewport.</summary>
     [Parameter] public bool ShowTree { get; set; } = true;
 
@@ -119,6 +151,17 @@
     private string _status = "";
     private Scene? _builtFrom;
     private int _builtTab = -1;
+
+    // Toolbar state. The section trio flows to the viewport as parameters, so the
+    // toolbar and the viewport can never disagree about what is cut; the style is a
+    // local override over the ViewStyle parameter (a host-supplied initial value the
+    // dropdown then owns, the pattern the viewport's SetViewStyleAsync documents).
+    private bool _section;
+    private SectionAxis _sectionAxis = SectionAxis.Z;
+    private double? _sectionOffset;
+    private ViewStyle? _styleOverride;
+
+    private ViewStyle EffectiveStyle => _styleOverride ?? ViewStyle;
 
     /// <summary>The GL viewport, for hosts that drive the camera, capture pixels or pick
     /// directly.</summary>
@@ -256,7 +299,57 @@
             await OnRendered.InvokeAsync();
     }
 
+    // ---- toolbar ----
+
+    private void OnStyleChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<ViewStyle>(e.Value?.ToString(), out var style))
+        {
+            _styleOverride = style;
+            _status = $"view style {style}";
+        }
+    }
+
+    private void ToggleSectionAsync()
+    {
+        _section = !_section;
+        _status = _section
+            ? $"section {_sectionAxis.ToString().ToLowerInvariant()}"
+            : "section off";
+    }
+
+    /// <summary>Cycles X → Y → Z. Clearing the offset re-centers the plane in the scene
+    /// bounds along the new axis — the desktop rule.</summary>
+    private void CycleSectionAxisAsync()
+    {
+        _sectionAxis = (SectionAxis)(((int)_sectionAxis + 1) % 3);
+        _sectionOffset = null;
+        _status = $"section {_sectionAxis.ToString().ToLowerInvariant()}";
+    }
+
+    private async Task NudgeSectionAsync(int direction)
+    {
+        if (_viewport is null)
+            return;
+        // Route through the viewport's nudge (2% of the scene extent per step — the
+        // desktop's [ / ] step), then adopt the offset it computed so the parameter
+        // flow keeps saying the same thing the viewport is already showing.
+        var nudge = _viewport.NudgeSectionAsync(direction);
+        _sectionOffset = _viewport.SectionOffset;
+        _status = $"section {_sectionAxis.ToString().ToLowerInvariant()} = {_sectionOffset:G4}";
+        await nudge;
+    }
+
     // ---- styling ----
+
+    private static string ButtonStyle(bool active) =>
+        "padding:3px 10px; border:1px solid #2a2d33; border-radius:4px; cursor:pointer; "
+        + "font:12px/1.4 'Segoe UI', system-ui, sans-serif; "
+        + (active ? "background:#2f4a68; color:#e6e9ee;" : "background:#22252b; color:#c9ced6;");
+
+    private static string SelectStyle =>
+        "padding:2px 6px; border:1px solid #2a2d33; border-radius:4px; background:#22252b; "
+        + "color:#c9ced6; font:12px/1.4 'Segoe UI', system-ui, sans-serif;";
 
     private static string TabStyle(bool active) =>
         "padding:5px 12px; border:1px solid #2a2d33; border-bottom:none; cursor:pointer; "

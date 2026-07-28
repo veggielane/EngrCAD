@@ -68,6 +68,25 @@
     /// working and stops the raycast entirely.</summary>
     [Parameter] public bool Picking { get; set; } = true;
 
+    /// <summary>
+    /// Section mode: clips the model at the plane perpendicular to
+    /// <see cref="SectionAxis"/> — the desktop toolbar's Section toggle. The clip runs
+    /// in the SHARED shaders (fragment discard, cut interiors shaded as cut material
+    /// via gl_FrontFacing), and picking honours it through the same
+    /// <c>SectionClip.Hides</c> rule <c>ScenePick</c> applies, so a click cannot select
+    /// the cut-away half. Parts with <c>Part.ClippedBySection</c> false render and pick
+    /// whole (the unsectioned-fastener drafting convention).
+    /// </summary>
+    [Parameter] public bool SectionEnabled { get; set; }
+
+    /// <summary>Which world axis the section plane is perpendicular to (Z — the classic
+    /// horizontal cut, the desktop default).</summary>
+    [Parameter] public SectionAxis SectionAxis { get; set; } = SectionAxis.Z;
+
+    /// <summary>Plane position along the axis; null centers the cut in the scene
+    /// bounds, the desktop's default when the toggle first goes on.</summary>
+    [Parameter] public double? SectionOffset { get; set; }
+
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
@@ -108,12 +127,21 @@
         string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick);
 
     private readonly List<ViewportInstance> _drawn = [];
-    // Parallel to _drawn: the part and pose each entry came from. The parts let a
-    // DisplayMode changed on the model be picked up without re-meshing; the pick
-    // instances are what ScenePick raycasts.
+    // Parallel to _drawn: the part, instance and pose each entry came from. The parts
+    // let a DisplayMode changed on the model be picked up without re-meshing; the
+    // instances feed the section-isoline extraction; the pick instances are what
+    // ScenePick raycasts.
     private readonly List<Part> _drawnParts = [];
+    private readonly List<PartInstance> _drawnInstances = [];
     private readonly List<PickInstance> _pick = [];
     private readonly List<int> _pickScratch = [];
+
+    private (bool Enabled, SectionAxis Axis, double? Offset) _shownSection = (false, SectionAxis.Z, null);
+    private ViewportContours? _contours;
+    // Parts whose implicit lowering failed and was already reported (the failure is
+    // cached on the Part, so without this every rebuild repeats the status line —
+    // the same dedupe the desktop SectionContourRenderer keeps).
+    private readonly HashSet<Part> _reportedSectionFailures = [];
 
     // Uploads are keyed by Part REFERENCE and survive tab switches: a part shown in two
     // tabs is uploaded once, and revisiting a tab re-draws with no GPU work at all. Keys
@@ -222,13 +250,14 @@
 
     /// <summary>Shows or hides one instance and draws. Hidden instances keep their index
     /// (so nothing downstream shifts) and are not pickable.</summary>
-    public Task SetVisibleAsync(int index, bool visible)
+    public async Task SetVisibleAsync(int index, bool visible)
     {
         if (index < 0 || index >= _drawn.Count || _drawn[index].Visible == visible)
-            return Task.CompletedTask;
+            return;
         _drawn[index] = _drawn[index] with { Visible = visible };
         _pick[index] = _pick[index] with { Visible = visible };
-        return PumpAsync();
+        await RebuildContoursAsync();   // a hidden part's isolines go with it
+        await PumpAsync();
     }
 
     /// <summary>
@@ -237,7 +266,7 @@
     /// instances. Entries past the instance list are ignored, so a host may push a vector
     /// for the whole tab while the viewport is still showing a growing prefix.
     /// </summary>
-    public Task SetVisibilityAsync(IReadOnlyList<bool> visible)
+    public async Task SetVisibilityAsync(IReadOnlyList<bool> visible)
     {
         ArgumentNullException.ThrowIfNull(visible);
         bool changed = false;
@@ -249,7 +278,10 @@
             _pick[i] = _pick[i] with { Visible = visible[i] };
             changed = true;
         }
-        return changed ? PumpAsync() : Task.CompletedTask;
+        if (!changed)
+            return;
+        await RebuildContoursAsync();
+        await PumpAsync();
     }
 
     /// <summary>Whether an instance is currently shown.</summary>
@@ -262,6 +294,63 @@
         _camera = ViewportFrame.DefaultCamera(_bounds);
         _userMovedCamera = false;
         return PumpAsync();
+    }
+
+    // ---- sections ----
+    //
+    // The clip rule itself is never restated here: the shaders carry it
+    // (ViewerShaders.SectionClip), picking asks SectionClip.Hides through ScenePick,
+    // and this component only decides WHICH plane is active — one axis-aligned plane,
+    // like the desktop toolbar (custom hosts wanting quarter cuts drive
+    // ViewportFrame.Build directly with more planes).
+
+    /// <summary>The offset actually in use: the parameter, or the scene-bounds centre
+    /// along the active axis (the desktop's default when the toggle goes on).</summary>
+    public double EffectiveSectionOffset =>
+        SectionOffset ?? (_bounds.IsEmpty ? 0 : AxisComponent(_bounds.Center, SectionAxis));
+
+    private static double AxisComponent(in Vector3d v, SectionAxis axis) => axis switch
+    {
+        SectionAxis.X => v.X,
+        SectionAxis.Y => v.Y,
+        _ => v.Z,
+    };
+
+    private IReadOnlyList<SectionPlane>? ActiveSectionPlanes() =>
+        SectionEnabled ? [SectionPlane.On(SectionAxis, EffectiveSectionOffset)] : null;
+
+    /// <summary>
+    /// Drives the section state directly (the toolbar's toggle/axis-cycle path, and how
+    /// a test reaches it without a parameter flow). Changing the axis re-centers the
+    /// plane — the desktop rule — unless <paramref name="offset"/> pins it.
+    /// </summary>
+    public Task SetSectionAsync(bool enabled, SectionAxis? axis = null, double? offset = null)
+    {
+        SectionEnabled = enabled;
+        if (axis is { } wanted && wanted != SectionAxis)
+        {
+            SectionAxis = wanted;
+            SectionOffset = null;   // changing the axis re-centers, as on the desktop
+        }
+        if (offset is { } o)
+            SectionOffset = o;
+        return ApplySectionAsync();
+    }
+
+    /// <summary>Moves the section plane by 2% of the scene extent along the active axis
+    /// per step — the desktop's <c>[</c>/<c>]</c> nudge.</summary>
+    public Task NudgeSectionAsync(int direction)
+    {
+        double extent = _bounds.IsEmpty ? 10 : AxisComponent(_bounds.Size, SectionAxis);
+        SectionOffset = EffectiveSectionOffset + direction * extent * 0.02;
+        return ApplySectionAsync();
+    }
+
+    private async Task ApplySectionAsync()
+    {
+        _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+        await RebuildContoursAsync();
+        await PumpAsync();
     }
 
     /// <summary>
@@ -346,15 +435,28 @@
             _loadedFrom = Content;
             _showingFurniture = Furniture;
             _shownStyle = ViewStyle;
+            _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
             await LoadAsync();
+            return;
         }
-        else if (_shownStyle != ViewStyle)
+
+        // A style or section change needs no upload — every part's buffers are already
+        // on the GPU and the clip is a shader uniform — so both are a redraw and
+        // nothing more (the section change also refreshes the isoline overlay).
+        bool redraw = false;
+        if (_shownStyle != ViewStyle)
         {
-            // A style change needs no upload — every part's fills, feature edges and wire
-            // edges are already on the GPU — so it is a redraw and nothing more.
             _shownStyle = ViewStyle;
-            await PumpAsync();
+            redraw = true;
         }
+        if (_shownSection != (SectionEnabled, SectionAxis, SectionOffset))
+        {
+            _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+            await RebuildContoursAsync();
+            redraw = true;
+        }
+        if (redraw)
+            await PumpAsync();
     }
 
     protected override void OnParametersSet()
@@ -440,7 +542,9 @@
 
         _drawn.Clear();
         _drawnParts.Clear();
+        _drawnInstances.Clear();
         _pick.Clear();
+        _contours = null;
         _bounds = Aabb.Empty;
         _gridSpacing = 0;
         _failed = false;
@@ -478,15 +582,18 @@
             }
 
             var worldBounds = instance.Bounds();
+            // ClippedBySection is a property of the PART and rides on both the drawn
+            // instance (per-draw uSectionEnabled override) and the pick instance
+            // (ScenePick applies SectionClip.Hides), so render and pick cannot
+            // disagree about a fastener standing whole in a cutaway.
             _drawn.Add(new ViewportInstance(
                 keys.Mesh, instance.World, part.Color ?? Palette.Steel,
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
                 part.DisplayMode,
-                keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices));
+                keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices,
+                Visible: true, ClippedBySection: part.ClippedBySection));
             _drawnParts.Add(part);
-            // ClippedBySection is carried now even though sections are a later rung: it is
-            // a property of the PART, and reading it here means the pick list is already
-            // correct when the section planes arrive.
+            _drawnInstances.Add(instance);
             _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
             _bounds = _bounds.Union(worldBounds);
 
@@ -498,6 +605,13 @@
             await PumpAsync();
         }
 
+        if (SectionEnabled)
+        {
+            await RebuildContoursAsync();
+            if (generation != _generation)
+                return;
+            await PumpAsync();
+        }
         if (!_failed)
             await ReportAsync(null);
         if (OnRendered.HasDelegate)
@@ -577,6 +691,57 @@
         _furniture = new ViewportFurniture("@grid", grid.Length / 3, "@axes");
     }
 
+    /// <summary>
+    /// Recomputes and uploads the section-plane SDF isolines. The extraction is the
+    /// shared <c>SectionContours.Build</c> — the same marching squares, the same cached
+    /// <c>Part.TryGetSdf</c> route, the same lift below the plane and the same level
+    /// spacing the desktop renderer uses — so this component only decides WHEN to
+    /// rebuild: on a section change, a visibility change, or a load, never per frame.
+    /// </summary>
+    private async Task RebuildContoursAsync()
+    {
+        var gl = _gl;
+        if (gl is null)
+            return;
+        if (!SectionEnabled || _drawnInstances.Count == 0)
+        {
+            _contours = null;
+            return;
+        }
+
+        var visible = new bool[_drawnInstances.Count];
+        for (int i = 0; i < visible.Length; i++)
+            visible[i] = _drawn[i].Visible;
+
+        // Failures are collected (the callback is synchronous) and reported after,
+        // deduped per part: the lowering failure itself is cached on the Part, so
+        // without the dedupe every rebuild would repeat the same status line.
+        List<string>? failures = null;
+        var geometry = SectionContours.Build(
+            _drawnInstances, visible,
+            SectionContours.PlaneFrame(SectionAxis.Direction(), EffectiveSectionOffset),
+            (part, message) =>
+            {
+                if (_reportedSectionFailures.Add(part))
+                    (failures ??= []).Add($"{part.Name}: {message}");
+            });
+        if (failures is not null)
+            await ReportAsync(string.Join("\n", failures));
+
+        if (geometry.PartCount == 0)
+        {
+            _contours = null;
+            return;
+        }
+        await gl.UploadLineVerticesAsync("@contours.zero", geometry.ZeroVertices);
+        await gl.UploadLineVerticesAsync("@contours.positive", geometry.PositiveVertices);
+        await gl.UploadLineVerticesAsync("@contours.negative", geometry.NegativeVertices);
+        _contours = new ViewportContours(
+            "@contours.zero", geometry.ZeroVertices.Length / 3,
+            "@contours.positive", geometry.PositiveVertices.Length / 3,
+            "@contours.negative", geometry.NegativeVertices.Length / 3);
+    }
+
     // ---- drawing ----
     //
     // On demand, like the desktop viewport: a frame is drawn when something changed, not
@@ -621,7 +786,8 @@
             _lastSize = (width, height);
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
-                _selected, _hovered));
+                _selected, _hovered,
+                sectionPlanes: ActiveSectionPlanes(), contours: _contours));
         }
         catch (JSDisconnectedException)
         {
@@ -651,11 +817,15 @@
         var (near, far) = CameraMath.FrustumPlanes(_camera.Distance, _bounds);
         var viewProjection = CameraMath.Perspective(Math.PI / 4, width / height, near, far)
                            * CameraMath.LookAt(eye, _camera.Target, Vector3d.UnitZ);
-        // No section planes yet (that rung is next), but ScenePick already takes them and
-        // _pick already carries each part's ClippedBySection, so turning sections on here
-        // is passing three more arguments rather than writing a second clip rule.
+        // Picking honours the section planes through the SAME rule the shaders apply:
+        // ScenePick asks SectionClip.Hides, and each PickInstance carries its part's
+        // ClippedBySection — so a click cannot select the cut-away half, and an
+        // unsectioned fastener stays clickable everywhere it is drawn.
+        var planes = ActiveSectionPlanes();
         return ScenePick.Nearest(
-            x, y, width, height, viewProjection, _pick, scratch: _pickScratch);
+            x, y, width, height, viewProjection, _pick,
+            sectionEnabled: planes is not null, sectionPlanes: planes,
+            scratch: _pickScratch);
     }
 
     /// <summary>A click: select what is under it, or clear the selection by clicking it
