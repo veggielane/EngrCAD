@@ -13,6 +13,12 @@ internal sealed record SyntheticFontOptions
 
     /// <summary>Omit this table entirely (to test required-table diagnostics).</summary>
     public string? OmitTable { get; init; }
+
+    /// <summary>Include a <c>GPOS</c> table with a <c>kern</c> feature (PairPos
+    /// formats 1 and 2, an Extension lookup, both coverage and both class-definition
+    /// formats). Its values deliberately disagree with the legacy <c>kern</c> table,
+    /// so the precedence rule is observable.</summary>
+    public bool Gpos { get; init; }
 }
 
 /// <summary>
@@ -135,6 +141,8 @@ internal static class SyntheticFont
             tables["name"] = Name();
             tables["OS/2"] = Os2();
         }
+        if (options.Gpos)
+            tables["GPOS"] = Gpos();
         if (options.OmitTable is not null)
             tables.Remove(options.OmitTable);
 
@@ -275,6 +283,85 @@ internal static class SyntheticFont
         kern.U16(0).U16(6 + pairBytes.Length).U16(0x0001);           // version, length, coverage: format 0, horizontal
         kern.Bytes(pairBytes);
         return kern.ToArray();
+    }
+
+    /// <summary>Expected GPOS kerning values (font units). I|O comes from a PairPos
+    /// format 1 in lookup 0 (-60, stored beside an XPlacement so the value-record slot
+    /// arithmetic is under test) PLUS a second format-1 lookup (-20): lookups
+    /// accumulate. C|I and A|I come from a PairPos format 2 class matrix wrapped in an
+    /// Extension (type 9) lookup, with coverage format 2 and both class-definition
+    /// formats. The legacy kern table says I|O = -50, so GPOS precedence is
+    /// observable.</summary>
+    public const int GposKernIO = -80;
+    public const int GposKernCI = -30;
+    public const int GposKernAI = -15;
+
+    private static byte[] Gpos()
+    {
+        // ---- lookup 0: PairPos format 1, I|O = -60 with an XPlacement in front ----
+        var pairPos1 = new Be();
+        pairPos1.U16(1).U16(12).U16(0x0005).U16(0);                  // format, coverage@12, XPlacement|XAdvance, none
+        pairPos1.U16(1).U16(18);                                     // one pair set @18
+        pairPos1.U16(1).U16(1).U16(RectGlyph);                       // coverage format 1: ['I']
+        pairPos1.U16(1).U16(RingGlyph).I16(7).I16(-60);              // 1 pair: 'O', record = (xPlacement 7, xAdvance -60)
+
+        // ---- lookup 1: Extension (type 9) wrapping PairPos format 2 ----
+        var pairPos2 = new Be();
+        pairPos2.U16(2).U16(40).U16(0x0004).U16(0x0004);             // format, coverage@40, XAdvance both sides
+        pairPos2.U16(50).U16(60).U16(3).U16(2);                      // classDef1@50, classDef2@60, 3x2 classes
+        int[,] matrix = { { 0, 0 }, { 0, GposKernCI }, { 0, GposKernAI } };
+        for (int c1 = 0; c1 < 3; c1++)
+            for (int c2 = 0; c2 < 2; c2++)
+                pairPos2.I16(matrix[c1, c2]).I16(0);                 // value1 (xAdvance), value2 (xAdvance, unused)
+        pairPos2.U16(2).U16(1).U16(CurveGlyph).U16(CompositeGlyph).U16(0); // coverage format 2: C..A
+        pairPos2.U16(1).U16(CurveGlyph).U16(2).U16(1).U16(2);        // classDef1 format 1: C->1, A->2
+        pairPos2.U16(2).U16(1).U16(RectGlyph).U16(RectGlyph).U16(1); // classDef2 format 2: I->1
+
+        var extension = new Be();
+        extension.U16(1).U16(2).U32(8);                              // ext format, wrapped type, subtable @8
+        extension.Bytes(pairPos2.ToArray());
+
+        // ---- lookup 2: PairPos format 1 again, I|O = -20 (accumulates with lookup 0) ----
+        var pairPos3 = new Be();
+        pairPos3.U16(1).U16(12).U16(0x0004).U16(0);
+        pairPos3.U16(1).U16(18);
+        pairPos3.U16(1).U16(1).U16(RectGlyph);
+        pairPos3.U16(1).U16(RingGlyph).I16(-20);
+
+        byte[] Lookup(int type, byte[] subtable)
+        {
+            var lookup = new Be();
+            lookup.U16(type).U16(0).U16(1).U16(8);                   // type, flag, one subtable @8
+            lookup.Bytes(subtable);
+            return lookup.ToArray();
+        }
+        byte[][] lookups = [Lookup(2, pairPos1.ToArray()), Lookup(9, extension.ToArray()), Lookup(2, pairPos3.ToArray())];
+
+        var lookupList = new Be();
+        lookupList.U16(3);
+        int lookupAt = 2 + 3 * 2;
+        foreach (var lookup in lookups)
+        {
+            lookupList.U16(lookupAt);
+            lookupAt += lookup.Length;
+        }
+        foreach (var lookup in lookups)
+            lookupList.Bytes(lookup);
+
+        var feature = new Be();
+        feature.U16(0).U16(3).U16(0).U16(1).U16(2);                  // no params, lookups 0..2
+
+        var featureList = new Be();
+        featureList.U16(1).Tag("kern").U16(8);                       // one 'kern' feature @8
+        featureList.Bytes(feature.ToArray());
+
+        var gpos = new Be();
+        gpos.U16(1).U16(0);                                          // version 1.0
+        gpos.U16(10).U16(12).U16(12 + featureList.Count);            // scriptList@10, featureList@12, lookupList after
+        gpos.U16(0);                                                 // ScriptList: empty (kern applies regardless)
+        gpos.Bytes(featureList.ToArray());
+        gpos.Bytes(lookupList.ToArray());
+        return gpos.ToArray();
     }
 
     private static byte[] Name()

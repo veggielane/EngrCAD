@@ -680,8 +680,12 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
 - **`TextStyle`** carries `LetterSpacing` (tracking, inserted between glyphs only),
   `LineSpacing` (baseline step, default 1.2), `Align` and `Kerning` — all spacing as a
   multiple of the em size, so one style is correct at every size. Kerning comes from the
-  legacy `kern` table; fonts that ship kerning only in OpenType `GPOS` lay out on their
-  advance widths alone (`font.HasKerning` reports which).
+  OpenType `GPOS` `kern` feature when the font has one (`Text/GposKerning.cs`: PairPos
+  formats 1 and 2 — the class-pair matrix most fonts use — unwrapped through Extension
+  lookups, both coverage and both class-definition formats, lookups accumulating), else
+  from the legacy `kern` table; per the spec, a GPOS `kern` feature makes the legacy
+  table invisible rather than merging with it. `font.HasKerning` reports whether either
+  source exists.
 - **Counters** (the holes in O, A, 8) are separate contours. TrueType's convention is
   clockwise outlines and counter-clockwise counters, but real fonts violate it often
   enough that orientation is not trusted: contours are nested by **containment** (a
@@ -1189,8 +1193,8 @@ host fallback > `MeshQuality` defaults**.
 
 Sketch constraint solver (see todo.md), mesh→B-Rep import
 (unlock blends → B-Rep), fillets on `Shape` with edge selectors, ellipsoid surfaces for
-non-uniformly scaled spheres. For text: OpenType/CFF (cubic) outlines, `GPOS` kerning,
-text on a curve, variable fonts, and B-Rep booleans for sketch-extrusion tools (which
+non-uniformly scaled spheres. For text: text on a curve, variable fonts (`fvar`/`gvar`/
+`CFF2`), and B-Rep booleans for sketch-extrusion tools (which
 would make engraving B-Rep-native). For standard components: more families (button and
 countersunk heads, nuts, washers, bearings), higher body fidelity (hex sockets, modeled
 threads on the shank, knurled inserts), and stacks that anchor into a placed component

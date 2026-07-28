@@ -60,6 +60,7 @@ public sealed class TrueTypeFont
     private readonly int[] _leftSideBearings;
     private readonly CharacterMap _cmap;
     private readonly Dictionary<(int Left, int Right), double>? _kerning;
+    private readonly GposKerning? _gpos;
     private readonly ConcurrentDictionary<int, Glyph> _glyphs = new();
 
     private TrueTypeFont(byte[] data, IReadOnlyDictionary<string, TableRecord> tables)
@@ -118,6 +119,7 @@ public sealed class TrueTypeFont
         _cmap = CharacterMap.Read(span, Table(tables, "cmap").Offset);
 
         // ---- optional tables ----
+        _gpos = tables.TryGetValue("GPOS", out var gpos) ? GposKerning.Read(span, gpos.Offset) : null;
         _kerning = tables.TryGetValue("kern", out var kern) ? ReadKerning(span, kern) : null;
         FamilyName = tables.TryGetValue("name", out var name) ? ReadFamilyName(span, name) : "";
         CapHeight = ReadCapHeight(span, tables);
@@ -171,8 +173,10 @@ public sealed class TrueTypeFont
     /// the table is absent or unreadable).</summary>
     public string FamilyName { get; }
 
-    /// <summary>True when the font carries a usable format-0 <c>kern</c> table.</summary>
-    public bool HasKerning => _kerning is not null;
+    /// <summary>True when the font supplies pair kerning — a <c>kern</c> feature in
+    /// <c>GPOS</c> (where modern fonts keep it) or a usable format-0 legacy
+    /// <c>kern</c> table.</summary>
+    public bool HasKerning => _gpos is not null || _kerning is not null;
 
     /// <summary>True when outlines come from a PostScript <c>CFF </c> table (cubic
     /// Béziers, <c>OTTO</c>-flavoured <c>.otf</c>); false for TrueType <c>glyf</c>
@@ -227,11 +231,16 @@ public sealed class TrueTypeFont
     }
 
     /// <summary>Kerning adjustment between two glyphs in font units (negative pulls
-    /// them together); 0 when the font has no <c>kern</c> table or no pair entry.
-    /// Only the legacy format-0 table is read — modern OpenType <c>GPOS</c> kerning is
-    /// not implemented.</summary>
-    public double KerningBetween(int leftGlyphIndex, int rightGlyphIndex) =>
-        _kerning is not null && _kerning.TryGetValue((leftGlyphIndex, rightGlyphIndex), out double value) ? value : 0;
+    /// them together); 0 when the font kerns nothing for the pair. A <c>kern</c>
+    /// feature in <c>GPOS</c> takes precedence over the legacy <c>kern</c> table —
+    /// the OpenType rule: when both exist, the legacy table is ignored entirely, not
+    /// merged (see <see cref="GposKerning"/> for what is read).</summary>
+    public double KerningBetween(int leftGlyphIndex, int rightGlyphIndex)
+    {
+        if (_gpos is not null)
+            return _gpos.Kerning(leftGlyphIndex, rightGlyphIndex);
+        return _kerning is not null && _kerning.TryGetValue((leftGlyphIndex, rightGlyphIndex), out double value) ? value : 0;
+    }
 
     // ---- table directory -----------------------------------------------------
 

@@ -35,9 +35,10 @@ height instead, so `font.EmSizeForCapHeight(9)` converts: capitals come out exac
 
 The origin is the **baseline** at the start of the first line, x along the writing
 direction and y up. `TextStyle` carries alignment (measured per line), tracking, and line
-spacing as em multiples; `\n` starts a new line. Advance widths and legacy `kern` pair
-kerning are applied automatically — `font.HasKerning` tells you whether a font supplies
-them.
+spacing as em multiples; `\n` starts a new line. Advance widths and pair kerning are
+applied automatically — from the OpenType `GPOS` `kern` feature when the font has one
+(where modern fonts keep it), else from the legacy `kern` table. `font.HasKerning`
+tells you whether a font supplies either.
 
 A character the font doesn't contain throws, naming the character and the font, rather
 than silently dropping it.
