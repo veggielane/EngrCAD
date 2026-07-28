@@ -22,6 +22,26 @@ public interface IProjectionTarget
 {
     /// <summary>Returns the point on the target closest to (or otherwise standing in for) <paramref name="point"/>.</summary>
     Vector3d Project(in Vector3d point);
+
+    /// <summary>
+    /// Projects and additionally reports the target's outward unit normal there. Needed by
+    /// face-aligned reprojection (<see cref="RemeshProjection.FaceAligned"/>), which moves a
+    /// whole triangle rigidly onto the target and therefore needs to know which way the
+    /// target faces, not just where it is.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation projects and reports <see cref="Vector3d.Zero"/>, which is
+    /// how an <b>unoriented</b> target says so — a semantic exact-zero test, not a tolerance
+    /// (no unit normal is ever zero). Callers must have a plan for that answer; the remesher
+    /// falls back to plain closest-point projection for the triangles it affects. Overriding
+    /// this is worth it wherever the orientation is already computed: both targets in this
+    /// repository get it for free from work the projection does anyway.
+    /// </remarks>
+    Vector3d Project(in Vector3d point, out Vector3d normal)
+    {
+        normal = Vector3d.Zero;
+        return Project(point);
+    }
 }
 
 /// <summary>
@@ -81,6 +101,30 @@ public sealed class MeshProjectionTarget : IProjectionTarget
             _positions[_triangles[3 * triangle]],
             _positions[_triangles[3 * triangle + 1]],
             _positions[_triangles[3 * triangle + 2]]);
+    }
+
+    /// <summary>
+    /// Projects and reports the winning triangle's own normal — the snapshot's orientation, so
+    /// it costs nothing beyond the search that already ran. A degenerate winning triangle
+    /// reports a zero normal, which the interface's contract already defines as "unoriented".
+    /// </summary>
+    public Vector3d Project(in Vector3d point, out Vector3d normal)
+    {
+        normal = Vector3d.Zero;
+        var metric = new TriangleDistance(_positions, _triangles, point);
+        if (!_bvh.Nearest(point, ref metric, out int triangle, out _))
+            return point;
+
+        var a = _positions[_triangles[3 * triangle]];
+        var b = _positions[_triangles[3 * triangle + 1]];
+        var c = _positions[_triangles[3 * triangle + 2]];
+        var area = (b - a).Cross(c - a);
+        double length = area.Length;
+        // Exact-zero test on a length, not an epsilon on an area: a triangle with no normal
+        // has none at any scale, and the interface has a spelling for that.
+        if (length > 0)
+            normal = area / length;
+        return Distance3d.ClosestPointOnTriangle(point, a, b, c);
     }
 
     private readonly struct TriangleDistance(Vector3d[] positions, int[] triangles, Vector3d point) : IBvhDistance

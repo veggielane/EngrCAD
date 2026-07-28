@@ -414,8 +414,30 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     scheduling measured **slower** than the sweep it exists to beat (783 vs 747 ms) — all of
     the sweep's work plus the bookkeeping. A scheduler whose wake-up rule never fires is a
     pure overhead.
+  - **Face-aligned (RZN-flow) reprojection** (`RemeshOptions.Projection =
+    RemeshProjection.FaceAligned`, g3's `RemesherPro.SharpEdgeReprojectionRemesh`) — the
+    projection pass that keeps sharp features. Each TRIANGLE is moved rigidly onto the target
+    (centroid to its closest point, plane rotated to the target's normal there) and every
+    vertex takes the `area × (n·n')³`-weighted average of where its incident triangles put it.
+    The cube of the normal agreement is the mechanism: a triangle lying flat against the
+    target contributes with full weight, one straddling a crease agrees with neither side and
+    contributes almost nothing, so a vertex ON a crease is pulled by the two flat groups
+    either side and lands where their planes meet. Plain closest-point projection has no way
+    to know that — it pulls the vertex onto whichever face happens to be nearer, and the
+    crease erodes. Measured on a 2 × 2 × 2 box remeshed to a 0.35 target for 12 passes with
+    feature pinning switched **off** (so nothing but the projection protects the edges):
+    volume **7.2244** with vertex projection against **7.6964** face-aligned, i.e. corner
+    erosion 9.7% → 3.8%. It needs an *oriented* target; triangles whose projection comes back
+    unoriented fall back to closest-point placement, so an unoriented target degrades to
+    `Vertex` rather than failing.
 - **`IProjectionTarget` / `MeshProjectionTarget`** — the surface a remesh pulls vertices back
-  onto. Smoothing shrinks a model (Laplacian flow is curvature flow — a sphere loses radius
+  onto. The interface has two members: `Project(point)` and an oriented
+  `Project(point, out normal)` whose **default implementation reports a zero normal** — a
+  semantic exact-zero test spelling "this target carries no orientation", since no unit
+  normal is ever zero — so existing targets keep working and callers have one thing to check.
+  Both targets here override it from work the projection already does: `MeshProjectionTarget`
+  hands back the winning triangle's normal, `SdfProjectionTarget` the unit gradient its last
+  Newton step computed. Smoothing shrinks a model (Laplacian flow is curvature flow — a sphere loses radius
   every pass), and projection is what undoes it, so the remesh changes the tessellation and
   leaves the shape. `MeshProjectionTarget` is a BVH over a **snapshot** of the target's
   triangles (the mesh being remeshed is mutating underneath) plus the exact closest point on

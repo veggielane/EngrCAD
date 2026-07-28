@@ -444,6 +444,11 @@ absolute constant, so it works at 1e-4 scale.
   within a fraction of an edge length of it, where every one of these fields is locally the
   exact distance to a real face. Project points that are already near the surface; do not
   use this as a general closest-point query.
+- It is an **oriented** target: `Project(point, out normal)` reports the unit gradient the
+  last Newton step computed, so face-aligned (RZN-flow) reprojection gets its orientation for
+  free. A point already exactly on the surface takes no step, so the gradient is read where it
+  stands rather than reporting "unoriented" — which would send a face-aligned remesh down its
+  fallback path for precisely its best-placed triangles.
 - Measured on the pairing it was written for — `SurfaceNets.Polygonize(Sphere(1), 32)`
   remeshed at target edge 0.12 for 8 passes — the worst vertex-to-field distance drops by
   more than an order of magnitude while the volume stays within 2% of the exact sphere.

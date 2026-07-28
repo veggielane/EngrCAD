@@ -590,6 +590,107 @@ public class RemesherTests
             () => Remesher.Remesh(GridPatch(3), new RemeshOptions(0.1) { FastSplitPasses = -1 }));
     }
 
+    // ---------------------------------------------------------------- face-aligned projection
+
+    /// <summary>A target that deliberately does NOT override the oriented overload, so it
+    /// answers through the interface's default and reports no normal.</summary>
+    private sealed class UnorientedTarget(IProjectionTarget inner) : IProjectionTarget
+    {
+        public Vector3d Project(in Vector3d point) => inner.Project(point);
+    }
+
+    [Fact]
+    public void MeshProjectionTarget_ReportsTheWinningTriangleNormal()
+    {
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (2, 2, 2))).Triangulated();
+        var target = new MeshProjectionTarget(box);
+
+        target.Project(new Vector3d(1, 1, 5), out var top);
+        Assert.Equal(new Vector3d(0, 0, 1), top);
+        target.Project(new Vector3d(1, -3, 1), out var front);
+        Assert.Equal(new Vector3d(0, -1, 0), front);
+    }
+
+    [Fact]
+    public void FaceAlignedProjection_KeepsSharpEdgesThatVertexProjectionRoundsOff()
+    {
+        // The whole point of the RZN flow. Feature pinning is switched OFF so the creases
+        // have nothing protecting them but the projection itself: closest-point projection
+        // pulls a vertex near an edge onto whichever face happens to be nearer and the box
+        // erodes, while the face-aligned weighting lets the two flat groups either side pull
+        // it back onto their intersection.
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (2, 2, 2))).Triangulated();
+        var options = new RemeshOptions(0.35)
+        {
+            Iterations = 12,
+            FeatureAngleDegrees = 0,
+            SmoothSpeed = 0.3,
+            ProjectionTarget = new MeshProjectionTarget(box),
+        };
+
+        var rounded = Remesher.Remesh(box, options).Mesh;
+        var sharp = Remesher.Remesh(box, options with { Projection = RemeshProjection.FaceAligned }).Mesh;
+
+        sharp.Validate();
+        Assert.True(sharp.IsClosed);
+        Assert.Equal(2, sharp.EulerCharacteristic);
+
+        double roundedLoss = 8 - rounded.Volume();
+        double sharpLoss = 8 - sharp.Volume();
+        Assert.True(roundedLoss > 0, "closest-point projection is expected to erode the corners");
+        Assert.True(sharpLoss < roundedLoss / 2,
+            $"face-aligned should lose far less volume: {sharpLoss} against {roundedLoss}");
+    }
+
+    [Fact]
+    public void FaceAlignedProjection_DegradesToVertexProjectionOnAnUnorientedTarget()
+    {
+        // A target that answers only the unoriented overload reports a zero normal through the
+        // interface's default, and every triangle then falls back to closest-point placement.
+        // The mode must therefore still produce a sound mesh rather than refusing or drifting.
+        var sphere = MeshPrimitives.UvSphere(1.0, 20, 14).Triangulated();
+        var options = new RemeshOptions(0.2)
+        {
+            Iterations = 8,
+            FeatureAngleDegrees = 0,
+            Projection = RemeshProjection.FaceAligned,
+            ProjectionTarget = new UnorientedTarget(new MeshProjectionTarget(sphere)),
+        };
+
+        var result = Remesher.Remesh(sphere, options);
+
+        result.Mesh.Validate();
+        Assert.True(result.Mesh.IsClosed);
+        AssertAllTriangles(result.Mesh);
+        Assert.True(Math.Abs(result.Mesh.Volume() - sphere.Volume()) / sphere.Volume() < 0.05);
+    }
+
+    [Fact]
+    public void FaceAlignedProjection_KeepsASmoothSurfaceWhereItIs()
+    {
+        // It must not be a feature-only tool: on a curved surface with no creases at all, the
+        // rigid per-triangle motion has to reproduce ordinary projection's job of holding the
+        // shape against smoothing's shrinkage.
+        var sphere = MeshPrimitives.UvSphere(1.0, 24, 16).Triangulated();
+        var options = new RemeshOptions(0.18)
+        {
+            Iterations = 10,
+            FeatureAngleDegrees = 0,
+            Projection = RemeshProjection.FaceAligned,
+            ProjectionTarget = new MeshProjectionTarget(sphere),
+        };
+
+        var result = Remesher.Remesh(sphere, options);
+
+        result.Mesh.Validate();
+        Assert.True(result.Mesh.IsClosed);
+        double worst = 0;
+        foreach (var vertex in result.Mesh.Vertices)
+            worst = Math.Max(worst, Math.Abs(vertex.Position.Length - 1));
+        // Within the source tessellation's own sagitta of the unit sphere.
+        Assert.True(worst < 0.03, $"worst radial deviation {worst}");
+    }
+
     // ---------------------------------------------------------------- projection target
 
     [Fact]

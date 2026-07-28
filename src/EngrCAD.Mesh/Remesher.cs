@@ -25,6 +25,39 @@ public enum RemeshSmoothing
     Cotangent,
 }
 
+/// <summary>How <see cref="Remesher"/>'s projection pass puts vertices back on the target.</summary>
+public enum RemeshProjection
+{
+    /// <summary>
+    /// Move each free vertex to its own closest point on the target. Simple and the default —
+    /// and it rounds sharp features off, because the closest point to a vertex sitting near a
+    /// crease is on whichever side happens to be nearer.
+    /// </summary>
+    Vertex,
+
+    /// <summary>
+    /// Face-aligned (RZN-flow) reprojection — geometry3Sharp's
+    /// <c>RemesherPro.SharpEdgeReprojectionRemesh</c>. Each TRIANGLE is moved rigidly: its
+    /// centroid goes to the centroid's closest point on the target and its plane is rotated to
+    /// the target's normal there, and every vertex then takes the weighted average of where
+    /// its incident triangles would put it, weighted by <c>area × (n·n')³</c>.
+    /// <para>
+    /// The cube of the normal agreement is what preserves creases. A triangle lying flat
+    /// against the target contributes with full weight, a triangle straddling a crease agrees
+    /// with neither side and contributes almost nothing, so a vertex ON a crease is pulled by
+    /// the two flat groups either side and lands where their planes meet — the crease — rather
+    /// than being dragged onto the nearer face. Vertex projection has no way to know that.
+    /// </para>
+    /// <para>
+    /// Needs an <b>oriented</b> target (<see cref="IProjectionTarget.Project(in Vector3d, out Vector3d)"/>
+    /// reporting a non-zero normal). Triangles whose projection comes back unoriented fall back
+    /// to plain closest-point projection, so an unoriented target degrades to
+    /// <see cref="Vertex"/> rather than failing.
+    /// </para>
+    /// </summary>
+    FaceAligned,
+}
+
 /// <summary>How <see cref="Remesher"/> decides which edges and vertices a pass looks at.</summary>
 public enum RemeshScheduling
 {
@@ -160,6 +193,12 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// signed distance field, which is the quality-control pass for Surface Nets output.
     /// </summary>
     public IProjectionTarget? ProjectionTarget { get; init; }
+
+    /// <summary>
+    /// How the projection pass uses <see cref="ProjectionTarget"/>: per vertex (the default)
+    /// or face-aligned, which preserves sharp features. Ignored when there is no target.
+    /// </summary>
+    public RemeshProjection Projection { get; init; } = RemeshProjection.Vertex;
 
     /// <summary>
     /// Refuse any operation or vertex move that would invert or degenerate an incident
@@ -324,6 +363,8 @@ public static class Remesher
         private int[] _ring = new int[16];
         private readonly List<int> _moved = [];
         private readonly List<Vector3d> _movedTo = [];
+        private Vector3d[] _accumulated = [];      // face-aligned projection
+        private double[] _accumulatedWeight = [];
 
         // Queue scheduling. Two generations of each queue: work found during a pass goes into
         // the NEXT one, which mirrors the sweep's own rule that elements created mid-pass are
@@ -872,6 +913,11 @@ public static class Remesher
         {
             if (_options.ProjectionTarget is not { } target)
                 return;
+            if (_options.Projection == RemeshProjection.FaceAligned)
+            {
+                ProjectFaceAlignedPass(target, candidates);
+                return;
+            }
             EnsureVertexCapacity();
             ClearModified(candidates);
             foreach (int v in candidates)
@@ -883,6 +929,106 @@ public static class Remesher
                 _modified[v] = true;
             }
             ApplyBuffer(candidates);
+        }
+
+        /// <summary>
+        /// Face-aligned (RZN-flow) reprojection: every triangle is moved rigidly onto the
+        /// target — centroid to its closest point, plane rotated to the target's normal there
+        /// — and each vertex takes the <c>area × (n·n')³</c>-weighted average of where its
+        /// incident triangles put it. See <see cref="RemeshProjection.FaceAligned"/> for why
+        /// the cube is what preserves creases.
+        /// </summary>
+        private void ProjectFaceAlignedPass(IProjectionTarget target, List<int> candidates)
+        {
+            EnsureVertexCapacity();
+            EnsureAccumulators();
+            ClearModified(candidates);
+            Array.Clear(_accumulated, 0, _mesh.VertexCapacity);
+            Array.Clear(_accumulatedWeight, 0, _mesh.VertexCapacity);
+
+            // The accumulation is over the WHOLE mesh even under queue scheduling: a vertex's
+            // position here is a function of its incident triangles, so a partial accumulation
+            // would weight it against a subset and move it for no geometric reason. Only the
+            // write set is restricted.
+            for (int f = 0; f < _mesh.FaceCapacity; f++)
+            {
+                if (!_mesh.IsFace(f))
+                    continue;
+                int h0 = _mesh.FaceHalfEdge(f);
+                int h1 = _mesh.Next(h0);
+                int h2 = _mesh.Next(h1);
+                int v0 = _mesh.Origin(h0), v1 = _mesh.Origin(h1), v2 = _mesh.Origin(h2);
+                var p0 = _mesh.GetPosition(v0);
+                var p1 = _mesh.GetPosition(v1);
+                var p2 = _mesh.GetPosition(v2);
+
+                var area = (p1 - p0).Cross(p2 - p0);
+                double doubleArea = area.Length;
+                if (doubleArea == 0)
+                    continue; // no plane to align: an exact-zero test, not an epsilon
+                var normal = area / doubleArea;
+
+                var centroid = (p0 + p1 + p2) / 3.0;
+                var landed = target.Project(centroid, out var targetNormal);
+                double agreement = normal.Dot(targetNormal);
+                if (agreement <= 0)
+                {
+                    // Either the target is unoriented (zero normal — the interface's spelling
+                    // for "no orientation available") or this triangle disagrees with the
+                    // surface outright. Both get plain closest-point behaviour, which is what
+                    // makes an unoriented target degrade to Vertex projection rather than fail.
+                    Contribute(v0, landed + (p0 - centroid), 1);
+                    Contribute(v1, landed + (p1 - centroid), 1);
+                    Contribute(v2, landed + (p2 - centroid), 1);
+                    continue;
+                }
+
+                double weight = doubleArea * agreement * agreement * agreement;
+                Contribute(v0, landed + RotateOnto(p0 - centroid, normal, targetNormal, agreement), weight);
+                Contribute(v1, landed + RotateOnto(p1 - centroid, normal, targetNormal, agreement), weight);
+                Contribute(v2, landed + RotateOnto(p2 - centroid, normal, targetNormal, agreement), weight);
+            }
+
+            foreach (int v in candidates)
+            {
+                if (!_mesh.IsVertex(v) || IsFixed(v) || _accumulatedWeight[v] == 0)
+                    continue;
+                _buffer[v] = _accumulated[v] / _accumulatedWeight[v];
+                _modified[v] = true;
+            }
+            ApplyBuffer(candidates);
+
+            void Contribute(int vertex, in Vector3d position, double weight)
+            {
+                _accumulated[vertex] += position * weight;
+                _accumulatedWeight[vertex] += weight;
+            }
+        }
+
+        /// <summary>
+        /// Rodrigues rotation of <paramref name="v"/> by the rotation taking
+        /// <paramref name="from"/> onto <paramref name="to"/> (both unit), with their dot
+        /// product already in hand. The caller guarantees it is positive, so the axis can only
+        /// vanish when the two coincide — where the rotation is the identity.
+        /// </summary>
+        private static Vector3d RotateOnto(in Vector3d v, in Vector3d from, in Vector3d to, double cos)
+        {
+            var axis = from.Cross(to);
+            double sin = axis.Length;
+            if (sin == 0)
+                return v;
+            var k = axis / sin;
+            return v * cos + k.Cross(v) * sin + k * (k.Dot(v) * (1 - cos));
+        }
+
+        private void EnsureAccumulators()
+        {
+            int capacity = _mesh.VertexCapacity;
+            if (_accumulated.Length >= capacity)
+                return;
+            int size = Math.Max(capacity, _accumulated.Length * 2);
+            Array.Resize(ref _accumulated, size);
+            Array.Resize(ref _accumulatedWeight, size);
         }
 
         /// <summary>

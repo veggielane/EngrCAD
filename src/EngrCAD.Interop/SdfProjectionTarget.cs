@@ -132,7 +132,9 @@ public sealed class SdfProjectionTarget : IProjectionTarget
 
     /// <summary>
     /// Projects and reports the surface normal there — the field's own unit gradient, which
-    /// the last Newton step computed anyway, so the orientation is free.
+    /// the last Newton step computed anyway, so the orientation face-aligned reprojection
+    /// needs is free. A point already exactly on the surface reports no normal (the
+    /// interface's spelling for "unoriented"), since no step was taken to read one from.
     /// </summary>
     public Vector3d Project(in Vector3d point, out Vector3d normal)
     {
@@ -145,9 +147,19 @@ public sealed class SdfProjectionTarget : IProjectionTarget
             p = next;
             normal = n;
         }
-        // The normal reported is the one at the last point stepped FROM. Re-reading it at
-        // the projected point would cost another six evaluations to move it by O(|d|·kappa),
-        // which is below the positional error the step itself leaves behind.
+        if (normal == Vector3d.Zero)
+        {
+            // No step was taken — the point was already exactly on the surface — so read the
+            // gradient where it stands rather than reporting "unoriented", which would send a
+            // face-aligned remesh down its fallback path for the best-placed triangles it has.
+            var gradient = Gradient(p);
+            double length = gradient.Length;
+            if (length > 0 && double.IsFinite(length))
+                normal = gradient / length;
+        }
+        // Otherwise the normal reported is the one at the last point stepped FROM. Re-reading
+        // it at the projected point would cost six more evaluations to move it by
+        // O(|d|·curvature), which is below the positional error the step itself leaves behind.
         return p;
     }
 
@@ -166,11 +178,7 @@ public sealed class SdfProjectionTarget : IProjectionTarget
         if (d == 0)
             return false;
 
-        double h = GradientStep;
-        var gradient = new Vector3d(
-            _field.Evaluate(p + (h, 0, 0)) - _field.Evaluate(p - (h, 0, 0)),
-            _field.Evaluate(p + (0, h, 0)) - _field.Evaluate(p - (0, h, 0)),
-            _field.Evaluate(p + (0, 0, h)) - _field.Evaluate(p - (0, 0, h)));
+        var gradient = Gradient(p);
         double length = gradient.Length;
         if (length == 0 || !double.IsFinite(length))
             return false;
@@ -178,6 +186,16 @@ public sealed class SdfProjectionTarget : IProjectionTarget
         normal = gradient / length;
         next = p - normal * d;
         return true;
+    }
+
+    /// <summary>Central-difference gradient, unnormalized: six evaluations.</summary>
+    private Vector3d Gradient(in Vector3d p)
+    {
+        double h = GradientStep;
+        return new Vector3d(
+            _field.Evaluate(p + (h, 0, 0)) - _field.Evaluate(p - (h, 0, 0)),
+            _field.Evaluate(p + (0, h, 0)) - _field.Evaluate(p - (0, h, 0)),
+            _field.Evaluate(p + (0, 0, h)) - _field.Evaluate(p - (0, 0, h)));
     }
 
     private static double DefaultGradientStep(Sdf field)
