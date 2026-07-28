@@ -73,10 +73,11 @@ public static class OffscreenRenderer
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null) =>
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
+        bool fields = true) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
             width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, preview, previewWorld);
+            sectionPlanes, sectionCombine, preview, previewWorld, fields);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
@@ -92,7 +93,8 @@ public static class OffscreenRenderer
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null)
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
+        bool fields = true)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -106,7 +108,7 @@ public static class OffscreenRenderer
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var oversized = Draw(gl, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
-            preview, previewWorld);
+            preview, previewWorld, fields);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -155,10 +157,11 @@ public static class OffscreenRenderer
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null)
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
+        bool fields = true)
     {
         var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -172,10 +175,11 @@ public static class OffscreenRenderer
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null)
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
+        bool fields = true)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -185,13 +189,13 @@ public static class OffscreenRenderer
     private readonly record struct InstanceDraw(
         EffectiveMode Mode, uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
         uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
-        bool SectionClipped);
+        bool SectionClipped, bool FieldColored, uint GhostVao, int GhostIndexCount);
 
     private static unsafe byte[] Draw(
         GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture,
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
-        IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld)
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields)
     {
         // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
         string header = ViewerShaders.Header(es: true);
@@ -220,8 +224,10 @@ public static class OffscreenRenderer
         gl.ClearColor(0.11f, 0.12f, 0.14f, 1f);
         gl.Clear((uint)(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit));
         // Meshes without a baked-occlusion buffer read this constant (the GL default
-        // would be 0 = fully occluded = black parts).
+        // would be 0 = fully occluded = black parts); the same rule for the
+        // field-colour attribute, whose strength uniform is 0 for such a part anyway.
         RenderUploads.SetDefaultOcclusion(gl);
+        RenderUploads.SetDefaultFieldColor(gl);
 
         // Background gradient: vertexless fullscreen triangle, no depth.
         uint bgVao = gl.GenVertexArray();
@@ -280,7 +286,7 @@ public static class OffscreenRenderer
         // uploaded: mesh VAO for fills/points/translucency, feature edges for the
         // shaded-with-edges look and translucent silhouettes, wire edges for wireframe.
         var uploaded = new Dictionary<Part, (uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-            uint WireVao, int WireVertexCount)>();
+            uint WireVao, int WireVertexCount, bool FieldColored, uint GhostVao, int GhostIndexCount)>();
         var draws = new List<InstanceDraw>(instances.Count);
         foreach (var instance in instances)
         {
@@ -293,19 +299,40 @@ public static class OffscreenRenderer
                 var mesh = part.GetMesh();
                 uint vao = 0;
                 int indexCount = 0;
+                // Simulation results (the same FieldRendering call the window makes, so
+                // both passes upload identical colour floats and a deformed shape is the
+                // same displaced mesh). Built even for the wireframe/points modes' sake
+                // of the deform, since the displaced geometry drives every mode.
+                var render = RenderMesh.CreateFlat(mesh);
+                FieldMeshData? field =
+                    fields && FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out _)
+                        ? built
+                        : null;
+                var drawn = field?.Deformed ?? render;
+                uint ghostVao = 0;
+                int ghostIndexCount = 0;
                 if (mode != EffectiveMode.Wireframe)
                 {
-                    var render = RenderMesh.CreateFlat(mesh);
                     // Baked per-vertex occlusion (cached per mesh, shared with the
                     // window pass, deterministic) — the whole AO story is vertex data,
                     // so both passes shade from identical floats.
-                    (vao, _, _, _) = RenderUploads.UploadMesh(gl, render,
-                        ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null);
-                    indexCount = render.Indices.Length;
+                    (vao, _, _, _, _) = RenderUploads.UploadMesh(gl, drawn,
+                        ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null,
+                        field?.Colors);
+                    indexCount = drawn.Indices.Length;
+                    if (field is { ShowGhost: true })
+                    {
+                        (ghostVao, _, _, _, _) = RenderUploads.UploadMesh(gl, render);
+                        ghostIndexCount = render.Indices.Length;
+                    }
                 }
                 uint edgeVao = 0;
                 int edgeVertexCount = 0;
-                if (mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent)
+                // A deformed part gets no edge overlay: those edges describe geometry
+                // that has moved (the window's rule, stated once in each pass because
+                // the passes decide what to upload separately).
+                if (mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent
+                    && field?.Deformed is null)
                 {
                     // B-Rep-backed parts overlay their ACTUAL B-Rep edges (smooth
                     // circles at any tessellation); others fall back to mesh
@@ -328,7 +355,8 @@ public static class OffscreenRenderer
                         wireVertexCount = wireEdges.Count * 2;
                     }
                 }
-                shared = (vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount);
+                shared = (vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
+                    field is not null, ghostVao, ghostIndexCount);
                 uploaded[part] = shared;
             }
 
@@ -337,7 +365,8 @@ public static class OffscreenRenderer
                 mode, shared.Vao, shared.IndexCount, shared.EdgeVao, shared.EdgeVertexCount,
                 shared.WireVao, shared.WireVertexCount, instance.World, part.Color ?? Palette.Steel,
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
-                section && part.ClippedBySection));
+                section && part.ClippedBySection,
+                shared.FieldColored, shared.GhostVao, shared.GhostIndexCount));
         }
 
         // Shaded fills, pushed back slightly so the edge overlay wins the depth test.
@@ -361,6 +390,7 @@ public static class OffscreenRenderer
         meshSection.Write(gl, planes, sectionCombine);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
             ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
+        int uFieldColor = gl.GetUniformLocation(meshProgram, "uFieldColor");
         gl.Uniform1(uAlpha, 1f);
 
         // Section mode relies on face culling staying OFF (nothing here enables
@@ -379,6 +409,7 @@ public static class OffscreenRenderer
             CameraMath.WriteColumnMajor(d.Model, matrix);
             gl.UniformMatrix4(uModel, 1, false, matrix);
             gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
+            gl.Uniform1(uFieldColor, d.FieldColored ? FieldRendering.Strength : 0f);
             gl.BindVertexArray(d.Vao);
             gl.DrawElements(PrimitiveType.Triangles, (uint)d.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
         }
@@ -469,6 +500,7 @@ public static class OffscreenRenderer
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uModel, 1, false, matrix);
                 gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
+                gl.Uniform1(uFieldColor, d.FieldColored ? FieldRendering.Strength : 0f);
                 gl.BindVertexArray(d.Vao);
                 gl.DrawElements(PrimitiveType.Triangles, (uint)d.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
             }
@@ -489,6 +521,33 @@ public static class OffscreenRenderer
                 gl.DrawArrays(PrimitiveType.Lines, 0, (uint)d.EdgeVertexCount);
             }
         }
+        // Undeformed ghosts behind the deformed shapes, in the window's pass position
+        // and through the same blend/depth-mask machinery.
+        if (draws.Exists(d => d.GhostVao != 0))
+        {
+            gl.UseProgram(meshProgram);
+            gl.Uniform1(uFieldColor, 0f);
+            gl.Uniform1(uAlpha, FieldRendering.GhostAlpha);
+            gl.Enable(EnableCap.Blend);
+            gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+            gl.DepthMask(false);
+            foreach (var d in draws)
+            {
+                if (d.GhostVao == 0)
+                    continue;
+                meshSection.SetEnabled(gl, d.SectionClipped);
+                CameraMath.WriteColumnMajor(d.Model, matrix);
+                gl.UniformMatrix4(uModel, 1, false, matrix);
+                gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
+                gl.BindVertexArray(d.GhostVao);
+                gl.DrawElements(
+                    PrimitiveType.Triangles, (uint)d.GhostIndexCount, DrawElementsType.UnsignedInt, (void*)0);
+            }
+            gl.DepthMask(true);
+            gl.Disable(EnableCap.Blend);
+            gl.Uniform1(uAlpha, 1f);
+        }
+
         // Section-plane SDF isolines, drawn after the translucent pass so they read
         // as an overlay on the cut — the same pass order as the window. Offscreen is
         // one-shot: a fresh SectionContourRenderer builds the geometry once, the
@@ -529,6 +588,21 @@ public static class OffscreenRenderer
             layer.Draw(gl, lineProgram, uLineModel, uLineColor, uLineSectionEnabled, matrix);
         }
 
+        // The field legend, unlike the view cube, IS drawn headlessly: it is
+        // documentation (the same argument that puts dimensions in a docs render), and a
+        // colour plot without its scale is a picture of nothing in particular. The
+        // supersample factor doubles as the pixel scale so the widget keeps its
+        // on-image size, exactly as the annotation text does.
+        if (fields)
+        {
+            var display = draws.Exists(d => d.FieldColored)
+                ? FirstFieldDisplay(instances)
+                : null;
+            new FieldLegendLayer().Draw(gl, display, width, height, supersample,
+                new LineProgramHandles(
+                    lineProgram, uLineModel, uLineView, uLineProj, uLineColor, uLineSectionEnabled));
+        }
+
         gl.BindVertexArray(0);
         gl.Finish();
 
@@ -548,4 +622,18 @@ public static class OffscreenRenderer
     /// <summary>The viewer's first-visit framing — one source of truth in
     /// <see cref="CameraMath.DefaultCamera"/> (turntable tracks base on it too).</summary>
     private static CameraState DefaultCamera(in Aabb bounds) => CameraMath.DefaultCamera(bounds);
+
+    /// <summary>The first instance's resolvable field display — the legend's scale.
+    /// ONE display, matching the window's <c>ViewportControl.ActiveFieldDisplay</c>: a
+    /// legend is a single scale, and several parts on different scales under one bar
+    /// would be a legend that lies.</summary>
+    private static ResolvedFieldDisplay? FirstFieldDisplay(IReadOnlyList<PartInstance> instances)
+    {
+        foreach (var instance in instances)
+        {
+            if (instance.Part.TryResolveFieldDisplay(out var resolved, out _))
+                return resolved;
+        }
+        return null;
+    }
 }

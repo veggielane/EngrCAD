@@ -315,25 +315,29 @@ public static class ViewerShaders
 
         """;
 
-    /// <summary>Lit mesh vertex shader (position + normal + baked occlusion, world-space
-    /// lighting). aOcclusion is attribute 2; a mesh uploaded without an occlusion buffer
-    /// leaves that array disabled and reads the constant 1.0 set at pass init.</summary>
+    /// <summary>Lit mesh vertex shader (position + normal + baked occlusion + field
+    /// colour, world-space lighting). aOcclusion is attribute 2 and aFieldColor
+    /// attribute 3; a mesh uploaded without either buffer leaves that array disabled and
+    /// reads the constant set at pass init (1.0, and white respectively).</summary>
     public const string MeshVertex = """
         in vec3 aPos;
         in vec3 aNormal;
         in float aOcclusion;
+        in vec3 aFieldColor;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
         out vec3 vNormal;
         out vec3 vWorldPos;
         out float vOcclusion;
+        out vec3 vFieldColor;
         void main()
         {
             vec4 world = uModel * vec4(aPos, 1.0);
             vWorldPos = world.xyz;
             vNormal = mat3(uModel) * aNormal;
             vOcclusion = aOcclusion;
+            vFieldColor = aFieldColor;
             gl_Position = uProj * uView * world;
         }
         """;
@@ -341,23 +345,34 @@ public static class ViewerShaders
     /// <summary>
     /// Lit mesh fragment shader: directional light + specular, selection highlight
     /// (uHighlight), section planes (the shared <see cref="SectionClip"/> rule; cut
-    /// interiors via gl_FrontFacing), translucency (uAlpha), and baked ambient
+    /// interiors via gl_FrontFacing), translucency (uAlpha), baked ambient
     /// occlusion (uAmbientOcclusion scales the per-vertex vOcclusion in; 0 = off and
-    /// reproduces the pre-AO look exactly, since the factor is then exactly 1.0).
+    /// reproduces the pre-AO look exactly, since the factor is then exactly 1.0), and
+    /// field colouring (uFieldColor mixes the per-vertex vFieldColor in over the part
+    /// colour; 0 = off and leaves uColor bit-identical, since mix(x, y, 0.0) is
+    /// x*1.0 + y*0.0 = x for any finite y — the same constant-when-absent rule the
+    /// occlusion attribute follows, and what keeps a part with no results rendering
+    /// byte-identically).
     /// </summary>
     public const string MeshFragment = SectionClip + """
         in vec3 vNormal;
         in vec3 vWorldPos;
         in float vOcclusion;
+        in vec3 vFieldColor;
         uniform vec3 uColor;
         uniform vec3 uLightDir;
         uniform vec3 uEyePos;
         uniform float uHighlight;
         uniform float uAlpha;
         uniform float uAmbientOcclusion;
+        uniform float uFieldColor;
         out vec4 fragColor;
         void main()
         {
+            // The surface colour before lighting: the part's own, or the colour-mapped
+            // field value where one is displayed. uFieldColor 0 leaves this exactly
+            // uColor, which is what makes a part with no results render unchanged.
+            vec3 surface = mix(uColor, vFieldColor, uFieldColor);
             if (uSectionEnabled > 0.5)
             {
                 if (sectionClipped(vWorldPos))
@@ -371,7 +386,7 @@ public static class ViewerShaders
                     // outward surface, and cut material is a flat fill by design.
                     // NOTE: shader comments must stay pure ASCII - ANGLE's GLES
                     // translator rejects the whole shader on non-ASCII bytes.
-                    vec3 cut = mix(uColor, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
+                    vec3 cut = mix(surface, vec3(0.78, 0.47, 0.25), 0.55) * 0.72;
                     fragColor = vec4(mix(cut, vec3(1.0, 0.85, 0.35), uHighlight * 0.4), uAlpha);
                     return;
                 }
@@ -381,7 +396,7 @@ public static class ViewerShaders
             vec3 v = normalize(uEyePos - vWorldPos);
             vec3 h = normalize(v - uLightDir);
             float specular = pow(max(dot(n, h), 0.0), 48.0) * 0.35;
-            vec3 base = mix(uColor, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
+            vec3 base = mix(surface, vec3(1.0, 0.85, 0.35), uHighlight * 0.55);
             // Occlusion darkens ambient and diffuse but not the specular highlight
             // (a direct-light term); uAmbientOcclusion 0 leaves the factor exactly 1.
             float ao = mix(1.0, vOcclusion, uAmbientOcclusion);

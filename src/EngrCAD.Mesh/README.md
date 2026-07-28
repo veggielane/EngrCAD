@@ -682,6 +682,44 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   bow-ties, so components never share vertices) and `Separate(mesh)` splitting a
   multi-body mesh into its bodies.
 - **`RenderMesh`** — flat (per-face) or smooth (per-vertex) triangle extraction for GPUs.
+  `SourceVertices` records which `HalfEdgeMesh` vertex each render vertex came from
+  (the identity for the smooth variant), so a consumer holding per-source-vertex data —
+  baked occlusion, a simulation `MeshField` — can spread it across the flat variant's
+  duplicates **exactly**. Recovering the mapping by hashing positions also works and is
+  what the occlusion bake does, but it is ambiguous wherever two distinct source
+  vertices share a position; recording the index while it is known costs one int per
+  vertex and cannot be wrong.
+- **`MeshField` / `FieldRange`** — simulation results as data on a mesh: a named scalar
+  or vector field over a mesh's **vertices**, with units, plus the min/max interval a
+  colour map is evaluated over. Immutable (values copied at construction) so a field is
+  a value and two consumers cannot disagree about it. Everything that needs one number
+  per vertex — colouring, the legend, the range — reads `ScalarAt`, which is the value
+  for a scalar field and the **magnitude** for a vector one, so "colour the part by its
+  displacement" needs no extra call; `Magnitude()`/`Component(i)` still produce the
+  derived field as a first-class object. `Sample`/`SampleVector` build one by evaluating
+  a function at every vertex (the analytic route: distance from a datum, an `Sdf` on the
+  surface). `FieldRange.Normalize` maps a value into [0, 1] clamped, and a **zero span
+  maps to 0.5** — a constant field has no position to report, and 0 or 1 would paint it
+  in an extreme colour and read as a hot spot; `SymmetricAboutZero()` is what a diverging
+  map wants, and is deliberately something the caller asks for rather than something
+  choosing that map does silently. NaNs are skipped when ranging, so one undefined value
+  does not poison a legend. **Vertex association only** in v1: cell fields are a
+  documented gap, not a half-supported mode.
+  This is the seam between a solver and everything that displays or exports one — it
+  lives here (not in `EngrCAD.Modeling`) for the same reason the writers do, so a future
+  volumetric mesher/solver can produce results without a reference on the modelling API.
+- **`VtuWriter` / `VtkCellType`** — VTK XML unstructured-grid (`.vtu`) export for
+  ParaView, dependency-free (hand-written XML, ASCII data arrays). The seam is
+  deliberately **(points, cells, cell types, point data)** rather than a mesh type: a
+  surface result writes `Triangle`/`Quad`/`Polygon` cells today and a volumetric mesher
+  writes `Tetra` through the same call with nothing here changing. The `HalfEdgeMesh`
+  overload is a convenience over that seam (n-gons kept as `Polygon` — nothing is
+  triangulated on the way out), and the multi-part overload merges posed meshes into one
+  grid where **arrays are the union of the parts' field names and a part lacking one
+  contributes `NaN`** — dropping the array would lose the result that exists and zeros
+  would show a fake safe region, while NaN is VTK's own "no value". Point data only,
+  matching `MeshField`'s association; ASCII rather than base64/appended so an exported
+  file stays diffable and independent of the byte order the header claims.
 - **`ObjWriter`** — minimal Wavefront OBJ export for debugging.
 - **`OffWriter`** — the writer twin of `OffReader` (n-gon faces as-is, merged
   multi-part with transforms, mirror-safe windings; R-format doubles so it

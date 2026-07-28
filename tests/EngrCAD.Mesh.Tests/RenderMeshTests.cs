@@ -28,6 +28,34 @@ public class RenderMeshTests
     }
 
     [Fact]
+    public void CreateFlat_RecordsTheSourceVertexOfEveryDuplicate()
+    {
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1)));
+        var render = RenderMesh.CreateFlat(box);
+
+        Assert.Equal(render.VertexCount, render.SourceVertices.Length);
+        for (int v = 0; v < render.VertexCount; v++)
+        {
+            // The mapping is exact, not a position hash: the render vertex sits exactly
+            // where its source vertex does.
+            var source = box.GetPosition(render.SourceVertices[v]);
+            Assert.Equal((float)source.X, render.Positions[v * 3]);
+            Assert.Equal((float)source.Y, render.Positions[v * 3 + 1]);
+            Assert.Equal((float)source.Z, render.Positions[v * 3 + 2]);
+        }
+        // A box's 8 corners each appear several times, and every one is reached.
+        Assert.Equal(8, render.SourceVertices.Distinct().Count());
+    }
+
+    [Fact]
+    public void CreateSmooth_SourceVerticesAreTheIdentity()
+    {
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1)));
+        var render = RenderMesh.CreateSmooth(box);
+        Assert.Equal(Enumerable.Range(0, box.VertexCount), render.SourceVertices);
+    }
+
+    [Fact]
     public void CreateSmooth_SharesVertices()
     {
         var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1)));

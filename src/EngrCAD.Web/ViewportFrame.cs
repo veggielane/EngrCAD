@@ -34,13 +34,36 @@ namespace EngrCAD.Web;
 /// <c>uSectionEnabled = 0</c> override) — the drafting convention that shafts, bolts
 /// and pins are drawn unsectioned. Picking already carries the same flag on
 /// <c>PickInstance</c>, so the two cannot disagree.</param>
+/// <param name="FieldColored">Whether <paramref name="GeometryKey"/>'s upload carries a
+/// field-colour buffer (<c>aFieldColor</c>). Its fill draws then set
+/// <c>uFieldColor</c> to <c>FieldRendering.Strength</c>; everything else leaves the
+/// frame's neutral 0, which is what makes a part with no results render
+/// byte-identically.</param>
+/// <param name="GhostKey">Key of the UNDEFORMED mesh upload when this instance is drawn
+/// displaced, or null. Drawn as a faint translucent body behind the deformed shape —
+/// the comparison is the point of a deformed-shape plot.</param>
 public readonly record struct ViewportInstance(
     string GeometryKey, Matrix4d World, PartColor Color, Vector3d WorldCenter,
     DisplayMode Mode = DisplayMode.Shaded,
     string? EdgeKey = null, int EdgeVertexCount = 0,
     string? WireKey = null, int WireVertexCount = 0,
     bool Visible = true,
-    bool ClippedBySection = true);
+    bool ClippedBySection = true,
+    bool FieldColored = false,
+    string? GhostKey = null);
+
+/// <summary>
+/// The field legend's uploads: the colour bar's triangle vertices and the combined
+/// outline+label line vertices, plus the shared <see cref="FieldLegendGeometry"/> that
+/// says how to draw them (band colours, vertex ranges, and the pixel-coordinate
+/// projection). Nothing about what a legend looks like is decided in this project.
+/// </summary>
+/// <param name="BandKey">Upload key of the colour bar's triangle vertices.</param>
+/// <param name="LineKey">Upload key of the outline+tick vertices followed by the label
+/// strokes (one buffer, two ranges — the world-axes trick).</param>
+/// <param name="Geometry">The shared layout.</param>
+public readonly record struct ViewportLegend(
+    string BandKey, string LineKey, FieldLegendGeometry Geometry);
 
 /// <summary>Keys the scene furniture is uploaded under, and how many vertices the grid
 /// has (the axes are always three consecutive pairs).</summary>
@@ -148,6 +171,12 @@ public static class ViewportFrame
     /// <summary>Upload key of the view cube's stroke-font labels.</summary>
     public const string CubeLabelsKey = "@cube.labels";
 
+    /// <summary>Upload key of the field legend's colour-bar triangles.</summary>
+    public const string LegendBandsKey = "@legend.bands";
+
+    /// <summary>Upload key of the field legend's outline, ticks and labels.</summary>
+    public const string LegendLinesKey = "@legend.lines";
+
     // Vertex counts of the cube's shared uploads, derived from the geometry builders
     // themselves so a glyph change cannot silently truncate a draw.
     private static readonly int CubeEdgeVertexCount = ViewCubeGeometry.BuildEdgeVertices().Length / 3;
@@ -231,7 +260,8 @@ public static class ViewportFrame
         SectionCombine sectionCombine = SectionCombine.Intersection,
         ViewportContours? contours = null,
         ViewportCube? cube = null,
-        ViewportAnnotations? annotations = null)
+        ViewportAnnotations? annotations = null,
+        ViewportLegend? legend = null)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -267,6 +297,10 @@ public static class ViewportFrame
             ["uHighlight"] = 0f,
             ["uAlpha"] = 1f,              // the translucent pass overrides this per draw
             ["uAmbientOcclusion"] = 0f,   // no bake in the browser; 0 leaves the factor exactly 1
+            // Neutral by default, exactly like uHighlight: a field-coloured instance's
+            // own fill draw overrides it, so a part with no results renders
+            // byte-identically (mix(uColor, vFieldColor, 0.0) is uColor).
+            ["uFieldColor"] = 0f,
             ["uSectionEnabled"] = sectionActive ? 1f : 0f,
             ["uSectionCount"] = new IntUniform(sectionCount),
             ["uPointSize"] = PointSize * (float)pixelScale,
@@ -337,6 +371,7 @@ public static class ViewportFrame
                 ["uColor"] = Rgb(instance.Color),
             };
             Highlighted(uniforms, i, selected, hovered);
+            FieldColored(uniforms, instance);
             Unclipped(uniforms, sectionActive, instance);
             draws.Add(new DrawCall
             {
@@ -424,6 +459,12 @@ public static class ViewportFrame
         // nothing for the edges to z-fight with, and the desktop disables it here too.
         AppendTranslucent(draws, instances, modes, eye, selected, hovered, sectionActive);
 
+        // Pass 4b: the undeformed ghosts behind the deformed shapes, in the desktop
+        // passes' position — after every opaque and translucent fill, blended with depth
+        // writes off so a reference outline never hides the result it sits behind, and
+        // never field-coloured (it carries no colour buffer either).
+        AppendGhosts(draws, instances, sectionActive);
+
         // Pass 5: SDF isolines on the cut — after everything else so they read as an
         // overlay (the desktop draws them last for the same reason). Depth-tested like
         // feature edges; the geometry already sits 1% of a spacing below the plane so
@@ -468,6 +509,13 @@ public static class ViewportFrame
                 Uniforms = uniforms,
             });
         }
+
+        // Pass 6b: the field legend — with the annotations and before the cube, because
+        // it is documentation about what the colours mean. Depth test off, its own
+        // pixel-coordinate projection, never section-clipped. Every value comes from the
+        // shared FieldLegend layout, including the band colours.
+        if (legend is { } bar && bar.Geometry.HasContent)
+            AppendLegend(draws, bar, sectionActive);
 
         // Pass 7: the view cube, last of all — it is window chrome and sits on top of
         // everything, exactly as the desktop draws it at the end of its render pass.
@@ -606,6 +654,7 @@ public static class ViewportFrame
                 ["uAlpha"] = TranslucentAlpha,
             };
             Highlighted(uniforms, index, selected, hovered);
+            FieldColored(uniforms, instance);
             Unclipped(uniforms, sectionActive, instance);
             draws.Add(new DrawCall
             {
@@ -629,6 +678,112 @@ public static class ViewportFrame
                 first: 0, count: instance.EdgeVertexCount,
                 unclip: sectionActive && !instance.ClippedBySection));
         }
+    }
+
+    /// <summary>
+    /// The ghost pass: each visible instance drawn displaced also draws its UNDEFORMED
+    /// mesh, faintly, through the translucent machinery (blend on, depth writes off).
+    /// Kept in instance order rather than depth-sorted: a ghost is an outline behind its
+    /// own deformed shape, not a see-through body competing with others.
+    /// </summary>
+    private static void AppendGhosts(
+        List<DrawCall> draws, IReadOnlyList<ViewportInstance> instances, bool sectionActive)
+    {
+        foreach (var instance in instances)
+        {
+            if (!instance.Visible || instance.GhostKey is null)
+                continue;
+            var uniforms = new Dictionary<string, object>
+            {
+                ["uModel"] = ColumnMajor(instance.World),
+                ["uColor"] = Rgb(instance.Color),
+                ["uAlpha"] = FieldRendering.GhostAlpha,
+            };
+            if (sectionActive && !instance.ClippedBySection)
+                uniforms["uSectionEnabled"] = 0f;
+            draws.Add(new DrawCall
+            {
+                Program = MeshProgram,
+                Geometry = instance.GhostKey,
+                Blend = true,
+                DepthWrite = false,
+                Cull = false,
+                Uniforms = uniforms,
+            });
+        }
+    }
+
+    /// <summary>
+    /// The legend's draws: one per colour band (each needs its own colour, exactly as
+    /// the view cube draws its faces one at a time), then the outline and the labels as
+    /// two ranges of one line buffer. All with the depth test off and the shared
+    /// pixel-coordinate projection.
+    /// </summary>
+    private static void AppendLegend(List<DrawCall> draws, in ViewportLegend legend, bool sectionActive)
+    {
+        var identity = ColumnMajor(Matrix4d.Identity);
+        var projection = ColumnMajor(legend.Geometry.Projection);
+        for (int b = 0; b < legend.Geometry.BandCount; b++)
+        {
+            draws.Add(new DrawCall
+            {
+                Program = LineProgram,
+                Geometry = legend.BandKey,
+                Mode = "triangles",
+                First = b * FieldLegend.VerticesPerBand,
+                Count = FieldLegend.VerticesPerBand,
+                DepthTest = false,
+                Cull = false,
+                Uniforms = LegendUniforms(
+                    identity, projection, Rgb(legend.Geometry.BandColors[b]), sectionActive),
+            });
+        }
+        draws.Add(new DrawCall
+        {
+            Program = LineProgram,
+            Geometry = legend.LineKey,
+            First = 0,
+            Count = legend.Geometry.FrameVertexCount,
+            DepthTest = false,
+            Cull = false,
+            Uniforms = LegendUniforms(identity, projection, Rgb(FieldLegend.FrameColor), sectionActive),
+        });
+        draws.Add(new DrawCall
+        {
+            Program = LineProgram,
+            Geometry = legend.LineKey,
+            First = legend.Geometry.FrameVertexCount,
+            Count = legend.Geometry.LabelVertexCount,
+            DepthTest = false,
+            Cull = false,
+            Uniforms = LegendUniforms(identity, projection, Rgb(FieldLegend.LabelColor), sectionActive),
+        });
+    }
+
+    private static Dictionary<string, object> LegendUniforms(
+        float[] identity, float[] projection, float[] color, bool sectionActive)
+    {
+        var uniforms = new Dictionary<string, object>
+        {
+            ["uModel"] = identity,
+            ["uView"] = identity,
+            ["uProj"] = projection,
+            ["uColor"] = color,
+        };
+        if (sectionActive)
+            uniforms["uSectionEnabled"] = 0f;   // chrome, never section-clipped
+        return uniforms;
+    }
+
+    /// <summary>Adds the per-draw <c>uFieldColor</c> override for an instance whose
+    /// upload carries a colour buffer, and only then: the neutral state says nothing,
+    /// the same discipline <see cref="Highlighted"/> follows — and the neutral state is
+    /// what makes a fieldless part's pixels identical.</summary>
+    private static void FieldColored(
+        Dictionary<string, object> uniforms, in ViewportInstance instance)
+    {
+        if (instance.FieldColored)
+            uniforms["uFieldColor"] = FieldRendering.Strength;
     }
 
     /// <summary>Adds the per-draw <c>uSectionEnabled = 0</c> override for an instance

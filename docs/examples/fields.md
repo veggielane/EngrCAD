@@ -1,0 +1,252 @@
+# Results & fields
+
+A simulation result is **data on a mesh**: one number (or one vector) per vertex, with a
+name and a unit. EngrCAD carries those as `MeshField`s attached to a `Part`, colour-maps
+them in every viewer, and exports them to ParaView — and none of that needs a solver,
+because a field is just values. Anything that can produce a number at a point can drive
+the whole pipeline: a distance, a clearance, a hand-written load case, or eventually an
+FEA solve.
+
+## Attaching a result
+
+`MeshField.Sample` evaluates a function at every vertex of a part's display mesh, in
+vertex-index order — which is exactly what a `MeshField` is indexed by.
+
+```csharp render:field-edge-distance
+// A drilled plate coloured by how far each surface point is from the nearest bore -- the
+// ligament / edge-distance check, evaluated straight off the bores' own distance field.
+var top = SketchPlane.At((0, 0, 5), Vector3d.UnitX, Vector3d.UnitY);
+var plate = Shape.Box(90, 50, 10)
+    .Drill(StandardHoles.Clearance(8), [new(-28, 0), new(0, 14), new(28, 0)], depth: 12, top);
+
+var part = new Part("plate", plate);
+var mesh = part.GetMesh();
+
+// The bores as their own field: Evaluate is the signed distance to that surface, so on
+// the plate's skin it reads "how much material to the nearest hole".
+var bores = Sdf.Union(
+    Sdf.Cylinder(4.5, 40).Translate((-28, 0, 0)),
+    Sdf.Cylinder(4.5, 40).Translate((0, 14, 0)),
+    Sdf.Cylinder(4.5, 40).Translate((28, 0, 0)));
+
+part.AddResult(MeshField.Sample(mesh, "edge distance", "mm", p => bores.Evaluate(p)));
+part.FieldDisplay = new FieldDisplay
+{
+    Field = "edge distance",
+    Range = new FieldRange(0, 25),   // a scale chosen by the engineer, not by the data
+};
+
+var scene = new Scene();
+scene.Add(part);
+```
+
+![A drilled plate colour-mapped by distance to the nearest bore, with a legend](images/field-edge-distance.png)
+
+Three things are in that picture and all three come from the same handful of lines: the
+plate is painted through a **perceptual colour map**, the **legend** on the left states
+what the colours mean and over what range, and the range is the one the model asked for.
+Leave `Range` out and the field's own min and max are used instead — which is the right
+default for a first look and the wrong one for a figure, since the bore walls sit at
+distance zero give or take a rounding error and the legend would say so.
+
+`Part.Results` is a list, so a part can carry several and `FieldDisplay` names the one to
+show. Re-adding a result under an existing name **replaces** it, so re-running a solve
+updates the display instead of accumulating stale twins.
+
+```csharp run:field-attach
+var part = new Part("plate", Shape.Box(40, 20, 4));
+var mesh = part.GetMesh();
+
+part.AddResult(MeshField.Sample(mesh, "von Mises", "MPa", p => 120 - 2 * Math.Abs(p.X)));
+part.AddResult(MeshField.SampleVector(mesh, "displacement", "mm",
+    p => new Vector3d(0, 0, -0.001 * p.X * p.X)));
+
+if (part.Results.Count != 2) throw new Exception("both results should attach");
+
+// A second result under the same name replaces the first (a re-solve, not a twin).
+part.AddResult(MeshField.Sample(mesh, "von Mises", "MPa", _ => 0));
+if (part.Results.Count != 2) throw new Exception("re-solving must not accumulate twins");
+if (part.Result("von Mises")!.Range.Max != 0) throw new Exception("the live result should win");
+```
+
+## Scalars, vectors and derived fields
+
+A vector field (a displacement, a heat flux) reads as its **magnitude** wherever one
+number is wanted — colouring, the legend, the range — so `FieldDisplay { Field = "displacement" }`
+plots the deflection magnitude with no extra call. `Magnitude()` and `Component(i)` produce
+the derived field as an object of its own, for export or for its own legend.
+
+```csharp run:field-derived
+var mesh = Shape.Box(10, 10, 10).ToMesh();
+var u = MeshField.SampleVector(mesh, "displacement", "mm", p => new Vector3d(0, 0, p.Z * 0.1));
+
+// ScalarAt is the magnitude for a vector field; the range follows it.
+if (Math.Abs(u.Range.Max - 0.5) > 1e-9) throw new Exception($"range was {u.Range}");
+
+var magnitude = u.Magnitude();          // named "|displacement|", same units
+var uz = u.Component(2);                // named "displacement.Z"
+if (magnitude.IsVector || uz.IsVector) throw new Exception("both derivations are scalar");
+
+// The magnitude is unsigned by construction; a COMPONENT keeps its sign, which is
+// exactly when the diverging map earns its keep.
+if (magnitude.Range.Min < 0) throw new Exception("a magnitude cannot be negative");
+if (Math.Abs(uz.Range.Min + 0.5) > 1e-9) throw new Exception($"uz should reach -0.5, was {uz.Range}");
+```
+
+## The deformed shape
+
+A displacement result can *move* the model. This is the one place the viewer deliberately
+re-uploads geometry rather than re-posing it — a displaced shape is a different mesh, not
+a different placement — and the undeformed shape is ghosted behind it, because the
+comparison is the point.
+
+```csharp render:field-deformed
+// A cantilever plate under an analytic deflection, exaggerated 40x. The colour is the
+// deflection magnitude; the faint body behind it is the undeformed plate.
+var part = new Part("cantilever", Shape.Box(120, 24, 6), Palette.Steel);
+var mesh = part.GetMesh();
+
+// A tip-loaded cantilever's shape: w(x) proportional to x^2 (3L - x), fixed at x = 0.
+const double L = 120, tip = 0.35;
+double Deflection(double x) => -tip * (x * x * (3 * L - x)) / (2 * L * L * L);
+
+part.AddResult(MeshField.SampleVector(mesh, "displacement", "mm",
+    p => new Vector3d(0, 0, Deflection(p.X + 60))));
+part.FieldDisplay = new FieldDisplay
+{
+    Field = "displacement",     // a vector result colours by its magnitude
+    Deform = "displacement",
+    DeformScale = 40,           // real deflections are invisible; the legend states the factor
+};
+
+var scene = new Scene();
+scene.Add(part);
+```
+
+![A cantilever plate bent by its displacement result, the undeformed shape ghosted behind it](images/field-deformed.png)
+
+The legend's title carries `40X DEFORMED`, deliberately: a deformed plot whose
+exaggeration is not stated is a picture of a shape that does not exist. Set
+`ShowUndeformed = false` to drop the ghost, or `DeformScale = 0` to leave the geometry
+alone entirely.
+
+A deformed part draws **no feature-edge overlay** — those edges come from the exact
+B-Rep and describe geometry that has moved — and picking follows what is drawn, so a
+click selects the part where it is on screen.
+
+## Colour maps and ranges
+
+Two maps, and the choice matters:
+
+| `FieldColorMap` | For |
+| --- | --- |
+| `Viridis` (default) | A **magnitude** — stress, temperature, deflection — where only "more" and "less" mean anything. Monotone in lightness, so it survives greyscale printing and colour-vision deficiency. |
+| `Diverging` | A **signed** quantity where the crossing is the interesting value. Blue–grey–red, with the neutral midpoint at the middle of the range. |
+
+A diverging map only means what it looks like over a range centred on zero, and EngrCAD
+will not silently re-centre one for you — quietly widening a range would change what the
+numbers on the legend say. Ask for it:
+
+```csharp run:field-diverging
+var mesh = Shape.Box(60, 20, 4).ToMesh();
+var bending = MeshField.Sample(mesh, "bending stress", "MPa", p => 12 * p.Z);
+
+var display = new FieldDisplay
+{
+    Field = "bending stress",
+    ColorMap = FieldColorMap.Diverging,
+    Range = bending.Range.SymmetricAboutZero(),   // so grey means zero
+};
+
+var range = display.Range!.Value;
+if (Math.Abs(range.Min + range.Max) > 1e-12) throw new Exception("the range should straddle zero");
+if (Math.Abs(range.Normalize(0) - 0.5) > 1e-12) throw new Exception("zero should land mid-map");
+```
+
+An explicit `Range` is also how several parts — or several load cases — are made
+**comparable**: without one, each field spans its own min and max and every picture gets
+its own private scale.
+
+Two range behaviours are worth knowing. A **constant** field normalizes to 0.5 rather
+than to an end, because a field with no variation has no position to report and an
+extreme colour would read as a hot spot. And **NaN is skipped** when ranging, so one
+undefined value does not collapse a legend.
+
+```csharp run:field-range
+if (new FieldRange(4, 4).Normalize(4) != 0.5) throw new Exception("a constant field sits mid-map");
+if (!FieldRange.Of([1, double.NaN, 5]).Equals(new FieldRange(1, 5)))
+    throw new Exception("NaN must not poison a range");
+
+// The colours the legend and the fills both use come from one call.
+var cold = ColorMaps.Sample(FieldColorMap.Viridis, new FieldRange(0, 100), 0);
+var hot = ColorMaps.Sample(FieldColorMap.Viridis, new FieldRange(0, 100), 100);
+if (cold.B <= cold.R || hot.R <= hot.B) throw new Exception("viridis runs blue to yellow");
+```
+
+## Exporting to ParaView (`.vtu`)
+
+`--export scene.vtu` writes a VTK XML unstructured grid: the flattened instances' geometry
+merged into one grid, plus every part's results as point-data arrays.
+
+```csharp run:field-vtu
+var part = new Part("plate", Shape.Box(40, 20, 4));
+var mesh = part.GetMesh();
+part.AddResult(MeshField.Sample(mesh, "von Mises", "MPa", p => 40 + p.Z * 4));
+part.AddResult(MeshField.SampleVector(mesh, "displacement", "mm",
+    p => new Vector3d(0, 0, -0.002 * p.X * p.X)));
+
+string path = Path.Combine(Scratch, "plate.vtu");
+VtuWriter.WriteFile(mesh, part.Results, path);
+
+var root = System.Xml.Linq.XDocument.Load(path).Root!;
+if ((string?)root.Attribute("type") != "UnstructuredGrid") throw new Exception("wrong grid type");
+
+var arrays = root.Descendants("PointData").Single().Elements("DataArray")
+    .ToDictionary(e => (string)e.Attribute("Name")!, e => (string?)e.Attribute("NumberOfComponents"));
+if (arrays["von Mises"] != "1") throw new Exception("stress should be a scalar array");
+if (arrays["displacement"] != "3") throw new Exception("displacement should be a vector array");
+```
+
+The writer's seam is deliberately **(points, cells, cell types, point data)** rather than
+a mesh type: a surface result writes triangles, quads and polygons today, and a
+volumetric mesher writes `VtkCellType.Tetra` through the same call with nothing in the
+writer changing.
+
+When a scene merges several parts, the arrays are the **union** of their result names and
+a part that lacks one contributes `NaN` — VTK's own "no value", which ParaView paints in
+the map's NaN colour. Dropping the array would lose the result that does exist, and zeros
+would show a fake safe region.
+
+## Where results fit in the document
+
+Results live on the `Part`, not in a viewport. That is what makes them survive tab and
+scene plumbing, appear identically in the desktop window, a headless render and the
+browser client, and be visible to a script with no viewer reference at all.
+
+Attaching a result is free and **never meshes anything**, so it does not interfere with
+`Scene.PreMesh` running parts in parallel. The one contract to keep is that a field's
+values index the part's **display-mesh vertices, in vertex order** —
+`part.GetMesh().VertexCount` of them. A field of the wrong length is reported by name
+when something tries to draw it, never silently ignored:
+
+```csharp run:field-mismatch
+var part = new Part("plate", Shape.Box(10, 10, 10));
+part.AddResult(MeshField.Scalar("stress", "MPa", [1, 2, 3]));   // far too short
+part.FieldDisplay = new FieldDisplay { Field = "stress" };
+
+// Resolution itself succeeds -- it does not mesh, deliberately, so a properties panel or
+// an MCP tool can call it with no GL. The length check belongs to whatever draws it.
+if (!part.TryResolveFieldDisplay(out var display, out _)) throw new Exception("should resolve");
+if (display.Field.Count == part.GetMesh().VertexCount) throw new Exception("this field is short");
+
+// A display naming a result that is not there fails loudly, and says what IS there.
+part.FieldDisplay = new FieldDisplay { Field = "temperature" };
+if (part.TryResolveFieldDisplay(out _, out string? error)) throw new Exception("should fail");
+if (error is null || !error.Contains("stress")) throw new Exception("the error should list the results");
+```
+
+In the viewer the **Fields** toolbar toggle switches the whole thing off (every part back
+to its own colour and undeformed shape) and the properties panel shows the selected part's
+results, the one being displayed, its range and any deformation scale. Headlessly,
+`EngrCad.RenderToImage(scene, path, fields: false)` does the same — which is how a
+geometry figure is taken of a model that also carries results.

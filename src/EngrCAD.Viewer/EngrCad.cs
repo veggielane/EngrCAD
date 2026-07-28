@@ -142,6 +142,10 @@ public static class EngrCad
     /// flattening the window animates, so an exploded render and an exploded viewport
     /// agree by construction; the offsets come from <c>Assembly.AutoExplode</c> (called
     /// here when nothing has set them yet).</para>
+    /// <para><paramref name="fields"/> (default true) draws parts that carry simulation
+    /// results through their <c>Part.FieldDisplay</c> — colour map, legend and deformed
+    /// shape. False renders every part in its own colour and undeformed, which is how a
+    /// geometry figure is taken of a model that also carries results.</para>
     /// </summary>
     public static void RenderToImage(
         Scene scene, string path, int width = 1280, int height = 800, CameraState? camera = null,
@@ -151,7 +155,8 @@ public static class EngrCad
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         ConstructionPreviewRequest? preview = null,
-        double explode = 0)
+        double explode = 0,
+        bool fields = true)
     {
         scene.PreMesh(); // tessellate before touching GL
         // Exact-zero semantic test: only an explode ASKED FOR derives offsets, so a plain
@@ -170,7 +175,7 @@ public static class EngrCad
             : (null, Matrix4d.Identity);
         OffscreenRenderer.RenderToImage(instances, path, width, height, camera,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, segments, world);
+            sectionPlanes, sectionCombine, segments, world, fields);
     }
 
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
@@ -230,7 +235,8 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off</c> → headless export, no window (CI-friendly);
+    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off|.vtu</c> → headless export, no window (CI-friendly;
+    /// <c>.vtu</c> carries the parts' simulation results as point data for ParaView);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// <c>--render</c> additionally honors
     /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
@@ -619,6 +625,22 @@ public static class EngrCad
             case ".amf":
                 AmfWriter.WriteFile(ExportParts(instances, quality), path);
                 Log.WroteMeshFormat(log, path, instances.Count, "AMF");
+                return 0;
+
+            case ".vtu":
+                // VTK unstructured grid for ParaView: the geometry PLUS every part's
+                // simulation results. Arrays are the union of the parts' result names
+                // and a part lacking one contributes NaN (VtuWriter's rule), so the
+                // format name states how many arrays came out — a .vtu with none is a
+                // valid geometry file and the difference should be visible in the log.
+                VtuWriter.WriteFile(
+                    [.. instances.Select(i => (i.Part.GetMesh(quality), i.World, i.Part.Results))],
+                    path);
+                int arrays = instances
+                    .SelectMany(i => i.Part.Results.Select(f => f.Name))
+                    .Distinct(StringComparer.Ordinal)
+                    .Count();
+                Log.WroteMeshFormat(log, path, instances.Count, $"VTU, {arrays} result array(s)");
                 return 0;
 
             case ".step" or ".stp":

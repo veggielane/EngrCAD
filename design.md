@@ -989,6 +989,31 @@ Design decisions:
   (placed instances of parts/sub-assemblies) can be added beside parts later without
   reshaping the API. The viewer's `SceneHost` maps tabs to a tab strip over one shared
   GL viewport with per-tab cameras.
+- **Simulation results are DATA on a mesh, carried by the document** (`Results.cs` here,
+  `MeshField`/`FieldRange` in EngrCAD.Mesh, `ColorMaps`/`FieldRendering`/`FieldLegend` in
+  EngrCAD.Viewer.Core). Four decisions shape it. *The field type lives in the mesh
+  engine, not here*, for the reason `StlWriter` does: a field is a property of a mesh,
+  its exporter (`VtuWriter`) sits beside it, and a future solver can produce one without
+  a reference on the whole modelling API — while `Part.Results`/`FieldDisplay` put the
+  *choice* of what to draw in the document, so a script, a headless render and the
+  browser client all show the same thing. *`FieldColorMap` follows `DisplayMode`'s
+  precedent exactly*: the enum is a document-model choice here, the colour TABLES are in
+  Viewer.Core beside the shaders, and neither half can drift because one is a choice and
+  the other its only implementation. *Colour is a vertex attribute under the baked-AO
+  rule* — `aFieldColor` at slot 3, a context constant when no buffer is attached, and a
+  `uFieldColor` strength of 0 that makes `mix(uColor, vFieldColor, 0.0)` exactly
+  `uColor`, so a part with no results renders **byte-identically** (the oracle is the
+  docs suite: all 89 rendered PNGs unchanged across the shader change, which no unit
+  test could have shown). *A deformed shape is GEOMETRY, not a pose* — so it cannot ride
+  the matrices-only `SetInstancePoses` path the exploded view and the animation
+  transport share, it re-uploads deliberately, it is kept off the animation path, and its
+  facet normals are recomputed from the displaced positions (carrying the originals over
+  would make the deformed shape look exactly like the original, which is the entire point
+  of the plot). Two smaller rules earn their place: a zero-span range normalizes to
+  **0.5**, because a constant field has no position to report and an extreme colour would
+  read as a hot spot; and a merged VTU fills a part's missing array with **NaN**, VTK's
+  own "no value", since dropping the array loses the result that exists and zeros show a
+  fake safe region.
 
 ## 7. Query layer
 

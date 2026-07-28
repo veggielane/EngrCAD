@@ -36,6 +36,8 @@
   href: selection.md
 - name: 3D annotations (PMI)
   href: annotations.md
+- name: Results & fields
+  href: fields.md
 - name: Remeshing
   href: remeshing.md
 - name: Tessellation quality

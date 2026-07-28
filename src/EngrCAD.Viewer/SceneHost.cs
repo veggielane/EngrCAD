@@ -292,6 +292,31 @@ internal sealed class SceneHost
         annotations.IsCheckedChanged += (_, _) => Viewport.ShowAnnotations = annotations.IsChecked ?? true;
         toolbar.Children.Add(annotations);
 
+        // Simulation results: on by default — a scene whose parts state a FieldDisplay
+        // shows it. Switching off returns every part to its own colour and undeformed
+        // shape, which is how a geometry view is taken of a model that carries results.
+        // Unlike the other view toggles this one re-uploads (colours are a vertex
+        // attribute and a deformed shape is different geometry, not a different pose).
+        var fields = new ToggleButton
+        {
+            Content = "Fields",
+            Padding = new Thickness(10, 4),
+            FontSize = 12,
+            IsChecked = true,
+        };
+        ToolTip.SetTip(fields,
+            "Show simulation results: colour map, legend and deformed shape (re-uploads geometry)");
+        fields.IsCheckedChanged += (_, _) =>
+        {
+            Viewport.ShowFields = fields.IsChecked ?? true;
+            _statusText!.Text = Viewport.ShowFields
+                ? Viewport.ActiveFieldDisplay is { } display
+                    ? $"fields: {display.Label} {display.Range}"
+                    : "fields: no part in this tab shows a result"
+                : "fields: off";
+        };
+        toolbar.Children.Add(fields);
+
         // Measure tool: while on, two clicks create a transient point-to-point
         // dimension (Escape clears; toggling off clears and exits).
         var measure = new ToggleButton { Content = "Measure", Padding = new Thickness(10, 4), FontSize = 12 };
@@ -1816,6 +1841,25 @@ internal sealed class SceneHost
             _ => part.Geometry.GetType().Name,
         });
         AddProperty("Display", part.DisplayMode.ToString().ToLowerInvariant());
+
+        // Simulation results: the min/max probe readout. Everything here is resolved
+        // WITHOUT meshing (Part.TryResolveFieldDisplay does not), so it is legal above
+        // the HasMesh gate below and appears even while the part is still tessellating.
+        if (part.Results.Count > 0)
+        {
+            AddProperty("Results", string.Join(", ", part.Results.Select(f => f.Label)));
+            if (part.TryResolveFieldDisplay(out var display, out string? fieldError))
+            {
+                AddProperty("Showing", display.Label);
+                AddProperty("Range", $"{FieldLegend.Format(display.Range.Min)} .. "
+                    + $"{FieldLegend.Format(display.Range.Max)}"
+                    + (display.Field.Units.Length > 0 ? $" {display.Field.Units}" : ""));
+                if (display.Deform is { } deform)
+                    AddProperty("Deformed by", $"{deform.Name} x {display.DeformScale:G4}");
+            }
+            else if (fieldError is not null)
+                AddProperty("Field", fieldError);
+        }
 
         // Everything below reads the display mesh. Asking for it here would BLOCK the
         // UI thread on a part the loader is still meshing (and mesh it a second time

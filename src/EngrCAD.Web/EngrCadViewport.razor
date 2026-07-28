@@ -134,8 +134,13 @@
     /// pick BVH over its display mesh. All three uploads happen whatever the current
     /// style, so switching style is a redraw rather than a re-upload — the desktop's
     /// UploadShared makes the same trade.</summary>
+    /// <param name="FieldColored">Whether the mesh upload carries a field-colour buffer
+    /// (the part shows a simulation result).</param>
+    /// <param name="Ghost">Key of the undeformed mesh, when the part is drawn displaced —
+    /// the reference outline behind a deformed-shape plot.</param>
     private sealed record PartKeys(
-        string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick);
+        string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick,
+        bool FieldColored = false, string? Ghost = null);
 
     private readonly List<ViewportInstance> _drawn = [];
     // Parallel to _drawn: the part, instance and pose each entry came from. The parts
@@ -738,7 +743,8 @@
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
                 part.EffectiveDisplayMode,   // Ghost renders translucent, same as desktop
                 keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices,
-                Visible: true, ClippedBySection: part.ClippedBySection));
+                Visible: true, ClippedBySection: part.ClippedBySection,
+                FieldColored: keys.FieldColored, GhostKey: keys.Ghost));
             _drawnParts.Add(part);
             _drawnInstances.Add(instance);
             _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
@@ -806,11 +812,30 @@
     {
         var mesh = part.GetMesh();
         var render = RenderMesh.CreateFlat(mesh);
+        // Simulation results, through the SHARED FieldRendering: the same colour floats
+        // and the same displaced mesh both desktop passes upload. A deformed shape
+        // replaces the uploaded geometry (it is different geometry, not a different
+        // pose) and the undeformed one goes up as a ghost.
+        var field = FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out _)
+            ? built
+            : (FieldMeshData?)null;
+        var drawn = field?.Deformed ?? render;
         string meshKey = $"part{index}";
-        await gl.UploadMeshAsync(meshKey, render.Positions, render.Normals, render.Indices);
+        await gl.UploadMeshAsync(meshKey, drawn.Positions, drawn.Normals, drawn.Indices,
+            occlusion: default, fieldColors: field?.Colors ?? []);
+
+        string? ghostKey = null;
+        if (field is { ShowGhost: true })
+        {
+            ghostKey = $"part{index}.ghost";
+            await gl.UploadMeshAsync(ghostKey, render.Positions, render.Normals, render.Indices);
+        }
 
         string? edgeKey = null;
-        var featureEdges = part.GetFeatureEdges();
+        // A deformed part gets no edge overlay: its exact B-Rep edges describe geometry
+        // that has moved (the desktop rule, stated in each pass because each decides
+        // what to upload separately).
+        var featureEdges = field?.Deformed is null ? part.GetFeatureEdges() : [];
         if (featureEdges.Count > 0)
         {
             edgeKey = $"part{index}.edges";
@@ -829,7 +854,9 @@
 
         return new PartKeys(
             meshKey, edgeKey, featureEdges.Count * 2, wireKey, wireEdges.Count * 2,
-            PickMesh.Build(render));
+            // Picking follows what is DRAWN: a click on a deformed part must select it
+            // where it is on screen.
+            PickMesh.Build(drawn), field is not null, ghostKey);
     }
 
     /// <summary>
@@ -936,6 +963,55 @@
         }
     }
 
+    // Field-legend state: the geometry currently uploaded and the (display, size, scale)
+    // it was built for. Value equality is the rebuild key, exactly the rule the
+    // annotation overlay follows.
+    private ViewportLegend? _legend;
+    private (ResolvedFieldDisplay? Display, double Width, double Height, double Scale)? _legendKey;
+
+    /// <summary>
+    /// The active field display's colour bar, rebuilt and re-uploaded only when the
+    /// display or the canvas size changes. ONE display, from the first visible instance
+    /// that resolves one — the desktop rule: a legend is a single scale, and several
+    /// parts on different scales under one bar would be a legend that lies.
+    /// </summary>
+    private async Task<ViewportLegend?> RebuildLegendAsync(
+        WebGlContext gl, double widthPx, double heightPx, double pixelScale)
+    {
+        ResolvedFieldDisplay? display = null;
+        for (int i = 0; i < _drawn.Count && display is null; i++)
+        {
+            if (_drawn[i].Visible && _drawnParts[i].TryResolveFieldDisplay(out var resolved, out _))
+                display = resolved;
+        }
+
+        var key = (display, widthPx, heightPx, pixelScale);
+        if (_legendKey is { } previous && previous.Equals(key))
+            return _legend;
+        _legendKey = key;
+
+        if (display is not { } active)
+        {
+            _legend = null;
+            return null;
+        }
+        var geometry = FieldLegend.Build(active, widthPx, heightPx, pixelScale);
+        if (!geometry.HasContent)
+        {
+            _legend = null;
+            return null;
+        }
+        // Outline and labels share one buffer drawn in two ranges (the world-axes trick).
+        var lines = new float[geometry.FrameVertices.Length + geometry.LabelVertices.Length];
+        geometry.FrameVertices.CopyTo(lines, 0);
+        geometry.LabelVertices.CopyTo(lines, geometry.FrameVertices.Length);
+        await gl.UploadLineVerticesAsync(ViewportFrame.LegendBandsKey, geometry.BandVertices);
+        await gl.UploadLineVerticesAsync(ViewportFrame.LegendLinesKey, lines);
+        _legend = new ViewportLegend(
+            ViewportFrame.LegendBandsKey, ViewportFrame.LegendLinesKey, geometry);
+        return _legend;
+    }
+
     private async Task DrawAsync()
     {
         var gl = _gl;
@@ -977,12 +1053,16 @@
                     annotations = new ViewportAnnotations("@annotations", _annotationSegments.Count * 2);
             }
 
+            // The field legend: rebuilt (and re-uploaded) only when the display or the
+            // canvas size changes — a value comparison, like the annotation camera.
+            var legend = await RebuildLegendAsync(gl, width * pixelScale, height * pixelScale, pixelScale);
+
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
                 _selected, _hovered,
                 sectionPlanes: ActiveSectionPlanes(), contours: _contours,
                 cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null,
-                annotations: annotations));
+                annotations: annotations, legend: legend));
         }
         catch (JSDisconnectedException)
         {

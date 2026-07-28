@@ -125,6 +125,9 @@ public sealed class Part
     private readonly List<Annotation> _annotationList = [];
     private (IReadOnlyList<ResolvedAnnotation>? Resolved, string? Error)? _resolvedAnnotations;
 
+    // ---- simulation results (fields on the display mesh's vertices) ----
+    private readonly List<MeshField> _results = [];
+
     public Part(string name, Shape shape, PartColor? color = null, Matrix4d? transform = null)
         : this(name, (object)shape, color, transform) { }
 
@@ -476,6 +479,120 @@ public sealed class Part
             _resolvedAnnotations = (list, null);
             resolved = list;
             error = null;
+            return true;
+        }
+    }
+
+    // ---- simulation results ----
+
+    /// <summary>
+    /// The simulation results attached to this part — scalar or vector
+    /// <see cref="MeshField"/>s over its <b>display mesh's vertices</b>
+    /// (<c>GetMesh().VertexCount</c> values, in vertex-index order).
+    /// <para>Results live here rather than in a viewport so they survive tab and scene
+    /// plumbing, export with the document, and are visible to headless renders and the
+    /// MCP server. Nothing in this class evaluates or validates them: attaching a result
+    /// is free and never meshes anything (which is what keeps
+    /// <see cref="Scene.PreMesh"/> free to run in parallel), and the vertex-count check
+    /// happens where a consumer actually has the mesh in hand — reported by name, never
+    /// silently ignored.</para>
+    /// </summary>
+    public IReadOnlyList<MeshField> Results
+    {
+        get
+        {
+            lock (_meshLock)
+                return [.. _results];
+        }
+    }
+
+    /// <summary>
+    /// Attaches a result (chainable). A second result with the same
+    /// <see cref="MeshField.Name"/> REPLACES the first, in place, so re-running a solve
+    /// updates the display instead of accumulating stale twins under one name — and
+    /// <see cref="FieldDisplay"/>, which refers to results by name, keeps pointing at
+    /// the live one.
+    /// </summary>
+    public Part AddResult(MeshField field)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        lock (_meshLock)
+        {
+            int existing = _results.FindIndex(f => f.Name == field.Name);
+            if (existing >= 0)
+                _results[existing] = field;
+            else
+                _results.Add(field);
+        }
+        return this;
+    }
+
+    /// <summary>The attached result of that name, or null.</summary>
+    public MeshField? Result(string name)
+    {
+        lock (_meshLock)
+            return _results.Find(f => f.Name == name);
+    }
+
+    /// <summary>
+    /// Which result colours this part, through which map, over what range, and whether
+    /// the shape is displaced — null (the default) draws the part in its own colour with
+    /// no field at all. See <see cref="Modeling.FieldDisplay"/>.
+    /// </summary>
+    public FieldDisplay? FieldDisplay { get; set; }
+
+    /// <summary>
+    /// Resolves <see cref="FieldDisplay"/> against <see cref="Results"/>: looks the
+    /// names up, settles the range (an explicit one wins; otherwise the field's own),
+    /// and checks that a deformation field really is a vector field.
+    /// <para>Deliberately does NOT mesh: the vertex-count check belongs to the renderer
+    /// that has the mesh, so this stays callable from a properties panel, the MCP server
+    /// or a test with no GL and no tessellation. Returns false with a diagnostic naming
+    /// the part and the missing result — a display that refers to a result an edit
+    /// removed becomes a status message, never a crash.</para>
+    /// </summary>
+    public bool TryResolveFieldDisplay(out ResolvedFieldDisplay resolved, out string? error)
+    {
+        resolved = default;
+        error = null;
+        if (FieldDisplay is not { } display)
+            return false;
+
+        lock (_meshLock)
+        {
+            var field = _results.Find(f => f.Name == display.Field);
+            if (field is null)
+            {
+                error = $"Part '{Name}': no result named '{display.Field}'"
+                    + (_results.Count == 0
+                        ? " (the part carries none)."
+                        : $" (it has {string.Join(", ", _results.Select(f => $"'{f.Name}'"))}).");
+                return false;
+            }
+            MeshField? deform = null;
+            if (display.Deform is { } deformName)
+            {
+                deform = _results.Find(f => f.Name == deformName);
+                if (deform is null)
+                {
+                    error = $"Part '{Name}': no result named '{deformName}' to deform by.";
+                    return false;
+                }
+                if (!deform.IsVector)
+                {
+                    error = $"Part '{Name}': result '{deformName}' is a scalar field; " +
+                        "a deformed shape needs a vector (displacement) field.";
+                    return false;
+                }
+            }
+            var range = display.Range ?? field.Range;
+            if (range.IsEmpty)
+            {
+                error = $"Part '{Name}': result '{field.Name}' has no finite values to map.";
+                return false;
+            }
+            resolved = new ResolvedFieldDisplay(
+                field, range, display.ColorMap, deform, display.DeformScale, display.ShowUndeformed);
             return true;
         }
     }
