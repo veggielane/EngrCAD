@@ -460,10 +460,37 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
   convection h·(T−T∞)), steady solve first, transient with implicit time stepping
   after; temperature fields in the viewer. Thermal→structural coupling (thermal
   expansion loads) once both exist.
-- [ ] **Results/fields infrastructure** — scalar/vector fields on mesh vertices/cells,
-  color-map rendering in the viewer (legend, min/max probes), export (VTK/VTU for
-  ParaView interop), and a `Part`-level results attachment so simulation results live
-  in the document model alongside geometry.
+- [ ] **Results/fields follow-ups** (v1 ✅ landed — `MeshField`/`FieldRange` +
+  `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
+  Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all
+  three front ends with `--export .vtu` and `docs/examples/fields.md`):
+  - [ ] **Cell-associated fields.** `MeshField` is vertex-only by construction and
+    `VtuWriter` writes point data only — a per-ELEMENT result (an element's von Mises,
+    a material id) has nowhere to go. Needs an association on the field plus a
+    `RenderMesh` face→cell map for display (`SourceVertices`' sibling), and the
+    `<CellData>` block, which is ten lines once the association exists.
+  - [ ] **A solver's results are on ITS vertex set, not the display mesh.** The seam
+    task #27 publishes through requires `field.Count == part.GetMesh().VertexCount`.
+    A tet solve's surface vertices need not coincide with the tessellation's, so the
+    missing piece is a sampling step (nearest, or barycentric within the surface
+    triangle a display vertex lands in) that maps a solution onto the display mesh —
+    deliberately NOT guessed at here, since the tet mesher's own vertex conventions
+    decide what is cheap.
+  - [ ] **Points/wireframe view styles ignore field colour.** The point and line
+    programs are flat-colour; a field-coloured part drawn in Points or Wireframe falls
+    back to its part colour. The attribute is already uploaded, so this is a per-vertex
+    colour varying in those two shaders.
+  - [ ] **A deformed part draws no feature edges** (they describe geometry that has
+    moved). Displacing the exact B-Rep edge samples by the same field would restore the
+    outline — the sampling is the same `SourceVertices` question as above, since an edge
+    sample is not a mesh vertex.
+  - [ ] **MCP `export` does not offer `.vtu`.** `EngrCad.Run`'s `--export` does; the
+    MCP tool's format switch needs the same case and its description updated.
+  - [ ] **One legend per view.** The viewer shows the first visible part's display;
+    several parts on genuinely different scales cannot each get a bar. Stacked legends,
+    or a scene-level shared range, are the honest options.
+  - [ ] Time-varying results (a load step / frequency slider driving `Part.Results`),
+    and result persistence beside `FeatureHistory.SaveParameters`.
 
 ## OpenSCAD feature parity (open items)
 
@@ -805,7 +832,9 @@ honest no) is recorded in design.md §6b with the comparison committed as
   OCCT section — HLR gives the view, drafting gives the annotation on it.
 - [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
   `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
-  build123d's edge-classification line types); remaining: glTF, VTK, VRML.
+  build123d's edge-classification line types) and **VTK/VTU** ✅ (`VtuWriter` +
+  `--export .vtu`, geometry plus simulation results as point data); remaining: glTF,
+  VRML.
 - [ ] **Deliberately NOT taking**: string selectors (type-unsafe, and LINQ is strictly
   better in C#), Python-style implicit "pending" state carried between builder calls
   (hard to reason about and worse without context managers — confirmed by the builder
