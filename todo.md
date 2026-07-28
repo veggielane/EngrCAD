@@ -626,14 +626,12 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     ratio keeps the four corners coplanar). The radius case is blocked on the *corner*,
     not the band, and needs the same non-conic-corner-curve machinery as curved-face
     shelling.
-  - [ ] **Sharp corners at ARC rim edges** (torus ∩ cylinder is not a conic).
-- [ ] **`StepReader`: trim a closed generator from meridian boundary arcs** —
-  `FilletAllEdges` output EXPORTS correctly (a STEP `SURFACE_OF_REVOLUTION` is unbounded
-  by definition and the face boundary trims it), but re-import cannot re-trim a closed
-  generator when the swept angle came from rails: the corner patches' meridian boundaries
-  are circles *through* the axis, which no rim rule recognizes, so a re-imported rounded
-  solid meshes non-manifold. `RecoverRevolvedSurface` says so in a diagnostic rather than
-  failing silently. Mitered rim fillets round-trip fine.
+- [ ] **`StepReader`: trim closed NON-circular generators** — circles ✅ landed (meridian
+  arcs trim a closed circular revolve generator; congruent translated end arcs trim a
+  closed circular extrusion generator; both closed form, so `FilletAllEdges` output now
+  round-trips manifold with zero diagnostics). A closed NURBS generator under a partial
+  sweep still keeps the honest non-manifold diagnostic — recovering it needs projection,
+  not congruence, and nothing exports one today.
 - [ ] **`BrepBoolean` on whole-solid fillets** — a fragment's re-surfaced sub-band loses
   the corner arcs from its domain. The solid itself is sound (a locked test checks every
   loop point projects inside its own face's domain), so this is a boolean limitation.

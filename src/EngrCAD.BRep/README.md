@@ -563,8 +563,11 @@ operations. Depends only on `EngrCAD.Core`.
     no trigonometry to round off. The circular junction arc is literally the
     `|bottom − centre| = r` specialization. Reflex corners work too (their bands reach
     PAST the edge's end to meet the miter, so the band surface is built to span it).
-    A sharp corner at an ARC is refused: that blend pairs a torus with a cylinder and is
-    not a conic.
+    A sharp corner at an ARC is refused as a documented POLICY (design.md §5): that blend
+    pairs a torus with a cylinder, which is not a conic, and tracing an approximate corner
+    would bake a non-refining sampling floor into a primary feature — so the refusal
+    locates the corner and names the exact escapes (make the rim tangent-continuous,
+    chamfer instead, or take the implicit route explicitly).
     <br/>**Why a miter and not a ball.** A spherical patch is the classic corner where
     THREE blended edges meet. At a rim corner only two are blended — the two side faces
     keep their sharp shared edge — and a sphere of the fillet radius there is tangent to
@@ -598,12 +601,16 @@ operations. Depends only on `EngrCAD.Core`.
     <br/>All the corner arcs are `CurveSegment` over `Circle3d`, never rational NURBS arcs:
     the patch is a surface of revolution sampled at even ANGLES, so an arc parameterized
     any other way samples to different points and the patch stops welding to its band.
-    <br/>Known gap: `StepWriter` exports these solids correctly (a STEP
-    `SURFACE_OF_REVOLUTION` is unbounded by definition and the face boundary trims it), but
-    `StepReader` cannot re-trim a CLOSED generator when the swept angle came from rails —
-    the corner patches' meridian boundaries are circles through the axis, which no rim rule
-    recognizes — so a re-imported rounded solid meshes non-manifold. The reader now emits a
-    diagnostic saying exactly that instead of failing silently. Second known gap:
+    <br/>These solids round-trip through STEP: the corner patches' meridian boundaries are
+    circles THROUGH the axis (no rim rule applies), and the reader recovers the closed
+    circular generator's trim from them in CLOSED FORM — each meridian is a rotated copy of
+    the generator, its azimuth read from the two circles' plane normals (the ±normal branch
+    resolved by requiring the azimuth to sit within the swept angle and the rotated centre
+    to land on the generator's), its points rotated back into the generator's plane and
+    their angles read in the generator circle's own frame; the edge bands' extruded
+    surfaces recover the same way from their congruent TRANSLATED end arcs. Never a
+    distance minimization (which stalls at √ε, past weld tolerance). Closed NON-circular
+    generators still keep the honest non-manifold diagnostic. Known gap:
     `BrepBoolean` cannot yet cut a whole-solid fillet (a fragment's re-surfaced sub-band
     loses the corner arcs from its domain); the solid itself is sound — every loop point
     projects inside its own face's domain, which is a locked test — so this is a boolean
