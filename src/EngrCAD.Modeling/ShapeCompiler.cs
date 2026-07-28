@@ -85,7 +85,10 @@ internal static class ShapeCompiler
                         "a non-uniform scale or shear would need an elliptic cone surface"));
                 break;
             case RevolveShape { Sketch: { } sketch } revolve:
-                if (!m.TryDecomposeRigidUniformScale(out _, out _, out _))
+                // Mirrored similarities included: a reflection conjugates the rotation —
+                // F·Rot(d, φ)·F = Rot(−F·d, φ) — so a mirrored revolve is the same
+                // sweep about the negated transformed axis, exactly.
+                if (!TryDecomposeSimilarity(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
                 else if (revolve.IsFullTurn && sketch.Holes.Count > 0)
@@ -99,7 +102,11 @@ internal static class ShapeCompiler
                 break;
 
             case RevolveShape or SweepShape:
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                // Mirrored similarities included: revolves negate the transformed axis
+                // (see the sketch case above); sweeps need no fix at all — the RMF
+                // transport is intrinsic, so sweeping the reflected profile along the
+                // reflected path IS the reflected sweep.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
@@ -146,8 +153,12 @@ internal static class ShapeCompiler
                     "only expressible as a signed distance field, and meshes cannot be imported into B-Rep"));
                 break;
             case RimShape rim:
+                // Mirrored similarities included: chamfers and fillets are metric
+                // features and a reflection is an isometry, so the surgery on the
+                // mirrored child is the mirrored surgery. (Selectors run on the
+                // LOWERED, i.e. mirrored, solid — the same contract rotations have.)
                 ClassifyBrep(rim.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "planar-face rim feature; rim shape constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -401,11 +412,11 @@ internal static class ShapeCompiler
             case BoxShape box:
             {
                 if (IsIdentity(m))
-                    return SolidFactory.MakeBox(box.Box);
+                    return SolidFactory.MakeBox(box.Extents);
                 if (IsTranslation(m, out var offset))
-                    return SolidFactory.MakeBox(new Aabb(box.Box.Min + offset, box.Box.Max + offset));
-                var (x0, y0, z0) = box.Box.Min;
-                var (x1, y1, z1) = box.Box.Max;
+                    return SolidFactory.MakeBox(new Aabb(box.Extents.Min + offset, box.Extents.Max + offset));
+                var (x0, y0, z0) = box.Extents.Min;
+                var (x1, y1, z1) = box.Extents.Max;
                 var profile = Profile.FromPoints(
                 [
                     m.TransformPoint((x0, y0, z0)),
@@ -512,31 +523,44 @@ internal static class ShapeCompiler
 
             case RevolveShape { Sketch: { } sketch } revolve:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                DecomposeSimilarity(m, shape, out _, out _, out _, out bool reflected);
                 var effective = m * revolve.PlaneMatrix;
                 var (outer, holes) = sketch.ToProfiles();
+                // A reflection conjugates the rotation — F·Rot(d, φ)·F = Rot(F·d, −φ)
+                // = Rot(−F·d, φ) — so the mirrored revolve is the SAME angular sweep
+                // about the NEGATED transformed axis (the LH-thread identity; for full
+                // turns the sign only keeps the orientation conventions aligned).
+                var axis = effective.TransformVector((0, 1, 0));    // the plane's y axis
                 return SolidFactory.Revolve(
                     TransformProfile(outer, effective),
                     effective.TransformPoint(Vector3d.Zero),
-                    effective.TransformVector((0, 1, 0)),   // the plane's y axis
+                    reflected ? -axis : axis,
                     revolve.Angle,
                     TransformProfiles(holes, effective));
             }
 
             case RevolveShape revolve:
             {
-                Decompose(m, shape, out var rotation, out _, out _);
+                DecomposeSimilarity(m, shape, out var rotation, out _, out _, out bool reflected);
+                // Proper placements keep the exact spelling they always had; reflected
+                // ones take the negated linear image of the axis (see the sketch case).
+                var axis = reflected
+                    ? -m.TransformVector(revolve.AxisDirection)
+                    : rotation.Rotate(revolve.AxisDirection);
                 return SolidFactory.Revolve(
                     TransformProfile(revolve.Profile!, m),
                     m.TransformPoint(revolve.AxisOrigin),
-                    rotation.Rotate(revolve.AxisDirection),
+                    axis,
                     revolve.Angle,
                     TransformProfiles(revolve.Holes, m));
             }
 
             case SweepShape { Sketch: { } sketch } sweep:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                // Mirrored similarities need no fix here: rotation-minimizing transport
+                // is intrinsic (it commutes with any isometry), so sweeping the
+                // reflected profile along the reflected path IS the reflected sweep.
+                DecomposeSimilarity(m, shape, out _, out _, out _);
                 var effective = m * sweep.PlaneMatrix;
                 var (outer, holes) = sketch.ToProfiles();
                 var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
@@ -546,7 +570,7 @@ internal static class ShapeCompiler
 
             case SweepShape sweep:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                DecomposeSimilarity(m, shape, out _, out _, out _); // mirrored OK (see above)
                 var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
                 return SolidFactory.Sweep(
                     TransformProfile(sweep.Profile!, m), path, TransformProfiles(sweep.Holes, m));
@@ -591,8 +615,10 @@ internal static class ShapeCompiler
             case RimShape rim:
             {
                 // Amounts scale with the accumulated uniform factor so a feature
-                // authored before a Scale behaves as if scaled with the part.
-                Decompose(m, shape, out _, out _, out double featureScale);
+                // authored before a Scale behaves as if scaled with the part. Mirrored
+                // similarities are fine: the surgery runs on the (mirrored) lowered
+                // child, and chamfer/fillet geometry commutes with isometries.
+                DecomposeSimilarity(m, shape, out _, out _, out double featureScale);
                 var solid = LowerBrep(rim.Child, m);
                 var selected = rim.Selector(solid).ToList();
                 if (selected.Count == 0)
@@ -807,8 +833,8 @@ internal static class ShapeCompiler
         switch (shape)
         {
             case BoxShape box:
-                return Place(Sdf.Box(box.Box.Size.X, box.Box.Size.Y, box.Box.Size.Z)
-                        .Translate(box.Box.Center),
+                return Place(Sdf.Box(box.Extents.Size.X, box.Extents.Size.Y, box.Extents.Size.Z)
+                        .Translate(box.Extents.Center),
                     rotation, translation, scale);
             case SphereShape sphere:
                 return Place(Sdf.Sphere(sphere.Radius), rotation, translation, scale);
@@ -1274,6 +1300,16 @@ internal static class ShapeCompiler
         out Quaterniond rotation, out Vector3d translation, out double scale)
     {
         if (!TryDecomposeSimilarity(m, out rotation, out translation, out scale, out _))
+            throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
+    }
+
+    /// <summary>As above, but also reporting whether the similarity is improper
+    /// (mirrored) — the nodes that must negate an axis need to know.</summary>
+    private static void DecomposeSimilarity(
+        in Matrix4d m, Shape shape,
+        out Quaterniond rotation, out Vector3d translation, out double scale, out bool reflected)
+    {
+        if (!TryDecomposeSimilarity(m, out rotation, out translation, out scale, out reflected))
             throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
     }
 

@@ -81,12 +81,14 @@ scene.Add(new Part("left-hand", bracket.Mirror(Vector3d.UnitX), Palette.Copper))
 Mirroring is a single exact reflection matrix, correct in every representation:
 meshes transform positions and reverse triangle winding (staying outward-oriented),
 and the implicit lowering reflects the query point, which is exact for any SDF.
-B-Rep support follows the node under the mirror: boxes, cylinders, and sketch
-extrusions handle any affine map (this bracket stays fully B-Rep-native);
-spheres, tori, and cones are re-placed natively under mirrored similarities; but
-mirrored revolve/sweep/chamfer/fillet/drill nodes have **no B-Rep lowering yet** —
-their mirrors are still exact via mesh or SDF, and `Explain` names the node
-([support matrix](representations.md)).
+B-Rep support follows the node under the mirror, and every modeling node now has a
+mirrored lowering: boxes, cylinders, and sketch extrusions handle any affine map
+(this bracket stays fully B-Rep-native); spheres, tori, and cones re-place natively
+under mirrored similarities; revolves sweep about the **negated** transformed axis
+(a reflection conjugates the rotation — the same identity that makes a mirrored
+thread the left-hand thread); sweeps need no fix at all (rotation-minimizing frames
+are intrinsic); and chamfers, fillets, and drilled holes follow because their
+geometry commutes with isometries ([support matrix](representations.md)).
 
 ## Linear patterns
 

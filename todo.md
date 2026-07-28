@@ -540,11 +540,12 @@ export — is recorded in CLAUDE.md):
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)
-- [ ] mirror B-Rep completion — mirrored revolve/sweep/rim/drill nodes are Impossible
-  in v1 (exact via mesh/SDF); native route: `F∘R(d,θ)∘F = R(−F·d, θ)` axis negation
-  for revolves/sweeps (`Shape.Mirror` ✅ landed otherwise: implicit exact via
-  improper-similarity decomposition, mesh exact, B-Rep native for
-  box/cylinder/extrude/sphere/torus/cone)
+- [ ] mirror B-Rep completion, remaining nodes — revolve/sweep/rim/drill ✅ landed
+  (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF for sweeps,
+  isometry-commuting surgery for rims/drills); still rigid-proper-only:
+  `Draft` (pull direction needs the linear image under the reflection),
+  `Shell(t, openings)`, `RoundEdges`, `Loft` — all isometry-commuting, each a small
+  DecomposeSimilarity change plus tests when wanted
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
   chamfer joins, erosion as complement dilation): **exact curved offsets** (arcs stay
   arcs — today everything flattens first, same limitation as all region work); variable

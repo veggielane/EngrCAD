@@ -1013,9 +1013,13 @@ public abstract class Shape
     /// representation: meshes transform positions and reverse winding (staying
     /// outward-oriented), implicit lowering reflects the query point (exact), and
     /// B-Rep support follows the node: box/cylinder/sketch-extrude handle any affine
-    /// map, sphere/torus/cone re-place natively under mirrored similarities, while
-    /// mirrored revolve/sweep/rim/drill nodes have no B-Rep lowering yet (their mirror
-    /// is exact via mesh or SDF — see <see cref="Explain"/>).
+    /// map; sphere/torus/cone re-place natively under mirrored similarities; revolves
+    /// negate the transformed axis (a reflection conjugates the rotation,
+    /// F·Rot(d, φ)·F = Rot(−F·d, φ) — the identity that also makes mirrored threads
+    /// left-handed); sweeps need no fix at all (rotation-minimizing transport is
+    /// intrinsic); and rim features / drills follow, since chamfers, fillets and
+    /// revolved tools commute with isometries. See <see cref="Explain"/> for the
+    /// per-node verdicts.
     /// </summary>
     public Shape Mirror(in Vector3d point, in Vector3d normal)
     {
