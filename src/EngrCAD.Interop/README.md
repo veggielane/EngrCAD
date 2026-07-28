@@ -70,10 +70,31 @@ engines.
        cap. A global uv-area identity (outer ring less the holes) is the closing guard,
        since the per-slab tests cannot see a gap or an overlap between slabs. Ear
        clipping remains the fallback for holes that do not decompose this way.
-    3. **Periodic band** — loops winding the period (rings subdivided into arcs) zip
-       chain-to-chain or fan to a pole.
+    3. **Periodic band** — loops winding the period (rings subdivided into arcs) go
+       through the same **stack sweep**, or fan to a pole for a single winding chain.
+       The sweep replaced a plain merge walk here for the reason `ZipSlabs` records: a
+       merge pairs the chains by u, so wherever one chain carries many samples between
+       two of the other's it fans them from a single far vertex, and where that stretch
+       turns back on itself consecutive fan triangles invert. Measured on
+       `Box(20, 20, 20) − Sphere(12)`, whose cavity wall runs a 48-sample latitude circle
+       against a 240-sample rim scalloped by four side-face cuts: **2 226 inverted facets
+       (worst agreement −0.9978) → 266 (−0.2426)**. The merge walk is kept as a fallback
+       for chains the sweep declines (either not u-monotone, or crossing).
     4. **Ear clip** — everything else, by an exact-coordinate clipper (shortest-diagonal
        ears, on-edge points block, holes bridged).
+
+    **Reversing a face's polygons must not move the fan diagonal.** A reversed face
+    (boolean output, pointing opposite its surface normal) has its polygons re-wound, and
+    the obvious `Reverse()` turns `[a, b, c, d]` into `[d, c, b, a]`. Both are the same
+    cyclic polygon wound the other way, so for the winding the choice is free — but a
+    quad is triangulated downstream by fanning from vertex 0, so the first splits along
+    a–c and the second along b–d. On a skewed non-planar grid cell those are not equally
+    good triangulations, and `Reverse()` silently picked the wrong one for every
+    subtracted tool's face. Measured on an M8 B-Rep threaded hole, whose sheared helical
+    grid has cells with a diagonal ratio up to 40:1: **5 544 of 30 912 facets faced
+    inward, worst agreement −0.163**, against zero folds and 0.99976 for the identical
+    geometry unsubtracted (a threaded rod). The reversal now rotates so vertex 0 stays
+    put — `[a, d, c, b]` — and the hole matches the rod at 0.99897.
 
     Oversized interior edges are then midpoint-split to the natural grid density with
     new vertices on the exact surface. Boundary vertices are always the exact shared edge
@@ -179,6 +200,26 @@ engines.
     are refused (they used to fall back to the grid), a rung sampled at more than two
     points falls to the ear clipper rather than being fanned, and a hole straddling every
     possible seam (covering a full period in u) is unsupported.
+
+    **Whole-corpus quality gate.** `TessellationCorpusQualityTests` audits 21 named
+    constructions — drilled plates, cross-drills, spherical cavities, threaded rods and
+    holes, lofts, shells, drafts, mitered and whole-solid fillets, chamfers, vases,
+    partial revolves, sweeps, tori, cones, sketch pockets, Bézier engraving, wedges —
+    facet by facet against the exact surface each one samples, at 16/8, 48/24 and 96/48.
+    Its measurement rules live in `TessellationQuality` and are load-bearing: the
+    reference normal is the mean of the surface normals at the triangle's three
+    **vertices** (a centroid sits a sagitta inside a curved surface, so projecting it
+    fails and the assertion silently checks nothing); the audit runs on **unwelded
+    per-face polygons** via the internal `BRepTessellator.TessellateByFace`, because
+    welding destroys the facet → face attribution; and polygons are **fanned from vertex
+    0**, which is how the render mesh triangulates a grid quad — auditing a quad as a unit
+    would have missed the reversed-face defect entirely, since its whole mechanism is the
+    fan diagonal moving. The floor is one formula for every surface family,
+    `cos(3 · 2π/n)` — three natural grid steps of surface normal, the allowance being for
+    facets where two independently sampled boundaries meet. The worst case is the
+    cross-drilled housing (0.6431 at 16 segments, 0.9925 at 48, 0.9995 at 96), because
+    its breakout curves are tracer polylines baked in at boolean time and do not refine
+    with `segmentsPerCircle`. Everything else measures above 0.999 at 48/24.
 - **B-Rep booleans**: `BrepBoolean.Union/Intersection/Difference` — the full pipeline
   (face-pair intersection, seam-aligned splitting, SDF-probe classification, reversed
   subtracted faces, topological seam sealing via `TopologyEditor.SealSeams`). See

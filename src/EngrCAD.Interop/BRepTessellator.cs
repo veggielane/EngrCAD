@@ -66,59 +66,7 @@ public static class BRepTessellator
         foreach (var face in solid.Faces)
         {
             progress?.ThrowIfCancelled();
-            int firstPolygon = polygons.Count;
-            switch (face.Surface)
-            {
-                case PlaneSurface plane:
-                    TessellatePlanarFace(face, plane, edgePolylines, polygons);
-                    break;
-                case CylinderSurface when IsCylinderBand(face):
-                    TessellateCylinderBand(face, edgePolylines, polygons);
-                    break;
-                case CylinderSurface:
-                    if (!TrimmedFaceTessellator.TryTessellate(
-                            face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? cylinderFailure))
-                        throw new NotSupportedException(
-                            "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops. " +
-                            Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, cylinderFailure));
-                    break;
-                case HelicalSurface helical:
-                    TessellateHelicalBand(face, helical, edgePolylines, polygons);
-                    break;
-                case ExtrudedSurface or RevolvedSurface or SweptSurface or LoftedSurface:
-                {
-                    var (uParams, vParams, closedU, closedV) = GridParams(face.Surface, segmentsPerCircle, curveSamples);
-                    // Full-domain faces (the factories' and wrap-splitter's output) keep
-                    // the grid path — its samples coincide with the shared edge polylines.
-                    // Faces whose loops don't cover the domain go through the trimmed
-                    // path, and a failure there REFUSES: the grid would cover the whole
-                    // parameter rectangle, which is not this face, so it would silently
-                    // hand back an open mesh (the worst failure mode this project has).
-                    if (IsFullDomainFace(face, edgePolylines, uParams, vParams, closedU, closedV))
-                    {
-                        TessellateGrid(face.Surface, uParams, vParams, closedU, closedV, polygons);
-                    }
-                    else if (!TrimmedFaceTessellator.TryTessellate(
-                                 face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? failure))
-                    {
-                        throw new NotSupportedException(
-                            "A trimmed face could not be tessellated, and its surface's natural grid covers more " +
-                            "than the face, so falling back to it would produce an open mesh. " +
-                            Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, failure));
-                    }
-                    break;
-                }
-                default:
-                    throw new NotSupportedException(
-                        $"Tessellation of {face.Surface.GetType().Name} faces is not implemented yet.");
-            }
-
-            // Reversed faces (boolean output) point opposite their surface normal.
-            if (face.IsReversed)
-            {
-                for (int i = firstPolygon; i < polygons.Count; i++)
-                    polygons[i] = [.. polygons[i].Reverse()];
-            }
+            TessellateFace(face, edgePolylines, segmentsPerCircle, curveSamples, polygons);
             progress?.Report(EdgePhase + FacePhase * ++facesDone / Math.Max(1, faceCount));
         }
 
@@ -131,6 +79,125 @@ public static class BRepTessellator
         var mesh = MeshWelder.WeldPolygons(polygons, tolerance: 1e-9, zipSeams: true);
         progress?.Report(1);
         return mesh;
+    }
+
+    /// <summary>
+    /// Appends one face's polygons, routing it to the path its surface and trim state
+    /// call for, and flipping reversed faces (boolean output points opposite its surface
+    /// normal). Split out of <see cref="Tessellate"/> so the same routing can be replayed
+    /// per face by <see cref="TessellateByFace"/>.
+    /// </summary>
+    private static void TessellateFace(
+        BrepFace face,
+        Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
+        int segmentsPerCircle,
+        int curveSamples,
+        List<IReadOnlyList<Vector3d>> polygons)
+    {
+        int firstPolygon = polygons.Count;
+        switch (face.Surface)
+        {
+            case PlaneSurface plane:
+                TessellatePlanarFace(face, plane, edgePolylines, polygons);
+                break;
+            case CylinderSurface when IsCylinderBand(face):
+                TessellateCylinderBand(face, edgePolylines, polygons);
+                break;
+            case CylinderSurface:
+                if (!TrimmedFaceTessellator.TryTessellate(
+                        face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? cylinderFailure))
+                    throw new NotSupportedException(
+                        "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops. " +
+                        Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, cylinderFailure));
+                break;
+            case HelicalSurface helical:
+                TessellateHelicalBand(face, helical, edgePolylines, polygons);
+                break;
+            case ExtrudedSurface or RevolvedSurface or SweptSurface or LoftedSurface:
+            {
+                var (uParams, vParams, closedU, closedV) = GridParams(face.Surface, segmentsPerCircle, curveSamples);
+                // Full-domain faces (the factories' and wrap-splitter's output) keep
+                // the grid path — its samples coincide with the shared edge polylines.
+                // Faces whose loops don't cover the domain go through the trimmed
+                // path, and a failure there REFUSES: the grid would cover the whole
+                // parameter rectangle, which is not this face, so it would silently
+                // hand back an open mesh (the worst failure mode this project has).
+                if (IsFullDomainFace(face, edgePolylines, uParams, vParams, closedU, closedV))
+                {
+                    TessellateGrid(face.Surface, uParams, vParams, closedU, closedV, polygons);
+                }
+                else if (!TrimmedFaceTessellator.TryTessellate(
+                             face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? failure))
+                {
+                    throw new NotSupportedException(
+                        "A trimmed face could not be tessellated, and its surface's natural grid covers more " +
+                        "than the face, so falling back to it would produce an open mesh. " +
+                        Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, failure));
+                }
+                break;
+            }
+            default:
+                throw new NotSupportedException(
+                    $"Tessellation of {face.Surface.GetType().Name} faces is not implemented yet.");
+        }
+
+        // Reversed faces (boolean output) point opposite their surface normal.
+        if (face.IsReversed)
+        {
+            for (int i = firstPolygon; i < polygons.Count; i++)
+                polygons[i] = Reversed(polygons[i]);
+        }
+    }
+
+    /// <summary>
+    /// The same polygon wound the other way, KEEPING its first vertex — <c>[a, d, c, b]</c>
+    /// for <c>[a, b, c, d]</c>, not <c>[d, c, b, a]</c>.
+    /// <para>Both are the same cyclic polygon with the opposite orientation, so for the
+    /// winding this is a free choice; for the GEOMETRY it is not. A quad is triangulated
+    /// downstream by fanning from vertex 0, so <c>[a, b, c, d]</c> is split along a–c and
+    /// <c>[d, c, b, a]</c> along b–d — the other diagonal. On a grid cell that is skewed
+    /// and non-planar those two triangulations are not equally good, and a plain
+    /// <c>Reverse()</c> silently picks the wrong one for every subtracted tool's face.
+    /// <para>Measured on an M8 B-Rep threaded hole (a subtracted helical tool, whose sheared
+    /// grid gives cells with a diagonal ratio up to 40:1): 5 544 of 30 912 facets faced
+    /// INWARD and the worst facet-vs-surface normal agreement was −0.163, against zero
+    /// folds and 0.99976 for the identical geometry unsubtracted (a threaded rod). Rotating
+    /// the reversal so vertex 0 stays put is the whole fix.</para></para>
+    /// </summary>
+    private static IReadOnlyList<Vector3d> Reversed(IReadOnlyList<Vector3d> polygon)
+    {
+        var reversed = new Vector3d[polygon.Count];
+        reversed[0] = polygon[0];
+        for (int i = 1; i < polygon.Count; i++)
+            reversed[i] = polygon[polygon.Count - i];
+        return reversed;
+    }
+
+    /// <summary>
+    /// The same tessellation <see cref="Tessellate"/> performs, but returned per face and
+    /// UNWELDED — the seam a facet-quality audit needs, since only the owning face knows
+    /// which surface a triangle is supposed to approximate. Welding is what destroys that
+    /// attribution, so this stops one step short of it.
+    /// <para>Internal: this is a diagnostic seam for tests, not a second public conversion
+    /// route. It must stay a pure factoring of the production path (same routing, same
+    /// reversal flip) or a quality assertion built on it would audit geometry no consumer
+    /// ever sees.</para>
+    /// </summary>
+    internal static List<(BrepFace Face, List<IReadOnlyList<Vector3d>> Polygons)> TessellateByFace(
+        BrepSolid solid, int segmentsPerCircle = 32, int curveSamples = 24)
+    {
+        var edgePolylines = new Dictionary<BrepEdge, List<Vector3d>>();
+        foreach (var edge in solid.Edges)
+            edgePolylines[edge] = SampleEdge(edge, segmentsPerCircle, curveSamples);
+
+        var byFace = new List<(BrepFace, List<IReadOnlyList<Vector3d>>)>();
+        foreach (var face in solid.Faces)
+        {
+            var polygons = new List<IReadOnlyList<Vector3d>>();
+            TessellateFace(face, edgePolylines, segmentsPerCircle, curveSamples, polygons);
+            byFace.Add((face, polygons));
+        }
+        return byFace;
     }
 
     /// <summary>

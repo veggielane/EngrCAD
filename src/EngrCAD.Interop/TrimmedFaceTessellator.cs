@@ -490,21 +490,37 @@ internal static class TrimmedFaceTessellator
             boundaryEdges.Add(EdgeKey(bottom[0], top[0]));
             boundaryEdges.Add(EdgeKey(bottom[^1], top[^1]));
 
-            int i = 0, j = 0;
-            while (i < bottom.Count - 1 || j < top.Count - 1)
+            // The unrolled band IS a u-monotone polygon, so the stack sweep is the correct
+            // triangulation of it and the merge walk is only an approximation of one. The
+            // difference bites whenever the two rings carry unequal sample counts: a merge
+            // pairs by u, so a stretch where one chain has many samples between two of the
+            // other's gets FANNED from a single far vertex, and where that stretch turns
+            // back on itself consecutive fan triangles invert. Measured on
+            // Box(20,20,20) - Sphere(12), whose cavity wall runs a 48-sample latitude
+            // circle against a 240-sample scalloped rim: 102 226 triangles with 2 226
+            // inverted (worst dot -0.9978) from the merge walk, against 1 508 with none
+            // from the sweep. (The same lesson ZipSlabs records for bands with holes.)
+            int emitted = triangles.Count;
+            if (!NonDecreasingU(uvAll, bottom) || !NonDecreasingU(uvAll, top) ||
+                !SweepMonotone(triangles, uvAll, bottom, top))
             {
-                bool advanceBottom =
-                    i < bottom.Count - 1 &&
-                    (j >= top.Count - 1 || uvAll[bottom[i + 1]].X <= uvAll[top[j + 1]].X);
-                if (advanceBottom)
+                triangles.RemoveRange(emitted, triangles.Count - emitted);
+                int i = 0, j = 0;
+                while (i < bottom.Count - 1 || j < top.Count - 1)
                 {
-                    triangles.Add((bottom[i], bottom[i + 1], top[j]));
-                    i++;
-                }
-                else
-                {
-                    triangles.Add((bottom[i], top[j + 1], top[j]));
-                    j++;
+                    bool advanceBottom =
+                        i < bottom.Count - 1 &&
+                        (j >= top.Count - 1 || uvAll[bottom[i + 1]].X <= uvAll[top[j + 1]].X);
+                    if (advanceBottom)
+                    {
+                        triangles.Add((bottom[i], bottom[i + 1], top[j]));
+                        i++;
+                    }
+                    else
+                    {
+                        triangles.Add((bottom[i], top[j + 1], top[j]));
+                        j++;
+                    }
                 }
             }
         }

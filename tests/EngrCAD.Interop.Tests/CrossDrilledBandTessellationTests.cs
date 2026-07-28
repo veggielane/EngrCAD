@@ -67,53 +67,21 @@ public class CrossDrilledBandTessellationTests
         + BicylinderVolume(5, BoreRadius);
 
     /// <summary>
-    /// Fold report over every non-planar face, tessellated through the trimmed path.
-    /// <para>The reference normal is the mean of the surface normals at the triangle's
-    /// three VERTICES, never the normal at its centroid: a centroid sits a sagitta inside
-    /// a curved surface, far past the 1e-6 inverse-evaluation tolerance, so projecting it
-    /// fails and a centroid-based assertion silently checks nothing. The vertices are
-    /// exact surface points by construction. (An earlier fold hunt on the mitered fillets
-    /// reported zero folds where there were 808, for exactly this reason.)</para>
+    /// Every non-planar face driven through the trimmed path and audited facet by facet
+    /// (see <see cref="TessellationQuality"/>, which owns the reference-normal rules this
+    /// measurement depends on and is shared with the whole-corpus gate in
+    /// <see cref="TessellationCorpusQualityTests"/>).
     /// </summary>
-    private static (int Folds, double WorstDot, int Triangles) FoldReport(
+    private static TessellationQuality.SolidReport FoldReport(
         BrepSolid solid, int segmentsPerCircle, int curveSamples)
     {
-        var edgePolylines = new Dictionary<BrepEdge, List<Vector3d>>();
-        foreach (var edge in solid.Edges)
-            edgePolylines[edge] = BRepTessellator.SampleEdge(edge, segmentsPerCircle, curveSamples);
-
-        int folds = 0, triangles = 0;
-        double worst = 1;
-        foreach (var face in solid.Faces)
-        {
-            if (face.Surface is PlaneSurface)
-                continue;
-            var polygons = new List<IReadOnlyList<Vector3d>>();
-            Assert.True(
-                TrimmedFaceTessellator.TryTessellate(
-                    face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? why),
-                $"the trimmed path refused a cross-drilled band: {why}");
-
-            foreach (var polygon in polygons)
-            {
-                triangles++;
-                var normal = (polygon[1] - polygon[0]).Cross(polygon[2] - polygon[0]);
-                var exact = Vector3d.Zero;
-                foreach (var p in polygon)
-                {
-                    Assert.True(
-                        face.Surface.TryProjectPoint(p, out var uv, FaceGeometry.InverseEvaluationTolerance),
-                        $"a band vertex at {p} does not lie on its own face's surface");
-                    exact += face.Surface.NormalAt(uv.X, uv.Y).Normalized();
-                }
-                Assert.True(normal.Length > 0, "a band triangle is degenerate");
-                double dot = normal.Normalized().Dot(exact.Normalized());
-                worst = Math.Min(worst, dot);
-                if (dot <= 0)
-                    folds++;
-            }
-        }
-        return (folds, worst, triangles);
+        var report = TessellationQuality.AuditTrimmedPath(solid, segmentsPerCircle, curveSamples);
+        Assert.True(
+            report.Refusals.Count == 0,
+            $"the trimmed path refused a cross-drilled band: {string.Join("; ", report.Refusals)}");
+        Assert.True(report.Unprojectable == 0, $"a band vertex is off its own surface: {report.Describe()}");
+        Assert.True(report.Slivers == 0, $"a band triangle is degenerate: {report.Describe()}");
+        return report;
     }
 
     /// <summary>
@@ -129,15 +97,15 @@ public class CrossDrilledBandTessellationTests
     public void CrossDrilledBoreWall_ContainsNoFoldedOrNearTangentTriangles(
         int segmentsPerCircle, int curveSamples)
     {
-        var (folds, worstDot, _) = FoldReport(Housing().ToBrep(), segmentsPerCircle, curveSamples);
+        var report = FoldReport(Housing().ToBrep(), segmentsPerCircle, curveSamples);
 
-        Assert.Equal(0, folds);
+        Assert.Equal(0, report.Folds);
         // A facet spanning one natural step of a 16-gon still agrees with the surface to
         // cos(pi/16) = 0.98; the slivers this replaces sat between 0.0086 and 0.067, i.e.
         // very nearly PERPENDICULAR to the surface they were meant to approximate. The
         // bar is set well below the measured 0.643 (at 16 segments) so it tracks the
         // structural property, not the arithmetic.
-        Assert.True(worstDot > 0.5, $"worst facet-vs-surface normal agreement was {worstDot}");
+        Assert.True(report.WorstDot > 0.5, $"worst facet-vs-surface normal agreement was {report.WorstDot}");
     }
 
     /// <summary>

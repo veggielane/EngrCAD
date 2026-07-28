@@ -81,7 +81,7 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   bound. Needs care over tie-breaking (equidistant triangles must resolve to the same one
   `Bvh.Nearest` picks) and a fallback when the candidate list blows up.
 - [ ] **Trimmed-band gaps left by the strip path** (`TrimmedFaceTessellator`). The zip
-  handles single-loop bands with single-sample rungs; three cases still ear-clip or
+  handles single-loop bands with single-sample rungs; two cases still ear-clip or
   refuse, each cheap on its own:
   - A **rung sampled at more than two points** (a curved cross edge) is refused rather
     than fanned — fanning collinear rung samples would emit the very zero-area triangles
@@ -110,22 +110,63 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   so we do not know whether they are reachable from the `Shape` API at all. Build a repro
   for each (a drilled sphere pole cap; a band cut so its loop wraps twice) and either
   support them or refuse them at construction time in `Shape`.
-- [ ] **A per-face triangle-quality assertion for the whole tessellator.** The mitered
-  fillet fold was invisible to every existing test — closed, Euler-clean, volume within
-  tolerance — because orientation was never checked. `MiteredBandTessellationTests`'
-  `FoldReport` helper generalizes to any solid: run it over the whole B-Rep corpus
-  (drilled plates, cross-drills, threads, lofts, shells) as one parameterized test.
-  **Assert the worst normal dot, NOT the fold count** — the cross-drilled bore had zero
-  inverted triangles before *and* after its fix, while carrying an 88.9° sliver (dot
-  0.0198), so a count-based assertion would have passed the broken mesh. Pair it with a
-  convergence check: excess volume should fall ~4× per doubling, and the bore's stalling
-  ratios (3.29 → 1.39 → 1.19) are what a non-converging triangulation looks like.
-- [ ] **Refinement quality upgrade** — Rivara-with-boundary-constraints instead of the
-  monotone-decrease rule's worst-sliver tradeoff; no Delaunay flips. Lower priority now
-  that the base triangulation carries the accuracy rather than the refinement. Also
-  (Frame3d work finding): bores drilled into extruded *side* faces miss the inscribed-ngon
-  volume by ~5e-5 — the trimmed side-face triangulation differs from a planar cap's
-  (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
+- ~~**A per-face triangle-quality assertion for the whole tessellator.**~~ ✅ **done** —
+  `TessellationCorpusQualityTests` + the shared `TessellationQuality` audit, over 21
+  constructions at three densities. It caught three real defects on its first run, and
+  the two structural ones are fixed (see the Interop README): a reversed face's polygons
+  were re-wound with `Reverse()`, which MOVES the downstream fan diagonal from a–c to
+  b–d — 5 544 of 30 912 facets of an M8 threaded hole faced inward (worst −0.163) while
+  the identical unsubtracted rod was clean; and the two-ring periodic band used a merge
+  walk where the monotone stack sweep was needed. Remaining findings are the two items
+  below.
+- [ ] **Refinement quality upgrade — now with a repro that PROVES it is needed.**
+  `Box(20, 20, 20) − Sphere(12)` (a sphere larger than its box, so the cavity breaks out
+  of all six faces) is the one corpus member the trimmed path cannot carry, and it is
+  locked by
+  `TessellationCorpusQualityTests.SpherePiercingEverySide_IsCarriedByRefinementAndSaysSoLoudly`.
+  The cavity wall is a band whose chains are a 48-sample latitude circle against a
+  240-sample rim scalloped by four side-face cuts, spanning ~15 natural v steps. The
+  monotone sweep triangulates it correctly — every base facet has positive uv area — but
+  the base mesh has **no interior rows**, so `Refine` has to manufacture all of them by
+  midpoint bisection, and on a surface this curved the surface midpoint of a long chord
+  lies far enough off the chord to invert the halves. Measured at 48/24: **101 246 facets
+  where the grid density asks for ~1 440, 266 of them inverted, worst agreement −0.2426**;
+  volume converges at ratios 2.64 then 2.13, not 4; and at 96/48 it REFUSES outright
+  ("curvature refinement did not converge"), which is the right behaviour and an unusable
+  model. Every milder spherical cavity is clean (a pocket through one face measures
+  0.99956 with no folds), so this is specifically about tall bands. Two candidate fixes:
+  Rivara longest-edge bisection under the anisotropic metric (cheaper, still refinement),
+  or — the one that matches "the base triangulation must carry the accuracy" — inserting
+  the natural grid's interior v rows into the band before triangulating, which the
+  v-simple structure between two u-monotone chains makes well defined. No Delaunay flips.
+  Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
+  inscribed-ngon volume by ~5e-5 — the trimmed side-face triangulation differs from a
+  planar cap's (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
+- [ ] **The planar earcut emits an occasional zero-area facet.** `PolygonTriangulator`
+  filters EXACTLY collinear vertices, but boundary samples of a straight edge that came
+  through a boolean are collinear only to a few ulps, so a run of them survives the filter
+  and one is eventually clipped as a degenerate ear. Measured: a Bézier-engraved plate
+  emits one (area 5.6e-17 in a face of area 165; cross product 4.4e-16 over 1.07-long
+  chords) at 32 and 48 segments and none at 16/96/192; a three-hole drilled plate emits
+  one at 96. Harmless to closure and volume, and **not fixable in `BRepTessellator`** — a
+  guarded drop was built and measured to do nothing, because the middle sample belongs to
+  no other triangle, so dropping the facet would drop a shared boundary vertex and open a
+  T-junction. The fix is in the triangulator: give such a vertex a thin-but-real triangle
+  against a far vertex instead of a degenerate one against its two neighbours.
+  `TessellationCorpusQualityTests.Corpus_EmitsDegenerateFacetsOnlyFromThePlanarEarcut`
+  pins the structural claim meanwhile (no trimmed or grid tier ever emits one, and never
+  more than one per face).
+- [ ] **`FilletAllEdges` corner patches carry vertices 2.6e-3 off their own surface at
+  fine density** (B-Rep side, found by the corpus gate). At 96/48 a rounded 20×14×8 box
+  has 70 vertices per spherical corner face — 176 vertex-instances over 37 644 facets, 34
+  of them in triangles with no projectable vertex at all — that fail pullback onto the
+  quarter-revolve they are drawn on, brute-force nearest surface point 2.6e-3 away (1.3e-4
+  of the model, three decades past the 1e-6 inverse-evaluation tier). Absent at 16/8 and
+  48/24. Orientation is unaffected (worst agreement 0.999866) and the mesh still welds
+  closed, which means the offending vertices are shared CONSISTENTLY between the patch and
+  its bands — so the error is in the edge curve the two faces share, not in the
+  tessellator. Locked as a documented exception in `KnownOffSurface`; fixing it must
+  update that table.
 
 ## Core (EngrCAD.Core)
 
