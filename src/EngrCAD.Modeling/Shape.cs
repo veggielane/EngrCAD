@@ -902,6 +902,35 @@ public abstract class Shape
     public static Shape From(Sdf sdf) => new SourceShape(sdf);
 
     /// <summary>
+    /// Imports a mesh file (.stl, .obj, or .off) as a mesh-backed shape — the
+    /// user-facing wrapper over <see cref="MeshReader.ReadAndRepair"/>: the file is
+    /// read (dirty files weld rather than throw), run through the
+    /// <see cref="MeshRepair"/> pipeline (crack welding, degenerate/duplicate removal,
+    /// consistent outward orientation, T-junction zipping), and wrapped via
+    /// <see cref="From(HalfEdgeMesh)"/> so booleans, transforms and the implicit route
+    /// all work on it. Use the <c>out</c>-report overload to see what repair did.
+    /// </summary>
+    /// <exception cref="NotSupportedException">Unrecognized file extension.</exception>
+    /// <exception cref="InvalidOperationException">The file's defects need topological
+    /// surgery beyond the repair pipeline.</exception>
+    public static Shape From(string path) => From(path, out _);
+
+    /// <summary><see cref="From(string)"/> with the repair report, and opt-in hole
+    /// filling: <paramref name="fillHolesAndCracks"/> runs the full
+    /// <see cref="MeshRepair.AutoRepair(MeshReadResult, MeshRepairOptions?)"/> dispatch
+    /// (pair-wise crack welding + hole filling). Off by default — closing holes invents
+    /// geometry, which an importer should only do when asked.</summary>
+    public static Shape From(
+        string path, out MeshRepairReport report, bool fillHolesAndCracks = false,
+        MeshRepairOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        var (mesh, repairReport) = MeshReader.ReadAndRepair(path, options, fillHolesAndCracks);
+        report = repairReport;
+        return From(mesh);
+    }
+
+    /// <summary>
     /// Heightmap terrain — OpenSCAD's <c>surface()</c>: the grid becomes a closed
     /// solid (top surface, flat base at <paramref name="baseLevel"/>, perimeter
     /// walls), wrapped as a mesh-backed shape via <see cref="From(HalfEdgeMesh)"/>.
