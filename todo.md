@@ -743,12 +743,6 @@ where this project already points.
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
-- [ ] **A construction-preview docs example.** DocsGen snippets can now declare
-  `sectionPlanes`/`sectionCombine`/`camera` alongside `scene` (which unblocked
-  `section-oblique` and `section-unsectioned-fasteners`), but a construction-tree
-  preview still has no headless entry point to render through — previews are built by
-  the SceneHost on selection, not by anything `RenderToImage` can drive. Needs a
-  `ConstructionPreviewRequest`-shaped seam in the offscreen path first.
 - [ ] **3D-annotation (PMI) follow-ups** (v1 ✅ landed: `Annotation`/`LinearDimension`
   (point-to-point + `BetweenFaces` selectors)/`RadialDimension.OnEdge`/`LeaderNote`/
   `DatumLabel` + `HoleCallout`/`ThreadCallout` in Modeling; `StrokeFont` +

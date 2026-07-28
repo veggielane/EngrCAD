@@ -153,6 +153,40 @@ scene.Add(new Part("blend", body, Palette.Steel));
 
 ![Section-plane SDF isolines: gold surface cross-section with warm and cool field rings](images/section-isolines.png)
 
+## Construction previews
+
+Every `Shape` part expands in the model tree into **how it was built** — the
+operation graph as nested rows (a `FeatureHistory` part shows its feature list).
+Clicking a row previews that step in the viewport: the model *as of that step*, a
+rollback view, drawn as construction-cyan edges over the finished part.
+
+Headless renders can draw the same overlay. A `render:` snippet (or any
+`EngrCad.RenderToImage` caller) declares a `preview` — the part plus the
+construction-tree row to show, addressed by its stable positional path:
+
+```csharp render:construction-preview
+// A boss on a plate, then a bore through both.
+var body = (Shape.Box(60, 40, 10) | Shape.Cylinder(12, 14).Translate(0, 0, 8))
+    - Shape.Cylinder(6, 60);
+
+var part = new Part("bracket", body, Palette.Steel);
+var scene = new Scene();
+scene.Add(part);
+
+// Row "0" is the union — the body BEFORE the bore. Previewing it overlays that
+// step's feature edges on the finished part: the rollback view, in a still image.
+var preview = new ConstructionPreviewRequest(part, part.ConstructionTree()!.Find("0")!);
+```
+
+![The drilled bracket with the pre-bore step's edges overlaid in construction cyan](images/construction-preview.png)
+
+The overlay draws through the same `PreviewLayer` the window uses (always on top,
+never section-clipped), so the two paths cannot drift; a row that cannot be lowered
+**fails the render** rather than silently omitting the overlay. In the window, the
+tree rows of a feature-history part additionally carry a suppress toggle, a rollback
+marker, and editable `[Param]` fields in the properties panel — see the
+[parametric features](features.md) page.
+
 ## Headless rendering
 
 `EngrCad.RenderToImage(scene, path, width, height, camera?, style?, sectionAxis?,
