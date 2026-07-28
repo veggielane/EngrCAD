@@ -998,6 +998,49 @@ circle regardless of mesh quality), so exact circles stay smooth at any tessella
 everything else (SDF/mesh parts, failed lowerings) falls back to mesh-dihedral
 extraction.
 
+### Simulation results on a part
+
+A part carries its own results, the way it carries its own annotations:
+
+```csharp
+var plate = new Part("plate", Shape.Box(60, 30, 4));
+var mesh = plate.GetMesh();
+
+plate.AddResult(MeshField.Sample(mesh, "von Mises", "MPa", p => 40 - p.Z * 6));
+plate.AddResult(MeshField.SampleVector(mesh, "displacement", "mm",
+    p => new Vector3d(0, 0, -0.02 * p.X * p.X / 900)));
+
+plate.FieldDisplay = new FieldDisplay
+{
+    Field = "von Mises",
+    ColorMap = FieldColorMap.Viridis,
+    Deform = "displacement",     // deformed shape, original ghosted behind it
+    DeformScale = 60,
+};
+```
+
+`Part.Results` is a list of `MeshField`s (EngrCAD.Mesh) indexed by the part's **display
+mesh vertices**, in vertex-index order. `AddResult` **replaces** a result of the same
+name rather than appending a twin, so re-running a solve updates what is displayed and
+`FieldDisplay` — which refers to results by name — keeps pointing at the live one.
+Attaching is free and **never meshes anything**, which is what keeps `Scene.PreMesh`
+free to run parts in parallel; the vertex-count check happens where a consumer actually
+has the mesh in hand and is reported by name, never silently ignored.
+
+`Part.FieldDisplay` states *what should be drawn* — which result colours the part
+(`FieldColorMap.Viridis` for magnitudes, `Diverging` for signed quantities over a range
+centred on zero, see `FieldRange.SymmetricAboutZero`), over what range (null = the
+field's own, an explicit one is what makes several parts or load cases comparable), and
+optionally a vector result to displace the vertices by. It lives on the part rather than
+in a viewport so a headless render, the desktop window and the browser client show the
+same thing and a script can set it up with no viewer reference.
+
+`Part.TryResolveFieldDisplay(out resolved, out error)` does the lookup once for every
+consumer: names resolved, range settled, a scalar field refused as a deformation source.
+It deliberately does **not** mesh, so a properties panel, an MCP tool or a test can call
+it with no GL — and a display referring to a result that an edit removed becomes a
+status message naming the part and what results it *does* have, never a crash.
+
 ### Assemblies (v1: occurrences)
 
 An `Assembly` is a named list of `Occurrence`s — a shared `Part` **or** a nested
