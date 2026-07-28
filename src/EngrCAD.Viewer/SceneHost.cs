@@ -87,6 +87,13 @@ internal sealed class SceneHost
     /// Keyed by occurrence path, so it also survives tab switches and live reloads.</summary>
     private readonly HashSet<string> _hiddenRows = [];
 
+    /// <summary>Assembly rows the user collapsed, keyed by assembly path — the inverse
+    /// of <see cref="_expanded"/> because an assembly DEFAULTS to expanded (a fresh tree
+    /// should show its contents). Collapsing is pure UI state: the rows under a
+    /// collapsed assembly are still built and registered (their viewport visibility and
+    /// instance indices must not shift), just not attached to the panel.</summary>
+    private readonly HashSet<string> _collapsedAssemblies = [];
+
     /// <summary>Construction rows currently drawn (with each row's resting color), so
     /// the previewed one can be highlighted without another rebuild.</summary>
     private readonly List<(string Key, Button Label, IBrush Idle)> _constructionRows = [];
@@ -717,14 +724,25 @@ internal sealed class SceneHost
         ApplyVisibility();
     }
 
-    /// <summary>An assembly header row (checkbox hides the whole subtree) plus its
-    /// occurrences, indented one level per nesting depth (always expanded in v1).</summary>
+    /// <summary>An assembly header row (checkbox hides the whole subtree; disclosure
+    /// triangle collapses it) plus its occurrences, indented one level per nesting
+    /// depth. A collapsed subtree's rows are still BUILT — visibility state and the
+    /// running viewport instance index both have to keep flowing through them — they
+    /// are just not attached to the panel.</summary>
     private void AddAssemblyRows(
         Assembly assembly, string label, string path, int depth,
-        IReadOnlyList<CheckBox> ancestors, ref int next)
+        IReadOnlyList<CheckBox> ancestors, ref int next, bool visible = true)
     {
         var check = VisibilityCheckBox($"A{path}");
         ToolTip.SetTip(check, "Show/hide the whole assembly");
+
+        bool expanded = !_collapsedAssemblies.Contains(path);
+        var expander = ExpanderButton(true, expanded, "Collapse/expand this assembly's rows", () =>
+        {
+            if (!_collapsedAssemblies.Add(path))
+                _collapsedAssemblies.Remove(path);
+            RefreshTree();
+        });
 
         var title = new TextBlock
         {
@@ -735,20 +753,25 @@ internal sealed class SceneHost
             Padding = new Thickness(4, 2),
             VerticalAlignment = VerticalAlignment.Center,
         };
-        _tree.Children.Add(new DockPanel
+        if (visible)
         {
-            Margin = new Thickness(depth * 14, 0, 0, 0),
-            Children = { check, title },
-        });
+            _tree.Children.Add(new DockPanel
+            {
+                Margin = new Thickness(depth * 14, 0, 0, 0),
+                Children = { expander, check, title },
+            });
+        }
 
         var groupAncestors = new List<CheckBox>(ancestors) { check };
+        bool childrenVisible = visible && expanded;
         foreach (var occurrence in assembly.Occurrences)
         {
             if (occurrence.Part is { } part)
-                AddPartRow(occurrence.Name, part, NextIndex(part, ref next), depth + 1, groupAncestors);
+                AddPartRow(occurrence.Name, part, NextIndex(part, ref next), depth + 1, groupAncestors,
+                    childrenVisible);
             else
                 AddAssemblyRows(occurrence.SubAssembly!, occurrence.Name, $"{path}/{occurrence.Name}",
-                    depth + 1, groupAncestors, ref next);
+                    depth + 1, groupAncestors, ref next, childrenVisible);
         }
     }
 
@@ -774,7 +797,8 @@ internal sealed class SceneHost
         return check;
     }
 
-    private void AddPartRow(string name, Part part, int index, int depth, IReadOnlyList<CheckBox> ancestors)
+    private void AddPartRow(
+        string name, Part part, int index, int depth, IReadOnlyList<CheckBox> ancestors, bool visible = true)
     {
         // Rows key on the occurrence path; a part with no instance (it failed to mesh)
         // has no path, so its own name keys it instead.
@@ -842,14 +866,20 @@ internal sealed class SceneHost
                 RefreshTree();
             });
 
-        _tree.Children.Add(new DockPanel
+        if (visible)
         {
-            Margin = new Thickness(depth * 14, 0, 0, 0),
-            Children = { expander, check, mode, label },
-        });
+            _tree.Children.Add(new DockPanel
+            {
+                Margin = new Thickness(depth * 14, 0, 0, 0),
+                Children = { expander, check, mode, label },
+            });
+        }
+        // Registered even when a collapsed ancestor hides the row: EffectiveVisibility
+        // walks _partRows to push per-instance visibility to the viewport, and a
+        // collapsed assembly must not change what renders.
         _partRows.Add(new PartRow(index, part, check, ancestors, label, mode));
 
-        if (construction is not null && _expanded.Contains(partKey))
+        if (visible && construction is not null && _expanded.Contains(partKey))
             AddConstructionRows(index, construction, depth + 1);
     }
 
