@@ -136,7 +136,7 @@ revolutions are *Native* in the implicit lowering — no mesh bridge — while B
 exact rational arcs/béziers and mesh gets crisp tessellation. Sketches touching the
 revolve axis (vases, domes) work everywhere on full turns: on-axis stretches revolve
 to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolves
-still need axis clearance). A 2D constraint solver is future work (todo.md).
+still need axis clearance).
 
 **The sketch field is the inner loop of every implicit sketch solid, so `SketchRegion`
 is structure-of-arrays with lane-wise kernels** — lines, full circles, partial arcs and
@@ -180,6 +180,59 @@ micron-scale 3-point arc collinear while building a radius-1e15 circle from thre
 metre-scale points that were collinear to round-off. Two things stay absolute on purpose:
 sketch **closure** (1e-9, the weld tier — those endpoints become exactly shared vertices
 downstream) and the arc **sweep** guards (1e-12 rad; angles are dimensionless).
+
+### Sketch constraints (`SketchConstraints.cs` / `SketchConstraintSolver.cs`)
+
+**The variational constraint layer**: draw roughly, constrain, solve exact —
+`sketch.Constrain()` returns a `ConstrainedSketch` whose vocabulary is Onshape's
+(CadQuery's `Sketch.constrain(...).solve()` was the API reference):
+`Coincident`/`Horizontal`/`Vertical`/`Parallel`/`Perpendicular`/`Tangent`
+(line–arc and arc–arc)/`EqualLength`/`EqualRadius`/`Concentric`/`Fix` plus dimensions
+`Distance` (point–point, point–line — 0 is point-on-line)/`Angle`/`Radius`/`Diameter`.
+`Solve()` returns a report carrying an ordinary solved `Sketch` — the geometry
+pipeline downstream (regions, SDF, extrude/revolve/sweep, features) is unchanged.
+
+- **Variable mapping**: joints shared between consecutive segments are ONE point
+  variable (2 DOF); arcs carry center + radius tied to their joints by two internal
+  endpoint-consistency rows (net +1 DOF, the bulge); a single-full-circle loop is
+  center + radius only; bézier control points are not variables — they follow their
+  chord's similarity on rebuild. Entities address the sketch's *normalized* segment
+  order (the `ToCurves()` order), including hole loops (`HoleArc(0, 0)` is the washer
+  bore).
+- **MateSolver doctrine throughout**: Levenberg–Marquardt with an ANALYTIC Jacobian,
+  every residual a length (angular rows scaled by the sketch's characteristic
+  length), rank-revealing DOF report via diagonally pivoted Cholesky of JᵀJ (dense —
+  sketches are tens of variables and dense is honest), refuse-loudly non-convergence
+  (a failed solve produces NOTHING and names the constraints carrying the residual),
+  and named stationary configurations (Perpendicular between lines drawn exactly
+  parallel has no first-order step; the report says so instead of nudging).
+- **The drawn configuration is the seed AND the branch selector**: tangency side,
+  external-vs-internal arc tangency and arc sweep branch are all read off the
+  drawing. Under-constrained is NORMAL — the LM step lies in the Jacobian's row
+  space, so motions no constraint sees are never taken and unconstrained geometry
+  keeps its drawn proportions; the remaining-DOF count is always reported.
+  Over-constrained-but-consistent converges and reports the redundant row count;
+  contradictions fail naming the rows that cannot drop.
+- **Two numerical lessons paid for here**: (a) adjacent line–arc tangency must be the
+  perpendicularity form `d̂·(c − J) = 0` at the shared joint, never
+  center-to-carrier-distance = r — the distance form leaves the tangency foot only
+  *second-order* constrained (sliding the joint δ along the line moves the residual
+  δ²/2r), so a solve "converged" at 1e-9 carried √(2r·1e-9) ≈ 1e-4 of foot slop,
+  measured as 3.6e-4 of area error on a fully constrained rounded rectangle, and the
+  near-zero singular value corrupted the DOF rank. (b) The rank floor is 1e-6 on
+  relative singular values (looser than MateSolver's 1e-8, applied squared): 1e-8²
+  = 1e-16 sits *below the pivoted elimination's own round-off* at sketch sizes — a
+  rank-9 Jacobian over 14 variables measurably reported rank 10, an arithmetic
+  impossibility, because the eliminated Schur complement's ~2e-16-relative residue
+  out-ranked the floor.
+- Verified: every constraint solo, the classic sloppy rounded rectangle fully
+  constrained to **0 DOF** with area exact to the analytic w·h − (4−π)r², an
+  under-constrained slot keeping its drawn proportions, contradiction/stationary
+  naming, and 1e-3/1/1e3 scale freedom (`SketchConstraintTests`).
+
+Constraint *serialization* does not fall out of the feature-history `[Param]`
+descriptor pattern (constraints reference entities, and features re-run fresh
+instances anyway), so it is deliberately not in v1.
 
 ### 2D regions and sketch booleans
 

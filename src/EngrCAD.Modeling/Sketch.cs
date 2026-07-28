@@ -267,6 +267,18 @@ public sealed class Sketch
         }
     }
 
+    // ---- constraints ----
+
+    /// <summary>
+    /// Begins constraining this sketch — the variational constraint layer
+    /// (<see cref="ConstrainedSketch"/>): coincident/horizontal/vertical/parallel/
+    /// perpendicular/tangent/equal/concentric plus distance/angle/radius dimensions,
+    /// solved by Levenberg–Marquardt with the DRAWN geometry as seed and branch
+    /// selector. Solving returns a NEW solved <see cref="Sketch"/>; this one is never
+    /// modified.
+    /// </summary>
+    public ConstrainedSketch Constrain() => new(this);
+
     // ---- lowering ----
 
     /// <summary>The sketch as an exact 2D signed distance field — compose it with
