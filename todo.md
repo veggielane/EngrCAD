@@ -743,23 +743,19 @@ where this project already points.
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
-- [ ] **3D-annotation (PMI) follow-ups** (v1 ✅ landed: `Annotation`/`LinearDimension`
-  (point-to-point + `BetweenFaces` selectors)/`RadialDimension.OnEdge`/`LeaderNote`/
-  `DatumLabel` + `HoleCallout`/`ThreadCallout` in Modeling; `StrokeFont` +
-  `AnnotationLayer` billboarded rendering with offscreen parity; measure tool) —
-  remaining ideas:
-  - **Angular dimensions** (two planar faces or three points → arc + degree text)
-    and ordinate/chain dimension styles.
+- [ ] **3D-annotation (PMI) residuals** (angular dimensions incl. `BetweenFaces`
+  included-angle measurement, chain/ordinate styles, multi-line stroke-font layout
+  with callout continuation lines, `ToleranceSpec` text sugar, `HoleTable` +
+  `HoleAnnotations.AutoAttach`, and pickable annotations ✅ landed):
   - **Occlusion-aware rendering** (v1 is always-on-top with the depth test off;
-    depth-tested with a "hidden = dashed/dimmed" pass is the classic upgrade) and
-    **pickable annotations** (select/highlight/edit from the viewport).
-  - **Hole-table annotation** from a `Drill` call's point list (one balloon per
-    hole, a table note keyed by letter), and cosmetic-thread auto-callouts:
-    `Shape.ThreadedHole`/`Drill` could auto-attach `HoleCallout`/`ThreadCallout`
-    notes (v1 generates them; attachment is manual).
-  - **Multi-line note text** (the stroke-font layout is single-line; callout
-    continuation lines currently join with spaces) and tolerance text sugar
-    ("±0.1" via `Label` today).
+    depth-tested with a "hidden = dashed/dimmed" pass is the classic upgrade —
+    needs a second line batch split by a depth pre-pass or a stippled shader
+    variant, so it is real render-path work, not an overlay tweak).
+  - **Annotation editing from the viewport** (picking ✅ — selection reports the
+    text; dragging a picked dimension's offset would be the next affordance).
+  - True leader-less ordinate dimensioning (datum zero point + aligned coordinate
+    text per hole, no dimension lines) — `LinearDimension.Ordinate` is the
+    baseline/running style.
   - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
     STEP AP242 PMI export (far future).
 - [ ] **Chord-deviation tessellation for large parts** — investigated, and the obvious
@@ -778,7 +774,24 @@ where this project already points.
   would need Avalonia pointer capture plumbing for marginal gain); parameter fields are
   free-text through the JSON seam — typed editors (sliders for `Min`/`Max` ranges,
   enum dropdowns) would be the polish pass.
-- [ ] Idea: matcap shading (ambient occlusion landed).
+- [ ] **Matcap shading — assessed, viable as a *procedural* shader variant** (idea
+  stage; ambient occlusion landed). A matcap shades by sampling a lit-sphere image at
+  the view-space normal — material-rich metal/clay looks with zero lights. What the
+  assessment found: (a) the render stack has **no texture machinery at all** (no
+  sampler uniforms, no image decode for COLOR input — `PngGrayReader` is 8/16-bit
+  gray, `PngWriter` write-only), and the parity rule means any texture must reach
+  three front ends (window GL, offscreen EGL, WebGL2 via `engrcad-gl.js`), so a
+  texture-based matcap drags in a color PNG reader plus upload plumbing times three;
+  (b) an **analytic matcap needs none of that** — two or three Gaussian/Phong lobes
+  evaluated in normal space inside the mesh shader reproduce the classic studio
+  matcap look, with the lobe constants living in `ViewerShaders` where window,
+  offscreen and web already share every shading decision; (c) interactions are
+  clean: AO multiplies the matcap sample exactly as it multiplies ambient+diffuse
+  today, the section cut-face flat material and `gl_FrontFacing` rule stay, and the
+  selection `uHighlight` blend is orthogonal. Recommendation: a `ViewStyle`-adjacent
+  toggle (or per-part `DisplayMode` addition) with 2–3 built-in analytic matcaps;
+  texture-based custom matcaps only if a color image reader lands for other reasons.
+  Verify with the docs-PNG byte-compare discipline (default look must not move).
 
 ## Blazor web viewer
 

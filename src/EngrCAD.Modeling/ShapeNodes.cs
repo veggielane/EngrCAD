@@ -366,6 +366,9 @@ internal sealed class DrillShape : Shape
     public double Depth { get; }
     public Matrix4d PlaneMatrix { get; }
 
+    /// <summary>The spec that cut these holes (callout/hole-table generation reads it).</summary>
+    public HoleSpec Spec { get; }
+
     /// <summary>The tool's diameter where it meets the drilled face (cbore/csk included).</summary>
     public double SurfaceDiameter { get; }
 
@@ -373,11 +376,12 @@ internal sealed class DrillShape : Shape
     public (double Axial, double Radius)[] ToolSilhouette { get; }
 
     public DrillShape(
-        Shape child, Shape expanded, IReadOnlyList<Vector2d> points, double depth,
+        Shape child, Shape expanded, HoleSpec spec, IReadOnlyList<Vector2d> points, double depth,
         Matrix4d planeMatrix, double surfaceDiameter, (double Axial, double Radius)[] silhouette)
     {
         Child = child;
         Expanded = expanded;
+        Spec = spec;
         Points = points;
         Depth = depth;
         PlaneMatrix = planeMatrix;

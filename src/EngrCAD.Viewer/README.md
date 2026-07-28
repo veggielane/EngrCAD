@@ -305,13 +305,31 @@ Dark-themed layout around one shared GL viewport:
   viewport or enters the cube region. Hover shares the pick raycast, so it honors the
   section plane exactly as clicking does.
 - **3D annotations (PMI)**: parts annotated in Modeling (`Part.Annotate` —
-  selector-measured `LinearDimension`/`RadialDimension`, `LeaderNote`,
-  `DatumLabel`, hole/thread callouts; see the Modeling README) render as classic
+  selector-measured `LinearDimension`/`RadialDimension`/`AngularDimension`,
+  `LeaderNote`,
+  `DatumLabel`, hole/thread callouts, hole tables; see the Modeling README) render as
+  classic
   dimension graphics: extension lines with a gap at the model and an overshoot past
-  the dimension line, arrowheads, radial/note leaders, datum boxes, and **billboarded
+  the dimension line, arrowheads, radial/note leaders, datum boxes, **angular arcs**
+  (extension rays + a 5°-chorded arc with tangent arrowheads + degree text outside
+  its midpoint; the arc radius is the author's `Offset` length, else ¾ of the shorter
+  ray), and **billboarded
   screen-constant text** from the shared **`StrokeFont`** (`StrokeFont.cs`: digits,
   A-Z, and the dimension symbols — diameter, degree, plus-minus, depth, counterbore,
   countersink — as polyline glyphs; the view cube's labels use the same table).
+  Text may be **multi-line** (`'\n'`): billboarded blocks center their lines, leader
+  text stacks continuation lines below the tail line (hole callouts put their
+  counterbore/countersink continuations there), and a datum box grows to span every
+  line — single-line output is bit-identical to the pre-multi-line layout, which the
+  committed docs PNGs hang off.
+  **Annotations are pickable**: a click within `AnnotationGeometry.PickRadiusPx`
+  (8 style px) of any of an annotation's drawn segments selects it — drawn again in
+  the one selection gold (`Highlight.Selection`), text reported in the status bar;
+  clicking it again or empty space deselects; a claimed click never falls through to
+  the part behind. The pick is `AnnotationGeometry.Pick` (pure math — the same
+  `Build` segments, so what you see is exactly what you can click) and is
+  **depth-blind on purpose**, matching the always-on-top draw; drive it directly via
+  `ViewportControl.PickAnnotation(point)` / read `SelectedAnnotationText`.
   Implementation is self-contained in `AnnotationLayer.cs` following the
   isoline/cube precedents: `AnnotationGeometry` is pure math (unit-tested without
   GL), billboarding is CPU-side and rebuilt **only when the camera pose, viewport,

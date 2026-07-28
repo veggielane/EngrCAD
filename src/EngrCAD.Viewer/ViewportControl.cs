@@ -1131,11 +1131,60 @@ public sealed class ViewportControl : OpenGlControlBase
 
     private void Pick(Point pixel)
     {
+        // Annotations first: the overlay draws on top of the model, so it picks on
+        // top of it too (a claimed click never falls through to the part behind).
+        if (PickAnnotation(pixel))
+            return;
         int best = HitTest(pixel);
         Select(best == _selected ? -1 : best); // clicking the selection clears it
         Report(_selected >= 0 ? $"picked '{_instances[_selected].Path}'" : "picked nothing");
         SelectionChanged?.Invoke(_selected);
     }
+
+    /// <summary>
+    /// Picks a 3D annotation at a control-space position: within a few pixels of any
+    /// of its drawn lines or text strokes selects it (drawn in selection gold; its
+    /// text goes to the status bar), clicking it again deselects. Returns true when
+    /// the click hit an annotation (the caller then skips part picking). Depth-blind
+    /// like the overlay itself — an annotation you can see is pickable. Public so
+    /// tests and custom hosts can drive it directly (synthetic mouse input does not
+    /// reach Avalonia).
+    /// </summary>
+    public bool PickAnnotation(Point position)
+    {
+        double width = Math.Max(1, Bounds.Width);
+        double height = Math.Max(1, Bounds.Height);
+        var eye = CameraMath.Eye(_yaw, _pitch, _distance, _target);
+        var viewProjection = ProjectionMatrix(width / height)
+                           * CameraMath.LookAt(eye, _target, Vector3d.UnitZ);
+        if (!ScenePick.TryRay(position.X, position.Y, width, height, viewProjection,
+                out var near, out var far))
+            return false;
+
+        double scaling = TopLevel.GetTopLevel(this)?.RenderScaling ?? 1.0;
+        var camera = AnnotationCamera.From(
+            new CameraState(_yaw, _pitch, _distance, _target), _orthographic,
+            height * scaling, scaling);
+        int hit = _annotations.Pick(camera, new Ray3d(near, far - near), _showAnnotations);
+        if (hit < 0)
+        {
+            // Clicking empty space clears an annotation selection, then falls
+            // through to normal part picking.
+            if (_annotations.Select(-1))
+                RequestNextFrameRendering();
+            return false;
+        }
+        _annotations.Select(hit == _annotations.SelectedIndex ? -1 : hit);
+        Report(_annotations.SelectedText is { } text
+            ? $"annotation: {text.Replace('\n', ' ')}"
+            : "annotation deselected");
+        RequestNextFrameRendering();
+        return true;
+    }
+
+    /// <summary>The selected annotation's display text (null when none) — the
+    /// host-facing read of the annotation selection.</summary>
+    public string? SelectedAnnotationText => _annotations.SelectedText;
 
     // BVH candidate scratch reused across HitTest calls (hover re-picks on pointer
     // moves — no allocation there; UI-thread only, like all input handling).

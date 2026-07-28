@@ -17,8 +17,9 @@ public static class HoleCallout
 {
     /// <summary>
     /// The callout text for a hole drilled with <paramref name="spec"/> to
-    /// <paramref name="depth"/>: "&#x2300;D &#x21A7;depth", followed by
-    /// "&#x2334;&#x2300;D &#x21A7;d" for counterbores or
+    /// <paramref name="depth"/>: "&#x2300;D &#x21A7;depth", followed on a
+    /// <b>continuation line</b> (drawing convention \u2014 the stroke-font layout stacks
+    /// '\n'-separated lines) by "&#x2334;&#x2300;D &#x21A7;d" for counterbores or
     /// "&#x2335;&#x2300;D &#x00D7;angle&#x00B0;" for countersinks, and
     /// " &#x00D7;angle&#x00B0; TIP" when the hole carries a drill point.
     /// </summary>
@@ -37,10 +38,10 @@ public static class HoleCallout
         if (spec.TipAngleDegrees is { } tip)
             callout += " \u00D7" + Annotation.Format(tip) + "\u00B0 TIP";
         if (spec.IsCounterbore)
-            callout += " \u2334\u2300" + Annotation.Format(spec.FeatureDiameter)
+            callout += "\n\u2334\u2300" + Annotation.Format(spec.FeatureDiameter)
                 + " \u21A7" + Annotation.Format(spec.CounterboreDepth);
         else if (spec.IsCountersink)
-            callout += " \u2335\u2300" + Annotation.Format(spec.FeatureDiameter)
+            callout += "\n\u2335\u2300" + Annotation.Format(spec.FeatureDiameter)
                 + " \u00D7" + Annotation.Format(spec.CountersinkAngleDegrees) + "\u00B0";
         return callout;
     }

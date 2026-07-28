@@ -1092,10 +1092,42 @@ var plate = new Part("plate", plateShape)
   edit becomes a status message, not a crash) and `Scene.PreMesh` pre-resolves off
   the render thread. `Label` overrides the formatted text; `Offset` places the
   dimension line/text (zero = renderer default).
+- **Angular dimensions.** `new AngularDimension(vertex, a, b)` measures the angle at
+  a vertex between two rays; `AngularDimension.BetweenFaces(selA, selB)` measures two
+  non-parallel planar faces' **included** angle — the in-plane directions
+  perpendicular to the shared intersection line, each pointing from the line toward
+  its own face's centroid, which is the angle a drafter dimensions (a 10°-drafted
+  side against the base reads 80°, not the normals' 100°). The vertex (in
+  `ResolvedAnnotation.AnchorC`) is the intersection-line point nearest the centroids,
+  so the arc lands beside the faces. Parallel faces fail loudly, naming
+  `LinearDimension.BetweenFaces` as the distance alternative.
+- **Tolerance text.** `Tolerance = ToleranceSpec.Symmetric(0.1)` appends "±0.1" to a
+  dimension's formatted value, `ToleranceSpec.Limits(plus, minus)` appends
+  "+0.2/-0.1". Pure text sugar — the model is not analyzed — and a `Label` override
+  wins (the author already controls the whole text there).
+- **Chain / ordinate styles.** `LinearDimension.Chain(points, offset)` = one
+  dimension per consecutive pair on one shared offset line;
+  `LinearDimension.Ordinate(points, offset, spacing?)` = every point dimensioned
+  from the first (the datum) with successive lines stacked outward — the baseline
+  style that holds every position to the datum instead of accumulating per-segment
+  tolerances.
 - **Callouts.** `HoleCallout.From(spec, anchor, depth)` and
   `ThreadCallout.From(spec, anchor, depth)` generate standard-text `LeaderNote`s
   from `HoleSpec`/`ThreadSpec` ("⌀5.5 ↧14", "M6×1 ↧12") so drilled/tapped parts can
-  label themselves from the same specs that cut them.
+  label themselves from the same specs that cut them. Counterbore/countersink
+  continuations sit on their own `'\n'` line (the drawing convention; the viewer's
+  stroke-font layout stacks lines).
+- **Hole tables + auto callouts** (`HoleTable.cs`). The drilling data already lives
+  in the `Shape` graph (a `DrillShape`/`ThreadedHoleShape` node carries its spec,
+  points, depth and placement plane), so `HoleTable.For(part)` GENERATES the table
+  instead of transcribing it: one lettered row per call, in call order ("A" = the
+  first `Drill` — the walk reverses the graph's outermost-first nesting), positions
+  on the placement plane. `Annotate(part, tableAnchor)` attaches per-hole balloons
+  ("A1", "B1" — boxed `DatumLabel`s) plus the table as one multi-line note;
+  `HoleAnnotations.AutoAttach(part)` is the lighter per-call option ("4× ⌀5.5 ↧14"
+  at each call's first hole). Deliberately explicit methods rather than a flag on
+  `Drill`: annotations belong to the PART, and a graph node cannot know which part
+  will carry it.
 
 ## Standard components ("smart" hardware)
 
