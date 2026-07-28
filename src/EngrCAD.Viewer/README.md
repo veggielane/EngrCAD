@@ -491,6 +491,17 @@ the explode slider's lesson). `animation.RenderFrames(scene, directory, ...)` al
 offers the **PNG frame sequence** (`frame-0000.png` …), the zero-risk escape hatch
 into ffmpeg for MP4/WebM, which no dependency-free encoder reaches.
 
+`animation.RenderGif(...)` is second, because GIF is what pastes everywhere — and that
+is its only virtue here. `GifWriter` is a per-frame median-cut quantizer + GIF-variant
+LZW, dependency-free; **expect banding on shaded renders** (256 colours, no alpha: the
+background gradient, smooth shading and AO band visibly, and dithering — deliberately
+not done — would fight the clean look). Wireframe or flat-shaded clips GIF far better.
+Quantizer detail worth keeping: the median-cut PARTITION is the pixel mapping (every
+distinct colour lands in one box whose palette entry is the box average), so no
+nearest-palette search exists to disagree with the split, and an image with ≤256
+distinct colours reproduces exactly. The LZW encoder is locked by a round-trip against
+an independently written decoder, including the 4096-entry table reset.
+
 ## Bill of materials
 
 The **BOM** toolbar button shows the current tab's parts list — quantities per distinct

@@ -67,6 +67,27 @@ public static class AnimationExport
         return paths;
     }
 
+    /// <summary>
+    /// Renders the animation to an animated GIF. <b>Expect banding on shaded renders</b>:
+    /// GIF is 256 colours with no alpha, so the background gradient, smooth shading and
+    /// ambient occlusion band visibly, and dithering (deliberately not done) would fight
+    /// the clean look — a <see cref="ViewStyle.Wireframe"/> or flat-shaded clip GIFs far
+    /// better, and <see cref="RenderApng"/> is the quality route. GIF's one virtue is
+    /// that it pastes everywhere.
+    /// </summary>
+    public static void RenderGif(
+        this Animation animation, Scene scene, string path,
+        int frames = 36, int width = 640, int height = 448, CameraState? camera = null,
+        ViewStyle style = ViewStyle.ShadedWithEdges, bool loop = true,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault)
+    {
+        var (pixels, _) = RenderFramePixels(
+            animation, scene, frames, width, height, camera, style, loop, ambientOcclusion);
+        // GIF delays are centiseconds; browsers clamp below 2 to a sluggish 10.
+        int delayCs = Math.Max(2, (int)Math.Round(animation.Duration / frames * 100));
+        GifWriter.Write(path, pixels, width, height, delayCs);
+    }
+
     /// <summary>The shared frame loop: meshes once, resolves one fixed camera when no
     /// camera track exists, evaluates <c>At(t)</c> per frame, renders offscreen.</summary>
     internal static (IReadOnlyList<byte[]> Pixels, CameraState Camera) RenderFramePixels(
