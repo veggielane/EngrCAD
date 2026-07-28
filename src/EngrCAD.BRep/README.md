@@ -734,6 +734,36 @@ operations. Depends only on `EngrCAD.Core`.
   outward-band convention the single-rim pole case reads — with the rim circle's own
   axis alignment folded in.
 
+- **Shape healing** (`ShapeHealing.Heal/Analyze` — OCCT `ShapeFix`): repairs imported
+  face-soup topology; every repair is a return value (`ShapeHealingReport`), never a
+  log line, and the input is never modified. Passes in order, each switchable: vertex
+  merging (union-find, keeping an existing coordinate), small-edge collapse,
+  degenerate-face removal (dimensionless area/perimeter² sliver rule), edge sewing,
+  **curved-edge re-trimming** (opt-in, `RetrimCurvedEdges` — OCCT
+  `ShapeFix_Wire::FixGaps`' parametric mode: each curved edge's domain moves to the
+  foot-of-perpendicular parameters of its unified vertices via a LOCAL Gauss–Newton —
+  the gap is sub-tolerance so no global seeding or period unwrapping is needed, and the
+  break-before-negligible-step rule makes a converged end come back bit-identical so
+  healing stays idempotent; what remains is the vertex's PERPENDICULAR distance to the
+  curve, which only curve re-fitting could remove — a modelling operation, reported
+  and never attempted; the per-edge tolerance story is exactly that report, since this
+  topology deliberately carries no per-entity tolerances for downstream code to have
+  to honour), straight-edge refitting (opt-in — the one pass that moves geometry),
+  wire re-ordering/re-sensing, and **shell repair** (`RepairShells`, on by default —
+  OCCT `ShapeFix_Shell`, the B-Rep counterpart of `MeshRepair`'s winding flood): a
+  consistency flood over shared-edge senses (the manifold invariant is two uses with
+  OPPOSITE sense, so agreement across an edge means one face is flipped; flipping
+  re-winds every loop AND toggles `IsReversed`, so "loops CCW about the outward
+  normal" keeps holding; contradictions mean non-orientable and are reported, not
+  guessed), a **global outward vote** per CLOSED component from the fan volume of the
+  sampled boundary loops against containment parity (a nested component is a void and
+  must point INTO its cavity — sealed `Shelling.Shell` output is left exactly alone;
+  pole-bounded/closed-band faces like spheres enclose ~no loop volume, so their vote
+  is honestly ambiguous and the authored side is kept), and shell **repartition** so
+  each connected component is one shell (splitting a foreign writer's flat face list,
+  merging shells a component spans) — skipped bit-stably when the partition already
+  matches.
+
 ### Named epsilon tiers
 
 The epsilon ladder documented in `CLAUDE.md` has two named B-Rep constants, both on
