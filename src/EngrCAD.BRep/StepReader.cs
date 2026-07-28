@@ -553,6 +553,37 @@ public static class StepReader
                     return (ellipse, new Interval(t0, t0 + sweep));
                 }
 
+                case Parabola3d parabola:
+                {
+                    // The parameter IS the local y coordinate (unit axes), so the trim is
+                    // one dot product per vertex — exact, and it also replaces the
+                    // construction-time placeholder domain with the real interval.
+                    double t0 = (startPosition - parabola.Apex).Dot(parabola.YDirection);
+                    double t1 = (endPosition - parabola.Apex).Dot(parabola.YDirection);
+                    var rebuilt = new Parabola3d(
+                        parabola.Apex, parabola.XDirection, parabola.YDirection, parabola.FocalLength,
+                        new Interval(Math.Min(t0, t1), Math.Max(t0, t1)));
+                    return t1 > t0
+                        ? (rebuilt, new Interval(t0, t1))
+                        : (new CurveSegment(rebuilt, t0, t1), Interval.Unit);
+                }
+
+                case Hyperbola3d hyperbola:
+                {
+                    // sinh t is the (unit) SemiAxisY component over |B| — monotone, so
+                    // asinh reads the parameter exactly per vertex.
+                    double b = hyperbola.SemiAxisY.Length;
+                    var yHat = hyperbola.SemiAxisY / b;
+                    double t0 = Math.Asinh((startPosition - hyperbola.Center).Dot(yHat) / b);
+                    double t1 = Math.Asinh((endPosition - hyperbola.Center).Dot(yHat) / b);
+                    var rebuilt = new Hyperbola3d(
+                        hyperbola.Center, hyperbola.SemiAxisX, hyperbola.SemiAxisY,
+                        new Interval(Math.Min(t0, t1), Math.Max(t0, t1)));
+                    return t1 > t0
+                        ? (rebuilt, new Interval(t0, t1))
+                        : (new CurveSegment(rebuilt, t0, t1), Interval.Unit);
+                }
+
                 default:
                 {
                     var domain = curve.Domain;
@@ -598,6 +629,9 @@ public static class StepReader
                     "LINE" => Line(record),
                     "CIRCLE" => Circle(record),
                     "ELLIPSE" => Ellipse(record),
+                    "PARABOLA" => Parabola(record),
+                    "HYPERBOLA" => Hyperbola(record),
+                    "OFFSET_CURVE_3D" => OffsetCurve(record),
                     _ => throw new NotSupportedException($"curve type {entity.Keyword} (#{id}) is not supported"),
                 };
             }
@@ -625,6 +659,39 @@ public static class StepReader
             double a = ToMillimetres(record.Args[2].AsNumber());
             double b = ToMillimetres(record.Args[3].AsNumber());
             return new Ellipse3d(frame.Origin, frame.X * a, frame.Y * b);
+        }
+
+        /// <summary>A STEP conic is UNBOUNDED while our <see cref="Parabola3d"/>/<see
+        /// cref="Hyperbola3d"/> require a finite domain at construction: this placeholder
+        /// stands in until <see cref="TrimEdgeCurve"/> rebuilds the curve over the exact
+        /// vertex-derived interval (closed form for both conics). It matters only for a
+        /// conic consumed OUTSIDE an edge (an offset basis, a revolve generator), where
+        /// ±1000 comfortably covers mm-scale CAD.</summary>
+        private static readonly Interval ConicPlaceholderDomain = new(-1000, 1000);
+
+        private Parabola3d Parabola(StepRecord record)
+        {
+            var frame = Axis2(record.Args[1].AsReference());
+            double focal = ToMillimetres(record.Args[2].AsNumber());
+            return new Parabola3d(frame.Origin, frame.X, frame.Y, focal, ConicPlaceholderDomain);
+        }
+
+        private Hyperbola3d Hyperbola(StepRecord record)
+        {
+            var frame = Axis2(record.Args[1].AsReference());
+            double a = ToMillimetres(record.Args[2].AsNumber());
+            double b = ToMillimetres(record.Args[3].AsNumber());
+            return new Hyperbola3d(frame.Origin, frame.X * a, frame.Y * b, ConicPlaceholderDomain);
+        }
+
+        private OffsetCurve3d OffsetCurve(StepRecord record)
+        {
+            // offset_curve_3d(name, basis, distance, self_intersect, ref_direction);
+            // displacement = distance·(ref_direction × tangent) = our d·(n̂ × T̂).
+            var basis = Curve(record.Args[1].AsReference());
+            double distance = ToMillimetres(record.Args[2].AsNumber());
+            var refDirection = Direction(record.Args[4].AsReference());
+            return new OffsetCurve3d(basis, refDirection, distance);
         }
 
         private NurbsCurve BsplineCurve(StepEntity entity)
@@ -1349,15 +1416,17 @@ public static class StepReader
                 }
             }
 
-            if (curve is NurbsCurve nurbs)
+            if (curve is NurbsCurve or OffsetCurve3d)
             {
+                // Types with exact DerivativeAt overrides take Newton (the conics never
+                // reach here — TrimEdgeCurve reads their parameters in closed form).
                 double t = best;
                 for (int i = 0; i < 50; i++)
                 {
-                    var residual = nurbs.PointAt(t) - point;
+                    var residual = curve.PointAt(t) - point;
                     if (residual.Length < 1e-13)
                         break;
-                    var derivative = nurbs.DerivativeAt(t);
+                    var derivative = curve.DerivativeAt(t);
                     double denominator = derivative.Dot(derivative);
                     if (denominator < 1e-30)
                         break;

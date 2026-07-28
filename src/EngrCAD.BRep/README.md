@@ -20,6 +20,9 @@ operations. Depends only on `EngrCAD.Core`.
   `Hyperbola3d` is one branch P(t) = C + A·cosh t + B·sinh t (arc length by adaptive
   Simpson — no elementary closed form). Both require a finite domain at construction
   (the underlying loci are unbounded; OCCT trims equivalently).
+  `Parabola3d.ToNurbs()` is the segment over its domain as an EXACT quadratic Bézier
+  (the parabola is the one conic that is polynomial: ends plus the tangent-intersection
+  middle control point, unit weights, parameter affine over the domain).
   `OffsetCurve3d` is a planar offset as first-class geometry:
   O(t) = C(t) + d·(n̂ × T̂(t)), positive d to the left of travel seen from +n̂ (CCW
   circle with n̂ = axis: radius r − d, exactly concentric). Its exact derivative is
@@ -686,7 +689,14 @@ operations. Depends only on `EngrCAD.Core`.
   and knots untouched, sound for any affine map because a rational curve is an affine
   combination of its control points at every parameter, which is what lets
   NURBS-profile extrusions round-trip at reconstruction accuracy instead of sampling
-  their translated top edges to degree-1 polylines; swept surfaces not exportable)
+  their translated top edges to degree-1 polylines; swept surfaces not exportable).
+  The full analytic conic family maps both ways: `Parabola3d` ↔ PARABOLA and
+  `Hyperbola3d` ↔ HYPERBOLA (the ISO 10303-42 parameterizations are ours verbatim, so
+  edge trims reconstruct in CLOSED FORM — one dot product / asinh per vertex — and the
+  import replaces the construction-time placeholder domain with the exact
+  vertex-derived interval), and `OffsetCurve3d` ↔ OFFSET_CURVE_3D (displacement
+  d·(ref_direction × T̂) = our d·(n̂ × T̂), so distance and direction carry over
+  unchanged; trims by Newton on the exact offset derivative)
   and `StepReader.Read/ReadFile` (its inverse: a full Part 21 parser — strings with
   `''` escapes, `1.E-6`-style reals, enums, typed values, complex instances, forward
   references — plus entity mapping back to `BrepSolid`, returning solids + a
