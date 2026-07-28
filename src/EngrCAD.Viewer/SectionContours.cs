@@ -11,10 +11,150 @@ namespace EngrCAD.Viewer;
 // it; ViewportControl only calls Invalidate/Draw/Release here.
 
 /// <summary>
+/// One completed background contour build: the geometries (one per section plane),
+/// the per-part lowering failures encountered, and the exact target (planes +
+/// visibility) the build was made for, so the render thread can adopt it as the new
+/// built state. <see cref="Generation"/> stamps the build so a target that changed
+/// while the worker ran is discarded rather than adopted (the TabMeshLoader rule:
+/// a stale result must never land).
+/// </summary>
+internal sealed record SectionContourBuild(
+    int Generation, List<SectionContourGeometry> Geometries,
+    List<(Part Part, string Message)> Failures, List<SectionPlane> Planes,
+    bool[] Visible);
+
+/// <summary>
+/// The UI-free state machine behind the streaming isoline rebuild: tracks which
+/// target (planes + visibility) is being built on the background task, stamps builds
+/// with a generation so <see cref="Invalidate"/> or a newer kick rejects an in-flight
+/// result, and hands completed builds back for adoption on the render thread.
+/// Extraction itself (<see cref="SectionContours.Build"/> — marching squares plus the
+/// first <c>Part.TryGetSdf</c> lowering, which can be seconds for a bridged shape)
+/// runs entirely off-thread; the render thread only adopts and uploads. All methods
+/// except the worker's own completion write are render-thread-only.
+/// </summary>
+internal sealed class SectionContourWorker
+{
+    private int _generation;
+    private List<SectionPlane>? _inFlightPlanes;
+    private bool[]? _inFlightVisible;
+    private SectionContourBuild? _completed;
+    private readonly object _resultLock = new();
+
+    /// <summary>True while a build for some target is running and its result has not
+    /// been adopted or superseded.</summary>
+    public bool Building => _inFlightPlanes is not null;
+
+    /// <summary>Rejects any in-flight build's result (scene swap, live reload): its
+    /// generation no longer matches, so <see cref="TryAdopt"/> discards it.</summary>
+    public void Invalidate()
+    {
+        _generation++;
+        _inFlightPlanes = null;
+        _inFlightVisible = null;
+    }
+
+    /// <summary>
+    /// Starts a background build for the given target unless one for the SAME target
+    /// is already running (compared by exact plane equality and visibility bits — the
+    /// same staleness rule the renderer uses). <paramref name="requestRender"/> is
+    /// invoked from the worker when the result is ready, so the host can schedule a
+    /// frame that adopts it. Snapshots the visibility list (mutated in place by the
+    /// UI thread) and the plane list; the instance list is replaced wholesale on
+    /// change (and any change routes through <see cref="Invalidate"/>), so its
+    /// reference is safe to carry.
+    /// </summary>
+    public void EnsureBuilding(
+        IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
+        IReadOnlyList<SectionPlane> planes, Action requestRender)
+    {
+        if (SameTarget(_inFlightPlanes, _inFlightVisible, planes, visible))
+            return;
+        _generation++;
+        int generation = _generation;
+        var planesCopy = new List<SectionPlane>(planes);
+        bool[] visibleCopy = [.. visible];
+        _inFlightPlanes = planesCopy;
+        _inFlightVisible = visibleCopy;
+        Task.Run(() =>
+        {
+            var geometries = new List<SectionContourGeometry>(planesCopy.Count);
+            var failures = new List<(Part, string)>();
+            foreach (var plane in planesCopy)
+            {
+                geometries.Add(SectionContours.Build(
+                    instances, visibleCopy,
+                    SectionContours.PlaneFrame(plane.Normal.Normalized(), plane.Offset),
+                    (part, message) => failures.Add((part, message))));
+            }
+            lock (_resultLock)
+            {
+                // Never let an older task's late finish overwrite a newer result:
+                // only the highest completed generation can survive to adoption.
+                if (_completed is null || _completed.Generation < generation)
+                    _completed = new SectionContourBuild(
+                        generation, geometries, failures, planesCopy, visibleCopy);
+            }
+            requestRender();
+        });
+    }
+
+    /// <summary>
+    /// The completed build if it is still current, else null (a stale build — its
+    /// target superseded or <see cref="Invalidate"/>d — is discarded either way).
+    /// Called on the render thread; adoption clears the in-flight target so the next
+    /// change kicks a fresh build.
+    /// </summary>
+    public SectionContourBuild? TryAdopt()
+    {
+        SectionContourBuild? completed;
+        lock (_resultLock)
+        {
+            completed = _completed;
+            _completed = null;
+        }
+        if (completed is null || completed.Generation != _generation)
+            return null;
+        _inFlightPlanes = null;
+        _inFlightVisible = null;
+        return completed;
+    }
+
+    private static bool SameTarget(
+        List<SectionPlane>? builtPlanes, bool[]? builtVisible,
+        IReadOnlyList<SectionPlane> planes, IReadOnlyList<bool> visible)
+    {
+        if (builtPlanes is null || builtVisible is null)
+            return false;
+        if (planes.Count != builtPlanes.Count || visible.Count != builtVisible.Length)
+            return false;
+        for (int i = 0; i < planes.Count; i++)
+        {
+            // Exact equality on purpose: change detection, not geometry.
+            if (planes[i] != builtPlanes[i])
+                return false;
+        }
+        for (int i = 0; i < visible.Count; i++)
+        {
+            if (visible[i] != builtVisible[i])
+                return false;
+        }
+        return true;
+    }
+}
+
+/// <summary>
 /// GL-side owner of the section-isoline overlay: caches SDF routes and the built
 /// geometry, rebuilds only when the section plane moves or the scene/visibility
 /// changes (never per frame), and draws three colored line batches through the shared
-/// line program. All methods must be called with the GL context current (render pass).
+/// line program. In the window the rebuild STREAMS: extraction (marching squares plus
+/// the first <c>Part.TryGetSdf</c> lowering, which used to stall the first
+/// section-enabled frame for seconds on a bridged shape) runs on a background task
+/// (the <see cref="AmbientOcclusion.BakeInBackground"/> precedent) and the previous
+/// contours — or nothing, on first enable — draw until the new ones land; the
+/// offscreen pass (no <c>requestRender</c>) builds inline, one-shot and
+/// deterministic. All GL-touching methods must be called with the context current
+/// (render pass).
 /// </summary>
 internal sealed class SectionContourRenderer
 {
@@ -33,66 +173,46 @@ internal sealed class SectionContourRenderer
     private bool[] _builtVisible = [];
     private int _builtVisibleCount;
     private int _reportedParts = -1;
+    private readonly SectionContourWorker _worker = new();
 
     /// <summary>Call when the instance list changes (scene swap/live reload): forces a
-    /// rebuild. The SDF lowerings themselves are cached on the Parts and deliberately
-    /// NOT dropped — a reload brings fresh parts anyway, and an unchanged part keeps its
-    /// (possibly very expensive) field.</summary>
+    /// rebuild and rejects any in-flight background build. The SDF lowerings themselves
+    /// are cached on the Parts and deliberately NOT dropped — a reload brings fresh
+    /// parts anyway, and an unchanged part keeps its (possibly very expensive) field.</summary>
     public void Invalidate()
     {
         _dirty = true;
         _reportedFailures.Clear();
+        _worker.Invalidate();
     }
 
     /// <summary>
-    /// Draws the isolines for every active section plane, rebuilding geometry and GPU
-    /// buffers first when stale. Each plane's contours are drawn clipped by its SIBLING
-    /// planes (<see cref="SectionClip.Siblings"/> — that method documents and owns the
-    /// rule), so a quarter cut shows each cut face's isolines only where that face is
-    /// actually exposed instead of across the plane's full extent. The plane comparisons
-    /// for staleness are deliberate exact equality — change detection, not geometry.
+    /// Draws the isolines for every active section plane, scheduling a background
+    /// rebuild when stale (or rebuilding inline when <paramref name="requestRender"/>
+    /// is null — the offscreen one-shot). Each plane's contours are drawn clipped by
+    /// its SIBLING planes (<see cref="SectionClip.Siblings"/> — that method documents
+    /// and owns the rule), so a quarter cut shows each cut face's isolines only where
+    /// that face is actually exposed instead of across the plane's full extent; the
+    /// sibling set comes from the planes the drawn geometry was BUILT for, so stale
+    /// contours awaiting a background rebuild stay self-consistent. The plane
+    /// comparisons for staleness are deliberate exact equality — change detection,
+    /// not geometry.
     /// </summary>
     public void Draw(
         GL gl, IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
         IReadOnlyList<SectionPlane> planes, SectionCombine combine,
         uint lineProgram, int uModel, int uColor, in SectionUniforms section,
-        Span<float> matrix, Action<string> report)
+        Span<float> matrix, Action<string> report, Action? requestRender = null)
     {
         if (NeedsRebuild(planes, visible))
         {
-            Release(gl);
-            _geometries.Clear();
-            int most = 0;
-            double spacing = 0;
-            foreach (var plane in planes)
-            {
-                var geometry = SectionContours.Build(
-                    instances, visible,
-                    SectionContours.PlaneFrame(plane.Normal.Normalized(), plane.Offset),
-                    (part, message) =>
-                    {
-                        if (_reportedFailures.Add(part))
-                            report(message);
-                    });
-                _geometries.Add(geometry);
-                if (geometry.PartCount > most)
-                {
-                    most = geometry.PartCount;
-                    spacing = geometry.Spacing;
-                }
-            }
-            _dirty = false;
-            _builtPlanes.Clear();
-            _builtPlanes.AddRange(planes);
-            SnapshotVisibility(visible);
-            Upload(gl);
-            if (most != _reportedParts)
-            {
-                _reportedParts = most;
-                if (most > 0)
-                    report($"section isolines: {most} part(s), spacing {spacing:G3}");
-            }
+            if (requestRender is null)
+                BuildInline(gl, instances, visible, planes, report);
+            else
+                _worker.EnsureBuilding(instances, visible, planes, requestRender);
         }
+        if (requestRender is not null && _worker.TryAdopt() is { } build)
+            Adopt(gl, build, report);
 
         gl.UseProgram(lineProgram);
         CameraMath.WriteColumnMajor(Matrix4d.Identity, matrix);
@@ -103,7 +223,7 @@ internal sealed class SectionContourRenderer
             if (_geometries[i].PartCount == 0)
                 continue;
 
-            SectionClip.Siblings(planes, i, combine, _siblings);
+            SectionClip.Siblings(_builtPlanes, i, combine, _siblings);
             section.Write(gl, _siblings, SectionCombine.Union);
 
             // d = 0 bright gold (the exact cross-section), positive levels cool,
@@ -118,6 +238,61 @@ internal sealed class SectionContourRenderer
                 SectionContours.NegativeColor);
             DrawBatch(gl, buffers.ZeroVao, geometry.ZeroVertices.Length / 3, uColor,
                 SectionContours.ZeroColor);
+        }
+    }
+
+    /// <summary>Synchronous rebuild for the offscreen one-shot path (deterministic,
+    /// nothing streams): the pre-worker behaviour, verbatim.</summary>
+    private void BuildInline(
+        GL gl, IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
+        IReadOnlyList<SectionPlane> planes, Action<string> report)
+    {
+        var geometries = new List<SectionContourGeometry>(planes.Count);
+        var failures = new List<(Part, string)>();
+        foreach (var plane in planes)
+        {
+            geometries.Add(SectionContours.Build(
+                instances, visible,
+                SectionContours.PlaneFrame(plane.Normal.Normalized(), plane.Offset),
+                (part, message) => failures.Add((part, message))));
+        }
+        Adopt(gl, new SectionContourBuild(
+            0, geometries, failures, [.. planes], [.. visible]), report);
+    }
+
+    /// <summary>Installs a completed build as the drawn state: geometry, GPU buffers,
+    /// the built-target snapshot the staleness check compares against, and the
+    /// deduped failure/summary status lines (reported here, on the render thread,
+    /// never from the worker).</summary>
+    private void Adopt(GL gl, SectionContourBuild build, Action<string> report)
+    {
+        _geometries.Clear();
+        _geometries.AddRange(build.Geometries);
+        _dirty = false;
+        _builtPlanes.Clear();
+        _builtPlanes.AddRange(build.Planes);
+        SnapshotVisibility(build.Visible);
+        Upload(gl);
+        foreach (var (part, message) in build.Failures)
+        {
+            if (_reportedFailures.Add(part))
+                report(message);
+        }
+        int most = 0;
+        double spacing = 0;
+        foreach (var geometry in build.Geometries)
+        {
+            if (geometry.PartCount > most)
+            {
+                most = geometry.PartCount;
+                spacing = geometry.Spacing;
+            }
+        }
+        if (most != _reportedParts)
+        {
+            _reportedParts = most;
+            if (most > 0)
+                report($"section isolines: {most} part(s), spacing {spacing:G3}");
         }
     }
 

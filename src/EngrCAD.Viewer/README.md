@@ -209,7 +209,13 @@ Dark-themed layout around one shared GL viewport:
   bar; a wall thinner than one spacing simply shows no interior ring). Extraction is
   `SdfContours` in EngrCAD.Interop (marching squares over one batch-`Evaluate` grid,
   ~160 cells across, per part per rebuild); it reruns only when the section height,
-  scene, or visibility changes — never per frame. Lines draw through the shared line
+  scene, or visibility changes — never per frame — and in the window it runs **on a
+  background task** (`SectionContourWorker`, the `AmbientOcclusion.BakeInBackground`
+  precedent): the first section-enabled frame no longer stalls on the marching
+  squares plus a bridged shape's first `TryGetSdf` lowering; the previous contours
+  (or nothing, on first enable) draw until the new ones land, generation-stamped so
+  a scene swap or a superseding nudge can never adopt a stale build (the
+  `TabMeshLoader` rule). Lines draw through the shared line
   program, pulled 1% of the spacing to the visible side of the clip so the fragment
   discard never eats them; depth-tested like feature edges (polygon-offset fills lose
   to coincident lines). The plumbing is plane-general (`SectionContours.PlaneFrame`

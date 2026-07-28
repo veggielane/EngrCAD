@@ -786,10 +786,15 @@ public sealed class ViewportControl : OpenGlControlBase
     /// </summary>
     private void DrawSectionContours(GL gl, Span<float> matrix) =>
         _sectionContours.Draw(gl, _instances, _visible, _sectionPlanes, _sectionCombine,
-            _lineProgram, _uLineModel, _uLineColor, _lineSection, matrix, _sectionReport ??= Report);
+            _lineProgram, _uLineModel, _uLineColor, _lineSection, matrix, _sectionReport ??= Report,
+            // The window streams: extraction runs on a background task and this
+            // callback (from the worker thread) schedules the frame that adopts it.
+            _contourRequestRender ??=
+                () => Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering));
 
-    // Cached delegate so the per-frame contour draw does not allocate.
+    // Cached delegates so the per-frame contour draw does not allocate.
     private Action<string>? _sectionReport;
+    private Action? _contourRequestRender;
 
     // ---- annotations (PMI) + measure tool (all overlay logic lives in AnnotationLayer.cs) ----
 

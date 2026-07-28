@@ -743,10 +743,6 @@ where this project already points.
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
-- [ ] **Section-isoline extraction still runs on the render thread** when the section
-  toggle is first enabled (marching squares plus the first `TryGetSdf` lowering). It
-  should stream the way ambient occlusion now does —
-  `AmbientOcclusion.BakeInBackground` is the precedent.
 - [ ] **`Part.ClippedBySection` has no UI** — a per-tree-row toggle beside the
   display-mode cycler; likewise no toolbar affordance for oblique section planes (hosts
   must set `ViewportControl.SectionPlanes` directly), and AO streaming reports only one
