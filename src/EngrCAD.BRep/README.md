@@ -534,6 +534,24 @@ operations. Depends only on `EngrCAD.Core`.
     (`ChamferRim`) or the "distance and angle" spelling `ChamferRimAtAngle(setback,
     degrees)` — setback measured IN the chamfered face, angle measured FROM it, 45° being
     the symmetric case.
+  - **Variable-setback chamfer** — `ChamferRim(solid, face, setbackAt)` /
+    `ChamferRimAtAngle(solid, face, setbackAt, degrees)` / `ChamferEdges(solid, edges,
+    setbackAt)` take a LAW `Func<Vector3d, double>` evaluated at each rim corner, linear
+    along each edge. Still exact everywhere, on two facts: a linearly varying
+    perpendicular inset of a straight edge is still a straight LINE (merely tilted), so
+    sharp corners keep exact line–line miters and the corner segment from mitered top
+    point to dropped bottom point is a boundary ruling of both adjacent strips; and a
+    constant top:side ratio (a constant angle) keeps each strip's four corner points
+    coplanar (`s₀·d₁ = d₀·s₁`), so every strip stays an exact PLANE — the strip's frame
+    just follows the tilted top boundary instead of the edge. Enforced restrictions,
+    both because a circle offset by a varying amount is a spiral with no exact B-Rep
+    form: an arc rim edge needs the law constant along the arc (its band remains the
+    exact cone), and a full circular rim needs it constant everywhere. Sharp corners
+    adjacent to an arc are refused under a law (the miter of a tilted line against a
+    concentric arc is not the arc's endpoint). A neighbour whose surface is
+    domain-driven is re-trimmed to the HIGHEST remaining rim corner, since a tilted rim
+    dips below a constant trim. Variable-RADIUS fillets stay refused — the corner, not
+    the band, is the blocker (see the future-work note below).
   - **Fillet** — a full circular rim becomes an exact quarter-torus (`FilletEdge`); a
     tangent-continuous chain of lines and arcs becomes quarter-cylinder and
     quarter-torus-segment bands sharing circular junction arcs; and a **sharp corner
@@ -545,8 +563,11 @@ operations. Depends only on `EngrCAD.Core`.
     no trigonometry to round off. The circular junction arc is literally the
     `|bottom − centre| = r` specialization. Reflex corners work too (their bands reach
     PAST the edge's end to meet the miter, so the band surface is built to span it).
-    A sharp corner at an ARC is refused: that blend pairs a torus with a cylinder and is
-    not a conic.
+    A sharp corner at an ARC is refused as a documented POLICY (design.md §5): that blend
+    pairs a torus with a cylinder, which is not a conic, and tracing an approximate corner
+    would bake a non-refining sampling floor into a primary feature — so the refusal
+    locates the corner and names the exact escapes (make the rim tangent-continuous,
+    chamfer instead, or take the implicit route explicitly).
     <br/>**Why a miter and not a ball.** A spherical patch is the classic corner where
     THREE blended edges meet. At a rim corner only two are blended — the two side faces
     keep their sharp shared edge — and a sphere of the fillet radius there is tangent to
@@ -566,37 +587,81 @@ operations. Depends only on `EngrCAD.Core`.
     band about the ERODED edge line, and every vertex becomes a spherical patch on the
     ERODED vertex, bounded by great-circle arcs. Each curve is created once and handed to
     both of its faces, so senses follow mechanically and the result is manifold by
-    construction (a box gives 6 + 12 + 8 = 26 faces, 48 edges, 24 vertices). Every face is
-    FULL-DOMAIN, so it all tessellates on the natural grid and the volume converges
-    quadratically onto Steiner's formula
-    `V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³` — the last term because the eight octants
-    are exactly one ball. Refused loudly: concave edges (an opening cannot round them),
-    vertices of valence ≠ 3, and corners where no incident face is perpendicular to the
-    other two. That last restriction is what keeps the patch an exact surface of
-    revolution — the spherical triangle is then the lune between two meridians of that
-    face's normal, closed by an equatorial great circle — and it holds for every box, every
-    convex prism, and every sheared box. A general trihedral corner's spherical triangle
-    has no exact revolved form, and there is no other tessellable surface type for it.
+    construction (a box gives 6 + 12 + 8 = 26 faces, 48 edges, 24 vertices). Refused
+    loudly: concave edges (an opening cannot round them) and vertices of valence ≠ 3.
+    Corners where one incident face is perpendicular to the other two (every box, convex
+    prism and sheared box) keep the exact LUNE — the spherical triangle reduces to the
+    region between two meridians of that face's normal closed by an equatorial great
+    circle, a FULL-DOMAIN surface of revolution on the natural grid. **General trihedral
+    corners** (a tetrahedron's, a drafted block's) build a TRIMMED spherical-triangle
+    patch on the same sphere: pick one face normal as the pole axis — the two arcs that
+    end at its tangency are then exact MERIDIANS (a great circle through the pole lies in
+    a plane containing the axis), landing on the u = 0 / u = sweep domain boundaries, the
+    pole closes the top, and only the third (diagonal) arc genuinely trims the interior.
+    The generator's interior-side extent is not a weld boundary, so it takes the
+    diagonal's sampled elevation minimum with a fixed margin; the three weld boundaries
+    are exact by construction. Tessellation goes through a dedicated trimmed tier
+    (`TriangulatePoleGrid` in Interop): one column per diagonal boundary sample, interior
+    rows invented at the natural density and shared by index between adjacent column
+    zips, meridian columns verbatim from the shared edge polylines, one one-step fan
+    ring at the pole — and the whole grid EXCLUDED from midpoint refinement, because the
+    refiner's flat uv metric overstates u chords near a pole without bound (measured: it
+    cascaded midpoints into the apex fan at 16/8 and half-step slivers into the last rows
+    at 48/24, both rejected by the corpus floor; the tier's own cells are already at
+    natural density and converge quadratically — Steiner on a regular tetrahedron to
+    1e-4 with a 3.0–5.0 halving ratio). Volume converges onto Steiner's formula
+    `V = V₀ + A₀·r + (r²/2)·Σ ℓₑθₑ + (4π/3)r³` (dimensions of the ERODED body — the
+    last term because a convex polytope's exterior solid angles sum to one ball).
     <br/>All the corner arcs are `CurveSegment` over `Circle3d`, never rational NURBS arcs:
     the patch is a surface of revolution sampled at even ANGLES, so an arc parameterized
     any other way samples to different points and the patch stops welding to its band.
-    <br/>Known gap: `StepWriter` exports these solids correctly (a STEP
-    `SURFACE_OF_REVOLUTION` is unbounded by definition and the face boundary trims it), but
-    `StepReader` cannot re-trim a CLOSED generator when the swept angle came from rails —
-    the corner patches' meridian boundaries are circles through the axis, which no rim rule
-    recognizes — so a re-imported rounded solid meshes non-manifold. The reader now emits a
-    diagnostic saying exactly that instead of failing silently. Second known gap:
-    `BrepBoolean` cannot yet cut a whole-solid fillet (a fragment's re-surfaced sub-band
-    loses the corner arcs from its domain); the solid itself is sound — every loop point
-    projects inside its own face's domain, which is a locked test — so this is a boolean
-    limitation, not a construction one. Mitered RIM fillets do cut correctly.
+    <br/>These solids round-trip through STEP: the corner patches' meridian boundaries are
+    circles THROUGH the axis (no rim rule applies), and the reader recovers the closed
+    circular generator's trim from them in CLOSED FORM — each meridian is a rotated copy of
+    the generator, its azimuth read from the two circles' plane normals (the ±normal branch
+    resolved by requiring the azimuth to sit within the swept angle and the rotated centre
+    to land on the generator's), its points rotated back into the generator's plane and
+    their angles read in the generator circle's own frame; the edge bands' extruded
+    surfaces recover the same way from their congruent TRANSLATED end arcs. Never a
+    distance minimization (which stalls at √ε, past weld tolerance). Closed NON-circular
+    generators still keep the honest non-manifold diagnostic. Known gap:
+    `BrepBoolean` can cut a whole-solid fillet through its PLANES (a centre drill is
+    exact — locked with a Steiner-minus-bore volume test) but not through an edge BAND.
+    The earlier "re-surfaced sub-band loses the corner arcs" diagnosis was WRONG; the
+    measured causes: the tool∩band tracer loop leaves the band's quarter domain and
+    closes on the extended carrier; the on-band runs' pseudo-samples now reach the
+    domain edge (extrapolation extends by however many local gaps it takes, capped —
+    one gap was measured falling short, leaving zero seeds), so crossing SEEDS exist —
+    but `RefineCrossing` demands a true 3D intersection to 1e-11 and a CHORDAL tracer
+    polyline sits a sagitta (~1e-4) off the exact tangency edge mid-chord: the curves
+    are skew, every seed is rejected, the band never splits, and the whole band
+    mis-classifies while its planar neighbours split — the result cracks along entire
+    tangency edges and the boolean refuses loudly (with the unpaired edges now itemized
+    in the message). The fix needs exact edge-vs-tool-surface crossings (the tracer
+    curve must carry its surface pair) plus crossing-snapped polyline segment ends on
+    BOTH solids, so the seam still welds by construction. Mitered RIM fillets cut
+    correctly.
   - **Selection** — by face (`FilletRim`/`ChamferRim`) or by EDGE (`FilletEdges`/
-    `ChamferEdges`, and `RimFacesFor` which resolves a selection into the rim features
-    that reproduce it). A complete planar face rim resolves; a partial run does not, and is
-    refused before any surgery runs, because a band that stops partway along a rim has to
-    terminate somewhere and every exact termination is a different surface. Filleting EVERY
-    edge of a convex solid is refused for the same reason in reverse: its vertices need the
-    spherical corner patch, which is a different construction from rim surgery.
+    `ChamferEdges`; `RimFacesFor` remains the complete-rims-only resolution). A complete
+    planar face rim resolves to rim surgery; a **partial run** — a contiguous selection
+    stopping part-way along a rim — now blends with **SETBACK terminations**: the band
+    stops at the run's end vertex with a planar face perpendicular to the terminal edge,
+    exact because the band's cross-section there is already planar (the fillet's quarter
+    arc / the chamfer's segment — the industry-default stop; cliff and vertex-blend
+    terminations stay refused, each being a different surface). The top face keeps the
+    terminal vertex and gains one in-plane link segment to the inset boundary, the
+    terminal side face gains the matching descent segment, and the termination face
+    closes the triangle against the band's end cross-section — its outward normal points
+    INTO the removed wedge (the intact material is beyond the run vertex), which is what
+    fixes every link edge's two senses. Interior run corners miter/blend exactly as full
+    rims; interior-neighbour bands re-trim, terminal neighbours keep their full height.
+    The whole selection is grouped and validated BEFORE any surgery: runs must be
+    contiguous, start and end on STRAIGHT edges (an arc terminal's periodic cylindrical
+    neighbour cannot be re-trimmed yet), and stay clear of other selected rims and runs —
+    three blended edges meeting at one vertex is the spherical-corner shape that belongs
+    to `FilletAllEdges`, and is refused naming it. Removed volumes are closed form (the
+    prism terminates flush at the end planes): one chamfered edge removes exactly
+    `c²/2·L`, an L-run `c²/2·(L₁+L₂) − c³/3`.
   - Numerical rules the surgery depends on (all learned from real cracks): rim circles come
     from EDGE SAMPLES (`ActualCircle`), never from `Underlying` — a translated extrusion
     top's underlying circle sits at the base; every new rim edge is built in the top face's
@@ -673,17 +738,18 @@ two spiral cuts) and take the same path.
 
 Coplanar/tangent boolean cases,
 NURBS surface export. Filleting gaps, all refused loudly rather than approximated:
-**spherical corner patches on non-perpendicular trihedral vertices** (`FilletAllEdges`
-covers the perpendicular ones — boxes, convex prisms — which is where an exact surface of
-revolution exists), **partial edge runs** (a band that stops mid-rim needs a
-termination surface — cliff, setback or vertex blend — that this engine does not build),
-**sharp corners at arc rim edges** (torus ∩ cylinder is not a conic), and
+**cliff and vertex-blend run terminations** (the setback termination is implemented;
+each of the others is a different surface), **arc-terminal partial runs** (the
+termination itself is exact, but the periodic cylindrical neighbour needs re-trimming),
+**sharp corners at arc rim edges** (a documented policy — torus ∩ cylinder is not a
+conic; see the Filleting section), and
 **variable-radius fillets**: the band itself would be exact — a linear radius law between
 two equal-weight rational arcs is a degree-(2,1) NURBS whose v-sections are true circles,
 and it stays G1 with both neighbours — but the corner where two such bands meet is the
 intersection of two non-cylindrical surfaces, which is not a conic, so there is no exact
-miter to weld them on. Variable-SETBACK chamfers do not have that problem (the corner
-segment is a boundary ruling of both bilinear strips) and are the cheaper next step.
+miter to weld them on. (Variable-SETBACK chamfers do not have that problem — the corner
+segment is a boundary ruling of both strips — and are implemented; see `ChamferRim`'s
+law overloads above.)
 Loft gaps: sections must already be segment-compatible (no degree
 elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution

@@ -608,28 +608,45 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
   whole-solid `FilletAllEdges` ✅ landed) — all of these are refused loudly today, so
   they are additions, not bug fixes:
-  - [ ] **General trihedral corner patches** — `FilletAllEdges` requires one incident
-    face perpendicular to the other two, which is exactly when the spherical triangle
-    reduces to a lune closed by an equatorial great circle (an exact surface of
-    revolution). The general case needs a trimmed spherical-triangle path. A tetrahedron
-    is the smallest failing example.
-  - [ ] **Partial edge runs** — a band that stops mid-rim needs a termination surface
-    (cliff, setback or vertex blend) and each exact one is a different surface.
-  - [ ] **Variable-SETBACK chamfers first, then variable-radius fillets.** The setback
-    case is cheap (the corner segment is a boundary ruling of both bilinear strips); the
-    radius case is blocked on the *corner*, not the band, and needs the same
-    non-conic-corner-curve machinery as curved-face shelling.
-  - [ ] **Sharp corners at ARC rim edges** (torus ∩ cylinder is not a conic).
-- [ ] **`StepReader`: trim a closed generator from meridian boundary arcs** —
-  `FilletAllEdges` output EXPORTS correctly (a STEP `SURFACE_OF_REVOLUTION` is unbounded
-  by definition and the face boundary trims it), but re-import cannot re-trim a closed
-  generator when the swept angle came from rails: the corner patches' meridian boundaries
-  are circles *through* the axis, which no rim rule recognizes, so a re-imported rounded
-  solid meshes non-manifold. `RecoverRevolvedSurface` says so in a diagnostic rather than
-  failing silently. Mitered rim fillets round-trip fine.
-- [ ] **`BrepBoolean` on whole-solid fillets** — a fragment's re-surfaced sub-band loses
-  the corner arcs from its domain. The solid itself is sound (a locked test checks every
-  loop point projects inside its own face's domain), so this is a boolean limitation.
+  - [ ] **General corner machinery follow-up** — general trihedral corner patches
+    ✅ landed (`FilletAllEdges` now rounds tetrahedra and drafted blocks: a trimmed
+    spherical-triangle patch whose two pole-tangent arcs are exact meridians, plus a
+    dedicated `TriangulatePoleGrid` trimmed tier excluded from midpoint refinement).
+    Remaining: curved-face shelling corners and variable-radius fillet corners still
+    need the non-conic surface–surface corner curve.
+  - [ ] **Partial-run follow-ups** — SETBACK terminations ✅ landed (`Filleting.
+    FilletEdges/ChamferEdges` resolve contiguous partial runs; the termination is the
+    planar band cross-section perpendicular to the terminal edge, the industry
+    default; `Shape.FilletEdges/ChamferEdges` accept them). Remaining, refused by
+    name: cliff and vertex-blend terminations (different surfaces), arc-terminal runs
+    (the cylindrical neighbour needs periodic re-trimming), mid-EDGE stops (terminate
+    at a parameter, not a vertex — needs an edge split first), and variable-setback
+    laws on runs.
+  - [ ] **Variable-radius fillets** (variable-SETBACK chamfers ✅ landed — `ChamferRim`/
+    `ChamferRimAtAngle`/`ChamferEdges` law overloads + `Shape.Chamfer(setbackAt, faces)`
+    + `VariableChamferRimFeature`; strips stay exact planes because a constant top:side
+    ratio keeps the four corners coplanar). The radius case is blocked on the *corner*,
+    not the band, and needs the same non-conic-corner-curve machinery as curved-face
+    shelling.
+- [ ] **`StepReader`: trim closed NON-circular generators** — circles ✅ landed (meridian
+  arcs trim a closed circular revolve generator; congruent translated end arcs trim a
+  closed circular extrusion generator; both closed form, so `FilletAllEdges` output now
+  round-trips manifold with zero diagnostics). A closed NURBS generator under a partial
+  sweep still keeps the honest non-manifold diagnostic — recovering it needs projection,
+  not congruence, and nothing exports one today.
+- [ ] **`BrepBoolean` on whole-solid fillets: band-crossing tools** — centre drills
+  through the caps ✅ work (locked, Steiner-minus-bore exact). The band case is now
+  precisely diagnosed (the old "re-surfaced sub-band loses corner arcs" story was
+  wrong): the tool∩band tracer loop closes on the EXTENDED carrier; run pseudo-samples
+  now reach the domain edge (adaptive extrapolation ✅ landed — one local gap was
+  measured falling short, leaving zero crossing seeds), but `RefineCrossing` demands a
+  true 3D intersection to 1e-11 and a chordal tracer polyline is a sagitta (~1e-4) off
+  the exact tangency edge mid-chord — skew curves, every seed rejected, band never
+  splits, whole band mis-classifies, result cracks along entire tangency edges (refused
+  loudly; unpaired edges itemized). Remaining fix: tag tracer curves with their surface
+  pair, refine boundary crossings as exact edge∩other-surface root solves, and SNAP the
+  polyline segment ends to the exact crossing on BOTH solids (the segment endpoints are
+  seam geometry — a 1e-4 chordal end would open a pinhole at every crossing).
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
   as `Shape.Draft`): curved faces; caps with holes; a non-planar neutral surface.
 - [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall

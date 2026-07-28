@@ -125,6 +125,37 @@ public sealed class ChamferRimFeature : Feature
             .Chamfer(Setback, Faces.AsSelector(nameof(Faces)));
 }
 
+/// <summary>
+/// Chamfers the rims of the selected planar faces with a VARIABLE setback: the law is
+/// evaluated at each rim corner of the lowered body and interpolates linearly along each
+/// edge (<see cref="Shape.ChamferAtAngle(Func{Vector3d, double}, double, Func{BrepSolid, IEnumerable{BrepFace}})"/>).
+/// The law is a code input, like sketches and hole specs — not a <c>[Param]</c> — so it
+/// is covered by the regeneration cache's instance-identity rule: a fresh instance
+/// always re-runs.
+/// </summary>
+public sealed class VariableChamferRimFeature(Func<Vector3d, double> setbackAt) : Feature
+{
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+
+    /// <summary>Chamfer angle measured from the face, degrees; 45 is the symmetric
+    /// chamfer. Constant along the rim — that is what keeps every strip planar.</summary>
+    [Param(Min = 1e-6, Max = 90 - 1e-6, Description = "Angle from the face, degrees")]
+    public double AngleDegrees { get; init; } = 45;
+
+    /// <inheritdoc cref="FilletRimFeature.Faces"/>
+    [Param(Description = "Rim faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
+    {
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+    }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("VariableChamferRimFeature needs a body."))
+            .ChamferAtAngle(setbackAt, AngleDegrees, Faces.AsSelector(nameof(Faces)));
+}
+
 /// <summary>Unions or subtracts a fixed shape (bosses, cutters).</summary>
 public sealed class BooleanFeature(Shape tool) : Feature
 {

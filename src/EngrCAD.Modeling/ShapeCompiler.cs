@@ -636,15 +636,35 @@ internal static class ShapeCompiler
                 // child, and chamfer/fillet geometry commutes with isometries.
                 DecomposeSimilarity(m, shape, out _, out _, out double featureScale);
                 var solid = LowerBrep(rim.Child, m);
+                if (rim.EdgeSelector is { } edgeSelector)
+                {
+                    // Edge-set selection: the kernel groups it into complete rims plus
+                    // terminated partial runs (all-or-nothing before surgery).
+                    var selectedEdges = edgeSelector(solid).ToList();
+                    if (selectedEdges.Count == 0)
+                        throw new InvalidOperationException(
+                            $"{rim.Describe()}: the edge selector matched nothing on the lowered solid.");
+                    return rim.IsFillet
+                        ? Filleting.FilletEdges(solid, selectedEdges, rim.Amount * featureScale)
+                        : Filleting.ChamferEdges(
+                            solid, selectedEdges, rim.Amount * featureScale, rim.SideAmount * featureScale);
+                }
                 var selected = rim.Selector(solid).ToList();
                 if (selected.Count == 0)
                     throw new InvalidOperationException(
                         $"{rim.Describe()}: the face selector matched nothing on the lowered solid.");
                 foreach (var target in selected)
                 {
-                    solid = rim.IsFillet
-                        ? Filleting.FilletRim(solid, target, rim.Amount * featureScale)
-                        : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);
+                    // A setback LAW reads corner positions on the lowered solid — the
+                    // transforms are already baked into the geometry it sees — so its
+                    // result is used verbatim, never multiplied by the feature scale.
+                    solid = rim.SetbackLaw is { } law
+                        ? rim.LawAngleDegrees is { } lawAngle
+                            ? Filleting.ChamferRimAtAngle(solid, target, law, lawAngle)
+                            : Filleting.ChamferRim(solid, target, law)
+                        : rim.IsFillet
+                            ? Filleting.FilletRim(solid, target, rim.Amount * featureScale)
+                            : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);
                 }
                 return solid;
             }

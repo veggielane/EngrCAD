@@ -52,6 +52,22 @@ public class StepRoundTripTests
     }
 
     [Fact]
+    public void RoundedBox_FilletAllEdges_RoundTrips()
+    {
+        // Whole-solid fillet output: 26 faces — 6 shrunk planes, 12 cylindrical bands
+        // (ExtrudedSurface over a CurveSegment arc, which the writer flattens to the
+        // full circle), 8 spherical corner patches (RevolvedSurface whose boundary is
+        // two MERIDIAN arcs plus an equatorial rail, so no rim rule applies). The
+        // reader recovers both closed circular generators' trims in closed form — the
+        // extrusion's from congruent translated end arcs, the revolve's from the
+        // meridians — so this round-trips manifold with no diagnostics, where it used
+        // to mesh non-manifold with a warning.
+        var rounded = Filleting.FilletAllEdges(
+            SolidFactory.MakeBox(new Aabb((0, 0, 0), (20, 14, 8))), 2);
+        RoundTrip(rounded, genus: 0);
+    }
+
+    [Fact]
     public void DrilledPlate_ShapeDrillOutput_RoundTrips()
     {
         // Shape.Drill subtracts axis-touching revolved tools: the bore walls come back

@@ -48,7 +48,8 @@ public class TessellationCorpusQualityTests
         "drilled plate", "cross-drilled housing", "spherical cavity", "drilled sphere",
         "threaded rod", "threaded hole",
         "loft", "shelled tray", "drafted boss",
-        "filleted box", "filleted L", "filleted hexagon", "chamfered box", "rounded box",
+        "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
+        "rounded box", "rounded tetrahedron", "partial fillet run",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
         "sketch pocket", "engraved plate", "wedge",
     ];
@@ -121,8 +122,31 @@ public class TessellationCorpusQualityTests
                 return Shape.Box(30, 20, 6)
                     .Chamfer(1.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
                     .ToBrep();
+            case "variable chamfer":
+                // A slot rim under a setback law in x: tilted planar strips on the
+                // straights, exact cone bands on the (locally constant) end arcs.
+                return Shape.Extrude(Sketch.Slot(24, 8), 5)
+                    .Chamfer(p => 0.8 + 0.03 * (p.X + 12), s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
+                    .ToBrep();
             case "rounded box":
                 return Filleting.FilletAllEdges(SolidFactory.MakeBox(new Aabb((0, 0, 0), (20, 14, 8))), 2);
+            case "partial fillet run":
+                // An L-shaped two-edge run: one mitered interior corner, two exact
+                // setback terminations (planar cross-section faces).
+                return Shape.Box(30, 20, 6)
+                    .FilletEdges(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ)
+                        .SelectMany(f => f.RimEdges())
+                        .Where(e => e.IsLinear(out var a, out var b)
+                            && (a.Y + b.Y < -19 || a.X + b.X > 29)))
+                    .ToBrep();
+            case "rounded tetrahedron":
+                // Every corner is a GENERAL trihedral one: four trimmed spherical
+                // corner patches through the pole-grid tier.
+                return Filleting.FilletAllEdges(
+                    FilletCornerVolumeTests.Polyhedron(
+                        [(10, 10, 10), (10, -10, -10), (-10, 10, -10), (-10, -10, 10)],
+                        [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]]),
+                    2);
             case "revolved vase":
                 return Shape.Revolve(Sketch.Start(0, 0)
                     .LineTo(10, 0)

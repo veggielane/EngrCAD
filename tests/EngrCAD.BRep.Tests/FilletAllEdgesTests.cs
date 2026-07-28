@@ -171,18 +171,95 @@ public class FilletAllEdgesTests
     }
 
     [Fact]
-    public void GeneralTrihedralCorner_IsRefusedWithTheReason()
+    public void GeneralTrihedralCorners_BuildTrimmedSphericalPatches()
     {
-        // A tetrahedron: convex, three-valent, all faces planar — but no face is
-        // perpendicular to its two neighbours, so the spherical triangle is general.
-        Vector3d[] positions = [(0, 0, 0), (2, 0, 0), (0, 2, 0), (0, 0, 2)];
+        // A right tetrahedron: the origin corner is a perpendicular (lune) corner; the
+        // other three are GENERAL trihedral corners — no incident face perpendicular to
+        // the other two — whose patches are trimmed spherical triangles: the two arcs
+        // meeting the chosen pole are exact meridians (domain boundaries), and only the
+        // diagonal arc trims the interior.
+        Vector3d[] positions = [(0, 0, 0), (20, 0, 0), (0, 20, 0), (0, 0, 20)];
         int[][] loops = [[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]];
         var tetrahedron = Polyhedron(positions, loops);
         tetrahedron.Validate();
 
-        var exception = Assert.Throws<NotSupportedException>(
-            () => Filleting.FilletAllEdges(tetrahedron, 0.2));
-        Assert.Contains("perpendicular", exception.Message);
+        var rounded = Filleting.FilletAllEdges(tetrahedron, 1.5);
+        rounded.Validate();
+        Assert.True(rounded.SatisfiesEulerFormula(genus: 0));
+        // 4 shrunk faces + 6 bands + 4 corner patches.
+        Assert.Equal(14, rounded.Faces.Count());
+
+        var patches = rounded.Faces
+            .Where(f => f.Surface is RevolvedSurface r && r.Generator.Underlying is Circle3d)
+            .ToList();
+        Assert.Equal(4, patches.Count);
+
+        // Weld-critical invariants: every loop point of every face lies on its own
+        // surface INSIDE its domain (grids are domain-driven), and every corner-patch
+        // loop point sits at exactly the fillet radius from the patch's own centre.
+        foreach (var face in rounded.Faces)
+        {
+            foreach (var coedge in face.OuterLoop.Coedges)
+            {
+                var domain = coedge.Edge.Domain;
+                for (int i = 0; i <= 12; i++)
+                {
+                    var point = coedge.Edge.Curve.PointAt(domain.ParameterAt(i / 12.0));
+                    Assert.True(
+                        face.Surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance),
+                        $"{face.Surface.GetType().Name}: {point} is not on the face's surface");
+                    Assert.True(face.Surface.DomainU.Contains(uv.X, Tolerance.Default));
+                    Assert.True(face.Surface.DomainV.Contains(uv.Y, Tolerance.Default));
+                }
+            }
+        }
+        foreach (var patch in patches)
+        {
+            var revolved = (RevolvedSurface)patch.Surface;
+            var centre = revolved.AxisOrigin;
+            foreach (var coedge in patch.OuterLoop.Coedges)
+            {
+                var domain = coedge.Edge.Domain;
+                for (int i = 0; i <= 12; i++)
+                {
+                    double r = coedge.Edge.Curve.PointAt(domain.ParameterAt(i / 12.0)).DistanceTo(centre);
+                    Assert.True(Math.Abs(r - 1.5) < 1e-9, $"corner patch loop at radius {r}");
+                }
+            }
+        }
+    }
+
+    [Fact]
+    public void DraftedBox_AllEightCornersGeneral_RoundsAndValidates()
+    {
+        // An 8° draft tilts every side, so NO corner keeps a face perpendicular to its
+        // two neighbours — all eight corner patches take the general trimmed path.
+        var block = SolidFactory.MakeBox(new Aabb((0, 0, 0), (24, 18, 12)));
+        var sides = new[] { Vector3d.UnitX, -Vector3d.UnitX, Vector3d.UnitY, -Vector3d.UnitY }
+            .SelectMany(n => block.PlanarFacesWithNormal(n)).ToList();
+        var drafted = Draft.Apply(block, Vector3d.Zero, Vector3d.UnitZ, 8 * Math.PI / 180,
+            f => sides.Any(g => ReferenceEquals(f, g)));
+
+        var rounded = Filleting.FilletAllEdges(drafted, 2.5);
+        rounded.Validate();
+        Assert.True(rounded.SatisfiesEulerFormula(genus: 0));
+        Assert.Equal(26, rounded.Faces.Count());
+    }
+
+    [Fact]
+    public void RegularTetrahedron_AllFourCornersGeneral_RoundsAndValidates()
+    {
+        // Alternate cube corners: every corner is a general trihedral one (face
+        // normals meet pairwise at arccos(1/3), nothing perpendicular).
+        Vector3d[] positions = [(10, 10, 10), (10, -10, -10), (-10, 10, -10), (-10, -10, 10)];
+        int[][] loops = [[0, 1, 2], [0, 3, 1], [0, 2, 3], [1, 3, 2]];
+        var tetrahedron = Polyhedron(positions, loops);
+        tetrahedron.Validate();
+
+        var rounded = Filleting.FilletAllEdges(tetrahedron, 2);
+        rounded.Validate();
+        Assert.True(rounded.SatisfiesEulerFormula(genus: 0));
+        Assert.Equal(14, rounded.Faces.Count());
     }
 
     [Fact]

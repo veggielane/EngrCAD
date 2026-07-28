@@ -129,13 +129,16 @@ public static class BrepBoolean
         if (unpaired.Count > 0)
         {
             var sample = unpaired[0];
+            var detail = string.Join("; ", unpaired.Take(8).Select(e =>
+                $"{e.Curve.GetType().Name}[{uses[e]} use(s)] " +
+                $"{e.Curve.PointAt(e.Domain.Start)}->{e.Curve.PointAt(e.Domain.End)}"));
             throw new BrepBooleanException(
                 $"B-Rep {operation} produced an unclosed solid: {unpaired.Count} of {uses.Count} edges are " +
                 $"used by {string.Join('/', unpaired.Select(e => uses[e]).Distinct().Order())} face(s) instead " +
                 $"of 2, so the result has cracks (one runs through {sample.Curve.PointAt(sample.Domain.Mid)}). " +
                 "The usual causes are coplanar or tangent face pairs — unsupported input for the v1 exact " +
                 "boolean — or intersection curves that do not close into loops. Returning this solid would " +
-                "tessellate into an open mesh with no error, so it fails here instead.");
+                $"tessellate into an open mesh with no error, so it fails here instead. Unpaired: {detail}.");
         }
 
         foreach (var loop in result.Loops)

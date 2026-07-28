@@ -705,7 +705,7 @@ public static class StepReader
                 {
                     var generator = Curve(record.Args[1].AsReference());
                     var direction = VectorOf(record.Args[2].AsReference());
-                    return new ExtrudedSurface(generator, direction);
+                    return RecoverExtrudedSurface(generator, direction, bounds);
                 }
                 case "SURFACE_OF_REVOLUTION":
                 {
@@ -892,19 +892,238 @@ public static class StepReader
 
             // A partial revolution whose generator is a CLOSED curve and whose boundary
             // offered no rim to trim against: the rails fixed the swept angle, but the
-            // generator still spans its whole period, so the face's domain covers far more
-            // surface than the face. Tessellation is domain-driven, so that silently
-            // produces a non-manifold mesh — say so instead. (Spherical corner patches
-            // from whole-solid filleting are the case: their meridian boundaries are
-            // circles through the axis, which no rim rule recognizes.)
-            if (angle is not null && rims.Count == 0 && generator.IsClosed)
+            // generator still spans its whole period, so the face's domain covers far
+            // more surface than the face. Spherical corner patches from whole-solid
+            // filleting are the case — their boundaries are MERIDIAN arcs, circles whose
+            // plane contains the axis, which no rim rule recognizes. A closed CIRCULAR
+            // generator recovers from them exactly (each meridian is a rotated copy of
+            // the generator, so the trim is read in closed form); anything else keeps the
+            // honest diagnostic, because tessellation is domain-driven and meshing an
+            // untrimmed closed generator silently produces a non-manifold mesh.
+            if (angle is { } sweptAngle && rims.Count == 0 && generator.IsClosed
+                && ReferenceEquals(trimmed, generator))
             {
-                Note("A surface of revolution swept through a partial angle kept a closed, untrimmed " +
-                     "generator: no rim circle bounded it, so its parameter domain covers more than the " +
-                     "face. Meshing this face will not be manifold.");
+                if (generator is Circle3d genCircle
+                    && TrimFromMeridians(genCircle, bounds, origin, axis, sweptAngle) is { } meridianTrim)
+                {
+                    trimmed = new CurveSegment(generator, meridianTrim.Start, meridianTrim.End);
+                }
+                else
+                {
+                    Note("A surface of revolution swept through a partial angle kept a closed, untrimmed " +
+                         "generator: no rim circle bounded it, so its parameter domain covers more than the " +
+                         "face. Meshing this face will not be manifold.");
+                }
             }
 
             return new RevolvedSurface(trimmed, origin, axis, angle ?? 2 * Math.PI);
+        }
+
+        /// <summary>
+        /// STEP's SURFACE_OF_LINEAR_EXTRUSION carries whatever generator the writer
+        /// emitted, and the writer flattens a <see cref="CurveSegment"/> to its base
+        /// curve (vertices carry the trim) — so a band extruded from a circular ARC
+        /// arrives with a CLOSED circle generator whose domain covers the whole
+        /// cylinder. Whole-solid fillet edge bands are the case. The boundary arcs are
+        /// TRANSLATED copies of the generator arc (the band's two ends), so the trim is
+        /// read in closed form: match congruent open circular edges whose centre offset
+        /// is parallel to the extrusion direction, translate their points back to the
+        /// generator's plane, and read the angular interval in the generator circle's
+        /// own frame. All matching arcs must agree; otherwise the generator is left
+        /// untrimmed (the pre-existing behaviour).
+        /// </summary>
+        private ExtrudedSurface RecoverExtrudedSurface(
+            Curve3d generator, in Vector3d direction,
+            List<(bool IsOuter, List<(BrepEdge Edge, bool Sense)> Pairs)> bounds)
+        {
+            if (generator is not Circle3d genCircle || !generator.IsClosed)
+                return new ExtrudedSurface(generator, direction);
+
+            var axis = direction.Normalized();
+            var gNormal = genCircle.Axis.Normalized();
+            double scale = Math.Max(1, Math.Max(genCircle.Radius, genCircle.Center.Length));
+
+            bool Congruent(Circle3d circle, out Vector3d offset)
+            {
+                offset = circle.Center - genCircle.Center;
+                // The end arc's centre offset must be a multiple of the direction (zero
+                // for the base arc): reject any transverse component.
+                return Math.Abs(circle.Radius - genCircle.Radius) <= 1e-6 * scale
+                    && Math.Abs(circle.Axis.Normalized().Dot(gNormal)) >= 1 - 1e-6
+                    && (offset - axis * offset.Dot(axis)).Length <= 1e-6 * scale;
+            }
+
+            // A CLOSED congruent ring anywhere on the boundary means the face genuinely
+            // spans the full period — a stray open arc (a boolean seam, say) must not
+            // shrink it.
+            foreach (var (edge, _) in bounds.SelectMany(b => b.Pairs))
+            {
+                if (edge.IsClosedEdge && edge.Curve is Circle3d ring && Congruent(ring, out _))
+                    return new ExtrudedSurface(generator, direction);
+            }
+
+            (double Start, double End)? result = null;
+            foreach (var (edge, _) in bounds.SelectMany(b => b.Pairs))
+            {
+                if (edge.IsClosedEdge || edge.Curve is not Circle3d circle)
+                    continue;
+                if (!Congruent(circle, out var offset))
+                    continue;
+
+                double AngleOf(double parameter)
+                {
+                    var q = edge.Curve.PointAt(parameter) - offset - genCircle.Center;
+                    return Math.Atan2(q.Dot(genCircle.YDirection), q.Dot(genCircle.XDirection));
+                }
+                double a0 = AngleOf(edge.Domain.Start);
+                double aMid = AngleOf(edge.Domain.Mid);
+                double a1 = AngleOf(edge.Domain.End);
+                double ccwToEnd = Wrap2Pi(a1 - a0);
+                double ccwToMid = Wrap2Pi(aMid - a0);
+                double start = Wrap2Pi(a0);
+                if (start >= 2 * Math.PI - 1e-9)
+                    start -= 2 * Math.PI;
+                (double Start, double End) interval = ccwToMid <= ccwToEnd + 1e-9
+                    ? (start, start + ccwToEnd)
+                    : (start - (2 * Math.PI - ccwToEnd), start);
+
+                if (result is { } previous)
+                {
+                    if (WrappedDistance(previous.Start, interval.Start) > 1e-9
+                        || Math.Abs((previous.End - previous.Start) - (interval.End - interval.Start)) > 1e-9)
+                        return new ExtrudedSurface(generator, direction); // arcs disagree — leave untrimmed
+                }
+                else
+                {
+                    result = interval;
+                }
+            }
+
+            return result is { } trim
+                ? new ExtrudedSurface(new CurveSegment(generator, trim.Start, trim.End), direction)
+                : new ExtrudedSurface(generator, direction);
+
+            static double Wrap2Pi(double a) => a - 2 * Math.PI * Math.Floor(a / (2 * Math.PI));
+
+            static double WrappedDistance(double a, double b)
+            {
+                double d = Math.Abs(a - b) % (2 * Math.PI);
+                return Math.Min(d, 2 * Math.PI - d);
+            }
+        }
+
+        /// <summary>
+        /// Trims a CLOSED circular generator from MERIDIAN boundary arcs — open circular
+        /// edges whose plane CONTAINS the revolve axis (whole-solid fillet corner
+        /// patches are the case: their boundary is two meridian great-circle arcs plus
+        /// an equatorial rail, so no rim rule applies). Each meridian is a rotated copy
+        /// of the generator, so the recovery is closed form, never a distance
+        /// minimization: the azimuth comes from the two circles' plane normals (two
+        /// candidates, since a normal has no side; only the branch whose azimuth lies
+        /// within the swept angle can bound the face, and the rotated centre must land
+        /// on the generator's), and rotating the arc's endpoints and midpoint by that
+        /// azimuth into the generator's plane reads their angular parameters directly in
+        /// the generator circle's own frame. Every meridian must agree on the interval
+        /// (they are rotations of one curve); disagreement returns null and keeps the
+        /// honest non-manifold diagnostic.
+        /// </summary>
+        private (double Start, double End)? TrimFromMeridians(
+            Circle3d genCircle,
+            List<(bool IsOuter, List<(BrepEdge Edge, bool Sense)> Pairs)> bounds,
+            in Vector3d axisOrigin, in Vector3d axisDirection, double sweptAngle)
+        {
+            var origin = axisOrigin;
+            var z = axisDirection.Normalized();
+            var gNormal = genCircle.Axis.Normalized();
+            double scale = Math.Max(1, Math.Max(genCircle.Radius, genCircle.Center.Length));
+            // The generator's plane must itself contain the axis line, or "meridian"
+            // means nothing here.
+            if (Math.Abs(gNormal.Dot(z)) > 1e-6
+                || Math.Abs((origin - genCircle.Center).Dot(gNormal)) > 1e-6 * scale)
+                return null;
+
+            (double Start, double End)? result = null;
+            foreach (var (edge, _) in bounds.SelectMany(b => b.Pairs))
+            {
+                if (edge.IsClosedEdge || edge.Curve is not Circle3d circle)
+                    continue;
+                var mNormal = circle.Axis.Normalized();
+                if (Math.Abs(mNormal.Dot(z)) > 1e-6
+                    || Math.Abs((origin - circle.Center).Dot(mNormal)) > 1e-6 * scale
+                    || Math.Abs(circle.Radius - genCircle.Radius) > 1e-6 * scale)
+                    continue;
+
+                // Azimuth of the meridian's plane relative to the generator's, about the
+                // axis; the ±normal ambiguity gives the second candidate half a turn on.
+                double baseAzimuth = Math.Atan2(gNormal.Cross(mNormal).Dot(z), gNormal.Dot(mNormal));
+                foreach (double candidate in new[] { baseAzimuth, baseAzimuth + Math.PI })
+                {
+                    double u = Wrap2Pi(candidate);
+                    if (u >= 2 * Math.PI - 1e-9)
+                        u = 0;
+                    if (u > sweptAngle + 1e-9)
+                        continue; // a boundary meridian sits within the sweep
+
+                    Vector3d Unrotated(in Vector3d p)
+                    {
+                        // Rotate by −u about the axis line (Rodrigues on the radial part).
+                        var d = p - origin;
+                        double axial = d.Dot(z);
+                        var radial = d - z * axial;
+                        var rotated = radial * Math.Cos(u) - z.Cross(radial) * Math.Sin(u);
+                        return origin + z * axial + rotated;
+                    }
+
+                    if (Unrotated(circle.Center).DistanceTo(genCircle.Center) > 1e-6 * scale)
+                        continue;
+
+                    double AngleOf(double parameter)
+                    {
+                        var q = Unrotated(edge.Curve.PointAt(parameter)) - genCircle.Center;
+                        return Math.Atan2(q.Dot(genCircle.YDirection), q.Dot(genCircle.XDirection));
+                    }
+                    double a0 = AngleOf(edge.Domain.Start);
+                    double aMid = AngleOf(edge.Domain.Mid);
+                    double a1 = AngleOf(edge.Domain.End);
+                    double ccwToEnd = Wrap2Pi(a1 - a0);
+                    double ccwToMid = Wrap2Pi(aMid - a0);
+                    // Snap a start an ulp below zero back near zero rather than to 2π,
+                    // so the interval stays canonical; the circle is periodic, so a
+                    // slightly negative start is harmless.
+                    double start = Wrap2Pi(a0);
+                    if (start >= 2 * Math.PI - 1e-9)
+                        start -= 2 * Math.PI;
+                    (double Start, double End) interval = ccwToMid <= ccwToEnd + 1e-9
+                        ? (start, start + ccwToEnd)
+                        : (start - (2 * Math.PI - ccwToEnd), start);
+
+                    if (result is { } previous)
+                    {
+                        // Wrap-aware agreement: same start angle modulo 2π, same length.
+                        if (WrappedDistance(previous.Start, interval.Start) > 1e-9
+                            || Math.Abs((previous.End - previous.Start) - (interval.End - interval.Start)) > 1e-9)
+                        {
+                            Note("Meridian boundary arcs of a surface of revolution disagree about the " +
+                                 "generator trim; the generator is left untrimmed.");
+                            return null;
+                        }
+                    }
+                    else
+                    {
+                        result = interval;
+                    }
+                    break; // at most one azimuth branch can be valid per meridian
+                }
+            }
+            return result;
+
+            static double Wrap2Pi(double a) => a - 2 * Math.PI * Math.Floor(a / (2 * Math.PI));
+
+            static double WrappedDistance(double a, double b)
+            {
+                double d = Math.Abs(a - b) % (2 * Math.PI);
+                return Math.Min(d, 2 * Math.PI - d);
+            }
         }
 
         /// <summary>

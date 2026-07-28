@@ -77,13 +77,15 @@ public class FilletEdgeSelectionTests
     }
 
     [Fact]
-    public void PartialRun_IsRefusedWithGuidance()
+    public void PartialRun_NowResolvesToATerminatedBand()
     {
+        // Historically refused; now the two-edge run blends with exact setback
+        // terminations at its open ends (see PartialRunTests for the geometry).
         var box = Box();
         var twoOfFour = TopFace(box).RimEdges().Take(2).ToList();
-        var exception = Assert.Throws<NotSupportedException>(
-            () => Filleting.FilletEdges(box, twoOfFour, 0.2));
-        Assert.Contains("complete rims", exception.Message);
+        var filleted = Filleting.FilletEdges(box, twoOfFour, 0.2);
+        filleted.Validate();
+        Assert.True(filleted.SatisfiesEulerFormula(genus: 0));
     }
 
     [Fact]
