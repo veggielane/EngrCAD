@@ -131,7 +131,7 @@ public class ViewCubeFrameTests
         int size = (int)(ViewCubeMath.RegionSizeDip * 2);
         int margin = (int)(ViewCubeMath.RegionMarginDip * 2);
         Assert.Equal([1600 - size - margin, 1200 - size - margin, size, size],
-            draws[0].Viewport);
+            Assert.IsType<int[]>(draws[0].Viewport));
     }
 
     [Fact]

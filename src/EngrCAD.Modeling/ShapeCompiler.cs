@@ -605,27 +605,12 @@ internal static class ShapeCompiler
             {
                 var a = LowerBrep(boolean.A, m);
                 var b = LowerBrep(boolean.B, m);
-                try
+                return WithImplicitRouteHint(() => boolean.Op switch
                 {
-                    return boolean.Op switch
-                    {
-                        BooleanOp.Union => BrepBoolean.Union(a, b),
-                        BooleanOp.Intersection => BrepBoolean.Intersection(a, b),
-                        _ => BrepBoolean.Difference(a, b),
-                    };
-                }
-                catch (BrepBooleanException ex)
-                {
-                    // The exact route failed; hand the caller the approximate one rather
-                    // than silently taking it for them. Falling back automatically would
-                    // make Explain(Representation.Brep) lie (it reported Native) and would
-                    // quietly downgrade an exact model to a polygonized one.
-                    throw new InvalidOperationException(
-                        $"{ex.Message} Model this shape through the implicit representation instead — " +
-                        "Shape.From(shape.ToImplicit()).ToMesh(quality) — which handles coplanar and " +
-                        "tangent configurations, at the cost of an approximated (polygonized) surface.",
-                        ex);
-                }
+                    BooleanOp.Union => BrepBoolean.Union(a, b),
+                    BooleanOp.Intersection => BrepBoolean.Intersection(a, b),
+                    _ => BrepBoolean.Difference(a, b),
+                });
             }
 
             case RimShape rim:
@@ -729,7 +714,10 @@ internal static class ShapeCompiler
                 var body = LowerBrep(drill.Child, m);
                 ValidateDrillDepth(drill, body, m);
                 foreach (var tool in tools)
-                    body = BrepBoolean.Difference(body, LowerBrep(tool, m));
+                {
+                    var cut = LowerBrep(tool, m);
+                    body = WithImplicitRouteHint(() => BrepBoolean.Difference(body, cut));
+                }
                 return body;
             }
 
@@ -826,7 +814,8 @@ internal static class ShapeCompiler
                     var tool = SolidFactory.MakeThreadedRod(
                         scaledCorners, pitch * scale, (hole.Depth + overshoot) * scale, frame,
                         spec.LeftHand);
-                    body = BrepBoolean.Difference(body, tool);
+                    var cutting = body;
+                    body = WithImplicitRouteHint(() => BrepBoolean.Difference(cutting, tool));
                 }
                 return body;
             }
@@ -1165,6 +1154,34 @@ internal static class ShapeCompiler
         }
         tools.Reverse(); // the chain is built outermost-last
         return true;
+    }
+
+    /// <summary>
+    /// Runs an exact B-Rep boolean, replacing a <see cref="BrepBooleanException"/> with the
+    /// same failure plus the implicit-route suggestion. EVERY boolean the compiler performs
+    /// goes through here — a drilled hole that cannot be cut exactly is the same failure as
+    /// a subtraction that cannot, and telling the caller about the escape hatch only on the
+    /// operator path made the more common route the less helpful one.
+    /// <para>
+    /// The exact route deliberately does NOT fall back on its own: that would make
+    /// <c>Explain(Representation.Brep)</c> lie (it reported Native) and would quietly
+    /// downgrade an exact model to a polygonized one. The caller chooses.
+    /// </para>
+    /// </summary>
+    private static BrepSolid WithImplicitRouteHint(Func<BrepSolid> boolean)
+    {
+        try
+        {
+            return boolean();
+        }
+        catch (BrepBooleanException ex)
+        {
+            throw new InvalidOperationException(
+                $"{ex.Message} Model this shape through the implicit representation instead — " +
+                "Shape.From(shape.ToImplicit()).ToMesh(quality) — which handles coplanar and " +
+                "tangent configurations, at the cost of an approximated (polygonized) surface.",
+                ex);
+        }
     }
 
     /// <summary>
