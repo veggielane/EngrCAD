@@ -129,6 +129,65 @@ public abstract class Shape
     }
 
     /// <summary>
+    /// Extrudes a sketch with a twist and/or taper — OpenSCAD's
+    /// <c>linear_extrude(twist, scale, slices)</c>, uniform-scale form. See
+    /// <see cref="Extrude(Sketch, double, double, Vector2d, SketchPlane?, int?)"/>.
+    /// </summary>
+    public static Shape Extrude(
+        Sketch sketch, double height, double twist, double scale = 1,
+        SketchPlane? plane = null, int? slices = null) =>
+        Extrude(sketch, height, twist, new Vector2d(scale, scale), plane, slices);
+
+    /// <summary>
+    /// Extrudes a sketch with a twist and/or per-axis taper — OpenSCAD's
+    /// <c>linear_extrude(twist, scale, slices)</c>. The cross-section at height
+    /// fraction <c>t</c> is the sketch scaled by <c>lerp(1, scale, t)</c> per axis
+    /// about the plane origin, then rotated by <c>twist·t</c> about the plane normal
+    /// (radians, counter-clockwise / right-handed — OpenSCAD's <c>twist</c> is the
+    /// opposite sign).
+    /// <para>Representation support: a pure taper (<paramref name="twist"/> = 0) is
+    /// <b>B-Rep-Native</b> — every straight side sweeps an exact plane through the
+    /// scaling centre, so the solid is a ruled loft between the base and the scaled
+    /// top. A nonzero twist has no analytic side surface in the kernel and is
+    /// B-Rep-Impossible; the mesh lowering is a direct section sweep
+    /// (<paramref name="slices"/> rings, derived from the twist and the mesh quality
+    /// when null), and the implicit lowering wraps that mesh in a mesh SDF.
+    /// <c>Explain(target)</c> reports each case.</para>
+    /// </summary>
+    /// <param name="sketch">The profile; holes are carried through the sweep (a
+    /// tapered B-Rep of a holed sketch is rejected — loft sections with holes are a
+    /// documented follow-up).</param>
+    /// <param name="height">Extrusion height along the plane normal (&gt; 0).</param>
+    /// <param name="twist">Total twist over the height, radians.</param>
+    /// <param name="scale">Per-axis scale of the top section (components &gt; 0; use
+    /// <see cref="Cone"/> or <see cref="Loft(IReadOnlyList{Profile}, LoftStyle)"/> for
+    /// apex-degenerate tops).</param>
+    /// <param name="plane">Sketch placement (default world XY).</param>
+    /// <param name="slices">Section rings for the twisted mesh sweep; null sizes them
+    /// from the twist angle and the quality's segments-per-circle.</param>
+    public static Shape Extrude(
+        Sketch sketch, double height, double twist, Vector2d scale,
+        SketchPlane? plane = null, int? slices = null)
+    {
+        ArgumentNullException.ThrowIfNull(sketch);
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+        if (!double.IsFinite(twist))
+            throw new ArgumentOutOfRangeException(nameof(twist));
+        if (!(scale.X > 0) || !(scale.Y > 0))
+            throw new ArgumentOutOfRangeException(nameof(scale),
+                "Top-section scale components must be positive; a zero scale degenerates the top to a point (use Cone or a Loft).");
+        if (slices is < 1)
+            throw new ArgumentOutOfRangeException(nameof(slices));
+
+        // Exact-zero semantic test (not a tolerance): a literal no-op parameterization
+        // IS a plain extrusion, and gets the plain node's exactness everywhere.
+        if (twist == 0 && scale.X == 1 && scale.Y == 1)
+            return Extrude(sketch, height, plane);
+        return new TwistExtrudeShape(sketch, plane ?? SketchPlane.XY, height, twist, scale, slices);
+    }
+
+    /// <summary>
     /// Revolves a sketch about its plane's y axis (the sketch's x = 0 line); sketch x
     /// is the radial direction and must be ≥ 0. The default plane (XZ) puts the axis on
     /// world Z. Sketches may touch the axis on full turns in every representation:

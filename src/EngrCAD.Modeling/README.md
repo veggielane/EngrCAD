@@ -36,6 +36,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; ❌ with holes) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (rigid + uniform scale; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |

@@ -551,9 +551,12 @@ export — is recorded in CLAUDE.md):
   chamfer joins, erosion as complement dilation): **exact curved offsets** (arcs stay
   arcs — today everything flattens first, same limitation as all region work); variable
   offset along the outline; open-path offsetting (a stroke, for toolpaths).
-- [ ] `linear_extrude(twist, scale, slices)` — twisted/tapered extrusion (a
-  `SweptSurface` variant with per-v rotation/scale; g3's `GenCylGenerators` is the
-  mesh route)
+- [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
+  ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
+  twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
+  tapered sketches WITH holes are B-Rep-Impossible until loft sections support holes
+  (same gap as the Loft section); an exact twisted B-Rep surface type would make twist
+  Native (big kernel feature, low priority).
 - [ ] **Planar-view follow-ups** (`PlanarSection.OfMesh`/`OfSolid`/`SilhouetteOfMesh` +
   `Shape.Section`/`Shape.Silhouette` ✅ landed — both OpenSCAD `projection` modes):
   - [ ] **`Region2dBoolean` leaves ~1e-7-area pinholes at near-tangency.** Repro: the

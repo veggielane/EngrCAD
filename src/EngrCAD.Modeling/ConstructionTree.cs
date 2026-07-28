@@ -270,6 +270,9 @@ public static class ConstructionTree
             case ExtrudeShape { Sketch: { } extruded } extrude:
                 AddSketch(node, extruded, extrude.PlaneMatrix, ref next);
                 break;
+            case TwistExtrudeShape twisted:
+                AddSketch(node, twisted.Sketch, twisted.PlaneMatrix, ref next);
+                break;
             case RevolveShape { Sketch: { } revolved } revolve:
                 AddSketch(node, revolved, revolve.PlaneMatrix, ref next);
                 break;

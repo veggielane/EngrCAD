@@ -56,6 +56,8 @@ internal static class ShapeCompiler
             "quickhull over the operands' tessellated mesh vertices",
         _ when node.StartsWith("Remeshed(", StringComparison.Ordinal) =>
             "isotropic remesh of the child's mesh lowering, projected back onto it",
+        _ when node.StartsWith("Extrude(twist", StringComparison.Ordinal) =>
+            "section rings swept through the twist, caps triangulated once and shared by index",
         _ => "polygonized from the signed distance field (Surface Nets)",
     };
 
@@ -101,6 +103,23 @@ internal static class ShapeCompiler
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
+                break;
+            case TwistExtrudeShape twisted:
+                // A pure taper is exact: every straight side sweeps a plane through the
+                // scaling centre, so the solid is a ruled loft between base and top. A
+                // twisted side wall is no surface this kernel carries.
+                if (twisted.IsTwisted)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a twisted side wall is not an analytic or ruled surface the B-Rep kernel carries; ToMesh sweeps section rings and ToImplicit wraps that mesh"));
+                else if (twisted.Sketch.Holes.Count > 0)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a tapered extrusion of a sketch with holes needs loft sections with holes (a documented follow-up); cut the hole after the taper, or use ToMesh/ToImplicit"));
+                else
+                    entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                        ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                            "ruled loft between the base section and the scaled top (SolidFactory.Loft)")
+                        : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                            "a non-uniform scale or shear does not commute with the loft's parameterization"));
                 break;
             case LoftShape:
                 // Rigid + uniform only: the loft's chord-length parameterization and
@@ -259,8 +278,12 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared subtree goes through a tessellated mesh SDF"));
                 break;
+            case TwistExtrudeShape { IsTwisted: true }:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                    "twisted-extrusion section sweep wrapped in a mesh SDF"));
+                break;
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
-                or DraftShape or BrepShellShape or RoundEdgesShape:
+                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -464,6 +487,28 @@ internal static class ShapeCompiler
                     TransformProfile(extrude.Profile!, m),
                     m.TransformVector(extrude.Direction),
                     TransformProfiles(extrude.Holes, m));
+
+            case TwistExtrudeShape twisted:
+            {
+                if (twisted.IsTwisted)
+                    throw new NotSupportedException(
+                        "A twisted extrusion has no exact B-Rep side surface; lower to mesh or implicit instead.");
+                if (twisted.Sketch.Holes.Count > 0)
+                    throw new NotSupportedException(
+                        "A tapered extrusion of a sketch with holes needs loft sections with holes; cut the hole after the taper, or use ToMesh/ToImplicit.");
+                Decompose(m, shape, out _, out _, out _);   // rigid + uniform only (the loft rule)
+                var effective = m * twisted.PlaneMatrix;
+                // The top section is the base scaled per axis about the plane origin and
+                // lifted by the height; a ruled loft between the two IS the linear taper
+                // (scaling is linear, and a two-section loft's v is linear), and every
+                // straight side sweeps an exact plane through the scaling centre.
+                var topLocal = Matrix4d.CreateTranslation((0, 0, twisted.Height))
+                             * Matrix4d.CreateScale((twisted.ScaleTop.X, twisted.ScaleTop.Y, 1));
+                var (outer, _) = twisted.Sketch.ToProfiles();
+                return SolidFactory.Loft(
+                    [TransformProfile(outer, effective), TransformProfile(outer, effective * topLocal)],
+                    LoftStyle.Ruled);
+            }
 
             case RevolveShape { Sketch: { } sketch } revolve:
             {
@@ -794,8 +839,15 @@ internal static class ShapeCompiler
                 return Place(Sdf.RevolvedRegion(new SketchRegion(sketch, forRevolution: true)), q, t, s);
             }
 
+            case TwistExtrudeShape { IsTwisted: true } twisted:
+                // The twist has no field form; the section-swept mesh is the geometry,
+                // wrapped as an exact mesh SDF and placed rigidly (we are in the
+                // decomposable branch; the sheared case bridged above).
+                return Place(new MeshSdf(TwistedExtrusion.Build(twisted, quality)),
+                    rotation, translation, scale);
+
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
-                or DraftShape or BrepShellShape or RoundEdgesShape:
+                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 
@@ -954,6 +1006,14 @@ internal static class ShapeCompiler
                     ProjectionTarget = remesh.Options.ProjectionTarget ?? new MeshProjectionTarget(source),
                 };
                 return Remesher.Remesh(source, options).Mesh;
+            }
+
+            case TwistExtrudeShape { IsTwisted: true } twisted:
+            {
+                // Direct section sweep (the node's plane is baked in); the accumulated
+                // transform applies to the finished mesh, winding flips included.
+                var swept = TwistedExtrusion.Build(twisted, quality);
+                return IsIdentity(m) ? swept : TransformMesh(swept, m);
             }
 
             case TransformShape t:
