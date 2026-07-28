@@ -5,10 +5,48 @@ using EngrCAD.Core.Geometry2;
 
 namespace EngrCAD.Modeling;
 
-/// <summary>One DXF entity, carrying its layer name. The four kinds here are the 2D
-/// profile vocabulary (LINE / ARC / CIRCLE / LWPOLYLINE); everything else a file
+/// <summary>One DXF entity, carrying its layer name. The five kinds here are the 2D
+/// drawing vocabulary (LINE / ARC / CIRCLE / LWPOLYLINE / TEXT); everything else a file
 /// contains is skipped with a diagnostic at load.</summary>
 public abstract record DxfEntity(string Layer);
+
+/// <summary>
+/// A DXF line type: a name and its dash pattern in drawing units, positive for a mark
+/// and negative for a gap (the DXF convention; 0 is a dot).
+/// </summary>
+/// <param name="Name">Table name, upper case by convention.</param>
+/// <param name="Description">Human-readable pattern, shown by editors.</param>
+/// <param name="Dashes">Alternating mark/gap lengths.</param>
+public sealed record DxfLineType(string Name, string Description, IReadOnlyList<double> Dashes);
+
+/// <summary>
+/// The ISO 128 line types a drawing needs, as DXF patterns. Lengths are in drawing
+/// units (millimetres here), sized for a sheet rather than for a model — a hidden line
+/// dashed at 0.5 mm reads correctly on paper whatever the part measures, which is why
+/// they are absolute and not scaled by anything.
+/// </summary>
+public static class DxfLineTypes
+{
+    /// <summary>Unbroken (ISO 128 type A/B): visible outlines and drawing furniture.</summary>
+    public static DxfLineType Continuous { get; } = new("CONTINUOUS", "Solid line", []);
+
+    /// <summary>Narrow dashed (type E): hidden detail.</summary>
+    public static DxfLineType Hidden { get; } = new("HIDDEN", "Hidden __ __ __ __", [2.5, -1.5]);
+
+    /// <summary>Long-dash dotted (type G/H): centre lines and cutting planes.</summary>
+    public static DxfLineType Center { get; } = new("CENTER", "Center ____ _ ____ _", [8, -1.5, 1.5, -1.5]);
+
+    /// <summary>Long-dash double-dotted (type K): adjacent parts, alternate positions.</summary>
+    public static DxfLineType Phantom { get; } =
+        new("PHANTOM", "Phantom ____ _ _ ____", [10, -1.5, 1.5, -1.5, 1.5, -1.5]);
+
+    /// <summary>Every pattern, in discovery order.</summary>
+    public static IReadOnlyList<DxfLineType> All { get; } = [Continuous, Hidden, Center, Phantom];
+
+    /// <summary>Look one up by name (case-insensitive), or null.</summary>
+    public static DxfLineType? ByName(string name) =>
+        All.FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.OrdinalIgnoreCase));
+}
 
 /// <summary>A straight segment (DXF LINE).</summary>
 public sealed record DxfLine(Vector2d Start, Vector2d End, string Layer = "0") : DxfEntity(Layer);
@@ -22,6 +60,16 @@ public sealed record DxfArc(
 
 /// <summary>A full circle (DXF CIRCLE).</summary>
 public sealed record DxfCircle(Vector2d Center, double Radius, string Layer = "0") : DxfEntity(Layer);
+
+/// <summary>
+/// A single-line text entity (DXF TEXT): the insertion point, the CAP height in
+/// drawing units, and the string. <paramref name="Anchor"/> maps to DXF group 72
+/// (0 left, 1 centred, 2 right); a non-left justification also needs the alignment
+/// point (11/21), which the writer emits.
+/// </summary>
+public sealed record DxfText(
+    Vector2d Position, string Value, double Height,
+    SheetTextAnchor Anchor = SheetTextAnchor.Left, string Layer = "0") : DxfEntity(Layer);
 
 /// <summary>A lightweight polyline (DXF LWPOLYLINE): vertices plus a per-vertex
 /// <paramref name="Bulges"/> value — tan(sweep/4) of the arc from that vertex to the
@@ -62,6 +110,19 @@ public sealed class DxfDocument
 
     /// <summary>Distinct layer names in entity order.</summary>
     public IReadOnlyList<string> Layers => [.. _entities.Select(e => e.Layer).Distinct()];
+
+    /// <summary>
+    /// Line type per layer (a name from <see cref="DxfLineTypes"/>). A layer with no
+    /// entry is CONTINUOUS.
+    ///
+    /// <para>This is the DXF half of the same edge-CLASSIFICATION story
+    /// <see cref="SvgLineClass"/> tells: a drawing is only usable if hidden detail comes
+    /// out dashed and a cutting plane comes out chain-dashed, and in DXF that is a
+    /// property of the LAYER, not of the entity. The writer emits an LTYPE table for
+    /// every pattern a layer here names, so the file is self-contained — a viewer that
+    /// had to guess would show everything solid.</para>
+    /// </summary>
+    public Dictionary<string, string> LayerLineTypes { get; } = [];
 
     public void Add(DxfEntity entity) => _entities.Add(ValidateEntity(entity));
 
@@ -348,11 +409,39 @@ public sealed class DxfDocument
         if (layers.Count == 0)
             layers = ["0"];
         Pair(0, "SECTION"); Pair(2, "TABLES");
+
+        // LTYPE first: a LAYER record referencing a pattern the file never defines is
+        // what makes a reader fall back to solid lines.
+        var used = new List<DxfLineType> { DxfLineTypes.Continuous };
+        foreach (var layer in layers)
+        {
+            if (LayerLineTypes.TryGetValue(layer, out string? name)
+                && DxfLineTypes.ByName(name) is { } pattern
+                && !used.Any(t => t.Name == pattern.Name))
+                used.Add(pattern);
+        }
+        Pair(0, "TABLE"); Pair(2, "LTYPE"); Pair(70, used.Count.ToString(culture));
+        foreach (var pattern in used)
+        {
+            Pair(0, "LTYPE"); Pair(2, pattern.Name);
+            Pair(70, "0"); Pair(3, pattern.Description);
+            Pair(72, "65");   // 'A' alignment, the only one DXF defines
+            Pair(73, pattern.Dashes.Count.ToString(culture));
+            Real(40, pattern.Dashes.Sum(Math.Abs));
+            foreach (double dash in pattern.Dashes)
+                Real(49, dash);
+        }
+        Pair(0, "ENDTAB");
+
         Pair(0, "TABLE"); Pair(2, "LAYER"); Pair(70, layers.Count.ToString(culture));
         foreach (var layer in layers)
         {
             Pair(0, "LAYER"); Pair(2, layer);
-            Pair(70, "0"); Pair(62, "7"); Pair(6, "CONTINUOUS");
+            Pair(70, "0"); Pair(62, "7");
+            Pair(6, LayerLineTypes.TryGetValue(layer, out string? name)
+                    && DxfLineTypes.ByName(name) is not null
+                ? name
+                : DxfLineTypes.Continuous.Name);
         }
         Pair(0, "ENDTAB"); Pair(0, "ENDSEC");
 
@@ -376,6 +465,20 @@ public sealed class DxfDocument
                     Pair(0, "CIRCLE"); Pair(8, circle.Layer);
                     Real(10, circle.Center.X); Real(20, circle.Center.Y); Real(30, 0);
                     Real(40, circle.Radius);
+                    break;
+                case DxfText text:
+                    Pair(0, "TEXT"); Pair(8, text.Layer);
+                    Real(10, text.Position.X); Real(20, text.Position.Y); Real(30, 0);
+                    Real(40, text.Height);
+                    Pair(1, text.Value);
+                    if (text.Anchor != SheetTextAnchor.Left)
+                    {
+                        Pair(72, text.Anchor == SheetTextAnchor.Center ? "1" : "2");
+                        // Group 72 is only honoured alongside the alignment point, and
+                        // for a centred or right-aligned string that point IS the
+                        // insertion point.
+                        Real(11, text.Position.X); Real(21, text.Position.Y); Real(31, 0);
+                    }
                     break;
                 case DxfPolyline polyline:
                     Pair(0, "LWPOLYLINE"); Pair(8, polyline.Layer);
@@ -517,6 +620,24 @@ public sealed class DxfDocument
             case "CIRCLE":
                 document._entities.Add(new DxfCircle((Value(10), Value(20)), Value(40), Layer()));
                 break;
+            case "TEXT":
+            {
+                string? value = null;
+                for (int i = start; i < end && value is null; i++)
+                {
+                    if (pairs[i].Code == 1)
+                        value = pairs[i].Value;
+                }
+                var anchor = (int)Value(72) switch
+                {
+                    1 => SheetTextAnchor.Center,
+                    2 => SheetTextAnchor.Right,
+                    _ => SheetTextAnchor.Left,
+                };
+                document._entities.Add(new DxfText(
+                    (Value(10), Value(20)), value ?? "", Value(40, 1), anchor, Layer()));
+                break;
+            }
             case "LWPOLYLINE":
             {
                 bool closed = ((int)Value(70)) % 2 == 1;   // bit 0 = closed

@@ -94,6 +94,11 @@ public class DxfTests
         Assert.Contains(diagnostics, d => d.Contains("do not close"));
     }
 
+    /// <summary>
+    /// An entity kind outside the 2D drawing vocabulary is counted into the diagnostics
+    /// and skipped — never guessed at. (TEXT used to be one of these and is now read, so
+    /// the case is made with MTEXT, which genuinely is not supported.)
+    /// </summary>
     [Fact]
     public void UnknownEntities_AreSkippedWithDiagnostics()
     {
@@ -103,7 +108,7 @@ public class DxfTests
             2
             ENTITIES
             0
-            TEXT
+            MTEXT
             8
             notes
             1
@@ -125,7 +130,7 @@ public class DxfTests
             """;
         var document = DxfDocument.Load(new StringReader(dxf));
         Assert.Single(document.Entities);
-        Assert.Contains(document.Diagnostics, d => d.Contains("TEXT"));
+        Assert.Contains(document.Diagnostics, d => d.Contains("MTEXT"));
     }
 
     [Fact]

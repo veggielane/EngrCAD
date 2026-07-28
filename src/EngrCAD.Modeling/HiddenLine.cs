@@ -173,6 +173,23 @@ public sealed record HiddenLineOptions
     /// already in the feature-edge set, and is not re-emitted as a silhouette). The
     /// viewer's own 30-degree feature angle.</summary>
     public double SharpAngleRadians { get; init; } = Math.PI / 6;
+
+    /// <summary>
+    /// Cuts everything NEARER the viewer than this point away — a section view.
+    ///
+    /// <para>Only a point, because a section view's cutting plane is perpendicular to
+    /// its own view direction BY DEFINITION: that is what makes the exposed cut faces
+    /// project in true shape, which is what makes them worth hatching and dimensioning.
+    /// An oblique cut would foreshorten them, and a drawing that hatches a foreshortened
+    /// face is lying about its dimensions — so the API offers the depth and not the
+    /// plane. (An oblique cut is a legitimate thing to WANT; the honest way to get one
+    /// is a view whose direction is the oblique normal.)</para>
+    ///
+    /// <para>Parts with <see cref="Part.ClippedBySection"/> false are drawn whole
+    /// through the cut, the drafting convention for shafts, bolts, nuts, keys and
+    /// pins.</para>
+    /// </summary>
+    public Vector3d? SectionThrough { get; init; }
 }
 
 /// <summary>
@@ -248,9 +265,22 @@ public static class HiddenLineRemoval
     /// line has no meaning on paper).
     /// </summary>
     public static HiddenLineResult Project(
-        IReadOnlyList<PartInstance> instances, in Frame3d view, HiddenLineOptions? options = null)
+        IReadOnlyList<PartInstance> instances, in Frame3d view, HiddenLineOptions? options = null) =>
+        Project(instances, view, [], EdgeSource.Cut, options);
+
+    /// <summary>
+    /// Projects the instances plus caller-supplied world-space polylines — how a section
+    /// view gets its cut-face boundaries drawn, since those belong to no part's edge
+    /// set. Supplied polylines are classified against the same occluders as everything
+    /// else.
+    /// </summary>
+    public static HiddenLineResult Project(
+        IReadOnlyList<PartInstance> instances, in Frame3d view,
+        IReadOnlyList<IReadOnlyList<Vector3d>> extraEdges, EdgeSource extraSource,
+        HiddenLineOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(instances);
+        ArgumentNullException.ThrowIfNull(extraEdges);
         var opts = options ?? new HiddenLineOptions();
         var shown = DebugFilter.Exported(instances);
         if (shown.Count == 0)
@@ -261,7 +291,7 @@ public static class HiddenLineRemoval
         var world = Aabb.Empty;
         foreach (var instance in shown)
         {
-            var occluder = Occluder.Build(instance, opts.Quality, toViewer);
+            var occluder = Occluder.Build(instance, opts, toViewer);
             if (occluder is null)
                 continue;
             occluders.Add(occluder);
@@ -280,49 +310,38 @@ public static class HiddenLineRemoval
             foreach (var (points, source) in occluders[i].Edges(opts))
                 Classify(points, source, i, probe, view, extent, opts, runs, ref bounds);
         }
-        return new HiddenLineResult(runs, bounds);
-    }
-
-    /// <summary>
-    /// Classifies caller-supplied world-space polylines against the same instances —
-    /// how a section view gets its cut-face boundaries drawn without them having to be
-    /// edges of any part.
-    /// </summary>
-    public static HiddenLineResult Project(
-        IReadOnlyList<PartInstance> instances, in Frame3d view,
-        IReadOnlyList<IReadOnlyList<Vector3d>> extraEdges, EdgeSource extraSource,
-        HiddenLineOptions? options = null)
-    {
-        ArgumentNullException.ThrowIfNull(extraEdges);
-        var baseResult = Project(instances, view, options);
-        if (extraEdges.Count == 0)
-            return baseResult;
-
-        var opts = options ?? new HiddenLineOptions();
-        var toViewer = view.Z.Normalized(Tolerance.Default);
-        var occluders = new List<Occluder>();
-        var world = Aabb.Empty;
-        foreach (var instance in DebugFilter.Exported(instances))
-        {
-            var occluder = Occluder.Build(instance, opts.Quality, toViewer);
-            if (occluder is null)
-                continue;
-            occluders.Add(occluder);
-            world = world.Union(occluder.Bounds);
-        }
-
-        double extent = Extent(world);
         // Owner −1: a supplied polyline belongs to no instance, so the local back-face
         // stage has nothing to read and the ray decides on its own.
-        var probe = new VisibilityProbe(occluders, toViewer, extent, opts);
-        var runs = new List<HiddenLineRun>(baseResult.Runs);
-        var bounds = baseResult.Bounds;
         foreach (var polyline in extraEdges)
         {
             if (polyline.Count >= 2)
                 Classify(polyline, extraSource, -1, probe, view, extent, opts, runs, ref bounds);
         }
         return new HiddenLineResult(runs, bounds);
+    }
+
+    /// <summary>
+    /// The cut loops a section would expose, in world space — the boundaries of the
+    /// faces the cut lays open, ready to be drawn and hatched. Empty when
+    /// <see cref="HiddenLineOptions.SectionThrough"/> is unset or the plane misses
+    /// everything.
+    /// </summary>
+    public static IReadOnlyList<IReadOnlyList<Vector3d>> CutLoops(
+        IReadOnlyList<PartInstance> instances, in Frame3d view, HiddenLineOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(instances);
+        ArgumentNullException.ThrowIfNull(options);
+        if (options.SectionThrough is null)
+            return [];
+        var toViewer = view.Z.Normalized(Tolerance.Default);
+        var loops = new List<IReadOnlyList<Vector3d>>();
+        foreach (var instance in DebugFilter.Exported(instances))
+        {
+            var occluder = Occluder.Build(instance, options, toViewer);
+            if (occluder is not null)
+                loops.AddRange(occluder.CutLoops);
+        }
+        return loops;
     }
 
     /// <summary>The characteristic length every fraction in
@@ -556,51 +575,83 @@ public static class HiddenLineRemoval
         private Bvh _bvh = null!;
         private HalfEdgeMesh _mesh = null!;
         private Matrix4d _world;
+        private Matrix4d _edgeWorld;
         private Part _part = null!;
         private MeshQuality? _quality;
         private Vector3d _toViewer = Vector3d.UnitZ;
         private Vector3d _localToViewer = Vector3d.UnitZ;
         private bool _mirrored;
+        private Vector3d? _sectionThrough;
 
         public Aabb Bounds { get; private set; } = Aabb.Empty;
+
+        /// <summary>The world-space loops this instance's cut exposed (empty without a
+        /// section, or when the plane misses it).</summary>
+        public IReadOnlyList<IReadOnlyList<Vector3d>> CutLoops { get; private set; } = [];
 
         /// <summary>Builds the occluder, or null when the part has no meshable
         /// geometry (a failed lowering is a part the drawing simply cannot show; the
         /// document model has already reported it).</summary>
-        public static Occluder? Build(in PartInstance instance, MeshQuality? quality, in Vector3d toViewer)
+        public static Occluder? Build(
+            in PartInstance instance, HiddenLineOptions options, in Vector3d toViewer)
         {
             HalfEdgeMesh mesh;
             try
             {
-                mesh = instance.Part.GetMesh(quality);
+                mesh = instance.Part.GetMesh(options.Quality);
             }
             catch (Exception)
             {
                 return null;
             }
 
+            var quality = options.Quality;
+            var world = instance.World;
+            var cutLoops = (IReadOnlyList<IReadOnlyList<Vector3d>>)[];
+            // A section removes everything nearer the viewer than the plane. The cut is
+            // done in WORLD space (the mesh moved, not the plane) because the plane is
+            // one world fact shared by every instance, and because MeshPlaneCut's capped
+            // result is exactly the occluder a section view needs: the cut face has to
+            // hide what stands behind it.
+            if (options.SectionThrough is { } through && instance.Part.ClippedBySection)
+            {
+                var placed = world.Equals(Matrix4d.Identity) ? mesh : mesh.Transformed(world);
+                var cut = MeshPlaneCut.Cut(placed, through, toViewer, cap: true);
+                if (cut.Mesh.FaceCount == 0)
+                    return null;   // wholly on the removed side: not in this view at all
+                mesh = cut.Mesh;
+                cutLoops = [.. cut.CutLoops];
+                world = Matrix4d.Identity;
+            }
+
             var occluder = new Occluder
             {
                 _mesh = mesh,
-                _world = instance.World,
+                _world = world,
+                // Feature edges come from the UNCUT part, so they keep the original
+                // placement and are clipped to the kept half-space afterwards; the mesh
+                // was already moved into world space by the cut.
+                _edgeWorld = instance.World,
                 _part = instance.Part,
                 _quality = quality,
                 _toViewer = toViewer,
-                _mirrored = instance.World.Determinant < 0,
+                _mirrored = world.Determinant < 0,
+                _sectionThrough = instance.Part.ClippedBySection ? options.SectionThrough : null,
+                CutLoops = cutLoops,
             };
             // The view direction pulled back into the mesh's own frame. n_world . v has
             // the same sign as n_local . (M^-1 v) for ANY invertible affine M (the
             // normal transforms by the inverse transpose, and the two inverses cancel),
             // so the silhouette test needs no inverse-transpose of its own; a mirroring
             // placement flips the winding on top of that, hence the extra sign.
-            occluder._localToViewer = instance.World.TryInvert(out var toLocal)
+            occluder._localToViewer = world.TryInvert(out var toLocal)
                 ? toLocal.TransformVector(toViewer) * (occluder._mirrored ? -1 : 1)
                 : toViewer;
 
             var positions = new Vector3d[mesh.VertexCount];
             for (int v = 0; v < mesh.VertexCount; v++)
             {
-                positions[v] = instance.World.TransformPoint(mesh.GetPosition(v));
+                positions[v] = world.TransformPoint(mesh.GetPosition(v));
                 occluder.Bounds = occluder.Bounds.Union(positions[v]);
             }
 
@@ -707,13 +758,61 @@ public static class HiddenLineRemoval
         {
             var result = new List<(IReadOnlyList<Vector3d>, EdgeSource)>();
             foreach (var chain in FeatureChains())
-                result.Add((chain, EdgeSource.Feature));
+            {
+                foreach (var piece in ClipToSection(chain))
+                    result.Add((piece, EdgeSource.Feature));
+            }
             if (options.IncludeSilhouette)
             {
+                // Silhouettes are read off the already-cut mesh, so they need no clip.
                 foreach (var chain in SilhouetteChains(options))
                     result.Add((chain, EdgeSource.Silhouette));
             }
             return result;
+        }
+
+        /// <summary>
+        /// A world-space polyline restricted to the half-space a section keeps, split
+        /// into pieces where it crosses the plane. The crossing point is solved on the
+        /// SEGMENT, so a piece ends exactly on the plane and its last point is shared
+        /// with nothing that has to weld.
+        /// </summary>
+        private List<IReadOnlyList<Vector3d>> ClipToSection(IReadOnlyList<Vector3d> polyline)
+        {
+            if (_sectionThrough is not { } through)
+                return [polyline];
+
+            var pieces = new List<IReadOnlyList<Vector3d>>();
+            var current = new List<Vector3d>();
+            double Signed(in Vector3d p) => (p - through).Dot(_toViewer);
+
+            double previous = Signed(polyline[0]);
+            if (previous <= 0)
+                current.Add(polyline[0]);
+            for (int i = 1; i < polyline.Count; i++)
+            {
+                double d = Signed(polyline[i]);
+                // Exact-sign straddle test: the plane is a semantic boundary here, not a
+                // tolerance, and a point exactly on it belongs to the kept side.
+                if (previous <= 0 != d <= 0)
+                {
+                    double t = previous / (previous - d);
+                    var crossing = polyline[i - 1] + (polyline[i] - polyline[i - 1]) * t;
+                    current.Add(crossing);
+                    if (d > 0)
+                    {
+                        if (current.Count >= 2)
+                            pieces.Add(current);
+                        current = [];
+                    }
+                }
+                if (d <= 0)
+                    current.Add(polyline[i]);
+                previous = d;
+            }
+            if (current.Count >= 2)
+                pieces.Add(current);
+            return pieces;
         }
 
         /// <summary>
@@ -750,7 +849,7 @@ public static class HiddenLineRemoval
                 if (interned.TryGetValue(local, out int index))
                     return index;
                 interned[local] = index = points.Count;
-                points.Add(_world.TransformPoint(local));
+                points.Add(_edgeWorld.TransformPoint(local));
                 return index;
             }
         }

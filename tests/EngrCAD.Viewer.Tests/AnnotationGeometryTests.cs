@@ -199,4 +199,33 @@ public class AnnotationGeometryTests
         // The leader's anchor endpoint moved by exactly the translation.
         Assert.Equal(100.0, translated[2].A.X - atOrigin[2].A.X, 1e-6);
     }
+
+    /// <summary>
+    /// A 3D annotation is sized in SCREEN pixels and a drawing sheet's in PAPER
+    /// millimetres, so the two cannot share a constant — but they must share the
+    /// PROPORTIONS, or the same dimension would look like a different product in the
+    /// viewport and on the sheet.
+    ///
+    /// <para><c>SheetStyle</c> therefore holds each length as a ratio to its text
+    /// height, and this asserts those ratios ARE this overlay's pixel constants divided
+    /// by its own text height. It reads both sides rather than re-typing either, which
+    /// is the only version of this test worth having: a copied number agrees with a
+    /// broken implementation as happily as a correct one.</para>
+    /// </summary>
+    [Fact]
+    public void SheetStyleKeepsTheOverlaysProportions()
+    {
+        double px = AnnotationGeometry.TextHeightPx;
+        Assert.Equal(SheetStyle.ArrowLengthRatio, AnnotationGeometry.ArrowLengthPx / px, 12);
+        Assert.Equal(SheetStyle.ArrowHalfWidthRatio, AnnotationGeometry.ArrowHalfWidthPx / px, 12);
+        Assert.Equal(SheetStyle.ExtensionGapRatio, AnnotationGeometry.ExtensionGapPx / px, 12);
+        Assert.Equal(SheetStyle.ExtensionOvershootRatio, AnnotationGeometry.ExtensionOvershootPx / px, 12);
+        Assert.Equal(SheetStyle.TextGapRatio, AnnotationGeometry.TextGapPx / px, 12);
+        Assert.Equal(SheetStyle.DefaultOffsetRatio, AnnotationGeometry.DefaultOffsetPx / px, 12);
+        Assert.Equal(SheetStyle.LeaderLengthRatio, AnnotationGeometry.LeaderLengthPx / px, 12);
+        Assert.Equal(SheetStyle.TailLengthRatio, AnnotationGeometry.TailLengthPx / px, 12);
+        Assert.Equal(SheetStyle.BoxPaddingRatio, AnnotationGeometry.DatumBoxPaddingPx / px, 12);
+        Assert.Equal(SheetStyle.LineSpacing, AnnotationGeometry.LineSpacing, 12);
+        Assert.Equal(SheetStyle.ArcStepRadians, AnnotationGeometry.ArcStepRadians, 12);
+    }
 }
