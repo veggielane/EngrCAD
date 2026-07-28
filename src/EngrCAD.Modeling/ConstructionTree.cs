@@ -237,6 +237,9 @@ public static class ConstructionTree
             case RemeshShape remesh:
                 AddShape(node, remesh.Child, ref next);
                 break;
+            case MotionSweepShape motionSweep:
+                AddShape(node, motionSweep.Child, ref next);
+                break;
             case OffsetShape offset:
                 AddShape(node, offset.Child, ref next);
                 break;

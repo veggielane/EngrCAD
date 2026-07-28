@@ -64,7 +64,7 @@ public sealed record MotionFrame(double Value, IReadOnlyList<PartInstance> Insta
 /// nothing — the solver's own contract); a sweep that hits a singular configuration
 /// says so and names what lost rank rather than guessing a branch.
 /// </summary>
-public sealed class MotionStudy
+public sealed partial class MotionStudy
 {
     internal MotionStudy(
         Mechanism mechanism, MechanismDriver driver, IReadOnlyList<MotionFrame> frames,

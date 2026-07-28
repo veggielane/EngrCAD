@@ -692,6 +692,17 @@ internal sealed class RemeshShape(Shape child, RemeshOptions options) : Shape
         $"Remeshed(edge {options.TargetEdgeLength:0.###}, {options.Iterations} passes)";
 }
 
+/// <summary>The volume swept by the child over a sampled set of rigid poses — the
+/// union of the posed copies (implicit-native: one lowering of the child's field,
+/// N placements; B-Rep-impossible: a motion envelope is not one of the kernel's
+/// surfaces).</summary>
+internal sealed class MotionSweepShape(Shape child, IReadOnlyList<Matrix4d> poses) : Shape
+{
+    public Shape Child => child;
+    public IReadOnlyList<Matrix4d> Poses => poses;
+    internal override string Describe() => $"SweptOver({poses.Count} poses)";
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;
