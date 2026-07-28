@@ -294,6 +294,16 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   normal (`projection(cut = false)`) — a through hole survives as a hole, a blind pocket
   does not. Always from the mesh (a silhouette is the union of the projected faces), so
   fidelity and cost both follow the mesh quality; see the Interop README for the numbers.
+- **`Packing.Pack(parts, plateWidth, plateDepth, gap)`** (`Packing.cs`) — 2D bin packing
+  of silhouette footprints onto a build plate (build123d's `pack`): a deterministic
+  SHELF packer (deepest-first, then width, then input index — no randomness), gap
+  honored between parts and to the plate edges, placements returned in input order with
+  each part's measured footprint; `PackLayout.Apply`/`Packing.Arrange` return the
+  translated shapes (XY only — how a part sits in z is the model's business). Footprints
+  are `Shape.Silhouette` bounds, so an overhang wider than the base gets its room. A
+  layout that does not fit refuses loudly naming the first part that ran out of plate;
+  no rotation or concavity nesting in v1 (stated, not implied). Docs:
+  `docs/examples/packing.md` (packed-plate render + one-STL export).
 
 **Fidelity contract — read this before using regions for curved sketches.** Arcs and
 béziers are FLATTENED to polylines within `chordTolerance` (default 1e-3 model units,
@@ -365,10 +375,15 @@ public sealed class Boss : Feature
 ```
 
 Queries nest and are named: `FaceSetRef.PlanarWithNormal(n)` / `Cylindrical(r?)` /
-`All` / `RimFacesOf(edges)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
-`Top` / `Bottom`, `PlaneRef.TopPlane` / `OnTopFace` / `On(faceRef)` / `At(plane)`,
-`EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)`, `AxisRef.OfCylindrical(face)` /
-`Of(origin, direction)`. `FaceSetRef.From/Where` and `EdgeSetRef.From` take a lambda
+`All` / `RimFacesOf(edges)` / `OfKind(SurfaceKind)` / `NthByRadius(n)` /
+`GroupAlong(set, direction, n)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
+`Top` / `Bottom` / `LargestByArea(set)` / `Largest`, `PlaneRef.TopPlane` / `OnTopFace`
+/ `On(faceRef)` / `At(plane)`, `EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)` /
+`NthByRadius(n)`, `AxisRef.OfCylindrical(face)` / `Of(origin, direction)`. The
+ordering/grouping ones are the serializable spellings of `BrepSelection` in
+EngrCAD.BRep (`SortAlong`/`Extreme`/`GroupAlong`/`GroupByCoplanar`/`FilterBy`/
+`Area`/`NthByRadius` — the build123d `sort_by`/`group_by`/`filter_by` capability as
+LINQ). `FaceSetRef.From/Where` and `EdgeSetRef.From` take a lambda
 when no named query fits. A `SketchPlane` — and a `SketchPlane?` whose null means "the
 top plane" — converts implicitly, so incumbent code is untouched.
 
@@ -538,6 +553,46 @@ var block = Shape.Box(30, 20, 12).RoundEdges(2);                          // box
 tree, all representations). Disjoint results become valid multi-shell solids; a
 Difference tool swallowed whole becomes a cavity shell. For hole arrays, keep passing
 point lists to `Drill` — that stays the cheaper idiom.
+
+**Location sets** (`Locations.cs`): `LocationSet` is "place this feature at these N
+poses" as one immutable VALUE — `Grid(cx, cy, sx, sy)` (centred, x-fastest),
+`Polar(count, radius, startAngle, rotate)` (CCW, seam not repeated; each location
+carries its polar angle unless `rotate: false`), `PolarArc` (both ends included),
+`Hex(cx, cy, pitch)` (closest packing, centred by extents), `Linear(count, step)`,
+`At(points)`, composed by `Translate`/`Rotate`/`+`. One value feeds three consumers:
+`Shape.Drill(spec, locations, depth, plane?)`, `Shape.Pattern(locations, plane?)`
+(stamps the shape — modeled at the plane origin — at each location's point + rotation;
+for an origin-modeled shape `Pattern(Polar(n, r))` equals
+`Translate(r,0,0).PatternCircular(n, ...)` exactly, by conjugation), and
+`ComponentAssembly.Place(component, locations, face?)`. Serializable like
+`GeometryRef`s: `Descriptor` (`grid(3,2,10,8)`, `translate([5,0],hex(3,3,6))`) is the
+cache-key term `ToString` returns, and `LocationSet.Parse` reconstructs it — locations
+bit-for-bit, since parsing re-runs the same deterministic constructors.
+
+## Extrude/cut until a face
+
+`shape.ExtrudeUntil(sketch, plane, Until.Next|Last)` (boss) and `CutUntil` (pocket) —
+build123d/CadQuery's `until=NEXT/LAST` (`ExtrudeUntil.cs`). Both extrude from the
+sketch plane along −normal (the `Drill` convention). The stop distance is resolved by
+probe rays from the profile's strict interior against the body's mesh
+(`UntilResolver`, an internal seam the tests pin directly): `Next` = the first surface
+met for a boss / the first EXIT for a cut (punch through the first wall, stop in the
+void); `Last` = the far boundary. **The robustness is the point**: the stop must be
+one plane perpendicular to the extrusion (hits clustering within 1e-6 × extent —
+planar stops tessellate exactly, genuine curves spread far wider), and anything else
+refuses loudly naming the candidates — hit clusters with ray counts for curved/slanted
+stops, the miss count for overhanging profiles, the probe point for tangent grazes
+(enter/exit alternation breaks). Ray–triangle tests use inclusive barycentric bounds
+(±1e-9, dimensionless) because a crossing on a shared mesh edge must register on at
+least one triangle — exclusive tests can drop it from both, and a ray that enters but
+never exits poisons the resolution. Overshoots follow the Drill never-coplanar rules:
+a `Next` boss reaches half the thinnest wall INTO the body (capped 2%), a `Next` cut
+half the gap into the void, a `Last` cut 2% past the far face, and a cut tool also
+clears the TOP by 2% when the plane sits on a body face (a submerged plane gets no top
+clearance — its tool top is interior, and extending it would cut above the plane).
+Only a `Last` boss ends exactly flush, documented as the coplanar-union case B-Rep may
+refuse. Resolution is EAGER (the `Bounds`/`Resized` policy); the result is ordinary
+extrude + boolean nodes, so `Explain` stays honest with no special case.
 
 ## Holes
 

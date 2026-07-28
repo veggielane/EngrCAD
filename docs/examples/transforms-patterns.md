@@ -124,3 +124,55 @@ scene.Add(new Part("carousel", carousel, Palette.Brass,
 
 For arrays of *holes*, keep passing point lists to [`Drill`](holes.md) — one boolean
 with many tools is cheaper than patterning a drilled body.
+
+## Location sets: one layout, every consumer
+
+"Place this feature at these N poses" is a *value*, not an operation:
+`LocationSet.Grid` / `Polar` / `PolarArc` / `Hex` / `Linear` / `At(points)` build one,
+`Translate` / `Rotate` / `+` compose it, and the same value feeds `Shape.Drill`,
+`Shape.Pattern` and `ComponentAssembly.Place` — build123d's
+`GridLocations`/`PolarLocations`/`HexLocations` and CadQuery's
+`pushPoints`/`rarray`/`polarArray` as one idea instead of three:
+
+```csharp render:location-sets
+// One layout value: a bolt circle plus two dowel positions.
+var bolts = LocationSet.Polar(6, 18);
+var dowels = LocationSet.At(new Vector2d(32, 0), new Vector2d(-32, 0));
+
+// The same LocationSet vocabulary drives holes and patterns alike.
+var top = SketchPlane.At((0, 0, 8), Vector3d.UnitX, Vector3d.UnitY);
+var plate = Shape.Extrude(Sketch.Circle(40), 8)
+    .Drill(StandardHoles.Clearance(5), bolts, 20, top)
+    .Drill(HoleSpec.Simple(4), dowels, 20, top);
+
+// Pattern stamps a copy per location: the rib is modeled at the plane origin and
+// each polar location moves AND rotates it (rotate: false would keep copies upright).
+var rib = Shape.Box(10, 3, 4).Translate(31, 0, 8);
+var ribbed = plate | rib.Pattern(LocationSet.Polar(6, 0, Math.PI / 6));
+
+var scene = new Scene();
+scene.Add(new Part("ribbed plate", ribbed, Palette.Steel));
+```
+
+![A plate drilled and ribbed from shared location sets](images/location-sets.png)
+
+Points run deterministically (grids x-fastest and centred, polar counter-clockwise
+without repeating the seam; hex fields are the closest packing at the given pitch),
+and each location carries an in-plane **rotation** that `Pattern` honors — a polar
+location turns its copy with its position, exactly matching `PatternCircular` of the
+pre-translated shape. Everything is **serializable** the way
+[geometry references](geometry-inputs.md) are: `Descriptor` is a canonical parseable
+string (`grid(3,2,10,8)`, `translate([5,0],hex(3,3,6))`) that `LocationSet.Parse`
+reconstructs bit for bit, so a `[Param]` location set is an honest regeneration cache
+key and survives feature JSON.
+
+```csharp run:location-set-roundtrip
+var layout = (LocationSet.Grid(3, 2, 10, 8) + LocationSet.Polar(4, 30)).Rotate(0.2);
+var parsed = LocationSet.Parse(layout.Descriptor);
+if (parsed.Descriptor != layout.Descriptor) throw new Exception("descriptor drifted");
+for (int i = 0; i < layout.Count; i++)
+{
+    if (parsed[i] != layout[i])
+        throw new Exception($"location {i} did not round-trip bit for bit");
+}
+```

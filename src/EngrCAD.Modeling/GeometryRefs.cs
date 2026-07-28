@@ -147,6 +147,8 @@ internal static class RefSyntax
 
     public static string Vector(in Vector3d v) => $"[{Number(v.X)},{Number(v.Y)},{Number(v.Z)}]";
 
+    public static string Vector2(in Vector2d v) => $"[{Number(v.X)},{Number(v.Y)}]";
+
     public static string Call(string name, params string[] arguments) =>
         arguments.Length == 0 ? name : $"{name}({string.Join(",", arguments)})";
 
@@ -219,6 +221,16 @@ internal sealed class RefLexer(string text)
         double z = ReadNumber();
         Expect(']');
         return new Vector3d(x, y, z);
+    }
+
+    public Vector2d ReadVector2()
+    {
+        Expect('[');
+        double x = ReadNumber();
+        Expect(',');
+        double y = ReadNumber();
+        Expect(']');
+        return new Vector2d(x, y);
     }
 
     public void ExpectEnd()
@@ -296,6 +308,23 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
     /// selection stops partway along a rim.</summary>
     public static FaceSetRef RimFacesOf(EdgeSetRef edges) => new RimFaces(edges);
 
+    /// <summary>Faces of a semantic <see cref="SurfaceKind"/>
+    /// (<see cref="BrepSelection.FilterBy"/> — planar, cylindrical, conical, toroidal...).</summary>
+    public static FaceSetRef OfKind(SurfaceKind kind) => new KindFaces(kind);
+
+    /// <summary>The cylindrical faces carrying the <paramref name="index"/>-th smallest
+    /// distinct radius (<see cref="BrepSelection.NthByRadius(IEnumerable{BrepFace}, int)"/>;
+    /// 0 = smallest, −1 = largest). "The middle bore size" without typing its radius.</summary>
+    public static FaceSetRef NthByRadius(int index) => new RadiusIndexFaces(index);
+
+    /// <summary>The <paramref name="index"/>-th group of <paramref name="faces"/> ranked
+    /// along <paramref name="direction"/>
+    /// (<see cref="BrepSelection.GroupAlong(IEnumerable{BrepFace}, Vector3d, double)"/>;
+    /// groups ascending, 0 = furthest against the direction, −1 = furthest along it).
+    /// "The faces on the second step" without naming its height.</summary>
+    public static FaceSetRef GroupAlong(FaceSetRef faces, in Vector3d direction, int index) =>
+        new GroupAlongFaces(faces, direction, index);
+
     /// <summary>Escape hatch: any lambda over the lowered solid. Subsumes the raw
     /// selector overloads on <see cref="Shape"/>; not serializable.</summary>
     public static FaceSetRef From(string label, Func<BrepSolid, IEnumerable<BrepFace>> selector) =>
@@ -347,6 +376,33 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
                 var edges = EdgeSetRef.ParseFrom(lexer);
                 lexer.Expect(')');
                 return RimFacesOf(edges);
+            }
+            case "kind":
+            {
+                lexer.Expect('(');
+                string kindName = lexer.ReadIdentifier();
+                lexer.Expect(')');
+                if (!Enum.TryParse<SurfaceKind>(kindName, ignoreCase: true, out var kind))
+                    throw new FormatException($"unknown surface kind '{kindName}'");
+                return OfKind(kind);
+            }
+            case "nthByRadius":
+            {
+                lexer.Expect('(');
+                int index = (int)lexer.ReadNumber();
+                lexer.Expect(')');
+                return NthByRadius(index);
+            }
+            case "groupAlong":
+            {
+                lexer.Expect('(');
+                var inner = ParseFrom(lexer);
+                lexer.Expect(',');
+                var direction = lexer.ReadVector();
+                lexer.Expect(',');
+                int index = (int)lexer.ReadNumber();
+                lexer.Expect(')');
+                return GroupAlong(inner, direction, index);
             }
             case "optional":
             {
@@ -431,6 +487,60 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
         }
     }
 
+    private sealed class KindFaces(SurfaceKind kind) : FaceSetRef
+    {
+        public override string Descriptor =>
+            RefSyntax.Call("kind", kind.ToString().ToLowerInvariant());
+
+        public override string Subject => $"{kind.ToString().ToLowerInvariant()} face";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName) =>
+            solid.Faces.FilterBy(kind);
+    }
+
+    private sealed class RadiusIndexFaces(int index) : FaceSetRef
+    {
+        public override string Descriptor => RefSyntax.Call("nthByRadius", RefSyntax.Number(index));
+        public override string Subject => $"cylindrical face at distinct-radius index {index}";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName)
+        {
+            try
+            {
+                return solid.Faces.NthByRadius(index);
+            }
+            catch (InvalidOperationException exception)
+            {
+                // NthByRadius already names the radii that exist; prefix the input.
+                throw new GeometryInputException($"{inputName}: {exception.Message}");
+            }
+        }
+    }
+
+    private sealed class GroupAlongFaces(FaceSetRef faces, Vector3d direction, int index) : FaceSetRef
+    {
+        public override string Descriptor => RefSyntax.Call(
+            "groupAlong", faces.Descriptor, RefSyntax.Vector(direction), RefSyntax.Number(index));
+
+        public override string Subject =>
+            $"{faces.Subject} in rank group {index} along {Describe(direction)}";
+
+        public override bool IsSerializable => faces.IsSerializable;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName)
+        {
+            var groups = faces.Resolve(solid, inputName).GroupAlong(direction);
+            int resolved = index < 0 ? groups.Count + index : index;
+            if (resolved < 0 || resolved >= groups.Count)
+                throw new GeometryInputException(
+                    $"{inputName}: rank-group index {index} is out of range — the {faces.Subject}s " +
+                    $"form {groups.Count} group(s) along {Describe(direction)}.");
+            return groups[resolved];
+        }
+    }
+
     private sealed class OpaqueFaces(string label, Func<BrepSolid, IEnumerable<BrepFace>> selector) : FaceSetRef
     {
         public override string Descriptor => RefSyntax.Call("opaque", RefSyntax.Label(label));
@@ -479,6 +589,15 @@ public abstract class FaceRef : GeometryRef<BrepFace>
     /// <summary>The lowest downward-facing planar face.</summary>
     public static FaceRef Bottom { get; } = Extreme(FaceSetRef.PlanarWithNormal(-Vector3d.UnitZ), -Vector3d.UnitZ);
 
+    /// <summary>The face of <paramref name="faces"/> with the largest area
+    /// (<see cref="BrepSelection.LargestByArea"/> — exact for planar faces, quadrature for
+    /// curved ones; ties keep the first in the solid's order). "The main face" without
+    /// measuring it.</summary>
+    public static FaceRef LargestByArea(FaceSetRef faces) => new LargestFace(faces);
+
+    /// <summary>The largest face of the whole solid.</summary>
+    public static FaceRef Largest { get; } = LargestByArea(FaceSetRef.All);
+
     public static FaceRef Parse(string descriptor)
     {
         var lexer = new RefLexer(descriptor);
@@ -508,6 +627,13 @@ public abstract class FaceRef : GeometryRef<BrepFace>
                 lexer.Expect(')');
                 return Extreme(faces, direction);
             }
+            case "largest":
+            {
+                lexer.Expect('(');
+                var faces = FaceSetRef.ParseFrom(lexer);
+                lexer.Expect(')');
+                return LargestByArea(faces);
+            }
             default:
                 throw new FormatException($"unknown single-face query '{name}'");
         }
@@ -534,6 +660,22 @@ public abstract class FaceRef : GeometryRef<BrepFace>
                     $"{inputName}: expected exactly one {Subject}, found {matches.Count}." +
                     (matches.Count > 1 ? " Narrow the query, or pick one with FaceRef.Extreme." : ""));
             return matches[0];
+        }
+    }
+
+    private sealed class LargestFace(FaceSetRef faces) : FaceRef
+    {
+        public override string Descriptor => RefSyntax.Call("largest", faces.Descriptor);
+        public override string Subject => $"largest {faces.Subject}";
+        public override bool IsSerializable => faces.IsSerializable;
+
+        public override BrepFace Resolve(BrepSolid? solid, string inputName)
+        {
+            var matches = faces.Match(solid, inputName);
+            if (matches.Count == 0)
+                throw new GeometryInputException(
+                    $"{inputName}: expected the {Subject}, found no {faces.Subject} at all.");
+            return matches.LargestByArea();
         }
     }
 
@@ -750,6 +892,11 @@ public abstract class EdgeSetRef : GeometryRef<IReadOnlyList<BrepEdge>>
     /// <summary>Circular edges (bore rims), optionally of a given radius.</summary>
     public static EdgeSetRef Circular(double? radius = null) => new CircularEdges(radius);
 
+    /// <summary>The circular edges carrying the <paramref name="index"/>-th smallest
+    /// distinct radius (<see cref="BrepSelection.NthByRadius(IEnumerable{BrepEdge}, int)"/>;
+    /// 0 = smallest, −1 = largest) — "the rims of the middle hole size".</summary>
+    public static EdgeSetRef NthByRadius(int index) => new RadiusIndexEdges(index);
+
     /// <summary>Escape hatch: any lambda over the lowered solid; not serializable.</summary>
     public static EdgeSetRef From(string label, Func<BrepSolid, IEnumerable<BrepEdge>> selector) =>
         new OpaqueEdges(label, selector ?? throw new ArgumentNullException(nameof(selector)));
@@ -783,6 +930,13 @@ public abstract class EdgeSetRef : GeometryRef<IReadOnlyList<BrepEdge>>
                 var faces = FaceSetRef.ParseFrom(lexer);
                 lexer.Expect(')');
                 return RimOf(faces);
+            }
+            case "nthByRadius":
+            {
+                lexer.Expect('(');
+                int index = (int)lexer.ReadNumber();
+                lexer.Expect(')');
+                return NthByRadius(index);
             }
             case "optional":
             {
@@ -836,6 +990,25 @@ public abstract class EdgeSetRef : GeometryRef<IReadOnlyList<BrepEdge>>
                 if (edge.IsCircular(out _, out _, out double found) &&
                     (radius is null || Tolerance.Default.AreEqual(found, radius.Value)))
                     yield return edge;
+            }
+        }
+    }
+
+    private sealed class RadiusIndexEdges(int index) : EdgeSetRef
+    {
+        public override string Descriptor => RefSyntax.Call("nthByRadius", RefSyntax.Number(index));
+        public override string Subject => $"circular edge at distinct-radius index {index}";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepEdge> Select(BrepSolid solid, string inputName)
+        {
+            try
+            {
+                return solid.Edges.NthByRadius(index);
+            }
+            catch (InvalidOperationException exception)
+            {
+                throw new GeometryInputException($"{inputName}: {exception.Message}");
             }
         }
     }

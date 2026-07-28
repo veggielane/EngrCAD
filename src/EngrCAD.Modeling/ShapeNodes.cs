@@ -272,7 +272,8 @@ internal sealed class ShellShape(Shape child, double thickness) : Shape
 internal sealed class LatticeShape(Shape child, Sdf pattern) : Shape
 {
     public Shape Child => child;
-    public Sdf Pattern => pattern;
+    // Named Field rather than Pattern so it does not hide Shape.Pattern(LocationSet).
+    public Sdf Field => pattern;
     internal override string Describe() => "Lattice";
 }
 

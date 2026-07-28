@@ -57,6 +57,48 @@ Representation support is honest about what each case is:
   omitted, it derives from the twist and the mesh quality), and the implicit lowering
   wraps that mesh in a mesh SDF. `Explain(target)` reports each case.
 
+## Extrude and cut *until* a face
+
+`ExtrudeUntil` (boss) and `CutUntil` (pocket) stop against the body instead of at a
+typed depth — build123d/CadQuery's `until=NEXT/LAST`. `Until.Next` stops at the first
+surface met (a boss lands on the body; a cut punches through the first wall and stops
+in the void behind it); `Until.Last` continues to the far boundary (flush boss;
+through-all cut with the standard overshoot). Both extrude from the sketch plane
+along −normal, the `Drill` convention:
+
+```csharp render:extrude-until
+// A base plate with a shelf floating above it (one body, a void between).
+var body = Shape.Extrude(Sketch.Rectangle(60, 40), 6)
+         | (Shape.Extrude(Sketch.Rectangle(60, 40), 4).Translate(0, 0, 18)
+            | Shape.Box(4, 32, 16).Translate(-24, 0, 12));
+
+var above = SketchPlane.At((0, 0, 30), Vector3d.UnitX, Vector3d.UnitY);
+
+// A post that grows DOWN from z=30 until it lands on the shelf (Until.Next)...
+var withPost = body.ExtrudeUntil(Sketch.Circle(new Vector2d(18, 0), 4), above, Until.Next);
+// ...and a slot cut down through the shelf that stops in the void (Until.Next),
+// leaving the base plate untouched.
+var slotPlane = SketchPlane.At((-10, 0, 30), Vector3d.UnitX, Vector3d.UnitY);
+var finished = withPost.CutUntil(Sketch.Slot(16, 6), slotPlane, Until.Next);
+
+var scene = new Scene();
+scene.Add(new Part("until-features", finished, Palette.Steel));
+```
+
+![A post extruded until the shelf and a slot cut until the void](images/extrude-until.png)
+
+The stop is found by probe rays from the profile's interior against the body's mesh,
+and it must be **one plane perpendicular to the extrusion** — a flat extrusion cannot
+honestly conform to a curved or slanted stop, so anything ambiguous refuses loudly
+naming the candidates: hit-distance clusters with their ray counts for a curved stop,
+the number of rays that missed for an overhanging profile, the probe point that saw a
+tangent graze. Resolution is **eager** (measured at the call, like `Resized`) — wrap
+the call in a `Feature` to re-measure per regeneration. Overshoots follow the `Drill`
+lessons so booleans never see coplanar faces: a `Next` boss reaches slightly *into*
+the body, a `Next` cut slightly into the void behind the wall, a `Last` cut through
+the far face; only a `Last` boss ends exactly flush (its union is a coplanar boolean
+where material adjoins — the B-Rep lowering may refuse it, mesh/implicit handle it).
+
 ## Revolve
 
 `Shape.Revolve(sketch, angle?, plane?)` spins the sketch about its plane's y axis;

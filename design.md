@@ -706,6 +706,25 @@ Design decisions:
   extrude/revolve/sweep, booleans, smooth blends/offset/shell/lattice, transforms, and
   `From(engine object)` leaves. Nothing is computed until `ToBrep()`, `ToImplicit()`,
   or `ToMesh()` lowers the graph, so the *same* model can be lowered to all three.
+- **Builder-style authoring: prototyped and declined (an honest no).** build123d has
+  two APIs — algebra (`box - cylinder`, which `Shape` already is) and a builder
+  (`with BuildPart() as p:` accumulating add/subtract/intersect) — and the parity
+  survey asked whether the builder form earns a C# counterpart. It was prototyped
+  against a real bracket (base + bosses in a loop − pocket − drilled holes) in three
+  spellings, committed compilable as `BuilderPrototypeTests` in
+  EngrCAD.Modeling.Tests. Verdict: **no new API**, for three reasons found by writing
+  it rather than argued from taste. (1) Python's builder rests on context managers
+  giving every nested call an ambient "active builder"; C# `using` gives no ambient
+  anything, so a builder is either passed explicitly (a lambda, an indentation level,
+  a second vocabulary for the same three verbs) or thread-static ambient state —
+  which is todo.md's already-declined "implicit pending state". (2) C# already HAS
+  accumulate-without-naming-intermediates: a mutable local with compound assignment
+  (`bracket |= boss; bracket -= pocket;`) is the builder mode, natively, including
+  loops and conditionals. (3) The one C#-specific trap a builder would fix — operator
+  precedence, `a | b - c` parsing as `a | (b - c)` — is already fixed by the named
+  `Union/Subtract/Intersect` methods, which chain left-to-right by construction. The
+  transliteration also visibly breaks at non-boolean operations (`Drill`, rim
+  features), which have no add/subtract mode and must sit outside the scope anyway.
 - **Transforms bake into construction inputs, never into finished geometry.** The B-Rep
   lowering carries an accumulated matrix: boxes become extrusions of transformed
   profiles (shear included), cylinders extrude transformed `Circle3d`/`Ellipse3d` rims,

@@ -773,41 +773,30 @@ almost entirely about **API design, not kernel capability** — their contributi
 model is *expressed*, and the underlying operations are ones we largely have. Read them
 for ergonomics, and copy capability rather than syntax: CadQuery's stringly-typed
 selectors (`">Z"`, `"|Z and >Y"`) are the part to learn from and *not* imitate, because
-`BrepQueries` + LINQ gives the same power type-safely. build123d's `ShapeList`
-(`.sort_by(Axis.Z)`, `.filter_by(GeomType.PLANE)`, `.group_by(...)`) is much closer to
-where this project already points.
+`BrepQueries` + LINQ gives the same power type-safely. Landed from this section:
+`BrepSelection` (the ordering/grouping layer + GeometryRef spellings), `LocationSet`,
+`ExtrudeUntil`/`CutUntil`, `Packing`, and the builder-form prototype whose verdict (an
+honest no) is recorded in design.md §6b with the comparison committed as
+`BuilderPrototypeTests`.
 
-- [ ] **The selection vocabulary is the real gap, and it is LINQ-shaped.** We have
-  `BrepQueries` (`IsPlanar`/`IsCylindrical`/`IsCircular`/`Length`/`Bounds`/`IsConvex`,
-  adjacency, `PlanarFacesWithNormal`, `RimEdges`, `ConvexEdges`) and lambda selectors.
-  What both libraries have and we do not is the **ordering/grouping layer** on top:
-  sort faces along an axis and take the extreme one, group by coplanarity or by distance
-  along a direction and take the *n*-th group, filter by surface type, take the largest
-  by area or the *n*-th by radius. As extension methods over `IEnumerable<BrepFace>` /
-  `IEnumerable<BrepEdge>` that is small, idiomatic C#, and it is exactly the
-  "LINQ-native geometry querying" this project claims as a design goal — the spatial
-  `IQueryable` provider already exists for the *positional* half.
-- [ ] **Location / workplane algebra as first-class values** — `Locations`,
-  `GridLocations`, `PolarLocations`, `HexLocations` (build123d) and
-  `pushPoints`/`rarray`/`polarArray`/`eachpoint` (CadQuery) all express "place this
-  feature at these N poses" as data an operation consumes. We have the pieces —
-  `Frame3d`, `SketchPlane.On(face)`, `PatternLinear`/`PatternCircular`, and `Drill`
-  already takes a point list — but no shared *location-list* abstraction that every
-  operation accepts. Unifying that would make `Drill`, patterns and component placement
-  one idea instead of three.
-- [ ] **Extrude `until` NEXT / LAST** — extrude or cut until the next face or the last
-  face of the existing body, instead of a fixed distance. Both libraries have it, it is
-  one of the most-used real modelling conveniences, and it is genuinely missing here.
-  Implementable as a ray cast from the profile against the target body (the per-part BVH
-  and `MeshSdf` are both already available) to find the stop distance, then the ordinary
-  extrude — so the work is the *robustness* of choosing the face, not new geometry.
-- [ ] **Builder-style authoring alongside the algebra** — `Shape` is already
-  algebra-mode (`box - cylinder`, which is build123d's second API almost exactly), so
-  the gap is the *builder* form: a scoped context that accumulates operations with an
-  add/subtract/intersect mode, so a sketch can be built from several pieces and consumed
-  without naming every intermediate. Worth prototyping against a real model before
-  committing — C# `using` scopes and object initializers are not Python context
-  managers, and a bad transliteration would be worse than the current fluent style.
+- [ ] **Selection-layer follow-ups**: `BrepSelection.Area`'s curved-face quadrature is
+  ordering-grade (~1–2%, midpoint grid gated by pulled trim loops) — an exact-surface
+  or adaptive tier is possible if a consumer ever needs measurement-grade face areas
+  (today that is `BrepMassProperties`' job); `GroupByCoplanar` could gain a
+  direction-filtered variant; `SurfaceKind` has no Helical member (helical faces
+  report `Swept`).
+- [ ] **Location-set follow-ups**: locations are 2D-in-plane by design — a full 3D
+  `Frame3d`-list variant (build123d's arbitrary `Locations`) would serve component
+  placement on non-parallel faces; `Shape.Pattern` could take a per-location scale law
+  the way `LoftAlong` takes laws.
+- [ ] **ExtrudeUntil follow-ups**: the resolution is eager (the `Bounds`/`Resized`
+  policy) — an `UntilFeature` wrapper would re-measure per regeneration; a conforming
+  end face (extrude-until-curved-face, what real CAD does with a trimmed end cap) needs
+  kernel work: split the prism's side walls against the target and cap with the
+  target's own surface patch.
+- [ ] **Packing follow-ups**: rotation (90° first, then free), true-outline nesting
+  (the silhouette regions are already computed — only their AABBs are used), and
+  multi-plate overflow instead of the loud refusal.
 - [ ] **Drafting / dimensions** — build123d's `drafting` module (`Draft`,
   `DimensionLine`, `ExtensionLine`, `TechnicalDrawing`). We have 3D PMI annotations
   landed (`LinearDimension`, `RadialDimension`, `LeaderNote`, `DatumLabel` with
@@ -817,14 +806,12 @@ where this project already points.
 - [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
   `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
   build123d's edge-classification line types); remaining: glTF, VTK, VRML.
-- [ ] **`pack`** — build123d's arrange-parts-on-a-build-plate helper (2D bin packing of
-  part footprints). Small, self-contained, and immediately useful for 3D-print export of
-  a multi-part assembly; `Shape.Silhouette` already produces the footprint it needs.
 - [ ] **Deliberately NOT taking**: string selectors (type-unsafe, and LINQ is strictly
   better in C#), Python-style implicit "pending" state carried between builder calls
-  (hard to reason about and worse without context managers), and the `Workplane` stack's
-  history/rollback semantics (our `FeatureHistory` already covers regeneration properly
-  and with typed parameters).
+  (hard to reason about and worse without context managers — confirmed by the builder
+  prototype, design.md §6b), and the `Workplane` stack's history/rollback semantics
+  (our `FeatureHistory` already covers regeneration properly and with typed
+  parameters).
 
 ## Viewer
 
