@@ -219,6 +219,22 @@ public abstract class AxisJoint : Joint
     /// <summary>Unwrap/zero bookkeeping for swept motion.</summary>
     internal JointSweepState State { get; }
 
+    /// <summary>Hard stops on the spin coordinate (radians, measured from the
+    /// construction zero), or null for a full-travel joint. Enforced by
+    /// <see cref="Mechanism"/> after every converged solve.</summary>
+    public (double Min, double Max)? AngleLimits { get; internal set; }
+
+    /// <summary>Hard stops on the slide coordinate (model units from the construction
+    /// zero), or null for a full-travel joint.</summary>
+    public (double Min, double Max)? SlideLimits { get; internal set; }
+
+    internal static (double Min, double Max) ValidatedLimits(double min, double max, string what)
+    {
+        if (!(min < max))
+            throw new ArgumentException($"A joint's {what} limits need min < max (got [{min:g4}, {max:g4}]).");
+        return (min, max);
+    }
+
     /// <summary>The spin about the joint axis, in radians — 0 at construction,
     /// unwrapped (a crank swept twice reads 4π). Read from the CURRENT occurrence
     /// frames.</summary>
@@ -310,6 +326,16 @@ public sealed class RevoluteJoint : AxisJoint
             DeriveReferences(a, b))
     {
     }
+
+    /// <summary>Hard stops on the hinge angle, in degrees from the construction zero
+    /// (chainable). A solve or sweep that drives past a stop refuses, naming this
+    /// joint.</summary>
+    public RevoluteJoint WithLimits(double minDegrees, double maxDegrees)
+    {
+        AngleLimits = ValidatedLimits(
+            minDegrees * Math.PI / 180, maxDegrees * Math.PI / 180, "angle");
+        return this;
+    }
 }
 
 /// <summary>A slider — see <see cref="Joint.Prismatic"/>.</summary>
@@ -328,6 +354,15 @@ public sealed class PrismaticJoint : AxisJoint
             ],
             references)
     {
+    }
+
+    /// <summary>Hard stops on the slide, in model units from the construction zero
+    /// (chainable). A solve or sweep that drives past a stop refuses, naming this
+    /// joint.</summary>
+    public PrismaticJoint WithLimits(double min, double max)
+    {
+        SlideLimits = ValidatedLimits(min, max, "slide");
+        return this;
     }
 }
 

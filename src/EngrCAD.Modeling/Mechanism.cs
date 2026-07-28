@@ -238,12 +238,77 @@ public sealed class Mechanism
     }
 
     /// <summary><see cref="Assemble"/> without the exception.</summary>
-    public MateSolveResult TryAssemble(MateSolverSettings? settings = null)
+    public MateSolveResult TryAssemble(MateSolverSettings? settings = null) =>
+        Solved(() => Mates.TrySolve(settings ?? new MateSolverSettings(), _couplings));
+
+    /// <summary>Runs a solve under the joint-limit contract: a converged pose that
+    /// drives any joint past a stop is ROLLED BACK (every frame restored) and reported
+    /// as a failure naming the joint — the refuse-loudly style; a clean converged pose
+    /// commits the joints' unwrap states.</summary>
+    private MateSolveResult Solved(Func<MateSolveResult> solve)
     {
-        var result = Mates.TrySolve(settings ?? new MateSolverSettings(), _couplings);
-        if (result.Converged)
-            CommitJointStates();
+        bool anyLimits = _joints.Any(j => j is AxisJoint { AngleLimits: not null } or AxisJoint { SlideLimits: not null });
+        var snapshot = anyLimits ? SnapshotFrames() : null;
+        var result = solve();
+        if (!result.Converged)
+            return result;
+        if (LimitViolation() is { } violation)
+        {
+            foreach (var (occurrence, frame) in snapshot!)
+                occurrence.Frame = frame;
+            return new MateSolveResult(
+                false, result.Iterations, result.Residual,
+                result.FreeDegreesOfFreedom, result.ConstrainedDegreesOfFreedom,
+                [violation, "nothing was moved — the occurrence frames are unchanged"])
+            { OccurrenceFreedoms = result.OccurrenceFreedoms };
+        }
+        CommitJointStates();
         return result;
+    }
+
+    private string? LimitViolation()
+    {
+        // The stop tolerance is the weld tier: a pose ON the stop to solver precision
+        // is legal, one measurably past it is not.
+        double slack = Core.Tolerance.Default.Linear;
+        foreach (var joint in _joints)
+        {
+            if (joint is not AxisJoint axis)
+                continue;
+            if (axis.AngleLimits is { } angle)
+            {
+                double value = axis.Angle;
+                if (value < angle.Min - slack || value > angle.Max + slack)
+                    return $"joint '{axis.Name}' is driven past its stop: angle " +
+                           $"{value * 180 / Math.PI:g6}° outside " +
+                           $"[{angle.Min * 180 / Math.PI:g6}°, {angle.Max * 180 / Math.PI:g6}°]";
+            }
+            if (axis.SlideLimits is { } slide)
+            {
+                double value = axis.Displacement;
+                if (value < slide.Min - slack || value > slide.Max + slack)
+                    return $"joint '{axis.Name}' is driven past its stop: slide " +
+                           $"{value:g6} outside [{slide.Min:g6}, {slide.Max:g6}]";
+            }
+        }
+        return null;
+    }
+
+    private List<(Occurrence Occurrence, Frame3d Frame)> SnapshotFrames()
+    {
+        var snapshot = new List<(Occurrence, Frame3d)>();
+        Collect(Assembly);
+        return snapshot;
+
+        void Collect(Assembly assembly)
+        {
+            foreach (var occurrence in assembly.Occurrences)
+            {
+                snapshot.Add((occurrence, occurrence.Frame));
+                if (occurrence.SubAssembly is { } sub)
+                    Collect(sub);
+            }
+        }
     }
 
     /// <summary>
@@ -269,10 +334,7 @@ public sealed class Mechanism
         var extras = new List<AuxiliaryConstraint>(_couplings.Count + 1);
         extras.AddRange(_couplings);
         extras.Add(driver.Constraint);
-        var result = Mates.TrySolve(settings ?? new MateSolverSettings(), extras);
-        if (result.Converged)
-            CommitJointStates();
-        return result;
+        return Solved(() => Mates.TrySolve(settings ?? new MateSolverSettings(), extras));
     }
 
     /// <summary>
@@ -440,6 +502,18 @@ public sealed class Mechanism
         MechanismDriver driver, double current, double target, MateSolveResult result,
         MateSolveResult looseBaseline, MateSolverSettings? settings, List<string> diagnostics)
     {
+        // A joint stop is its own story: the sweep walked up to the stop (step
+        // halving got it within 1/4096 of the range) and the next nudge violates a
+        // limit — no singularity probe needed, the joint is simply out of travel.
+        if (result.Diagnostics.FirstOrDefault(d => d.Contains("past its stop", StringComparison.Ordinal))
+            is { } stop)
+        {
+            diagnostics.Add(
+                $"the sweep stopped at driver value {current:g6}: {stop}");
+            diagnostics.Add("the assembly is left at the last good pose, on the stop");
+            return false;
+        }
+
         bool stationary = result.Diagnostics.Any(d => d.Contains("stationary", StringComparison.Ordinal));
         var atStall = RankProbe(driver, current, settings);
         bool nearSingular =
