@@ -337,9 +337,23 @@ this project's conversions.)
   tests, so a seed can only save part of the first descent. (A standalone prototype claimed
   1.88×; its baseline went through a `Func` delegate per triangle while the seeded path
   called the kernel directly. The gap was the delegate. Never benchmark an optimization
-  against a baseline you wrote differently.) The untried lever is a *packet* query — one
-  traversal per coherent block, collecting candidates for all its points at once — which
-  attacks the node-test cost rather than the initial bound.
+  against a baseline you wrote differently.)
+  **The packet query was the remaining lever. It was built and measured too, and it does not
+  survive contact with the batch seam** (`MeshSdfPacketBenchmark`). One traversal per
+  coherent group, with per-point pruning at the leaves so the shared work is the node tests,
+  wins **1.45×** on a compact 2³ block of grid points — but a packet's shared bound is
+  governed by the group's **diameter**, since a node is visited whenever it could beat the
+  *worst* member's current best. The batch seam hands over a flat span that every bulk
+  consumer generates **z-fastest**, so the real groups are rows: the same 8 points in a row
+  measure **0.86×**, and 64 of them span 1.9 units on a 3-unit model, at which point the
+  shared bound is the whole model and the packet is a brute-force scan (**0.30×**).
+  `MeshSdf` cannot regroup a collinear run into blocks, and teaching the batch contract to
+  carry "these points form a compact block" is a large API change to buy a win in a shape
+  no caller produces. Tie-breaking never became the question. Two negatives ride along:
+  seeding the packet from one exact query at the group's centre changes nothing
+  (0.80–1.31×, and it makes the best case *worse*), and pruning on **squared** distances
+  throughout — removing a `Math.Sqrt` from every box and triangle test — measures
+  0.94–0.99×.
   The sign source is opt-in via `new MeshSdf(mesh, MeshSignSource.WindingNumber)`, which
   drives the fast generalized winding number (`MeshWindingNumber` in EngrCAD.Mesh) instead
   of the pseudonormal — same partition on watertight meshes, but also accepts **open**

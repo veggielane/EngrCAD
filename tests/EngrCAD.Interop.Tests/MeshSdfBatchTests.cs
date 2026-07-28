@@ -154,12 +154,14 @@ public class MeshSdfBatchTests(ITestOutputHelper output)
     /// <b>Beware benchmarking an optimization against a baseline you wrote differently.</b>
     /// </para>
     /// <para>
-    /// What is still untried: a <em>packet</em> query — one traversal per coherent block
-    /// collecting the candidate triangles for all its points at once, then scanning that
-    /// short list per point. That attacks the node-test cost across the whole block rather
-    /// than the initial bound, which is the part seeding cannot reach. It needs care over
-    /// tie-breaking (equidistant triangles must resolve to the same one as
-    /// <c>Bvh.Nearest</c>) and a fallback when the candidate list blows up.
+    /// <b>The packet query was the remaining lever, and it was built and measured too</b> —
+    /// see <see cref="MeshSdfPacketBenchmark"/> for the table. One traversal per coherent
+    /// group with per-point pruning at the leaves does win on a compact 2³ block (1.45×),
+    /// but a packet's shared bound is governed by the group's DIAMETER, and the batch seam
+    /// delivers z-fastest ROWS: the same 8 points in a row measure 0.86× and 64 of them
+    /// 0.30×. There is no way for <c>MeshSdf</c> to regroup a collinear run into blocks, so
+    /// the win is in a shape no caller produces. Tie-breaking never even became the
+    /// question.
     /// </para>
     /// </summary>
     [Fact]
