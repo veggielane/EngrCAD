@@ -190,7 +190,9 @@ public abstract class Shape
             var tool = Revolve(toolProfile).Transform(placementPlane.ToMatrixAt(point));
             result -= tool;
         }
-        return new DrillShape(this, result, points, depth, placementPlane.ToMatrix(), surfaceDiameter);
+        return new DrillShape(
+            this, result, points, depth, placementPlane.ToMatrix(), surfaceDiameter,
+            hole.ToolSilhouette(depth));
     }
 
     // ---- Threads (modeled helical geometry) ----

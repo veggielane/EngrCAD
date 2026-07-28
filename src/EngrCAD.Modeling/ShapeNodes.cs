@@ -256,9 +256,12 @@ internal sealed class DrillShape : Shape
     /// <summary>The tool's diameter where it meets the drilled face (cbore/csk included).</summary>
     public double SurfaceDiameter { get; }
 
+    /// <summary>The tool's (axial, radius) silhouette — see <c>HoleSpec.ToolSilhouette</c>.</summary>
+    public (double Axial, double Radius)[] ToolSilhouette { get; }
+
     public DrillShape(
         Shape child, Shape expanded, IReadOnlyList<Vector2d> points, double depth,
-        Matrix4d planeMatrix, double surfaceDiameter)
+        Matrix4d planeMatrix, double surfaceDiameter, (double Axial, double Radius)[] silhouette)
     {
         Child = child;
         Expanded = expanded;
@@ -266,6 +269,7 @@ internal sealed class DrillShape : Shape
         Depth = depth;
         PlaneMatrix = planeMatrix;
         SurfaceDiameter = surfaceDiameter;
+        ToolSilhouette = silhouette;
         ValidateAgainstEarlierDrills();
     }
 
@@ -279,11 +283,11 @@ internal sealed class DrillShape : Shape
     /// boolean input and fails just as deep inside tessellation.
     /// </summary>
     /// <remarks>
-    /// Only drills sharing a placement plane are compared, and the walk stops at the
-    /// first non-drill node. Two drills on DIFFERENT planes can still produce
-    /// intersecting tools (opposing bores on the two faces of a plate, for instance);
-    /// deciding that in general is a tool-vs-tool solid intersection test, not a 2D
-    /// centre-distance test, and is deliberately left out rather than half-done.
+    /// Drills sharing a placement plane are compared in the plane's own 2D coordinates —
+    /// the surface circles are coplanar, so centre distance against summed surface radii
+    /// is the exact test. Drills on DIFFERENT planes (opposing bores on the two faces of
+    /// a plate, a side bore crossing a top bore) go through the 3D tool-vs-tool test
+    /// below instead.
     /// </remarks>
     private void ValidateAgainstEarlierDrills()
     {
@@ -292,22 +296,245 @@ internal sealed class DrillShape : Shape
         const double tolerance = 1e-9;
         for (var node = Child; node is DrillShape earlier; node = earlier.Child)
         {
-            if (!SamePlane(earlier.PlaneMatrix, PlaneMatrix))
-                continue;
-            double limit = (SurfaceDiameter + earlier.SurfaceDiameter) / 2;
-            foreach (var mine in Points)
+            if (SamePlane(earlier.PlaneMatrix, PlaneMatrix))
+                ValidateSamePlane(earlier, tolerance);
+            else
+                ValidateAcrossPlanes(earlier, tolerance);
+        }
+    }
+
+    private void ValidateSamePlane(DrillShape earlier, double tolerance)
+    {
+        double limit = (SurfaceDiameter + earlier.SurfaceDiameter) / 2;
+        foreach (var mine in Points)
+        {
+            foreach (var theirs in earlier.Points)
             {
-                foreach (var theirs in earlier.Points)
+                if (mine.DistanceTo(theirs) <= limit + tolerance)
+                    throw new ArgumentException(
+                        $"The hole at {mine} (surface diameter {SurfaceDiameter:g6}) overlaps or is " +
+                        $"tangent to a hole at {theirs} (surface diameter {earlier.SurfaceDiameter:g6}) " +
+                        $"drilled by an earlier Drill call on the same plane; centers must be more than " +
+                        $"{limit:g6} apart.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tools placed on two different planes: a 3D interference test between the two
+    /// solids of revolution. Reject when they may touch — intersecting or tangent cutting
+    /// tools are the degenerate boolean input this node exists to catch, and they fail
+    /// deep inside tessellation rather than at the call that created them.
+    /// </summary>
+    /// <remarks>
+    /// <para>Cheap analytic pre-test first: each tool is contained in the cylinder of its
+    /// largest radius about its axis segment, and two such cylinders are disjoint whenever
+    /// the distance between the AXIS SEGMENTS exceeds the summed radii (any shared point
+    /// would be within its own radius of each segment). One segment–segment distance per
+    /// hole pair clears the overwhelming majority of layouts.</para>
+    /// <para>Only when that is ambiguous does the pair get refined, by re-running the same
+    /// separation test slab by slab over the tools' silhouette breakpoints. The refinement
+    /// is <b>sound in the accept direction at any subdivision</b> — every slab pair
+    /// separating still proves the tools disjoint — and it is EXACT wherever a slab's
+    /// radius is constant, which covers simple and counterbored tools entirely; only a
+    /// countersink's cone is over-approximated, and it is subdivided. So the residual
+    /// error is a conservative refusal in a near-tangent band, which is precisely the
+    /// configuration a boolean cannot survive anyway.</para>
+    /// </remarks>
+    private void ValidateAcrossPlanes(DrillShape earlier, double tolerance)
+    {
+        var mineAxis = PlaneMatrix.TransformVector(Vector3d.UnitZ);
+        var theirsAxis = earlier.PlaneMatrix.TransformVector(Vector3d.UnitZ);
+        foreach (var mine in Points)
+        {
+            var mineOrigin = PlaneMatrix.TransformPoint(new Vector3d(mine.X, mine.Y, 0));
+            foreach (var theirs in earlier.Points)
+            {
+                var theirsOrigin = earlier.PlaneMatrix.TransformPoint(new Vector3d(theirs.X, theirs.Y, 0));
+                if (Separated(
+                        Slabs(mineOrigin, mineAxis, ToolSilhouette, 1),
+                        Slabs(theirsOrigin, theirsAxis, earlier.ToolSilhouette, 1), tolerance))
+                    continue;
+                if (Separated(
+                        Slabs(mineOrigin, mineAxis, ToolSilhouette, ConeSlabs),
+                        Slabs(theirsOrigin, theirsAxis, earlier.ToolSilhouette, ConeSlabs), tolerance))
+                    continue;
+                throw new ArgumentException(
+                    $"The hole at {mine} on this Drill's plane (axis through {mineOrigin:g6}) " +
+                    $"intersects or touches the hole at {theirs} drilled by an earlier Drill call on a " +
+                    $"different plane (axis through {theirsOrigin:g6}); their cutting tools overlap, which " +
+                    $"is degenerate boolean input. Move one hole, or shorten its depth so the tools clear.");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sub-slabs per sloped silhouette segment. Constant-radius segments are exact at any
+    /// count and are never subdivided; only a countersink's cone needs this.
+    /// </summary>
+    private const int ConeSlabs = 16;
+
+    /// <summary>A bounding cylinder: the axis segment plus the largest radius over it.</summary>
+    private readonly record struct ToolSlab(Vector3d Start, Vector3d End, double Radius);
+
+    /// <summary>
+    /// Bounding cylinders covering one tool. <paramref name="subdivisions"/> = 1 gives the
+    /// whole-tool pre-test bound (one slab per silhouette segment, or a single slab when
+    /// the caller wants the coarsest form); each slab's radius is the largest the
+    /// silhouette reaches over it, so the cover is always conservative.
+    /// </summary>
+    private static List<ToolSlab> Slabs(
+        in Vector3d origin, in Vector3d axis, (double Axial, double Radius)[] silhouette, int subdivisions)
+    {
+        var slabs = new List<ToolSlab>();
+        if (subdivisions <= 1)
+        {
+            // The coarse bound: one cylinder over the whole axial run.
+            double radius = 0;
+            foreach (var (_, r) in silhouette)
+                radius = Math.Max(radius, r);
+            slabs.Add(new ToolSlab(
+                origin + axis * silhouette[0].Axial, origin + axis * silhouette[^1].Axial, radius));
+            return slabs;
+        }
+        for (int i = 0; i + 1 < silhouette.Length; i++)
+        {
+            var (a0, r0) = silhouette[i];
+            var (a1, r1) = silhouette[i + 1];
+            if (a1 <= a0)
+                continue; // a vertical silhouette step covers no axial extent
+            // A constant-radius segment IS its bounding cylinder — subdividing it would
+            // only cost pairs. Deliberate exact comparison: the radii come from the same
+            // arithmetic, so equality here is a structural fact, not a measurement.
+            int steps = r0 == r1 ? 1 : subdivisions;
+            for (int k = 0; k < steps; k++)
+            {
+                double t0 = (double)k / steps, t1 = (double)(k + 1) / steps;
+                double b0 = a0 + (a1 - a0) * t0, b1 = a0 + (a1 - a0) * t1;
+                slabs.Add(new ToolSlab(
+                    origin + axis * b0, origin + axis * b1,
+                    Math.Max(r0 + (r1 - r0) * t0, r0 + (r1 - r0) * t1)));
+            }
+        }
+        return slabs;
+    }
+
+    /// <summary>Every slab pair provably clear of every other: the tools cannot touch.</summary>
+    private static bool Separated(List<ToolSlab> a, List<ToolSlab> b, double tolerance)
+    {
+        foreach (var slabA in a)
+        {
+            foreach (var slabB in b)
+            {
+                if (!Separated(slabA, slabB, tolerance))
+                    return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// Two bounding cylinders proved disjoint. Any ONE sufficient condition settles it, so
+    /// two are tried:
+    /// <list type="number">
+    /// <item>the distance between the AXIS SEGMENTS exceeding the summed radii (any shared
+    /// point would lie within its own radius of each segment) — the condition that decides
+    /// skew and offset-parallel layouts; and</item>
+    /// <item>a separating axis. A finite solid cylinder is CONVEX, so a direction whose
+    /// projections do not overlap proves disjointness outright, and its support extent
+    /// along a unit d is exactly |n·d|·halfLength + r·√(1 − (n·d)²).</item>
+    /// </list>
+    /// The second is what the first cannot see: two COLLINEAR tools drilled towards each
+    /// other from opposite faces have axis segments at zero radial distance however much
+    /// web is left between them, and only the axial projection separates them.
+    /// </summary>
+    private static bool Separated(in ToolSlab a, in ToolSlab b, double tolerance)
+    {
+        if (SegmentDistance(a.Start, a.End, b.Start, b.End) > a.Radius + b.Radius + tolerance)
+            return true;
+
+        var axisA = a.End - a.Start;
+        var axisB = b.End - b.Start;
+        var centres = (b.Start + b.End) / 2 - (a.Start + a.End) / 2;
+        if (!axisA.TryNormalize(Tolerance.Default, out var nA) ||
+            !axisB.TryNormalize(Tolerance.Default, out var nB))
+            return false; // a zero-length slab: leave it to the segment test above
+        double halfA = axisA.Length / 2, halfB = axisB.Length / 2;
+
+        // The face normals plus their cross product are the SAT candidates two cylinders
+        // share with two boxes; the centre offset and its radial components cover the
+        // side-by-side layouts whose separating direction is neither axis.
+        Span<Vector3d> candidates =
+        [
+            nA, nB, nA.Cross(nB),
+            centres, centres - nA * centres.Dot(nA), centres - nB * centres.Dot(nB),
+        ];
+        foreach (var candidate in candidates)
+        {
+            if (!candidate.TryNormalize(Tolerance.Default, out var d))
+                continue; // parallel axes, or coincident centres: nothing to project on
+            if (Math.Abs(centres.Dot(d)) >
+                Extent(nA, halfA, a.Radius, d) + Extent(nB, halfB, b.Radius, d) + tolerance)
+                return true;
+        }
+        return false;
+    }
+
+    /// <summary>A solid cylinder's support extent about its centre along a unit direction.</summary>
+    private static double Extent(in Vector3d axis, double halfLength, double radius, in Vector3d direction)
+    {
+        double along = axis.Dot(direction);
+        return Math.Abs(along) * halfLength + radius * Math.Sqrt(Math.Max(0, 1 - along * along));
+    }
+
+    /// <summary>
+    /// Distance between two closed segments (Ericson, <i>Real-Time Collision Detection</i>
+    /// §5.1.9). The exact-zero guards are structural — a zero-length segment is a POINT,
+    /// which is a different formula, not a tolerance question — and the parallel case
+    /// (a zero denominator) pins s = 0 and lets the clamping below find the answer.
+    /// </summary>
+    private static double SegmentDistance(
+        in Vector3d p1, in Vector3d q1, in Vector3d p2, in Vector3d q2)
+    {
+        var d1 = q1 - p1;
+        var d2 = q2 - p2;
+        var r = p1 - p2;
+        double a = d1.Dot(d1), e = d2.Dot(d2), f = d2.Dot(r);
+        double s, t;
+        if (a <= 0 && e <= 0)
+            return r.Length;
+        if (a <= 0)
+        {
+            s = 0;
+            t = Math.Clamp(f / e, 0, 1);
+        }
+        else
+        {
+            double c = d1.Dot(r);
+            if (e <= 0)
+            {
+                t = 0;
+                s = Math.Clamp(-c / a, 0, 1);
+            }
+            else
+            {
+                double b = d1.Dot(d2);
+                double denominator = a * e - b * b;
+                s = denominator > 0 ? Math.Clamp((b * f - c * e) / denominator, 0, 1) : 0;
+                t = (b * s + f) / e;
+                if (t < 0)
                 {
-                    if (mine.DistanceTo(theirs) <= limit + tolerance)
-                        throw new ArgumentException(
-                            $"The hole at {mine} (surface diameter {SurfaceDiameter:g6}) overlaps or is " +
-                            $"tangent to a hole at {theirs} (surface diameter {earlier.SurfaceDiameter:g6}) " +
-                            $"drilled by an earlier Drill call on the same plane; centers must be more than " +
-                            $"{limit:g6} apart.");
+                    t = 0;
+                    s = Math.Clamp(-c / a, 0, 1);
+                }
+                else if (t > 1)
+                {
+                    t = 1;
+                    s = Math.Clamp((b - c) / a, 0, 1);
                 }
             }
         }
+        return (p1 + d1 * s - (p2 + d2 * t)).Length;
     }
 
     /// <summary>

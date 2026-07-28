@@ -429,6 +429,37 @@ Trisert® insert pilots (`Trisert`/`TrisertMinimumDepth` — ⚠ verify the inse
 against the current Tappex datasheet before production use). Blind holes get flat
 bottoms; drill-tip angles are future work.
 
+**Holes are validated against each other before any geometry is built**, because two
+cutting tools that overlap or touch are degenerate boolean input and fail deep inside
+tessellation rather than at the call that created them. Three layers:
+
+- within one `Drill` call, centre distance against the summed surface diameters;
+- across `Drill` calls **on the same placement plane**, the same 2D test (mixing
+  clearance holes and counterbores in two calls is the normal way to build a plate);
+- across `Drill` calls on **different planes** — opposing bores on the two faces of a
+  plate, a side bore crossing a top bore — a 3D tool-vs-tool interference test. Each
+  tool is covered by bounding cylinders about its axis, and a pair is cleared by either
+  of two sufficient conditions: the distance between the axis SEGMENTS exceeding the
+  summed radii, or a separating axis (a finite solid cylinder is convex, and its support
+  extent along a unit **d** is exactly `|n·d|·halfLength + r·√(1 − (n·d)²)`). Both are
+  needed and neither subsumes the other: the segment distance settles skew and
+  offset-parallel layouts, while two COLLINEAR tools drilled towards each other have
+  axis segments at zero radial distance however much web is left between them, so only
+  the axial projection separates them.
+
+  A cheap whole-tool bound clears the overwhelming majority of layouts in one test; only
+  an ambiguous pair is refined slab by slab over the tool's silhouette breakpoints (the
+  `HoleSpec.ToolSilhouette` that `ToolProfile` itself is built from, so a validated
+  configuration and the geometry actually cut cannot disagree). The refinement is
+  **sound in the accept direction at any subdivision** — every slab pair separating still
+  proves the tools disjoint — and EXACT wherever a slab's radius is constant, which is
+  all of a simple or counterbored tool; only a countersink's cone is over-approximated,
+  and it is subdivided. The residual error is therefore a conservative refusal in a
+  near-tangent band, which is exactly the configuration a boolean cannot survive anyway.
+
+  Not covered: `ThreadedHole`'s thread void (its tap-drill pilot goes through `Drill` and
+  is), and tools from separate `Shape` branches later unioned.
+
 ## Threads
 
 Real modeled thread geometry (not cosmetic), built for 3D printing:

@@ -80,31 +80,32 @@ public sealed class HoleSpec
     internal double SurfaceDiameter => _kind == Kind.Simple ? _diameter : _featureDiameter;
 
     /// <summary>
-    /// The cutting tool's revolve profile in (radius, height) coordinates: the drilled
-    /// surface is at y = 0, material below. The tool overshoots the surface slightly so
-    /// booleans never see coplanar faces (the countersink cone continues its slope, so
-    /// the surface diameter stays exact).
+    /// The cutting tool's OUTER silhouette as (axial, radius) breakpoints, ascending in
+    /// axial: the tool's radius is piecewise linear between them. Axial 0 is the drilled
+    /// surface and material is at negative axial, so the run starts at −depth and ends at
+    /// the overshoot above the surface.
     /// </summary>
-    internal Sketch ToolProfile(double depth)
+    /// <remarks>
+    /// This is the single source of truth for the tool's shape:
+    /// <see cref="ToolProfile"/> closes it against the axis, and <c>DrillShape</c>'s
+    /// cross-plane interference test bounds it slab by slab. Deriving one from the other
+    /// is what keeps a validated configuration and the geometry actually cut in agreement.
+    /// </remarks>
+    internal (double Axial, double Radius)[] ToolSilhouette(double depth)
     {
         double r = _diameter / 2;
         double overshoot = 0.05 * Math.Max(depth, _diameter);
         switch (_kind)
         {
             case Kind.Simple:
-                return Sketch.Polygon([new(0, -depth), new(r, -depth), new(r, overshoot), new(0, overshoot)]);
+                return [(-depth, r), (overshoot, r)];
 
             case Kind.Counterbore:
             {
                 double bigR = _featureDiameter / 2;
                 if (_counterboreDepth >= depth)
                     throw new ArgumentException("The counterbore must be shallower than the hole.");
-                return Sketch.Polygon(
-                [
-                    new(0, -depth), new(r, -depth),
-                    new(r, -_counterboreDepth), new(bigR, -_counterboreDepth),
-                    new(bigR, overshoot), new(0, overshoot),
-                ]);
+                return [(-depth, r), (-_counterboreDepth, r), (-_counterboreDepth, bigR), (overshoot, bigR)];
             }
 
             default:
@@ -114,13 +115,27 @@ public sealed class HoleSpec
                 double sinkDepth = (bigR - r) / slope;
                 if (sinkDepth >= depth)
                     throw new ArgumentException("The countersink must be shallower than the hole.");
-                double topR = bigR + overshoot * slope;
-                return Sketch.Polygon(
-                [
-                    new(0, -depth), new(r, -depth),
-                    new(r, -sinkDepth), new(topR, overshoot), new(0, overshoot),
-                ]);
+                // The cone continues its slope past the surface, so the surface diameter
+                // stays exactly the specified one despite the overshoot.
+                return [(-depth, r), (-sinkDepth, r), (overshoot, bigR + overshoot * slope)];
             }
         }
+    }
+
+    /// <summary>
+    /// The cutting tool's revolve profile in (radius, height) coordinates: the drilled
+    /// surface is at y = 0, material below. The tool overshoots the surface slightly so
+    /// booleans never see coplanar faces (the countersink cone continues its slope, so
+    /// the surface diameter stays exact).
+    /// </summary>
+    internal Sketch ToolProfile(double depth)
+    {
+        var silhouette = ToolSilhouette(depth);
+        var points = new Vector2d[silhouette.Length + 2];
+        points[0] = new(0, silhouette[0].Axial);
+        for (int i = 0; i < silhouette.Length; i++)
+            points[i + 1] = new(silhouette[i].Radius, silhouette[i].Axial);
+        points[^1] = new(0, silhouette[^1].Axial);
+        return Sketch.Polygon(points);
     }
 }

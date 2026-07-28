@@ -58,17 +58,89 @@ public class CrossDrillValidationTests
         Assert.True(solid.SatisfiesEulerFormula(genus: 3));
     }
 
+    /// <summary>The plate's underside, looking down (its own 2D y runs opposite the top's).</summary>
+    private static SketchPlane Bottom() => SketchPlane.At((0, 0, 0), Vector3d.UnitX, -Vector3d.UnitY);
+
     [Fact]
-    public void HolesOnDifferentPlanesAreNotCompared()
+    public void OpposingCoaxialBoresThatMeetAreRejected()
     {
-        // Documented limitation: the check is a 2D centre-distance test on ONE placement
-        // plane. Opposing bores on the two faces of a plate are not compared (deciding
-        // that needs a tool-vs-tool solid intersection), so this must not throw.
-        var bottom = SketchPlane.At((0, 0, 0), Vector3d.UnitX, -Vector3d.UnitY);
+        // This exact layout used to be accepted, under a comment claiming opposing bores
+        // "are not compared". They are the same bore from both sides: the top tool reaches
+        // z = 4 and the bottom tool z = 6, so they overlap over 2 mm of coaxial material
+        // and the boolean sees two tools sharing a volume.
+        var first = Plate().Drill(Bore(6), [new Vector2d(20, 20)], 6, Top());
+
+        var error = Assert.Throws<ArgumentException>(() =>
+            first.Drill(Bore(6), [new Vector2d(20, -20)], 6, Bottom()));
+
+        Assert.Contains("different plane", error.Message);
+        Assert.Contains("(20, -20)", error.Message);
+        Assert.Contains("(20, 20)", error.Message);
+    }
+
+    [Fact]
+    public void OpposingCoaxialBoresThatStopShortAreAccepted()
+    {
+        // The same two bores, each 4 mm into a 10 mm plate: 2 mm of web between them, so
+        // the tools clear (their overshoot is 0.05 x 6 = 0.3 mm each, nowhere near it).
         var design = Plate()
-            .Drill(Bore(6), [new Vector2d(20, 20)], 6, Top())
-            .Drill(Bore(6), [new Vector2d(20, -20)], 6, bottom);
-        Assert.NotNull(design);
+            .Drill(Bore(6), [new Vector2d(20, 20)], 4, Top())
+            .Drill(Bore(6), [new Vector2d(20, -20)], 4, Bottom());
+
+        var solid = design.ToBrep();
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus: 0)); // two blind pockets, no through hole
+    }
+
+    [Fact]
+    public void OffsetOpposingBoresAreAccepted()
+    {
+        // Full-depth from both sides but far apart in plan: the cheap pre-test settles
+        // this one on a single segment-segment distance.
+        var design = Plate()
+            .Drill(Bore(6), [new Vector2d(15, 20)], 12, Top())
+            .Drill(Bore(6), [new Vector2d(45, -20)], 12, Bottom());
+
+        design.ToBrep().Validate();
+    }
+
+    [Fact]
+    public void ACrossBoreMeetingATopBoreIsRejected()
+    {
+        // Perpendicular axes, the case a 2D centre-distance test cannot see at all: a
+        // side bore driven through the plate's width passes straight through a top bore.
+        var side = SketchPlane.At((0, 0, 0), Vector3d.UnitX, Vector3d.UnitZ); // normal −Y
+        var first = Plate().Drill(Bore(6), [new Vector2d(20, 20)], 12, Top());
+
+        var error = Assert.Throws<ArgumentException>(() =>
+            first.Drill(Bore(4), [new Vector2d(20, 5)], 50, side));
+        Assert.Contains("different plane", error.Message);
+    }
+
+    [Fact]
+    public void ACrossBoreClearingATopBoreIsAccepted()
+    {
+        // The same cross bore moved 20 mm along the plate: perpendicular axes that never
+        // come within their summed radii.
+        var side = SketchPlane.At((0, 0, 0), Vector3d.UnitX, Vector3d.UnitZ);
+        var design = Plate()
+            .Drill(Bore(6), [new Vector2d(20, 20)], 12, Top())
+            .Drill(Bore(4), [new Vector2d(45, 5)], 50, side);
+
+        Assert.NotNull(design.ToBrep());
+    }
+
+    [Fact]
+    public void ACountersinkConeMeetingAnOpposingBoreIsRejected()
+    {
+        // The one tool whose radius genuinely varies along its axis, so the whole-tool
+        // pre-test is ambiguous and the slab refinement decides it. The cone opens to
+        // 14 mm at the top face; a 5 mm bore from below reaching up into that flare must
+        // be caught even though the two AXES are 5 mm apart.
+        var first = Plate().Drill(HoleSpec.Countersink(6, 14), [new Vector2d(20, 20)], 9, Top());
+
+        Assert.Throws<ArgumentException>(() =>
+            first.Drill(Bore(5), [new Vector2d(25, -20)], 9.5, Bottom()));
     }
 
     [Fact]
