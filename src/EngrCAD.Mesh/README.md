@@ -570,6 +570,18 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   half-relaxed value); exposes `NearestSeed`/`Predecessor`/`PathToSeed` and
   `SettledOrder` — the ascending-distance settle order the discrete exponential map
   propagates in. Deterministic.
+- **`MeshIsoCurves`** — iso-contours of a per-vertex scalar field as ordered polylines
+  (g3 `MeshIsoCurves`): marching triangles with exact linear interpolation along edges.
+  The crossing on each undirected edge is computed **once, from the edge's lower-indexed
+  vertex** — the boolean seam lesson applied here, so both adjacent triangles share the
+  endpoint bit-identically (the contract `SdfContours` documents) — and chaining is
+  **combinatorial** (segments meet at mesh edges; an edge has at most two faces, so
+  successors are unique), which is stronger than equality chaining. Contours run with
+  the below-level region on their LEFT in the mesh's orientation; closed loops set
+  `IsClosed` instead of repeating a point; the strict inside rule (`value < level`)
+  makes at-level vertices outside, drops zero-length segments by exact equality, and
+  carries the marching-squares node caveat: a contour through a vertex may split chains
+  there. Deterministic.
 - **`MeshWelder`** — polygon-soup → mesh via spatial-hash vertex welding, with optional
   T-junction seam zipping: for every directed edge with no reverse partner, the crack
   vertices lying collinearly along it are inserted, so both sides of a seam end up with
