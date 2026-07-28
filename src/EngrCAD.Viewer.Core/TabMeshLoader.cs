@@ -7,7 +7,7 @@ namespace EngrCAD.Viewer;
 /// <summary>What one tab-meshing job was asked to prepare: the tab's flattened
 /// instances (in <c>Tab.Instances()</c> order), the quality to mesh at, and whether the
 /// camera should frame the result.</summary>
-internal sealed record TabMeshRequest(
+public sealed record TabMeshRequest(
     string TabName,
     IReadOnlyList<PartInstance> Instances,
     MeshQuality? Quality,
@@ -16,7 +16,7 @@ internal sealed record TabMeshRequest(
 /// <summary>A geometry batch ready to display: the instances meshed so far, in tab
 /// order, minus any whose part failed. <see cref="Final"/> marks the last batch of a
 /// job (the point at which a host stops showing progress).</summary>
-internal readonly record struct TabMeshBatch(
+public readonly record struct TabMeshBatch(
     string TabName,
     IReadOnlyList<PartInstance> Ready,
     IReadOnlyList<Part> Failed,
@@ -27,7 +27,7 @@ internal readonly record struct TabMeshBatch(
 /// what is happening. <see cref="Fraction"/> is over the whole tab in [0, 1];
 /// <see cref="Flavor"/> is a secondary line describing the route this part takes
 /// through the kernel (see <see cref="MeshFlavor"/>).</summary>
-internal readonly record struct TabMeshProgress(
+public readonly record struct TabMeshProgress(
     string TabName,
     int Completed,
     int Total,
@@ -36,11 +36,11 @@ internal readonly record struct TabMeshProgress(
     string Flavor);
 
 /// <summary>One part that could not be meshed (its geometry never reaches the viewport).</summary>
-internal readonly record struct TabMeshFailure(string PartName, string Message);
+public readonly record struct TabMeshFailure(string PartName, string Message);
 
 /// <summary>How a job ended: how many parts it prepared successfully, how long that
 /// took, what failed, and whether a newer request (or a cancel) cut it short.</summary>
-internal readonly record struct TabMeshCompletion(
+public readonly record struct TabMeshCompletion(
     string TabName,
     int PartCount,
     TimeSpan Elapsed,
@@ -70,8 +70,14 @@ internal readonly record struct TabMeshCompletion(
 /// published instances (its geometry cannot be uploaded) and named in the completion,
 /// while the rest of the tab still loads and the bar still reaches the end.</item>
 /// </list>
+/// <para>It lives in EngrCAD.Viewer.Core because it is Avalonia-free, but note that it
+/// is <b>thread-model-bound</b>: its whole shape (a <see cref="Task.Run(Action)"/>
+/// worker, a post-back delegate, a volatile generation token read across threads)
+/// assumes two threads. The single-threaded browser client deliberately does NOT use it
+/// — <c>EngrCadViewport.LoadAsync</c> keeps the same three rules with cooperative
+/// yielding instead (see the EngrCAD.Web README).</para>
 /// </summary>
-internal sealed class TabMeshLoader
+public sealed class TabMeshLoader
 {
     private readonly Action<Action> _post;
     private readonly Action<Part, MeshQuality?, ProgressCancel?> _prepare;

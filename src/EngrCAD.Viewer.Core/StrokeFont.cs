@@ -16,7 +16,7 @@ namespace EngrCAD.Viewer;
 /// might ever see).
 /// </para>
 /// </summary>
-internal static class StrokeFont
+public static class StrokeFont
 {
     /// <summary>Glyph box width (the height is 1).</summary>
     public const double GlyphWidth = 0.6;

@@ -6,12 +6,18 @@
     <RootNamespace>EngrCAD.Viewer</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Core for the math structs, Mesh for the half-edge walk WireframeEdges does, and
+    <!-- Core for the math structs, Mesh for the half-edge walk WireframeEdges does,
          Modeling for DisplayMode (RenderModes.Resolve's precedence rule is stated in
-         terms of it). NOTHING that touches a GL binding: this assembly must stay
-         loadable in a WebAssembly client. -->
+         terms of it) and the Part/PartInstance surface TabMeshLoader and the pure
+         annotation/isoline halves read, Implicit + Interop for the section-isoline
+         extraction (Sdf + SdfContours), BRep for MeshFlavor's geometry inspection.
+         NOTHING that touches a GL binding: this assembly must stay loadable in a
+         WebAssembly client. -->
     <ProjectReference Include="..\EngrCAD.Core\EngrCAD.Core.csproj" />
     <ProjectReference Include="..\EngrCAD.Mesh\EngrCAD.Mesh.csproj" />
+    <ProjectReference Include="..\EngrCAD.Implicit\EngrCAD.Implicit.csproj" />
+    <ProjectReference Include="..\EngrCAD.BRep\EngrCAD.BRep.csproj" />
+    <ProjectReference Include="..\EngrCAD.Interop\EngrCAD.Interop.csproj" />
     <ProjectReference Include="..\EngrCAD.Modeling\EngrCAD.Modeling.csproj" />
   </ItemGroup>
 </Project>
