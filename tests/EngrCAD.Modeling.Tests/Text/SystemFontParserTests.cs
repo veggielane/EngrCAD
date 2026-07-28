@@ -90,4 +90,31 @@ public class SystemFontParserTests
         Assert.True(font.TryGetGlyph('I', out var i));
         Assert.All(i.Contours.SelectMany(c => c.Points), p => Assert.True(p.OnCurve));
     }
+
+    // ---- OpenType/CFF (.otf) — commonly skips: Windows ships no .otf ---------
+
+    [SkippableFact]
+    public void RealCffFont_ParsesAndProducesClosedGeometry()
+    {
+        Skip.If(SystemFonts.CffSkipReason is not null, SystemFonts.CffSkipReason);
+        var font = SystemFonts.CffFont;
+
+        Assert.True(font.HasPostScriptOutlines);
+        Assert.True(font.GlyphCount > 0);
+
+        Assert.True(font.TryGetGlyph('O', out var o));
+        Assert.False(o.IsEmpty);
+        Assert.All(o.Contours, c => Assert.True(c.IsCubic));
+
+        // Structural facts only (the exact outlines are the font's, not ours): the
+        // ring encloses area, its counter classifies as a hole, and text extrudes to
+        // a closed solid.
+        var sketches = TextOutlines.GlyphSketches(font, 'O', 10);
+        Assert.True(sketches.Count >= 1);
+        Assert.True(sketches.Sum(s => s.Area()) > 0);
+
+        var mesh = Shape.Text("OK", font, size: 10, height: 2).ToMesh();
+        Assert.True(mesh.IsClosed);
+        Assert.True(mesh.Volume() > 0);
+    }
 }

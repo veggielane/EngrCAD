@@ -5,16 +5,19 @@ using EngrCAD.Core;
 namespace EngrCAD.Modeling;
 
 /// <summary>
-/// A TrueType font read straight from its bytes — no third-party dependency, in the
+/// An OpenType font read straight from its bytes — no third-party dependency, in the
 /// spirit of the rest of the kernel (kernel projects pack to NuGet and stay dependency
-/// free). Only what modeled text needs is parsed: <c>head</c>, <c>maxp</c>,
-/// <c>cmap</c> (formats 4 and 12), <c>loca</c>, <c>glyf</c> (simple <em>and</em>
-/// composite glyphs), <c>hhea</c>/<c>hmtx</c>, plus optional <c>kern</c> (format 0),
-/// <c>name</c> and <c>OS/2</c>. Hinting instructions are skipped — they are a
-/// rasterization concern and modeled text is resolution independent.
-/// <para><b>Not supported:</b> PostScript/CFF outlines (<c>OTTO</c>-flavoured OpenType
-/// <c>.otf</c>, cubic béziers in a <c>CFF </c> table) and TrueType Collections
-/// (<c>.ttc</c>) — both are detected and rejected with a message naming the
+/// free). Both outline flavours are supported: TrueType quadratics from a
+/// <c>glyf</c> table (<c>.ttf</c>) and PostScript cubics from a <c>CFF </c> table
+/// (<c>OTTO</c>-flavoured <c>.otf</c>, see <see cref="CffOutlines"/>). Only what
+/// modeled text needs is parsed: <c>head</c>, <c>maxp</c>, <c>cmap</c> (formats 4 and
+/// 12), <c>loca</c>/<c>glyf</c> (simple <em>and</em> composite glyphs) or
+/// <c>CFF </c> (Type 2 charstrings, including CID-keyed fonts),
+/// <c>hhea</c>/<c>hmtx</c>, plus optional <c>kern</c> (format 0), <c>name</c> and
+/// <c>OS/2</c>. Hinting is skipped — a rasterization concern, and modeled text is
+/// resolution independent.
+/// <para><b>Not supported:</b> TrueType Collections (<c>.ttc</c>) and variable-font
+/// <c>CFF2</c> tables — both are detected and rejected with a message naming the
 /// limitation rather than producing wrong geometry.</para>
 /// <para>Glyph outlines are cached per index and the type is immutable after loading,
 /// so one font instance can be shared across threads (e.g. <c>Scene.PreMesh</c>).</para>
@@ -49,9 +52,10 @@ public sealed class TrueTypeFont
     private const int MaxCompositeDepth = 8;
 
     private readonly byte[] _data;
-    private readonly int[] _loca;                 // GlyphCount + 1 offsets into glyf
+    private readonly int[]? _loca;                // GlyphCount + 1 offsets into glyf (glyf fonts only)
     private readonly int _glyfOffset;
     private readonly int _glyfLength;
+    private readonly CffOutlines? _cff;           // PostScript outlines (OTTO fonts only)
     private readonly int[] _advanceWidths;        // font units, per glyph
     private readonly int[] _leftSideBearings;
     private readonly CharacterMap _cmap;
@@ -71,7 +75,8 @@ public sealed class TrueTypeFont
             throw new FontFormatException($"head.unitsPerEm is {UnitsPerEm}; the format allows 16..16384.");
         head.Skip(30);                                   // created/modified/bbox/macStyle/lowestRecPPEM/fontDirectionHint
         int indexToLocFormat = head.ReadInt16();
-        if (indexToLocFormat is not (0 or 1))
+        bool hasGlyf = tables.ContainsKey("glyf") || !tables.ContainsKey("CFF ");
+        if (hasGlyf && indexToLocFormat is not (0 or 1))
             throw new FontFormatException($"head.indexToLocFormat is {indexToLocFormat}; expected 0 (short) or 1 (long).");
 
         // ---- maxp: glyph count ----
@@ -92,11 +97,22 @@ public sealed class TrueTypeFont
                 $"hhea.numberOfHMetrics is {metricCount}, which is not in 1..{GlyphCount} (maxp.numGlyphs).");
         (_advanceWidths, _leftSideBearings) = ReadHorizontalMetrics(span, Table(tables, "hmtx"), metricCount, GlyphCount);
 
-        // ---- loca: glyph offsets into glyf ----
-        _loca = ReadLoca(span, Table(tables, "loca"), indexToLocFormat, GlyphCount);
-        var glyf = Table(tables, "glyf");
-        _glyfOffset = glyf.Offset;
-        _glyfLength = glyf.Length;
+        // ---- outlines: glyf/loca (quadratic) or CFF (cubic) ----
+        if (hasGlyf)
+        {
+            _loca = ReadLoca(span, Table(tables, "loca"), indexToLocFormat, GlyphCount);
+            var glyf = Table(tables, "glyf");
+            _glyfOffset = glyf.Offset;
+            _glyfLength = glyf.Length;
+        }
+        else
+        {
+            var cff = Table(tables, "CFF ");
+            _cff = CffOutlines.Read(data, cff.Offset, cff.Length);
+            if (_cff.GlyphCount != GlyphCount)
+                throw new FontFormatException(
+                    $"CFF CharStrings holds {_cff.GlyphCount} glyphs but maxp.numGlyphs is {GlyphCount}.");
+        }
 
         // ---- cmap: character -> glyph index ----
         _cmap = CharacterMap.Read(span, Table(tables, "cmap").Offset);
@@ -109,7 +125,7 @@ public sealed class TrueTypeFont
 
     // ---- public surface ------------------------------------------------------
 
-    /// <summary>Reads a <c>.ttf</c> file from disk.</summary>
+    /// <summary>Reads a <c>.ttf</c> or <c>.otf</c> file from disk.</summary>
     public static TrueTypeFont Load(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
@@ -157,6 +173,12 @@ public sealed class TrueTypeFont
 
     /// <summary>True when the font carries a usable format-0 <c>kern</c> table.</summary>
     public bool HasKerning => _kerning is not null;
+
+    /// <summary>True when outlines come from a PostScript <c>CFF </c> table (cubic
+    /// Béziers, <c>OTTO</c>-flavoured <c>.otf</c>); false for TrueType <c>glyf</c>
+    /// quadratics. Either way the outlines map onto <see cref="Sketch"/> segments
+    /// exactly — see <see cref="GlyphContour.IsCubic"/>.</summary>
+    public bool HasPostScriptOutlines => _cff is not null;
 
     /// <summary>
     /// The em size that renders flat capitals <paramref name="capHeight"/> tall —
@@ -223,11 +245,8 @@ public sealed class TrueTypeFont
         {
             case 0x00010000:                             // TrueType outlines
             case 0x74727565:                             // 'true' (legacy Apple)
+            case 0x4F54544F:                             // 'OTTO': OpenType with PostScript (CFF) outlines
                 break;
-            case 0x4F54544F:                             // 'OTTO'
-                throw new FontFormatException(
-                    "This is an OpenType/CFF font (PostScript cubic outlines in a 'CFF ' table). " +
-                    "EngrCAD reads TrueType quadratic outlines only — use a .ttf, or convert the font.");
             case 0x74746366:                             // 'ttcf'
                 throw new FontFormatException(
                     "This is a TrueType Collection (.ttc). Extract the individual font you want; " +
@@ -252,10 +271,12 @@ public sealed class TrueTypeFont
             tables[tag] = new TableRecord(offset, length);
         }
 
-        if (tables.ContainsKey("CFF "))
+        if (!tables.ContainsKey("glyf") && !tables.ContainsKey("CFF "))
             throw new FontFormatException(
-                "This font stores PostScript cubic outlines in a 'CFF ' table. " +
-                "EngrCAD reads TrueType quadratic outlines ('glyf') only.");
+                tables.ContainsKey("CFF2")
+                    ? "This font stores outlines in a variable-font 'CFF2' table, which is not supported " +
+                      "(static 'glyf' and 'CFF ' outlines are)."
+                    : "The font has neither a 'glyf' nor a 'CFF ' table; there are no outlines to read.");
         return tables;
     }
 
@@ -317,9 +338,12 @@ public sealed class TrueTypeFont
 
     private Glyph ReadGlyph(int index, int depth)
     {
-        int start = _loca[index], end = _loca[index + 1];
         double advance = _advanceWidths[index];
         double bearing = _leftSideBearings[index];
+        if (_cff is not null)
+            return new Glyph(index, _cff.ReadGlyph(index), advance, bearing);
+
+        int start = _loca![index], end = _loca[index + 1];
 
         // Equal offsets mean "no outline" — space and other blank glyphs. This is the
         // format's own encoding, not an error.

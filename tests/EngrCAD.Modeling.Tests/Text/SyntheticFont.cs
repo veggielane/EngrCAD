@@ -385,58 +385,59 @@ internal static class SyntheticFont
         return glyph.ToArray();
     }
 
-    // ---- big-endian byte builder --------------------------------------------
+}
 
-    private sealed class Be
+/// <summary>Big-endian byte builder shared by the synthetic font assemblers
+/// (<see cref="SyntheticFont"/> and <see cref="SyntheticCffFont"/>).</summary>
+internal sealed class Be
+{
+    private readonly List<byte> _bytes = [];
+
+    public int Count => _bytes.Count;
+
+    public Be U8(int value)
     {
-        private readonly List<byte> _bytes = [];
-
-        public int Count => _bytes.Count;
-
-        public Be U8(int value)
-        {
-            _bytes.Add((byte)value);
-            return this;
-        }
-
-        public Be U16(int value)
-        {
-            _bytes.Add((byte)(value >> 8));
-            _bytes.Add((byte)value);
-            return this;
-        }
-
-        public Be I16(int value) => U16(value & 0xFFFF);
-
-        public Be U32(long value)
-        {
-            _bytes.Add((byte)(value >> 24));
-            _bytes.Add((byte)(value >> 16));
-            _bytes.Add((byte)(value >> 8));
-            _bytes.Add((byte)value);
-            return this;
-        }
-
-        public Be Tag(string tag)
-        {
-            foreach (char c in tag)
-                _bytes.Add((byte)c);
-            return this;
-        }
-
-        public Be Bytes(ReadOnlySpan<byte> bytes)
-        {
-            foreach (byte b in bytes)
-                _bytes.Add(b);
-            return this;
-        }
-
-        public void PadTo(int alignment)
-        {
-            while (_bytes.Count % alignment != 0)
-                _bytes.Add(0);
-        }
-
-        public byte[] ToArray() => [.. _bytes];
+        _bytes.Add((byte)value);
+        return this;
     }
+
+    public Be U16(int value)
+    {
+        _bytes.Add((byte)(value >> 8));
+        _bytes.Add((byte)value);
+        return this;
+    }
+
+    public Be I16(int value) => U16(value & 0xFFFF);
+
+    public Be U32(long value)
+    {
+        _bytes.Add((byte)(value >> 24));
+        _bytes.Add((byte)(value >> 16));
+        _bytes.Add((byte)(value >> 8));
+        _bytes.Add((byte)value);
+        return this;
+    }
+
+    public Be Tag(string tag)
+    {
+        foreach (char c in tag)
+            _bytes.Add((byte)c);
+        return this;
+    }
+
+    public Be Bytes(ReadOnlySpan<byte> bytes)
+    {
+        foreach (byte b in bytes)
+            _bytes.Add(b);
+        return this;
+    }
+
+    public void PadTo(int alignment)
+    {
+        while (_bytes.Count % alignment != 0)
+            _bytes.Add(0);
+    }
+
+    public byte[] ToArray() => [.. _bytes];
 }

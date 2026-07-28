@@ -177,13 +177,15 @@ public class TrueTypeFontTests
     // ---- rejection paths -----------------------------------------------------
 
     [Fact]
-    public void Load_RejectsPostScriptOutlines()
+    public void Load_RejectsFontsWithNoOutlineTable()
     {
-        byte[] otto = [0x4F, 0x54, 0x54, 0x4F, 0, 1, 0, 0, 0, 0, 0, 0];
+        // OTTO containers are accepted now (PostScript outlines, see CffFontTests) —
+        // but an sfnt with neither glyf nor CFF has nothing to read.
+        byte[] otto = [0x4F, 0x54, 0x54, 0x4F, 0, 0, 0, 0, 0, 0, 0, 0];
 
         var error = Assert.Throws<FontFormatException>(() => TrueTypeFont.Load(otto));
+        Assert.Contains("glyf", error.Message);
         Assert.Contains("CFF", error.Message);
-        Assert.Contains("TrueType", error.Message);
     }
 
     [Fact]

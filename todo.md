@@ -523,11 +523,13 @@ export — is recorded in CLAUDE.md):
 
 - [ ] **Text follow-ups** (`Shape.Text` ✅ landed — dependency-free TrueType reader,
   glyphs → exact sketch segments, containment-based counter detection, layout with
-  `kern` kerning): **CFF/OpenType-PostScript outlines** (`CFF ` table, cubic Béziers →
-  `BezierTo`) — rejected loudly today, and supporting it opens every `.otf`; **GPOS
-  kerning** (modern fonts ship kerning only there); **text on a curve/path** (layout
-  maps the pen position to a frame instead of a straight baseline); **variable fonts**
-  (`fvar`/`gvar`); **vertical alignment** for text blocks (horizontal-only today);
+  `kern` kerning; **CFF/OpenType-PostScript outlines ✅ landed** — `CffOutlines`, Type 2
+  charstrings → cubic `BezierTo`, CID-keyed via FDArray/FDSelect, every `.otf` opens):
+  **GPOS kerning** (modern fonts ship kerning only there); **text on a curve/path**
+  (layout maps the pen position to a frame instead of a straight baseline); **variable
+  fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today); **`seac` accent
+  composition** (legacy CFF accents — rejected loudly today, needs charset + standard
+  encoding); **vertical alignment** for text blocks (horizontal-only today);
   **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
   font reference).
 - [ ] `surface()` — heightmap (image/data grid) → mesh terrain

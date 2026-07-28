@@ -634,10 +634,12 @@ cuts along the threads fail loudly; use clearance or the implicit route for thos
 ## Text
 
 Modeled text — OpenSCAD's `text()`, but exact. TrueType `glyf` outlines are straight
-lines and **quadratic** Béziers, and `SketchBuilder` already has `LineTo`/`QuadraticTo`,
-so glyph contours map onto sketch segments with **no flattening**. Text therefore
-inherits the whole pipeline: exact NURBS profiles in B-Rep, the exact 2D signed distance
-in implicit, crisp tessellation in mesh — Native in all three, no bridge anywhere.
+lines and **quadratic** Béziers, OpenType/CFF (`.otf`) outlines are lines and **cubic**
+Béziers, and `SketchBuilder` already has `LineTo`/`QuadraticTo`/`BezierTo` — so glyph
+contours of either flavour map onto sketch segments with **no flattening**. Text
+therefore inherits the whole pipeline: exact NURBS profiles in B-Rep, the exact 2D
+signed distance in implicit, crisp tessellation in mesh — Native in all three, no
+bridge anywhere.
 
 ```csharp
 var font = TrueTypeFont.Load(@"C:\Windows\Fonts\arial.ttf");
@@ -654,9 +656,22 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
   (formats 4 and 12), `loca`, `glyf` (simple **and** composite glyphs, with the
   repeat/short-vector coordinate compression), `hhea`/`hmtx`, plus optional `kern`
   (format 0), `name` and `OS/2`. Hinting instructions are skipped — modeled text is
-  resolution independent. **OpenType/CFF (`.otf`, PostScript cubic outlines) and
-  TrueType Collections (`.ttc`) are rejected with a message naming the limitation**,
-  never silently mis-modeled.
+  resolution independent. **TrueType Collections (`.ttc`) and variable-font `CFF2`
+  tables are rejected with a message naming the limitation**, never silently
+  mis-modeled.
+- **OpenType/CFF (`.otf`) fonts work too** (`Text/CffOutlines.cs`): `OTTO` containers
+  store glyphs as PostScript Type 2 charstrings — cubic Béziers — parsed by the same
+  hand-rolled approach (INDEX/DICT structures, local + global subroutines with the
+  count-dependent bias, the whole curve-operator family including flex, and CID-keyed
+  fonts via FDArray/FDSelect). Contours carry `GlyphContour.IsCubic` and become
+  `BezierTo` segments, so `.otf` text is exactly as exact as `.ttf` text;
+  `font.HasPostScriptOutlines` reports which flavour loaded. **The decoding trap worth
+  knowing**: `hintmask`/`cntrmask` are followed by one data byte per eight declared
+  stems, *including stems declared implicitly by arguments still on the stack* —
+  miscounting reads mask bytes as operators and garbles everything after, which is why
+  the synthetic-font tests pin decoded outlines to exact coordinates (CFF's cousin of
+  TrueType's implied-midpoint subtlety). Legacy `seac` accent composition and the
+  Type 2 arithmetic operators are rejected by name.
 - **Size is the em size** (the typographic meaning of "12 point"); capitals are shorter.
   When a drawing specifies letter height, convert with `font.EmSizeForCapHeight(h)`.
 - **The origin is the baseline** at the start of the first line — x along the writing
