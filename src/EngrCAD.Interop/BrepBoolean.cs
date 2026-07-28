@@ -53,6 +53,10 @@ public static class BrepBoolean
         var sdfB = new MeshSdf(BRepTessellator.Tessellate(b, logger: logger), logger: logger);
         var bounds = sdfA.Bounds.Union(sdfB.Bounds);
         var region = bounds.Expanded(bounds.Size[bounds.LongestAxis] * 0.1 + 0.1);
+        // The marching tracer's own step (region extent / StepDivisor): how far short of a
+        // bounded domain's edge a traced curve can stop, and therefore how far a snapped
+        // landing may legitimately sit from the polyline's last vertex.
+        double step = region.Size[region.LongestAxis] / 150.0;
 
         // Intersection curves per original face pair; each side records the other side's
         // crossing parameters as mandatory seam breaks.
@@ -89,7 +93,7 @@ public static class BrepBoolean
                     continue;
                 }
                 foreach (var curve in curves)
-                    pending.Add((fa, fb, curve));
+                    pending.Add((fa, fb, SnapTracerEnds(curve, fa, fb, step)));
             }
         }
 
@@ -271,6 +275,155 @@ public static class BrepBoolean
                     "not have. Offset one operand by a working clearance, or take the implicit route.");
             }
         }
+    }
+
+    /// <summary>
+    /// Extends a marching-tracer polyline so it ENDS on the face boundary it was heading for.
+    ///
+    /// <para><b>Why the tracer cannot do this itself.</b> It breaks its step only AFTER the
+    /// corrector's parameters leave the domain, so a traced curve always stops up to one march
+    /// step short of a bounded surface's edge. Where that edge is also the boundary of the face
+    /// being split, the polyline never crosses it, <c>FaceSplitter</c> finds ZERO crossings, and
+    /// the face is whole-classified — which is how a bore crossing a whole-solid fillet's band
+    /// cracked the result along entire tangency edges. Measured on
+    /// <c>FilletAllEdges(20x14x8, r2) − Ø6 cylinder</c>: the four band curves ended 5.5e-5 and
+    /// 1.1e-2 away from the band's two tangency lines and produced no crossings at all.</para>
+    ///
+    /// <para><b>The landing is solved exactly, not extrapolated.</b> The boundary edge and the
+    /// other solid's carrier are both exact geometry, so E(t) = S(u, v) is a well-posed 3x3
+    /// Newton system seeded from the polyline's own last vertex — which already lies on S, so
+    /// the seed's (u, v) is exact and only t moves. Extrapolating the chord instead would land
+    /// a sagitta off the surface, which is the error this exists to remove.</para>
+    ///
+    /// <para><b>Both solids get the same endpoint by construction</b>, because the polyline is
+    /// ONE object shared by the two faces' curve lists and is snapped once, here, before either
+    /// side splits. The alternative — snapping per face during splitting — would give the two
+    /// sides endpoints differing by the sagitta, opening a pinhole at every crossing.</para>
+    /// </summary>
+    private static Curve3d SnapTracerEnds(Curve3d curve, BrepFace fa, BrepFace fb, double step)
+    {
+        if (curve is not PolylineCurve3d polyline || polyline.IsClosed)
+            return curve;
+        var points = polyline.Points.ToList();
+        bool changed = false;
+        if (TryBoundaryLanding(points[0], fa, fb, step, out var atStart))
+        {
+            points.Insert(0, atStart);
+            changed = true;
+        }
+        if (TryBoundaryLanding(points[^1], fa, fb, step, out var atEnd))
+        {
+            points.Add(atEnd);
+            changed = true;
+        }
+        return changed ? new PolylineCurve3d(points, false) : curve;
+    }
+
+    /// <summary>
+    /// Where the traced curve would have met one of the two faces' boundaries, or false when it
+    /// already ends there (within the weld tier) or no boundary is within reach. Candidates are
+    /// ranked by distance from <paramref name="end"/>, so an end near two boundaries takes the
+    /// nearer — the one the trace was actually leaving through.
+    /// </summary>
+    private static bool TryBoundaryLanding(
+        in Vector3d end, BrepFace fa, BrepFace fb, double step, out Vector3d landing)
+    {
+        landing = default;
+        double best = double.PositiveInfinity;
+        // Two march steps of slack: one for the step the tracer breaks after, one for the
+        // corrector's own overshoot. Beyond that the "landing" would be a different feature.
+        double reach = 2 * step;
+        foreach (var (face, other) in (ReadOnlySpan<(BrepFace, BrepFace)>)[(fa, fb), (fb, fa)])
+        {
+            foreach (var loop in face.Loops)
+            {
+                foreach (var coedge in loop.Coedges)
+                {
+                    if (!TryEdgeSurfaceCrossing(coedge.Edge, other.Surface, end, out var point))
+                        continue;
+                    double distance = point.DistanceTo(end);
+                    if (distance < best && distance <= reach)
+                    {
+                        best = distance;
+                        landing = point;
+                    }
+                }
+            }
+        }
+        // Already on the boundary: appending a weld-scale chord would only add a degenerate
+        // sampling segment for every downstream consumer.
+        return best <= reach && best > Tolerance.Default.Linear;
+    }
+
+    /// <summary>
+    /// Solves E(t) = S(u, v) — an edge curve meeting a surface — by 3x3 Newton from the seed
+    /// nearest <paramref name="near"/>. The seed's (u, v) comes from projecting
+    /// <paramref name="near"/> onto S, which is exact because a traced point lies ON S.
+    /// </summary>
+    private static bool TryEdgeSurfaceCrossing(
+        BrepEdge edge, Surface surface, in Vector3d near, out Vector3d point)
+    {
+        point = default;
+        if (!surface.TryProjectPoint(near, out var uv, FaceGeometry.InverseEvaluationTolerance))
+            return false;
+
+        // Seed t at the sampled point of the edge closest to the traced end.
+        var domain = edge.Domain;
+        var parameters = FaceGeometry.ExactSampleParameters(edge.Curve, domain.Start, domain.End, 32);
+        double t = parameters[0], bestDistance = double.PositiveInfinity;
+        foreach (double candidate in parameters)
+        {
+            double distance = edge.Curve.PointAt(candidate).DistanceTo(near);
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                t = candidate;
+            }
+        }
+
+        double u = uv.X, v = uv.Y;
+        for (int iteration = 0; iteration < 24; iteration++)
+        {
+            var residual = edge.Curve.PointAt(domain.Clamp(t)) - surface.PointAt(u, v);
+            // Two decades below the weld tier, as RefineCrossing's own test is: the landing
+            // becomes a vertex position, so it must not carry a weld-scale error itself.
+            if (residual.Length < 1e-11)
+            {
+                point = edge.Curve.PointAt(domain.Clamp(t));
+                return true;
+            }
+            var dt = edge.Curve.DerivativeAt(domain.Clamp(t));
+            double hu = Math.Max(1e-8, surface.DomainU.Length * 1e-7);
+            double hv = Math.Max(1e-8, surface.DomainV.Length * 1e-7);
+            if (!double.IsFinite(hu) || !double.IsFinite(hv))
+                hu = hv = 1e-7;
+            var du = (surface.PointAt(u + hu, v) - surface.PointAt(u - hu, v)) / (2 * hu);
+            var dv = (surface.PointAt(u, v + hv) - surface.PointAt(u, v - hv)) / (2 * hv);
+            if (!Solve3(dt, -du, -dv, -residual, out double stepT, out double stepU, out double stepV))
+                return false;
+            t = domain.Clamp(t + stepT);
+            u += stepU;
+            v += stepV;
+        }
+        return false;
+    }
+
+    /// <summary>Cramer's rule for the 3x3 column system [c0 c1 c2]·x = rhs.</summary>
+    private static bool Solve3(
+        in Vector3d c0, in Vector3d c1, in Vector3d c2, in Vector3d rhs,
+        out double x0, out double x1, out double x2)
+    {
+        x0 = x1 = x2 = 0;
+        double determinant = c0.Dot(c1.Cross(c2));
+        // Relative degeneracy guard (the scale-free tier): the determinant is a VOLUME, so an
+        // absolute floor would fail cubically with model scale.
+        double scale = c0.Length * c1.Length * c2.Length;
+        if (scale <= 0 || Math.Abs(determinant) <= 1e-12 * scale)
+            return false;
+        x0 = rhs.Dot(c1.Cross(c2)) / determinant;
+        x1 = c0.Dot(rhs.Cross(c2)) / determinant;
+        x2 = c0.Dot(c1.Cross(rhs)) / determinant;
+        return true;
     }
 
     /// <summary>

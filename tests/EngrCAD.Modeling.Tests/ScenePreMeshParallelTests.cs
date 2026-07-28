@@ -105,11 +105,10 @@ public class ScenePreMeshParallelTests
     [Fact]
     public void PartThatCannotLower_RethrowsTheOriginalException_NotAnAggregate()
     {
-        // A bore that swallows a rounded corner and breaks out through both adjacent walls:
-        // a cut chain crossing a face boundary part-way, which the v1 exact boolean refuses.
-        // Sequentially PreMesh surfaced that exception directly; running in parallel must not
-        // wrap it in an AggregateException.
-        var unclosable = BooleanFailureTests.UnclosableBreakout();
+        // A shaft the same diameter as its own bore: coincident CURVED faces, which the exact
+        // boolean refuses by name. Sequentially PreMesh surfaced that exception directly;
+        // running in parallel must not wrap it in an AggregateException.
+        var unclosable = BooleanFailureTests.CoincidentShaftInItsBore();
 
         var scene = new Scene();
         scene.Add(new Part("fine", MeshPrimitives.Box(1, 1, 1)));
@@ -117,7 +116,7 @@ public class ScenePreMeshParallelTests
         scene.Add(new Part("also fine", SolidFactory.MakeBox(new Aabb((0, 0, 0), (1, 1, 1)))));
 
         var error = Assert.Throws<InvalidOperationException>(() => scene.PreMesh());
-        Assert.Contains("unclosed solid", error.Message);
+        Assert.Contains("coincident CYLINDRICAL faces", error.Message);
 
         // The healthy parts were still primed — priming is per-part and independent.
         Assert.NotNull(scene.AllParts.First(p => p.Name == "also fine").GetMesh());

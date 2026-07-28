@@ -109,16 +109,24 @@ public class NearMissCarrierTests
     }
 
     /// <summary>
-    /// The boundary of the fix, pinned so it cannot rot into silence. A bore centred on the
-    /// corner arc's own centre swallows the fillet and breaks out through both adjacent
-    /// straight walls — a cut chain crossing a face boundary part-way, which the v1 splitter
-    /// does not support (todo.md). It must keep failing LOUDLY: removing fabricated carrier
-    /// must not turn a named refusal into wrong-but-closed geometry.
+    /// The other side of the same corner: a bore centred on the corner arc's own centre, wide
+    /// enough to swallow the fillet and break out through both adjacent straight walls. That
+    /// used to be an unclosable boolean; snapping traced curves onto their exact boundary
+    /// landing closed it, and the volume is analytic — the plate less the part of the bore
+    /// disc inside it (the disc, minus the quadrant annulus outside the fillet, minus the two
+    /// segments beyond the walls).
     /// </summary>
     [Fact]
-    public void BoreSwallowingTheCornerItself_StillRefusesLoudly()
+    public void BoreSwallowingTheCornerItself_IsExact()
     {
         var breakout = Plate().Drill(HoleSpec.Simple(14), [new Vector2d(24, 14)], PlateThickness + 2, TopPlane());
-        Assert.Throws<BrepBooleanException>(() => breakout.ToBrep());
+
+        double removedArea = Math.PI * 49
+            - Math.PI / 4 * (49 - CornerRadius * CornerRadius)
+            - (49 * Math.Acos(CornerRadius / 7) - CornerRadius * Math.Sqrt(49 - CornerRadius * CornerRadius));
+        double expected = PlateArea * PlateThickness - removedArea * PlateThickness;
+
+        // Genus 0: the bore removes the corner rather than piercing the plate.
+        Assert.Equal(expected, SoundVolume(breakout, genus: 0), TessellationSlack * 10);
     }
 }

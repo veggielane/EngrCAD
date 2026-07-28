@@ -617,10 +617,26 @@ Booleans deliberately live in Interop, not BRep: classification rides on the mes
 engine's signed distance field — the hybrid kernel earning its keep.
 
 Two supporting mechanisms: circle-extrusions along their axis are **promoted to analytic
-cylinders** inside `SurfaceIntersection`, so drilled bores get exact circles rather than
-marched polylines; and a closed curve whose pullback drifts a full period (a bore circle
+cylinders** inside `SurfaceIntersection` — only when the generator sweeps a WHOLE turn, since
+an extruded ARC merely *lies on* that cylinder and promoting it fabricates surface the face
+does not carry — so drilled bores get exact circles rather than marched polylines; and a
+closed curve whose pullback drifts a full period (a bore circle
 on a band) is recognized as non-contractible and handled by `SplitBandByWrapCurve`,
 which cuts the band into two bands with exactly reconstructed sub-surfaces.
+
+A third mechanism exists for the curves the tracer DOES have to produce. **The tracer breaks
+its step only after the corrector's parameters leave the domain**, so a traced curve always
+stops up to one march step short of a bounded surface's edge. Where that edge also bounds the
+face being split, the curve crosses nothing at all: face splitting finds zero crossings, the
+face is whole-classified, and the result cracks along the whole boundary. `SnapTracerEnds`
+therefore extends each traced polyline onto the exact solution of E(t) = S(u, v) — its
+boundary edge against the other solid's carrier, a well-posed 3×3 Newton system seeded from
+the polyline's own last vertex, which already lies on S so only t moves. **It runs once, on
+the single curve object both faces share**, which is what makes the two solids agree: snapping
+per face during splitting would give them endpoints a sagitta apart and open a pinhole at
+every crossing. This closed booleans that cross a whole-solid fillet's bands, and — a family
+nobody was aiming at — cuts that break out through a face boundary part-way, such as a bore
+swallowing a rounded rectangle's corner.
 
 #### Coincident (flush) planar surface
 

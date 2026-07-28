@@ -362,6 +362,32 @@ logging complements them, never replaces them.
     Note the limit of the check — it catches *unclosed* results, not *wrong but closed*
     ones (a tool buried as an internal cavity is perfectly manifold), so end-to-end tests
     must still assert analytic volumes.
+  - **Traced curves are SNAPPED onto their exact boundary landing** before either solid
+    splits (`SnapTracerEnds`). The marching tracer breaks its step only AFTER the
+    corrector's parameters leave the domain, so a traced curve always stops up to one
+    march step short of a bounded surface's edge; where that edge also bounds the face
+    being split, the polyline crosses nothing, `FaceSplitter` finds ZERO crossings, and
+    the face is whole-classified. That is what cracked a whole-solid fillet along entire
+    tangency edges: measured on `FilletAllEdges(20×14×8, r2) − Ø6 cylinder`, the four band
+    curves ended 5.5e-5 and 1.1e-2 from the two tangency lines and produced no crossings
+    at all. The landing is SOLVED, not extrapolated — E(t) = S(u, v) is a well-posed 3×3
+    Newton system on the exact boundary edge and the other solid's exact carrier, seeded
+    from the polyline's own last vertex (which already lies on S, so only t moves) — and
+    it happens ONCE, on the single curve object both faces share, so the two solids get a
+    bit-identical endpoint. Snapping per face during splitting would instead give them
+    endpoints a sagitta apart, opening a pinhole at every crossing.
+    Together with the face splitter's exact interior probe (see the BRep README) this
+    closed the band-crossing family: a Ø6 bore down through two fillet bands, and Ø4
+    cross-drills along Y and X, are now `Validate`-clean and closed, satisfy
+    |A| − |A−B| = |A∩B| to 0.02–0.06 % of the removed volume, and converge with
+    tessellation density. It also closed a family nobody was aiming at — a bore swallowing
+    a rounded rectangle's corner and breaking out through both adjacent walls now
+    converges QUADRATICALLY onto its analytic volume (1.0e-4 / 2.7e-5 / 6.8e-6 / 1.7e-6
+    relative at 32/64/128/256 segments). **What remains** is a tool drilled ALONG a band's
+    own axis, whose intersection runs the band's whole length instead of crossing it, and
+    the quality note that a baked tracer polyline keeps a fixed sample count while the
+    grid around it refines, so facet-vs-surface agreement on those bands DEGRADES with
+    density (0.999 at 32 → 0.90 at 192; no folds, and volumes still converge).
   - **Straight-edged sketch extrusions (pockets, slots, polygons, engraved lettering)
     are exact**, via `SurfaceIntersection`'s bounded planar carriers — see the BRep
     README. Before that they were the headline silent failure: the marching tracer

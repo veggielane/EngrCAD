@@ -560,7 +560,18 @@ operations. Depends only on `EngrCAD.Core`.
   direction 2% along an edge's domain and therefore read it from a point a sagitta off
   the surface. Those probes now use the nearest exact vertex parameter, falling back to
   the FAR endpoint for a single-chord edge (an on-surface vertex, and a chord's exact
-  direction). Note the predicate is deliberately not a test on `Underlying`: a segment's
+  direction). **A third site joined them**: `SplitByCurve`'s "is this stretch of the cut
+  inside the face?" probe took the ARITHMETIC midpoint of the interior stretch, which on
+  a tracer polyline is a mid-chord point — measured 5e-3 off the surface on a whole-solid
+  fillet's quarter-arc band at the tracer's own sample density, five thousand times the
+  inverse-evaluation tolerance. `TryProjectPoint` then failed, the stretch was discarded
+  as "leaves the surface entirely", no seam edge was built, and the face came back
+  UNSPLIT with no complaint — which is how a bore crossing a fillet band cracked the
+  result along entire tangency edges. `InteriorProbeParameter` takes an exact interior
+  sample instead; a stretch spanning no vertex has none and keeps the midpoint, and
+  non-polyline curves keep it bit-for-bit (an analytic curve is exact everywhere, so
+  there is nothing to fix and no reason to move an existing probe). Note the predicate is
+  deliberately not a test on `Underlying`: a segment's
   underlying curve is its base's, which says nothing about the parameter mapping the
   rule turns on. Closed curves interior to a face honor **mandatory seam breaks**
   (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`

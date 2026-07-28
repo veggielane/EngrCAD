@@ -318,9 +318,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   landed — flush embossing, stacked plates, butted blocks and flush pocket floors all
   fuse into one solid (`CoplanarFaces.cs`, normal-agreement classification; design.md
   §5). Cylinder promotion now requires a WHOLE turn ✅, which fixed near-miss pairs at a
-  rounded corner.) — remaining:
-  a cut chain that crosses a face boundary part-way (a pocket or glyph breaking out of
-  a side face) throws `Open splitting curves must start and end outside the face`;
+  rounded corner. **Cuts that break out through a face boundary part-way** ✅ landed too,
+  as a side effect of snapping traced curve ends — a bore swallowing a rounded corner now
+  converges quadratically onto its analytic volume; what still refuses is a tool drilled
+  ALONG a band's own axis, filed with the other traced-curve residuals below.) — remaining:
   equal-radius perpendicular cylinders (tangent bicylinder: overlapping v-ranges
   rejected; the tracer's degenerate output there is untested); coincident or tangent
   CURVED faces (a shaft in a bore of its own diameter) — refused BY NAME for coaxial
@@ -630,19 +631,24 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   round-trips manifold with zero diagnostics). A closed NURBS generator under a partial
   sweep still keeps the honest non-manifold diagnostic — recovering it needs projection,
   not congruence, and nothing exports one today.
-- [ ] **`BrepBoolean` on whole-solid fillets: band-crossing tools** — centre drills
-  through the caps ✅ work (locked, Steiner-minus-bore exact). The band case is now
-  precisely diagnosed (the old "re-surfaced sub-band loses corner arcs" story was
-  wrong): the tool∩band tracer loop closes on the EXTENDED carrier; run pseudo-samples
-  now reach the domain edge (adaptive extrapolation ✅ landed — one local gap was
-  measured falling short, leaving zero crossing seeds), but `RefineCrossing` demands a
-  true 3D intersection to 1e-11 and a chordal tracer polyline is a sagitta (~1e-4) off
-  the exact tangency edge mid-chord — skew curves, every seed rejected, band never
-  splits, whole band mis-classifies, result cracks along entire tangency edges (refused
-  loudly; unpaired edges itemized). Remaining fix: tag tracer curves with their surface
-  pair, refine boundary crossings as exact edge∩other-surface root solves, and SNAP the
-  polyline segment ends to the exact crossing on BOTH solids (the segment endpoints are
-  seam geometry — a 1e-4 chordal end would open a pinhole at every crossing).
+- [ ] **Traced-curve residuals after the band-crossing fix** (`SnapTracerEnds` ✅ landed —
+  a traced polyline is extended onto the EXACT solution of E(t) = S(u, v) once, on the
+  curve object both faces share, and `SplitByCurve`'s interior probe ✅ now takes an exact
+  sample instead of a mid-chord midpoint; together they closed the whole-solid-fillet
+  band case and, unexpectedly, cuts that break out through a face boundary part-way).
+  What is left:
+  - [ ] **A tool drilled ALONG a band's own axis** — its intersection with the band runs
+    the band's whole LENGTH rather than crossing it, and still throws `Open splitting
+    curves must start and end outside the face` (pinned by
+    `WholeSolidFilletBooleanTests.ToolRunningAlongABandsAxis_StillRefusesLoudly`).
+  - [ ] **A baked tracer polyline does not refine with the grid.** Its sample count is
+    fixed at boolean time, so as `segmentsPerCircle` rises the facets straddling it
+    disagree more with the exact surface: measured 0.999 at 32 segments → 0.90 at 192 on a
+    band-crossing bore (no folds, and volumes still converge, so this is accuracy rather
+    than validity). `TrimmedFaceRefusalTests`' "cap cut low with bore" is the same story
+    and folds at 16/8 and 192/96 while being clean at the audited 32/24. The fix is to
+    re-sample a baked intersection curve at tessellation time against its two exact
+    carriers, which needs the surface pair carried on the curve.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
   as `Shape.Draft`): curved faces; caps with holes; a non-planar neutral surface.
 - [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall
