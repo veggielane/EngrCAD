@@ -342,6 +342,16 @@ function setUniform(ctx, program, name, value) {
     if (location === null) return;   // optimized out of this program; not an error
     if (typeof value === 'number') { gl.uniform1f(location, value); return; }
     if (typeof value === 'boolean') { gl.uniform1i(location, value ? 1 : 0); return; }
+    if (!Array.isArray(value)) {
+        // Typed markers (C#'s IntUniform / Vec4ArrayUniform). A plain JSON number
+        // cannot say whether the uniform is a float or an int -- uniform1f on an int
+        // uniform is a GL error -- and a 16-float vec4[4] array is indistinguishable
+        // from a mat4. WHICH uniforms need which type is decided in C#; this only
+        // dispatches on the marker's shape.
+        if (typeof value.int === 'number') { gl.uniform1i(location, value.int); return; }
+        if (Array.isArray(value.vec4)) { gl.uniform4fv(location, value.vec4); return; }
+        return;   // unknown marker: leave the uniform at its default, as with a null location
+    }
     switch (value.length) {
         case 2: gl.uniform2fv(location, value); break;
         case 3: gl.uniform3fv(location, value); break;

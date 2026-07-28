@@ -56,6 +56,26 @@ public sealed class DrawCall
     [JsonPropertyName("polygonOffset")] public float[]? PolygonOffset { get; init; }
 }
 
+/// <summary>
+/// An <c>int</c> uniform value. The interop marshals a plain JSON number through
+/// <c>uniform1f</c>, which GL rejects on an int uniform — silently, since the interop
+/// cannot see the GLSL declaration. This marker serializes as <c>{"int": n}</c> and the
+/// JavaScript dispatches it through <c>uniform1i</c>; WHICH uniforms are ints stays a
+/// C#-side decision (the shader sources live in <see cref="Viewer.ViewerShaders"/>),
+/// keeping the no-policy-in-JS rule intact.
+/// </summary>
+/// <param name="Value">The integer value.</param>
+public readonly record struct IntUniform([property: JsonPropertyName("int")] int Value);
+
+/// <summary>
+/// A <c>vec4[]</c> uniform-array value (the section planes). It cannot be a plain float
+/// array: four packed planes are exactly 16 floats, which the interop's shape dispatch
+/// would send through <c>uniformMatrix4fv</c> as a mat4. Serializes as
+/// <c>{"vec4": [...]}</c> and dispatches through <c>uniform4fv</c>.
+/// </summary>
+/// <param name="Values">Packed xyzw components, four per array element.</param>
+public readonly record struct Vec4ArrayUniform([property: JsonPropertyName("vec4")] float[] Values);
+
 /// <summary>A whole frame: the clear colour and the ordered draw list.</summary>
 public sealed class FrameDescription
 {

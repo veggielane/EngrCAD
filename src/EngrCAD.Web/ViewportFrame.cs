@@ -160,10 +160,9 @@ public static class ViewportFrame
         // from a program are skipped, so one set serves the mesh, line and point programs
         // and is simply ignored by the background gradient.
         //
-        // uSectionCount is deliberately NOT here: it is an `int` uniform and the interop
-        // marshals every JSON number through uniform1f, which GL rejects on an int. The
-        // section rule short-circuits on uSectionEnabled, and an unset int uniform is
-        // already 0, so the neutral state needs nothing said about it.
+        // uSectionCount is an `int` uniform, so it travels as an IntUniform marker: the
+        // interop marshals a plain JSON number through uniform1f, which GL rejects on an
+        // int — the typed-marker path in engrcad-gl.js exists for exactly this uniform.
         var shared = new Dictionary<string, object>
         {
             ["uView"] = ColumnMajor(view),
@@ -177,6 +176,7 @@ public static class ViewportFrame
             ["uAlpha"] = 1f,              // the translucent pass overrides this per draw
             ["uAmbientOcclusion"] = 0f,   // no bake in the browser; 0 leaves the factor exactly 1
             ["uSectionEnabled"] = 0f,
+            ["uSectionCount"] = new IntUniform(0),
             ["uPointSize"] = PointSize * (float)pixelScale,
         };
 
