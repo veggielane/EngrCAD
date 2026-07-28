@@ -1028,10 +1028,61 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   logger sees its own booleans; consider `SurfaceNets.Polygonize` and `MeshRepair`
   timing at the same standard; a `--log-kernel` switch on `EngrCad.Run` wiring the
   host console logger into the kernel seams.
-- [ ] Sheet metal (bend allowances, flanges, unfold) — big, separate domain.
-- [ ] nuget.org publish — `Directory.Build.props` URLs are placeholders; a real remote
-  exists (github.com/veggielane/EngrCAD). GitHub Pages needs Settings → Pages →
-  Source: GitHub Actions enabled once, then a push deploys the docs site.
+- [ ] **Sheet metal — scoped design assessment** (assessment only; implementation not
+  started). The domain is big but its kernel demands are mostly things this kernel
+  already has; the genuinely new work is a MODEL, not new surface types.
+  - **Bend allowance model.** One formula family covers industry practice: developed
+    length of a bend = θ·(R + K·t) with inside radius R, thickness t, and the
+    K-factor K ∈ (0, 1) locating the neutral axis (K = 0.5 mid-sheet; real values
+    0.3–0.5 by material/process). Bend deduction and setback are derived quantities,
+    not separate models. Design decision to make up front: store K per FEATURE with a
+    per-material default table (the `StandardHoles`-style verify-flagged table), and
+    keep the formula in ONE place so flat-pattern length can never disagree with the
+    fold. Air-bend spring-back compensation is out of scope (manufacturing, not
+    geometry).
+  - **Data model.** A sheet body is a base flat face + thickness + an ordered tree of
+    flanges: `Flange(edge, angle, height, R, K, relief)` hanging off a planar face's
+    straight rim edge — which is exactly a `Feature` with an `EdgeSetRef` input, so
+    regeneration/suppression/persistence come free from the existing feature system.
+    The folded GEOMETRY of one flange is: offset the edge, one cylindrical band
+    (partial `RevolvedSurface`/`CylinderSurface` — both exist, incl. their booleans
+    and tessellation) + one planar wall, thickened. The kernel can already BUILD this
+    as a revolve∪extrude union; what it lacks is the tangent union (flange band meets
+    both sheets tangentially — the same v1-boolean tangency refusal the hex-socket
+    work hit), so v1 should CONSTRUCT the folded solid directly as topology (the
+    faces are known in closed form — the `Filleting`-style surgery approach, no
+    boolean) rather than lean on booleans.
+  - **Unfold.** A developable-only unfold is bookkeeping, not differential geometry:
+    walk the flange tree, replace each bend band by its developed-length rectangle
+    (θ·(R + K·t) wide), and lay planar faces into the plane via `Frame3d` chains.
+    Output should be a `Sketch`/`Region2d` flat pattern (plus bend lines as
+    annotations) — the 2D-views machinery (`Shape.Section`/`PlanarSection`,
+    `Region2dOffset`) already provides the vocabulary, and DXF export of a sketch is
+    a small writer. Refuse non-developable input by name (a deformed/lofted face has
+    no exact flat pattern in this model).
+  - **Reliefs and corners.** Rectangular/obround bend reliefs are pocket subtractions
+    at known coordinates (exact — the sketch-pocket case); corner closes/miters
+    between adjacent flanges are the genuinely fiddly part, and v1 should refuse
+    overlapping corner geometry loudly rather than approximate.
+  - **What exists already**: planar faces with straight rims + `BrepQueries`
+    selectors (flange targets), partial cylinder bands + their tessellation,
+    `EdgeSetRef`/features/regeneration, `Frame3d`, exact sketch pockets, 2D regions +
+    offset, mass properties (flat-pattern check: folded and unfolded volumes must
+    agree exactly, a strong built-in test oracle). **Missing**: the flange feature
+    family, direct folded-topology construction, the unfold walker, a K-factor
+    table, DXF out.
+  - **Suggested first rung**: `SheetBody(sketch, t)` + `Flange(edge, 90°, h, R, K)`
+    folded-topology construction + `Unfold()` to a `Sketch` with the volume-agreement
+    test — one bend, no reliefs, no corner interaction — which exercises every load-
+    bearing decision (K storage, tree model, surgery construction, unfold walk) at
+    minimum surface area.
+- [ ] nuget.org publish — pack VERIFIED solution-wide at 0.1.0 (12 packages, zero
+  warnings; every src project has a Description and a packaged README;
+  `RepositoryType` added). Remaining, all Chris's to confirm: the placeholder
+  `RepositoryUrl`/`PackageProjectUrl` (`example.invalid` — a real remote exists at
+  github.com/veggielane/EngrCAD) and the MIT license choice, then the actual push.
+  GitHub Pages needs Settings → Pages → Source: GitHub Actions enabled once, then a
+  push deploys the docs site.
 
 ## Not worth adopting (deliberate)
 

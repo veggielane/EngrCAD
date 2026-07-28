@@ -14,6 +14,7 @@
     <!-- TODO(chris): confirm license + real URLs before any public (nuget.org) push. -->
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <RepositoryUrl>https://example.invalid/engrcad</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://example.invalid/engrcad</PackageProjectUrl>
     <PackageTags>cad;geometry;brep;sdf;mesh;kernel</PackageTags>
     <PackageReadmeFile Condition="Exists('$(MSBuildProjectDirectory)\README.md')">README.md</PackageReadmeFile>
