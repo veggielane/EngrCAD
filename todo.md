@@ -580,13 +580,24 @@ extrude/revolve/sweep, booleans, rim fillets/chamfers, drilled holes, conics + o
 curves, curve interpolation, projection/extrema, surface intersection, STEP
 export+import, volume/area, tessellation — see CLAUDE.md):
 
-- [ ] **Loft follow-ups** (`SolidFactory.Loft` landed — cardinal-basis `LoftedSurface`,
-  smooth/ruled, exact prismatoid volumes): section compatibility by degree elevation +
-  knot merging (mismatched segment counts are rejected today); holes in sections; open
-  uncapped skins; periodic lofts closing back on the first section; guide curves/spine.
-- [ ] **Pipe shell with evolution law** — a loft whose sections are *generated* (scaled
-  or twisted along a spine) rather than given. Now only needs a law evaluator: feed the
-  generated `Profile`s to `Loft` and it lands on `LoftedSurface` unchanged.
+- [ ] **Loft follow-ups** (`SolidFactory.Loft` + `Shape.Loft`/`LoftAlong` landed; each
+  gap below is rejected by name today — assessed during the Shape wiring, none started):
+  - [ ] **Mismatched segment counts** — two exact routes, both compatibility
+    *preprocessing* feeding `Loft` unchanged: integer-ratio counts want the coarser
+    section's segments split with `CurveSegment` (no geometry moves, correspondence
+    stays natural — a square lofting to an octagon splits each side once); single-NURBS
+    sections want degree elevation + knot merging (The NURBS Book A5.9; `BSplineBasis`
+    is public). Non-integer-ratio chains have no canonical correspondence and should
+    stay rejected.
+  - [ ] **Holes in sections** — each hole chain lofts as its own inner skin and the caps
+    gain hole loops: topology work in `BuildLoftedSolid`, no new surface math.
+  - [ ] **Open (uncapped) skins** — structurally blocked: `BrepSolid.Validate` requires
+    two-manifold edge use, so this needs a sheet-body concept first, not a loft change.
+  - [ ] **Periodic lofts** closing back on the first section — `LoftedSurface` needs a
+    periodic knot vector in v plus band topology in BOTH parameters.
+  - [ ] **Guide curves / spine** constraining the skin between stations — does NOT fall
+    out of the cardinal basis (a guide constrains the blend *between* interpolation
+    stations, which the collocation solve never sees); needs a constrained surface fit.
 - [ ] Boolean extras: *section* (curve-only result), fuzzy tolerance, modification
   history
 - [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
@@ -604,10 +615,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     radius case is blocked on the *corner*, not the band, and needs the same
     non-conic-corner-curve machinery as curved-face shelling.
   - [ ] **Sharp corners at ARC rim edges** (torus ∩ cylinder is not a conic).
-  - [ ] **A `Shape.RoundEdges(radius)` node** wiring `FilletAllEdges` into the graph:
-    `ShapeNodes.cs` plus four spots in `ShapeCompiler.cs` (`ClassifyBrep`, the implicit
-    `or` list, `LowerBrep`, `LowerImplicit`). Today the Shape-level route is
-    `Shape.From(Filleting.FilletAllEdges(shape.ToBrep(), r))`.
 - [ ] **`StepReader`: trim a closed generator from meridian boundary arcs** —
   `FilletAllEdges` output EXPORTS correctly (a STEP `SURFACE_OF_REVOLUTION` is unbounded
   by definition and the face boundary trims it), but re-import cannot re-trim a closed
@@ -618,22 +625,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **`BrepBoolean` on whole-solid fillets** — a fragment's re-surfaced sub-band loses
   the corner arcs from its domain. The solid itself is sound (a locked test checks every
   loop point projects inside its own face's domain), so this is a boolean limitation.
-- [ ] **Draft follow-ups** (`Draft.Apply` landed — exact plane rotation about the
-  neutral line, composable, planar/extruded faces): curved faces; caps with holes;
-  per-face angles in one call; a non-planar neutral surface.
-- [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed — exact for polyhedra,
-  sealed-void and genus-1-tube cases Euler-clean): curved faces (a cylinder's or
+- [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
+  as `Shape.Draft`): curved faces; caps with holes; a non-planar neutral surface.
+- [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall
+  thickness, wired as `Shape.Shell(t, openings)`): curved faces (a cylinder's or
   revolve's offset surface is analytic — `OffsetCurve3d` gives the generator — but their
   **corners** need surface–surface re-intersection, which is the *same* blocker as
   general trihedral fillet corner patches, so the two should be solved together);
-  >3-valent vertices (over-determined corner, same machinery); adjacent openings; variable per-face
-  thickness; global self-intersection detection (deliberately unchecked today, as in
-  OCCT and `OffsetCurve3d`).
-- [ ] **Wire loft / draft / shelling into the `Shape` API + docs** — they are kernel-only
-  today, which by this project's own rule means they are not done. Each needs a
-  `ShapeNodes` node, a `ShapeCompiler` arm with honest `Explain` messages
-  (`Shape.Loft(sections, style)`, `Shape.Draft(angle, neutral, faces)`, a B-Rep-native
-  `Shape.Shell` beside the SDF one), and a `docs/examples` page with a render fence.
+  >3-valent vertices (over-determined corner, same machinery); adjacent openings (their
+  shared rim has zero width — the two openings must MERGE into one rim loop, a topology
+  pass, not new geometry); global self-intersection detection (deliberately unchecked
+  today, as in OCCT and `OffsetCurve3d`). The `Shape` route exposes one thickness;
+  per-face thickness and per-face draft angles stay kernel-level escape hatches
+  (`Shape.From(...)`) until a selector-to-value vocabulary exists at the Shape level.
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
   with faces-to-remove semantics
 - [ ] **Shape-healing follow-ups** (`ShapeHealing.Heal/Analyze` ✅ landed — six passes,

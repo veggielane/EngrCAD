@@ -641,6 +641,35 @@ Design decisions:
   booleans exactly as accurate as axis-aligned ones. The implicit lowering decomposes
   the matrix into `Scale→Rotate→Translate` SDF operators (blend radii and offsets scale
   by the uniform factor); non-decomposable (sheared) subtrees bridge through a mesh.
+- **`Shell(t)` and `Shell(t, openings)` are two operations, not one operation with two
+  lowerings.** The SDF shell is the onion `|d| − t/2`: a symmetric skin straddling the
+  surface, reaching t/2 *outside* the original body. The B-Rep shell
+  (`Shelling.Shell`) hollows INWARD, keeping the outer surface exactly. Making one
+  `Shape.Shell` pick per representation would give a design different walls in
+  different lowerings — precisely the "representation-dependent results must be
+  explained, not silent" failure — so the openings-taking overload is a distinct node
+  (`BrepShellShape`) that bridges implicit through the exact shelled B-Rep, and the SDF
+  shell's B-Rep-Impossible message names the exact overload as the way out. The same
+  wiring pattern serves `Shape.Draft` and `Shape.RoundEdges`: classify Native under
+  rigid + uniform scale with "constraints validate at lowering" (the rim-feature
+  precedent — the selector needs the lowered solid, so shape constraints cannot be
+  checked at construction), refuse shears with the metric quantity named (an angle, a
+  wall, a radius), and let the kernel's own loud rejections surface verbatim.
+- **A loft node is a graph LEAF whose inputs are placed profiles.** The sketch
+  overloads bake each section's `SketchPlane` at construction and `LoftShape` stores
+  `Profile`s, so lowering only wraps the accumulated graph transform around the section
+  curves (`TransformedCurve`) — one baking rule instead of a per-section
+  matrix-plus-sketch pair threaded through the compiler. B-Rep support is deliberately
+  rigid + uniform scale even though the machinery could wrap any affine: the loft's
+  mean-chord parameterization and least-twist alignment are METRIC choices, so lofting
+  sheared sections skins slightly different in-between geometry than shearing the
+  skin — the honest classification is Impossible, with the mesh route transforming the
+  identity-placed tessellation (exact). `LoftAlong` (the evolution-law pipe shell)
+  generates stations by scaling/twisting one sketch in `SweptSurface`'s own
+  rotation-minimizing frames — the frames depend only on the path and the start x, so a
+  law-free `LoftAlong` stations its sections on the same frames a sweep would use, and
+  the generated profiles feed `Loft` unchanged rather than growing a second skinning
+  path.
 - **Best-effort bridging with honest reporting** (Chris's chosen policy): nodes without
   a native form in the target bridge through another representation —
   extrude/revolve/sweep → implicit goes B-Rep → tessellation → `MeshSdf`; blends →

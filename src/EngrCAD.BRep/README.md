@@ -348,6 +348,11 @@ operations. Depends only on `EngrCAD.Core`.
   faces, caps with holes, selecting a cap, and a taper large enough to fold the profile
   (checked by winding *and* per-edge direction against the original loop, since a signed
   area alone can stay positive while one edge has already reversed).
+  **Per-face angles in one call**: `Draft.Apply(solid, neutralOrigin, pullDirection,
+  angleSelector)` takes a `Func<BrepFace, double?>` (null = leave the face) — every corner
+  is solved once from its two final planes, which is exactly what chaining single-angle
+  drafts computes too (the operation is closed-form and composable, locked by a
+  positions-bit-equal-to-the-chain test), just without re-recognizing the prism per angle.
 - **`Shelling`** — offset solids and hollowing (OCCT `BRepOffsetAPI_MakeOffsetShape` /
   `MakeThickSolid`): `Shelling.Offset(solid, distance)` moves every face along its own
   normal (positive grows, negative shrinks) and `Shelling.Shell(solid, thickness,
@@ -363,6 +368,10 @@ operations. Depends only on `EngrCAD.Core`.
   boundary (they supply the second use of every edge that face used to carry) plus the inner
   opening as a hole. With no opening the cavity is sealed and the result is a **two-shell**
   solid; with openings it is one shell, and two opposite openings give a genus-1 tube.
+  **Per-face wall thickness**: `Shelling.Shell(solid, Func<BrepFace, double> thickness,
+  openingSelector?)` asks the selector once per non-opening face (a thick base under thin
+  walls) — nothing new geometrically, since each inner corner was already the intersection
+  of its three offset planes and unequal offsets just move that intersection.
   Rejections are loud: curved faces (a cylinder offsets to a cylinder and a revolve to the
   revolve of an `OffsetCurve3d` generator, but their *corners* need surface–surface
   re-intersection, not a three-plane solve), vertices where more than three faces meet (the

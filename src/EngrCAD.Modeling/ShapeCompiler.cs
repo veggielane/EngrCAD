@@ -102,12 +102,27 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with this operation"));
                 break;
+            case LoftShape:
+                // Rigid + uniform only: the loft's chord-length parameterization and
+                // least-twist alignment are metric, so a shear would skin DIFFERENT
+                // in-between geometry than shearing the skin.
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "skinned through the placed sections (SolidFactory.Loft); section compatibility validates at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with the loft's chord-length parameterization"));
+                break;
             case BooleanShape b:
                 ClassifyBrep(b.A, m, entries);
                 ClassifyBrep(b.B, m, entries);
                 entries.Add(new ConversionEntry(b.Describe(), NodeSupport.Native));
                 break;
-            case SmoothShape or OffsetShape or ShellShape or LatticeShape:
+            case ShellShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                    "the SDF shell is a symmetric skin about the surface (|d| - t/2) with no B-Rep form; " +
+                    "for an exact inward hollow of a polyhedral solid use Shell(thickness, openings)"));
+                break;
+            case SmoothShape or OffsetShape or LatticeShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                     "only expressible as a signed distance field, and meshes cannot be imported into B-Rep"));
                 break;
@@ -118,6 +133,33 @@ internal static class ShapeCompiler
                         "planar-face rim feature; rim shape constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a non-uniform scale or shear does not commute with rim features"));
+                break;
+
+            case DraftShape draft:
+                ClassifyBrep(draft.Child, m, entries);
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "exact plane rotation about each face's neutral line (Draft.Apply); prism-shape constraints validate at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with a draft angle"));
+                break;
+
+            case BrepShellShape brepShell:
+                ClassifyBrep(brepShell.Child, m, entries);
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "exact inward polyhedral shelling (Shelling.Shell); polyhedron constraints validate at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with a wall thickness"));
+                break;
+
+            case RoundEdgesShape roundEdges:
+                ClassifyBrep(roundEdges.Child, m, entries);
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "exact morphological rounding (Filleting.FilletAllEdges); convex-edge and corner constraints validate at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a non-uniform scale or shear does not commute with a fillet radius"));
                 break;
 
             case HullShape:
@@ -217,7 +259,8 @@ internal static class ShapeCompiler
                     : new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                         "sheared subtree goes through a tessellated mesh SDF"));
                 break;
-            case ExtrudeShape or RevolveShape or SweepShape or RimShape:
+            case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
+                or DraftShape or BrepShellShape or RoundEdgesShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -464,6 +507,15 @@ internal static class ShapeCompiler
                     TransformProfile(sweep.Profile!, m), path, TransformProfiles(sweep.Holes, m));
             }
 
+            case LoftShape loft:
+            {
+                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                var placed = new Profile[loft.Sections.Count];
+                for (int i = 0; i < placed.Length; i++)
+                    placed[i] = TransformProfile(loft.Sections[i], m);
+                return SolidFactory.Loft(placed, loft.Style);
+            }
+
             case BooleanShape boolean:
             {
                 var a = LowerBrep(boolean.A, m);
@@ -508,6 +560,52 @@ internal static class ShapeCompiler
                         : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);
                 }
                 return solid;
+            }
+
+            case DraftShape draft:
+            {
+                // The angle is dimensionless, so only the neutral plane and pull
+                // direction bake; uniform scale leaves the taper alone (a scaled
+                // frustum keeps its angles).
+                Decompose(m, shape, out var draftRotation, out _, out _);
+                var solid = LowerBrep(draft.Child, m);
+                Func<BrepFace, bool>? selector = null;
+                if (draft.Selector is not null)
+                {
+                    var selected = new HashSet<BrepFace>(draft.Selector(solid));
+                    if (selected.Count == 0)
+                        throw new InvalidOperationException(
+                            $"{draft.Describe()}: the face selector matched nothing on the lowered solid.");
+                    selector = selected.Contains;
+                }
+                return BRep.Draft.Apply(
+                    solid, m.TransformPoint(draft.NeutralOrigin),
+                    draftRotation.Rotate(draft.PullDirection), draft.AngleRadians, selector);
+            }
+
+            case BrepShellShape brepShell:
+            {
+                // Wall thickness is a length: it scales with the accumulated uniform
+                // factor, like the rim features' amounts.
+                Decompose(m, shape, out _, out _, out double wallScale);
+                var solid = LowerBrep(brepShell.Child, m);
+                Func<BrepFace, bool>? openings = null;
+                if (brepShell.Openings is not null)
+                {
+                    var selected = new HashSet<BrepFace>(brepShell.Openings(solid));
+                    if (selected.Count == 0)
+                        throw new InvalidOperationException(
+                            $"{brepShell.Describe()}: the opening selector matched nothing on the lowered solid.");
+                    openings = selected.Contains;
+                }
+                return Shelling.Shell(solid, brepShell.Thickness * wallScale, openings);
+            }
+
+            case RoundEdgesShape roundEdges:
+            {
+                Decompose(m, shape, out _, out _, out double radiusScale);
+                return Filleting.FilletAllEdges(
+                    LowerBrep(roundEdges.Child, m), roundEdges.Radius * radiusScale);
             }
 
             case DrillShape drill:
@@ -696,7 +794,8 @@ internal static class ShapeCompiler
                 return Place(Sdf.RevolvedRegion(new SketchRegion(sketch, forRevolution: true)), q, t, s);
             }
 
-            case ExtrudeShape or RevolveShape or SweepShape or RimShape:
+            case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
+                or DraftShape or BrepShellShape or RoundEdgesShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 

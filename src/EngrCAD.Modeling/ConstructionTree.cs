@@ -249,6 +249,15 @@ public static class ConstructionTree
             case RimShape rim:
                 AddShape(node, rim.Child, ref next);
                 break;
+            case DraftShape draft:
+                AddShape(node, draft.Child, ref next);
+                break;
+            case BrepShellShape brepShell:
+                AddShape(node, brepShell.Child, ref next);
+                break;
+            case RoundEdgesShape roundEdges:
+                AddShape(node, roundEdges.Child, ref next);
+                break;
             case DrillShape drill:
                 AddShape(node, drill.Child, ref next);
                 break;

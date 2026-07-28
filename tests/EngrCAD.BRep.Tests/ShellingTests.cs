@@ -171,4 +171,36 @@ public class ShellingTests
         var top = solid.PlanarFacesWithNormal(Vector3d.UnitZ).Single();
         Assert.Throws<NotSupportedException>(() => Shelling.Shell(solid, 1, f => ReferenceEquals(f, top)));
     }
+
+    [Fact]
+    public void Shell_PerFaceThickness_PutsEachInnerPlaneAtItsOwnDepth()
+    {
+        // Open-top tray with a 3-thick base under 1-thick walls. Each inner corner is
+        // still the intersection of its three offset planes, so unequal offsets stay
+        // exact: the cavity is x ∈ [1, 19], y ∈ [1, 29], z ∈ [3, 10].
+        var block = Block();
+        var tray = Shelling.Shell(
+            block,
+            f => f.IsPlanar(out _, out var n) && n.Z < -0.9 ? 3.0 : 1.0,
+            f => ReferenceEquals(f, TopOf(block)));
+        tray.Validate();
+
+        var tolerance = new Tolerance(1e-12, 1e-12);
+        var positions = tray.Vertices.Select(v => v.Position).ToList();
+        Assert.Contains(positions, p => p.AreEqual((1, 1, 3), tolerance));
+        Assert.Contains(positions, p => p.AreEqual((19, 29, 3), tolerance));
+        Assert.Contains(positions, p => p.AreEqual((1, 1, 10), tolerance));
+        // No inner vertex sits at the uniform-thickness depth z = 1.
+        Assert.DoesNotContain(positions, p => p.AreEqual((1, 1, 1), tolerance));
+    }
+
+    [Fact]
+    public void Shell_PerFaceThickness_RejectsANonPositiveWall()
+    {
+        var block = Block();
+        Assert.Throws<ArgumentOutOfRangeException>(() => Shelling.Shell(
+            block,
+            f => f.IsPlanar(out _, out var n) && n.Z < -0.9 ? 0.0 : 1.0,
+            f => ReferenceEquals(f, TopOf(block))));
+    }
 }

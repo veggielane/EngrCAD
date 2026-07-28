@@ -104,6 +104,19 @@ internal sealed class WedgeShape : Shape
         $"Wedge({SizeX:g4}×{SizeY:g4}×{SizeZ:g4}, topX={TopX:g4}, offset={TopOffsetX:g4})";
 }
 
+/// <summary>
+/// A solid skinned through planar sections (<see cref="SolidFactory.Loft"/>). The
+/// sections are stored ALREADY PLACED in 3D (the sketch overloads bake their plane in at
+/// construction), so lowering only has to bake the accumulated graph transform into the
+/// section curves. A leaf in the operation graph: its inputs are profiles, not shapes.
+/// </summary>
+internal sealed class LoftShape(IReadOnlyList<Profile> sections, LoftStyle style) : Shape
+{
+    public IReadOnlyList<Profile> Sections => sections;
+    public LoftStyle Style => style;
+    internal override string Describe() => $"Loft({sections.Count} sections, {style})";
+}
+
 internal sealed class ExtrudeShape : Shape
 {
     public Profile? Profile { get; }
@@ -223,6 +236,52 @@ internal sealed class LatticeShape(Shape child, Sdf pattern) : Shape
     public Shape Child => child;
     public Sdf Pattern => pattern;
     internal override string Describe() => "Lattice";
+}
+
+/// <summary>
+/// Draft (mould-release taper) applied to side faces selected by a query on the lowered
+/// solid — <see cref="Draft.Apply"/>. Angle stored in radians; a null selector drafts
+/// every side face.
+/// </summary>
+internal sealed class DraftShape(
+    Shape child, double angleRadians, Vector3d neutralOrigin, Vector3d pullDirection,
+    Func<BrepSolid, IEnumerable<BrepFace>>? selector) : Shape
+{
+    public Shape Child => child;
+    public double AngleRadians => angleRadians;
+    public Vector3d NeutralOrigin => neutralOrigin;
+    public Vector3d PullDirection => pullDirection;
+    public Func<BrepSolid, IEnumerable<BrepFace>>? Selector => selector;
+    internal override string Describe() => $"Draft({angleRadians * 180 / Math.PI:0.###} deg)";
+}
+
+/// <summary>
+/// Exact B-Rep shelling (<see cref="Shelling.Shell"/>): hollow the child INWARD to walls
+/// of the given thickness, opening the cavity through selected faces (null = sealed
+/// void). Deliberately a different node from <see cref="ShellShape"/>, whose SDF
+/// lowering is the SYMMETRIC skin |d| − t/2 about the surface — the two are different
+/// geometry, and which one a design gets must be its explicit choice, never a lowering's.
+/// </summary>
+internal sealed class BrepShellShape(
+    Shape child, double thickness, Func<BrepSolid, IEnumerable<BrepFace>>? openings) : Shape
+{
+    public Shape Child => child;
+    public double Thickness => thickness;
+    public Func<BrepSolid, IEnumerable<BrepFace>>? Openings => openings;
+    internal override string Describe() =>
+        openings is null ? $"Shell(t={thickness:g4}, sealed)" : $"Shell(t={thickness:g4}, openings)";
+}
+
+/// <summary>
+/// Whole-solid rounding (<see cref="Filleting.FilletAllEdges"/>): the exact
+/// morphological opening (K ⊖ B_r) ⊕ B_r of the child's B-Rep — every convex edge
+/// becomes a cylindrical band, every corner a spherical patch.
+/// </summary>
+internal sealed class RoundEdgesShape(Shape child, double radius) : Shape
+{
+    public Shape Child => child;
+    public double Radius => radius;
+    internal override string Describe() => $"RoundEdges(r={radius:g4})";
 }
 
 /// <summary>Rim chamfer/fillet applied to faces selected by a query on the lowered solid.</summary>
