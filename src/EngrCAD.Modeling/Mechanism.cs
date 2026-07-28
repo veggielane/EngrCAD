@@ -287,6 +287,10 @@ public sealed class Mechanism
         }
         recorded.Add(Snapshot(from));
         int baselineRank = first.ConstrainedDegreesOfFreedom;
+        // The dead-centre detector's yardstick: the driven system's WIDE-threshold
+        // rank at a healthy pose. Compared against the same probe at a stall, so a
+        // direction that is merely weak throughout the sweep never trips it.
+        var looseBaseline = RankProbe(driver, from, settings);
 
         double current = from;
         double stepLimit = Math.Abs(nominalStep);
@@ -316,8 +320,8 @@ public sealed class Mechanism
                     stepLimit /= 2;
                     if (stepLimit < minStep)
                     {
-                        Failure(driver, current, target, result, first, diagnostics);
-                        bool singular = diagnostics.Any(d => d.Contains("singular", StringComparison.Ordinal));
+                        bool singular = Failure(
+                            driver, current, target, result, looseBaseline, settings, diagnostics);
                         return new MotionStudy(this, driver, recorded, completed: false,
                             failedAt: current, singular, diagnostics);
                     }
@@ -348,29 +352,69 @@ public sealed class Mechanism
             diagnostics.Add($"joint '{name}' spans the rank loss");
     }
 
+    /// <summary>
+    /// The wide-threshold rank tolerance behind the dead-centre DIAGNOSIS: a driven
+    /// direction whose singular value has fallen below this fraction of the spectrum
+    /// reads as lost. Deliberately far above the solver's strict 1e-8 rank threshold —
+    /// a sweep stalls NEAR a dead centre (the minimum step keeps it a finite distance
+    /// away), where the Jacobian is almost, not exactly, deficient. The diagnosis only
+    /// names WHY a sweep already stopped; the hard stop itself never depends on this
+    /// number.
+    /// </summary>
+    private const double DeadCentreRankTolerance = 0.03;
+
+    /// <summary>The wide-threshold rank of the DRIVEN system at the current
+    /// (converged) pose — zero iterations, nothing moves, nothing commits.</summary>
+    private MateSolveResult RankProbe(MechanismDriver driver, double at, MateSolverSettings? settings)
+    {
+        driver.Constraint.Target = at;
+        var extras = new List<AuxiliaryConstraint>(_couplings.Count + 1);
+        extras.AddRange(_couplings);
+        extras.Add(driver.Constraint);
+        var probe = new MateSolverSettings
+        {
+            MaxIterations = 0,
+            Tolerance = (settings ?? new MateSolverSettings()).Tolerance,
+        };
+        return Mates.TrySolve(probe, extras, DeadCentreRankTolerance);
+    }
+
     /// <summary>A step that kept failing down to the minimum subdivision. Distinguish
-    /// "the Jacobian went singular along the driven direction" (dead centre — the
-    /// stationary-configuration diagnosis the mate solver already makes) from a
-    /// genuinely unsatisfiable target (limits of the linkage's range).</summary>
-    private void Failure(
+    /// a dead centre — the Jacobian near-singular along the driven direction at the
+    /// last good pose, or the solver's own stationary-configuration diagnosis — from a
+    /// target genuinely outside the linkage's reach. Returns whether the stop was
+    /// singular.</summary>
+    private bool Failure(
         MechanismDriver driver, double current, double target, MateSolveResult result,
-        MateSolveResult baseline, List<string> diagnostics)
+        MateSolveResult looseBaseline, MateSolverSettings? settings, List<string> diagnostics)
     {
         bool stationary = result.Diagnostics.Any(d => d.Contains("stationary", StringComparison.Ordinal));
+        var atStall = RankProbe(driver, current, settings);
+        bool nearSingular =
+            atStall.ConstrainedDegreesOfFreedom < looseBaseline.ConstrainedDegreesOfFreedom;
+        bool singular = stationary || nearSingular;
+
         diagnostics.Add(
             $"the sweep stopped at driver value {current:g6}: stepping toward {target:g6} stopped " +
             "converging even at 1/4096 of the range" +
-            (stationary
-                ? " — the residual has no first-order descent there, which is a singular (dead-centre) " +
-                  "configuration for this driver"
+            (singular
+                ? $" — a dead centre for joint '{driver.Joint.Name}': the driven variable is " +
+                  "first-order stationary along the mechanism's remaining motion, so the linkage can " +
+                  "toggle or lock here. Refusing to guess a branch; drive a different joint through " +
+                  "this region, or approach from the other end."
                 : " — the target is outside what the linkage can reach from here"));
-        if (stationary)
+        if (nearSingular)
         {
-            foreach (string name in SuspectJoints(result, baseline))
+            diagnostics.Add(
+                $"the constraint Jacobian at the last good pose is within {DeadCentreRankTolerance:p0} of " +
+                $"rank-deficient ({atStall.ConstrainedDegreesOfFreedom} of the healthy " +
+                $"{looseBaseline.ConstrainedDegreesOfFreedom})");
+            foreach (string name in SuspectJoints(atStall, looseBaseline))
                 diagnostics.Add($"joint '{name}' spans the rank loss");
         }
         diagnostics.AddRange(result.Diagnostics);
         diagnostics.Add("the assembly is left at the last good pose");
+        return singular;
     }
 
     /// <summary>The joints touching an occurrence whose per-body constrained DOF fell

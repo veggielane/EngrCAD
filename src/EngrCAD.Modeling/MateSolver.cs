@@ -280,6 +280,17 @@ public sealed partial class MateSet
     internal MateSolveResult TrySolve(MateSolverSettings settings, IReadOnlyList<AuxiliaryConstraint> extras) =>
         new Solver(this, settings, extras).Run();
 
+    /// <summary>
+    /// <see cref="TrySolve(MateSolverSettings, IReadOnlyList{AuxiliaryConstraint})"/>
+    /// with the rank threshold widened for DIAGNOSIS — <see cref="Mechanism"/> probes
+    /// "how close to rank-deficient is this pose" (a dead-centre detector) by
+    /// comparing wide-threshold ranks between poses. Never used for the authoritative
+    /// DOF count, which keeps the strict threshold.
+    /// </summary>
+    internal MateSolveResult TrySolve(
+        MateSolverSettings settings, IReadOnlyList<AuxiliaryConstraint> extras, double rankTolerance) =>
+        new Solver(this, settings, extras, rankTolerance).Run();
+
     // =====================================================================
     //  The solver
     // =====================================================================
@@ -294,8 +305,10 @@ public sealed partial class MateSet
     private const double RankRelativeTolerance = 1e-8;
 
     private sealed partial class Solver(
-        MateSet set, MateSolverSettings settings, IReadOnlyList<AuxiliaryConstraint> extras)
+        MateSet set, MateSolverSettings settings, IReadOnlyList<AuxiliaryConstraint> extras,
+        double? rankTolerance = null)
     {
+        private readonly double _rankTolerance = rankTolerance ?? RankRelativeTolerance;
         private readonly List<Occurrence> _free = [];
         private readonly Dictionary<Occurrence, int> _block = [];
 
@@ -409,7 +422,7 @@ public sealed partial class MateSet
             var final = new double[_columns * _columns];
             var unusedGradient = new double[_columns];
             NormalEquations(jacobian, residual, final, unusedGradient);
-            int rank = Rank(final, _columns);
+            int rank = Rank(final, _columns, _rankTolerance);
 
             // Per-occurrence report: the rank of each occurrence's own 6×6 block of JᵀJ —
             // how many of ITS motions the mates can see (an upper bound on pinning;
@@ -423,7 +436,7 @@ public sealed partial class MateSet
                     for (int c = 0; c < 6; c++)
                         block[r * 6 + c] = final[(b * 6 + r) * _columns + (b * 6 + c)];
                 }
-                freedoms.Add(new MateOccurrenceFreedom(PathOf(_free[b]), Rank(block, 6)));
+                freedoms.Add(new MateOccurrenceFreedom(PathOf(_free[b]), Rank(block, 6, _rankTolerance)));
             }
 
             if (converged)
@@ -996,7 +1009,7 @@ public sealed partial class MateSet
         /// the standard rank-revealing factorization for this class of matrix, and the
         /// reason the redundant rotational residual rows do not inflate the DOF count.
         /// </summary>
-        private static int Rank(double[] a, int n)
+        private static int Rank(double[] a, int n, double relativeTolerance)
         {
             if (n == 0)
                 return 0;
@@ -1011,7 +1024,7 @@ public sealed partial class MateSet
                 return 0;
             // Pivots are SQUARED singular values, so the relative singular-value threshold
             // enters squared.
-            double floor = first * RankRelativeTolerance * RankRelativeTolerance;
+            double floor = first * relativeTolerance * relativeTolerance;
 
             int rank = 0;
             for (int step = 0; step < n; step++)
