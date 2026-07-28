@@ -74,19 +74,22 @@ convex polyhedral `a` and `b`.
 
 ## Shell
 
-`Shell(thickness)` hollows a solid into a constant-thickness skin. Subtracting a box
-here exposes the interior wall:
+`Shell(thickness)` hollows a solid into a constant-thickness skin. A real **quarter
+cut** (two section planes on the render, the viewer's
+[section mode](viewer.md)) exposes the interior wall — and because a shelled shape is
+SDF-native, the cut carries its [isolines](viewer.md#sdf-isolines-on-the-cut): the
+two gold contours are the exact inner and outer surfaces, and the constant gap
+between them IS the wall thickness, readable at a glance:
 
-```csharp render:shell
-var hollow = Shape.Sphere(16).Shell(2.5)
-    - Shape.Box(40, 40, 40).Translate(0, -20, 20);   // cut a quarter away to look inside
+```csharp render:shell section:y,0;z,16
+var hollow = Shape.Sphere(16).Shell(2.5);
 
 var scene = new Scene();
 scene.Add(new Part("shelled sphere", hollow, Palette.Brass,
     Matrix4d.CreateTranslation((0, 0, 16))));
 ```
 
-![A shelled sphere cut open to show the constant wall thickness](images/shell.png)
+![A shelled sphere quarter-cut by two section planes, isolines showing the constant wall thickness](images/shell.png)
 
 ## Lattice
 

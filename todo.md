@@ -740,9 +740,6 @@ where this project already points.
 
 ## Viewer
 
-- [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
-  boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
-  options — convert where the page reads better with a real section).
 - [ ] **3D-annotation (PMI) residuals** (angular dimensions incl. `BetweenFaces`
   included-angle measurement, chain/ordinate styles, multi-line stroke-font layout
   with callout continuation lines, `ToleranceSpec` text sugar, `HoleTable` +

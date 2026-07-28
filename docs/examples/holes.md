@@ -94,24 +94,24 @@ production use.
 
 ## Seeing inside
 
-Cutting the drilled plate in half shows the counterbore step and countersink cone the
-recipes produce (the viewer's [section mode](viewer.md) does this interactively):
+A real **section plane** through the hole axes shows the counterbore step and
+countersink cone the recipes produce — the same cut the viewer's
+[section mode](viewer.md) makes interactively, here as a render option (`section:y,0`
+on the fence), so the geometry stays the exact B-Rep and the cut faces shade as flat
+cut material. The contour rings on the cut are the automatic
+[SDF isolines](viewer.md#sdf-isolines-on-the-cut) — drilling is exact in the
+implicit engine too, and the gold ring is the exact surface cross-section:
 
-```csharp render:holes-section
+```csharp render:holes-section section:y,0
 var top = SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY);
 
 var plate = Shape.Box(60, 30, 12)
     .Drill(HoleSpec.Counterbore(5, 10, 4), [new(-15, 0)], depth: 14, top)
     .Drill(HoleSpec.Countersink(5, 11), [new(15, 0)], depth: 14, top);
 
-// Drilling is exact in the implicit engine too: lower to the signed distance
-// field and cut the near half away to expose the hole profiles.
-var sectioned = Shape.From(plate.ToImplicit())
-    - Shape.Box(62, 32, 16).Translate(0, 16, 0);
-
-var scene = new Scene(new MeshQuality { SdfResolution = 160 });
-scene.Add(new Part("cross-section", sectioned, Palette.Sky,
+var scene = new Scene();
+scene.Add(new Part("plate", plate, Palette.Sky,
     Matrix4d.CreateTranslation((0, 0, 6))));
 ```
 
-![A half-sectioned plate exposing counterbore and countersink profiles](images/holes-section.png)
+![A plate cut by a real section plane, exposing counterbore and countersink profiles with isolines on the cut](images/holes-section.png)
