@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Core.Spatial;
 using EngrCAD.Mesh;
 
 namespace EngrCAD.Fea;
@@ -391,15 +392,7 @@ public static class TetMesher
                     "and belong to no surface patch, so there is nothing to refine. This indicates a " +
                     "corrupted triangulation.");
 
-            var replacement = new List<SubTriangle>(_subTriangles.Count + 3 * doomed.Count);
-            for (int i = 0; i < _subTriangles.Count; i++)
-            {
-                if (doomed.Contains(i))
-                    Split(_subTriangles[i], replacement);
-                else
-                    replacement.Add(_subTriangles[i]);
-            }
-            _subTriangles = replacement;
+            SplitSubTriangles(doomed);
         }
 
         /// <summary>
@@ -682,8 +675,19 @@ public static class TetMesher
 
         private void RefineQuality(Side[] label, int[] region)
         {
-            for (int pass = 0; pass < 60; pass++)
+            for (int pass = 0; pass < 24; pass++)
             {
+                // Ruppert's rule, in Ruppert's ORDER: a circumcentre that encroaches a
+                // boundary sub-triangle is never inserted; the sub-triangle is split instead.
+                // Inserting first and repairing the boundary afterwards is the same two
+                // operations in the wrong order, and it cascades — the insertion disturbs the
+                // boundary, recovery splits, the splits disturb more, and a bored plate with
+                // a sizing field exhausted a 500 000-point budget. Refusing up front costs
+                // one spatial query per candidate and cannot cascade at all.
+                var (encroachmentIndex, balls) = BuildEncroachmentIndex();
+                var encroached = new HashSet<int>();
+                var hits = new List<int>();
+
                 var candidates = new List<(double Priority, Vector3d Point, double Radius)>();
                 foreach (int t in _delaunay.LiveTets())
                 {
@@ -713,7 +717,17 @@ public static class TetMesher
                     if (!IsInsideAnyBody(centre))
                         continue;
 
+                    if (Encroaches(encroachmentIndex, balls, centre, hits, encroached))
+                        continue; // the boundary is refined instead, below (if it is oversized)
+
                     candidates.Add((ratio, centre, radius));
+                }
+
+                if (encroached.Count > 0)
+                {
+                    SplitSubTriangles(encroached);
+                    (label, region) = Classify();
+                    continue;
                 }
 
                 if (candidates.Count == 0)
@@ -787,15 +801,95 @@ public static class TetMesher
 
                 progress?.ThrowIfCancelled();
 
-                // Recover, not merely re-classify. An interior insertion CAN make a recovered
-                // boundary face stop being Delaunay — that is exactly the encroachment case
-                // Ruppert's algorithm answers by splitting the encroached facet instead of
-                // inserting the circumcentre. The recovery loop already performs that split,
-                // so composing the two is the whole response: no separate encroachment rule,
-                // no spatial index over diametral balls, and the boundary is conforming again
-                // by the time the next pass measures quality.
-                (label, region) = Recover();
+                // Only re-classify. Encroaching candidates were refused above, so an accepted
+                // insertion cannot disturb the boundary — and Recover() costs a second
+                // classification pass over every element, which at refinement scale dominated
+                // the whole mesher. The boundary is re-verified ONCE after the loop, where a
+                // disturbance would still be caught and repaired.
+                (label, region) = Classify();
             }
+        }
+
+        /// <summary>
+        /// A BVH over the surface sub-triangles' diametral balls, so "does this point
+        /// encroach the boundary?" is a logarithmic query instead of a scan.
+        /// </summary>
+        private (Bvh Index, (Vector3d Centre, double Radius)[] Balls) BuildEncroachmentIndex()
+        {
+            var balls = new (Vector3d Centre, double Radius)[_subTriangles.Count];
+            var boxes = new Aabb[_subTriangles.Count];
+            for (int i = 0; i < _subTriangles.Count; i++)
+            {
+                var sub = _subTriangles[i];
+                if (!TetGeometry.TryTriangleCircumcentre(
+                        _points[sub.V0], _points[sub.V1], _points[sub.V2],
+                        out var centre, out double radius))
+                {
+                    // A degenerate sub-triangle has no diametral ball; give it an empty box
+                    // so it never matches, and let recovery deal with it if it ever matters.
+                    balls[i] = (default, -1);
+                    boxes[i] = new Aabb(new Vector3d(1, 1, 1), new Vector3d(-1, -1, -1));
+                    continue;
+                }
+                balls[i] = (centre, radius);
+                var extent = new Vector3d(radius, radius, radius);
+                boxes[i] = new Aabb(centre - extent, centre + extent);
+            }
+            return (Bvh.Build(boxes), balls);
+        }
+
+        /// <summary>
+        /// True when <paramref name="point"/> lies inside some surface sub-triangle's
+        /// diametral ball — in which case it must NOT be inserted. Sub-triangles that are
+        /// still oversized by the sizing field's own standard are recorded for splitting.
+        ///
+        /// <para><b>That size floor is what makes the loop terminate.</b> Without it, a
+        /// circumcentre sitting essentially ON the surface (which is exactly what a sliver
+        /// against a wall produces) encroaches whatever sub-triangles are there, splitting
+        /// them forever: each split halves their diametral balls but the point stays inside,
+        /// so the next pass splits again. Measured, the suite simply stopped finishing.
+        /// Refusing to split a sub-triangle that already meets the target bounds the whole
+        /// process by the sizing field, and the candidate is discarded instead — the quality
+        /// report then says what was left behind, which is the honest outcome.</para>
+        /// </summary>
+        private bool Encroaches(
+            Bvh index,
+            (Vector3d Centre, double Radius)[] balls,
+            in Vector3d point,
+            List<int> hits,
+            HashSet<int> encroached)
+        {
+            hits.Clear();
+            index.Query(new Aabb(point, point), hits);
+            bool any = false;
+            foreach (int i in hits)
+            {
+                var (centre, radius) = balls[i];
+                if (radius < 0)
+                    continue;
+                if ((point - centre).LengthSquared >= radius * radius)
+                    continue;
+
+                any = true;
+                var sub = _subTriangles[i];
+                double target = TargetSize((_points[sub.V0] + _points[sub.V1] + _points[sub.V2]) / 3.0);
+                if (!double.IsPositiveInfinity(target) && radius > 0.5 * target)
+                    encroached.Add(i);
+            }
+            return any;
+        }
+
+        private void SplitSubTriangles(HashSet<int> doomed)
+        {
+            var replacement = new List<SubTriangle>(_subTriangles.Count + 3 * doomed.Count);
+            for (int i = 0; i < _subTriangles.Count; i++)
+            {
+                if (doomed.Contains(i))
+                    Split(_subTriangles[i], replacement);
+                else
+                    replacement.Add(_subTriangles[i]);
+            }
+            _subTriangles = replacement;
         }
 
         private bool IsInsideAnyBody(in Vector3d p)
