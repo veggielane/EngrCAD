@@ -148,6 +148,37 @@ public sealed class Profile
     }
 
     /// <summary>
+    /// A <see cref="CurvedRegion2d"/> placed on a plane as EXACT profiles — the curved
+    /// counterpart of <see cref="FromRegion"/>, and the reason the curved 2D tier exists.
+    ///
+    /// <para>A region that came out of <c>CurvedRegion2dBoolean</c> or
+    /// <c>CurvedRegion2dOffset</c> still has circles on its boundary, so the profiles built
+    /// here carry <see cref="Circle3d"/>s and trimmed arcs rather than chords: extruding or
+    /// revolving one gives analytic cylindrical faces and an exact volume, where the same
+    /// design routed through <see cref="FromRegion"/> gives a prism of chords whose volume
+    /// is short by the flattening. A region whose whole boundary is one full circle becomes
+    /// a single-closed-curve profile, exactly as <see cref="Circle"/> would.</para>
+    /// </summary>
+    public static (Profile Outer, IReadOnlyList<Profile> Holes) FromCurvedRegion(
+        CurvedRegion2d region, Frame3d? plane = null)
+    {
+        ArgumentNullException.ThrowIfNull(region);
+        var frame = plane ?? Frame3d.WorldXY;
+        // No simplicity re-check: CurvedRegion2d validated every chain when it was built.
+        return (
+            PlaceCurved(region.Outer, frame),
+            [.. region.Holes.Select(hole => PlaceCurved(hole, frame))]);
+    }
+
+    private static Profile PlaceCurved(IReadOnlyList<CurvedEdge2d> loop, in Frame3d plane)
+    {
+        var segments = new Curve3d[loop.Count];
+        for (int i = 0; i < loop.Count; i++)
+            segments[i] = Curve2d.FromCurvedEdge(loop[i]).ToCurve3d(plane);
+        return new Profile(segments);
+    }
+
+    /// <summary>
     /// A chain of exact 2D curves placed on a plane as an exact <see cref="Profile"/> — the
     /// curve-family counterpart of <see cref="FromRegion"/>, which is polygonal. Lines stay
     /// lines, arcs stay arcs and NURBS stay NURBS (<see cref="Curve2d.ToCurve3d"/>), so a

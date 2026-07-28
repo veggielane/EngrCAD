@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Core.Geometry2;
 
 namespace EngrCAD.BRep;
 
@@ -44,6 +45,34 @@ public abstract class Curve2d
 
     /// <summary>The curve on the world XY plane (z = 0).</summary>
     public Curve3d ToCurve3d() => ToCurve3d(Frame3d.WorldXY);
+
+    /// <summary>
+    /// The same curve as a <see cref="CurvedEdge2d"/> — the boundary vocabulary of the
+    /// EXACT curved 2D arrangement (<c>CurvedArrangement2d</c>) — or false when this curve
+    /// has no exact counterpart there.
+    /// </summary>
+    /// <remarks>
+    /// <para>The default REFUSES rather than sampling, which is the same rule
+    /// <see cref="ToCurve3d"/> expresses by being abstract: nothing in this family may
+    /// silently approximate. Only <see cref="Line2d"/> and <see cref="Arc2d"/> override,
+    /// because lines and circles are exactly the tier the curved arrangement can decide
+    /// soundly (see <c>CurvedArrangement2d</c> for why the tangential tie-break is complete
+    /// for them and not for Béziers). Callers that must handle everything flatten the
+    /// refusals at a stated chord tolerance and say so — <c>Sketch.ToCurvedRegions</c>
+    /// does.</para>
+    /// </remarks>
+    public virtual bool TryToCurvedEdge(out CurvedEdge2d edge)
+    {
+        edge = default;
+        return false;
+    }
+
+    /// <summary>The inverse of <see cref="TryToCurvedEdge"/>: an arrangement edge back in
+    /// the exact 2D curve vocabulary, so a curved boolean's output can become a
+    /// <c>Profile</c> or a <c>Sketch</c> with its arcs intact.</summary>
+    public static Curve2d FromCurvedEdge(in CurvedEdge2d edge) => edge.IsArc
+        ? new Arc2d(edge.Center, edge.Radius, edge.StartAngle, edge.SweepAngle)
+        : new Line2d(edge.Start, edge.End);
 
     /// <summary>Lifts a sketch-plane point onto a placement frame.</summary>
     private protected static Vector3d Lift(in Frame3d plane, in Vector2d point) =>
@@ -313,6 +342,13 @@ public sealed class Line2d(Vector2d start, Vector2d end) : Curve2d
     }
 
     public override Curve3d ToCurve3d(in Frame3d plane) => new Line3d(Lift(plane, start), Lift(plane, end));
+
+    /// <summary>Exact: a segment IS a straight arrangement edge.</summary>
+    public override bool TryToCurvedEdge(out CurvedEdge2d edge)
+    {
+        edge = CurvedEdge2d.Line(start, end);
+        return true;
+    }
 }
 
 /// <summary>
@@ -399,6 +435,14 @@ public sealed class Arc2d : Curve2d
         }
         var circle = new Circle3d(center, plane.X, plane.Y, Radius);
         return new CurveSegment(circle, StartAngle, StartAngle + SweepAngle);
+    }
+
+    /// <summary>Exact: the signed sweep carries over verbatim, so orientation is preserved
+    /// without a flag on either side.</summary>
+    public override bool TryToCurvedEdge(out CurvedEdge2d edge)
+    {
+        edge = CurvedEdge2d.Arc(Center, Radius, StartAngle, SweepAngle);
+        return true;
     }
 
     /// <summary>Exact distance to the arc: radial when the foot lies inside the sweep, otherwise to the nearer end.</summary>

@@ -259,15 +259,68 @@ public class PlanarSectionTests
         double annulus = Math.PI * ((major + minor) * (major + minor) - (major - minor) * (major - minor));
         Assert.InRange(down.Area, annulus * 0.99, annulus);
 
-        // Side on, the outline is {|z| <= r, |x| <= R + sqrt(r^2 - z^2)}: a rectangle with
-        // two half-discs on the ends, and no MEANINGFUL hole. This is the view where every
-        // quad is nearly edge-on, and the 2D boolean can leave a pinhole of ~1e-7 of the
-        // outline at such near-tangencies (a known limitation, documented in the Interop
-        // README) -- so the assertion is on hole AREA, not hole count.
+        // Side on, the SMOOTH outline is {|z| <= r, |x| <= R + sqrt(r^2 - z^2)}: a rectangle
+        // with two half-discs on the ends, and no hole at all. The tessellated body's own
+        // shadow does have one, of ~2.4e-7 of the outline -- and it is REAL GEOMETRY, not
+        // the boolean instability this was long filed as. In the band
+        // |z| in [r*cos(pi/48), r] the discrete tube only reaches that height near its
+        // minor-polygon vertices, and the major discretization breaks that thin band into
+        // lenses that need not overlap. So the assertion is the strong one: whatever holes
+        // come back are covered by NO facet, i.e. the boolean returned the correct union of
+        // what it was given.
         double sideOn = 4 * major * minor + Math.PI * minor * minor;
         double pinholes = across.Holes.Sum(h => Math.Abs(Region2d.SignedArea(h)));
         Assert.True(pinholes < 1e-5 * across.Area, $"unexpected hole area {pinholes} in the side-on outline");
         Assert.InRange(across.Area, sideOn * 0.98, sideOn);
+
+        var view = Frame3d.FromOrthonormal(Vector3d.Zero, Vector3d.UnitY, Vector3d.UnitZ);
+        foreach (var hole in across.Holes)
+            AssertUncoveredByEveryFacet(torus, view, hole);
+    }
+
+    /// <summary>
+    /// Asserts that a silhouette hole is a genuine gap in the MESH's shadow: sampling its
+    /// interior, no projected facet contains the sample — decided with the exact
+    /// <see cref="Predicates2d.Orient2d"/>, over every triangle, front- and back-facing
+    /// alike. That is what separates "the boolean lost material" from "the tessellation has
+    /// no material there".
+    /// </summary>
+    private static void AssertUncoveredByEveryFacet(
+        HalfEdgeMesh mesh, Frame3d view, IReadOnlyList<Vector2d> hole)
+    {
+        double x0 = hole.Min(p => p.X), x1 = hole.Max(p => p.X);
+        double y0 = hole.Min(p => p.Y), y1 = hole.Max(p => p.Y);
+        var projected = new List<(Vector2d A, Vector2d B, Vector2d C)>();
+        foreach (var face in mesh.Faces)
+        {
+            var vs = face.Vertices().Select(v => view.ToLocal(v.Position)).ToArray();
+            if (vs.Length != 3)
+                continue;
+            projected.Add((
+                new Vector2d(vs[0].X, vs[0].Y),
+                new Vector2d(vs[1].X, vs[1].Y),
+                new Vector2d(vs[2].X, vs[2].Y)));
+        }
+
+        int probed = 0;
+        for (int i = 1; i < 20; i++)
+        for (int j = 1; j < 20; j++)
+        {
+            var p = new Vector2d(x0 + (x1 - x0) * i / 20.0, y0 + (y1 - y0) * j / 20.0);
+            if (!Region2d.ParityInside(hole, p))
+                continue;
+            probed++;
+            foreach (var (a, b, c) in projected)
+            {
+                int s0 = Math.Sign(Predicates2d.Orient2d(a, b, p));
+                int s1 = Math.Sign(Predicates2d.Orient2d(b, c, p));
+                int s2 = Math.Sign(Predicates2d.Orient2d(c, a, p));
+                Assert.False(
+                    (s0 >= 0 && s1 >= 0 && s2 >= 0) || (s0 <= 0 && s1 <= 0 && s2 <= 0),
+                    $"the silhouette hole is covered by a facet at {p}: the boolean lost material");
+            }
+        }
+        Assert.True(probed > 0, "the hole was too thin to probe");
     }
 
     [Fact]

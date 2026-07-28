@@ -463,6 +463,89 @@ The result is a lossless route from a drawn sketch to an exact analytic profile 
 touches `Region2d` — which matters because going through a region is the one deliberately
 lossy step in the whole 2D pipeline.
 
+### The curved 2D tier — and why it is a PARALLEL type
+
+The lossy step above is now optional. `CurvedEdge2d` / `CurvedRegion2d` /
+`CurvedArrangement2d` / `CurvedRegion2dBoolean` / `CurvedRegion2dOffset` (all in
+`EngrCAD.Core.Geometry2`) carry **lines and circular arcs through the arrangement
+unflattened**, and `Curve2d.TryToCurvedEdge` / `Curve2d.FromCurvedEdge`,
+`Profile.FromCurvedRegion`, `Sketch.ToCurvedRegions` / `Sketch.FromCurvedRegion` are the
+bridges. A fourth vocabulary is a real cost, so the reasoning for each decision is worth
+recording.
+
+**Parallel, not an extension of `Arrangement2d`.** The straight arrangement is
+boolean-critical — `Region2dBoolean`, `Region2dOffset`, `Shape.Section`,
+`Shape.Silhouette`, `Sketch.Offset`, and every rendered docs PNG sit on it — and teaching it
+curves means changing three of its load-bearing rules at once: the vertex fan comparator
+(positions → tangents), edge identity (a vertex pair → a vertex pair *plus a carrier*, since
+two points on one circle are joined by two arcs and by a chord), and the area rule. This is
+the same call §5 makes for `FaceSplitter`: **do not unify boolean-critical machinery**. The
+curved type shares the exact predicates and the algorithms' shape; the straight path's diff
+is empty, and `Region2dGoldenTests` pins its output bit for bit going forward.
+
+**The tier stops at arcs, and that is a completeness result rather than a budget.** The cell
+walk orders edges at a node by departure TANGENT, tie-broken by departure CURVATURE — which
+follows from p(s) = v + s·d + ½s²κ·n̂, so two edges leaving along the same d separate at
+second order and the larger signed curvature sits further counter-clockwise. For lines and
+circles, agreeing in both means sharing a carrier: a line and a circle never osculate, and
+two circles that osculate are one circle. The tie-break is therefore *complete* — the walk
+never guesses, and the comparator refuses by name if it is ever handed a second-order tie
+between different carriers. A third shape destroys that property: two Béziers can agree to
+second order and separate only in the third derivative, so a sound rule would need a jet of
+unbounded order and a subdivision tolerance underneath it. Béziers are consequently
+flattened at the entry points and the flattening is stated in the API contract rather than
+hidden.
+
+**The tangency policy is SNAP, not refuse.** Every curve decision is posed so its threshold
+is a LENGTH, and that length is the arrangement's own vertex snap tolerance — a line is
+tangent to a circle when the centre's distance from it differs from the radius by less than
+it, two circles when their centre distance differs from r₀ + r₁ or |r₀ − r₁| by less than
+it, a point is on an edge when its distance is under it. There is no second epsilon in the
+tier. Inside that band the answer reported is ONE touch point. Refusing would be useless (a
+sketch is full of tangencies) and dropping the contact loses a node the tracing needs, while
+two crossings a nanometre apart is a degenerate sliver cell whose classification is decided
+by rounding. Snapping is area-neutral to O(τ^1.5) and always yields a valid arrangement,
+**because a tangential contact is representable here**: the two edges leave the node with
+equal tangents and different curvature, which the fan can rank. That is the same property
+that makes the tier complete, used a second time.
+
+**And the tangency policy has a second half, learned the hard way.** Snapping produces the
+node; ordering the edges *at* it is a separate problem, and the first implementation got it
+confidently wrong. The fan comparator sorts by the exact `Orient2dSign` of the two departure
+directions — but where two edges are tangent, those directions differ only by arithmetic
+noise, so the exact predicate decides a quantity that carries no information. A disc tangent
+to a plate's straight edge from outside gave the arc a departure of (−1.22e-16, −1), whose x
+sign is nothing but the error in `sin(π)`; that put it on the wrong side of the plate's
+exactly vertical edge, the tightest-turn walk closed **no face at all**, and the union came
+back EMPTY. `OrderTangentialRuns` re-orders each cyclic run of tangentially tied departures
+by curvature afterwards, and **the tie band is derived rather than chosen**: a vertex may sit
+up to the snap tolerance from the true tangency point, and displacing a point by δ along a
+circle of radius r rotates its radial — hence its tangent — by δ/r = δ·|κ|, so the band is
+`snap·max(|κ₁|, |κ₂|)` plus a few-ulp floor. That floor is all that remains for two straight
+edges, so genuinely distinct line directions are still decided exactly and a near-parallel
+pair keeps the orientation sign's answer. This is §5's `DepartureAngle` note in new clothes:
+**Shewchuk exactness is exactness about the coordinates you hand it**, and a tangent computed
+at a tangency is not one of them.
+
+**What changed in the classification proof.** The straight interior sample takes the
+boundary-edge midpoint with the greatest clearance and pushes half of it along the inward
+normal; the disk of that clearance meets no other edge, so the pushed point is interior. For
+arcs the push must also be capped by the edge's own CURVATURE RADIUS — otherwise a small
+circular hole inside a large cell sends the sample past the circle's centre and out the far
+side. With the cap, the pushed point sits at |r ∓ s| from the centre with 0 < s < r, so it
+is off its own carrier by exactly s and off every other edge by more: the same proof, with
+the straight case being the infinite-radius specialization. Classification then uses the
+epsilon-free `ParityInside` rather than the closed-set `Contains`, whose on-boundary band
+would answer "inside both" for a cell thinner than the weld tolerance.
+
+**What it buys, measured.** A disc's area is πr² rather than an inscribed polygon's; two
+overlapping discs' union, intersection and difference match the analytic lens formulas to
+1e-10; an offset's round joins are exact sectors, which *retires* the inscribed-arc contract
+instead of honouring it; and a 40×20 plate with a Ø12 bore extruded 5 mm comes out within
+1e-6 relative of (800 − 36π)·5, against 3.6e-5 through the default-flattened route — an
+error that is a FLOOR no tessellation density can lower, because it is baked into the
+profile before any solid exists.
+
 ### Simplicity validation and simplification
 
 Two passes that look similar and are opposites. `Region2dValidation` REFUSES loops that are

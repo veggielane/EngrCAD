@@ -283,8 +283,28 @@ var body = Shape.Extrude(outer, Vector3d.UnitZ * 6, holes);
   sketch into several regions or consume it entirely, so the result is always a list —
   no inverted loops, because Core's `Region2dOffset` offsets by UNIONING one primitive
   per edge and per corner rather than chasing edges.
+- **`sketch.ToCurvedRegions(chordTolerance)` / `Sketch.FromCurvedRegion(region)` plus
+  `UnionExact` / `IntersectExact` / `SubtractExact` / `OffsetExact`** are the EXACT
+  curved route, and the one to reach for when the result becomes a solid. Lines and
+  circular arcs cross UNCHANGED into Core's `CurvedRegion2d` — a bore stays a circle, a
+  slot end stays a semicircle, and a boolean of two such sketches has a closed-form area —
+  while Béziers are the one thing still flattened, at the stated chord tolerance, because
+  the curved arrangement's tangential tie-break is complete for lines and circles and would
+  need an unbounded jet for a third shape (Core README). `OffsetExact`'s round joins are
+  true arcs rather than the inscribed fans `Offset` produces. `FromCurvedRegion` brings the
+  answer back as an ordinary `Sketch`, so it extrudes, revolves and sweeps with its arcs
+  intact:
+
+  ```csharp
+  var plate = Sketch.Rectangle(40, 20);
+  var bore  = Sketch.Circle(new Vector2d(0, 0), 6);
+  var body  = Shape.Extrude(Sketch.FromCurvedRegion(plate.SubtractExact(bore)[0]), 5);
+  // volume is (800 - 36*pi) * 5 to 1e-6 relative; the flattened route is 3.6e-5 off,
+  // and that error is a FLOOR - it is baked into the profile before any solid exists.
+  ```
 - `Profile.FromRegion(region, frame)` (BRep) returns the `(outer, holes)` pair the
-  solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`.
+  solid factories take, so regions feed `Extrude` / `Revolve` / `Sweep`;
+  `Profile.FromCurvedRegion` does the same for a curved region, exactly.
 - **`shape.Section(plane, chordTolerance)`** goes the other way — a 3D body back to 2D
   regions in the plane's own coordinates (`projection(cut = true)`, the drawing-view
   section). Exact geometry when the shape lowers to B-Rep, otherwise from the display
