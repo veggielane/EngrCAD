@@ -57,17 +57,25 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Interop / meshing (EngrCAD.Interop)
 
-- [ ] **A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**
-  `HalfEdgeMesh.Triangulated` fans from corner 0, so a quad's split is decided by where
-  its cycle happens to start. Measured on a left-hand threaded rod, whose band is a
-  sheared grid: it tessellates to the *identical* vertex set as the mirror of its
-  right-hand twin — 0 of 131 200 vertices differ at 1e-9 — yet carries a systematically
-  **3× larger volume deficit** at every density (RH deficit 0.668 vs LH 2.00 at 64
-  segments; 0.167 vs 0.501 at 128). Both converge quadratically onto the same analytic
-  volume, so this is a discretization *constant*, not a drift, and it is documented at
-  the one assertion it forces wider (`ThreadShapeTests`, 2.5% band). A shortest-diagonal
-  rule would improve every grid band, not just threads — but it moves rendered geometry,
-  so it needs the 54 docs PNGs as its oracle.
+- ~~**A grid quad's diagonal is chosen by CORNER ORDER, not geometry.**~~ ✅ **done** —
+  `PolygonFan` is now the one rule (shorter 3D diagonal for quads, corner-0 fan for
+  n-gons) and every consumer goes through it: `Triangulated`, `SignedVolume` via
+  `FaceFanStart`, `MeshMassProperties`, `MeshConnectedComponents`, `RenderMesh`, and the
+  STL/3MF/AMF writers. The mirrored thread now measures identically to its twin
+  (`ThreadShapeTests` tightened from a 2.5% band to 1%, plus an exact 9-digit equality).
+  Two findings came out of it: the tie guard has to be RELATIVE, because a UV-sphere
+  quad's diagonals are mathematically equal and an exact comparison gave 408 of 960
+  splits to round-off; and the win is *consistency* rather than universally less error —
+  on a saddle cell the two triangulations bracket the surface with equal magnitude.
+  18 of 87 docs PNGs move (SDF/Surface Nets, threads, lofts). Residual:
+  - [ ] **The repair/import fans are deliberately untouched** (`MeshRepair`,
+    `MeshSoupOps`, `StlReader`): they decompose soup that is not a mesh yet, where the
+    fan is a documented fallback for input earcut declined. Worth revisiting only if a
+    dirty-import case is ever traced to a fan diagonal.
+  - [ ] **A quad is still fanned, not optimally triangulated.** For n > 4 the corner-0 fan
+    remains, and on a non-convex n-gon that is simply wrong geometry — nothing in the
+    kernel produces one today (planar faces earcut before they reach here), which is why
+    it was left alone, but it is where the next defect of this family would live.
 - [ ] **`SdfProjectionTarget` stalls on a CSG difference's fictitious faces.** Its
   guarantee is one-sided (a 1-Lipschitz lower bound puts the surface at least |d| away, so
   a step can never cross it) but |d| need not decrease: inside material a subtracted tool
@@ -78,13 +86,20 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   only ever projects near-surface points, but it is why this must not be offered as a
   general closest-point query. A real one would need the field's own structure (a CSG walk
   that knows which branch is a real face there), not more iterations.
-- [ ] **Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.** With
-  `SurfaceCull` landed, at res 256 a one-sqrt/sample field polygonizes in 132.8 ms vs
-  129.3 ms for the real CSG field — evaluation is effectively free and
-  `HalfEdgeMesh.Build` alone is 39–48%, the rest per-cell component maps, quad lists and
-  the sample window. Further speedup belongs in assembly (e.g. building the half-edge
-  structure from the known grid adjacency instead of the generic manifold-validating
-  `Build`), not in the grid walk.
+- ~~**Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.**~~ ✅ **done, but
+  not the way this entry proposed.** The grid does NOT give twins for free: a dual edge is
+  a grid FACE and matching its up-to-four claimants needs a face table the streaming
+  window cannot hold. What worked was making the GENERIC builder fast — twin resolution as
+  a counting sort over each edge's lower endpoint instead of a `Dictionary<(int,int),int>`,
+  plus flat index buffers instead of one `int[4]` per quad — which serves every caller and
+  leaves one implementation rather than two and a cross-check. Assembly 3.3–3.7×, whole
+  polygonization 1.2–1.5×, allocation at res 256 145 → 103 MB, output bit-identical.
+  Residual:
+  - [ ] **The grid WALK is now the cost** (~175 ms of a 213 ms res-384 polygonize; assembly
+    is 15–18%). The named candidates are the per-cell `int[8]` component map (one heap
+    allocation per mixed cell — the same defect the quad arrays had), the crossing
+    interpolation, and the three quad passes re-reading `values` through `Corner()`.
+    Re-measure before choosing: that is what this entry's own history argues for.
 - [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
   74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
   real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a
@@ -351,9 +366,21 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 `LaplacianMeshDeformer`, `MeshLocalParam`, `MeshIsoCurves`, `DijkstraGraphDistance`,
 `MeshIcp`). Residuals:
 
-- [ ] **AMD/RCM fill-reducing ordering for `SparseCholesky`** — natural ordering was
-  measured sufficient at deformation-ROI scale (≤ ~14k unknowns; see design.md §2), but
-  FEA-scale stiffness systems will need it (62.5k unknowns: 1.6 s factor vs 24.5 ms CG).
+- ~~**AMD/RCM fill-reducing ordering for `SparseCholesky`**~~ ✅ **done** — AMD landed as
+  `SparseOrdering.Amd` (opt-in; a permutation changes the summation order, so it is not
+  bit-identical to the natural path every upstream number was measured on). 4.6–13.4× on
+  factor time, 3.5–8.3× on fill, never a loss; table in the Core README. RCM was not
+  implemented and should not be: AMD dominates it on every pattern here, and a second
+  ordering is a second thing to keep honest. Residuals worth knowing:
+  - [ ] **A supernodal/left-looking numeric factorization** is the next lever, not a
+    better ordering. AMD takes 3D 40³ (64k unknowns) from 125 s to 26 s, which is a real
+    4.8× and still unusable — the fill is 20.6M entries and the up-looking scalar loop
+    touches them one at a time. BLAS-3 dense blocks over the supernodes are the standard
+    answer and the only thing that closes that gap.
+  - [ ] **Nothing consumes `SparseOrdering.Amd` yet.** `LaplacianMeshSmoother`/
+    `LaplacianMeshDeformer`/`MeshIcp` still factor natural, deliberately: their committed
+    outputs are pinned bit-for-bit and switching would move them. Whoever wires FEA
+    assembly should pass `Amd` from the start and pin its own baselines.
 - [ ] **Shape-level exposure of smoothing/deformation** — the tools are kernel-only
   (`EngrCAD.Mesh`); a `Shape.Smoothed(...)` graph node (mesh-Native, implicit-Bridged
   via `MeshSdf`, B-Rep-Impossible — the `Remeshed` precedent) plus docs-site example
@@ -879,6 +906,28 @@ honest no) is recorded in design.md §6b with the comparison committed as
   would need Avalonia pointer capture plumbing for marginal gain); parameter fields are
   free-text through the JSON seam — typed editors (sliders for `Min`/`Max` ranges,
   enum dropdowns) would be the polish pass.
+- [ ] **Ambient-occlusion bake cost — three levers examined, two declined, don't redo
+  them.** The bake was 12.3 s on the demo scene and already saturates every core.
+  (a) **An any-hit early-out does not exist here**: occlusion accumulates as `1 − t`, so
+  it is a NEAREST-hit query and a boolean test is a different renderer (measured 0.055
+  darker over the occluded vertices; pinned by
+  `Occlusion_AttenuatesWithDISTANCE_NotJustHitOrMiss`). (b) **Nearer-child-first traversal
+  landed** — exact, bit-identical, but worth only **1.19× on a gyroid lattice and 1.04×
+  (nothing) on a smooth blob**, because an escaping ray never sets the pruning bound below
+  1 and most rays escape on ordinary CAD parts. (c) **Fewer rays changes renders**: 16 → 8
+  is 1.6–1.9× and moves 59 of the 87 docs PNGs. What is left, in rough order of promise:
+  - [ ] **Bake at fewer sample points and interpolate** — the cost is linear in vertex
+    GROUPS, and a flat render mesh has one group per position per smoothing group, which
+    on a tessellated curve is far more resolution than a half-strength vertex signal
+    needs. Merging near-coplanar groups within a distance tier would cut the ray count
+    without touching the ray's own cost. Changes output; needs the PNG oracle.
+  - [ ] **A cheaper hemisphere for the common case**: a first pass of 4 rays that returns
+    exactly 1.0 (fully open) could skip the remaining 12 — but only if "4 rays escaped"
+    implies the other 12 do, which it does not, so this needs a conservative bound
+    (e.g. an unoccluded cone) rather than a sample count.
+  - [ ] The **80k-triangle opt-out** is still a cliff: a part just over it renders flat
+    while its neighbour just under it does not. A budget expressed in rays × expected
+    per-ray cost would degrade instead of cutting off.
 - [ ] **Matcap shading — assessed, viable as a *procedural* shader variant** (idea
   stage; ambient occlusion landed). A matcap shades by sampling a lit-sphere image at
   the view-space normal — material-rich metal/clay looks with zero lights. What the

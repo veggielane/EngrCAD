@@ -36,11 +36,16 @@ public static class StlWriter
 
             foreach (var face in faces)
             {
+                // The shared fan rule — a quad splits along its shorter 3D diagonal —
+                // read on the TRANSFORMED points, since a non-uniform scale can swap
+                // which diagonal is shorter and the exported solid must be the one the
+                // viewer draws in world space.
+                int apex = PolygonFan.Apex(face, world);
                 for (int i = 1; i + 1 < face.Length; i++)
                 {
-                    var a = world[face[0]];
-                    var b = world[face[flip ? i + 1 : i]];
-                    var c = world[face[flip ? i : i + 1]];
+                    var a = world[face[apex]];
+                    var b = world[face[PolygonFan.Corner(apex, face.Length, flip ? i + 1 : i)]];
+                    var c = world[face[PolygonFan.Corner(apex, face.Length, flip ? i : i + 1)]];
                     var normal = (b - a).Cross(c - a);
                     normal = normal.TryNormalize(Tolerance.Default, out var n) ? n : Vector3d.Zero;
 

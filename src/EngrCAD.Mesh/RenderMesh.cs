@@ -43,14 +43,24 @@ public sealed class RenderMesh
         {
             var n = face.Normal();
             var loop = face.Vertices().ToList();
+            // The shared fan rule: a quad splits along its shorter 3D diagonal. On a
+            // non-planar cell the two splits are different SURFACES, so this has to agree
+            // with what SignedVolume measures and what the writers export. Source indices
+            // follow the same corners, so a field lookup still names the vertex it drew.
+            var corners = new Vector3d[loop.Count];
+            for (int i = 0; i < loop.Count; i++)
+                corners[i] = loop[i].Position;
+            int apex = PolygonFan.Apex(corners);
             for (int i = 1; i < loop.Count - 1; i++)
             {
-                AppendVertex(positions, normals, loop[0].Position, n);
-                AppendVertex(positions, normals, loop[i].Position, n);
-                AppendVertex(positions, normals, loop[i + 1].Position, n);
-                sources.Add(loop[0].Index);
-                sources.Add(loop[i].Index);
-                sources.Add(loop[i + 1].Index);
+                int b = PolygonFan.Corner(apex, loop.Count, i);
+                int c = PolygonFan.Corner(apex, loop.Count, i + 1);
+                AppendVertex(positions, normals, loop[apex].Position, n);
+                AppendVertex(positions, normals, loop[b].Position, n);
+                AppendVertex(positions, normals, loop[c].Position, n);
+                sources.Add(loop[apex].Index);
+                sources.Add(loop[b].Index);
+                sources.Add(loop[c].Index);
                 uint baseIndex = (uint)(positions.Count / 3 - 3);
                 indices.Add(baseIndex);
                 indices.Add(baseIndex + 1);
@@ -90,11 +100,12 @@ public sealed class RenderMesh
         foreach (var face in mesh.Faces)
         {
             var loop = face.Vertices().Select(v => v.Index).ToList();
+            int apex = PolygonFan.Apex([.. loop.Select(mesh.GetPosition)]);
             for (int i = 1; i < loop.Count - 1; i++)
             {
-                indices.Add((uint)loop[0]);
-                indices.Add((uint)loop[i]);
-                indices.Add((uint)loop[i + 1]);
+                indices.Add((uint)loop[apex]);
+                indices.Add((uint)loop[PolygonFan.Corner(apex, loop.Count, i)]);
+                indices.Add((uint)loop[PolygonFan.Corner(apex, loop.Count, i + 1)]);
             }
         }
 

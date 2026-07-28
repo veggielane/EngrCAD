@@ -1,27 +1,52 @@
 namespace EngrCAD.Core.Solvers;
 
 /// <summary>
+/// Which elimination order <see cref="SparseCholesky"/> factors in. The order does not
+/// change the answer mathematically, only how much fill L carries — and therefore how
+/// much time and memory the factorization costs.
+/// </summary>
+public enum SparseOrdering
+{
+    /// <summary>
+    /// The caller's own row order, used verbatim. The default, because it is what every
+    /// existing consumer measured and because a permutation is not free: it costs a
+    /// symbolic pass and it moves round-off, so results are no longer bit-identical.
+    /// </summary>
+    Natural,
+
+    /// <summary>
+    /// Approximate minimum degree (<see cref="AmdOrdering"/>) — the standard
+    /// fill-reducing permutation. Pays for itself the moment fill dominates, which on
+    /// this repo's grid Laplacians is from a few thousand unknowns upward; see the
+    /// measurement table in the Core README.
+    /// </summary>
+    Amd,
+}
+
+/// <summary>
 /// Sparse Cholesky factorization A = L·Lᵀ of a symmetric positive-definite matrix, by
 /// the standard up-looking algorithm (elimination tree + per-row reach; Davis,
 /// <i>Direct Methods for Sparse Linear Systems</i>, ch. 4). Factor once, then
 /// <see cref="Solve(ReadOnlySpan{double}, Span{double})"/> any number of right-hand
 /// sides by forward/back substitution — the shape of every Laplacian mesh solve, where
-/// x, y and z share one operator. Deterministic: the elimination order is the matrix's
-/// own row order, no pivoting, no randomness.
+/// x, y and z share one operator. Deterministic: no pivoting, no randomness, and the
+/// elimination order is a pure function of the matrix pattern.
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Ordering</b>: the natural (caller-given) order is used as-is — no AMD/RCM
-/// fill-reducing permutation. Measured on this repo's own target workload (cotangent
-/// Laplacians of primitive and boolean-output meshes, whose vertex numbering is
-/// grid-coherent), natural-order fill and factor time are well inside budget at the
-/// 10⁴-vertex scale the deformation tools run at; a fill-reducing ordering is filed as
-/// follow-up work for the FEA-scale systems that will eventually need it.
+/// <b>Ordering</b> is a choice (<see cref="SparseOrdering"/>) and it defaults to
+/// <see cref="SparseOrdering.Natural"/>. That default is deliberate rather than lazy:
+/// a permutation changes the summation order, so an AMD-ordered solve is NOT
+/// bit-identical to a natural-ordered one, and every current consumer's committed
+/// numbers were measured natural. Where fill dominates —
+/// <see cref="SparseOrdering.Amd"/> — the win is large and measured (Core README).
 /// </para>
 /// <para>
 /// A nonpositive pivot throws, naming the column — for the SPD systems this library
 /// builds (graph Laplacians plus positive diagonal terms) that always means an assembly
-/// bug, and a silent least-squares-ish answer would hide it.
+/// bug, and a silent least-squares-ish answer would hide it. The column named is the one
+/// in the FACTORED order; with a permutation in play, <see cref="Permutation"/> maps it
+/// back to the caller's index.
 /// </para>
 /// </remarks>
 public sealed class SparseCholesky
@@ -32,6 +57,9 @@ public sealed class SparseCholesky
     private readonly int[] _colStart;
     private readonly int[] _rowIndex;
     private readonly double[] _values;
+    // null for Natural: the identity permutation is spelled as its own absence so the
+    // unpermuted solve keeps exactly the loop it always had.
+    private readonly int[]? _permutation;
 
     /// <summary>Dimension of the factored matrix.</summary>
     public int Rows { get; }
@@ -39,20 +67,52 @@ public sealed class SparseCholesky
     /// <summary>Stored entries of L (diagonal included) — the fill diagnostic.</summary>
     public int FactorNonZeroCount => _rowIndex.Length;
 
-    private SparseCholesky(int n, int[] colStart, int[] rowIndex, double[] values)
+    /// <summary>The ordering this factorization was built with.</summary>
+    public SparseOrdering Ordering { get; }
+
+    /// <summary>
+    /// The elimination order actually used: <c>Permutation[k]</c> is the caller's index
+    /// that was eliminated k-th. Always a valid permutation, and the identity for
+    /// <see cref="SparseOrdering.Natural"/>.
+    /// </summary>
+    public int[] Permutation
+    {
+        get
+        {
+            if (_permutation is not null)
+                return (int[])_permutation.Clone();
+            var identity = new int[Rows];
+            for (int i = 0; i < Rows; i++)
+                identity[i] = i;
+            return identity;
+        }
+    }
+
+    private SparseCholesky(
+        int n, int[] colStart, int[] rowIndex, double[] values, int[]? permutation, SparseOrdering ordering)
     {
         Rows = n;
         _colStart = colStart;
         _rowIndex = rowIndex;
         _values = values;
+        _permutation = permutation;
+        Ordering = ordering;
     }
 
     /// <summary>
     /// Factors <paramref name="a"/> (symmetric positive definite; symmetric-upper
-    /// storage is used directly, general storage has its upper triangle extracted).
-    /// Throws <see cref="InvalidOperationException"/> on a nonpositive pivot.
+    /// storage is used directly, general storage has its upper triangle extracted) in the
+    /// caller's own row order. Throws <see cref="InvalidOperationException"/> on a
+    /// nonpositive pivot.
     /// </summary>
-    public static SparseCholesky Factorize(PackedSparseMatrix a)
+    public static SparseCholesky Factorize(PackedSparseMatrix a) => Factorize(a, SparseOrdering.Natural);
+
+    /// <summary>
+    /// Factors <paramref name="a"/> under <paramref name="ordering"/>. An AMD-ordered
+    /// factorization solves the same system to the same accuracy but is NOT bit-identical
+    /// to the natural one — a different elimination order is different arithmetic.
+    /// </summary>
+    public static SparseCholesky Factorize(PackedSparseMatrix a, SparseOrdering ordering)
     {
         ArgumentNullException.ThrowIfNull(a);
         if (a.Rows != a.Columns)
@@ -64,6 +124,13 @@ public sealed class SparseCholesky
         // Upper triangle in CSC form: column k lists rows i <= k ascending. (CSR rows of
         // the upper triangle are its columns transposed.)
         var (colStart, rowIndex, values) = UpperCsc(upper);
+
+        int[]? permutation = null;
+        if (ordering == SparseOrdering.Amd && n > 0)
+        {
+            permutation = AmdOrdering.Order(n, colStart, rowIndex);
+            (colStart, rowIndex, values) = SymmetricPermute(n, colStart, rowIndex, values, permutation);
+        }
 
         // Elimination tree (Davis 4.1) via path-compressed ancestors.
         var parent = new int[n];
@@ -143,14 +210,18 @@ public sealed class SparseCholesky
                 // Sign test, deliberately not a Tolerance comparison: an SPD matrix has
                 // strictly positive pivots, and how close to zero a legitimate pivot may
                 // come is a property of the caller's conditioning, not of geometry.
+                // Named in the CALLER's indices whenever a permutation is in play, since
+                // the factored column number would be meaningless to whoever assembled
+                // the matrix.
+                int reported = permutation is null ? k : permutation[k];
                 throw new InvalidOperationException(
-                    $"Matrix is not positive definite: nonpositive pivot {d:G6} at column {k}.");
+                    $"Matrix is not positive definite: nonpositive pivot {d:G6} at column {reported}.");
             }
             lRow[lColStart[k]] = k;
             lVal[lColStart[k]] = Math.Sqrt(d);
         }
 
-        return new SparseCholesky(n, lColStart, lRow, lVal);
+        return new SparseCholesky(n, lColStart, lRow, lVal, permutation, ordering);
     }
 
     /// <summary>Solves A·x = b using the factorization (forward then back substitution).</summary>
@@ -160,8 +231,36 @@ public sealed class SparseCholesky
             throw new ArgumentException($"b must have length {Rows}.", nameof(b));
         if (x.Length != Rows)
             throw new ArgumentException($"x must have length {Rows}.", nameof(x));
-        b.CopyTo(x);
+        if (_permutation is not null)
+        {
+            // A = Pᵀ·Â·P with Â = L·Lᵀ, so the permuted solve brackets the substitutions
+            // with a gather and a scatter. The scratch comes from the pool rather than a
+            // field: a factorization is immutable and callers do solve x/y/z from several
+            // threads, so a shared buffer would be the one piece of mutable state here.
+            var rented = System.Buffers.ArrayPool<double>.Shared.Rent(Rows);
+            try
+            {
+                var permuted = rented.AsSpan(0, Rows);
+                for (int k = 0; k < Rows; k++)
+                    permuted[k] = b[_permutation[k]];
+                Substitute(permuted);
+                for (int k = 0; k < Rows; k++)
+                    x[_permutation[k]] = permuted[k];
+            }
+            finally
+            {
+                System.Buffers.ArrayPool<double>.Shared.Return(rented);
+            }
+            return;
+        }
 
+        b.CopyTo(x);
+        Substitute(x);
+    }
+
+    /// <summary>Forward then back substitution, in place, in the factored order.</summary>
+    private void Substitute(Span<double> x)
+    {
         // L y = b.
         for (int j = 0; j < Rows; j++)
         {
@@ -221,6 +320,64 @@ public sealed class SparseCholesky
                 reach[--top] = pathStack[--len];
         }
         return top;
+    }
+
+    /// <summary>
+    /// The upper triangle of P·A·Pᵀ, given A's upper triangle in CSC form and
+    /// <paramref name="permutation"/> mapping new index → old index. Entry (i, j) of A
+    /// lands at (min, max) of the two new indices, which is what keeps the result an
+    /// upper triangle whichever way the permutation flips a pair.
+    /// <para>Rows are emitted ascending per column, because the up-looking pass reads
+    /// the diagonal by scanning for <c>i == k</c> and the rest of this class documents
+    /// its columns as sorted — an unsorted CSC would work today and rot silently.</para>
+    /// </summary>
+    private static (int[] ColStart, int[] RowIndex, double[] Values) SymmetricPermute(
+        int n, int[] colStart, int[] rowIndex, double[] values, int[] permutation)
+    {
+        var inverse = new int[n];
+        for (int k = 0; k < n; k++)
+            inverse[permutation[k]] = k;
+
+        var counts = new int[n];
+        for (int j = 0; j < n; j++)
+        {
+            int jNew = inverse[j];
+            for (int p = colStart[j]; p < colStart[j + 1]; p++)
+            {
+                int iNew = inverse[rowIndex[p]];
+                counts[Math.Max(iNew, jNew)]++;
+            }
+        }
+
+        var newColStart = new int[n + 1];
+        for (int c = 0; c < n; c++)
+            newColStart[c + 1] = newColStart[c] + counts[c];
+        var newRowIndex = new int[newColStart[n]];
+        var newValues = new double[newColStart[n]];
+
+        // Scattering column by column leaves the rows in whatever order the permutation
+        // produced, so each column is sorted afterwards; columns are short (the fill
+        // lives in L, not in A) and this runs once per factorization.
+        var cursor = new int[n];
+        newColStart.AsSpan(0, n).CopyTo(cursor);
+        for (int j = 0; j < n; j++)
+        {
+            int jNew = inverse[j];
+            for (int p = colStart[j]; p < colStart[j + 1]; p++)
+            {
+                int iNew = inverse[rowIndex[p]];
+                int column = Math.Max(iNew, jNew);
+                int slot = cursor[column]++;
+                newRowIndex[slot] = Math.Min(iNew, jNew);
+                newValues[slot] = values[p];
+            }
+        }
+        for (int c = 0; c < n; c++)
+        {
+            int from = newColStart[c], to = newColStart[c + 1];
+            newRowIndex.AsSpan(from, to - from).Sort(newValues.AsSpan(from, to - from));
+        }
+        return (newColStart, newRowIndex, newValues);
     }
 
     /// <summary>The stored upper triangle re-indexed by column (CSC), rows ascending per column.</summary>

@@ -42,10 +42,11 @@ public static class AmfWriter
             var (positions, faces) = part.Mesh.ToIndexed();
             bool flip = part.Transform.Determinant < 0;
 
+            var world = new Vector3d[positions.Length];
             var vertices = new XElement("vertices");
-            foreach (var position in positions)
+            for (int v = 0; v < positions.Length; v++)
             {
-                var w = part.Transform.TransformPoint(position);
+                var w = world[v] = part.Transform.TransformPoint(positions[v]);
                 vertices.Add(new XElement("vertex", new XElement("coordinates",
                     new XElement("x", w.X.ToString("R", culture)),
                     new XElement("y", w.Y.ToString("R", culture)),
@@ -57,12 +58,16 @@ public static class AmfWriter
                 volume.Add(new XAttribute("materialid", colorId[c].ToString(culture)));
             foreach (var face in faces)
             {
+                // The shared fan rule, read on the transformed points (see StlWriter).
+                int apex = PolygonFan.Apex(face, world);
                 for (int i = 1; i + 1 < face.Length; i++)
                 {
                     volume.Add(new XElement("triangle",
-                        new XElement("v1", face[0].ToString(culture)),
-                        new XElement("v2", face[flip ? i + 1 : i].ToString(culture)),
-                        new XElement("v3", face[flip ? i : i + 1].ToString(culture))));
+                        new XElement("v1", face[apex].ToString(culture)),
+                        new XElement("v2",
+                            face[PolygonFan.Corner(apex, face.Length, flip ? i + 1 : i)].ToString(culture)),
+                        new XElement("v3",
+                            face[PolygonFan.Corner(apex, face.Length, flip ? i : i + 1)].ToString(culture))));
                 }
             }
 

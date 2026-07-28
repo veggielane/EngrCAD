@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using EngrCAD.Core;
 
 namespace EngrCAD.Mesh;
@@ -64,50 +65,179 @@ public sealed class HalfEdgeMesh
     /// </summary>
     public static HalfEdgeMesh Build(IReadOnlyList<Vector3d> positions, IEnumerable<IReadOnlyList<int>> faces)
     {
-        var mesh = new HalfEdgeMesh();
-        mesh._positions.AddRange(positions);
-        for (int i = 0; i < positions.Count; i++)
-            mesh._vertexOut.Add(-1);
-
-        var directed = new Dictionary<(int From, int To), int>();
-
+        ArgumentNullException.ThrowIfNull(faces);
+        var corners = new List<int>();
+        var faceStarts = new List<int> { 0 };
         foreach (var face in faces)
         {
-            int n = face.Count;
+            for (int i = 0; i < face.Count; i++)
+                corners.Add(face[i]);
+            faceStarts.Add(corners.Count);
+        }
+        return Build(positions, CollectionsMarshal.AsSpan(corners), CollectionsMarshal.AsSpan(faceStarts));
+    }
+
+    /// <summary>
+    /// Builds a mesh from vertex positions and face loops packed into ONE index buffer:
+    /// face <c>f</c> owns <c>corners[faceStarts[f] .. faceStarts[f + 1])</c>, so
+    /// <paramref name="faceStarts"/> has one more entry than there are faces and its last
+    /// entry is <c>corners.Length</c>. Same validation and same result as the
+    /// loop-per-face overload; this shape exists for generators that already know their
+    /// counts (grid polygonizers, tessellators) and would otherwise allocate one array
+    /// per face.
+    /// </summary>
+    public static HalfEdgeMesh Build(
+        IReadOnlyList<Vector3d> positions, ReadOnlySpan<int> corners, ReadOnlySpan<int> faceStarts)
+    {
+        ArgumentNullException.ThrowIfNull(positions);
+        if (faceStarts.Length < 1 || faceStarts[0] != 0 || faceStarts[^1] != corners.Length)
+            throw new ArgumentException(
+                $"faceStarts must run from 0 to corners.Length ({corners.Length}); " +
+                $"got {faceStarts.Length} entries {(faceStarts.Length > 0 ? $"[{faceStarts[0]}..{faceStarts[^1]}]" : "")}.",
+                nameof(faceStarts));
+        return BuildCore(positions, corners, faceStarts);
+    }
+
+    /// <summary>
+    /// <see cref="Build(IReadOnlyList{Vector3d}, ReadOnlySpan{int}, ReadOnlySpan{int})"/>
+    /// for a buffer whose faces all have the same degree — the quad grids every
+    /// polygonizer emits.
+    /// </summary>
+    public static HalfEdgeMesh Build(
+        IReadOnlyList<Vector3d> positions, ReadOnlySpan<int> corners, int verticesPerFace)
+    {
+        if (verticesPerFace < 3)
+            throw new ArgumentOutOfRangeException(nameof(verticesPerFace), verticesPerFace, "At least 3 required.");
+        if (corners.Length % verticesPerFace != 0)
+            throw new ArgumentException(
+                $"{corners.Length} indices is not a whole number of {verticesPerFace}-sided faces.", nameof(corners));
+        int faceCount = corners.Length / verticesPerFace;
+        var faceStarts = new int[faceCount + 1];
+        for (int f = 0; f <= faceCount; f++)
+            faceStarts[f] = f * verticesPerFace;
+        return BuildCore(positions, corners, faceStarts);
+    }
+
+    /// <summary>
+    /// The one construction path. Origin/next/prev/face fall straight out of the face
+    /// loops; the only real work is pairing each directed edge with its reverse.
+    /// <para>
+    /// That pairing is a <b>counting sort over the edges' lower endpoint</b>, not a hash
+    /// table. Every directed edge is filed under <c>min(from, to)</c>, so an edge and its
+    /// reverse always land in the same bucket, and a bucket holds only the edges of one
+    /// vertex's fan — three to six entries on any real mesh. One linear scan of that
+    /// bucket then answers both questions at once: an earlier entry with the SAME
+    /// direction is the non-manifold duplicate, an earlier entry with the opposite
+    /// direction is the twin. Buckets are filled in ascending half-edge order, so "earlier"
+    /// is a <c>break</c> rather than a comparison, and the scan sees exactly the entries
+    /// the old <c>Dictionary&lt;(int, int), int&gt;</c> probe would have — including the
+    /// order in which errors are detected, which is what keeps the exception messages
+    /// identical.
+    /// </para>
+    /// </summary>
+    private static HalfEdgeMesh BuildCore(
+        IReadOnlyList<Vector3d> positions, ReadOnlySpan<int> corners, ReadOnlySpan<int> faceStarts)
+    {
+        int vertexCount = positions.Count;
+        int faceCount = faceStarts.Length - 1;
+        int interiorCount = corners.Length;
+
+        var mesh = new HalfEdgeMesh();
+        mesh._positions.AddRange(positions);
+        CollectionsMarshal.SetCount(mesh._vertexOut, vertexCount);
+        CollectionsMarshal.SetCount(mesh._heOrigin, interiorCount);
+        CollectionsMarshal.SetCount(mesh._heNext, interiorCount);
+        CollectionsMarshal.SetCount(mesh._hePrev, interiorCount);
+        CollectionsMarshal.SetCount(mesh._heTwin, interiorCount);
+        CollectionsMarshal.SetCount(mesh._heFace, interiorCount);
+        CollectionsMarshal.SetCount(mesh._faceHe, faceCount);
+        var vertexOut = CollectionsMarshal.AsSpan(mesh._vertexOut);
+        var heOrigin = CollectionsMarshal.AsSpan(mesh._heOrigin);
+        var heNext = CollectionsMarshal.AsSpan(mesh._heNext);
+        var hePrev = CollectionsMarshal.AsSpan(mesh._hePrev);
+        var heTwin = CollectionsMarshal.AsSpan(mesh._heTwin);
+        var heFace = CollectionsMarshal.AsSpan(mesh._heFace);
+        var faceHe = CollectionsMarshal.AsSpan(mesh._faceHe);
+        vertexOut.Fill(-1);
+        heTwin.Fill(-1);
+
+        // Bucket every directed edge under its lower endpoint. Out-of-range indices are
+        // skipped here rather than reported: the per-face loop below reaches them in the
+        // caller's own order and throws there, so error reporting stays where it was.
+        var bucketStart = new int[vertexCount + 1];
+        for (int f = 0; f < faceCount; f++)
+        {
+            int start = faceStarts[f], n = faceStarts[f + 1] - start;
+            for (int i = 0; i < n; i++)
+            {
+                int from = corners[start + i], to = corners[start + (i + 1) % n];
+                if ((uint)from < (uint)vertexCount && (uint)to < (uint)vertexCount)
+                    bucketStart[Math.Min(from, to) + 1]++;
+            }
+        }
+        for (int v = 0; v < vertexCount; v++)
+            bucketStart[v + 1] += bucketStart[v];
+        var bucketEntry = new int[vertexCount == 0 ? 0 : bucketStart[vertexCount]];
+        var bucketCursor = new int[Math.Max(1, vertexCount)];
+        bucketStart.AsSpan(0, vertexCount).CopyTo(bucketCursor);
+        for (int f = 0; f < faceCount; f++)
+        {
+            int start = faceStarts[f], n = faceStarts[f + 1] - start;
+            for (int i = 0; i < n; i++)
+            {
+                int from = corners[start + i], to = corners[start + (i + 1) % n];
+                if ((uint)from < (uint)vertexCount && (uint)to < (uint)vertexCount)
+                    bucketEntry[bucketCursor[Math.Min(from, to)]++] = start + i;
+            }
+        }
+
+        for (int f = 0; f < faceCount; f++)
+        {
+            int start = faceStarts[f], n = faceStarts[f + 1] - start;
             if (n < 3)
                 throw new ArgumentException($"Face has {n} vertices; at least 3 required.");
-
-            int faceIndex = mesh._faceHe.Count;
-            int start = mesh.HalfEdgeCount;
-            mesh._faceHe.Add(start);
+            faceHe[f] = start;
 
             for (int i = 0; i < n; i++)
             {
-                int v = face[i];
-                if (v < 0 || v >= positions.Count)
-                    throw new ArgumentException($"Face references vertex {v}, but only {positions.Count} positions were given.");
-                mesh._heOrigin.Add(v);
-                mesh._heNext.Add(start + (i + 1) % n);
-                mesh._hePrev.Add(start + (i - 1 + n) % n);
-                mesh._heTwin.Add(-1);
-                mesh._heFace.Add(faceIndex);
-                if (mesh._vertexOut[v] < 0)
-                    mesh._vertexOut[v] = start + i;
+                int v = corners[start + i];
+                if (v < 0 || v >= vertexCount)
+                    throw new ArgumentException($"Face references vertex {v}, but only {vertexCount} positions were given.");
+                heOrigin[start + i] = v;
+                heNext[start + i] = start + (i + 1) % n;
+                hePrev[start + i] = start + (i - 1 + n) % n;
+                heFace[start + i] = f;
+                if (vertexOut[v] < 0)
+                    vertexOut[v] = start + i;
             }
 
             for (int i = 0; i < n; i++)
             {
-                int from = face[i];
-                int to = face[(i + 1) % n];
+                int he = start + i;
+                int from = corners[he];
+                int to = corners[start + (i + 1) % n];
                 if (from == to)
-                    throw new ArgumentException($"Face {faceIndex} contains a degenerate edge ({from} → {to}).");
-                if (!directed.TryAdd((from, to), start + i))
-                    throw new ArgumentException(
-                        $"Directed edge {from} → {to} appears twice: mesh is non-manifold or a face is wound inconsistently.");
-                if (directed.TryGetValue((to, from), out int twin))
+                    throw new ArgumentException($"Face {f} contains a degenerate edge ({from} → {to}).");
+
+                // One pass over the shared bucket answers both questions. Entries are in
+                // ascending half-edge order, so everything past `he` is a face this loop
+                // has not ingested yet and cannot have paired with.
+                int bucket = Math.Min(from, to);
+                for (int b = bucketStart[bucket]; b < bucketStart[bucket + 1]; b++)
                 {
-                    mesh._heTwin[start + i] = twin;
-                    mesh._heTwin[twin] = start + i;
+                    int other = bucketEntry[b];
+                    if (other >= he)
+                        break;
+                    int otherFrom = heOrigin[other];
+                    int otherTo = heOrigin[heNext[other]];
+                    if (otherFrom == from && otherTo == to)
+                        throw new ArgumentException(
+                            $"Directed edge {from} → {to} appears twice: mesh is non-manifold or a face is wound inconsistently.");
+                    if (otherFrom == to && otherTo == from && heTwin[other] < 0)
+                    {
+                        heTwin[he] = other;
+                        heTwin[other] = he;
+                    }
                 }
             }
         }
@@ -119,12 +249,21 @@ public sealed class HalfEdgeMesh
     private void CreateBoundaryHalfEdges()
     {
         int interiorCount = HalfEdgeCount;
-        var boundaryByOrigin = new Dictionary<int, int>();
+        // One slot per vertex instead of a dictionary — a boundary vertex has exactly one
+        // outgoing boundary half-edge, and a second one IS the bow-tie. Allocated lazily
+        // because a closed mesh never reaches it.
+        int[]? boundaryByOrigin = null;
 
         for (int he = 0; he < interiorCount; he++)
         {
             if (_heTwin[he] >= 0)
                 continue;
+
+            if (boundaryByOrigin is null)
+            {
+                boundaryByOrigin = new int[VertexCount];
+                Array.Fill(boundaryByOrigin, -1);
+            }
 
             int b = HalfEdgeCount;
             int origin = _heOrigin[_heNext[he]]; // destination of the interior half-edge
@@ -135,13 +274,17 @@ public sealed class HalfEdgeMesh
             _heFace.Add(-1);
             _heTwin[he] = b;
 
-            if (!boundaryByOrigin.TryAdd(origin, b))
+            if (boundaryByOrigin[origin] >= 0)
                 throw new ArgumentException(
                     $"Vertex {origin} lies on more than one boundary edge fan: non-manifold (bow-tie) vertex.");
+            boundaryByOrigin[origin] = b;
 
             // Prefer a boundary outgoing half-edge so boundary vertices are easy to detect.
             _vertexOut[origin] = b;
         }
+
+        if (boundaryByOrigin is null)
+            return;
 
         // Chain boundary half-edges into loops: the successor starts at this one's destination.
         for (int b = interiorCount; b < HalfEdgeCount; b++)
@@ -258,10 +401,10 @@ public sealed class HalfEdgeMesh
         double volume = 0;
         for (int f = 0; f < FaceCount; f++)
         {
-            int start = _faceHe[f];
-            var p0 = _positions[_heOrigin[start]];
-            int he = _heNext[start];
-            while (_heNext[he] != start)
+            int apex = FaceFanStart(f);
+            var p0 = _positions[_heOrigin[apex]];
+            int he = _heNext[apex];
+            while (_heNext[he] != apex)
             {
                 var p1 = _positions[_heOrigin[he]];
                 var p2 = _positions[_heOrigin[_heNext[he]]];
@@ -270,6 +413,27 @@ public sealed class HalfEdgeMesh
             }
         }
         return volume / 6.0;
+    }
+
+    /// <summary>
+    /// The half-edge a face should be fan-triangulated from — <see cref="PolygonFan"/>'s
+    /// rule expressed on the half-edge walk, so a consumer that traverses the topology
+    /// directly (mass properties, volume) cannot pick a different diagonal from one that
+    /// goes through <see cref="ToIndexed"/> (rendering, export, triangulation).
+    /// </summary>
+    internal int FaceFanStart(int face)
+    {
+        int start = _faceHe[face];
+        int second = _heNext[start];
+        int third = _heNext[second];
+        int fourth = _heNext[third];
+        if (_heNext[fourth] != start)
+            return start;   // not a quad; PolygonFan keeps corner 0
+        return PolygonFan.QuadApex(
+            _positions[_heOrigin[start]], _positions[_heOrigin[second]],
+            _positions[_heOrigin[third]], _positions[_heOrigin[fourth]]) == 1
+            ? second
+            : start;
     }
 
     /// <summary>Face normal with magnitude equal to the face area (Newell's method), unnormalized.</summary>
@@ -386,9 +550,10 @@ public sealed class HalfEdgeMesh
     }
 
     /// <summary>
-    /// New mesh with every face fan-triangulated from its first vertex — or this mesh
-    /// itself when it is already all triangles, which is safe because a
-    /// <see cref="HalfEdgeMesh"/> is immutable once built.
+    /// New mesh with every face fan-triangulated from the corner <see cref="PolygonFan"/>
+    /// picks (a quad splits along its shorter 3D diagonal; larger n-gons fan from
+    /// corner 0) — or this mesh itself when it is already all triangles, which is safe
+    /// because a <see cref="HalfEdgeMesh"/> is immutable once built.
     /// <para>
     /// The short circuit matters: the general path is a full <see cref="Build"/>, manifold
     /// validation included, and the exact boolean triangulates BOTH operands on entry. A
@@ -404,8 +569,14 @@ public sealed class HalfEdgeMesh
         var triangles = new List<int[]>();
         foreach (var face in faces)
         {
+            int apex = PolygonFan.Apex(face, positions);
             for (int i = 1; i < face.Length - 1; i++)
-                triangles.Add([face[0], face[i], face[i + 1]]);
+            {
+                triangles.Add([
+                    face[apex],
+                    face[PolygonFan.Corner(apex, face.Length, i)],
+                    face[PolygonFan.Corner(apex, face.Length, i + 1)]]);
+            }
         }
         return Build(positions, triangles);
     }

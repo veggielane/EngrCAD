@@ -111,9 +111,13 @@ public static class MeshConnectedComponents
     {
         var vertices = mesh.GetFace(faceIndex).Vertices().Select(v => v.Position).ToList();
         double volume = 0;
-        var p0 = vertices[0];
+        int apex = PolygonFan.Apex(vertices);
+        var p0 = vertices[apex];
         for (int i = 1; i < vertices.Count - 1; i++)
-            volume += p0.Dot(vertices[i].Cross(vertices[i + 1]));
+        {
+            volume += p0.Dot(vertices[PolygonFan.Corner(apex, vertices.Count, i)]
+                .Cross(vertices[PolygonFan.Corner(apex, vertices.Count, i + 1)]));
+        }
         return volume / 6.0;
     }
 }

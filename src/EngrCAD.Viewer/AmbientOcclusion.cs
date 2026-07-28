@@ -38,6 +38,26 @@ namespace EngrCAD.Viewer;
 // The headless pass still bakes inline: it is one-shot and must be deterministic, so
 // RenderToImage output is unchanged and window/offscreen parity holds once the window
 // has converged (a second or two).
+//
+// WHY THERE IS NO ANY-HIT EARLY-OUT: the obvious way to make a visibility bake cheap is
+// to stop traversing at the first intersection, since "is this ray blocked" is a boolean
+// question. It is not the question this bake asks. Occlusion accumulates as 1 - t, so a
+// hit darkens in proportion to how CLOSE it is and the search radius fades hits out
+// rather than cutting them off — which is what keeps AO a local crevice cue instead of a
+// whole-body dimming. A boolean bake is the radius-to-infinity limit of this one, and it
+// is a different renderer: measured on a pocketed block, the boolean answer is 0.055
+// darker over the vertices that see an occluder at all
+// (AmbientOcclusionTests.Occlusion_AttenuatesWithDISTANCE_NotJustHitOrMiss pins this so
+// the early-out cannot be reintroduced as an "optimization").
+//
+// What IS exact, and is done: the traversal visits the nearer child box first. The answer
+// is a MINIMUM over hits and a subtree is skipped only when the ray's entry parameter into
+// its box already exceeds the best hit so far, so ordering cannot change the result — it
+// only reaches a tight bound sooner. Note where that can and cannot pay: a ray that
+// ESCAPES never sets the bound below 1, so ordering prunes nothing for it. The win is
+// therefore proportional to how occluded the geometry is, which the measurements show
+// exactly — 1.19x on a gyroid lattice (mean occlusion 0.70) and 1.04x, i.e. nothing, on a
+// smooth CSG blob (mean occlusion 0.95).
 
 /// <summary>
 /// Per-vertex ambient-occlusion baking for the mesh shader's <c>aOcclusion</c>
@@ -46,9 +66,18 @@ namespace EngrCAD.Viewer;
 /// </summary>
 internal static class AmbientOcclusion
 {
-    /// <summary>Hemisphere rays per vertex. 16 cosine-weighted directions is smooth
-    /// enough for a per-vertex signal that is then interpolated across triangles
-    /// (visually indistinguishable from 32 on CAD parts, at half the bake cost).</summary>
+    /// <summary>
+    /// Hemisphere rays per vertex: a cost/quality point, NOT a converged answer, and the
+    /// measurements say so plainly (<c>AmbientOcclusionBenchmark.RayCountTradeoff</c>).
+    /// Halving to 8 is 1.6–1.9× faster and moves the per-vertex occlusion by up to
+    /// 0.21–0.30 (mean 0.003–0.038); doubling to 32 costs 1.4–1.6× and still moves it by
+    /// up to 0.04–0.13. At <see cref="Strength"/> 0.5 a 0.30 swing is 0.15 of shaded
+    /// value — about 38 of 255 levels — so this is not dithering noise.
+    /// <para><b>The PNG oracle settles it</b>: rebuilding the docs site with 8 rays
+    /// changes <b>59 of the 87 rendered images</b>. Reducing the ray count is therefore a
+    /// deliberate change to what users see, not a free speedup, and any future attempt to
+    /// buy time here has to argue about appearance rather than about performance.</para>
+    /// </summary>
     public const int DefaultRays = 16;
 
     /// <summary>
@@ -247,9 +276,23 @@ internal static class AmbientOcclusion
             normals[group] += facet;
         }
 
+        // Triangles are widened to doubles ONCE, as (corner, edge1, edge2) — the exact form
+        // the Moller-Trumbore test wants. The inner loop was re-reading three float triples
+        // through the index buffer and re-subtracting them on every ray-triangle test, of
+        // which a bake does tens of millions. float→double is exact, so this is a pure
+        // restructuring: the arithmetic that follows sees the identical values.
+        var triangles = new Vector3d[render.TriangleCount * 3];
         var boxes = new Aabb[render.TriangleCount];
         for (int t = 0; t < render.TriangleCount; t++)
-            boxes[t] = Aabb.FromPoints([Vertex(render, t, 0), Vertex(render, t, 1), Vertex(render, t, 2)]);
+        {
+            var a = Vertex(render, t, 0);
+            var b = Vertex(render, t, 1);
+            var c = Vertex(render, t, 2);
+            triangles[t * 3] = a;
+            triangles[t * 3 + 1] = b - a;
+            triangles[t * 3 + 2] = c - a;
+            boxes[t] = Aabb.FromPoints([a, b, c]);
+        }
         var bvh = Bvh.Build(boxes);
 
         var bounds = bvh.Bounds;
@@ -284,11 +327,12 @@ internal static class AmbientOcclusion
         ParallelFor.Blocks(0, groups, (start, end) =>
         {
             var stack = new Bvh.NodeView[64];
+            var entries = new double[64];
             for (int g = start; g < end; g++)
             {
                 groupOcclusion[g] = Visibility(
-                    bvh, render, positionArray[g], normalArray[g], liftArray[g],
-                    directions, radius, lift, stack);
+                    bvh, triangles, positionArray[g], normalArray[g], liftArray[g],
+                    directions, radius, lift, stack, entries);
             }
         }, minBlockSize: 64);
 
@@ -310,9 +354,9 @@ internal static class AmbientOcclusion
     /// <summary>Open-sky fraction at one vertex: the share of hemisphere rays that
     /// escape, with hits attenuated linearly to nothing at the search radius.</summary>
     private static float Visibility(
-        Bvh bvh, RenderMesh render, in Vector3d position, in Vector3d normalSum,
+        Bvh bvh, Vector3d[] triangles, in Vector3d position, in Vector3d normalSum,
         in Vector3d liftDirection, Vector3d[] directions, double radius, double lift,
-        Bvh.NodeView[] stack)
+        Bvh.NodeView[] stack, double[] entries)
     {
         double length = normalSum.Length;
         // Exact-zero guard (a position whose incident facet normals cancel exactly, e.g.
@@ -333,7 +377,7 @@ internal static class AmbientOcclusion
             // Direction scaled by the radius, so a hit's t is already the normalized
             // distance and the attenuation is 1 - t.
             var ray = new Ray3d(frame.Origin, frame.ToWorldVector(local) * radius);
-            double nearest = NearestHit(bvh, render, ray, stack);
+            double nearest = NearestHit(bvh, triangles, ray, stack, entries);
             if (nearest < 1)
                 occluded += 1 - nearest;
         }
@@ -347,32 +391,71 @@ internal static class AmbientOcclusion
     /// far-away candidate, which on a dense mesh costs hundreds of triangle tests per
     /// short AO ray (measured 21 s for a 200k-triangle gyroid bake). Pruning on the
     /// slab test's entry parameter against the nearest hit so far keeps the walk local.
+    /// <para>
+    /// The children are visited <b>nearer box first</b>, which is a pure speedup and not
+    /// an approximation: the answer is a MINIMUM over hits, and a node is skipped only
+    /// when the ray's entry parameter into its box already exceeds the best hit so far —
+    /// nothing inside it can be closer. Ordering just reaches a tight bound sooner, so
+    /// more subtrees fail that test. Each node's entry parameter is carried on the stack
+    /// beside it rather than recomputed on pop, since the slab test that ordered the
+    /// children has already produced it.
+    /// </para>
     /// </summary>
-    private static double NearestHit(Bvh bvh, RenderMesh render, in Ray3d ray, Bvh.NodeView[] stack)
+    private static double NearestHit(
+        Bvh bvh, Vector3d[] triangles, in Ray3d ray, Bvh.NodeView[] stack, double[] entries)
     {
         double nearest = 1.0;
+        if (!ray.Intersects(bvh.Root.Bounds, out double rootEntry, out _))
+            return nearest;
+
         int top = 0;
-        stack[top++] = bvh.Root;
+        stack[top] = bvh.Root;
+        entries[top] = rootEntry;
+        top++;
         while (top > 0)
         {
-            var node = stack[--top];
-            if (!ray.Intersects(node.Bounds, out double entry, out _) || entry >= nearest)
+            top--;
+            if (entries[top] >= nearest)
                 continue;
+            var node = stack[top];
             if (node.IsLeaf)
             {
                 foreach (int triangle in node.Items)
                 {
-                    if (RayTriangle(ray, Vertex(render, triangle, 0), Vertex(render, triangle, 1),
-                            Vertex(render, triangle, 2), out double t) && t < nearest)
+                    if (RayTriangle(ray, triangles[triangle * 3], triangles[triangle * 3 + 1],
+                            triangles[triangle * 3 + 2], out double t) && t < nearest)
                         nearest = t;
                 }
+                continue;
             }
-            else
+
+            var left = node.Left;
+            var right = node.Right;
+            bool hitLeft = ray.Intersects(left.Bounds, out double leftEntry, out _);
+            bool hitRight = ray.Intersects(right.Bounds, out double rightEntry, out _);
+            // The BVH is median-split and shallow, and this walk pushes at most one extra
+            // slot per level, so 64 is the same depth budget Bvh's own traversals stackalloc.
+            if (hitLeft && hitRight)
             {
-                // The BVH is median-split and shallow; 64 slots is the same depth budget
-                // Bvh's own traversals stackalloc.
-                stack[top++] = node.Left;
-                stack[top++] = node.Right;
+                bool leftFirst = leftEntry <= rightEntry;
+                stack[top] = leftFirst ? right : left;
+                entries[top] = leftFirst ? rightEntry : leftEntry;
+                top++;
+                stack[top] = leftFirst ? left : right;
+                entries[top] = leftFirst ? leftEntry : rightEntry;
+                top++;
+            }
+            else if (hitLeft)
+            {
+                stack[top] = left;
+                entries[top] = leftEntry;
+                top++;
+            }
+            else if (hitRight)
+            {
+                stack[top] = right;
+                entries[top] = rightEntry;
+                top++;
             }
         }
         return nearest;
@@ -415,18 +498,21 @@ internal static class AmbientOcclusion
     }
 
     /// <summary>
-    /// Moller-Trumbore any-hit test; t is in units of the (unnormalized) ray direction,
-    /// so a hit inside the search radius has t &lt; 1. Deliberately separate from the
-    /// picking copy in <see cref="ViewportControl"/>: that one wants the nearest hit and
-    /// a world point for the measure tool, this one only asks whether a hemisphere ray
-    /// escapes.
+    /// Moller-Trumbore test over a triangle stored as corner + two edge vectors; t is in
+    /// units of the (unnormalized) ray direction, so a hit inside the search radius has
+    /// t &lt; 1. Deliberately separate from the picking copy in
+    /// <see cref="ViewportControl"/>: that one wants a world point for the measure tool.
+    /// <para>
+    /// Note that this is NOT an any-hit test, tempting as the name would be: the caller
+    /// attenuates a hit by its distance (<c>1 − t</c>), so occlusion is a nearest-hit
+    /// quantity and an early-out on the first intersection would change the shading. The
+    /// early-out available here is the traversal's box pruning, which is exact.
+    /// </para>
     /// </summary>
     private static bool RayTriangle(
-        in Ray3d ray, in Vector3d a, in Vector3d b, in Vector3d c, out double t)
+        in Ray3d ray, in Vector3d a, in Vector3d e1, in Vector3d e2, out double t)
     {
         t = 0;
-        var e1 = b - a;
-        var e2 = c - a;
         var p = ray.Direction.Cross(e2);
         double determinant = e1.Dot(p);
         // Round-off-scale parallel-ray guard (a shading estimate, not model geometry:

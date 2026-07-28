@@ -216,8 +216,21 @@ public class LoftShapeTests
         brep.Validate();
         var mesh = BRepTessellator.Tessellate(brep);
         Assert.True(mesh.IsClosed);
-        // The ruled interpolation of rotated corners lies INSIDE the untwisted prism.
-        Assert.True(mesh.Volume() > 0 && mesh.Volume() < 5 * 5 * H);
+        // A twist rotates each section without changing its area, and the loft's rails
+        // carry that through, so the exact solid is 25 mm² of cross-section at every
+        // height: 250. The tessellation BRACKETS that value — a twisted band's cell is a
+        // saddle, so the two fan diagonals fall either side of the surface — which is why
+        // this is a two-sided bound that tightens with density rather than the one-sided
+        // "< 250" it used to be. That older form was reading the SIGN of the corner-0 fan,
+        // not a property of the solid: measured corner-0 vs shortest-diagonal, the volume
+        // runs 244.37/255.27 at 16/12 and 249.66/250.34 at 256/192 — equal in magnitude,
+        // opposite in sign, both converging linearly on 250.
+        double exact = 5 * 5 * H;
+        Assert.True(Math.Abs(mesh.Volume() - exact) < 0.03 * exact,
+            $"twisted column volume {mesh.Volume():F4} vs exact {exact}");
+        var fine = BRepTessellator.Tessellate(brep, segmentsPerCircle: 128, curveSamples: 96);
+        Assert.True(Math.Abs(fine.Volume() - exact) < 0.005 * exact,
+            $"refined twisted column volume {fine.Volume():F4} vs exact {exact}");
     }
 
     [Fact]

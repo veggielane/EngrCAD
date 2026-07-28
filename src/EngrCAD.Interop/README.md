@@ -60,8 +60,28 @@ logging complements them, never replaces them.
   - **Beyond that, polygonization is no longer sample-bound** — the honest half of the
     result. At res 256 a field costing one square root per sample still takes 132.8 ms
     against 129.3 ms for the real CSG field: evaluation is free and the cost is assembly.
-    `HalfEdgeMesh.Build` alone is 39–48%, the rest being per-cell component maps, quad lists
-    and the sample window. Further work belongs there, not in the grid walk.
+    `HalfEdgeMesh.Build` alone was 39–48%, the rest per-cell component maps, quad lists
+    and the sample window.
+  - **Assembly has since been attacked, and is no longer where the time goes.** Quads are
+    emitted into per-axis **flat index buffers** rather than one `int[4]` per face
+    (289 726 heap allocations at res 384, for a mesh whose defining property is that it is
+    grid-structured), and the whole buffer goes to `HalfEdgeMesh.Build`'s uniform-stride
+    overload, whose twin resolution is now a counting sort over each edge's lower endpoint
+    instead of a half-million-entry dictionary. Output is bit-identical, golden
+    fingerprints included. Measured interleaved within one sitting
+    (`SurfaceNetsBenchmark.AssemblyShareByResolution`, i9-9900K win-x64 Release):
+
+    | res | vertices | assembly before → after | share before → after | total before → after |
+    |---|---|---|---|---|
+    | 96 | 17 930 | 6.5 → 2.0 ms | 42.1% → 18.2% | 12.9 → 10.7 ms |
+    | 192 | 72 232 | 27.0 → 8.0 ms | 38.4% → 15.8% | 67.1 → 50.6 ms |
+    | 256 | 129 268 | 47.5 → 13.4 ms | 40.8% → 14.8% | 116.2 → 90.2 ms |
+    | 384 | 289 726 | 132.3 → 35.5 ms | 41.0% → 16.7% | 322.5 → 212.6 ms |
+
+    Allocation at res 256 falls 145 → 103 MB. **The share, not the speedup, is the number
+    that matters**: at 15–18% the builder has stopped being the place to look, and what
+    remains at res 384 is ~35 ms of building against ~175 ms of grid walk (component maps,
+    crossing interpolation, the three quad passes).
 - **B-Rep → Mesh**: `BRepTessellator.Tessellate(solid, segmentsPerCircle, curveSamples, progress?)` —
   each edge is sampled once into a shared polyline; planar faces (any number of loops)
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces
@@ -159,6 +179,10 @@ logging complements them, never replaces them.
     inward, worst agreement −0.163**, against zero folds and 0.99976 for the identical
     geometry unsubtracted (a threaded rod). The reversal now rotates so vertex 0 stays
     put — `[a, d, c, b]` — and the hole matches the rod at 0.99897.
+    (`PolygonFan` has since made the downstream split a function of the geometry rather
+    than of vertex 0, so the two spellings would now triangulate alike; the rotation stays
+    because a polygon whose corner 0 wanders is still a polygon whose *audit* wanders, and
+    a rule that cannot be broken by a re-wind is better than one that merely is not.)
 
     Oversized interior edges are then midpoint-split to the natural grid density with
     new vertices on the exact surface. Boundary vertices are always the exact shared edge

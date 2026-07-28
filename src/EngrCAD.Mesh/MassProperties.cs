@@ -249,8 +249,17 @@ public struct MassPropertyIntegrator
             nz += (p.X - q.X) * (p.Y + q.Y);
         }
         _area += new Vector3d(nx, ny, nz).Length * 0.5;
+        // Same decomposition every other consumer uses (PolygonFan): on a non-planar quad
+        // the two diagonals bound different solids, so the mass properties must be of the
+        // one that is drawn and exported. Area stays Newell's, which needs no fan at all.
+        int apex = PolygonFan.Apex(polygon);
         for (int i = 1; i + 1 < polygon.Length; i++)
-            AddTriangleMoments(polygon[0], polygon[i], polygon[i + 1]);
+        {
+            AddTriangleMoments(
+                polygon[apex],
+                polygon[PolygonFan.Corner(apex, polygon.Length, i)],
+                polygon[PolygonFan.Corner(apex, polygon.Length, i + 1)]);
+        }
     }
 
     /// <summary>Volume moments of one facet without touching the area sum (the polygon
@@ -351,7 +360,12 @@ public static class MeshMassProperties
             // the half-edge arrays so no polygon buffer is materialized.
             integrator.AddArea(mesh.FaceNormalRaw(f).Length);
 
-            int start = mesh.FaceAnyHalfEdge(f);
+            // FaceFanStart, not FaceAnyHalfEdge: the fan apex is PolygonFan's decision, so
+            // the mass properties are of the same solid the volume, the render mesh and the
+            // exporters describe. Walking from the face's stored half-edge instead was a
+            // corner-0 fan hiding in a direct traversal (measured 1.5 out of 69.5 on a
+            // sheared hexahedron before this line changed).
+            int start = mesh.FaceFanStart(f);
             var p0 = mesh.GetPosition(mesh.HeOrigin(start));
             int he = mesh.HeNext(start);
             while (mesh.HeNext(he) != start)

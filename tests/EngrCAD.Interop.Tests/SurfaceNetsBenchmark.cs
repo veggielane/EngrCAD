@@ -2,6 +2,7 @@ using System.Diagnostics;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Interop;
+using EngrCAD.Mesh;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -148,6 +149,74 @@ public class SurfaceNetsBenchmark(ITestOutputHelper output)
                 output.WriteLine(
                     $" {label,-11} | {resolution,3} | {full,8:F1} | {culled,9:F1} | {full / culled,6:F2}x");
             }
+        }
+    }
+
+    /// <summary>
+    /// How much of a polygonization is mesh ASSEMBLY rather than field sampling — the
+    /// question the surface cull left behind, since it made evaluation effectively free.
+    /// "assembly" times exactly the call <see cref="SurfaceNets.Polygonize"/> makes at the
+    /// end: <see cref="HalfEdgeMesh.Build"/> over the flat quad buffer.
+    /// <para>
+    /// Reference machine (i9-9900K, win-x64, .NET 10.0.302, Release, otherwise idle),
+    /// best of three after a wall-clock warm-up budget, and the two builds
+    /// <b>interleaved within one sitting</b> — this repo has measured the same Release
+    /// binary 2× apart across sittings, so a ratio taken from two separate runs is noise
+    /// with units. "before" is the <c>Dictionary&lt;(int, int), int&gt;</c> twin
+    /// resolution fed one <c>int[4]</c> per quad; "after" is the counting sort over the
+    /// edges' lower endpoint fed one flat index buffer. Output is bit-identical across the
+    /// change (the golden fingerprints in <see cref="SurfaceNetsSamplingTests"/> pin it).
+    /// </para>
+    /// <code>
+    ///  res | vertices | before asm | after asm | before share | after share | before total | after total
+    ///   96 |   17 930 |     6.5 ms |    2.0 ms |        42.1% |       18.2% |      12.9 ms |    10.7 ms
+    ///  192 |   72 232 |    27.0 ms |    8.0 ms |        38.4% |       15.8% |      67.1 ms |    50.6 ms
+    ///  256 |  129 268 |    47.5 ms |   13.4 ms |        40.8% |       14.8% |     116.2 ms |    90.2 ms
+    ///  384 |  289 726 |   132.3 ms |   35.5 ms |        41.0% |       16.7% |     322.5 ms |   212.6 ms
+    /// </code>
+    /// <para>
+    /// Assembly is <b>3.3–3.7×</b> faster and the whole polygonization 1.2–1.5×, with
+    /// allocation at resolution 256 falling 145 → 103 MB (the per-quad arrays and the
+    /// half-million-entry dictionary are both gone). <b>The share is the number to watch,
+    /// not the speedup</b>: assembly went from 38–51% of the call to 15–18%, so the next
+    /// win is no longer here. What remains at resolution 384 is roughly 35 ms of building
+    /// against 175 ms of grid walk — the per-cell component maps, the crossing
+    /// interpolation and the quad passes — which is where the same question should be
+    /// asked next.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void AssemblyShareByResolution()
+    {
+        if (!Enabled)
+            return;
+
+        var field = (Sdf.Box(2, 2, 2) - Sdf.Cylinder(0.6, 3))
+            .SmoothUnion(Sdf.Sphere(1.2).Translate((0.8, 0.3, 0.2)), 0.25);
+        var region = new Aabb((-2.2, -2.2, -2.2), (2.4, 2.2, 2.2));
+
+        var warm = Stopwatch.StartNew();
+        do
+        {
+            SurfaceNets.Polygonize(field, region, 48);
+        }
+        while (warm.ElapsedMilliseconds < 1200);
+
+        output.WriteLine(" res | total ms | assembly ms | share | vertices |   quads");
+        foreach (int resolution in new[] { 96, 192, 256, 384 })
+        {
+            var mesh = SurfaceNets.Polygonize(field, region, resolution);
+            var (positions, faces) = mesh.ToIndexed();
+            var corners = new int[faces.Count * 4];
+            for (int f = 0; f < faces.Count; f++)
+                faces[f].CopyTo(corners, f * 4);
+
+            double total = Best(() => SurfaceNets.Polygonize(field, region, resolution));
+            double assembly = Best(() => HalfEdgeMesh.Build(positions, corners, 4));
+
+            output.WriteLine(
+                $"{resolution,4} | {total,8:F1} | {assembly,11:F1} | {assembly / total,5:P1} | " +
+                $"{positions.Length,8} | {faces.Count,7}");
         }
     }
 

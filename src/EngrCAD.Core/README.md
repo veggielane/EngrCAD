@@ -340,14 +340,44 @@ concerns.
   - **`SparseCholesky`** — up-looking sparse Cholesky (elimination tree + per-row
     ereach, Davis ch. 4): factor once, forward/back-substitute per right-hand side —
     the shape of every Laplacian mesh solve, where x/y/z share one operator. Nonpositive
-    pivots throw naming the column. **Natural ordering, measured rather than assumed**
-    (Release, win-x64, 5-point grid Laplacians — the coherent-numbered mesh stand-in):
-    fill is 17–80× nnz(A) but factor+solve stays cheap at deformation-ROI scale
-    (2.5k unknowns: 4.7 ms factor / 0.3 ms solve; 6.4k: 20.7 / 1.5; 14.4k: 133 / 5.5),
-    and past ~14k unknowns one-shot CG beats factor+3-RHS-solve (62.5k: CG 24.5 ms vs
-    1 625 ms factor) — so the factorization is for many-RHS reuse (interactive
-    deformation re-solves), CG for one-shot smoothing at scale, and an AMD/RCM
-    fill-reducing ordering is filed follow-up work for FEA-scale systems.
+    pivots throw naming the column (in the caller's indices, whatever the ordering).
+    **Ordering is a parameter** (`SparseOrdering.Natural` | `Amd`) defaulting to
+    `Natural`, because reordering changes the summation order and an AMD-ordered solve is
+    therefore *not* bit-identical to the natural one — every existing consumer's committed
+    numbers were measured natural.
+  - **`AmdOrdering`** — approximate minimum degree (Amestoy–Davis–Duff 1996): quotient
+    graph with element absorption (including the aggressive form), approximate external
+    degrees, mass elimination, hash-detected supervariables, and an assembly-tree
+    postorder as the returned permutation. Deterministic, allocation-bounded (one arena
+    with 20% elbow room and in-place compaction), no tolerance anywhere — it reads a
+    pattern, not values.
+  - **Ordering measured** (`SparseOrderingBenchmark`, `ENGRCAD_BENCH`-gated; i9-9900K,
+    win-x64, Release, best of three after a wall-clock warm-up budget). "solve" is one
+    substitution; "RHS" is how many right-hand sides an AMD factorization must serve
+    before it beats running CG once per side:
+
+    | grid | n | nat fill | nat factor | nat solve | amd fill | amd factor | amd solve | CG | CG iters | RHS |
+    |---|---|---|---|---|---|---|---|---|---|---|
+    | 2D 50² | 2 500 | 125 049 | 5.3 ms | 0.27 ms | 35 913 | 1.8 ms | 0.09 ms | 1.0 ms | 34 | 2 |
+    | 2D 80² | 6 400 | 512 079 | 32.9 ms | 1.29 ms | 120 766 | 7.1 ms | 0.31 ms | 2.7 ms | 34 | 4 |
+    | 2D 120² | 14 400 | 1 728 119 | 158.8 ms | 5.05 ms | 321 309 | 22.2 ms | 0.84 ms | 6.1 ms | 34 | 5 |
+    | 2D 250² | 62 500 | 15 625 249 | 2 754.8 ms | 47.65 ms | 1 874 755 | 204.8 ms | 5.66 ms | 26.6 ms | 34 | 10 |
+    | 3D 14³ | 2 744 | 504 713 | 70.1 ms | 1.21 ms | 151 653 | 19.2 ms | 0.36 ms | 1.5 ms | 39 | 18 |
+    | 3D 19³ | 6 859 | 2 359 153 | 572.9 ms | 6.34 ms | 644 706 | 148.2 ms | 1.48 ms | 3.8 ms | 39 | 65 |
+    | 3D 24³ | 13 824 | 7 657 943 | 2 943.1 ms | 21.09 ms | 1 874 559 | 682.0 ms | 5.06 ms | 7.8 ms | 39 | 250 |
+    | 3D 40³ | 64 000 | 99 966 439 | 125 219.8 ms | 262.39 ms | 20 614 676 | 26 172.2 ms | 55.68 ms | 40.5 ms | 40 | never |
+    | 2D 250² Dirichlet | 62 500 | 15 625 249 | 2 892.5 ms | 51.20 ms | 1 874 755 | 221.3 ms | 5.81 ms | 750.0 ms | 858 | 1 |
+    | 3D 24³ Dirichlet | 13 824 | 7 657 943 | 3 170.8 ms | 21.63 ms | 1 874 559 | 858.7 ms | 5.44 ms | 22.2 ms | 107 | 52 |
+
+    AMD is 4.6–13.4× on factor time and 3.5–8.3× on fill everywhere, and it never loses:
+    ordering a 62 500-unknown pattern costs single-digit milliseconds against a
+    factorization measured in hundreds. **The last two rows are the ones that matter for
+    the direct-vs-iterative question.** The shifted operator (L + I) is strongly
+    diagonally dominant, so CG converges in an *n-independent* ~35 iterations and the CG
+    column flatters it; drop the shift and CG needs 858 iterations at 62 500 unknowns
+    (750 ms) while AMD factor + one solve is 227 ms — the direct solve wins on the FIRST
+    right-hand side, by 3.3×. In 3D the crossover is real but far out (52 RHS at 13 824
+    unknowns), because 3D fill grows like n² however it is ordered.
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over
   index ranges (g3's `gParallel.BlockStartEnd`): splits the range into a bounded number
   of large contiguous blocks so each worker touches a contiguous slice of the underlying
