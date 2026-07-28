@@ -1078,6 +1078,28 @@ for `in`-parameters being illegal in expression trees.
   cannot see a geometric defect. Topological repair and geometric repair are different
   jobs, which is why healing has a separate refit pass and why its test measures the wire
   gap directly instead of trusting `Validate()`.
+- **Healing repairs what it can prove and reports what it cannot; the line is drawn at
+  inventing geometry.** The curved-edge pass re-TRIMS (foot-of-perpendicular parameters
+  of the unified vertices — a local solve, since a merge gap is sub-tolerance by
+  construction) but never re-FITS: the perpendicular residual that remains is exactly
+  the information "this vertex is off this curve", and erasing it by deforming the
+  curve would be a modelling decision made silently inside a repair. The same boundary
+  shapes the shell-orientation vote: relative face orientation is PROVABLE from the
+  opposite-sense manifold invariant, and the global side of a closed component from its
+  boundary-loop fan volume against containment parity (voids point INTO their cavity) —
+  but a component whose faces are all pole-bounded or closed bands (a two-face sphere)
+  encloses no measurable loop volume, and a vote read from noise would flip whole
+  solids at random, so the authored side is kept and SAID. One report, no log lines,
+  bit-stable no-ops on well-formed input.
+- **When a fast path can fail where the general path succeeds, defer — the invariant
+  "the override is never worse than the base" should hold by construction, not by
+  tuning.** The 1D inverse-evaluation reductions occasionally lose a query the 2D grid
+  wins (aliased generators where no 1D seed's basin contains the answer but a damped 2D
+  step wanders in); rather than chase seed counts, the overrides now fall back to the
+  base grid on failure, which costs nothing on the hot path and turns a locked
+  comparative test from an empirical observation into a structural guarantee. The same
+  pattern as trimmed-tessellation tiers deferring downward — a fallback is legitimate
+  exactly when it computes the same thing more generally.
 - **Explode rides the flattening, not a second path.** An exploded view is a scalar
   composed into each occurrence frame's origin during `Flatten`; everything downstream —
   window, offscreen render, STEP export, BOM — is unchanged code. The load-bearing property

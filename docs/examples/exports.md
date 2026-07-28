@@ -25,6 +25,55 @@ Console.WriteLine($"round-tripped {result.Solids[0].Faces.Count()} faces");
 Swept surfaces are not exportable yet; `Part.Source` tracks whether a part is
 B-Rep-representable for the `--export` switch.
 
+The exporter covers the full analytic conic family (circles, ellipses, parabolas,
+hyperbolas, planar offset curves) plus rational NURBS — including translated NURBS
+profile edges, which export exactly by transforming control points rather than being
+sampled. The importer maps the same entities back, and also synthesizes foreign
+`CONICAL_SURFACE`/`TOROIDAL_SURFACE` entities onto the kernel's revolved-surface
+machinery.
+
+### Units
+
+Foreign files declare their length unit, and the importer scales everything to
+millimetres — SI prefixes in closed form, `CONVERSION_BASED_UNIT` chains (inches)
+multiplied down — reporting the factor as a diagnostic:
+
+```csharp run:step-units
+// Simulate a foreign metre-unit file: our own writer always declares millimetres.
+var metreCube = SolidFactory.MakeBox(new Aabb((0, 0, 0), (1, 1, 1)));
+string text = StepWriter.Write(metreCube).Replace(".MILLI.,.METRE.", "$,.METRE.");
+
+var imported = StepReader.Read(text);
+double size = imported.Solids[0].Vertices.Max(v => v.Position.X);
+Console.WriteLine($"1 m cube imported as {size} mm"); // 1000
+if (Math.Abs(size - 1000) > 1e-9)
+    throw new Exception("metre units were not scaled");
+```
+
+### Healing imported files
+
+Foreign writers emit each face's wire separately, so a solid can arrive as a face
+soup: duplicated edges, merely-coincident vertices, inconsistent face orientations,
+disconnected bodies sharing one shell. `ShapeHealing.Heal` repairs what it can and
+reports everything — including what it could not repair — as a return value:
+
+```csharp run:step-healing
+var body = SolidFactory.MakeBox(new Aabb((0, 0, 0), (10, 10, 10)));
+var boss = SolidFactory.MakeBox(new Aabb((20, 0, 0), (26, 6, 6)));
+// A foreign writer's flat face list: two disconnected bodies in ONE shell.
+var soup = new BrepSolid([new BrepShell([.. body.Faces, .. boss.Faces])]);
+
+var healed = ShapeHealing.Heal(soup);
+Console.WriteLine(healed.Report); // "1 shells split off; result is a closed manifold."
+if (healed.Solid.Shells.Count != 2)
+    throw new Exception("expected the disconnected components split into two shells");
+```
+
+`ShapeHealing.Analyze` is the dry run; `ShapeHealingOptions` switches each pass
+(vertex merging, small-edge collapse, sewing, wire re-ordering, shell repair) and
+opts into the two passes that adjust geometry or trims (`RefitStraightEdges`,
+`RetrimCurvedEdges`).
+
 ## STL (3D printing)
 
 Binary STL, single mesh or multiple parts merged with their transforms applied:
