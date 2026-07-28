@@ -46,32 +46,46 @@ public sealed class Region2d
 
     /// <summary>
     /// Builds a region from an outer loop and optional holes, re-orienting them to the
-    /// canonical winding. Validates that every loop encloses area, that each hole lies
-    /// inside the outer loop, and that no two loops properly cross (touching at a vertex
-    /// is allowed).
+    /// canonical winding. Validates that every loop encloses area, that each loop is SIMPLE
+    /// (no segment of a loop properly crosses another segment of the same loop), that each
+    /// hole lies inside the outer loop, and that no two loops properly cross. Touching at a
+    /// vertex or along a collinear run is allowed throughout — see
+    /// <see cref="Region2dValidation"/> for the exact contract.
     /// </summary>
     public Region2d(IReadOnlyList<Vector2d> outer, IReadOnlyList<IReadOnlyList<Vector2d>>? holes = null)
     {
         var holeLoops = holes ?? [];
+        if (outer.Count < 3)
+            throw new ArgumentException("A region's outer loop needs at least 3 points and must enclose area.", nameof(outer));
+        for (int i = 0; i < holeLoops.Count; i++)
+        {
+            if (holeLoops[i].Count < 3)
+                throw new ArgumentException($"Hole loop {i} needs at least 3 points and must enclose area.", nameof(holes));
+        }
+
+        // Simplicity BEFORE the enclosed-area test: a bow-tie with equal lobes has a signed
+        // area of exactly zero, so the area test would otherwise refuse it with a message
+        // about the wrong defect. One sweep answers self-intersection AND every loop pair at
+        // once — the same question about the same segment set, so splitting it would cost
+        // twice as much, and treating them as different questions is how the self case came
+        // to be missed in the first place.
+        Region2dValidation.Require(
+            [outer, .. holeLoops],
+            index => index == 0 ? "The region's outer loop" : $"Hole loop {index - 1}",
+            holeLoops.Count > 0 ? nameof(holes) : nameof(outer));
+
         double outerArea = SignedArea(outer);
-        if (outer.Count < 3 || outerArea == 0)
+        if (outerArea == 0)
             throw new ArgumentException("A region's outer loop needs at least 3 points and must enclose area.", nameof(outer));
 
         var holeAreas = new double[holeLoops.Count];
         for (int i = 0; i < holeLoops.Count; i++)
         {
             holeAreas[i] = SignedArea(holeLoops[i]);
-            if (holeLoops[i].Count < 3 || holeAreas[i] == 0)
+            if (holeAreas[i] == 0)
                 throw new ArgumentException($"Hole loop {i} needs at least 3 points and must enclose area.", nameof(holes));
             if (!LoopContainsLoop(outer, holeLoops[i]))
                 throw new ArgumentException($"Hole loop {i} is not inside the region's outer loop.", nameof(holes));
-            if (ProperlyCross(outer, holeLoops[i]))
-                throw new ArgumentException($"Hole loop {i} crosses the region's outer loop.", nameof(holes));
-            for (int j = 0; j < i; j++)
-            {
-                if (ProperlyCross(holeLoops[j], holeLoops[i]))
-                    throw new ArgumentException($"Hole loops {j} and {i} cross.", nameof(holes));
-            }
         }
 
         Outer = outerArea > 0 ? [.. outer] : Reverse(outer);
@@ -134,10 +148,19 @@ public sealed class Region2d
     /// (the deepest loop containing it), and an island inside a hole becomes a region of
     /// its own. Input winding is irrelevant — every loop is re-oriented canonically.
     /// Loops with fewer than 3 points or no enclosed area are ignored.
+    ///
+    /// <para>Each loop must be SIMPLE, and that is checked BEFORE the enclosed-area filter:
+    /// a figure-eight with equal lobes has a signed area of exactly zero, so it would
+    /// otherwise be silently dropped rather than refused. Loops may legitimately overlap one
+    /// another here — that is what containment sorting is for — so only self-crossings are
+    /// rejected at this door; loops that end up in the SAME region are cross-checked by the
+    /// constructor.</para>
     /// </summary>
     public static IReadOnlyList<Region2d> FromLoops(IEnumerable<IReadOnlyList<Vector2d>> loops)
     {
-        var kept = loops.Where(l => l.Count >= 3 && SignedArea(l) != 0).ToList();
+        var all = loops as IReadOnlyList<IReadOnlyList<Vector2d>> ?? [.. loops];
+        Region2dValidation.Require(all, index => $"Input loop {index}", nameof(loops), acrossLoops: false);
+        var kept = all.Where(l => l.Count >= 3 && SignedArea(l) != 0).ToList();
         int n = kept.Count;
         if (n == 0)
             return [];
@@ -306,29 +329,6 @@ public sealed class Region2d
         if (Math.Abs(b.X - a.X) >= Math.Abs(b.Y - a.Y))
             return a.X < b.X ? a.X < p.X && p.X < b.X : b.X < p.X && p.X < a.X;
         return a.Y < b.Y ? a.Y < p.Y && p.Y < b.Y : b.Y < p.Y && p.Y < a.Y;
-    }
-
-    /// <summary>Do two closed loops have a PROPER crossing (segment interiors on opposite
-    /// sides both ways)? Touching at a vertex or along a collinear run is not a crossing.</summary>
-    private static bool ProperlyCross(IReadOnlyList<Vector2d> first, IReadOnlyList<Vector2d> second)
-    {
-        for (int i = 0; i < first.Count; i++)
-        {
-            var a = first[i];
-            var b = first[(i + 1) % first.Count];
-            for (int j = 0; j < second.Count; j++)
-            {
-                var c = second[j];
-                var d = second[(j + 1) % second.Count];
-                int o1 = Predicates2d.Orient2dSign(a, b, c);
-                int o2 = Predicates2d.Orient2dSign(a, b, d);
-                int o3 = Predicates2d.Orient2dSign(c, d, a);
-                int o4 = Predicates2d.Orient2dSign(c, d, b);
-                if (o1 * o2 < 0 && o3 * o4 < 0)
-                    return true;
-            }
-        }
-        return false;
     }
 
     private static IReadOnlyList<Vector2d> Reverse(IReadOnlyList<Vector2d> loop)

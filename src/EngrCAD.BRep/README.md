@@ -182,7 +182,11 @@ operations. Depends only on `EngrCAD.Core`.
   `Profile.FromRegion(region, frame?)` places a Core `Geometry2.Region2d`
   (polygon-with-holes, the output of the 2D sketch engine's booleans) on a `Frame3d` and
   returns the `(outer, holes)` pair `Extrude`/`Revolve`/`Sweep` take — the 2D front door
-  into the solid factories; `FromLoop(points, frame)` does one loop. Regions are polygonal,
+  into the solid factories; `FromLoop(points, frame)` does one loop and REFUSES a
+  self-intersecting one (`Region2dValidation`): a profile is the boundary of a face, and a
+  boundary that crosses itself has no interior to extrude or revolve, so the factories would
+  build a self-overlapping shell that still passes `Validate()`. `FromRegion` does not
+  re-check — `Region2d` validated its loops when it was constructed. Regions are polygonal,
   so these profiles are polygonal: a region derived from curved sketch input carries that
   flattening (see `Sketch.ToRegions`), whereas a sketch handed straight to a modeling
   operation keeps its exact arcs and NURBS.

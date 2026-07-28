@@ -284,4 +284,30 @@ public class SketchTests
         Assert.Throws<ArgumentException>(() =>
             Sketch.Start(0, 0).ArcThrough(new(500, 1e-10), new(1000, 0)));
     }
+
+    [Fact]
+    public void ToRegions_RefusesASelfIntersectingOutline()
+    {
+        // A path that crosses itself is not the boundary of anything: the "interior" it
+        // names depends on which fill rule the consumer happens to apply, so the area,
+        // every 2D boolean and every solid built from it would silently disagree. The
+        // refusal names the loop and where it crosses.
+        var bowTie = Sketch.Start(0, 0).LineTo(4, 6).LineTo(4, 0).LineTo(0, 4).Close();
+        var error = Assert.Throws<ArgumentException>(() => bowTie.ToRegions());
+        Assert.Contains("crosses itself", error.Message);
+    }
+
+    [Fact]
+    public void ToRegions_AcceptsCurvedOutlinesWhoseFlatteningStaysSimple()
+    {
+        // Flattening is inscribed, so a well-separated curved sketch cannot acquire a
+        // crossing on the way to a region — the guard must not fire on ordinary geometry.
+        var slot = Sketch.Slot(10, 3);
+        var regions = slot.ToRegions();
+        Assert.Single(regions);
+        // Inscribed flattening under-measures; the point here is that it VALIDATES, not
+        // that it is exact (see ToRegions' fidelity contract).
+        Assert.True(regions[0].Area <= slot.Area());
+        Assert.True(Math.Abs(regions[0].Area - slot.Area()) < slot.Area() * 1e-2);
+    }
 }

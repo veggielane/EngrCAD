@@ -70,6 +70,24 @@ concerns.
   chord tolerance before it reaches this type. `WithoutCollinearVertices(loop)` drops
   vertices lying EXACTLY between their neighbours (exact orientation + dominant-axis
   betweenness, so a 180-degree slit reversal is never eaten).
+- **`Geometry2.Region2dValidation`** — the simplicity guard every region consumer assumes and
+  none of them used to check: does any pair of segments PROPERLY cross, inside one loop or
+  between two? A self-intersecting outer loop is not a region at all — its "interior" depends
+  on which fill rule you happen to apply, so `Area`, `Contains` and every boolean silently
+  disagree — and before this, loops were checked against every *other* loop and never against
+  themselves. `TryFindSelfIntersection` / `TryFindCrossing` report a `LoopCrossing` (which
+  segments of which loops, plus the crossing point *for the message only* — the DECISION is
+  exact `Predicates2d.Orient2dSign`, the coordinate is not); `Require` throws naming the loop
+  in the caller's own vocabulary. Two rules worth knowing: **touching is not crossing** (a
+  shared vertex or a collinear run stays legal, matching the convention `Region2d` already
+  documented for hole-versus-outer contact), and **simplicity is checked BEFORE the
+  enclosed-area test**, because a bow-tie with equal lobes has a signed area of exactly zero
+  and would otherwise be refused for the wrong reason — or, in `FromLoops`, silently DROPPED
+  by the zero-area filter. `FromLoops` checks only self-crossings, since its bag is unsorted
+  and two loops in it are not yet known to share a region; loops that end up in one region are
+  cross-checked by the constructor. Candidate pairs come from a `Bvh` over the segment boxes
+  above 24 segments and from an all-pairs scan below it, so validation does not turn every
+  sketch into an O(n²) pass.
 - **`Geometry2.Region2dBoolean`** — `Union` / `Intersection` / `Difference` of regions (or
   region *sets*, each read as the union of its members), returning a list of canonical
   regions; empty result = empty list. Both operands' loops go into one `Arrangement2d`

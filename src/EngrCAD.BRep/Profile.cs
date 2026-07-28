@@ -141,16 +141,29 @@ public sealed class Profile
     {
         ArgumentNullException.ThrowIfNull(region);
         var frame = plane ?? Frame3d.WorldXY;
+        // No simplicity re-check: Region2d validated every loop when it was constructed.
         return (
-            FromLoop(region.Outer, frame),
-            [.. region.Holes.Select(hole => FromLoop(hole, frame))]);
+            Place(region.Outer, frame),
+            [.. region.Holes.Select(hole => Place(hole, frame))]);
     }
 
     /// <summary>One closed 2D loop as a polygonal profile on a plane (the region's 2D x/y
-    /// become the frame's X/Y). The loop closes implicitly — do not repeat the first point.</summary>
+    /// become the frame's X/Y). The loop closes implicitly — do not repeat the first point.
+    ///
+    /// <para>The loop must be SIMPLE. A profile is the boundary of a face, and a boundary
+    /// that crosses itself has no interior to extrude or revolve — the solid factories would
+    /// build a self-overlapping shell that still passes <c>Validate()</c>, so the refusal
+    /// belongs here (<see cref="Region2dValidation"/>). Loops arriving via
+    /// <see cref="FromRegion"/> were already checked when the region was built.</para></summary>
     public static Profile FromLoop(IReadOnlyList<Vector2d> loop, in Frame3d plane)
     {
         ArgumentNullException.ThrowIfNull(loop);
+        Region2dValidation.Require([loop], _ => "The profile loop", nameof(loop));
+        return Place(loop, plane);
+    }
+
+    private static Profile Place(IReadOnlyList<Vector2d> loop, in Frame3d plane)
+    {
         var corners = new Vector3d[loop.Count];
         for (int i = 0; i < loop.Count; i++)
             corners[i] = plane.ToWorld(new Vector3d(loop[i].X, loop[i].Y, 0));
