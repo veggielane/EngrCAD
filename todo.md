@@ -14,8 +14,24 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 `MeshExtrude` (faces/thicken/selections), selections + connected components. Wave-B ✅:
 `Remesher` (isotropic, vertex-keyed constraints), `HoleFiller.FillMinimal`/`FillSmoothed`,
 `MeshDecimator` on `EditableMesh`, BSP boolean retired (`Csg.cs` and `BooleanMethod`
-deleted; the imprint boolean is the only one). Remaining:
+deleted; the imprint boolean is the only one). Wave-C ✅: `SdfProjectionTarget` (Interop),
+seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
+`RemesherPro` scheduling (`RemeshScheduling.Queue`, `FastSplitPasses`), face-aligned
+(RZN-flow) reprojection, `RegionRemesher`, `Shape.Remeshed`. Remaining:
 
+- [ ] **The remesher's longest edge converges far more slowly than its distribution.**
+  Measured on a Ø20×20 cylinder at a 2 mm target, 94–96% of edges reach the
+  [0.66 L, 1.33 L] band within ~14 passes while the maximum sits near **2 L** however many
+  passes are spent (4.5 at 10, 4.0 at 14, 4.2 at 20, 3.4 at 40 with a fast-split prepass).
+  The mechanism is that a collapse can create a fresh edge of up to twice the target which
+  the *next* pass has to find and split. Worth a bounded-maximum mode (re-visit the edges an
+  operation created within the same pass, guarded against cascading) if anything ever needs
+  a guaranteed maximum rather than a good distribution.
+- [ ] **Face-aligned projection accumulates over the whole mesh even under queue
+  scheduling** — a vertex's position there is a function of its incident triangles, so a
+  partial accumulation would weight it against a subset. Restricting the face loop to the
+  faces incident to the active set (and clearing only those accumulators) would make the two
+  features compose; today `FaceAligned` costs O(faces) per pass regardless.
 - [ ] **`Part`-level display remesh** — `Shape.Remeshed` is a graph node, so a remesh is a
   modelling decision baked into the design. A viewer-only "give this part uniform triangles
   for display/FEA export" switch on `Part` (a post-tessellation pass inside `GetMesh`) is a
@@ -34,6 +50,16 @@ deleted; the imprint boolean is the only one). Remaining:
 
 ## Interop / meshing (EngrCAD.Interop)
 
+- [ ] **`SdfProjectionTarget` stalls on a CSG difference's fictitious faces.** Its
+  guarantee is one-sided (a 1-Lipschitz lower bound puts the surface at least |d| away, so
+  a step can never cross it) but |d| need not decrease: inside material a subtracted tool
+  removed, the field measures the distance to the tool's own surface and the gradient jumps
+  at the branch switch, so two branches trade the point back and forth — measured on
+  `Box(2,2,2) − Sphere(1.2)`, six steps leave a probe exactly where it started while the
+  true distance to the real rim is 0.45 (pinned by a test). Harmless for remeshing, which
+  only ever projects near-surface points, but it is why this must not be offered as a
+  general closest-point query. A real one would need the field's own structure (a CSG walk
+  that knows which branch is a real face there), not more iterations.
 - [ ] **Continuation ("surface-following") Surface Nets** — the slab-streaming sampler
   fixed the *memory* wall (peak is O(n²) now, so resolution 1024 is reachable) but still
   evaluates every grid corner. `MarchingCubesPro`'s idea of only visiting cells near the
