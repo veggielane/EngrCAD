@@ -68,6 +68,36 @@
     /// working and stops the raycast entirely.</summary>
     [Parameter] public bool Picking { get; set; } = true;
 
+    /// <summary>
+    /// Section mode: clips the model at the plane perpendicular to
+    /// <see cref="SectionAxis"/> — the desktop toolbar's Section toggle. The clip runs
+    /// in the SHARED shaders (fragment discard, cut interiors shaded as cut material
+    /// via gl_FrontFacing), and picking honours it through the same
+    /// <c>SectionClip.Hides</c> rule <c>ScenePick</c> applies, so a click cannot select
+    /// the cut-away half. Parts with <c>Part.ClippedBySection</c> false render and pick
+    /// whole (the unsectioned-fastener drafting convention).
+    /// </summary>
+    [Parameter] public bool SectionEnabled { get; set; }
+
+    /// <summary>Which world axis the section plane is perpendicular to (Z — the classic
+    /// horizontal cut, the desktop default).</summary>
+    [Parameter] public SectionAxis SectionAxis { get; set; } = SectionAxis.Z;
+
+    /// <summary>Plane position along the axis; null centers the cut in the scene
+    /// bounds, the desktop's default when the toggle first goes on.</summary>
+    [Parameter] public double? SectionOffset { get; set; }
+
+    /// <summary>The view cube in the top-right corner (on, as on the desktop): clicks
+    /// animate to the face/edge/corner view, dragging on it orbits and rotate-snaps to
+    /// the nearest standard orientation on release, hovering brightens the target.</summary>
+    [Parameter] public bool ShowViewCube { get; set; } = true;
+
+    /// <summary>3D annotations (PMI) — dimensions, leaders, datum labels resolved from
+    /// each part's own <c>Part.Annotations</c> (on, the desktop's Annot default).
+    /// Rendering is the shared <c>AnnotationGeometry</c>: billboarded, screen-constant,
+    /// always-on-top, never section-clipped. Hiding a part hides its annotations.</summary>
+    [Parameter] public bool ShowAnnotations { get; set; } = true;
+
     /// <summary>CSS size of the viewport element.</summary>
     [Parameter] public string Width { get; set; } = "100%";
 
@@ -108,12 +138,41 @@
         string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick);
 
     private readonly List<ViewportInstance> _drawn = [];
-    // Parallel to _drawn: the part and pose each entry came from. The parts let a
-    // DisplayMode changed on the model be picked up without re-meshing; the pick
-    // instances are what ScenePick raycasts.
+    // Parallel to _drawn: the part, instance and pose each entry came from. The parts
+    // let a DisplayMode changed on the model be picked up without re-meshing; the
+    // instances feed the section-isoline extraction; the pick instances are what
+    // ScenePick raycasts.
     private readonly List<Part> _drawnParts = [];
+    private readonly List<PartInstance> _drawnInstances = [];
     private readonly List<PickInstance> _pick = [];
     private readonly List<int> _pickScratch = [];
+
+    private (bool Enabled, SectionAxis Axis, double? Offset) _shownSection = (false, SectionAxis.Z, null);
+    private ViewportContours? _contours;
+
+    // View cube state: the hovered direction (drives the face brighten), whether the
+    // current drag started on the cube's screen region (arms rotate-snap on release),
+    // and a token that cancels an in-flight pose animation when the user takes over.
+    private Vector3d? _cubeHover;
+    private bool _pressOnCube;
+    private int _cameraAnimation;
+
+    // Annotation state: per-instance resolved items (collected once per load — the
+    // resolution rides Part.TryResolveAnnotations' cached lowering), the built
+    // segments, and the AnnotationCamera the build is valid for. Value equality on the
+    // camera is the rebuild key, the same rule the desktop AnnotationLayer keeps: an
+    // orbit rebuilds, a static camera never does.
+    private readonly List<(int Instance, AnnotationItem Item)> _annotationItems = [];
+    private readonly List<AnnotationItem> _annotationScratch = [];
+    private readonly List<(Vector3d A, Vector3d B)> _annotationSegments = [];
+    private AnnotationCamera _builtAnnotationCamera;
+    private bool _annotationsDirty = true;
+    private bool _shownAnnotations = true;
+    private bool _shownViewCube = true;
+    // Parts whose implicit lowering failed and was already reported (the failure is
+    // cached on the Part, so without this every rebuild repeats the status line —
+    // the same dedupe the desktop SectionContourRenderer keeps).
+    private readonly HashSet<Part> _reportedSectionFailures = [];
 
     // Uploads are keyed by Part REFERENCE and survive tab switches: a part shown in two
     // tabs is uploaded once, and revisiting a tab re-draws with no GPU work at all. Keys
@@ -222,13 +281,15 @@
 
     /// <summary>Shows or hides one instance and draws. Hidden instances keep their index
     /// (so nothing downstream shifts) and are not pickable.</summary>
-    public Task SetVisibleAsync(int index, bool visible)
+    public async Task SetVisibleAsync(int index, bool visible)
     {
         if (index < 0 || index >= _drawn.Count || _drawn[index].Visible == visible)
-            return Task.CompletedTask;
+            return;
         _drawn[index] = _drawn[index] with { Visible = visible };
         _pick[index] = _pick[index] with { Visible = visible };
-        return PumpAsync();
+        _annotationsDirty = true;       // hiding a part hides its annotations
+        await RebuildContoursAsync();   // a hidden part's isolines go with it
+        await PumpAsync();
     }
 
     /// <summary>
@@ -237,7 +298,7 @@
     /// instances. Entries past the instance list are ignored, so a host may push a vector
     /// for the whole tab while the viewport is still showing a growing prefix.
     /// </summary>
-    public Task SetVisibilityAsync(IReadOnlyList<bool> visible)
+    public async Task SetVisibilityAsync(IReadOnlyList<bool> visible)
     {
         ArgumentNullException.ThrowIfNull(visible);
         bool changed = false;
@@ -249,7 +310,11 @@
             _pick[i] = _pick[i] with { Visible = visible[i] };
             changed = true;
         }
-        return changed ? PumpAsync() : Task.CompletedTask;
+        if (!changed)
+            return;
+        _annotationsDirty = true;
+        await RebuildContoursAsync();
+        await PumpAsync();
     }
 
     /// <summary>Whether an instance is currently shown.</summary>
@@ -262,6 +327,154 @@
         _camera = ViewportFrame.DefaultCamera(_bounds);
         _userMovedCamera = false;
         return PumpAsync();
+    }
+
+    // ---- sections ----
+    //
+    // The clip rule itself is never restated here: the shaders carry it
+    // (ViewerShaders.SectionClip), picking asks SectionClip.Hides through ScenePick,
+    // and this component only decides WHICH plane is active — one axis-aligned plane,
+    // like the desktop toolbar (custom hosts wanting quarter cuts drive
+    // ViewportFrame.Build directly with more planes).
+
+    /// <summary>The offset actually in use: the parameter, or the scene-bounds centre
+    /// along the active axis (the desktop's default when the toggle goes on).</summary>
+    public double EffectiveSectionOffset =>
+        SectionOffset ?? (_bounds.IsEmpty ? 0 : AxisComponent(_bounds.Center, SectionAxis));
+
+    private static double AxisComponent(in Vector3d v, SectionAxis axis) => axis switch
+    {
+        SectionAxis.X => v.X,
+        SectionAxis.Y => v.Y,
+        _ => v.Z,
+    };
+
+    private IReadOnlyList<SectionPlane>? ActiveSectionPlanes() =>
+        SectionEnabled ? [SectionPlane.On(SectionAxis, EffectiveSectionOffset)] : null;
+
+    /// <summary>
+    /// Drives the section state directly (the toolbar's toggle/axis-cycle path, and how
+    /// a test reaches it without a parameter flow). Changing the axis re-centers the
+    /// plane — the desktop rule — unless <paramref name="offset"/> pins it.
+    /// </summary>
+    public Task SetSectionAsync(bool enabled, SectionAxis? axis = null, double? offset = null)
+    {
+        SectionEnabled = enabled;
+        if (axis is { } wanted && wanted != SectionAxis)
+        {
+            SectionAxis = wanted;
+            SectionOffset = null;   // changing the axis re-centers, as on the desktop
+        }
+        if (offset is { } o)
+            SectionOffset = o;
+        return ApplySectionAsync();
+    }
+
+    /// <summary>Moves the section plane by 2% of the scene extent along the active axis
+    /// per step — the desktop's <c>[</c>/<c>]</c> nudge.</summary>
+    public Task NudgeSectionAsync(int direction)
+    {
+        double extent = _bounds.IsEmpty ? 10 : AxisComponent(_bounds.Size, SectionAxis);
+        SectionOffset = EffectiveSectionOffset + direction * extent * 0.02;
+        return ApplySectionAsync();
+    }
+
+    private async Task ApplySectionAsync()
+    {
+        _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+        await RebuildContoursAsync();
+        await PumpAsync();
+    }
+
+    /// <summary>Shows or hides the annotation overlay and draws — the direct-call path
+    /// for the toolbar and self-checks, for the reason <see cref="SetViewStyleAsync"/>
+    /// is a method: a caller that flipped the parameter and immediately captured would
+    /// read the previous frame.</summary>
+    public Task SetAnnotationsAsync(bool show)
+    {
+        ShowAnnotations = show;
+        _shownAnnotations = show;
+        return PumpAsync();
+    }
+
+    // ---- view cube ----
+    //
+    // The pure halves are all shared (ViewCubeMath for region/hit/pose/snap,
+    // ViewCubeAnimation for the 250 ms smoothstep transition, ViewCubeGeometry for the
+    // arrays uploaded at init); this component only routes pointer events and runs the
+    // animation loop, exactly the division the desktop's ViewCube keeps.
+
+    /// <summary>The hovered cube direction (components in {-1,0,1}), or null.</summary>
+    public Vector3d? CubeHover => _cubeHover;
+
+    /// <summary>Shows or hides the view cube and draws (the direct-call path, like
+    /// <see cref="SetViewStyleAsync"/>).</summary>
+    public Task SetViewCubeAsync(bool show)
+    {
+        ShowViewCube = show;
+        _shownViewCube = show;
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Routes a click through the view cube: returns true when the position lies inside
+    /// the cube's screen region — the region CLAIMS the click, so parts behind the
+    /// widget are never picked through it (the desktop rule). When the cube itself was
+    /// hit, animates to the face/edge/corner view and reports its name. Public for the
+    /// reason the desktop's <c>ViewCubeClick</c> is: a state only reachable through a
+    /// real pointer event is a state nothing checks.
+    /// </summary>
+    public async Task<bool> ViewCubeClickAsync(double x, double y)
+    {
+        var (width, height) = _lastSize;
+        if (!ShowViewCube
+            || !ViewCubeMath.TryMapToRegion(x, y, width, height, out double u, out double v))
+            return false;
+        if (ViewCubeMath.TryHit(_camera.Yaw, _camera.Pitch, u, v, out var direction))
+        {
+            await ReportAsync($"view {ViewCubeMath.Label(direction)}");
+            var (yaw, pitch) = ViewCubeMath.PoseFor(direction, _camera.Yaw);
+            await AnimateCameraAsync(yaw, pitch);
+        }
+        return true;
+    }
+
+    /// <summary>Rotate-snap: settles the camera onto the standard orientation nearest
+    /// the current pose, the way commercial cubes finish a drag on the widget. Runs
+    /// when a drag that STARTED on the cube ends, so free orbiting elsewhere in the
+    /// viewport is untouched. Idempotent on an already-snapped pose.</summary>
+    public async Task SnapToNearestViewAsync()
+    {
+        var direction = ViewCubeMath.NearestStandardDirection(_camera.Yaw, _camera.Pitch);
+        await ReportAsync($"view {ViewCubeMath.Label(direction)}");
+        var (yaw, pitch) = ViewCubeMath.PoseFor(direction, _camera.Yaw);
+        await AnimateCameraAsync(yaw, pitch);
+    }
+
+    /// <summary>
+    /// The eased pose transition — <c>ViewCubeAnimation</c>, whose default duration IS
+    /// the product's 250 ms smoothstep, driven by a cooperative loop. A press or a
+    /// newer animation bumps the token and the stale loop stops writing, so the user
+    /// always wins over an animation.
+    /// </summary>
+    private async Task AnimateCameraAsync(double targetYaw, double targetPitch)
+    {
+        int token = ++_cameraAnimation;
+        var animation = new ViewCubeAnimation(_camera.Yaw, _camera.Pitch, targetYaw, targetPitch);
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (true)
+        {
+            var (yaw, pitch, done) = animation.Evaluate(
+                System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalSeconds);
+            if (token != _cameraAnimation)
+                return;
+            _camera = _camera with { Yaw = yaw, Pitch = pitch };
+            _userMovedCamera = true;
+            await PumpAsync();
+            if (done)
+                return;
+            await Task.Delay(16);
+        }
     }
 
     /// <summary>
@@ -325,6 +538,15 @@
                 await _gl.CreateProgramAsync(ViewportFrame.BackgroundProgram,
                     header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment,
                     bindAttributes: false);
+                // The view cube's geometry, uploaded once: the SAME arrays the desktop
+                // widget uploads (ViewCubeGeometry), drawn through the line program —
+                // fills in mode "triangles", edges and stroke-font labels as lines.
+                await _gl.UploadLineVerticesAsync(
+                    ViewportFrame.CubeFillsKey, ViewCubeGeometry.BuildFillVertices());
+                await _gl.UploadLineVerticesAsync(
+                    ViewportFrame.CubeEdgesKey, ViewCubeGeometry.BuildEdgeVertices());
+                await _gl.UploadLineVerticesAsync(
+                    ViewportFrame.CubeLabelsKey, ViewCubeGeometry.BuildLabelVertices());
             }
             catch (WebGlUnavailableException e)
             {
@@ -346,15 +568,40 @@
             _loadedFrom = Content;
             _showingFurniture = Furniture;
             _shownStyle = ViewStyle;
+            _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+            _shownAnnotations = ShowAnnotations;
+            _shownViewCube = ShowViewCube;
             await LoadAsync();
+            return;
         }
-        else if (_shownStyle != ViewStyle)
+
+        // A style or section change needs no upload — every part's buffers are already
+        // on the GPU and the clip is a shader uniform — so both are a redraw and
+        // nothing more (the section change also refreshes the isoline overlay).
+        bool redraw = false;
+        if (_shownStyle != ViewStyle)
         {
-            // A style change needs no upload — every part's fills, feature edges and wire
-            // edges are already on the GPU — so it is a redraw and nothing more.
             _shownStyle = ViewStyle;
-            await PumpAsync();
+            redraw = true;
         }
+        if (_shownSection != (SectionEnabled, SectionAxis, SectionOffset))
+        {
+            _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+            await RebuildContoursAsync();
+            redraw = true;
+        }
+        if (_shownAnnotations != ShowAnnotations)
+        {
+            _shownAnnotations = ShowAnnotations;
+            redraw = true;
+        }
+        if (_shownViewCube != ShowViewCube)
+        {
+            _shownViewCube = ShowViewCube;
+            redraw = true;
+        }
+        if (redraw)
+            await PumpAsync();
     }
 
     protected override void OnParametersSet()
@@ -440,7 +687,11 @@
 
         _drawn.Clear();
         _drawnParts.Clear();
+        _drawnInstances.Clear();
         _pick.Clear();
+        _contours = null;
+        _annotationItems.Clear();
+        _annotationsDirty = true;
         _bounds = Aabb.Empty;
         _gridSpacing = 0;
         _failed = false;
@@ -478,17 +729,38 @@
             }
 
             var worldBounds = instance.Bounds();
+            // ClippedBySection is a property of the PART and rides on both the drawn
+            // instance (per-draw uSectionEnabled override) and the pick instance
+            // (ScenePick applies SectionClip.Hides), so render and pick cannot
+            // disagree about a fastener standing whole in a cutaway.
             _drawn.Add(new ViewportInstance(
                 keys.Mesh, instance.World, part.Color ?? Palette.Steel,
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
                 part.DisplayMode,
-                keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices));
+                keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices,
+                Visible: true, ClippedBySection: part.ClippedBySection));
             _drawnParts.Add(part);
-            // ClippedBySection is carried now even though sections are a later rung: it is
-            // a property of the PART, and reading it here means the pick list is already
-            // correct when the section planes arrive.
+            _drawnInstances.Add(instance);
             _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
             _bounds = _bounds.Union(worldBounds);
+
+            // The part's own annotations, posed by the instance transform (assembly
+            // instances show their part's dimensions in place). Resolution rides the
+            // part's cached lowering; a broken selector becomes a status message, not
+            // a crash — the desktop's TryResolveAnnotations convention.
+            if (part.Annotations.Count > 0)
+            {
+                if (part.TryResolveAnnotations(out var resolved, out string? annotationError))
+                {
+                    foreach (var annotation in resolved)
+                        _annotationItems.Add((_drawn.Count - 1, new AnnotationItem(annotation, instance.World)));
+                    _annotationsDirty = true;
+                }
+                else if (annotationError is not null)
+                {
+                    await ReportAsync($"{part.Name}: annotations: {annotationError}");
+                }
+            }
 
             if (!_userMovedCamera)
                 _camera = ViewportFrame.DefaultCamera(_bounds);
@@ -498,6 +770,13 @@
             await PumpAsync();
         }
 
+        if (SectionEnabled)
+        {
+            await RebuildContoursAsync();
+            if (generation != _generation)
+                return;
+            await PumpAsync();
+        }
         if (!_failed)
             await ReportAsync(null);
         if (OnRendered.HasDelegate)
@@ -577,6 +856,57 @@
         _furniture = new ViewportFurniture("@grid", grid.Length / 3, "@axes");
     }
 
+    /// <summary>
+    /// Recomputes and uploads the section-plane SDF isolines. The extraction is the
+    /// shared <c>SectionContours.Build</c> — the same marching squares, the same cached
+    /// <c>Part.TryGetSdf</c> route, the same lift below the plane and the same level
+    /// spacing the desktop renderer uses — so this component only decides WHEN to
+    /// rebuild: on a section change, a visibility change, or a load, never per frame.
+    /// </summary>
+    private async Task RebuildContoursAsync()
+    {
+        var gl = _gl;
+        if (gl is null)
+            return;
+        if (!SectionEnabled || _drawnInstances.Count == 0)
+        {
+            _contours = null;
+            return;
+        }
+
+        var visible = new bool[_drawnInstances.Count];
+        for (int i = 0; i < visible.Length; i++)
+            visible[i] = _drawn[i].Visible;
+
+        // Failures are collected (the callback is synchronous) and reported after,
+        // deduped per part: the lowering failure itself is cached on the Part, so
+        // without the dedupe every rebuild would repeat the same status line.
+        List<string>? failures = null;
+        var geometry = SectionContours.Build(
+            _drawnInstances, visible,
+            SectionContours.PlaneFrame(SectionAxis.Direction(), EffectiveSectionOffset),
+            (part, message) =>
+            {
+                if (_reportedSectionFailures.Add(part))
+                    (failures ??= []).Add($"{part.Name}: {message}");
+            });
+        if (failures is not null)
+            await ReportAsync(string.Join("\n", failures));
+
+        if (geometry.PartCount == 0)
+        {
+            _contours = null;
+            return;
+        }
+        await gl.UploadLineVerticesAsync("@contours.zero", geometry.ZeroVertices);
+        await gl.UploadLineVerticesAsync("@contours.positive", geometry.PositiveVertices);
+        await gl.UploadLineVerticesAsync("@contours.negative", geometry.NegativeVertices);
+        _contours = new ViewportContours(
+            "@contours.zero", geometry.ZeroVertices.Length / 3,
+            "@contours.positive", geometry.PositiveVertices.Length / 3,
+            "@contours.negative", geometry.NegativeVertices.Length / 3);
+    }
+
     // ---- drawing ----
     //
     // On demand, like the desktop viewport: a frame is drawn when something changed, not
@@ -619,9 +949,40 @@
             if (width <= 0 || height <= 0)
                 return;   // not laid out yet; the next request will find a real size
             _lastSize = (width, height);
+
+            // The annotation overlay: rebuilt (and re-uploaded) only when the
+            // AnnotationCamera VALUE or the item/visibility set changed — an orbit
+            // rebuilds, a static camera never does. Billboarding is CPU-side, so the
+            // upload is a few hundred small segments, well under one part draw.
+            ViewportAnnotations? annotations = null;
+            if (ShowAnnotations && _annotationItems.Count > 0)
+            {
+                var annotationCamera = AnnotationCamera.From(
+                    _camera, orthographic: false, height * pixelScale, pixelScale);
+                if (_annotationsDirty || annotationCamera != _builtAnnotationCamera)
+                {
+                    _annotationScratch.Clear();
+                    foreach (var (index, item) in _annotationItems)
+                    {
+                        if (index < _drawn.Count && _drawn[index].Visible)
+                            _annotationScratch.Add(item);
+                    }
+                    AnnotationGeometry.Build(_annotationSegments, _annotationScratch, annotationCamera);
+                    await gl.UploadLineVerticesAsync(
+                        "@annotations", RenderGeometry.SegmentVertices(_annotationSegments));
+                    _builtAnnotationCamera = annotationCamera;
+                    _annotationsDirty = false;
+                }
+                if (_annotationSegments.Count > 0)
+                    annotations = new ViewportAnnotations("@annotations", _annotationSegments.Count * 2);
+            }
+
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
-                _selected, _hovered));
+                _selected, _hovered,
+                sectionPlanes: ActiveSectionPlanes(), contours: _contours,
+                cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null,
+                annotations: annotations));
         }
         catch (JSDisconnectedException)
         {
@@ -651,11 +1012,15 @@
         var (near, far) = CameraMath.FrustumPlanes(_camera.Distance, _bounds);
         var viewProjection = CameraMath.Perspective(Math.PI / 4, width / height, near, far)
                            * CameraMath.LookAt(eye, _camera.Target, Vector3d.UnitZ);
-        // No section planes yet (that rung is next), but ScenePick already takes them and
-        // _pick already carries each part's ClippedBySection, so turning sections on here
-        // is passing three more arguments rather than writing a second clip rule.
+        // Picking honours the section planes through the SAME rule the shaders apply:
+        // ScenePick asks SectionClip.Hides, and each PickInstance carries its part's
+        // ClippedBySection — so a click cannot select the cut-away half, and an
+        // unsectioned fastener stays clickable everywhere it is drawn.
+        var planes = ActiveSectionPlanes();
         return ScenePick.Nearest(
-            x, y, width, height, viewProjection, _pick, scratch: _pickScratch);
+            x, y, width, height, viewProjection, _pick,
+            sectionEnabled: planes is not null, sectionPlanes: planes,
+            scratch: _pickScratch);
     }
 
     /// <summary>A click: select what is under it, or clear the selection by clicking it
@@ -703,7 +1068,18 @@
         _moved = false;
         _lastX = _pressX = e.OffsetX;
         _lastY = _pressY = e.OffsetY;
+        _cameraAnimation++;   // the user takes over from any pose animation in flight
+        // Remember whether the drag STARTED on the cube's screen region: that is what
+        // arms rotate-snap on release (the desktop's rule), so orbiting from anywhere
+        // else stays free.
+        _pressOnCube = ShowViewCube && ViewCubeMath.TryMapToRegion(
+            e.OffsetX, e.OffsetY, _lastSize.Width, _lastSize.Height, out _, out _);
         await SetHoveredAsync(-1);   // a press ends hover, as it does on the desktop
+        if (_cubeHover is not null)
+        {
+            _cubeHover = null;
+            await PumpAsync();
+        }
         _hoverThrottle.Reset();
         // Capture, so a drag that leaves the canvas keeps orbiting. The desktop viewer
         // solves the same problem by handling input at the window level.
@@ -714,7 +1090,7 @@
     private Task OnPointerMove(PointerEventArgs e)
     {
         if (!_dragging || e.Buttons == 0)
-            return Picking ? UpdateHoverAsync(e.OffsetX, e.OffsetY) : Task.CompletedTask;
+            return HoverMoveAsync(e.OffsetX, e.OffsetY);
 
         double dx = e.OffsetX - _lastX;
         double dy = e.OffsetY - _lastY;
@@ -737,13 +1113,58 @@
     {
         bool wasDragging = _dragging;
         _dragging = false;
+        bool pressOnCube = _pressOnCube;
+        _pressOnCube = false;
         // Click-vs-drag discrimination, the desktop's rule and its threshold: a release
-        // within 4 pixels of the press is a click that picks; anything farther was an
+        // within 4 pixels of the press is a click; anything farther was an
         // orbit/pan/zoom drag. Reusing HoverThrottle's distance is deliberate — the two
         // answer the same question about what counts as pointer travel.
-        if (wasDragging && Picking && !_moved && !Travelled(e.OffsetX - _pressX, e.OffsetY - _pressY))
+        bool clicked = !_moved && !Travelled(e.OffsetX - _pressX, e.OffsetY - _pressY);
+        if (wasDragging && pressOnCube)
+        {
+            _hoverThrottle.Reset();
+            if (clicked)
+                await ViewCubeClickAsync(e.OffsetX, e.OffsetY);   // the region claims the click
+            else
+                await SnapToNearestViewAsync();   // a drag that started on the cube snaps
+            return;
+        }
+        if (wasDragging && Picking && clicked)
             await PickAndSelectAsync(e.OffsetX, e.OffsetY);
         _hoverThrottle.Reset();   // the next move re-picks immediately
+    }
+
+    /// <summary>
+    /// A pointer move with no drag: over the cube's region, cube-face hover replaces
+    /// model hover (the desktop suppresses model hover there too, and the widget's own
+    /// hit test needs no throttle — it is a handful of flops); elsewhere, the model
+    /// hover raycast behind the shared <c>HoverThrottle</c>.
+    /// </summary>
+    private async Task HoverMoveAsync(double x, double y)
+    {
+        var (width, height) = _lastSize;
+        if (ShowViewCube && ViewCubeMath.TryMapToRegion(x, y, width, height, out double u, out double v))
+        {
+            Vector3d? hover =
+                ViewCubeMath.TryHit(_camera.Yaw, _camera.Pitch, u, v, out var direction)
+                    ? direction
+                    : null;
+            bool changed = !Nullable.Equals(hover, _cubeHover);
+            _cubeHover = hover;
+            _hoverThrottle.Reset();
+            if (_hovered != -1)
+                await SetHoveredAsync(-1);
+            else if (changed)
+                await PumpAsync();
+            return;
+        }
+        if (_cubeHover is not null)
+        {
+            _cubeHover = null;
+            await PumpAsync();
+        }
+        if (Picking)
+            await UpdateHoverAsync(x, y);
     }
 
     private void OnPointerCancel(PointerEventArgs e) => _dragging = false;

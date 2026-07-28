@@ -39,6 +39,8 @@ public class InteropContractTests
                 DepthTest = false,
                 Cull = false,
                 PolygonOffset = [1f, 1f],
+                Viewport = [0, 0, 10, 10],
+                ClearDepth = true,
                 Uniforms = new Dictionary<string, object> { ["uColor"] = new[] { 1f, 0f, 0f } },
             },
         ],
@@ -83,12 +85,22 @@ public class InteropContractTests
             ["scalar"] = 1.5f,
             ["vec3"] = new[] { 1f, 2f, 3f },
             ["mat4"] = new float[16],
+            ["int"] = new IntUniform(2),
+            ["vec4s"] = new Vec4ArrayUniform([1f, 2f, 3f, 4f]),
         };
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(uniforms, Interop));
 
         Assert.Equal(JsonValueKind.Number, document.RootElement.GetProperty("scalar").ValueKind);
         Assert.Equal(3, document.RootElement.GetProperty("vec3").GetArrayLength());
         Assert.Equal(16, document.RootElement.GetProperty("mat4").GetArrayLength());
+
+        // The typed markers: an int uniform serializes as {"int": n} (uniform1i) and a
+        // vec4 array as {"vec4": [...]} (uniform4fv) -- the property names are what the
+        // JavaScript dispatches on, so a rename here is a silent no-op there.
+        var intMarker = document.RootElement.GetProperty("int");
+        Assert.Equal(JsonValueKind.Number, intMarker.GetProperty("int").ValueKind);
+        Assert.Equal(2, intMarker.GetProperty("int").GetInt32());
+        Assert.Equal(4, document.RootElement.GetProperty("vec4s").GetProperty("vec4").GetArrayLength());
     }
 
     [Fact]

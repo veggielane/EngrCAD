@@ -20,9 +20,14 @@
     @* The tree and the status line are dropped under ?report so the self-check measures
        the largest canvas it can; the pixel checks below are relationships between states
        of the same canvas, so its exact size does not matter to them. *@
+    @* Under ?report the cube and annotations start OFF like the furniture: the pixel
+       classifiers predate both, and near-white cube labels / dimension strokes would
+       land in the "steel" class and skew every comparative count. Their own checks
+       turn them on through the direct setters, measure, and turn them back off. *@
     <EngrCadSceneView @ref="_view" Scene="_scene" Height="460px" Class="viewport"
                       ViewStyle="_style" Furniture="@(!_report)"
                       ShowTree="@(!_report)" ShowStatus="@(!_report)"
+                      ShowViewCube="@(!_report)" ShowAnnotations="@(!_report)"
                       OnRendered="OnViewportRendered" />
 
     <section class="controls">
@@ -94,7 +99,11 @@
                 click through the same <code>ScenePick</code> &mdash; so the three cannot drift
                 apart. Try the <em>Assembly</em> tab: it shows the same two parts nested twice,
                 and switching to it meshes and uploads nothing, because both parts are already
-                on the GPU. Section planes and the view cube are the rungs after this one.
+                on the GPU. Try <em>Section</em> in the toolbar: the cut is the same shader
+                rule the desktop clips with, picking will not select the removed half, and the
+                gold line on the cut face is the model's exact SDF cross-section. The view
+                cube snaps the camera to standard views, and <em>BOM</em>/<em>Props</em>
+                mirror the desktop panels.
             </p>
         </footer>
     }
@@ -235,6 +244,9 @@
             await CheckPickingAsync(counts);
             await CheckVisibilityAndHighlightAsync(counts);
             await CheckTabSwitchAsync(counts);
+            await CheckSectionAsync(counts);
+            await CheckAnnotationsAsync(counts);
+            await CheckViewCubeAsync(counts);
 
             // Then orbit through the same CameraMath call a drag makes and re-read the
             // canvas: a viewport that draws once but ignores the camera would pass every
@@ -413,6 +425,76 @@
         await _view.ShowTabAsync(0);
         for (int i = 0; i < 200 && Viewport.InstanceCount != 2; i++)
             await Task.Delay(10);
+    }
+
+    /// <summary>
+    /// Sections, as a relationship: cutting at the scene centre must REMOVE model
+    /// pixels, and the SDF isolines must appear on the cut — gold is the d = 0
+    /// cross-section, a colour nothing else in the report frame produces (amber fails
+    /// the green floor, cut material the red one). X rather than Z so the plane
+    /// crosses the backplate too, whose cylinder is implicit-Native and therefore
+    /// guaranteed an isoline route.
+    /// </summary>
+    private async Task CheckSectionAsync(Dictionary<string, int> counts)
+    {
+        Trace("section");
+        var whole = await Viewport!.CapturePixelsAsync();
+        counts["bodyWhole"] = Body(whole);
+        await Viewport.SetSectionAsync(true, SectionAxis.X);
+        var cut = await Viewport.CapturePixelsAsync();
+        counts["bodySectioned"] = Body(cut);
+        counts["goldContours"] = Count(cut,
+            (r, g, b) => r > 200 && g > 170 && b < 170 && r > b + 60);
+        await Viewport.SetSectionAsync(false);
+    }
+
+    /// <summary>Annotations, as a relationship between two states of one canvas: the
+    /// flange carries a real dimension, so toggling the overlay must change pixels.</summary>
+    private async Task CheckAnnotationsAsync(Dictionary<string, int> counts)
+    {
+        Trace("annotations");
+        var without = await Viewport!.CapturePixelsAsync();
+        await Viewport.SetAnnotationsAsync(true);
+        counts["annotationPixels"] = Differences(without, await Viewport.CapturePixelsAsync());
+        await Viewport.SetAnnotationsAsync(false);
+    }
+
+    /// <summary>
+    /// The view cube: turning it on must light pixels in its top-right region, and a
+    /// click on the region's centre must land the camera EXACTLY on a standard pose —
+    /// the animation's final step returns the target, and the target comes from the
+    /// shared pose table, so snapped-ness is checkable without naming which face was hit.
+    /// </summary>
+    private async Task CheckViewCubeAsync(Dictionary<string, int> counts)
+    {
+        Trace("view cube");
+        await Viewport!.SetViewCubeAsync(true);
+        var shot = await Viewport.CapturePixelsAsync();
+        var (cssWidth, _, scale) = await Viewport.ViewportSizeAsync();
+        int region = (int)Math.Ceiling(116 * scale);   // RegionSizeDip + margin + slack
+        int lit = 0;
+        for (int i = 0; i + 3 < shot.Rgba.Length; i += 4)
+        {
+            int pixel = i / 4;
+            int px = pixel % shot.Width;
+            int py = pixel / shot.Width;   // bottom-first: the top rows are the HIGH py
+            if (px < shot.Width - region || py < shot.Height - region)
+                continue;
+            if (shot.Rgba[i] > 90 || shot.Rgba[i + 1] > 90 || shot.Rgba[i + 2] > 90)
+                lit++;
+        }
+        counts["cubePixels"] = lit;
+
+        // The region's centre in CSS pixels (margin 10, size 104 — the shared layout).
+        bool claimed = await Viewport.ViewCubeClickAsync(cssWidth - 62, 62);
+        counts["cubeClaimed"] = claimed ? 1 : 0;
+        var camera = Viewport.Camera;
+        var snapped = ViewCubeMath.PoseFor(
+            ViewCubeMath.NearestStandardDirection(camera.Yaw, camera.Pitch), camera.Yaw);
+        counts["cubeSnapped"] =
+            Math.Abs(snapped.Yaw - camera.Yaw) < 1e-9 && Math.Abs(snapped.Pitch - camera.Pitch) < 1e-9
+                ? 1 : 0;
+        await Viewport.SetViewCubeAsync(false);
     }
 
     /// <summary>Blazor WASM routes Console.WriteLine to the browser console, which a
@@ -651,6 +733,9 @@
             var part = new Part("Flange", shape, Palette.Steel) { DisplayMode = _flangeMode };
             var mesh = part.GetMesh();
             var t3 = Stopwatch.GetTimestamp();
+            // A real dimension, so the annotation rung has something to draw (and the
+            // ?report check something to toggle): the flange's 80 mm across, on its top.
+            part.Annotate(new LinearDimension((-40, 0, 5), (40, 0, 5)));
 
             var scene = new Scene();
             var model = scene.AddTab("Model");

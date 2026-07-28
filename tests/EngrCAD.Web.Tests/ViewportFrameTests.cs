@@ -172,12 +172,15 @@ public class ViewportFrameTests
         // than an approximation of it.
         Assert.Equal(0f, shared["uAmbientOcclusion"]);
 
-        // uSectionCount is an `int` uniform and the interop sends every JSON number
-        // through uniform1f, which GL rejects on an int. An unset int uniform is already
-        // 0, and the clip rule short-circuits on uSectionEnabled, so the neutral state
-        // must say nothing about it. Deleting this assertion is how the section rung
-        // starts with an invisible GL error.
-        Assert.DoesNotContain("uSectionCount", shared.Keys);
+        // uSectionCount is an `int` uniform: it MUST travel as the IntUniform typed
+        // marker, never as a plain number — the interop sends every JSON number through
+        // uniform1f, which GL rejects on an int with no visible error. This assertion is
+        // what keeps the section rung from starting with an invisible GL error.
+        Assert.Equal(new IntUniform(0), shared["uSectionCount"]);
+        // The plane payload and combine rule say nothing in the neutral state, the same
+        // discipline uHighlight follows: an unset uniform is already 0.
+        Assert.DoesNotContain("uSectionPlanes", shared.Keys);
+        Assert.DoesNotContain("uSectionUnion", shared.Keys);
     }
 
     [Fact]

@@ -1127,17 +1127,22 @@ for `in`-parameters being illegal in expression trees.
   colour, furniture ranges, per-instance matrices and the neutral shader state are all
   asserted directly as values. Extracting shared shaders and camera maths stopped the
   drift; making the frame a value is what makes drift *visible* without a screenshot.
-- **Fills do not cull, and that will look like a bug until the section rung lands.** Both
+- **Fills do not cull, and that looked like a bug until the section rung landed.** Both
   desktop passes leave face culling off deliberately: a section plane exposes a solid's
   interior as *backfaces*, which the shared fragment shader shades as cut material via
-  `gl_FrontFacing`. Enabling culling looks completely fine today and silently breaks
-  sectioning later - exactly the kind of change that is impossible to attribute months
-  afterwards, which is why it is asserted by a test rather than left as a comment.
-- **`uSectionCount` must never be sent from the browser client.** It is an `int` uniform,
-  and the JS interop marshals every JSON number through `uniform1f`, which GL rejects on
-  an int. The clip rule short-circuits on `uSectionEnabled` and an unset int uniform is
-  already 0, so the neutral state must say *nothing* about it. A test asserts the
-  absence, because "we do not set this" is otherwise invisible.
+  `gl_FrontFacing`. Enabling culling looked completely fine for a rung and would have
+  silently broken sectioning - exactly the kind of change that is impossible to
+  attribute months afterwards, which is why it was asserted by a test rather than left
+  as a comment, and the section rung landed against that test without touching it.
+- **A JS-interop uniform needs a TYPE, and JSON cannot carry one.** The interop
+  marshals every JSON number through `uniform1f`, which GL rejects on an `int` uniform
+  with no visible error - so `uSectionCount` was deliberately never sent until the
+  section rung, with a test asserting the absence. The rung added typed markers:
+  `IntUniform` serializes as `{"int": n}` (dispatched through `uniform1i`) and
+  `Vec4ArrayUniform` as `{"vec4": [...]}` (`uniform4fv` - needed because four packed
+  section planes are exactly 16 floats, indistinguishable from a mat4 by shape). WHICH
+  uniforms carry which type stays a C# decision; the JS dispatches on the marker's
+  shape and contains no policy.
 - **A published Blazor app is path-portable for the price of one tag.** Every asset
   reference the build emits is already relative - `./_framework/...` in the rewritten
   import map, `_framework/...` in the script tag - so `<base href>` is the *entire*

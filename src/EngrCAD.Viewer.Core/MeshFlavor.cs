@@ -17,7 +17,7 @@ namespace EngrCAD.Viewer;
 /// to a B-Rep (every glyph outline too), so a part built from sketches really does
 /// have splines to reticulate. It is only ever shown for those parts.
 /// </remarks>
-internal static class MeshFlavor
+public static class MeshFlavor
 {
     /// <summary>Sketch-derived geometry: profiles lower to exact NURBS curves.</summary>
     public const string Splines = "Reticulating splines...";

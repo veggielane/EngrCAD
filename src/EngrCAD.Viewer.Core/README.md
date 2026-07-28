@@ -2,9 +2,11 @@
 
 The **UI-free render model**: everything both EngrCAD render paths agree on that does
 not touch a GL binding. No Avalonia, no Silk.NET, no `System.Drawing` — this assembly
-must load in a WebAssembly client, so its only references are `EngrCAD.Core` (math
-structs), `EngrCAD.Mesh` (the half-edge walk `WireframeEdges` does) and
-`EngrCAD.Modeling` (`DisplayMode`).
+must load in a WebAssembly client. It references only kernel projects: `EngrCAD.Core`
+(math structs), `EngrCAD.Mesh` (the half-edge walk `WireframeEdges` does),
+`EngrCAD.Modeling` (`DisplayMode`, `Part`/`PartInstance` for the loader and the pure
+annotation/isoline halves), `EngrCAD.Implicit` + `EngrCAD.Interop` (the section-isoline
+extraction) and `EngrCAD.BRep` (`MeshFlavor`'s geometry inspection).
 
 ## The namespace is `EngrCAD.Viewer` on purpose — do NOT "tidy" it
 
@@ -52,6 +54,12 @@ prevent. Hence: extract, don't copy.
 | `Highlight` | Selection gold and the hover strength, in one place: `Strength(index, selected, hovered)` is the `uHighlight` uniform, `LineColor(...)` is what a wireframe or point part gets instead (it has no fill for `uHighlight` to act on). A second front end that re-typed "selection is gold" would be a second definition of what selection *looks like*. |
 | `PickMesh`, `PickInstance`, `PickResult`, `ScenePick` | Click picking and hover: unproject a pixel to a world ray (`TryRay`), test it against each visible instance's triangle BVH with Möller–Trumbore, keep the nearest hit the section planes do not remove. `PickMesh` is built per distinct part and shared by its instances (the ray goes into the instance's local space, never the mesh into world space), exactly as the GPU buffers are. |
 | `HoverThrottle` | The 4-pixel travel threshold the hover raycast re-picks on. Moved out of `ViewCube.cs` for the same reason `CameraMath`'s drag constants live here: how responsive hover feels is a product decision, not a per-front-end one. |
+| `ViewCubeMath`, `ViewCubeAnimation`, `ViewCubeFace`, `ViewCubeGeometry` | The view cube's pure halves: region layout + hit test + the pose table (`PoseFor` is what the desktop toolbar's Front/Top/Right/Iso, the cube's clicks and MCP's named views must all agree on), rotate-snap (`NearestStandardDirection`), the 250 ms smoothstep transition, and the fill/edge/label geometry with its palette (both front ends upload exactly these arrays). The GL widget stays in `EngrCAD.Viewer`'s `ViewCube.cs`. |
+| `StrokeFont` | The one polyline glyph table (digits, A–Z, dimension symbols) behind the cube's labels and annotation text. Its source stays pure ASCII — symbol glyphs are keyed by `\u` escapes — for the same reason the shaders do. |
+| `AnnotationItem`, `AnnotationCamera`, `AnnotationGeometry` | 3D annotation (PMI) rendering's pure half: the classic dimension anatomy (extension lines, arrowheads, leaders, datum boxes, billboarded screen-constant text), plus the overlay colour. `AnnotationCamera` is a record struct so *value equality* is a layer's rebuild key. The GL layer stays in `EngrCAD.Viewer`'s `AnnotationLayer.cs`. |
+| `SectionContourGeometry`, `SectionContours` | The section-plane SDF isolines' pure half: plane frames, the cached `Part.TryGetSdf` route, the marching-squares extraction via `SdfContours.OnPlane`, the lift below the plane that keeps the shader discard from eating the lines, and the three family colours (`ZeroColor`/`PositiveColor`/`NegativeColor`). The GL renderer stays in `EngrCAD.Viewer`'s `SectionContours.cs`. |
+| `TabMeshLoader` (+ `TabMeshRequest`/`Batch`/`Progress`/`Failure`/`Completion`) | Lazy tab meshing's state machine: growing-prefix publishing, the generation token, name-the-part-that-throws. Avalonia-free and headlessly tested — but **thread-model-bound** (worker task + post-back delegate), so the single-threaded browser client deliberately does NOT use it; see the EngrCAD.Web README. |
+| `MeshFlavor` | The progress line naming the kernel route a part takes (`Lowering to B-Rep...`, `Reticulating splines...` — shown only for geometry that genuinely carries NURBS). Pure graph inspection, no lowering. |
 
 ### Why picking is here and not in each front end
 
@@ -71,12 +79,10 @@ one rung before it grows them.
 Anything taking a `GL` stays in `EngrCAD.Viewer` (`RenderCore.cs` there):
 `ViewerPrograms.LinkProgram`/`CompileShader`, `SectionUniforms` (the single place either
 pass writes the section uniforms), and `RenderUploads.UploadMesh`/`UploadLines`/
-`UploadOcclusion`/`SetDefaultOcclusion`. A browser client supplies its own WebGL2
-equivalents; what it must not supply is its own shaders or its own camera.
-
-Also not here: `StrokeFont`, `ViewCubeMath`, `AnnotationGeometry` and `SdfContours`.
-They are pure too, and a browser front end will want them — but they were not part of
-`RenderCore.cs` and moving them is a separate, testable step, not a drive-by.
+`UploadOcclusion`/`SetDefaultOcclusion` — plus the GL halves of the widgets whose pure
+halves are listed above: `ViewCube`, `AnnotationLayer`, `SectionContourRenderer`. A
+browser client supplies its own WebGL2 equivalents; what it must not supply is its own
+shaders, its own camera, or its own copy of what a dimension or a cube face looks like.
 
 ## The rule that survives the split
 

@@ -6,10 +6,11 @@ using GL = Silk.NET.OpenGL.GL;
 namespace EngrCAD.Viewer;
 
 // The view cube: the standard CAD orientation widget in the viewport's top-right.
-// Everything cube-related lives in this file — pure pose/hit math (ViewCubeMath,
-// unit-tested without GL), the camera animation (ViewCubeAnimation) and the GL
-// widget itself (ViewCube). The HoverThrottle helper that used to live here moved
-// to EngrCAD.Viewer.Core when the browser client needed the same hover feel.
+// The pure halves — pose/hit math (ViewCubeMath), the camera animation
+// (ViewCubeAnimation) and the fill/edge/label geometry with its palette
+// (ViewCubeGeometry) — live in EngrCAD.Viewer.Core so the browser client shares them;
+// this file keeps the GL widget only. The HoverThrottle helper that used to live here
+// moved the same way when the browser client needed the same hover feel.
 // ViewportControl only calls four hooks: Step
 // (animation, before the camera matrices are built), Draw (end of the render
 // pass), HandleClick (pointer pre-check before scene picking), and UpdateHover
@@ -30,247 +31,11 @@ internal readonly record struct LineProgramHandles(
     uint Program, int Model, int View, int Proj, int Color, int SectionEnabled);
 
 /// <summary>
-/// Pure math for the view cube: region layout, pose table (matching the toolbar's
-/// Front/Top/Right/Iso yaw/pitch exactly), shortest-path yaw wrapping, easing, and
-/// the screen-space hit test (ortho pick ray vs the unit cube, band classification
-/// into face/edge/corner). No GL, no Avalonia — unit-testable.
-/// </summary>
-internal static class ViewCubeMath
-{
-    /// <summary>Side of the square cube region, in device-independent pixels.</summary>
-    public const double RegionSizeDip = 104;
-
-    /// <summary>Gap between the region and the viewport's top/right edges (DIPs).</summary>
-    public const double RegionMarginDip = 10;
-
-    /// <summary>Orbit-camera eye distance of the mini projection (cube units).</summary>
-    public const double EyeDistance = 4.0;
-
-    /// <summary>Half-extent of the square ortho frustum; the cube's space diagonal is
-    /// sqrt(3) ~ 1.732, so 1.9 keeps the cube inside the region at every angle.</summary>
-    public const double OrthoHalfExtent = 1.9;
-
-    /// <summary>Face-local coordinate (cube units, face spans [-1,1]) beyond which a
-    /// hit counts toward the adjacent face: an edge band, or a corner when both
-    /// coordinates exceed it.</summary>
-    public const double Band = 0.55;
-
-    /// <summary>Pitch clamp shared with the orbit camera (0.01 shy of the poles keeps
-    /// LookAt's up vector non-degenerate). Defined by <see cref="CameraMath.PitchLimit"/>
-    /// rather than repeated: the cube's poses and the orbit clamp must be the same number,
-    /// or snapping to Top would be undone by the very next clamp.</summary>
-    public const double PitchLimit = CameraMath.PitchLimit;
-
-    /// <summary>
-    /// Maps a control-space point (DIPs, y down) into the cube region's normalized
-    /// device coordinates (u right, v up, both in [-1,1]); false when the point lies
-    /// outside the top-right region square.
-    /// </summary>
-    public static bool TryMapToRegion(
-        double x, double y, double controlWidth, double controlHeight, out double u, out double v)
-    {
-        double left = controlWidth - RegionMarginDip - RegionSizeDip;
-        double top = RegionMarginDip;
-        u = (x - left) / RegionSizeDip * 2 - 1;
-        v = 1 - (y - top) / RegionSizeDip * 2;
-        return x >= left && x <= left + RegionSizeDip
-            && y >= top && y <= top + RegionSizeDip
-            && controlWidth > RegionSizeDip + 2 * RegionMarginDip;
-    }
-
-    /// <summary>
-    /// Screen-space hit test: casts the mini-projection's ortho pick ray for region
-    /// NDC (<paramref name="u"/>, <paramref name="v"/>) at the camera orbit pose and
-    /// intersects it with the unit cube [-1,1]^3. On a hit, <paramref name="direction"/>
-    /// holds the view direction as integer components in {-1,0,1}: one nonzero
-    /// component for a face, two for an edge band, three for a corner.
-    /// </summary>
-    public static bool TryHit(double yaw, double pitch, double u, double v, out Vector3d direction)
-    {
-        direction = default;
-        var eyeDir = new Vector3d(
-            Math.Cos(pitch) * Math.Cos(yaw), Math.Cos(pitch) * Math.Sin(yaw), Math.Sin(pitch));
-        var forward = -eyeDir;
-        var right = forward.Cross(Vector3d.UnitZ).Normalized();
-        var up = right.Cross(forward);
-        var origin = eyeDir * EyeDistance + right * (u * OrthoHalfExtent) + up * (v * OrthoHalfExtent);
-
-        Span<double> o = [origin.X, origin.Y, origin.Z];
-        Span<double> d = [forward.X, forward.Y, forward.Z];
-        double tEnter = double.NegativeInfinity, tExit = double.PositiveInfinity;
-        int enterAxis = -1;
-        double enterSign = 0;
-        for (int axis = 0; axis < 3; axis++)
-        {
-            // Axis-parallel ray guard (exact-zero-division protection, not a geometric
-            // tolerance): a standard view direction has two exactly-zero components.
-            if (Math.Abs(d[axis]) < 1e-12)
-            {
-                if (Math.Abs(o[axis]) > 1)
-                    return false;
-                continue;
-            }
-            double t1 = (-1 - o[axis]) / d[axis];
-            double t2 = (1 - o[axis]) / d[axis];
-            if (t1 > t2)
-                (t1, t2) = (t2, t1);
-            if (t1 > tEnter)
-            {
-                tEnter = t1;
-                enterAxis = axis;
-                enterSign = -Math.Sign(d[axis]); // entered through the face the ray points against
-            }
-            tExit = Math.Min(tExit, t2);
-        }
-        if (enterAxis < 0 || tEnter > tExit || tExit < 0)
-            return false;
-
-        var p = origin + forward * tEnter;
-        Span<double> hit = [p.X, p.Y, p.Z];
-        Span<double> components = [0, 0, 0];
-        components[enterAxis] = enterSign;
-        for (int axis = 0; axis < 3; axis++)
-        {
-            if (axis == enterAxis)
-                continue;
-            double c = Math.Clamp(hit[axis], -1, 1);
-            if (Math.Abs(c) > Band)
-                components[axis] = Math.Sign(c);
-        }
-        direction = new Vector3d(components[0], components[1], components[2]);
-        return true;
-    }
-
-    /// <summary>
-    /// Orbit pose looking along <paramref name="direction"/> (from target toward eye).
-    /// Face normals reproduce the toolbar poses exactly: Front (0,-1,0) is yaw -pi/2
-    /// pitch 0, Right (1,0,0) is yaw 0, and the (1,-1,1) corner is the toolbar Iso
-    /// (yaw -pi/4, pitch asin(1/sqrt 3)). Straight-up/down directions keep
-    /// <paramref name="currentYaw"/> (yaw is unconstrained at the poles); pitch is
-    /// clamped to the orbit camera's limit.
-    /// </summary>
-    public static (double Yaw, double Pitch) PoseFor(in Vector3d direction, double currentYaw)
-    {
-        var d = direction.Normalized();
-        double pitch = Math.Clamp(Math.Asin(Math.Clamp(d.Z, -1, 1)), -PitchLimit, PitchLimit);
-        // Exact-zero horizontal component test (semantic: the +-Z faces), squared scale.
-        double yaw = d.X * d.X + d.Y * d.Y < 1e-18 ? currentYaw : Math.Atan2(d.Y, d.X);
-        return (yaw, pitch);
-    }
-
-    /// <summary>
-    /// The camera's own view direction (target toward eye) for an orbit pose — the
-    /// inverse of <see cref="PoseFor"/> and the cube face you are looking at.
-    /// </summary>
-    public static Vector3d ViewDirection(double yaw, double pitch) => new(
-        Math.Cos(pitch) * Math.Cos(yaw),
-        Math.Cos(pitch) * Math.Sin(yaw),
-        Math.Sin(pitch));
-
-    /// <summary>
-    /// The standard cube orientation nearest an arbitrary orbit pose: the one of the
-    /// 26 face/edge/corner directions (components in {-1, 0, 1}, not all zero) whose
-    /// direction is closest to the camera's <see cref="ViewDirection"/>. This is what
-    /// commercial cubes snap to when you finish dragging on the widget — the view
-    /// settles onto a documented orientation instead of an arbitrary one. Idempotent:
-    /// snapping an already-snapped pose returns the same direction.
-    /// </summary>
-    public static Vector3d NearestStandardDirection(double yaw, double pitch)
-    {
-        var view = ViewDirection(yaw, pitch);
-        var best = new Vector3d(1, 0, 0);
-        double bestDot = double.NegativeInfinity;
-        for (int x = -1; x <= 1; x++)
-        {
-            for (int y = -1; y <= 1; y++)
-            {
-                for (int z = -1; z <= 1; z++)
-                {
-                    if (x == 0 && y == 0 && z == 0)
-                        continue;
-                    var candidate = new Vector3d(x, y, z);
-                    double dot = candidate.Normalized().Dot(view);
-                    if (dot > bestDot)
-                    {
-                        bestDot = dot;
-                        best = candidate;
-                    }
-                }
-            }
-        }
-        return best;
-    }
-
-    /// <summary>Equivalent target yaw within half a turn of <paramref name="fromYaw"/>,
-    /// so the animation always takes the shortest angular path.</summary>
-    public static double ShortestYawTarget(double fromYaw, double toYaw) =>
-        fromYaw + Math.IEEERemainder(toYaw - fromYaw, 2 * Math.PI);
-
-    /// <summary>Smoothstep ease (C1 at both ends), clamped to [0,1].</summary>
-    public static double Ease(double t) => t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t);
-
-    /// <summary>Human-readable name of a hit direction ("front", "front-right-top").</summary>
-    public static string Label(in Vector3d direction)
-    {
-        var parts = new List<string>(3);
-        if (direction.Y < 0)
-            parts.Add("front");
-        else if (direction.Y > 0)
-            parts.Add("back");
-        if (direction.X < 0)
-            parts.Add("left");
-        else if (direction.X > 0)
-            parts.Add("right");
-        if (direction.Z > 0)
-            parts.Add("top");
-        else if (direction.Z < 0)
-            parts.Add("bottom");
-        return string.Join("-", parts);
-    }
-}
-
-/// <summary>
-/// A short eased camera transition between orbit poses: yaw takes the shortest
-/// angular path, pitch is clamped to the orbit limit, distance/target are untouched
-/// (the caller keeps them). Evaluate is pure in elapsed time, so it is testable and
-/// drivable from the render loop without timers.
-/// </summary>
-internal sealed class ViewCubeAnimation
-{
-    private readonly double _startYaw, _startPitch, _targetYaw, _targetPitch, _duration;
-
-    public ViewCubeAnimation(
-        double startYaw, double startPitch, double targetYaw, double targetPitch,
-        double durationSeconds = 0.25)
-    {
-        _startYaw = startYaw;
-        _startPitch = startPitch;
-        _targetYaw = ViewCubeMath.ShortestYawTarget(startYaw, targetYaw);
-        _targetPitch = Math.Clamp(targetPitch, -ViewCubeMath.PitchLimit, ViewCubeMath.PitchLimit);
-        _duration = durationSeconds;
-    }
-
-    /// <summary>Pose at <paramref name="elapsedSeconds"/> since the start; Done once
-    /// the target pose is reached exactly (the last evaluation returns the target).</summary>
-    public (double Yaw, double Pitch, bool Done) Evaluate(double elapsedSeconds)
-    {
-        double t = _duration <= 0 ? 1 : elapsedSeconds / _duration;
-        double s = ViewCubeMath.Ease(t);
-        return (
-            _startYaw + (_targetYaw - _startYaw) * s,
-            _startPitch + (_targetPitch - _startPitch) * s,
-            t >= 1);
-    }
-}
-
-/// <summary>
-/// The GL widget: owns the cube's fill/edge/label geometry (uploaded lazily on first
-/// draw, GL context current), draws it through the existing line program into a small
-/// ortho viewport in the top-right corner with the depth buffer cleared (the cube
-/// always sits on top of the scene), and arms/steps the camera animation for clicks.
-/// All faces are flat-shaded with subtly distinct tones so orientation reads at a
-/// glance; labels are stroke-font line segments lifted slightly off each face (depth
-/// hides the back faces' labels).
+/// The GL widget: owns the cube's fill/edge/label geometry (built by
+/// <see cref="ViewCubeGeometry"/>, uploaded lazily on first draw, GL context current),
+/// draws it through the existing line program into a small ortho viewport in the
+/// top-right corner with the depth buffer cleared (the cube always sits on top of the
+/// scene), and arms/steps the camera animation for clicks.
 /// </summary>
 internal sealed class ViewCube
 {
@@ -285,19 +50,6 @@ internal sealed class ViewCube
     /// pointer is not over the cube). Every face contributing a component highlights,
     /// so an edge lights two faces and a corner three.</summary>
     public Vector3d? Hover => _hover;
-
-    /// <summary>Face table: outward normal, in-plane right/up for the label, word,
-    /// and flat fill tone (top lightest, bottom darkest — a baked-in light cue).</summary>
-    private static readonly (Vector3d N, Vector3d R, Vector3d U, string Word, (float R, float G, float B) Color)[]
-        Faces =
-        [
-            ((0, -1, 0), (1, 0, 0), (0, 0, 1), "FRONT", (0.53f, 0.56f, 0.61f)),
-            ((0, 1, 0), (-1, 0, 0), (0, 0, 1), "BACK", (0.42f, 0.44f, 0.49f)),
-            ((1, 0, 0), (0, 1, 0), (0, 0, 1), "RIGHT", (0.48f, 0.51f, 0.56f)),
-            ((-1, 0, 0), (0, -1, 0), (0, 0, 1), "LEFT", (0.39f, 0.42f, 0.46f)),
-            ((0, 0, 1), (1, 0, 0), (0, 1, 0), "TOP", (0.62f, 0.65f, 0.70f)),
-            ((0, 0, -1), (1, 0, 0), (0, -1, 0), "BOTTOM", (0.33f, 0.35f, 0.39f)),
-        ];
 
     /// <summary>
     /// Handles a click at a control-space position. Returns true when the position is
@@ -432,25 +184,28 @@ internal sealed class ViewCube
         gl.Enable(EnableCap.PolygonOffsetFill);
         gl.PolygonOffset(1f, 1f);
         gl.BindVertexArray(_fillVao);
-        for (int face = 0; face < Faces.Length; face++)
+        for (int face = 0; face < ViewCubeGeometry.Faces.Count; face++)
         {
-            var c = Faces[face].Color;
-            // Hover highlight: every face contributing a component of the hovered
-            // direction brightens (one face for a face hover, two for an edge, three
-            // for a corner), so the click target reads before clicking.
-            if (_hover is { } hover && hover.Dot(Faces[face].N) > 0.5)
-                c = (c.R + (1 - c.R) * 0.35f, c.G + (1 - c.G) * 0.35f, c.B + (1 - c.B) * 0.35f);
+            var c = ViewCubeGeometry.Faces[face].Color;
+            // Hover highlight (the shared rule): every face contributing a component of
+            // the hovered direction brightens, so the click target reads before clicking.
+            if (_hover is { } hover && hover.Dot(ViewCubeGeometry.Faces[face].Normal) > 0.5)
+                c = ViewCubeGeometry.Brightened(c);
             gl.Uniform3(line.Color, c.R, c.G, c.B);
-            gl.DrawArrays(PrimitiveType.Triangles, face * 6, 6);
+            gl.DrawArrays(
+                PrimitiveType.Triangles,
+                face * ViewCubeGeometry.VerticesPerFace, ViewCubeGeometry.VerticesPerFace);
         }
         gl.Disable(EnableCap.PolygonOffsetFill);
 
         gl.BindVertexArray(_edgeVao);
-        gl.Uniform3(line.Color, 0.12f, 0.13f, 0.15f);
+        var edgeColor = ViewCubeGeometry.EdgeColor;
+        gl.Uniform3(line.Color, edgeColor.R, edgeColor.G, edgeColor.B);
         gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_edgeVertexCount);
 
         gl.BindVertexArray(_labelVao);
-        gl.Uniform3(line.Color, 0.93f, 0.94f, 0.96f);
+        var labelColor = ViewCubeGeometry.LabelColor;
+        gl.Uniform3(line.Color, labelColor.R, labelColor.G, labelColor.B);
         gl.DrawArrays(PrimitiveType.Lines, 0, (uint)_labelVertexCount);
 
         gl.BindVertexArray(0);
@@ -471,73 +226,18 @@ internal sealed class ViewCube
         _initialized = false;
     }
 
+    /// <summary>Uploads the shared cube geometry (fills, edges, labels) — the same
+    /// arrays the browser client uploads, built by <see cref="ViewCubeGeometry"/>.</summary>
     private void BuildGeometry(GL gl)
     {
-        // Fills: 6 faces x 2 triangles, position-only (drawn per face for its color).
-        var fills = new List<float>(6 * 6 * 3);
-        foreach (var (n, r, u, _, _) in Faces)
-        {
-            var a = n - r - u;
-            var b = n + r - u;
-            var c = n + r + u;
-            var d = n - r + u;
-            AddVertex(fills, a);
-            AddVertex(fills, b);
-            AddVertex(fills, c);
-            AddVertex(fills, a);
-            AddVertex(fills, c);
-            AddVertex(fills, d);
-        }
-        (_fillVao, _fillVbo) = RenderUploads.UploadLines(gl, [.. fills]);
+        (_fillVao, _fillVbo) = RenderUploads.UploadLines(gl, ViewCubeGeometry.BuildFillVertices());
 
-        // Edges: the 12 cube edges as line segments.
-        var edges = new List<(Vector3d A, Vector3d B)>();
-        Span<double> s = [-1, 1];
-        foreach (double i in s)
-        {
-            foreach (double j in s)
-            {
-                edges.Add(((i, j, -1), (i, j, 1)));
-                edges.Add(((i, -1, j), (i, 1, j)));
-                edges.Add(((-1, i, j), (1, i, j)));
-            }
-        }
-        float[] edgeVertices = RenderGeometry.SegmentVertices(edges);
-        _edgeVertexCount = edges.Count * 2;
+        float[] edgeVertices = ViewCubeGeometry.BuildEdgeVertices();
+        _edgeVertexCount = edgeVertices.Length / 3;
         (_edgeVao, _edgeVbo) = RenderUploads.UploadLines(gl, edgeVertices);
 
-        // Labels: stroke-font words per face, lifted slightly off the surface so they
-        // beat the (polygon-offset-pushed) fills; back faces' labels lose the depth
-        // test against the front fills, so only visible faces show text.
-        var labels = new List<(Vector3d A, Vector3d B)>();
-        foreach (var (n, r, u, word, _) in Faces)
-            AddWord(labels, n * 1.01, r, u, word);
-        float[] labelVertices = RenderGeometry.SegmentVertices(labels);
-        _labelVertexCount = labels.Count * 2;
+        float[] labelVertices = ViewCubeGeometry.BuildLabelVertices();
+        _labelVertexCount = labelVertices.Length / 3;
         (_labelVao, _labelVbo) = RenderUploads.UploadLines(gl, labelVertices);
-    }
-
-    private static void AddVertex(List<float> vertices, in Vector3d p)
-    {
-        vertices.Add((float)p.X);
-        vertices.Add((float)p.Y);
-        vertices.Add((float)p.Z);
-    }
-
-    // ---- face labels (lettering lives in the shared StrokeFont) ----
-
-    /// <summary>Lays a word out centered on a face: letters scaled to fit a 1.5-unit
-    /// line (face spans 2 units) capped at 0.5-unit height, mapped into the face
-    /// plane at <paramref name="center"/> via the face's right/up frame. The strokes
-    /// come from the viewer-wide <see cref="StrokeFont"/> (this widget's original
-    /// lettering, now shared with annotation text).</summary>
-    private static void AddWord(
-        List<(Vector3d A, Vector3d B)> segments, in Vector3d center, in Vector3d right, in Vector3d up,
-        string word)
-    {
-        double rawWidth = StrokeFont.TextWidth(word);
-        double scale = Math.Min(0.5, 1.5 / rawWidth);
-        var origin = center + right * (-rawWidth * scale / 2) + up * (-scale / 2);
-        StrokeFont.AppendText(segments, word, origin, right, up, scale);
     }
 }

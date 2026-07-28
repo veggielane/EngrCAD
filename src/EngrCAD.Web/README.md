@@ -64,11 +64,14 @@ Three decisions there are load-bearing and easy to "fix" wrongly:
 - **Fills do not cull.** Both desktop passes leave face culling off, because a section
   plane exposes a solid's interior as *backfaces*, which the shared fragment shader
   shades as cut material via `gl_FrontFacing`. Culling would look fine today and break
-  the section rung silently.
-- **`uSectionCount` is never sent.** It is an `int` uniform, and the interop marshals
-  every JSON number through `uniform1f`, which GL rejects on an int. The clip rule
-  short-circuits on `uSectionEnabled` and an unset int uniform is already 0, so the
-  neutral state must say nothing about it. A test asserts the absence.
+  sectioning silently.
+- **`uSectionCount` travels as a typed marker, never a plain number.** It is an `int`
+  uniform, and the interop marshals every JSON number through `uniform1f`, which GL
+  rejects on an int with no visible error. `IntUniform` serializes as `{"int": n}` and
+  dispatches through `uniform1i`; `Vec4ArrayUniform` (`{"vec4": [...]}` →
+  `uniform4fv`) exists because four packed section planes are exactly 16 floats, which
+  the shape dispatch would otherwise send as a mat4. WHICH uniforms need which type
+  stays a C# decision — the JS only dispatches on the marker's shape.
 - **Translucent fills carry no polygon offset.** Opaque fills are pushed back so the
   edge overlay wins the depth test; translucent fills write no depth at all, so there is
   nothing for their edges to z-fight with — and the desktop disables it here too.
@@ -142,10 +145,11 @@ uploaded once and a revisit costs no GPU work at all. Measured in the demo below
 to switch to a tab placing the same two parts four times, against ~1 670 ms to build the
 model in the first place.
 
-### `TabMeshLoader` was NOT moved to `Viewer.Core`, and the reason is not Avalonia
+### This client does NOT use `TabMeshLoader`, and the reason is not Avalonia
 
-The desktop's `TabMeshLoader` is genuinely Avalonia-free and headlessly unit-tested, so
-moving it looks obvious. It is the wrong call: it is **thread-model**-bound, not UI-bound.
+`TabMeshLoader` now lives in `EngrCAD.Viewer.Core` (it is genuinely Avalonia-free and
+headlessly unit-tested), so using it here looks obvious. It is the wrong call: it is
+**thread-model**-bound, not UI-bound.
 Its whole shape — `Task.Run` for the work, a `post` delegate back to the UI thread, a
 `Volatile` generation token read across threads — assumes two threads. WebAssembly has
 one. `Task.Run` there runs the loop to completion on the same thread with no chance to
@@ -164,6 +168,59 @@ three rules and cooperative yielding in place of the threading:
 
 `Task.Delay(1)`, not `Task.Yield()`: yielding posts the continuation straight back onto
 the same loop, which need not paint first.
+
+## Section planes, and the isolines on the cut
+
+`EngrCadViewport` carries the desktop surface — `SectionEnabled`/`SectionAxis`/
+`SectionOffset` (null = centred in the scene bounds), `SetSectionAsync` (an axis change
+re-centres, the desktop rule), `NudgeSectionAsync` (2% of the scene extent per step) —
+and the SceneView toolbar drives it exactly as the desktop toolbar does: toggle, axis
+cycler, nudge. **Nothing about the cut itself is decided in this project.** The clip is
+the shared shader rule (`ViewerShaders.SectionClip`); the frame only carries the
+uniforms, packed exactly as the desktop's `SectionUniforms.Write` packs them (via the
+`Vec4ArrayUniform` marker — see the trio above). Scene furniture, the cube, annotations
+and `Part.ClippedBySection`-exempt parts carry a per-draw `uSectionEnabled = 0`
+override, the browser's version of the desktop's per-draw-group `SetEnabled(false)` —
+so a fastener stands whole inside a cutaway, in the render AND in the pick, because the
+pick goes through the same `SectionClip.Hides` the shaders state (`ScenePick` applies
+it; this project passes three arguments and restates nothing).
+
+The SDF isolines ride the shared `SectionContours` (moved to `Viewer.Core` for exactly
+this): the same cached `Part.TryGetSdf` route, the same marching squares, the same lift
+below the plane that keeps the fragment discard from eating the lines, the same
+1-2-5 level spacing, and the same three family colours — recomputed on a
+section/visibility/load change, never per frame, and drawn signed-families-first so the
+gold d = 0 cross-section wins overdraw.
+
+## The view cube, and annotations
+
+Both rungs are thin: their pure halves live in `EngrCAD.Viewer.Core` and this project
+uploads and routes. The cube's fills/edges/labels are `ViewCubeGeometry`'s arrays — the
+same floats the desktop widget uploads — drawn last into a top-right sub-viewport with
+the depth buffer cleared first (`DrawCall.Viewport`/`ClearDepth`, applied by the JS
+without policy); clicks resolve through `ViewCubeMath.TryHit`/`PoseFor` (the pose table
+the desktop toolbar shares, so "Front" cannot mean two things), a click inside the
+region is CLAIMED so parts behind the widget are never picked through it, a drag that
+started on the cube rotate-snaps to `NearestStandardDirection` on release, and the
+transition is `ViewCubeAnimation` — the 250 ms smoothstep constant, taken rather than
+re-typed. `ViewCubeClickAsync`/`SnapToNearestViewAsync` are public for the reason the
+desktop's `ViewCubeClick` is.
+
+Annotations resolve per instance through `Part.TryResolveAnnotations` at load (cached
+lowering; a broken selector becomes a status message) and build through
+`AnnotationGeometry` — billboarded, screen-constant, rebuilt only when the
+`AnnotationCamera` VALUE or the visibility set changes, the desktop layer's exact
+rebuild key — then draw depth-off in the shared colour, never section-clipped. Hiding a
+part hides its annotations; the toolbar's Annot toggle matches the desktop's.
+
+## Properties panel and BOM
+
+`PartFacts.For(row, instance)` is the desktop properties panel as a pure function
+(Name/Kind/Display + Faces/Closed/Volume/Area/Size/Position), **gated on
+`Part.HasMesh`** exactly as the desktop gates it — the panel must never mesh a part the
+loader is still working on. The BOM button shows `Bom.For(tab)` as the same monospace
+`ToText` the desktop windows, with `ToCsv()` as a data-URI download link (the browser's
+"drop a CSV beside the window").
 
 ## Picking, and selection sync
 
@@ -189,14 +246,10 @@ Hover fell out of the pick path cheaply and is in: pointer moves re-pick through
 `HoverThrottle` (4 pixels of travel, also moved to `Viewer.Core`), and a frame is redrawn
 only when the hovered index actually changes.
 
-**One forward dependency, designed in rather than deferred.** Section planes are the next
-rung, and on the desktop picking honours them — `SectionClip.Hides` holds the shaders'
-discard rule in one place so a click cannot select through a cut-away corner. `ScenePick`
-already takes the plane set and each `PickInstance` already carries the part's
-`ClippedBySection`, so turning sections on here is passing three more arguments, not
-writing a second clip rule. The desktop path proves it works today
-(`ScenePickTests` picks through a sectioned box and lands on the interior the cut
-exposed).
+**The forward dependency paid off.** `ScenePick` was built taking the plane set, and
+each `PickInstance` carried the part's `ClippedBySection` a rung early — so when
+sections landed here, picking-honours-the-cut was passing three more arguments in
+`EngrCadViewport.PickAt`, exactly as planned, and no second clip rule was ever written.
 
 ## The camera is not forked either
 
@@ -417,26 +470,35 @@ event is a state nothing checks.
 
 Kernel-in-the-browser, the WebGL2 interop layer, the scene-to-frame layer, the orbit
 camera, feature edges, per-part display modes, the global view style, the tab strip, the
-model tree with subtree visibility, client-side picking, two-way selection sync and the
-hover highlight are in place. Still to build: section planes and their isolines, the view
-cube, construction-tree rows and their rollback previews, the properties panel, and
-annotations. The parity ladder is in `todo.md`.
+model tree with subtree visibility, client-side picking, two-way selection sync, the
+hover highlight, **section planes with picking parity and SDF isolines on the cut, the
+view cube, 3D annotations, the toolbar, the properties panel and the BOM button** are in
+place. Still to build: construction-tree rows and their rollback previews, the measure
+tool, and exploded views. The parity ladder is in `todo.md`.
+
+The `?report` self-check covers the new rungs as pixel relationships (cube and
+annotations start OFF under `?report`, like the furniture, because their near-white
+strokes would land in the "steel" class and skew the comparative counts): sectioning at
+the scene centre removed **32 374 → 20 593** body pixels with **676** gold d = 0
+isoline pixels on the cut; toggling the flange's dimension changed **786** pixels; the
+cube lit **4 770** pixels in its corner region, claimed a click on the region
+(`cubeClaimed=1`) and landed the camera EXACTLY on a shared-pose-table orientation
+(`cubeSnapped=1` — checkable without naming the face, because the animation's final
+step returns the target). The drawing buffer is 693×393 now that the toolbar takes a
+row, so absolute counts are not comparable with the older tables above — the
+relationships are the point, and all of the pre-toolbar checks reproduce.
 
 Notes for whoever takes the next rung:
 
-- `SectionClip` is already shared and waiting; the frame builder deliberately does **not**
-  half-apply it, because a mode resolved and then ignored looks like support and is not.
-  `uSectionEnabled` is 0 in every frame today. **Picking is the part that is already
-  ready**: `ScenePick.Nearest` takes the plane set and each `PickInstance` carries the
-  part's `ClippedBySection`, so the section rung has to pass three arguments in
-  `EngrCadViewport.PickAt` and add the uniforms to `ViewportFrame.Build` — not write a
-  second clip rule.
-- **Do not move `TabMeshLoader` into `Viewer.Core`** for this client's benefit; see the
-  section above. It is Avalonia-free but thread-model-bound, and the browser needs the
-  opposite shape.
 - There is no ambient-occlusion bake in the browser. `uAmbientOcclusion` is 0, which
   makes the factor exactly 1.0 and *is* the AO-off shading rather than an approximation
   of it — the same property that lets the desktop stream bakes in behind a live scene.
+- The section UI is single-plane (the desktop toolbar's scope). Quarter/octant cuts are
+  already supported one layer down — `ViewportFrame.Build` takes the plane list and
+  `SectionCombine`, clamped to `ViewerShaders.MaxSectionPlanes` — so a multi-plane UI
+  is a component change, not a frame change. Multi-plane isolines would also want
+  `SectionClip.Siblings` per plane (the single-plane case has no siblings, so contour
+  draws currently opt out of the clip entirely).
 - Frame-constant uniforms ride on `FrameDescription.Shared` so they travel once instead
   of once per instance. For a scene of any size that is most of the interop payload, and
   it is the first place to look if a large assembly feels heavy during a drag.

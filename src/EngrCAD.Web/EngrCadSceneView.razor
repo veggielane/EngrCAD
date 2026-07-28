@@ -1,4 +1,37 @@
 <div class="engrcad-scene @Class" style="@Frame">
+    @if (ShowToolbar)
+    {
+        <div style="display:flex; gap:4px; align-items:center; padding:4px 8px; background:#191b1f;
+                    border-bottom:1px solid #2a2d33; font:12px/1.4 'Segoe UI', system-ui, sans-serif">
+            <button type="button" style="@ButtonStyle(false)" title="Frame the whole scene"
+                    @onclick="() => _viewport?.FitAsync() ?? Task.CompletedTask">Fit</button>
+            <select value="@EffectiveStyle" title="Global view style"
+                    @onchange="OnStyleChanged" style="@SelectStyle">
+                <option value="@ViewStyle.Points">Points</option>
+                <option value="@ViewStyle.Wireframe">Wireframe</option>
+                <option value="@ViewStyle.Shaded">Shaded</option>
+                <option value="@ViewStyle.ShadedWithEdges">Shaded + edges</option>
+            </select>
+            <span style="flex:0 0 6px"></span>
+            <button type="button" style="@ButtonStyle(_section)" title="Section cut"
+                    @onclick="ToggleSectionAsync">Section</button>
+            @if (_section)
+            {
+                <button type="button" style="@ButtonStyle(false)" title="Cycle the section axis (re-centers)"
+                        @onclick="CycleSectionAxisAsync">@_sectionAxis</button>
+                <button type="button" style="@ButtonStyle(false)" title="Nudge the plane down the axis"
+                        @onclick="() => NudgeSectionAsync(-1)">-</button>
+                <button type="button" style="@ButtonStyle(false)" title="Nudge the plane up the axis"
+                        @onclick="() => NudgeSectionAsync(+1)">+</button>
+            }
+            <button type="button" style="@ButtonStyle(EffectiveAnnotations)" title="Show 3D annotations (PMI)"
+                    @onclick="() => _annotationsOverride = !EffectiveAnnotations">Annot</button>
+            <button type="button" style="@ButtonStyle(_propertiesVisible)" title="Properties of the selection"
+                    @onclick="() => _propertiesVisible = !_propertiesVisible">Props</button>
+            <button type="button" style="@ButtonStyle(_bomVisible)" title="Bill of materials"
+                    @onclick="ToggleBom">BOM</button>
+        </div>
+    }
     @if (Tabs.Count > 1)
     {
         <div style="display:flex; gap:2px; padding:4px 6px 0; background:#191b1f; border-bottom:1px solid #2a2d33">
@@ -38,15 +71,57 @@
         }
 
         <div style="flex:1 1 auto; min-width:0; position:relative">
+            @if (_bomVisible && CurrentBom is { } bom)
+            {
+                <div style="position:absolute; inset:12px; z-index:10; overflow:auto; padding:12px 16px;
+                            background:rgba(17,19,22,.96); border:1px solid #2a2d33; border-radius:6px;
+                            font:12px/1.5 Consolas, Menlo, monospace; color:#e6e9ee">
+                    <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px;
+                                font-family:'Segoe UI', system-ui, sans-serif">
+                        <b>Bill of materials — @_tree.TabName</b>
+                        <a href="@BomCsvHref(bom)" download="bom.csv"
+                           style="color:#6f8fb5">download CSV</a>
+                        <span style="flex:1 1 auto"></span>
+                        <button type="button" style="@ButtonStyle(false)"
+                                @onclick="() => _bomVisible = false">close</button>
+                    </div>
+                    <pre style="margin:0; white-space:pre">@bom.ToText(pathsShown: 4)</pre>
+                </div>
+            }
             <EngrCadViewport @ref="_viewport"
                              Scene="Scene" TabIndex="_tabIndex"
-                             Furniture="Furniture" ViewStyle="ViewStyle" Picking="Picking"
+                             Furniture="Furniture" ViewStyle="EffectiveStyle" Picking="Picking"
+                             SectionEnabled="_section" SectionAxis="_sectionAxis"
+                             SectionOffset="_sectionOffset" ShowAnnotations="EffectiveAnnotations"
+                             ShowViewCube="ShowViewCube"
                              Width="100%" Height="100%"
                              SelectionChanged="OnViewportSelectionChanged"
                              PartFailed="OnPartFailed"
                              OnStatus="OnViewportStatus"
                              OnRendered="OnViewportRendered" />
         </div>
+
+        @if (_propertiesVisible)
+        {
+            <div style="width:@PropertiesWidth; flex:0 0 auto; overflow:auto; background:#191b1f;
+                        border-left:1px solid #2a2d33; padding:8px 10px;
+                        font:12px/1.6 'Segoe UI', system-ui, sans-serif; color:#c9ced6">
+                @if (Selection is { } selection)
+                {
+                    @foreach (var (label, value) in PartFacts.For(selection, InstanceFor(selection)))
+                    {
+                        <div style="display:flex; gap:8px">
+                            <span style="flex:0 0 62px; color:#8d939d">@label</span>
+                            <span style="min-width:0; overflow-wrap:anywhere">@value</span>
+                        </div>
+                    }
+                }
+                else
+                {
+                    <span style="color:#8d939d">nothing selected</span>
+                }
+            </div>
+        }
     </div>
 
     @if (ShowStatus)
@@ -81,6 +156,16 @@
     /// <summary>Click picking and hover in the viewport.</summary>
     [Parameter] public bool Picking { get; set; } = true;
 
+    /// <summary>The view cube, passed through to the viewport.</summary>
+    [Parameter] public bool ShowViewCube { get; set; } = true;
+
+    /// <summary>3D annotations, the host-supplied initial state; the toolbar's Annot
+    /// toggle then owns it (the same override pattern the style dropdown uses).</summary>
+    [Parameter] public bool ShowAnnotations { get; set; } = true;
+
+    /// <summary>Show the toolbar above the viewport (Fit, view style, sections).</summary>
+    [Parameter] public bool ShowToolbar { get; set; } = true;
+
     /// <summary>Show the model tree beside the viewport.</summary>
     [Parameter] public bool ShowTree { get; set; } = true;
 
@@ -89,6 +174,9 @@
 
     /// <summary>CSS width of the tree column.</summary>
     [Parameter] public string TreeWidth { get; set; } = "190px";
+
+    /// <summary>CSS width of the properties column (shown via the Props toggle).</summary>
+    [Parameter] public string PropertiesWidth { get; set; } = "220px";
 
     /// <inheritdoc cref="EngrCadViewport.Width"/>
     [Parameter] public string Width { get; set; } = "100%";
@@ -119,6 +207,22 @@
     private string _status = "";
     private Scene? _builtFrom;
     private int _builtTab = -1;
+
+    // Toolbar state. The section trio flows to the viewport as parameters, so the
+    // toolbar and the viewport can never disagree about what is cut; the style is a
+    // local override over the ViewStyle parameter (a host-supplied initial value the
+    // dropdown then owns, the pattern the viewport's SetViewStyleAsync documents).
+    private bool _section;
+    private SectionAxis _sectionAxis = SectionAxis.Z;
+    private double? _sectionOffset;
+    private bool? _annotationsOverride;
+    private bool _propertiesVisible;
+    private bool _bomVisible;
+    private ViewStyle? _styleOverride;
+
+    private ViewStyle EffectiveStyle => _styleOverride ?? ViewStyle;
+
+    private bool EffectiveAnnotations => _annotationsOverride ?? ShowAnnotations;
 
     /// <summary>The GL viewport, for hosts that drive the camera, capture pixels or pick
     /// directly.</summary>
@@ -256,7 +360,94 @@
             await OnRendered.InvokeAsync();
     }
 
+    // ---- properties + BOM ----
+
+    /// <summary>The current tab's BOM (occurrence counts per distinct part, nested
+    /// sub-assemblies rolled up), or null with nothing to list.</summary>
+    private Bom? CurrentBom =>
+        Tabs.Count > 0 && _tabIndex >= 0 && _tabIndex < Tabs.Count
+            ? Bom.For(Tabs[_tabIndex])
+            : null;
+
+    /// <summary>The placed instance a part row addresses (matched by occurrence path —
+    /// unique per tab), for the facts that need a pose: size and position.</summary>
+    private PartInstance? InstanceFor(SceneTreeRow row)
+    {
+        if (row.Kind != SceneTreeRowKind.Part || row.InstanceIndex < 0)
+            return null;
+        if (Tabs.Count == 0 || _tabIndex < 0 || _tabIndex >= Tabs.Count)
+            return null;
+        foreach (var instance in Tabs[_tabIndex].Instances())
+        {
+            if (instance.Path == row.Path)
+                return instance;
+        }
+        return null;
+    }
+
+    private void ToggleBom()
+    {
+        _bomVisible = !_bomVisible;
+        if (_bomVisible && CurrentBom is { } bom)
+            _status = $"BOM: {bom.LineCount} line(s), {bom.TotalQuantity} piece(s)";
+    }
+
+    /// <summary>The browser's version of "drop a CSV beside the window": the same
+    /// <c>Bom.ToCsv()</c> text the desktop writes, as a download link.</summary>
+    private static string BomCsvHref(Bom bom) =>
+        "data:text/csv;charset=utf-8," + Uri.EscapeDataString(bom.ToCsv());
+
+    // ---- toolbar ----
+
+    private void OnStyleChanged(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<ViewStyle>(e.Value?.ToString(), out var style))
+        {
+            _styleOverride = style;
+            _status = $"view style {style}";
+        }
+    }
+
+    private void ToggleSectionAsync()
+    {
+        _section = !_section;
+        _status = _section
+            ? $"section {_sectionAxis.ToString().ToLowerInvariant()}"
+            : "section off";
+    }
+
+    /// <summary>Cycles X → Y → Z. Clearing the offset re-centers the plane in the scene
+    /// bounds along the new axis — the desktop rule.</summary>
+    private void CycleSectionAxisAsync()
+    {
+        _sectionAxis = (SectionAxis)(((int)_sectionAxis + 1) % 3);
+        _sectionOffset = null;
+        _status = $"section {_sectionAxis.ToString().ToLowerInvariant()}";
+    }
+
+    private async Task NudgeSectionAsync(int direction)
+    {
+        if (_viewport is null)
+            return;
+        // Route through the viewport's nudge (2% of the scene extent per step — the
+        // desktop's [ / ] step), then adopt the offset it computed so the parameter
+        // flow keeps saying the same thing the viewport is already showing.
+        var nudge = _viewport.NudgeSectionAsync(direction);
+        _sectionOffset = _viewport.SectionOffset;
+        _status = $"section {_sectionAxis.ToString().ToLowerInvariant()} = {_sectionOffset:G4}";
+        await nudge;
+    }
+
     // ---- styling ----
+
+    private static string ButtonStyle(bool active) =>
+        "padding:3px 10px; border:1px solid #2a2d33; border-radius:4px; cursor:pointer; "
+        + "font:12px/1.4 'Segoe UI', system-ui, sans-serif; "
+        + (active ? "background:#2f4a68; color:#e6e9ee;" : "background:#22252b; color:#c9ced6;");
+
+    private static string SelectStyle =>
+        "padding:2px 6px; border:1px solid #2a2d33; border-radius:4px; background:#22252b; "
+        + "color:#c9ced6; font:12px/1.4 'Segoe UI', system-ui, sans-serif;";
 
     private static string TabStyle(bool active) =>
         "padding:5px 12px; border:1px solid #2a2d33; border-bottom:none; cursor:pointer; "

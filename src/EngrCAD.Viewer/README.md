@@ -18,6 +18,16 @@ and `MaxSectionPlanes`; `Header(es)` already emits both an ES3 and a desktop 3.3
 header, and WebGL2 wants the ES3 one), `CameraMath`, and the pure half of
 `RenderGeometry` (`BuildGridAndAxes`, `NiceStep`, `SegmentVertices`).
 
+**Step 2 of the extraction moved the widgets' pure halves too** (same rule, same
+namespace): `ViewCubeMath`/`ViewCubeAnimation`/`ViewCubeGeometry` (pose table, hit
+test, rotate-snap, the 250 ms transition, and the cube's fill/edge/label arrays with
+their palette), `StrokeFont`, `AnnotationItem`/`AnnotationCamera`/`AnnotationGeometry`
+(with the overlay colour), `SectionContours`/`SectionContourGeometry` (with the three
+isoline family colours), and `TabMeshLoader` + `MeshFlavor` (Avalonia-free, though the
+loader stays thread-model-bound — the browser keeps its own single-threaded loader).
+This project keeps their GL halves: `ViewCube`, `AnnotationLayer`,
+`SectionContourRenderer`.
+
 Still here, in `RenderCore.cs`, because each one takes a Silk.NET `GL`:
 `ViewerPrograms` (`LinkProgram`/`CompileShader`), `SectionUniforms` (the single place
 either pass writes the section uniforms), and `RenderUploads` (`UploadMesh`,
