@@ -60,6 +60,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
 | `ThreadedHole` (no clearance) | ✅ **native** (pilot + thread as ONE clipped-profile helical tool; spiral-arc chains split the drilled faces) | ✅ native | ✅ native (B-Rep tessellation) |
 | `ExternalThread` (chamfers) / either with clearance | ❌ chamfer cones / distance-field profile offsets — reported per cause | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
+| `Heightmap(heights, cellSize)` (OpenSCAD `surface()`; grids, `.dat`, grayscale PNG via `Heightmap.ReadDat/ReadPng`) | ❌ mesh construction | ✅ exact mesh SDF | ✅ native (manifold-by-construction terrain solid) |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
 | `From(HalfEdgeMesh)` | ❌ no mesh→B-Rep import | ✅ exact mesh SDF (closed meshes) | ✅ as-is |
 | `From(Sdf)` | ❌ no SDF→B-Rep | ✅ native | 🔶 polygonized |

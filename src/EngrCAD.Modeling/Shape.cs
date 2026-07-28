@@ -827,6 +827,41 @@ public abstract class Shape
     public static Shape From(HalfEdgeMesh mesh) => new SourceShape(mesh);
     public static Shape From(Sdf sdf) => new SourceShape(sdf);
 
+    /// <summary>
+    /// Heightmap terrain — OpenSCAD's <c>surface()</c>: the grid becomes a closed
+    /// solid (top surface, flat base at <paramref name="baseLevel"/>, perimeter
+    /// walls), wrapped as a mesh-backed shape via <see cref="From(HalfEdgeMesh)"/>.
+    /// Booleans, transforms and the implicit route work as for any mesh source;
+    /// B-Rep is Impossible (meshes cannot be imported). Heights can come from
+    /// <see cref="Modeling.Heightmap.ReadPng(string)"/> (grayscale PNG, 0..1 — set
+    /// <paramref name="heightScale"/> to the terrain's real peak height) or
+    /// <see cref="Modeling.Heightmap.ReadDat(string)"/> (OpenSCAD text matrices).
+    /// </summary>
+    /// <param name="heights"><c>[row, column]</c> heights, columns along +X and rows
+    /// along −Y (image order); at least 2×2, all strictly above the base.</param>
+    /// <param name="cellSize">Grid spacing in model units.</param>
+    /// <param name="heightScale">Multiplier applied to every height (for normalized
+    /// PNG data); default 1.</param>
+    /// <param name="baseLevel">The z of the flat bottom face (after scaling).</param>
+    /// <param name="centered">Center the footprint on the origin (default).</param>
+    public static Shape Heightmap(
+        double[,] heights, double cellSize = 1, double heightScale = 1,
+        double baseLevel = 0, bool centered = true)
+    {
+        ArgumentNullException.ThrowIfNull(heights);
+        if (heightScale <= 0)
+            throw new ArgumentOutOfRangeException(nameof(heightScale));
+        double[,] scaled = heights;
+        if (heightScale != 1)
+        {
+            scaled = new double[heights.GetLength(0), heights.GetLength(1)];
+            for (int r = 0; r < heights.GetLength(0); r++)
+                for (int c = 0; c < heights.GetLength(1); c++)
+                    scaled[r, c] = heights[r, c] * heightScale;
+        }
+        return From(Modeling.Heightmap.Mesh(scaled, cellSize, baseLevel, centered));
+    }
+
     // ---- Booleans ----
 
     public Shape Union(Shape other) => new BooleanShape(BooleanOp.Union, this, other);

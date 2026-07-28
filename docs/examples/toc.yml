@@ -18,6 +18,8 @@
   href: holes.md
 - name: Text
   href: text.md
+- name: Heightmap terrain
+  href: heightmaps.md
 - name: Threads
   href: threads.md
 - name: Chamfer & fillet

@@ -533,7 +533,11 @@ export — is recorded in CLAUDE.md):
   encoding); **vertical alignment** for text blocks (horizontal-only today);
   **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
   font reference).
-- [ ] `surface()` — heightmap (image/data grid) → mesh terrain
+- [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
+  `Heightmap.Mesh/ReadDat/ReadPng`, grayscale-PNG reader dependency-free over BCL
+  `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —
+  decide a documented rule first); Adam7 interlaced PNGs; chunk CRC verification
+  (currently structural failures only).
 - [ ] `minkowski()` — general Minkowski sum is hard; the important special case is
   rounding, which we already have cheaply (SDF `Offset` ≡ sphere-Minkowski, and
   `Filleting`). Document the equivalence; general polyhedron⊕polyhedron is low priority
