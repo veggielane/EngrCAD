@@ -172,6 +172,11 @@ internal static class ShapeCompiler
                     "a remesh is defined on a triangulation, so its result is a tessellation rather than a surface, and meshes cannot be imported into B-Rep"));
                 break;
 
+            case MotionSweepShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                    "a swept volume's outer envelope is not one of the kernel's surfaces — take the implicit route (union of the child's field over the sampled poses) or the mesh route"));
+                break;
+
             case DrillShape drill:
                 // A drill is its expansion (body minus revolved tools); the extra
                 // far-face validation happens at lowering.
@@ -316,6 +321,16 @@ internal static class ShapeCompiler
                     "remeshed triangles wrapped in a mesh SDF, so the field carries the tessellation's chord error rather than the child's own"));
                 break;
 
+            case MotionSweepShape sweep when rigid:
+                ClassifyImplicit(sweep.Child, Matrix4d.Identity, entries);
+                entries.Add(new ConversionEntry(sweep.Describe(), NodeSupport.Native,
+                    "the child's field lowered once and placed per sampled pose, unioned"));
+                break;
+            case MotionSweepShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                    "sheared subtree goes through a tessellated mesh SDF"));
+                break;
+
             case DrillShape drill:
                 ClassifyImplicit(drill.Expanded, m, entries);
                 break;
@@ -360,7 +375,8 @@ internal static class ShapeCompiler
 
     private static bool UsesImplicitOnlyOps(Shape shape) => shape switch
     {
-        SmoothShape or OffsetShape or ShellShape or LatticeShape or ThreadShape => true,
+        SmoothShape or OffsetShape or ShellShape or LatticeShape or ThreadShape
+            or MotionSweepShape => true,
         SourceShape { Geometry: Sdf } => true,
         BooleanShape b => UsesImplicitOnlyOps(b.A) || UsesImplicitOnlyOps(b.B),
         DrillShape d => UsesImplicitOnlyOps(d.Expanded),
@@ -853,6 +869,25 @@ internal static class ShapeCompiler
             case ThreadedHoleShape hole:
                 // Exact SDF subtraction: pilot drill + thread tool, no coplanarity concerns.
                 return LowerImplicit(hole.Expanded, m, quality);
+
+            case MotionSweepShape sweep:
+            {
+                // The point of the implicit route: the child's field is lowered ONCE
+                // and each sampled pose is a Rotate/Translate wrapper — N placements,
+                // not N tessellations.
+                var field = LowerImplicit(sweep.Child, Matrix4d.Identity, quality);
+                var copies = new List<Sdf>(sweep.Poses.Count);
+                foreach (var pose in sweep.Poses)
+                {
+                    var placed = m * pose;
+                    if (!placed.TryDecomposeRigidUniformScale(out var q, out var t2, out double s2))
+                        throw new NotSupportedException(
+                            $"{sweep.Describe()}: a swept-volume pose must be rigid (or a uniform " +
+                            "similarity) — a sheared pose cannot place a distance field.");
+                    copies.Add(Place(field, q, t2, s2));
+                }
+                return copies.Count == 1 ? copies[0] : Sdf.Union(copies);
+            }
 
             case TransformShape t:
                 return LowerImplicit(t.Child, m * t.Matrix, quality);

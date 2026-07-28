@@ -701,6 +701,26 @@ public abstract class Shape
         return new RemeshShape(this, options);
     }
 
+    /// <summary>
+    /// The volume this shape sweeps over a set of sampled rigid poses — the union of
+    /// the posed copies, typically the per-frame instance transforms of a
+    /// <see cref="MotionStudy"/> (see <see cref="MotionStudy.SweptVolume"/>). Fidelity
+    /// is set by how densely the motion was sampled: the swept volume is exactly the
+    /// union of the sampled poses, no more.
+    /// <para>Support: implicit-<b>Native</b> (the child's field is lowered once and
+    /// placed per pose — what the implicit engine is for); mesh Bridged via Surface
+    /// Nets over that field; B-Rep <b>Impossible</b> (a motion envelope is not one of
+    /// the kernel's surfaces). Every pose must be rigid (or a uniform similarity);
+    /// sheared poses are refused at lowering.</para>
+    /// </summary>
+    public Shape SweptOver(IReadOnlyList<Matrix4d> poses)
+    {
+        ArgumentNullException.ThrowIfNull(poses);
+        if (poses.Count == 0)
+            throw new ArgumentException("A swept volume needs at least one pose.", nameof(poses));
+        return new MotionSweepShape(this, [.. poses]);
+    }
+
     // ---- Text ----
 
     /// <summary>
