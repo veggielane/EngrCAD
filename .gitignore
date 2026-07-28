@@ -20,3 +20,4 @@ launchSettings.json
 # Claude Code harness runtime state (.claude/agents/ etc. stay tracked)
 .claude/scheduled_tasks.lock
 .claude/worktrees/
+scratch/
