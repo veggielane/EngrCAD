@@ -169,7 +169,8 @@ public sealed class WebGlContext : IAsyncDisposable
         ReadOnlySpan<Vector3d> positions,
         ReadOnlySpan<Vector3d> normals,
         ReadOnlySpan<int> indices,
-        ReadOnlySpan<float> occlusion = default)
+        ReadOnlySpan<float> occlusion = default,
+        ReadOnlySpan<float> fieldColors = default)
     {
         if (positions.Length != normals.Length)
             throw new ArgumentException(
@@ -180,21 +181,25 @@ public sealed class WebGlContext : IAsyncDisposable
             "uploadMesh", _id, key,
             PackVectors(positions), PackVectors(normals),
             MemoryMarshal.AsBytes(indices).ToArray(),
-            occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray());
+            occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray(),
+            fieldColors.IsEmpty ? [] : MemoryMarshal.AsBytes(fieldColors).ToArray());
     }
 
     /// <summary>
     /// Uploads a <c>RenderMesh</c>'s already-float32 arrays under <paramref name="key"/>
     /// — the form <c>RenderMesh.CreateFlat</c> produces and the desktop's
     /// <c>RenderUploads.UploadMesh</c> consumes, so a display mesh crosses without being
-    /// widened to doubles and narrowed again.
+    /// widened to doubles and narrowed again. <paramref name="fieldColors"/> (three
+    /// floats per vertex) is the simulation-result colour buffer, optional under the
+    /// same constant-when-absent rule as <paramref name="occlusion"/>.
     /// </summary>
     public ValueTask UploadMeshAsync(
         string key,
         ReadOnlySpan<float> positions,
         ReadOnlySpan<float> normals,
         ReadOnlySpan<uint> indices,
-        ReadOnlySpan<float> occlusion = default)
+        ReadOnlySpan<float> occlusion = default,
+        ReadOnlySpan<float> fieldColors = default)
     {
         if (positions.Length != normals.Length)
             throw new ArgumentException(
@@ -206,7 +211,8 @@ public sealed class WebGlContext : IAsyncDisposable
             MemoryMarshal.AsBytes(positions).ToArray(),
             MemoryMarshal.AsBytes(normals).ToArray(),
             MemoryMarshal.AsBytes(indices).ToArray(),
-            occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray());
+            occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray(),
+            fieldColors.IsEmpty ? [] : MemoryMarshal.AsBytes(fieldColors).ToArray());
     }
 
     /// <summary>Uploads a line list (feature edges, wireframe, grid, axes) under

@@ -213,6 +213,29 @@ lowering; a broken selector becomes a status message) and build through
 rebuild key — then draw depth-off in the shared colour, never section-clipped. Hiding a
 part hides its annotations; the toolbar's Annot toggle matches the desktop's.
 
+## Simulation results (colour maps, legend, deformed shape)
+
+Thin for the same reason: `FieldRendering.TryBuild` (EngrCAD.Viewer.Core) produces the
+colour floats and the displaced mesh both desktop passes upload, and this project only
+uploads them and says which draws carry `uFieldColor`.
+
+Two things follow the desktop exactly. **Colour is a vertex attribute** — `aFieldColor`
+at slot 3, bound in `createProgram` beside `aOcclusion` and carrying the same
+constant-when-absent rule: `uploadMesh` with no colour bytes disables the array and sets
+the context constant white, the frame's shared `uFieldColor` is 0, and only a
+field-coloured instance's own fill overrides it. That neutral default is what makes a
+part with no results produce identical pixels. **A deformed shape is different geometry**,
+not a different pose, so the displaced mesh REPLACES the part's upload, the undeformed
+one goes up under a `.ghost` key and draws blended with depth writes off after every
+fill, and a deformed part uploads no feature edges (they describe geometry that has
+moved). Picking follows what is drawn — the BVH is built over the displaced mesh.
+
+The legend is `FieldLegend`'s geometry uploaded under two keys and drawn one call per
+band (each needs its own colour, exactly as the cube's faces are drawn), with its own
+pixel-coordinate projection and the depth test off, between the annotations and the
+cube. It is rebuilt only when the resolved display or the canvas size changes — value
+equality as the key, the annotation overlay's rule.
+
 ## Properties panel and BOM
 
 `PartFacts.For(row, instance)` is the desktop properties panel as a pure function

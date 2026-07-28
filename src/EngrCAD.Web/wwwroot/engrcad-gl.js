@@ -95,6 +95,7 @@ export function createProgram(id, name, vertexSource, fragmentSource, bindAttrib
         gl.bindAttribLocation(handle, 0, 'aPos');
         gl.bindAttribLocation(handle, 1, 'aNormal');
         gl.bindAttribLocation(handle, 2, 'aOcclusion');
+        gl.bindAttribLocation(handle, 3, 'aFieldColor');
     }
     gl.linkProgram(handle);
     if (!gl.getProgramParameter(handle, gl.LINK_STATUS)) {
@@ -139,11 +140,13 @@ function uniform(ctx, program, name) {
 
 /**
  * Uploads (or replaces) a mesh. `positions`/`normals` are packed float32 triples and
- * `indices` packed uint32, all as raw bytes. Occlusion is optional: a VAO with no
- * occlusion buffer reads the context constant 1.0, which is exactly the AO-off shading
- * -- the same property the desktop viewer relies on to stream bakes in.
+ * `indices` packed uint32, all as raw bytes. Occlusion and field colours are optional
+ * and follow the SAME rule: a VAO with no such buffer reads a context constant (1.0 for
+ * occlusion, white for the field colour), which is exactly the feature-off shading --
+ * the property the desktop viewer relies on to stream occlusion bakes in, and the one
+ * that keeps a part with no simulation results rendering byte-identically.
  */
-export function uploadMesh(id, key, positions, normals, indices, occlusion) {
+export function uploadMesh(id, key, positions, normals, indices, occlusion, fieldColors) {
     const ctx = require(id);
     const gl = ctx.gl;
     const existing = ctx.meshes.get(key);
@@ -170,13 +173,23 @@ export function uploadMesh(id, key, positions, normals, indices, occlusion) {
         gl.vertexAttrib1f(2, 1.0);
     }
 
+    let fieldBuffer = null;
+    if (fieldColors && fieldColors.byteLength > 0) {
+        fieldBuffer = buffer(gl, gl.ARRAY_BUFFER, fieldColors);
+        gl.enableVertexAttribArray(3);
+        gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 0, 0);
+    } else {
+        gl.disableVertexAttribArray(3);
+        gl.vertexAttrib3f(3, 1.0, 1.0, 1.0);
+    }
+
     const indexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
     ctx.meshes.set(key, {
-        vao, posBuffer, normalBuffer, occlusionBuffer, indexBuffer,
+        vao, posBuffer, normalBuffer, occlusionBuffer, fieldBuffer, indexBuffer,
         indexCount: indices.byteLength / 4,
         vertexCount: positions.byteLength / 12,
     });
@@ -212,6 +225,7 @@ function releaseMesh(gl, mesh) {
     gl.deleteBuffer(mesh.normalBuffer);
     gl.deleteBuffer(mesh.indexBuffer);
     if (mesh.occlusionBuffer) gl.deleteBuffer(mesh.occlusionBuffer);
+    if (mesh.fieldBuffer) gl.deleteBuffer(mesh.fieldBuffer);
 }
 
 function releaseLines(gl, line) {
