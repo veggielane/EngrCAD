@@ -698,7 +698,13 @@ operations. Depends only on `EngrCAD.Core`.
   floor silently rejected slightly-off-axis rims on large geometry, leaving generators
   untrimmed), and near-miss rejections emit a diagnostic instead of failing silently.
   Units: millimetres assumed; other declared length units produce a diagnostic, not
-  scaling. `Read`/`ReadFile` take an **optional trailing `ILogger`**
+  scaling. Writer-side placements go through `Frame3d`: a `Placement(Frame3d)` overload
+  mirrors the reader's `Axis2` (`Frame3d.FromZX`) — STEP stores origin + Z + X and both
+  sides derive Y right-handed, so frames round-trip by construction — and the matrix
+  path refuses **mirrored (improper) instance transforms by name** (they pass every
+  orthonormality test, but a left-handed triple would silently re-pose the part
+  un-mirrored on read-back) while still emitting the matrix's own columns so the
+  written text is ULP-stable. `Read`/`ReadFile` take an **optional trailing `ILogger`**
   (`Microsoft.Extensions.Logging.Abstractions` — abstractions only, this project's one
   package dependency; `KernelLog.cs`, stable event ID **90**) that reports counts and
   timing; the import's real findings stay in `StepReadResult.Diagnostics`, data the

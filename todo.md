@@ -994,8 +994,11 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
 - [ ] **Frame3d enabled next steps** (the `TopPlane` behaviour question is settled: both
   conventions are now expressible — `PlaneRef.TopPlane` keeps world (0,0,z) origins,
   `PlaneRef.OnTopFace` gives the face's own frame — so it is a per-feature choice rather
-  than a global decision) — arbitrary section planes from a frame; `StepWriter` emitting
-  AXIS2 placements via `Frame3d`; Part poses as frames (assemblies above).
+  than a global decision; `StepWriter` AXIS2-via-`Frame3d` landed — a `Placement(Frame3d)`
+  overload mirrors `StepReader.Axis2`/`FromZX`, and the matrix path now REFUSES mirrored
+  (improper) placements by name, which passed the orthonormality guard and would have
+  silently re-posed un-mirrored on read-back) — arbitrary section planes from a frame;
+  Part poses as frames (assemblies above).
 - [ ] **Parametric model layer follow-ups** (`.csx` scripting landed —
   `tools/EngrCAD.Script` runs a script through `EngrCad.Run` with save-to-reload via
   the new `EngrCad.NotifySourceChanged()`, DocsGen's snippet contract and Roslyn seam,
