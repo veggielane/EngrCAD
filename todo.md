@@ -778,12 +778,12 @@ where this project already points.
   item: one max-chord-deviation criterion driving the display mesh *and*
   `BrepFeatureEdges` so they agree by construction. Camera-adaptive re-extraction on
   zoom is the follow-on.
-- [ ] **Construction-tree follow-ups** (tree + per-node preview ✅ landed) — a
-  **rollback bar** (drag a marker in the feature list; suppress below it),
-  **suppress-from-tree**, and **`[Param]` editing** in the properties panel: all cheap
-  now, since the rows already carry the `Feature`, its `Suppressed` flag and
-  `ParamInfo`. Also: a preview clears on live reload because node references change —
-  it could be restored by path.
+- [ ] **Construction-tree residuals** (rollback marker + suppress-from-tree +
+  `[Param]` properties-panel editing + preview-restore-by-path ✅ landed): the rollback
+  marker is click-to-place rather than a literal drag (drag-and-drop in the tree panel
+  would need Avalonia pointer capture plumbing for marginal gain); parameter fields are
+  free-text through the JSON seam — typed editors (sliders for `Min`/`Max` ranges,
+  enum dropdowns) would be the polish pass.
 - [ ] Idea: matcap shading (ambient occlusion landed).
 
 ## Blazor web viewer

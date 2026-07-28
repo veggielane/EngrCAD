@@ -375,8 +375,26 @@ Dark-themed layout around one shared GL viewport:
   task** and is memoized per graph node (`ConstructionPreviewCache`), so the UI never
   stalls and a second click is instant; a step that cannot be lowered reports in the
   status bar instead of throwing. Expansion state is keyed by occurrence path, so it
-  survives tab switches and live reloads. Custom hosts drive the overlay directly via
+  survives tab switches and live reloads — and the **preview itself is restored by
+  path** after a live reload or a tab revisit (`RestorePreview`: node references
+  change with the fresh scene, but the occurrence path and the construction path in
+  the preview key do not; a key that no longer resolves restores nothing). Custom
+  hosts drive the overlay directly via
   `ViewportControl.SetConstructionPreview(segments, world)`.
+  **Feature rows are editable**: each row of a `FeatureHistory` part carries a
+  **suppress toggle** ("sup"/"uns" — a suppressed feature passes the body through
+  untouched) and a **rollback marker** ("‖" — suppresses every feature below it;
+  clicking a later row moves the bar down, restoring what it suppressed above, and
+  the last row's marker restores the whole history; the flag logic is the UI-free
+  `FeatureRollback`, which records what the *bar* suppressed so it never restores a
+  feature the user suppressed deliberately). Clicking a feature row also opens its
+  **`[Param]` values as editable fields in the properties panel** — Enter applies the
+  value through the SAME JSON seam `SaveParameters`/`LoadParameters` (and the MCP
+  `set_param` tool) use, so accepted spellings cannot drift, then regenerates via
+  `Part.Regenerate()` on a background task: a successful regeneration republishes the
+  tab (the loader re-meshes exactly the changed part), a failed one keeps the
+  previous geometry and names the failing feature in the status bar, exactly the
+  feature-tree semantics.
   **Headless renders draw previews too** — `EngrCad.RenderToImage(..., preview:
   new ConstructionPreviewRequest(part, node))` puts one row's rollback view into a
   still image, through the same `PreviewLayer` the window uses, so the colour, the
