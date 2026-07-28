@@ -386,72 +386,41 @@ nodes, and Grübler/Kutzbach as a cross-check. Remaining follow-ups:
   (`MeshMassProperties`/`BrepMassProperties` return inertia tensors about the centre of
   mass), so dynamics has its inputs waiting whenever it comes.
 
-## Animation and motion export
+## Animation and motion export (follow-ups)
 
-Three different things want to animate — a **mechanism** driven through its range, an
-**assembly** moving between assembled and exploded, and the **camera** — and they are the
-same problem, because all three are pure functions of one parameter that move *poses and
-the camera only*.
+The v1 landed (`Animation`/tracks/`AnimationPlayback` in Viewer.Core, APNG + GIF +
+frame-sequence export in Viewer, the SceneHost transport, DocsGen `animate:` fences +
+`docs/examples/animation.md`) — the load-bearing rule held: an animation moves poses
+and the camera only, `Animation.At(t)` is pure, and one evaluation path serves
+scrubbing, playback, export and docs. What remains:
 
-**That is the load-bearing rule: an animation must not touch geometry.** The exploded
-view already proved the property this depends on — instance count and order are
-independent of the parameter — which is what lets `SetInstancePoses` animate with
-matrices alone, no GPU buffer touched, and lets picking keep working because `HitTest`
-already reads the per-instance model matrix. Anything that re-meshes per frame is a
-different and far more expensive feature (that is the `$t` time-parameterized-model item
-in the OpenSCAD section, and it should stay separate).
-
-- [ ] **A timeline over the three drivers** — one `Animation` abstraction: a duration, an
-  easing, and a set of *tracks*, where a track is anything that maps t ∈ [0,1] to poses or
-  a camera. v1 tracks: **mechanism** (a joint driver, from the Mechanisms section above),
-  **component position** (explode factor 0→1, which already exists as
-  `Occurrence.ExplodeOffset` + `Flatten(factor)`), and **camera**. Keep the evaluation a
-  pure function of t — that is what makes scrubbing, reversing, exporting and headless
-  rendering the same code path rather than four.
-- [ ] **Component-position tracks beyond a single factor** — today explode is one global
-  scalar. Real assembly instructions want **per-occurrence timing** (fasteners back out
-  first, then the cover, then the sub-assembly), i.e. a start/end window per occurrence
-  along the shared timeline, and ideally motion along the *explode path* rather than
-  straight-line lerp once the explode-path renderer lands (that item is under Assemblies
-  follow-ups). Sequenced explode is the actual deliverable behind "assembly animation".
-- [ ] **Camera tracks** — turntable (orbit about Z at fixed pitch, the default anyone
-  wants first), keyframed poses with smooth interpolation, and a path fly-through. Three
-  things already exist and must be reused rather than re-derived: `CameraState` +
-  `CameraMath` (now shared by desktop and web), the view cube's **250 ms smoothstep
-  shortest-yaw-path** move — which is exactly the interpolation primitive, and note the
-  shortest-path detail, because interpolating yaw naively sends the camera the long way
-  round — and for a fly-through, a `Curve3d` with the rotation-minimizing frames
-  `SweptSurface` already uses, so a camera path is literally a sweep path.
-- [ ] **Playback UI** — play/pause/scrub/loop beside the existing explode slider, driving
-  the same `SetInstancePoses` route. The web viewport gets it for free if the timeline
-  stays a pure function of t, which is a reason to keep it UI-free in `Viewer.Core`
-  rather than in the Avalonia layer.
-- [ ] **Animated export — APNG first, GIF second, WebP only with a dependency.** The
-  frame loop itself is trivial (`RenderToImage` per t, already parameterized by camera,
-  style, section and explode); the format is the real decision, and the honest ranking for
-  this codebase is:
-  - **APNG** is nearly free and should be first: `PngWriter` is already dependency-free,
-    and animation is three extra chunk types (`acTL`/`fcTL`/`fdAT`) over the encoder that
-    exists. Lossless, full colour, alpha — which matters because a shaded CAD render is
-    mostly smooth gradients.
-  - **GIF** is what people ask for and what pastes everywhere, but it is 256 colours with
-    no alpha, so a shaded render with a background gradient and AO **will band visibly**
-    without dithering, and dithering fights the clean look. Doable dependency-free (LZW
-    plus median-cut or octree quantization); just do not expect it to look like the PNGs.
-    A flat-shaded or wireframe style GIFs far better than a shaded one — worth saying in
-    the docs rather than letting people discover it.
-  - **WebP** needs a VP8/VP8L encoder, which is not something to hand-roll; it means
-    taking a dependency (libwebp or a managed port). Worth it only if the payload
-    difference matters for the docs site.
-  - **Always also emit a PNG frame sequence**, since that is the zero-risk escape hatch
-    into ffmpeg for MP4/WebM, which no dependency-free path reaches.
-- [ ] **Animated docs examples** — the payoff. DocsGen already renders a PNG per
-  `render:` fence and already accepts an `explode:` option, so a `turntable:` or
-  `animate:` option producing an APNG per example is a small step and makes every
-  example page spinnable without shipping the WASM runtime per page. Cross-reference the
-  docs-embedding item under the Blazor web viewer, which solves the same problem the
-  expensive way (live kernel) — animation is the cheap way, and the two are complementary
-  rather than alternatives.
+- [ ] **Web viewport transport** — the whole machine (`Animation`, `AnimationPlayback`)
+  is UI-free in `Viewer.Core` precisely so the Blazor viewport can reuse it: a
+  play/pause/scrub row driving the same per-instance matrices the desktop sends via
+  `SetInstancePoses`. Needs only widgets and a `requestAnimationFrame` clock; no new
+  evaluation code.
+- [ ] **Pose-track composition** — an `Animation` deliberately takes at most ONE pose
+  track (two full-instance-list producers cannot compose; whose matrices win?).
+  Composing *relative displacement* tracks (mechanism pose ∘ explode displacement on
+  top) is the principled extension — displacements compose where absolute pose lists do
+  not.
+- [ ] **Explode motion along the explode PATH** — `ExplodeTrack` lerps straight along
+  `ExplodeOffset`; assembly instructions sometimes want dogleg paths (out, then over).
+  Ties into the explode-path renderer item under Assemblies follow-ups.
+- [ ] **Reuse one EGL context across an animation's frames** — `OffscreenRenderer.Render`
+  creates and destroys a context per call, so a 36-frame export pays 36 context
+  creations plus 36 mesh uploads. A batch render entry holding one context and one set
+  of uploaded buffers (poses change per frame, buffers do not — the SetInstancePoses
+  insight applied offscreen) should make exports several times faster.
+- [ ] **`EngrCad.RenderToImage(scene, animation, t, ...)` sugar + an MCP `screenshot`
+  `t` parameter** — a single evaluated frame as a still, so an AI assistant can ask for
+  "the mechanism at t = 0.3". Both are thin: evaluate `At(t)`, pass the sample's
+  instances/camera to the existing render; the MCP side wants a schema addition and a
+  session test.
+- [ ] **WebP animation** needs a VP8/VP8L encoder — not something to hand-roll; it
+  means taking a dependency (libwebp or a managed port). Worth it only if the payload
+  difference matters for the docs site (the committed APNGs are the size pressure to
+  watch).
 
 ## Simulation
 

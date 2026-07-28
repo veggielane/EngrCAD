@@ -1060,6 +1060,59 @@ for `in`-parameters being illegal in expression trees.
   largest body, never the centroid: a centroid-relative radial rule degenerates exactly
   when it matters, because on a spread-out assembly the centroid sits in empty space and
   the base flies away from nothing.
+- **Animation is a pure function of t that must not touch geometry.** The exploded
+  view proved the property (instance count/order independent of the parameter → a
+  matrix-only viewport update is legal), and the `Animation` timeline generalizes it:
+  a duration, an easing, and tracks mapping t ∈ [0,1] to instance poses or a camera.
+  `At(t)` being pure is the whole design — scrubbing, reversing, window playback
+  (`AnimationPlayback`, the UI-free transport machine), APNG/GIF/frame-sequence export
+  and the docs build all evaluate ONE function instead of five re-implementations.
+  Anything that re-meshes per frame is a different, far more expensive feature (the
+  OpenSCAD `$t` item stays separate in todo.md for exactly that reason). Design calls
+  worth recording:
+  - **Placement by dependency direction**: pose tracks speak `Scene`/`Mechanism`
+    (Modeling), camera tracks speak `CameraState`/`ViewCubeMath` (Viewer.Core), and
+    Viewer.Core already references Modeling while the reverse would cycle — so the
+    timeline lives in `EngrCAD.Viewer.Core`, and the accepted cost is that a `Scene`
+    cannot carry its animation as a typed property (hosts pass it beside the scene:
+    `EngrCad.Configure().WithAnimation(factory)`, re-invoked per live reload because
+    tracks pose the occurrences they captured).
+  - **At most ONE pose track and one camera track.** Two tracks each producing the
+    full instance list cannot compose (whose matrices win?), so sequencing lives
+    INSIDE a track, where it is well defined: every track has a clamp-semantics
+    window on the shared timeline (hold the boundary value outside it — a finished
+    explode stays exploded), and `ExplodeTrack.Stagger` gives per-occurrence windows
+    over the new `Flatten(Func<Occurrence, double>)` overload (same walk as the
+    scalar factor; exactly 0 leaves a frame bit-identical). Composing relative
+    displacement tracks is future work, not half-supported.
+  - **A `MotionStudy` is already the animation input format** — recorded pure poses —
+    and `MechanismTrack` plays one back rather than re-solving, because a solve at
+    arbitrary t from an arbitrary seed is the branch-flipping trap the sweep's
+    continuation exists to avoid. Recorded frames are returned VERBATIM at their
+    sample points (bit-exact, locked by test); between them each instance takes the
+    chordal rigid motion: the delta b·a⁻¹ is rigid whatever the part transform
+    carries (both matrices share it), its rotation slerps from identity
+    (`Quaterniond.FromRotationMatrix`, Shepperd), and the origin travels the straight
+    chord — M(s) = T(lerp(p_a, p_b, s))·R_s·T(−p_a)·a, exact at both ends.
+  - **Camera tracks reuse the view cube's primitives** (`ViewCubeMath.Ease`,
+    `ShortestYawTarget` — naive yaw lerp sends the camera the long way round) rather
+    than re-deriving easing; the turntable loops seamlessly under LINEAR easing with
+    whole turns (t = 1 is t = 0), which is why easing is a timeline property the
+    turntable defaults away from. A fly-through follows any `Curve3d`, and the orbit
+    pose being Z-up means an RMF frame's roll is documented as dropped, not smuggled.
+  - **Export ranking is a quality argument, not taste**: APNG first (three chunk
+    types over the existing dependency-free `PngWriter`; lossless full colour —
+    shaded renders are smooth gradients; the first frame is the PNG default image so
+    the file ships as `.png` and degrades to a valid still), the numbered-PNG frame
+    sequence always available (the ffmpeg escape hatch to MP4/WebM), GIF second and
+    honestly documented to band on shaded renders (256 colours, no dithering — it
+    fights the clean look; wireframe/flat GIFs far better). GIF's median-cut
+    quantizer makes the PARTITION the mapping (a colour's index is the box it fell
+    into), so no nearest-palette search can disagree with the split and ≤256-colour
+    images reproduce exactly; the LZW encoder is locked by round-trip against an
+    independently written decoder. One camera per clip when no track drives it,
+    framed over the union of first and last frame bounds — never per-frame framing
+    (the explode slider's camera lesson).
 - **Mates are a small dense nonlinear least-squares problem, deliberately.** Six unknowns
   per free occurrence, an analytic Jacobian, one global length scale making residuals and
   columns dimensionally uniform, and rank from a pivoted Cholesky. That is enough for the
