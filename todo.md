@@ -67,6 +67,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   only ever projects near-surface points, but it is why this must not be offered as a
   general closest-point query. A real one would need the field's own structure (a CSG walk
   that knows which branch is a real face there), not more iterations.
+- [ ] **Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.** With
+  `SurfaceCull` landed, at res 256 a one-sqrt/sample field polygonizes in 132.8 ms vs
+  129.3 ms for the real CSG field — evaluation is effectively free and
+  `HalfEdgeMesh.Build` alone is 39–48%, the rest per-cell component maps, quad lists and
+  the sample window. Further speedup belongs in assembly (e.g. building the half-edge
+  structure from the known grid adjacency instead of the generic manifold-validating
+  `Build`), not in the grid walk.
 - [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
   74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
   real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a

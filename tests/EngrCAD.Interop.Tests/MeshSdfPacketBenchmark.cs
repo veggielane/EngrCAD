@@ -25,7 +25,7 @@ namespace EngrCAD.Interop.Tests;
 /// </para>
 /// <para>
 /// <b>Built and measured, and it does not survive contact with the batch seam.</b>
-/// Reference machine (win-arm64, .NET 10.0.302, Release, otherwise idle), 47 724 triangles,
+/// Reference machine (win-x64, .NET 10.0.302, Release, otherwise idle), 47 724 triangles,
 /// points on a narrow band around the surface, baseline = the production
 /// <c>Bvh.Nearest</c> with the same struct metric <see cref="MeshSdf"/> uses:
 /// </para>
