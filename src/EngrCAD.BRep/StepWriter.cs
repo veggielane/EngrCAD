@@ -24,7 +24,7 @@ public static class StepWriter
     /// </summary>
     /// <param name="ArcFitTolerance">
     /// When set, curves with no analytic STEP form — traced <see cref="PolylineCurve3d"/>
-    /// edges, RMF rails, <c>TransformedCurve(NurbsCurve)</c> — are fitted with a biarc chain
+    /// edges, RMF rails — are fitted with a biarc chain
     /// (<see cref="BiArcFit"/>) instead of being SAMPLED into a degree-1 B-spline, provided
     /// the fit's deviation clears this tolerance. A bore rim traced at display resolution
     /// then exports as two exact rational arcs rather than a 200-control-point polyline.
@@ -364,6 +364,30 @@ public static class StepWriter
                     return Emit($"ELLIPSE('',#{Placement(ellipse.Center, z, x)}," +
                                 $"{Real(ellipse.SemiAxisX.Length)},{Real(ellipse.SemiAxisY.Length)})");
                 }
+                case Parabola3d parabola:
+                    // ISO 10303-42 parabola: P(u) = origin + (u²/4F)·x + u·y — exactly
+                    // our focal parameterization, so vertices reconstruct the trim.
+                    return Emit($"PARABOLA('',#{Placement(parabola.Apex, parabola.Normal, parabola.XDirection)}," +
+                                $"{Real(parabola.FocalLength)})");
+                case Hyperbola3d hyperbola:
+                {
+                    // ISO 10303-42 hyperbola: P(u) = origin + a·cosh(u)·x + b·sinh(u)·y —
+                    // our cosh/sinh parameterization verbatim.
+                    var x = hyperbola.SemiAxisX.Normalized();
+                    var z = hyperbola.SemiAxisX.Cross(hyperbola.SemiAxisY).Normalized();
+                    return Emit($"HYPERBOLA('',#{Placement(hyperbola.Center, z, x)}," +
+                                $"{Real(hyperbola.SemiAxisX.Length)},{Real(hyperbola.SemiAxisY.Length)})");
+                }
+                case OffsetCurve3d offset:
+                {
+                    // ISO 10303-42 offset_curve_3d displaces by distance·(V × T̂) with V
+                    // the ref_direction — our O = C + d·(n̂ × T̂) with V = n̂, so distance
+                    // and direction carry over unchanged (sign conventions verified
+                    // compatible). self_intersect is unknowable cheaply: .U.
+                    int basis = Curve(offset.Base);
+                    return Emit($"OFFSET_CURVE_3D('',#{basis},{Real(offset.Distance)},.U.," +
+                                $"#{Direction(offset.PlaneNormal)})");
+                }
                 case NurbsCurve nurbs:
                     return BsplineCurve(nurbs.Degree, nurbs.ControlPoints, nurbs.Weights, nurbs.Knots);
                 case PolylineCurve3d polyline:
@@ -372,9 +396,9 @@ public static class StepWriter
                         : PolylineAsBspline(polyline.Points);
                 default:
                 {
-                    // Anything else (RMF rails, TransformedCurve(NurbsCurve), exotic
-                    // wrappers): sample to a polyline — or, with Options.ArcFitTolerance
-                    // set, fit exact arcs to those samples first.
+                    // Anything else (RMF rails, exotic wrappers): sample to a polyline —
+                    // or, with Options.ArcFitTolerance set, fit exact arcs to those
+                    // samples first.
                     var samples = new Vector3d[33];
                     for (int i = 0; i < samples.Length; i++)
                         samples[i] = curve.PointAt(curve.Domain.ParameterAt(i / (double)(samples.Length - 1)));
@@ -543,7 +567,8 @@ public static class StepWriter
         /// <summary>Resolves wrapper curves to analytic forms where a rigid interpretation exists.</summary>
         private static Curve3d? Simplify(Curve3d curve) => curve switch
         {
-            Line3d or Circle3d or Ellipse3d or NurbsCurve or PolylineCurve3d => curve,
+            Line3d or Circle3d or Ellipse3d or NurbsCurve or PolylineCurve3d
+                or Parabola3d or Hyperbola3d or OffsetCurve3d => curve,
             ReversedCurve r => Simplify(r.Base) switch
             {
                 Line3d l => new Line3d(l.End, l.Start),
@@ -563,6 +588,17 @@ public static class StepWriter
                     t.Transform.TransformPoint(e.Center),
                     t.Transform.TransformVector(e.SemiAxisX),
                     t.Transform.TransformVector(e.SemiAxisY)),
+                // Exact for ANY affine map: a rational curve is an affine combination of
+                // its control points at every parameter (Σ wN(MP+b)/Σ wN = M·C + b), so
+                // transforming the control points with weights and knots untouched IS the
+                // transformed curve, parameterization included. This is what makes
+                // NURBS-profile extrusion tops (translated copies of the profile) export
+                // exactly instead of as sampled degree-1 polylines.
+                NurbsCurve n => new NurbsCurve(
+                    n.Degree,
+                    n.ControlPoints.Select(p => t.Transform.TransformPoint(p)).ToList(),
+                    n.Weights,
+                    n.Knots),
                 _ => null,
             },
             CurveSegment s => Simplify(s.Base), // vertices carry the trim

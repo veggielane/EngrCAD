@@ -71,6 +71,22 @@ public sealed class Parabola3d : Curve3d
         double s = t / (2 * FocalLength);
         return FocalLength * (s * Math.Sqrt(1 + s * s) + Math.Asinh(s));
     }
+
+    /// <summary>
+    /// The segment over <see cref="Domain"/> as an EXACT quadratic Bézier — the parabola
+    /// is the one conic that is polynomial, so no weights are needed: P(t) is quadratic
+    /// in t, and the Bézier with ends P(t₀), P(t₁) and middle control point
+    /// P(t₀) + (Δt/2)·P′(t₀) (the tangent intersection) reproduces it identically. The
+    /// NURBS parameter runs [0, 1] affinely over the domain, so
+    /// <c>ToNurbs().PointAt(s) == PointAt(t₀ + s·Δt)</c> to round-off.
+    /// </summary>
+    public NurbsCurve ToNurbs()
+    {
+        double t0 = _domain.Start, t1 = _domain.End;
+        var p0 = PointAt(t0);
+        var control = p0 + DerivativeAt(t0) * (0.5 * (t1 - t0));
+        return new NurbsCurve(2, [p0, control, PointAt(t1)], null, [0, 0, 0, 1, 1, 1]);
+    }
 }
 
 /// <summary>

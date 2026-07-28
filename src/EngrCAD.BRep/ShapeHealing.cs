@@ -62,6 +62,36 @@ public sealed record ShapeHealingOptions
     public bool RefitStraightEdges { get; init; }
 
     /// <summary>
+    /// Re-trim <b>curved</b> edges so each ends at the parameter nearest its (unified)
+    /// vertex — the curved half of geometric gap closing (OCCT
+    /// <c>ShapeFix_Wire::FixGaps</c>'s parametric mode). A merged vertex can sit up to
+    /// <see cref="GapTolerance"/> from where the curve's stored domain ends, mostly ALONG
+    /// the curve; solving the foot-of-perpendicular parameter (local Gauss–Newton from the
+    /// current end — the gap is sub-tolerance, so the solve is local by construction)
+    /// removes the tangential part of the gap. What remains is the vertex's PERPENDICULAR
+    /// distance to the curve, which no re-trim can remove: closing that would mean
+    /// re-fitting or deforming the curve — a modelling operation, deliberately not
+    /// attempted (OCCT's geometric mode inserts filler segments instead; we report).
+    /// <para><b>Off by default</b> for the same reason as
+    /// <see cref="RefitStraightEdges"/>: it changes edge domains, and kernel output's
+    /// trims are exact. A residual above <see cref="GapTolerance"/> refuses the re-trim
+    /// and is reported — the honest per-edge tolerance story, since this topology carries
+    /// no per-entity tolerances to widen (and deliberately so: a per-edge tolerance is a
+    /// license every downstream consumer must then honour).</para>
+    /// </summary>
+    public bool RetrimCurvedEdges { get; init; }
+
+    /// <summary>
+    /// Repair shell structure (OCCT <c>ShapeFix_Shell</c>): make face orientations
+    /// consistent per connected component (a flood over shared-edge senses — the manifold
+    /// invariant is two uses with OPPOSITE sense), vote each closed component's global
+    /// side from the fan volume of its boundary loops (containment parity expects voids
+    /// to point INTO the cavity), and re-partition shells so each connected component is
+    /// one shell. On a well-formed solid all three find nothing to do.
+    /// </summary>
+    public bool RepairShells { get; init; } = true;
+
+    /// <summary>
     /// Sliver threshold as area / perimeter² — <b>dimensionless on purpose</b>. An absolute
     /// area threshold is the scale-quadratic mistake this codebase has made repeatedly: it
     /// rejects a legitimate micron-scale face and accepts a metre-long zero-width sliver.
@@ -94,6 +124,18 @@ public sealed record ShapeHealingReport
     /// <summary>Straight edges rebuilt through their unified endpoints
     /// (<see cref="ShapeHealingOptions.RefitStraightEdges"/>).</summary>
     public int EdgesRefit { get; init; }
+
+    /// <summary>Curved edges whose domain was re-trimmed to end at the parameters nearest
+    /// their unified vertices (<see cref="ShapeHealingOptions.RetrimCurvedEdges"/>).</summary>
+    public int CurvedEdgesRetrimmed { get; init; }
+
+    /// <summary>Faces flipped for orientation consistency or an inside-out component
+    /// (<see cref="ShapeHealingOptions.RepairShells"/>).</summary>
+    public int FacesFlipped { get; init; }
+
+    /// <summary>Additional shells created by splitting a shell whose faces form several
+    /// connected components (<see cref="ShapeHealingOptions.RepairShells"/>).</summary>
+    public int ShellsSplit { get; init; }
 
     /// <summary>Loops whose coedge order changed so that they chain end-to-start.</summary>
     public int LoopsReordered { get; init; }
@@ -132,7 +174,8 @@ public sealed record ShapeHealingReport
 
     /// <summary>True when healing changed the topology in any way.</summary>
     public bool ChangedAnything =>
-        VerticesMerged + SmallEdgesRemoved + EdgesSewn + EdgesRefit + LoopsReordered +
+        VerticesMerged + SmallEdgesRemoved + EdgesSewn + EdgesRefit + CurvedEdgesRetrimmed +
+        FacesFlipped + ShellsSplit + LoopsReordered +
         DegenerateFacesRemoved + DegenerateLoopsRemoved + EmptyShellsRemoved > 0;
 
     public override string ToString()
@@ -142,6 +185,9 @@ public sealed record ShapeHealingReport
         if (SmallEdgesRemoved > 0) parts.Add($"{SmallEdgesRemoved} small edges removed");
         if (EdgesSewn > 0) parts.Add($"{EdgesSewn} edges sewn");
         if (EdgesRefit > 0) parts.Add($"{EdgesRefit} straight edges refit");
+        if (CurvedEdgesRetrimmed > 0) parts.Add($"{CurvedEdgesRetrimmed} curved edges re-trimmed");
+        if (FacesFlipped > 0) parts.Add($"{FacesFlipped} faces flipped");
+        if (ShellsSplit > 0) parts.Add($"{ShellsSplit} shells split off");
         if (LoopsReordered > 0) parts.Add($"{LoopsReordered} loops reordered ({CoedgesReversed} coedges reversed)");
         if (DegenerateFacesRemoved > 0) parts.Add($"{DegenerateFacesRemoved} degenerate faces removed");
         if (DegenerateLoopsRemoved > 0) parts.Add($"{DegenerateLoopsRemoved} degenerate loops removed");
@@ -224,8 +270,12 @@ public static class ShapeHealing
             ? work.RemoveDegenerateFaces(o.GapTolerance, o.SliverAreaRatio, notes)
             : (0, 0);
         int sewn = o.SewEdges ? work.SewDuplicateEdges(o.GapTolerance) : 0;
-        int refit = o.RefitStraightEdges ? work.RefitStraightEdges(notes) : 0;
+        int retrimmed = o.RetrimCurvedEdges ? work.RetrimCurvedEdges(o.GapTolerance, notes) : 0;
+        int refit = o.RefitStraightEdges
+            ? work.RefitStraightEdges(notes, curvedNotedElsewhere: o.RetrimCurvedEdges)
+            : 0;
         var (loopsReordered, coedgesReversed) = o.RepairLoops ? work.RepairLoops(notes) : (0, 0);
+        var (facesFlipped, shellsSplit) = o.RepairShells ? work.RepairShells(notes) : (0, 0);
 
         var (healed, emptyShells) = work.Build();
         int nonManifoldAfter = CountNonManifoldEdges(healed);
@@ -240,6 +290,9 @@ public static class ShapeHealing
             SmallEdgesRemoved = smallEdges,
             EdgesSewn = sewn,
             EdgesRefit = refit,
+            CurvedEdgesRetrimmed = retrimmed,
+            FacesFlipped = facesFlipped,
+            ShellsSplit = shellsSplit,
             LoopsReordered = loopsReordered,
             CoedgesReversed = coedgesReversed,
             DegenerateFacesRemoved = facesRemoved,
@@ -305,8 +358,8 @@ public static class ShapeHealing
     private sealed class WorkFace(Surface surface, bool isReversed, int shell)
     {
         public Surface Surface { get; } = surface;
-        public bool IsReversed { get; } = isReversed;
-        public int Shell { get; } = shell;
+        public bool IsReversed { get; set; } = isReversed;
+        public int Shell { get; set; } = shell;
         public List<WorkLoop> Loops { get; } = [];
         public bool Alive { get; set; } = true;
     }
@@ -734,9 +787,86 @@ public static class ShapeHealing
             }
         }
 
-        // ---- pass 5: straight-edge refitting (the geometric half of gap closing) ----
+        // ---- pass 5a: curved-edge re-trimming (the parametric half of gap closing) ----
 
-        public int RefitStraightEdges(List<string> notes)
+        public int RetrimCurvedEdges(double tolerance, List<string> notes)
+        {
+            int retrimmed = 0, residualLeft = 0;
+            for (int e = 0; e < _edges.Count; e++)
+            {
+                var edge = _edges[e];
+                if (!edge.Alive || edge.Curve.Underlying is Line3d)
+                    continue; // straight edges belong to the refit pass (a line has no trim to adjust)
+
+                var start = _positions[Find(edge.Start)];
+                var end = _positions[Find(edge.End)];
+                var atStart = edge.Curve.PointAt(edge.Domain.Start);
+                var atEnd = edge.Curve.PointAt(edge.Domain.End);
+                // Exact-equality: the question is "does the trim already end at the
+                // vertex", not "is it close" — see RefitStraightEdges.
+                if (atStart == start && atEnd == end)
+                    continue;
+
+                double t0 = edge.Domain.Start, t1 = edge.Domain.End;
+                bool solved =
+                    (atStart == start || TryFootParameter(edge.Curve, start, edge.Domain.Start, ref t0)) &&
+                    (atEnd == end || TryFootParameter(edge.Curve, end, edge.Domain.End, ref t1)) &&
+                    t1 > t0;
+                double residual = solved
+                    ? Math.Max(edge.Curve.PointAt(t0).DistanceTo(start), edge.Curve.PointAt(t1).DistanceTo(end))
+                    : double.PositiveInfinity;
+
+                if (residual > tolerance)
+                {
+                    // The vertex is off the curve by more than the gap tolerance even at
+                    // the nearest parameter: closing it needs curve re-fitting, which is
+                    // a modelling operation. Reported, never attempted.
+                    residualLeft++;
+                    continue;
+                }
+                if (t0 != edge.Domain.Start || t1 != edge.Domain.End)
+                {
+                    edge.Domain = new Interval(t0, t1);
+                    retrimmed++;
+                }
+            }
+            if (residualLeft > 0)
+                notes.Add($"{residualLeft} curved edges still end away from their (unified) vertices " +
+                          "beyond the gap tolerance even at the nearest curve parameter; closing those " +
+                          "gaps needs curve re-fitting, which healing does not do.");
+            return retrimmed;
+        }
+
+        /// <summary>Foot-of-perpendicular parameter near <paramref name="t"/> by local
+        /// Gauss–Newton on the exact/virtual derivative. The gap is sub-tolerance, so the
+        /// solve is local by construction — no global seeding, no period unwrapping.</summary>
+        private static bool TryFootParameter(Curve3d curve, in Vector3d target, double seed, ref double t)
+        {
+            double current = seed;
+            for (int i = 0; i < 30; i++)
+            {
+                var residual = curve.PointAt(current) - target;
+                var derivative = curve.DerivativeAt(current);
+                double denominator = derivative.Dot(derivative);
+                if (denominator < 1e-30)
+                    return false; // stationary parameterization: refuse (exact-zero division guard)
+                double step = -residual.Dot(derivative) / denominator;
+                // Break BEFORE applying a negligible step: an already-converged end must
+                // come back bit-identical, or every heal would "re-trim" it by an ulp and
+                // the report would never go quiet (idempotence).
+                if (Math.Abs(step) < 1e-15 * Math.Max(1, Math.Abs(current)))
+                    break;
+                current += step;
+            }
+            if (!double.IsFinite(current))
+                return false;
+            t = current;
+            return true;
+        }
+
+        // ---- pass 5b: straight-edge refitting (the geometric half of gap closing) ----
+
+        public int RefitStraightEdges(List<string> notes, bool curvedNotedElsewhere = false)
         {
             int refit = 0, curvedLeft = 0;
             for (int e = 0; e < _edges.Count; e++)
@@ -770,9 +900,10 @@ public static class ShapeHealing
                 edge.Domain = Interval.Unit;
                 refit++;
             }
-            if (curvedLeft > 0)
+            if (curvedLeft > 0 && !curvedNotedElsewhere)
                 notes.Add($"{curvedLeft} curved edges still end away from their (unified) vertices; " +
-                          "closing those gaps needs curve re-fitting, which healing does not do.");
+                          "closing those gaps needs curve re-fitting, which healing does not do " +
+                          "(RetrimCurvedEdges removes the tangential part).");
             return refit;
         }
 
@@ -860,6 +991,258 @@ public static class ShapeHealing
                     return false;
             }
             return true;
+        }
+
+        // ---- pass 7: shell repair (orientation flood + outward vote + repartition) ----
+
+        /// <summary>
+        /// The B-Rep counterpart of <c>MeshRepair</c>'s per-component winding flood, and
+        /// OCCT's <c>ShapeFix_Shell</c>. Three steps, each a no-op on well-formed input:
+        /// <list type="number">
+        /// <item><description><b>Consistency flood</b> — the manifold invariant is two uses
+        /// per edge with OPPOSITE sense, so crossing a shared edge whose two uses agree
+        /// means one of the faces is flipped relative to the other; BFS propagates a flip
+        /// bit and a contradiction means the component is non-orientable (reported, left
+        /// untouched).</description></item>
+        /// <item><description><b>Global side vote</b> — a consistent component can still be
+        /// inside-out as a whole. The vote is the fan volume of the sampled boundary
+        /// loops (exact in sign for polyhedra and boolean-style trimmed faces), compared
+        /// against containment parity: an outermost component must enclose POSITIVE
+        /// volume, a component nested inside another (a cavity) NEGATIVE, because
+        /// material-outward normals point into a void. Pole-bounded and closed-band faces
+        /// (spheres, tori) have boundary loops that enclose ~no volume, so their vote is
+        /// honestly AMBIGUOUS: the component keeps its authored side, with a note only
+        /// when the flood already had to flip something. Open components never vote.
+        /// </description></item>
+        /// <item><description><b>Repartition</b> — each connected component becomes one
+        /// shell (splitting a shell whose faces are disconnected, merging shells one
+        /// component spans). Skipped entirely when the existing partition already equals
+        /// the component partition, so valid input is bit-stable.</description></item>
+        /// </list>
+        /// </summary>
+        public (int Flipped, int Split) RepairShells(List<string> notes)
+        {
+            var faces = Enumerable.Range(0, _faces.Count).Where(f => _faces[f].Alive).ToList();
+            if (faces.Count == 0)
+                return (0, 0);
+
+            // Edge -> its alive uses as (face, sense).
+            var usesOf = new Dictionary<int, List<(int Face, bool Sense)>>();
+            for (int f = 0; f < _faces.Count; f++)
+            {
+                if (!_faces[f].Alive)
+                    continue;
+                foreach (var loop in _faces[f].Loops.Where(l => l.Alive))
+                {
+                    foreach (var (edge, sense) in loop.Coedges)
+                    {
+                        if (!usesOf.TryGetValue(edge, out var list))
+                            usesOf[edge] = list = [];
+                        list.Add((f, sense));
+                    }
+                }
+            }
+
+            // BFS components + flip bits over 2-use edges joining two DIFFERENT faces.
+            var component = new Dictionary<int, int>();
+            var flip = new Dictionary<int, bool>();
+            var componentFaces = new List<List<int>>();
+            var orientable = new List<bool>();
+            foreach (int seed in faces)
+            {
+                if (component.ContainsKey(seed))
+                    continue;
+                int id = componentFaces.Count;
+                var members = new List<int>();
+                bool consistent = true;
+                var queue = new Queue<int>();
+                component[seed] = id;
+                flip[seed] = false;
+                queue.Enqueue(seed);
+                while (queue.Count > 0)
+                {
+                    int f = queue.Dequeue();
+                    members.Add(f);
+                    foreach (var loop in _faces[f].Loops.Where(l => l.Alive))
+                    {
+                        foreach (var (edge, sense) in loop.Coedges)
+                        {
+                            var uses = usesOf[edge];
+                            if (uses.Count != 2)
+                                continue;
+                            var other = uses[0].Face == f && uses[0].Sense == sense ? uses[1] : uses[0];
+                            if (other.Face == f)
+                                continue; // a face meeting itself constrains nothing here
+                            bool needed = flip[f] ^ (sense == other.Sense);
+                            if (!component.TryGetValue(other.Face, out int oc))
+                            {
+                                component[other.Face] = id;
+                                flip[other.Face] = needed;
+                                queue.Enqueue(other.Face);
+                            }
+                            else if (oc == id && flip[other.Face] != needed)
+                            {
+                                consistent = false; // non-orientable (Möbius-like) gluing
+                            }
+                        }
+                    }
+                }
+                componentFaces.Add(members);
+                orientable.Add(consistent);
+            }
+
+            // Per-face fan volume of the sampled boundary loops + bounds, for the vote.
+            var faceVolume = new Dictionary<int, double>();
+            var faceBounds = new Dictionary<int, Aabb>();
+            foreach (int f in faces)
+            {
+                double volume = 0;
+                var box = Aabb.Empty;
+                foreach (var loop in _faces[f].Loops.Where(l => l.Alive))
+                {
+                    var points = SampleLoop(loop);
+                    for (int i = 1; i + 1 < points.Count; i++)
+                        volume += points[0].Dot(points[i].Cross(points[i + 1])) / 6;
+                    foreach (var p in points)
+                        box = box.Union(p);
+                }
+                faceVolume[f] = volume;
+                faceBounds[f] = box;
+            }
+
+            int flipped = 0;
+            var componentBounds = new List<Aabb>();
+            var componentClosed = new List<bool>();
+            for (int c = 0; c < componentFaces.Count; c++)
+            {
+                var box = Aabb.Empty;
+                bool closed = true;
+                foreach (int f in componentFaces[c])
+                {
+                    box = box.Union(faceBounds[f]);
+                    foreach (var loop in _faces[f].Loops.Where(l => l.Alive))
+                    {
+                        foreach (var (edge, _) in loop.Coedges)
+                        {
+                            if (usesOf[edge].Count != 2)
+                                closed = false;
+                        }
+                    }
+                }
+                componentBounds.Add(box);
+                componentClosed.Add(closed);
+            }
+
+            for (int c = 0; c < componentFaces.Count; c++)
+            {
+                if (!orientable[c])
+                {
+                    notes.Add($"A connected component of {componentFaces[c].Count} faces is not orientable " +
+                              "(its shared-edge senses contradict); its orientation was left untouched.");
+                    continue;
+                }
+
+                int pendingFlips = componentFaces[c].Count(f => flip[f]);
+                if (componentClosed[c])
+                {
+                    double volume = componentFaces[c].Sum(f => flip[f] ? -faceVolume[f] : faceVolume[f]);
+                    // Containment parity: nested components are voids and must point
+                    // inward (negative enclosed volume).
+                    int depth = 0;
+                    for (int other = 0; other < componentFaces.Count; other++)
+                    {
+                        if (other != c && StrictlyContains(componentBounds[other], componentBounds[c]))
+                            depth++;
+                    }
+                    bool expectPositive = depth % 2 == 0;
+                    double extent = componentBounds[c].Size.Length;
+                    // Ambiguity guard: a RATIO of volumes (scale-free tier). Boundary
+                    // loops of pole-bounded/closed-band faces enclose ~nothing, and a
+                    // vote read from noise would flip whole solids at random.
+                    if (Math.Abs(volume) > 1e-9 * extent * extent * extent)
+                    {
+                        if (volume > 0 != expectPositive)
+                        {
+                            foreach (int f in componentFaces[c])
+                                flip[f] = !flip[f];
+                            pendingFlips = componentFaces[c].Count(f => flip[f]);
+                        }
+                    }
+                    else if (pendingFlips > 0)
+                    {
+                        notes.Add("A component's global orientation vote was ambiguous (its boundary loops " +
+                                  "enclose no measurable volume — pole-bounded or closed-band faces); its " +
+                                  "authored side was kept.");
+                    }
+                }
+
+                foreach (int f in componentFaces[c])
+                {
+                    if (!flip[f])
+                        continue;
+                    FlipFace(_faces[f]);
+                    flipped++;
+                }
+            }
+
+            // Repartition: one shell per component — but ONLY when the existing partition
+            // differs, so healthy input is bit-stable.
+            bool partitionMatches = true;
+            var shellOfComponent = new int?[componentFaces.Count];
+            var componentsInShell = new Dictionary<int, HashSet<int>>();
+            foreach (int f in faces)
+            {
+                int c = component[f];
+                int s = _faces[f].Shell;
+                if (shellOfComponent[c] is { } known && known != s)
+                    partitionMatches = false;
+                shellOfComponent[c] = s;
+                if (!componentsInShell.TryGetValue(s, out var set))
+                    componentsInShell[s] = set = [];
+                set.Add(c);
+            }
+            if (componentsInShell.Values.Any(set => set.Count > 1))
+                partitionMatches = false;
+
+            int split = 0;
+            if (!partitionMatches)
+            {
+                int aliveShellsBefore = componentsInShell.Count;
+                foreach (int f in faces)
+                    _faces[f].Shell = component[f];
+                _shellCount = componentFaces.Count;
+                split = Math.Max(0, componentFaces.Count - aliveShellsBefore);
+                if (componentFaces.Count < aliveShellsBefore)
+                    notes.Add($"{aliveShellsBefore - componentFaces.Count} shells merged: one connected " +
+                              "component spanned several shells.");
+                else if (split > 0)
+                    notes.Add($"{split} shells split off: a shell's faces formed several disconnected components.");
+            }
+            return (flipped, split);
+        }
+
+        /// <summary>Strict box containment with a hair of slack — an exact-boundary tie
+        /// (two components sharing a bounding plane) must not count as nesting.</summary>
+        private static bool StrictlyContains(in Aabb outer, in Aabb inner)
+        {
+            double slack = 1e-12 * outer.Size.Length; // scale-free tier
+            return inner.Min.X > outer.Min.X + slack && inner.Max.X < outer.Max.X - slack
+                && inner.Min.Y > outer.Min.Y + slack && inner.Max.Y < outer.Max.Y - slack
+                && inner.Min.Z > outer.Min.Z + slack && inner.Max.Z < outer.Max.Z - slack;
+        }
+
+        /// <summary>Reverses a face's orientation: every loop re-winds (order and senses)
+        /// and <see cref="WorkFace.IsReversed"/> toggles, so the outward normal flips while
+        /// "loops run CCW about the outward normal" keeps holding.</summary>
+        private static void FlipFace(WorkFace face)
+        {
+            foreach (var loop in face.Loops.Where(l => l.Alive))
+            {
+                loop.Coedges.Reverse();
+                for (int i = 0; i < loop.Coedges.Count; i++)
+                    loop.Coedges[i] = (loop.Coedges[i].Edge, !loop.Coedges[i].SameSense);
+            }
+            face.IsReversed = !face.IsReversed;
         }
 
         // ---- output ----

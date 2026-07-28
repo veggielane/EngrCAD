@@ -184,7 +184,14 @@ public sealed class ExtrudedSurface(Curve3d generator, Vector3d direction) : Sur
 
         double along = (target - generator.PointAt(parameter)).Dot(direction) / directionLengthSquared;
         uv = new Vector2d(parameter, Interval.Unit.Clamp(along));
-        return (PointAt(uv.X, uv.Y) - target).Length < tolerance;
+        if ((PointAt(uv.X, uv.Y) - target).Length < tolerance)
+            return true;
+        // The 1D reduction can occasionally lose a query the 2D grid still wins (a
+        // heavily aliased generator where no 1D seed's basin contains the answer but a
+        // damped 2D step wanders into it) — and the base grid now multi-seeds too.
+        // Deferring on failure makes "the override is never worse than the base" hold by
+        // construction, at a cost paid only when the fast path has already failed.
+        return base.TryProjectPoint(point, out uv, tolerance);
     }
 }
 
@@ -338,7 +345,11 @@ public sealed class RevolvedSurface : Surface
             angle -= 2 * Math.PI;
 
         uv = new Vector2d(DomainU.Clamp(angle), parameter);
-        return (PointAt(uv.X, uv.Y) - point).Length < tolerance;
+        if ((PointAt(uv.X, uv.Y) - point).Length < tolerance)
+            return true;
+        // See ExtrudedSurface.TryProjectPoint: defer to the (now multi-seeded) base grid
+        // on failure, so the override is never worse than the base by construction.
+        return base.TryProjectPoint(point, out uv, tolerance);
     }
 }
 

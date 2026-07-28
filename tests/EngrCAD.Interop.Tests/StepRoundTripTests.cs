@@ -110,6 +110,23 @@ public class StepRoundTripTests
     }
 
     [Fact]
+    public void NurbsProfileExtrusion_RoundTripsExactly()
+    {
+        // The top edge is a TransformedCurve(NurbsCurve): a translated copy of the
+        // rational half-circle. It now exports EXACTLY by transforming control points
+        // (the historical lossiness sampled it to a 33-point degree-1 polyline, which
+        // failed the volume bar), so the whole solid round-trips at reconstruction
+        // accuracy with no diagnostics.
+        double w = Math.Sqrt(2) / 2;
+        var halfCircle = new NurbsCurve(2,
+            [(1, 0, 0), (1, 1, 0), (0, 1, 0), (-1, 1, 0), (-1, 0, 0)],
+            [1, w, 1, w, 1],
+            [0, 0, 0, 0.5, 0.5, 1, 1, 1]);
+        var profile = new Profile([halfCircle, new Line3d((-1, 0, 0), (1, 0, 0))]);
+        RoundTrip(SolidFactory.Extrude(profile, (0, 0, 1)), genus: 0);
+    }
+
+    [Fact]
     public void ExtrudedBracket_RoundTrips()
     {
         var bracket = SolidFactory.Extrude(

@@ -580,7 +580,20 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     out of the cardinal basis (a guide constrains the blend *between* interpolation
     stations, which the collocation solve never sees); needs a constrained surface fit.
 - [ ] Boolean extras: *section* (curve-only result), fuzzy tolerance, modification
-  history
+  history. Assessed (task #11): **section** is the cheap one — `BrepBoolean` already
+  runs per-face-pair `SurfaceIntersection` behind the bounds prefilter, so a
+  `Section(a, b)` is that loop with the curves clipped to both faces' trims
+  (`FaceGeometry.Contains` at `ExactSampleParameters`) instead of being fed to the
+  splitter; the honest hard part is clipping ANALYTIC curves to a trim boundary
+  exactly (a tracer polyline clips at vertices, a circle needs its crossing phases
+  solved) — without that the section's endpoints are sampling-resolution, which is
+  fine for display and wrong for downstream modelling, so the API should say which it
+  returns. **Fuzzy tolerance** is NOT a parameter to add but a rewrite of every
+  coincidence decision in the splitter (OCCT threads it through BOPAlgo wholesale);
+  the existing near-tangency rejections are the honest substitute. **Modification
+  history** (which output face came from which input) is cheap to RECORD in
+  `BrepBoolean` (fragments know their host face) and belongs with the topological
+  naming item below — record at the boolean, resolve at the Shape layer.
 - [ ] **Fillet follow-ups** (sharp-corner miters, edge sets, chamfer angles and
   whole-solid `FilletAllEdges` ✅ landed) — all of these are refused loudly today, so
   they are additions, not bug fixes:
@@ -638,46 +651,120 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   (`Shape.From(...)`) until a selector-to-value vocabulary exists at the Shape level.
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
   with faces-to-remove semantics
-- [ ] **Shape-healing follow-ups** (`ShapeHealing.Heal/Analyze` ✅ landed — six passes,
-  every repair a return value):
-  - [ ] **Geometric gap closing for CURVED edges** (OCCT `ShapeFix_Wire::FixGaps`) —
-    re-fit or trim a circle/NURBS through its unified endpoints. `RefitStraightEdges`
-    covers lines (a line is determined by its endpoints); curved gaps are counted in
-    `Notes` and left, because inventing curve geometry is a modelling operation, not a
-    repair. Probably wants per-entity tolerances on `BrepEdge`/`BrepVertex`, which this
-    topology does not carry.
-  - [ ] **Face-orientation and shell repair** (OCCT `ShapeFix_Shell`) — outward-normal
-    voting per connected component and splitting a shell whose faces form several
-    components: the B-Rep counterpart of `MeshRepair`'s winding flood.
-- [ ] Local operations: split shape by shape, glue faces
+- [ ] **Shape-healing follow-ups** (curved-edge RE-TRIMMING — FixGaps' parametric mode,
+  opt-in `RetrimCurvedEdges` — and `RepairShells` — orientation flood + outward vote +
+  shell repartition, on by default — ✅ landed on top of the original six passes):
+  - [ ] **Curve re-FITTING for perpendicular gap residuals** — the re-trim removes the
+    tangential part of a merge gap; what remains is the vertex's perpendicular distance
+    to the curve, reported and never repaired. Closing it means deforming or re-fitting
+    the curve (OCCT's geometric FixGaps mode inserts filler segments), a modelling
+    operation this healing deliberately refuses; the report IS the per-edge tolerance
+    story, chosen over per-entity tolerances every consumer would then have to honour.
+  - [ ] **Surface-sampled orientation vote** — the global side of a component is voted
+    from the fan volume of its sampled boundary loops, which is exact in sign for
+    polyhedra and boolean-style trimmed faces but ~0 for components whose faces are all
+    pole-bounded or closed bands (a two-face sphere, a two-band torus): those keep the
+    authored side with a note only when the flood already flipped something. A
+    surface-domain-sampled flux vote would extend coverage; needs care on trimmed faces
+    whose grid covers more than the face.
+  - [ ] **Per-face wire winding vs same-sense flag** (OCCT `ShapeFix_Face`) — the flood
+    fixes RELATIVE face orientation and the vote the global side, but a single face
+    whose wire is wound opposite to its own `IsReversed` flag is internally
+    inconsistent in a way only `FaceGeometry.LoopSignedArea` can see.
+- [ ] Local operations: split shape by shape, glue faces. Assessed (task #11): *split*
+  is the boolean pipeline stopped after face splitting — imprint both solids against
+  each other's intersection curves and return all fragments unclassified; the
+  machinery exists (`FaceSplitter` + the boolean's per-pair loop), the work is an API
+  that returns fragment→host provenance without sealing, which is the modification
+  history item again. *Glue* (merge coincident faces of touching solids without a
+  boolean) is `ShapeHealing.SewDuplicateEdges` generalized from edges to overlapping
+  face REGIONS — needs the coplanar-overlap machinery the mesh boolean has and the
+  B-Rep boolean lacks; not cheap.
 - [ ] Surface interpolation + least-squares approximation (`GeomAPI_PointsToBSpline`
-  proper; curve interpolation exists)
-- [ ] Ray-parity B-Rep point classifier (drop the `MeshSdf` bridge in booleans)
+  proper; curve interpolation exists). Assessed (task #11): the interpolation half is
+  the tensor-product generalization of `NurbsCurve.InterpolatePoints` — chord-length
+  parameters per row/column averaged, then one tridiagonal solve per row and per
+  column of the control grid (The NURBS Book A9.1/9.2, global surface interpolation);
+  `BSplineBasis` and the curve solver are in place, so this is a well-bounded medium
+  item with exact pass-through tests. Least squares wants
+  `Core.Solvers.SparseCholesky` over the normal equations — also in place. Nothing
+  downstream consumes surface fits yet, which is why it stayed behind the STEP items.
+- [ ] Ray-parity B-Rep point classifier (drop the `MeshSdf` bridge in booleans).
+  Assessed (task #11): exact ray∩surface exists for planes/quadrics but not for
+  trimmed NURBS/swept faces (needs a surface-ray marching with the same rigor as
+  `SurfaceIntersection`), and parity through a trimmed face needs the crossing point
+  classified against the trim — the pole/parity lessons (`FaceGeometry.Contains`'
+  both-directions rule) all apply per ray. The `MeshSdf` probe's known weakness is
+  sliver fragments near the surface, which the largest-triangle-centroid rule already
+  mitigates; the classifier is worth building only when a boolean failure is traced to
+  a probe misclassification the mesh cannot fix, otherwise it is rigor without a
+  customer.
 - [ ] **Exact-surface mass-property quadrature** (OCCT `BRepGProp` + `GProp_Domain`) —
   mass properties ✅ landed by tessellate-then-sum with Richardson extrapolation (1.9e-7
   relative on a cylinder at default quality). Exact quadrature is worth doing only
   *after* trimmed parameter-space boundaries become exact, since the domain scan is the
   accuracy limit, not the quadrature. Would make analytic primitives exact rather than
   1e-7.
-- [ ] **Move `SymmetricTensor3` to Core**, where a symmetric 3×3 type belongs (residual
-  of the ✅-landed `SymmetricEigen3` publicization — Core now exposes both orderings and
-  the Mesh project's duplicated Jacobi solver is deleted).
+- [ ] **`BrepSolid` one-call rigid transform** — `Transformed(Matrix4d)` rebuilding
+  topology (the `Clone()` walk) with per-type geometry mapping: plane/cylinder/sphere/
+  conic frames rigidly, extrude/revolve generators via `TransformedCurve` + mapped
+  axes, NURBS by control points (the affine rule the STEP exporter now uses), swept
+  surfaces by transformed path+profile. Assessed (task #11): well-bounded — the per-
+  type curve mapping already exists in `StepWriter.Simplify` and the Modeling compiler
+  bakes transforms per-type at lowering, so this is consolidation, not new math;
+  restrict to rigid (+uniform scale where the type allows) and refuse shear by name.
+  Nothing internal needs it today (lowering bakes transforms into construction
+  inputs), which is why it stayed behind the STEP/healing items.
 - [ ] **Per-part material in the document model** — `Part.MassProperties(density)` takes
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
   and is the natural seed for the BOM and for Simulation.
 - [ ] Topological naming / modification history (which output face came from which
   input face) — the foundation of parametric rebuilds surviving edits
-- [ ] STEP follow-ups — unit scaling (mm assumed today); CONICAL/TOROIDAL_SURFACE
-  synthesis as `RevolvedSurface`; `StepWriter` exact `TransformedCurve(NurbsCurve)`
-  export by transforming control points (currently sampled to degree-1 polylines —
-  blocks exact round-trip of NURBS-profile extrusions); export mapping for the new
-  conics (PARABOLA/HYPERBOLA/OFFSET_CURVE_3D — sign conventions verified compatible);
-  `Parabola3d.ToNurbs()` (trivially exact quadratic Bézier); import bisections run a
-  fixed 100 iterations (exact but wasteful, import-time only)
-- [ ] Data exchange: IGES, glTF, native BREP serialization format
-- [ ] Hidden-line removal (HLR) projections for 2D drawings
-- [ ] OCAF-style document framework: undo/redo, attributes, persistence
+- [ ] STEP follow-up residuals (unit scaling, CONICAL/TOROIDAL_SURFACE synthesis, exact
+  `TransformedCurve(NurbsCurve)` export, PARABOLA/HYPERBOLA/OFFSET_CURVE_3D mappings and
+  `Parabola3d.ToNurbs()` all ✅ landed): import bisections run a fixed 100 iterations
+  (exact but wasteful, import-time only); imported PARABOLA/HYPERBOLA consumed OUTSIDE
+  an edge (an offset basis, a revolve generator) carry a ±1000 placeholder domain since
+  only edge vertices fix the real interval; plane-angle CONVERSION_BASED_UNITs (degree
+  files) are not read — sound today because the reader reads no angular quantities, but
+  a future entity that does must check; the closed-generator two-rim trim
+  disambiguation reads OUR outward-band sense convention, so a foreign face whose wire
+  winding contradicts its own same-sense flag could still pick the wrong half (per-face
+  winding validation is ShapeFix_Face territory, not started)
+- [ ] Data exchange: IGES, glTF, native BREP serialization format. Design assessment
+  (task #11, each its own project): **IGES** is a legacy-only format (fixed-column
+  Part 21-era encoding, entity soup, no product structure worth the name) whose one
+  remaining use is receiving files from old CAM systems — if ever built, import-only,
+  reusing the `StepReader` diagnostics conventions; do not write it. **glTF** is the
+  opposite: mesh-plus-materials for the web viewer and downstream DCC tools — it
+  belongs beside `StlWriter`/`ObjWriter` in the mesh export family (binary `.glb`, one
+  buffer, per-part nodes with instance transforms from `PartInstance`, colors from
+  `Part.Color`), no B-Rep semantics, and is the natural companion of the WASM viewer.
+  **Native BREP serialization** should be the STEP writer's entity model dumped
+  without the AP214 ceremony ONLY if a measured need (load time, exactness of swept
+  surfaces STEP cannot carry) appears; the honest alternative — version the format
+  from day one or don't ship it — is the whole cost.
+- [ ] Hidden-line removal (HLR) projections for 2D drawings. Design assessment
+  (task #11): the exact-algebra route (OCCT `HLRBRep`: project edges + silhouette
+  curves, split at visibility changes, classify against every face) is a large
+  project with the same robustness surface as the boolean; the pragmatic first rung
+  is MESH-based HLR — project tessellation feature edges (`BrepFeatureEdges` already
+  exists), depth-test segments against the triangle BVH (`Part` pick BVHs already
+  exist), and emit visible/hidden per segment for the DXF/SVG layer item. That gets
+  usable drawings at display fidelity now and leaves exact HLR as the upgrade whose
+  seam (a list of classified 2D segments) is already right.
+- [ ] OCAF-style document framework: undo/redo, attributes, persistence. Design
+  assessment (task #11): do NOT port OCAF's label-tree/attribute model — this
+  codebase's document model is `Scene`/`Tab`/`Part` with `FeatureHistory` as the
+  parametric core, and its natural persistence is what already half-exists
+  (`SaveParameters`/`LoadParameters`, `MatePersistence`): the missing piece is one
+  serialized DOCUMENT envelope (scene structure + per-part feature history + mates +
+  materials) with a version field. Undo/redo should ride the same seam as hot reload:
+  a document snapshot is a value, an edit produces a new one, and the viewer swaps
+  scenes — the `MeshChangeSet` journaling lesson (complete state, bit-identical
+  restore) applies at document granularity rather than OCAF-style per-attribute
+  deltas.
 
 ## build123d / CadQuery parity (open items)
 

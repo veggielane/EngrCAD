@@ -20,6 +20,9 @@ operations. Depends only on `EngrCAD.Core`.
   `Hyperbola3d` is one branch P(t) = C + A·cosh t + B·sinh t (arc length by adaptive
   Simpson — no elementary closed form). Both require a finite domain at construction
   (the underlying loci are unbounded; OCCT trims equivalently).
+  `Parabola3d.ToNurbs()` is the segment over its domain as an EXACT quadratic Bézier
+  (the parabola is the one conic that is polynomial: ends plus the tangent-intersection
+  middle control point, unit weights, parameter affine over the domain).
   `OffsetCurve3d` is a planar offset as first-class geometry:
   O(t) = C(t) + d·(n̂ × T̂(t)), positive d to the left of travel seen from +n̂ (CCW
   circle with n̂ = axis: radius r − d, exactly concentric). Its exact derivative is
@@ -125,8 +128,8 @@ operations. Depends only on `EngrCAD.Core`.
     (a genuine space curve comes back as `NotPlanar`, never silently flattened); an
     unfitted entry carries the original curve, so concatenating every entry's curves is
     always correct. **`StepWriter.Options.ArcFitTolerance`** (default null = off) makes the
-    exporter fit curves with no analytic STEP form — traced polyline edges, RMF rails,
-    `TransformedCurve(NurbsCurve)` — instead of SAMPLING them into a degree-1 B-spline,
+    exporter fit curves with no analytic STEP form — traced polyline edges, RMF rails —
+    instead of SAMPLING them into a degree-1 B-spline,
     and `StepWriter.Write(solid, options)` returns a `Result` carrying the worst adopted
     deviation plus the fitted/sampled curve counts. The chain is emitted as ONE degree-2
     rational B-spline rather than a `COMPOSITE_CURVE`: consecutive rational quadratic
@@ -241,7 +244,21 @@ operations. Depends only on `EngrCAD.Core`.
   `SweptSurface.SolveGeneratorParameter` for why refinement starts from every local
   minimum *and its neighbours* — a sliver profile hides two branches inside one seed
   interval, and single-seed refinement silently returns the mirrored parameter.
-  `NurbsSurface` still uses the base grid, legitimately: no such reduction exists.
+  `NurbsSurface` still uses the base grid, legitimately: no such reduction exists —
+  and **the base grid itself is now multi-seeded**: after the GLOBAL-best seed (tried
+  first and alone, so every call the single-seed implementation used to satisfy takes
+  the identical iteration and returns bit-identical parameters), refinement runs from
+  every LOCAL minimum of the 17×17 grid and its 8 neighbours, first success wins. A
+  folded NURBS hairpin (branches 0.08 apart under a ~2-unit seed interval) measured
+  **80/205** round-trip failures single-seeded and 0 multi-seeded. The fixture lesson:
+  a MIRROR-SYMMETRIC hairpin is secretly benign — every wrong-branch seed has a
+  same-branch mirror at the identical tangential offset minus the perpendicular
+  penalty, so the argmin can never land on the wrong branch; hostility needs
+  asymmetric branch parameterizations. The 1D overrides above now also DEFER to this
+  base grid when their reduction fails (a heavily aliased generator where no 1D seed's
+  basin contains the answer but a damped 2D step wanders in), so "the override is
+  never worse than the base" holds by construction rather than by luck — locked by
+  `SweptSeedSelectionTests.NeitherOverrideEverDoesWorseThanTheGenericGridSearch`.
 - **Topology**: `BrepSolid → BrepShell → BrepFace → BrepLoop → BrepCoedge → BrepEdge →
   BrepVertex`. Faces are built so surface normals point outward and loops run CCW around
   them (first loop outer, rest holes). `Validate()` checks loop chaining and two-manifold
@@ -681,7 +698,19 @@ operations. Depends only on `EngrCAD.Core`.
 
 - **STEP export/import** — `StepWriter.Write/WriteFile` (ISO 10303-21 AP214
   `MANIFOLD_SOLID_BREP`; analytic surfaces/curves, rational NURBS via the
-  complex-instance form, wrapper-curve simplification; swept surfaces not exportable)
+  complex-instance form, wrapper-curve simplification — including EXACT
+  `TransformedCurve(NurbsCurve)` export by transforming control points with weights
+  and knots untouched, sound for any affine map because a rational curve is an affine
+  combination of its control points at every parameter, which is what lets
+  NURBS-profile extrusions round-trip at reconstruction accuracy instead of sampling
+  their translated top edges to degree-1 polylines; swept surfaces not exportable).
+  The full analytic conic family maps both ways: `Parabola3d` ↔ PARABOLA and
+  `Hyperbola3d` ↔ HYPERBOLA (the ISO 10303-42 parameterizations are ours verbatim, so
+  edge trims reconstruct in CLOSED FORM — one dot product / asinh per vertex — and the
+  import replaces the construction-time placeholder domain with the exact
+  vertex-derived interval), and `OffsetCurve3d` ↔ OFFSET_CURVE_3D (displacement
+  d·(ref_direction × T̂) = our d·(n̂ × T̂), so distance and direction carry over
+  unchanged; trims by Newton on the exact offset derivative)
   and `StepReader.Read/ReadFile` (its inverse: a full Part 21 parser — strings with
   `''` escapes, `1.E-6`-style reals, enums, typed values, complex instances, forward
   references — plus entity mapping back to `BrepSolid`, returning solids + a
@@ -697,8 +726,57 @@ operations. Depends only on `EngrCAD.Core`.
   files carry rounding noise proportional to their coordinates — an absolute 1e-6
   floor silently rejected slightly-off-axis rims on large geometry, leaving generators
   untrimmed), and near-miss rejections emit a diagnostic instead of failing silently.
-  Units: millimetres assumed; other declared length units produce a diagnostic, not
-  scaling.
+  **Units are resolved and scaled on import**: the LENGTH_UNIT a
+  `GLOBAL_UNIT_ASSIGNED_CONTEXT` references — never a bare scan of all length-unit
+  entities, because an imperial file's `CONVERSION_BASED_UNIT('INCH', …)` chain
+  necessarily *contains* a metric base-unit entity that is not the file's unit — is
+  resolved to a millimetre factor (SI prefixes closed-form; conversion chains
+  multiplied down, so inches scale by 25.4) and applied to every length read
+  (coordinates, vector magnitudes, radii); the factor is reported as a diagnostic, a
+  unit that cannot be resolved falls back to unscaled-with-a-diagnostic (millimetres
+  assumed), and scale 1 leaves every coordinate bit-identical (exact-== semantic
+  guard). **Foreign quadric surfaces synthesize onto the existing revolve machinery**:
+  `CONICAL_SURFACE` becomes a `RevolvedSurface` of a slanted line generator (the
+  `MakeCone` representation) built over the face's own boundary-vertex axial range —
+  an apex-degenerate range extends to the cone's natural apex, snapped EXACTLY onto
+  the axis so the pole machinery sees a pole and not a hair-thin rim — and
+  `TOROIDAL_SURFACE` becomes a revolve of the minor circle in the frame's x–z plane,
+  both trimmed by the ordinary rim/rail recovery. That recovery gained the missing
+  disambiguation for a CLOSED generator bounded by two rims (a split torus's two
+  bands see the SAME two junction circles, and min/max would hand both faces the same
+  half): the rim coedge senses say which rim is the generator's start — the same
+  outward-band convention the single-rim pole case reads — with the rim circle's own
+  axis alignment folded in.
+
+- **Shape healing** (`ShapeHealing.Heal/Analyze` — OCCT `ShapeFix`): repairs imported
+  face-soup topology; every repair is a return value (`ShapeHealingReport`), never a
+  log line, and the input is never modified. Passes in order, each switchable: vertex
+  merging (union-find, keeping an existing coordinate), small-edge collapse,
+  degenerate-face removal (dimensionless area/perimeter² sliver rule), edge sewing,
+  **curved-edge re-trimming** (opt-in, `RetrimCurvedEdges` — OCCT
+  `ShapeFix_Wire::FixGaps`' parametric mode: each curved edge's domain moves to the
+  foot-of-perpendicular parameters of its unified vertices via a LOCAL Gauss–Newton —
+  the gap is sub-tolerance so no global seeding or period unwrapping is needed, and the
+  break-before-negligible-step rule makes a converged end come back bit-identical so
+  healing stays idempotent; what remains is the vertex's PERPENDICULAR distance to the
+  curve, which only curve re-fitting could remove — a modelling operation, reported
+  and never attempted; the per-edge tolerance story is exactly that report, since this
+  topology deliberately carries no per-entity tolerances for downstream code to have
+  to honour), straight-edge refitting (opt-in — the one pass that moves geometry),
+  wire re-ordering/re-sensing, and **shell repair** (`RepairShells`, on by default —
+  OCCT `ShapeFix_Shell`, the B-Rep counterpart of `MeshRepair`'s winding flood): a
+  consistency flood over shared-edge senses (the manifold invariant is two uses with
+  OPPOSITE sense, so agreement across an edge means one face is flipped; flipping
+  re-winds every loop AND toggles `IsReversed`, so "loops CCW about the outward
+  normal" keeps holding; contradictions mean non-orientable and are reported, not
+  guessed), a **global outward vote** per CLOSED component from the fan volume of the
+  sampled boundary loops against containment parity (a nested component is a void and
+  must point INTO its cavity — sealed `Shelling.Shell` output is left exactly alone;
+  pole-bounded/closed-band faces like spheres enclose ~no loop volume, so their vote
+  is honestly ambiguous and the authored side is kept), and shell **repartition** so
+  each connected component is one shell (splitting a foreign writer's flat face list,
+  merging shells a component spans) — skipped bit-stably when the partition already
+  matches.
 
 ### Named epsilon tiers
 

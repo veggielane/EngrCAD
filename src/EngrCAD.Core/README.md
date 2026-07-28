@@ -307,6 +307,12 @@ concerns.
     (`SolveDescending` for fitting's dominant-first convention, `SolveAscending` for the
     principal-inertia convention), which is what let `EngrCAD.Mesh` delete the
     near-verbatim internal copy it carried just to re-sort.
+  - **`SymmetricTensor3`** — a symmetric 3×3 tensor as its six independent entries
+    (inertia tensors, second-moment matrices, covariance): outer product, matrix-vector
+    multiply, trace complement tr(T)·Id − T, and the congruence M·T·Mᵀ. Moved here from
+    `EngrCAD.Mesh` (its mass-property code still consumes it) because a symmetric 3×3
+    type belongs in the dependency-free foundation, beside the `SymmetricEigen3` that
+    diagonalizes it.
 - **`Solvers`** (namespace `EngrCAD.Core.Solvers`) — a small sparse linear-algebra
   library for symmetric positive-definite systems: the numerical substrate for the mesh
   engine's Laplacian smoothing/deformation, and deliberately dependency-free and
