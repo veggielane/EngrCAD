@@ -125,8 +125,8 @@ operations. Depends only on `EngrCAD.Core`.
     (a genuine space curve comes back as `NotPlanar`, never silently flattened); an
     unfitted entry carries the original curve, so concatenating every entry's curves is
     always correct. **`StepWriter.Options.ArcFitTolerance`** (default null = off) makes the
-    exporter fit curves with no analytic STEP form — traced polyline edges, RMF rails,
-    `TransformedCurve(NurbsCurve)` — instead of SAMPLING them into a degree-1 B-spline,
+    exporter fit curves with no analytic STEP form — traced polyline edges, RMF rails —
+    instead of SAMPLING them into a degree-1 B-spline,
     and `StepWriter.Write(solid, options)` returns a `Result` carrying the worst adopted
     deviation plus the fitted/sampled curve counts. The chain is emitted as ONE degree-2
     rational B-spline rather than a `COMPOSITE_CURVE`: consecutive rational quadratic
@@ -681,7 +681,12 @@ operations. Depends only on `EngrCAD.Core`.
 
 - **STEP export/import** — `StepWriter.Write/WriteFile` (ISO 10303-21 AP214
   `MANIFOLD_SOLID_BREP`; analytic surfaces/curves, rational NURBS via the
-  complex-instance form, wrapper-curve simplification; swept surfaces not exportable)
+  complex-instance form, wrapper-curve simplification — including EXACT
+  `TransformedCurve(NurbsCurve)` export by transforming control points with weights
+  and knots untouched, sound for any affine map because a rational curve is an affine
+  combination of its control points at every parameter, which is what lets
+  NURBS-profile extrusions round-trip at reconstruction accuracy instead of sampling
+  their translated top edges to degree-1 polylines; swept surfaces not exportable)
   and `StepReader.Read/ReadFile` (its inverse: a full Part 21 parser — strings with
   `''` escapes, `1.E-6`-style reals, enums, typed values, complex instances, forward
   references — plus entity mapping back to `BrepSolid`, returning solids + a

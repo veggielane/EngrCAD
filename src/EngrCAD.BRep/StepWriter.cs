@@ -24,7 +24,7 @@ public static class StepWriter
     /// </summary>
     /// <param name="ArcFitTolerance">
     /// When set, curves with no analytic STEP form — traced <see cref="PolylineCurve3d"/>
-    /// edges, RMF rails, <c>TransformedCurve(NurbsCurve)</c> — are fitted with a biarc chain
+    /// edges, RMF rails — are fitted with a biarc chain
     /// (<see cref="BiArcFit"/>) instead of being SAMPLED into a degree-1 B-spline, provided
     /// the fit's deviation clears this tolerance. A bore rim traced at display resolution
     /// then exports as two exact rational arcs rather than a 200-control-point polyline.
@@ -372,9 +372,9 @@ public static class StepWriter
                         : PolylineAsBspline(polyline.Points);
                 default:
                 {
-                    // Anything else (RMF rails, TransformedCurve(NurbsCurve), exotic
-                    // wrappers): sample to a polyline — or, with Options.ArcFitTolerance
-                    // set, fit exact arcs to those samples first.
+                    // Anything else (RMF rails, exotic wrappers): sample to a polyline —
+                    // or, with Options.ArcFitTolerance set, fit exact arcs to those
+                    // samples first.
                     var samples = new Vector3d[33];
                     for (int i = 0; i < samples.Length; i++)
                         samples[i] = curve.PointAt(curve.Domain.ParameterAt(i / (double)(samples.Length - 1)));
@@ -563,6 +563,17 @@ public static class StepWriter
                     t.Transform.TransformPoint(e.Center),
                     t.Transform.TransformVector(e.SemiAxisX),
                     t.Transform.TransformVector(e.SemiAxisY)),
+                // Exact for ANY affine map: a rational curve is an affine combination of
+                // its control points at every parameter (Σ wN(MP+b)/Σ wN = M·C + b), so
+                // transforming the control points with weights and knots untouched IS the
+                // transformed curve, parameterization included. This is what makes
+                // NURBS-profile extrusion tops (translated copies of the profile) export
+                // exactly instead of as sampled degree-1 polylines.
+                NurbsCurve n => new NurbsCurve(
+                    n.Degree,
+                    n.ControlPoints.Select(p => t.Transform.TransformPoint(p)).ToList(),
+                    n.Weights,
+                    n.Knots),
                 _ => null,
             },
             CurveSegment s => Simplify(s.Base), // vertices carry the trim

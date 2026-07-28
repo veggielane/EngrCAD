@@ -213,9 +213,9 @@ public class StepReaderTests
     public void NurbsProfileExtrusion_ReadsStructurally()
     {
         // Rational quadratic half-circle + base line, extruded: the side surface is an
-        // extruded NURBS emitted through the rational complex-instance form. (The top
-        // edge is a sampled polyline in the file — a writer lossiness — so this asserts
-        // structure, not tessellated volume.)
+        // extruded NURBS emitted through the rational complex-instance form, and the
+        // TOP edge — a TransformedCurve(NurbsCurve) — exports EXACTLY by transforming
+        // control points (weights and knots untouched), not as a sampled polyline.
         double w = Math.Sqrt(2) / 2;
         var halfCircle = new NurbsCurve(2,
             [(1, 0, 0), (1, 1, 0), (0, 1, 0), (-1, 1, 0), (-1, 0, 0)],
@@ -234,6 +234,14 @@ public class StepReaderTests
         var generator = (NurbsCurve)((ExtrudedSurface)band.Surface).Generator;
         Assert.Contains(generator.Weights, weight => Math.Abs(weight - 1) > 1e-9);
         Assert.True(generator.PointAt(0.25).DistanceTo(halfCircle.PointAt(0.25)) < 1e-12);
+
+        // The top edge comes back as the exact 5-control-point rational arc translated
+        // to z = 1 — a sampled export would have produced a 33-point degree-1 spline.
+        var top = read.Edges.Single(e =>
+            e.Curve is NurbsCurve && Math.Abs(e.StartVertex.Position.Z - 1) < 1e-12);
+        var topCurve = (NurbsCurve)top.Curve;
+        Assert.Equal(5, topCurve.ControlPoints.Count);
+        Assert.True(topCurve.PointAt(0.25).DistanceTo(halfCircle.PointAt(0.25) + (0, 0, 1)) < 1e-12);
     }
 
     [Fact]
