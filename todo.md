@@ -743,10 +743,6 @@ where this project already points.
 - [ ] Remaining docs-cutaway sweep: other example pages that fake cutaways with
   boolean subtractions (DocsGen `render:` fences now take `section:`/`style:`
   options — convert where the page reads better with a real section).
-- [ ] **`Part.ClippedBySection` has no UI** — a per-tree-row toggle beside the
-  display-mode cycler; likewise no toolbar affordance for oblique section planes (hosts
-  must set `ViewportControl.SectionPlanes` directly), and AO streaming reports only one
-  status line rather than per-part progress in the tree.
 - [ ] **A construction-preview docs example.** DocsGen snippets can now declare
   `sectionPlanes`/`sectionCombine`/`camera` alongside `scene` (which unblocked
   `section-oblique` and `section-unsectioned-fasteners`), but a construction-tree

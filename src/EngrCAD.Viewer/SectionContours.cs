@@ -21,7 +21,7 @@ namespace EngrCAD.Viewer;
 internal sealed record SectionContourBuild(
     int Generation, List<SectionContourGeometry> Geometries,
     List<(Part Part, string Message)> Failures, List<SectionPlane> Planes,
-    bool[] Visible);
+    bool[] Visible, bool[] Clipped);
 
 /// <summary>
 /// The UI-free state machine behind the streaming isoline rebuild: tracks which
@@ -38,8 +38,20 @@ internal sealed class SectionContourWorker
     private int _generation;
     private List<SectionPlane>? _inFlightPlanes;
     private bool[]? _inFlightVisible;
+    private bool[]? _inFlightClipped;
     private SectionContourBuild? _completed;
     private readonly object _resultLock = new();
+
+    /// <summary>Per-instance <see cref="Part.ClippedBySection"/> snapshot — part of the
+    /// build target, because an exempt part contributes no isolines and the flag can be
+    /// toggled from the tree (<c>ViewportControl.SetClippedBySection</c>).</summary>
+    internal static bool[] ClippedBits(IReadOnlyList<PartInstance> instances)
+    {
+        var bits = new bool[instances.Count];
+        for (int i = 0; i < instances.Count; i++)
+            bits[i] = instances[i].Part.ClippedBySection;
+        return bits;
+    }
 
     /// <summary>True while a build for some target is running and its result has not
     /// been adopted or superseded.</summary>
@@ -52,6 +64,7 @@ internal sealed class SectionContourWorker
         _generation++;
         _inFlightPlanes = null;
         _inFlightVisible = null;
+        _inFlightClipped = null;
     }
 
     /// <summary>
@@ -68,7 +81,8 @@ internal sealed class SectionContourWorker
         IReadOnlyList<PartInstance> instances, IReadOnlyList<bool> visible,
         IReadOnlyList<SectionPlane> planes, Action requestRender)
     {
-        if (SameTarget(_inFlightPlanes, _inFlightVisible, planes, visible))
+        bool[] clipped = ClippedBits(instances);
+        if (SameTarget(_inFlightPlanes, _inFlightVisible, _inFlightClipped, planes, visible, clipped))
             return;
         _generation++;
         int generation = _generation;
@@ -76,6 +90,7 @@ internal sealed class SectionContourWorker
         bool[] visibleCopy = [.. visible];
         _inFlightPlanes = planesCopy;
         _inFlightVisible = visibleCopy;
+        _inFlightClipped = clipped;
         Task.Run(() =>
         {
             var geometries = new List<SectionContourGeometry>(planesCopy.Count);
@@ -93,7 +108,7 @@ internal sealed class SectionContourWorker
                 // only the highest completed generation can survive to adoption.
                 if (_completed is null || _completed.Generation < generation)
                     _completed = new SectionContourBuild(
-                        generation, geometries, failures, planesCopy, visibleCopy);
+                        generation, geometries, failures, planesCopy, visibleCopy, clipped);
             }
             requestRender();
         });
@@ -117,16 +132,18 @@ internal sealed class SectionContourWorker
             return null;
         _inFlightPlanes = null;
         _inFlightVisible = null;
+        _inFlightClipped = null;
         return completed;
     }
 
     private static bool SameTarget(
-        List<SectionPlane>? builtPlanes, bool[]? builtVisible,
-        IReadOnlyList<SectionPlane> planes, IReadOnlyList<bool> visible)
+        List<SectionPlane>? builtPlanes, bool[]? builtVisible, bool[]? builtClipped,
+        IReadOnlyList<SectionPlane> planes, IReadOnlyList<bool> visible, bool[] clipped)
     {
-        if (builtPlanes is null || builtVisible is null)
+        if (builtPlanes is null || builtVisible is null || builtClipped is null)
             return false;
-        if (planes.Count != builtPlanes.Count || visible.Count != builtVisible.Length)
+        if (planes.Count != builtPlanes.Count || visible.Count != builtVisible.Length
+            || clipped.Length != builtClipped.Length)
             return false;
         for (int i = 0; i < planes.Count; i++)
         {
@@ -137,6 +154,11 @@ internal sealed class SectionContourWorker
         for (int i = 0; i < visible.Count; i++)
         {
             if (visible[i] != builtVisible[i])
+                return false;
+        }
+        for (int i = 0; i < clipped.Length; i++)
+        {
+            if (clipped[i] != builtClipped[i])
                 return false;
         }
         return true;
@@ -172,6 +194,7 @@ internal sealed class SectionContourRenderer
     private readonly List<SectionPlane> _siblings = [];
     private bool[] _builtVisible = [];
     private int _builtVisibleCount;
+    private bool[] _builtClipped = [];
     private int _reportedParts = -1;
     private readonly SectionContourWorker _worker = new();
 
@@ -204,7 +227,7 @@ internal sealed class SectionContourRenderer
         uint lineProgram, int uModel, int uColor, in SectionUniforms section,
         Span<float> matrix, Action<string> report, Action? requestRender = null)
     {
-        if (NeedsRebuild(planes, visible))
+        if (NeedsRebuild(instances, planes, visible))
         {
             if (requestRender is null)
                 BuildInline(gl, instances, visible, planes, report);
@@ -257,7 +280,8 @@ internal sealed class SectionContourRenderer
                 (part, message) => failures.Add((part, message))));
         }
         Adopt(gl, new SectionContourBuild(
-            0, geometries, failures, [.. planes], [.. visible]), report);
+            0, geometries, failures, [.. planes], [.. visible],
+            SectionContourWorker.ClippedBits(instances)), report);
     }
 
     /// <summary>Installs a completed build as the drawn state: geometry, GPU buffers,
@@ -272,6 +296,7 @@ internal sealed class SectionContourRenderer
         _builtPlanes.Clear();
         _builtPlanes.AddRange(build.Planes);
         SnapshotVisibility(build.Visible);
+        _builtClipped = build.Clipped;
         Upload(gl);
         foreach (var (part, message) in build.Failures)
         {
@@ -311,9 +336,12 @@ internal sealed class SectionContourRenderer
         _buffers.Clear();
     }
 
-    private bool NeedsRebuild(IReadOnlyList<SectionPlane> planes, IReadOnlyList<bool> visible)
+    private bool NeedsRebuild(
+        IReadOnlyList<PartInstance> instances, IReadOnlyList<SectionPlane> planes,
+        IReadOnlyList<bool> visible)
     {
-        if (_dirty || planes.Count != _builtPlanes.Count || visible.Count != _builtVisibleCount)
+        if (_dirty || planes.Count != _builtPlanes.Count || visible.Count != _builtVisibleCount
+            || instances.Count != _builtClipped.Length)
             return true;
         for (int i = 0; i < planes.Count; i++)
         {
@@ -323,6 +351,13 @@ internal sealed class SectionContourRenderer
         for (int i = 0; i < visible.Count; i++)
         {
             if (visible[i] != _builtVisible[i])
+                return true;
+        }
+        for (int i = 0; i < instances.Count; i++)
+        {
+            // ClippedBySection is part of the target: an exempt part contributes no
+            // isolines, and the flag can be toggled live from the model tree.
+            if (instances[i].Part.ClippedBySection != _builtClipped[i])
                 return true;
         }
         return false;

@@ -128,8 +128,9 @@ internal static class AmbientOcclusion
 
     /// <summary>
     /// Bakes every part's occlusion on a background thread and publishes each result
-    /// into the shared cache as it finishes, calling <paramref name="onPartBaked"/> after
-    /// each one (the viewport repaints, and <see cref="TryGet"/> starts returning that
+    /// into the shared cache as it finishes, calling <paramref name="onPartBaked"/> with
+    /// the part after each one (the viewport repaints, hosts update per-part progress,
+    /// and <see cref="TryGet"/> starts returning that
     /// part's data). Parts are baked CHEAPEST FIRST — sorted by triangle count — so the
     /// bulk of a scene gains its occlusion in the first moments and only the one or two
     /// heavy parts trail; already-cached parts cost nothing and are not counted.
@@ -139,7 +140,7 @@ internal static class AmbientOcclusion
     /// pass, and a scene swap only needs the REST of the queue dropped.
     /// </summary>
     public static void BakeInBackground(
-        IReadOnlyList<EngrCAD.Modeling.Part> parts, Action onPartBaked,
+        IReadOnlyList<EngrCAD.Modeling.Part> parts, Action<EngrCAD.Modeling.Part> onPartBaked,
         Action<int, TimeSpan>? onFinished, CancellationToken token)
     {
         ArgumentNullException.ThrowIfNull(parts);
@@ -163,7 +164,7 @@ internal static class AmbientOcclusion
                     continue;
                 For(mesh, RenderMesh.CreateFlat(mesh));
                 baked++;
-                onPartBaked();
+                onPartBaked(part);
             }
             if (baked > 0 && !token.IsCancellationRequested)
                 onFinished?.Invoke(baked, started.Elapsed);

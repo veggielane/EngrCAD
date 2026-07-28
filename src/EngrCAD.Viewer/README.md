@@ -66,7 +66,12 @@ Dark-themed layout around one shared GL viewport:
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
   an **AO** toggle (ambient occlusion, on by default — see below), a **Section**
-  toggle with an **X/Y/Z axis cycler** button beside it (see below), an **Annot**
+  toggle with an **X/Y/Z axis cycler** button beside it (see below), a **Cut@View**
+  button (an *oblique* section plane from the current view: through the orbit target,
+  normal = the camera's eye direction, so it clips away everything between the viewer
+  and the view centre — the minimal toolbar affordance for planes the axis model
+  cannot express; `[`/`]` still nudge it along its own normal, and hosts keep the
+  full `ViewportControl.SectionPlanes` API), an **Annot**
   toggle (3D annotations, on by default — see below), a **Measure** toggle
   (interactive dimensioning — see below), an **Explode** toggle with a factor slider
   (see below), and a **BOM** button (see below).
@@ -94,7 +99,9 @@ Dark-themed layout around one shared GL viewport:
     scene **immediately, flat-lit**, and each part's occlusion arrives as its own bake
     finishes (`AmbientOcclusion.BakeInBackground`, **cheapest part first** so most of a
     scene lights up in the first moments, with the whole job reported once in the status
-    bar). This is not a placeholder state: a mesh VAO with no occlusion buffer reads the
+    bar and **per-part progress in the model tree**: a row carries a small italic "ao"
+    badge until its part's bake lands — `ViewportControl.OcclusionBaked` raises the
+    part on the UI thread as each result publishes). This is not a placeholder state: a mesh VAO with no occlusion buffer reads the
     context constant 1.0, which is *exactly* the AO-off shading, so an unbaked part is
     the correct flat-lit render of that part and the only thing the bake changes is that
     crevices darken. The bake queue follows the **visible tab**, so a tab you never open
@@ -182,7 +189,9 @@ Dark-themed layout around one shared GL viewport:
   face* (`BrepQueries.Frame(face)`) or a sketch plane. Nothing downstream needed
   changing: the shaders, `SectionClip` and the isoline overlay have always taken a
   general normal; only the toolbar's axis cycler is restricted to X/Y/Z, and hosts reach
-  past it with `ViewportControl.SectionPlanes` (or `RenderToImage(sectionPlanes:)`).
+  past it with `ViewportControl.SectionPlanes` (or `RenderToImage(sectionPlanes:)`) —
+  the toolbar's **Cut@View** button is the built-in shortcut, placing one oblique plane
+  from the current camera.
   **Per-part opt-out**: `Part.ClippedBySection = false` makes a part render *and pick*
   whole inside a cutaway. That is the drafting convention every standard shares —
   shafts, bolts, nuts, washers, keys, pins and ribs are drawn unsectioned, because
@@ -192,7 +201,11 @@ Dark-themed layout around one shared GL viewport:
   (`ViewportControl.SectionFor`, mirrored in the offscreen pass), with picking simply
   not consulting `SectionClip` for such a part, so the clickable and the visible surface
   stay the same one; an exempt part also contributes no isolines, having no cut face to
-  draw them on. With no section active the flag changes nothing at all (renders are
+  draw them on. The model tree carries a per-row **cut/whole** toggle beside the
+  display-mode cycler (`ViewportControl.SetClippedBySection` — writes through the part,
+  so sibling rows and every instance follow; the isoline overlay detects the changed
+  flag itself, the same self-detection visibility changes use). With no section active
+  the flag changes nothing at all (renders are
   byte-identical), so design code can set it unconditionally.
 - **SDF isolines on the section plane** (automatic when available): when the section
   plane cuts a part whose geometry is an `Sdf` — or a `Shape` whose implicit lowering
@@ -343,7 +356,10 @@ Dark-themed layout around one shared GL viewport:
   paths ("stack/clamp.2/bolt") in the title/status bar. Each part row also has a
   small **display-mode cycler** (`shade` / `wire` / `glass`) that steps the part
   through Shaded → Wireframe → Translucent (see below); the mode lives on the
-  shared `Part`, so every instance of that part changes together.
+  shared `Part`, so every instance of that part changes together. Beside it sit the
+  **cut/whole** section-exemption toggle (`Part.ClippedBySection` — see the section
+  planes above) and the transient **"ao" badge** that marks a part whose ambient
+  occlusion is still baking in the background.
 - **Construction tree** (the disclosure triangle on a part row): expands a part into
   **how it was built** — for a `Shape` part the operation graph as nested rows
   (booleans, drills, rims and patterns showing their operands as children, and a

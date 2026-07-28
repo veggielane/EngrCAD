@@ -69,7 +69,8 @@ internal sealed class SceneHost
     /// <summary>One model-tree row backed by a viewport instance (assembly header rows
     /// are not instances — they only contribute an ancestor checkbox).</summary>
     private sealed record PartRow(
-        int Index, Part Part, CheckBox Own, IReadOnlyList<CheckBox> Ancestors, Button Label, Button ModeButton);
+        int Index, Part Part, CheckBox Own, IReadOnlyList<CheckBox> Ancestors, Button Label,
+        Button ModeButton, Button ClipButton, TextBlock AoBadge);
 
     private readonly List<PartRow> _partRows = [];
     private IReadOnlyList<PartInstance> _instances = [];
@@ -209,8 +210,15 @@ internal sealed class SceneHost
             IsChecked = Viewport.AmbientOcclusion,
         };
         ToolTip.SetTip(occlusion, "Ambient occlusion - darken pockets, bores and crevices (baked per part)");
-        occlusion.IsCheckedChanged += (_, _) => Viewport.AmbientOcclusion = occlusion.IsChecked ?? true;
+        occlusion.IsCheckedChanged += (_, _) =>
+        {
+            Viewport.AmbientOcclusion = occlusion.IsChecked ?? true;
+            RefreshOcclusionBadges();   // pending badges only make sense while AO is on
+        };
         toolbar.Children.Add(occlusion);
+        // Per-part bake progress: each part's row shows a small "ao" badge until its
+        // background bake lands (one status line for the whole job is not progress).
+        Viewport.OcclusionBaked += OnOcclusionBaked;
 
         var section = new ToggleButton { Content = "Section", Padding = new Thickness(10, 4), FontSize = 12 };
         section.IsCheckedChanged += (_, _) => Viewport.SectionEnabled = section.IsChecked ?? false;
@@ -244,6 +252,29 @@ internal sealed class SceneHost
             sectionCount.Content = next.ToString();
         };
         toolbar.Children.Add(sectionCount);
+
+        // Oblique section plane from the current view: the minimal toolbar affordance
+        // for planes the X/Y/Z axis model cannot express (hosts can already set
+        // ViewportControl.SectionPlanes directly). The plane passes through the orbit
+        // target with the camera's own eye direction as its normal, so it clips away
+        // everything between the viewer and the view centre — the classic
+        // "section from view". [ and ] still nudge it along its own normal.
+        var cutAtView = new Button { Content = "Cut@View", Padding = new Thickness(8, 4), FontSize = 12 };
+        ToolTip.SetTip(cutAtView,
+            "Oblique section plane from the current view (through the view centre, facing the camera)");
+        cutAtView.Click += (_, _) =>
+        {
+            var camera = Viewport.Camera;
+            var normal = (CameraMath.Eye(camera.Yaw, camera.Pitch, camera.Distance, camera.Target)
+                - camera.Target).Normalized();
+            Viewport.SectionPlanes = [SectionPlane.Through(camera.Target, normal)];
+            sectionCount.Content = "1";
+            section.IsChecked = true;          // fires the handler that enables sectioning
+            Viewport.SectionEnabled = true;    // idempotent when it was already on
+            _statusText.Text =
+                $"section: oblique plane from view (normal {normal.X:F2}, {normal.Y:F2}, {normal.Z:F2})";
+        };
+        toolbar.Children.Add(cutAtView);
         toolbar.Children.Add(new Border { Width = 8 });
 
         // Annotations (PMI): on by default — a scene that carries dimensions shows
@@ -1056,6 +1087,48 @@ internal sealed class SceneHost
         };
         DockPanel.SetDock(mode, Dock.Right);
 
+        // Section-exemption toggle: writes through Part.ClippedBySection (shared by
+        // every instance), the drafting convention that fasteners, shafts and pins
+        // draw whole inside a cutaway. "cut" = clipped (default), "whole" = exempt.
+        var clip = new Button
+        {
+            Content = ClipLabel(part.ClippedBySection),
+            Background = Brushes.Transparent,
+            BorderThickness = new Thickness(0),
+            Padding = new Thickness(4, 2),
+            FontSize = 10,
+            Foreground = DimText,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(clip,
+            "Section clipping - click to toggle: cut by section planes / drawn whole (fastener convention)");
+        clip.Click += (_, _) =>
+        {
+            bool clipped = !part.ClippedBySection;
+            Viewport.SetClippedBySection(index, clipped);
+            foreach (var row in _partRows)
+            {
+                if (ReferenceEquals(row.Part, part))
+                    row.ClipButton.Content = ClipLabel(clipped);
+            }
+        };
+        DockPanel.SetDock(clip, Dock.Right);
+
+        // Ambient-occlusion progress: visible until this part's background bake lands
+        // (Viewport.OcclusionBaked clears it), hidden when AO is off or already baked.
+        var aoBadge = new TextBlock
+        {
+            Text = "ao",
+            Foreground = DimText,
+            FontSize = 9,
+            FontStyle = FontStyle.Italic,
+            Padding = new Thickness(2, 3),
+            VerticalAlignment = VerticalAlignment.Center,
+            IsVisible = OcclusionPending(part),
+        };
+        ToolTip.SetTip(aoBadge, "ambient occlusion: baking in the background...");
+        DockPanel.SetDock(aoBadge, Dock.Right);
+
         bool broken = _failedRows.TryGetValue(part, out string? failure);
         var label = new Button
         {
@@ -1093,13 +1166,13 @@ internal sealed class SceneHost
             _tree.Children.Add(new DockPanel
             {
                 Margin = new Thickness(depth * 14, 0, 0, 0),
-                Children = { expander, check, mode, label },
+                Children = { expander, check, mode, clip, aoBadge, label },
             });
         }
         // Registered even when a collapsed ancestor hides the row: EffectiveVisibility
         // walks _partRows to push per-instance visibility to the viewport, and a
         // collapsed assembly must not change what renders.
-        _partRows.Add(new PartRow(index, part, check, ancestors, label, mode));
+        _partRows.Add(new PartRow(index, part, check, ancestors, label, mode, clip, aoBadge));
 
         if (visible && construction is not null && _expanded.Contains(partKey))
             AddConstructionRows(index, construction, depth + 1);
@@ -1359,6 +1432,36 @@ internal sealed class SceneHost
         DisplayMode.Translucent => "glass",
         _ => "shade",
     };
+
+    private static string ClipLabel(bool clippedBySection) => clippedBySection ? "cut" : "whole";
+
+    /// <summary>Whether a part's ambient-occlusion bake is still to come: AO is on and
+    /// the cache has nothing for its display mesh yet. A part not yet meshed is pending
+    /// (its bake queues after its batch lands); a part that failed to mesh is not (there
+    /// is nothing to bake). Never meshes: <c>HasMesh</c> gates the <c>GetMesh</c> read.</summary>
+    private bool OcclusionPending(Part part)
+    {
+        if (!Viewport.AmbientOcclusion || _failedRows.ContainsKey(part))
+            return false;
+        return !part.HasMesh || Viewer.AmbientOcclusion.TryGet(part.GetMesh()) is null;
+    }
+
+    /// <summary>A part's background bake landed (UI thread): clear its rows' badges.</summary>
+    private void OnOcclusionBaked(Part part)
+    {
+        foreach (var row in _partRows)
+        {
+            if (ReferenceEquals(row.Part, part))
+                row.AoBadge.IsVisible = false;
+        }
+    }
+
+    /// <summary>Recomputes every row's pending badge (the AO toggle flipped).</summary>
+    private void RefreshOcclusionBadges()
+    {
+        foreach (var row in _partRows)
+            row.AoBadge.IsVisible = OcclusionPending(row.Part);
+    }
 
     private void OnViewportSelection(int index)
     {

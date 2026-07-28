@@ -452,7 +452,13 @@ public sealed class ViewportControl : OpenGlControlBase
             _occlusionBake = cts;
             Viewer.AmbientOcclusion.BakeInBackground(
                 parts,
-                onPartBaked: () => Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering),
+                onPartBaked: part => Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+                {
+                    // Hosts hear which part just gained its occlusion (the tree shows
+                    // per-part progress); the frame then attaches it (BackfillOcclusion).
+                    OcclusionBaked?.Invoke(part);
+                    RequestNextFrameRendering();
+                }),
                 onFinished: (count, elapsed) => ShowStatus(
                     $"ambient occlusion: {count} part(s) baked in {elapsed.TotalSeconds:F1} s"),
                 cts.Token);
@@ -1235,6 +1241,32 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             if (index >= 0 && index < _instances.Count)
                 _instances[index].Part.DisplayMode = mode;
+        }
+        RequestNextFrameRendering();
+    }
+
+    /// <summary>
+    /// Raised on the UI thread as each part's background ambient-occlusion bake lands
+    /// (the part's crevices darken on the next frame). Hosts drive per-part progress
+    /// off it — the model tree clears a row's pending badge here.
+    /// </summary>
+    public event Action<Part>? OcclusionBaked;
+
+    /// <summary>
+    /// Sets whether a part is clipped by the section planes (index into the current
+    /// part list). Writes through to <see cref="Part.ClippedBySection"/> — shared by
+    /// every instance of the part, the drafting convention that fasteners and shafts
+    /// draw whole inside a cutaway. Rendering and picking read the flag per frame, and
+    /// the isoline overlay detects the changed flag itself (the same self-detection
+    /// visibility changes use — an exempt part has no cut face to draw isolines on),
+    /// so no cross-thread invalidation is needed here.
+    /// </summary>
+    public void SetClippedBySection(int index, bool clipped)
+    {
+        lock (_sceneLock)
+        {
+            if (index >= 0 && index < _instances.Count)
+                _instances[index].Part.ClippedBySection = clipped;
         }
         RequestNextFrameRendering();
     }
