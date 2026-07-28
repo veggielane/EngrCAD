@@ -149,9 +149,13 @@ rebuild and no repository name compiled into it.
 ## Status
 
 The viewport draws: shaded geometry with per-part colours, feature edges, the ground grid
-and axes, an orbit camera, per-part display modes (shaded / wireframe / translucent) and
-the global view style — all through the same shaders, the same `CameraMath`, and the same
-mode-precedence rule the desktop window and the headless renderer use. Still to build: the
-model tree and tab strip, picking, section planes and their isolines, the view cube, and
-annotations — the parity ladder is in `todo.md`. The [Viewer](viewer.md) page describes
-what the desktop client already does, which is the target.
+and axes, an orbit camera, per-part display modes (shaded / wireframe / translucent), the
+global view style, the tab strip and model tree with visibility, click picking with
+selection sync and hover, section planes (picking honours the cut) with SDF isolines on
+the cut face, the view cube with rotate-snap, 3D annotations, a properties panel and a
+BOM view — all through the same shaders, the same `CameraMath`, the same mode-precedence
+rule, the same clip rule and the same pose table the desktop window and the headless
+renderer use. Still to build: construction-tree rows and their rollback previews, the
+measure tool, and exploded views — the parity ladder is in `todo.md`. The
+[Viewer](viewer.md) page describes what the desktop client already does, which is the
+target.

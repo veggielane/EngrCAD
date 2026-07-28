@@ -840,28 +840,45 @@ UI dependencies, which makes this unusually feasible.
   `RenderGeometry`'s pure half are public there, namespace unchanged. Verified by the
   50 docs PNGs being byte-identical, which is the oracle that actually constrains a
   render refactor.
-- [ ] **Shared render model, step 2** — the next tranche of pure-but-still-in-Viewer code
-  the web client will want: `TabMeshLoader` (already Avalonia-free and headlessly
-  unit-tested — the cleanest move), `ViewCubeMath` and `StrokeFont` (interleaved with GL
-  drawing inside `ViewCube.cs`), `AnnotationGeometry` (same, inside `AnnotationLayer.cs`),
-  `HoverThrottle`. (`WireframeEdges` ✅ moved with the display-modes rung — forced, because its walk order decides uploaded vertex order.) Then the `ViewerModel` abstraction over Scene→render-instances that
-  would serve Avalonia, offscreen AND the web client.
+- [x] **Shared render model, step 2** — `TabMeshLoader` + `MeshFlavor`, `ViewCubeMath`/
+  `ViewCubeAnimation` + a new `ViewCubeGeometry` (face table, fill/edge/label builders,
+  palette, hover rule), `StrokeFont`, `AnnotationItem`/`AnnotationCamera`/
+  `AnnotationGeometry` (+ the overlay colour) and `SectionContours`/
+  `SectionContourGeometry` (+ the three isoline family colours) are all public in
+  `EngrCAD.Viewer.Core` now, namespace unchanged; the GL halves (`ViewCube`,
+  `AnnotationLayer`, `SectionContourRenderer`) stayed behind and consume them.
+  (`HoverThrottle` and `WireframeEdges` had already moved with earlier rungs.) Oracle:
+  full suite green and all 53 rendered docs PNGs byte-identical. Note `TabMeshLoader`
+  is Avalonia-free but **thread-model-bound** — the browser keeps its own
+  single-threaded loader by design (EngrCAD.Web README).
+- [ ] **The `ViewerModel` abstraction (Scene→render-instances shared by Avalonia,
+  offscreen AND the web client)** — assessed during the step-2 move and deliberately NOT
+  forced. What the three front ends genuinely share is already extracted (frame values,
+  camera, modes, pick, widget geometry); what remains different is the *lifecycle*:
+  the window streams uploads per part through `TabMeshLoader` (two threads), the
+  offscreen pass is one-shot and synchronous, and the browser interleaves awaited JS
+  uploads on one thread. A shared ViewerModel would have to abstract exactly that
+  lifecycle, which is the part that must NOT look the same (the TabMeshLoader lesson).
+  The honest next step is smaller: extract the *pure* per-part upload description
+  (mesh + feature edges + wire edges + pick BVH, keyed by part reference) that all
+  three build today by hand, and leave scheduling to each front end.
 - [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
   written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
   shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —
   an API change, not a move.
 - [ ] **Feature parity ladder** (build in this order): ~~orbit/pan/zoom camera + shaded
   mesh rendering~~ ✅ → ~~feature edges~~ ✅ → ~~display modes + the global view style~~ ✅
-  → tab strip + model tree + visibility → picking (ray-cast client-side against the
-  existing per-part BVH) → section planes (same fragment-discard technique in WebGL) +
-  their SDF isolines → view cube → annotations → properties panel. Reuse the camera math
-  from `CameraMath` (public in `EngrCAD.Viewer.Core`) — the orbit input bindings and
-  `WireframeEdges` now live there too, so a new front end never re-types them.
-  **Prerequisite for the section rung**: `setUniform` in `engrcad-gl.js` has no `int`
-  path — the interop marshals every JSON number through `uniform1f`, which GL rejects on
-  an int, so `uSectionCount` is currently *deliberately never sent* (a test asserts the
-  absence; the clip rule short-circuits on `uSectionEnabled` and an unset int uniform is
-  already 0). Add the int path before wiring sections, not after.
+  → ~~tab strip + model tree + visibility~~ ✅ → ~~picking~~ ✅ → ~~section planes +
+  their SDF isolines~~ ✅ → ~~view cube~~ ✅ → ~~annotations~~ ✅ → ~~properties panel +
+  BOM~~ ✅ (the int-uniform prerequisite landed as the `IntUniform`/`Vec4ArrayUniform`
+  typed markers in `engrcad-gl.js` — the JS dispatches on marker shape, C# decides
+  which uniforms are which). **Remaining rungs**: construction-tree rows + rollback
+  previews (needs `ConstructionPreviewCache`'s background-lowering story rethought for
+  one thread), the measure tool (two picks → a transient dimension — `PickResult`
+  already carries the world point), exploded views (`Scene.Instances(factor)` is
+  front-end-free already), and a multi-plane section UI (the frame already takes
+  `SectionPlane[]` + `SectionCombine`; isolines would then want `SectionClip.Siblings`
+  per plane).
 - [ ] **Docs-site embedding, the general form** — one page embeds the demo today
   (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
   viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
@@ -887,11 +904,9 @@ stdout guarded, geometry evaluated lazily). Remaining:
   content (`UseStructuredContent` + output schemas) would let clients consume them
   without parsing.
 - [ ] **Delete `src/EngrCAD.Mcp/StandardViews.cs`** — it mirrors `ViewCubeMath.PoseFor`
-  and `CameraMath.FrameDistance`, two copies of the pose maths. **Half the blocker is
-  gone**: `CameraMath` is public in `EngrCAD.Viewer.Core` as of the render-model
-  extraction, so the `FrameDistance` copy can go today. `ViewCubeMath` is still internal
-  to `EngrCAD.Viewer` — move it to Viewer.Core with the other pure math (it is on the
-  step-2 list above) and delete the duplicate outright.
+  and `CameraMath.FrameDistance`, two copies of the pose maths. **The blocker is fully
+  gone**: `CameraMath` AND `ViewCubeMath` are both public in `EngrCAD.Viewer.Core` now
+  (render-model steps 1 and 2), so the duplicate can be deleted outright.
 - [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting — the
   protocol was driven by hand and via the SDK's own client — and the no-GL error path on
   a GPU-less machine.
