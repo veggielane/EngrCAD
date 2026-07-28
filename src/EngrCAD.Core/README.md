@@ -292,6 +292,41 @@ concerns.
     the edge loop parallelized deterministically (own slot per index, in-order reduction).
   - All built on an internal cyclic-Jacobi `SymmetricEigen3` (3×3 symmetric
     eigen-decomposition, unconditionally convergent).
+- **`Solvers`** (namespace `EngrCAD.Core.Solvers`) — a small sparse linear-algebra
+  library for symmetric positive-definite systems: the numerical substrate for the mesh
+  engine's Laplacian smoothing/deformation, and deliberately dependency-free and
+  mesh-agnostic (doubles + int indices only) because the future sketch constraint solver
+  and FEA assembly will sit on the same three types.
+  - **`PackedSparseMatrix`** — immutable CSR (row-start offsets + column indices +
+    values, rows sorted by column), with an optional **symmetric-upper storage** form
+    that keeps only the upper triangle of a square symmetric matrix and mirrors
+    off-diagonals during `Multiply` (half the memory and bandwidth). Assembly goes
+    through **`SparseMatrixBuilder`** (finite-element style: `Add(r, c, v)` accumulates
+    duplicates; packing stable-sorts per row so assembly is deterministic for a
+    deterministic add sequence; symmetric-upper packing *rejects* lower-triangle adds
+    rather than mirroring them, since a mirror would double-count a convention-following
+    assembly). Also: `Multiply(other)` (Gustavson row-merge SpMM — the bi-Laplacian L²
+    construction), `ToGeneral()`/`ToSymmetricUpper()` (the latter takes the stored upper
+    triangle as truth without comparing the lower, because the two halves of a
+    numerically symmetric product differ in their last bits — same terms, different
+    summation order), `Diagonal`, row-span accessors.
+  - **`SparseSymmetricCG`** — Jacobi-preconditioned conjugate gradients. Deterministic
+    (fixed-order sequential reductions — a parallel dot product would change last bits
+    run to run). Convergence is a **return value, not a log line**: `SparseSolveReport`
+    carries converged/iterations/residual, and a non-SPD search direction breaks out
+    honestly instead of dividing by nonpositive curvature. The preconditioner's
+    nonpositive-diagonal guard is a sign test, deliberately not a `Tolerance` comparison.
+  - **`SparseCholesky`** — up-looking sparse Cholesky (elimination tree + per-row
+    ereach, Davis ch. 4): factor once, forward/back-substitute per right-hand side —
+    the shape of every Laplacian mesh solve, where x/y/z share one operator. Nonpositive
+    pivots throw naming the column. **Natural ordering, measured rather than assumed**
+    (Release, win-arm64, 5-point grid Laplacians — the coherent-numbered mesh stand-in):
+    fill is 17–80× nnz(A) but factor+solve stays cheap at deformation-ROI scale
+    (2.5k unknowns: 4.7 ms factor / 0.3 ms solve; 6.4k: 20.7 / 1.5; 14.4k: 133 / 5.5),
+    and past ~14k unknowns one-shot CG beats factor+3-RHS-solve (62.5k: CG 24.5 ms vs
+    1 625 ms factor) — so the factorization is for many-RHS reuse (interactive
+    deformation re-solves), CG for one-shot smoothing at scale, and an AMD/RCM
+    fill-reducing ordering is filed follow-up work for FEA-scale systems.
 - **`ParallelFor.Blocks(from, to, body, minBlockSize)`** — thin block-parallel-for over
   index ranges (g3's `gParallel.BlockStartEnd`): splits the range into a bounded number
   of large contiguous blocks so each worker touches a contiguous slice of the underlying
