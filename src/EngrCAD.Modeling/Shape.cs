@@ -450,6 +450,54 @@ public abstract class Shape
         return new HullShape([.. operands]);
     }
 
+    /// <summary>
+    /// Isotropic remesh: rebuild this shape's triangulation toward a uniform edge length
+    /// (<see cref="Remesher"/>) while keeping the surface it already has. The operation for
+    /// display quality and for FEA prep, where a solver wants well-shaped triangles of a
+    /// known size rather than whatever the tessellator produced.
+    /// </summary>
+    /// <param name="targetEdgeLength">The edge length to converge on, in this shape's own units.</param>
+    /// <param name="iterations">Remesh passes. More costs time and buys uniformity.</param>
+    /// <remarks>
+    /// <b>This is a geometry-changing node, and <see cref="Explain"/> says so.</b> Remeshing
+    /// is defined on a triangulation, so it is <b>Native for mesh only</b>: to B-Rep it is
+    /// Impossible (there is no mesh → B-Rep import, and the result is a tessellation rather
+    /// than a surface), and to implicit it is Bridged through a mesh SDF of the remeshed
+    /// triangles — which is a different field from the child's own, since it carries the
+    /// tessellation's chord error. Reach for it at the end of a model, not in the middle.
+    /// <para>
+    /// The shape is preserved by projecting every pass back onto the child's mesh as lowered
+    /// — the default when <see cref="RemeshOptions.ProjectionTarget"/> is null — because
+    /// without a target, smoothing is curvature flow and the model shrinks a little every
+    /// pass. So what is preserved is the child's <i>tessellation</i> at the requested quality,
+    /// not its exact surface: remesh a curved shape at a coarse quality and the remesh is
+    /// faithful to that coarse mesh. Pass an explicit target (EngrCAD.Interop's
+    /// <c>SdfProjectionTarget</c> over <c>ToImplicit()</c>) to project onto the exact field
+    /// instead.
+    /// </para>
+    /// <para>
+    /// A uniform scale above this node scales the target edge length with it, so the node
+    /// means the same thing wherever it sits; a sheared or non-uniformly scaled placement has
+    /// no single factor, and the volume-preserving equivalent (the cube root of the
+    /// determinant) is used instead.
+    /// </para>
+    /// </remarks>
+    public Shape Remeshed(double targetEdgeLength, int iterations = 10) =>
+        Remeshed(new RemeshOptions(targetEdgeLength) { Iterations = iterations });
+
+    /// <summary>
+    /// Isotropic remesh with full control over the remesher's behaviour (feature angle,
+    /// smoothing rule, scheduling, projection mode and target). See
+    /// <see cref="Remeshed(double, int)"/> for the support story and the projection default.
+    /// </summary>
+    public Shape Remeshed(RemeshOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        if (!(options.TargetEdgeLength > 0))
+            throw new ArgumentOutOfRangeException(nameof(options), "TargetEdgeLength must be positive.");
+        return new RemeshShape(this, options);
+    }
+
     // ---- Text ----
 
     /// <summary>

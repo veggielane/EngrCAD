@@ -37,16 +37,27 @@ internal static class ShapeCompiler
                         entries[i] = entries[i] with
                         {
                             Support = NodeSupport.Bridged,
-                            // Hull nodes bridge as a mesh construction, not through the SDF.
-                            Detail = entries[i].Node.StartsWith("Hull(", StringComparison.Ordinal)
-                                ? "quickhull over the operands' tessellated mesh vertices"
-                                : "polygonized from the signed distance field (Surface Nets)",
+                            Detail = MeshRoute(entries[i].Node),
                         };
                 }
                 break;
         }
         return new ConversionReport(target, entries);
     }
+
+    /// <summary>
+    /// How a node that B-Rep cannot express reaches a mesh. Most go through the SDF, but a
+    /// couple are mesh CONSTRUCTIONS in their own right and saying "polygonized from the
+    /// field" of those would be a plain untruth about which code ran.
+    /// </summary>
+    private static string MeshRoute(string node) => node switch
+    {
+        _ when node.StartsWith("Hull(", StringComparison.Ordinal) =>
+            "quickhull over the operands' tessellated mesh vertices",
+        _ when node.StartsWith("Remeshed(", StringComparison.Ordinal) =>
+            "isotropic remesh of the child's mesh lowering, projected back onto it",
+        _ => "polygonized from the signed distance field (Surface Nets)",
+    };
 
     private static void ClassifyBrep(Shape shape, in Matrix4d m, List<ConversionEntry> entries)
     {
@@ -112,6 +123,11 @@ internal static class ShapeCompiler
             case HullShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                     "a convex hull is a mesh construction (quickhull over tessellated vertices), and meshes cannot be imported into B-Rep"));
+                break;
+
+            case RemeshShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                    "a remesh is defined on a triangulation, so its result is a tessellation rather than a surface, and meshes cannot be imported into B-Rep"));
                 break;
 
             case DrillShape drill:
@@ -250,6 +266,11 @@ internal static class ShapeCompiler
             case HullShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "convex hull mesh (quickhull over tessellated vertices) wrapped in a mesh SDF"));
+                break;
+
+            case RemeshShape:
+                entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
+                    "remeshed triangles wrapped in a mesh SDF, so the field carries the tessellation's chord error rather than the child's own"));
                 break;
 
             case DrillShape drill:
@@ -714,6 +735,12 @@ internal static class ShapeCompiler
                 // already applied — hulls commute with affine maps) and wrap it.
                 return new MeshSdf(LowerMesh(shape, m, quality));
 
+            case RemeshShape:
+                // Likewise: a remesh is defined on triangles, so the field is one of the
+                // remeshed mesh — deliberately NOT the child's field, which would silently
+                // discard the very operation that was asked for.
+                return new MeshSdf(LowerMesh(shape, m, quality));
+
             case DrillShape drill:
                 // Exact SDF subtraction has no coplanar-face degeneracy: no validation.
                 return LowerImplicit(drill.Expanded, m, quality);
@@ -808,6 +835,23 @@ internal static class ShapeCompiler
                 foreach (var operand in hull.Operands)
                     hullPoints.AddRange(LowerMesh(operand, m, quality).ToIndexed().Positions);
                 return ConvexHull.Compute(hullPoints);
+            }
+
+            case RemeshShape remesh:
+            {
+                var source = LowerMesh(remesh.Child, m, quality);
+                var options = remesh.Options with
+                {
+                    // The node's target length is in ITS OWN coordinates, so a scale above it
+                    // scales the target too and the node means the same thing wherever it
+                    // sits. A shear has no single factor; the volume-preserving equivalent is
+                    // the honest stand-in, and remeshing a sheared body is approximate anyway.
+                    TargetEdgeLength = remesh.Options.TargetEdgeLength * EquivalentScale(m),
+                    // Without a target, smoothing is curvature flow and the model shrinks
+                    // every pass. The child's own lowering is what "keep the shape" means here.
+                    ProjectionTarget = remesh.Options.ProjectionTarget ?? new MeshProjectionTarget(source),
+                };
+                return Remesher.Remesh(source, options).Mesh;
             }
 
             case TransformShape t:
@@ -980,6 +1024,21 @@ internal static class ShapeCompiler
     {
         if (!m.TryDecomposeRigidUniformScale(out rotation, out translation, out scale))
             throw new ShapeConversionException(Classify(shape, TargetRep.Brep));
+    }
+
+    /// <summary>
+    /// The single length scale a placement multiplies by — exact for a similarity, and the
+    /// volume-preserving equivalent (cube root of |det|) otherwise, since a shear has no
+    /// single factor and any answer there is a stand-in. Used where a node carries a LENGTH
+    /// in its own coordinates (a remesh's target edge) and must mean the same thing wherever
+    /// the graph places it.
+    /// </summary>
+    private static double EquivalentScale(in Matrix4d m)
+    {
+        if (m.TryDecomposeRigidUniformScale(out _, out _, out double scale))
+            return scale;
+        double determinant = Math.Abs(m.Determinant);
+        return determinant > 0 ? Math.Cbrt(determinant) : 1.0;
     }
 
     private static readonly Matrix4d FlipZ = Matrix4d.CreateScale(new Vector3d(1, 1, -1));

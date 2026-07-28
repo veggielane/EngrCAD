@@ -395,6 +395,16 @@ internal sealed class HullShape(IReadOnlyList<Shape> operands) : Shape
     internal override string Describe() => $"Hull({operands.Count} operands)";
 }
 
+/// <summary>Isotropic remesh of the child's mesh lowering (mesh-native only).</summary>
+internal sealed class RemeshShape(Shape child, RemeshOptions options) : Shape
+{
+    public Shape Child => child;
+    public RemeshOptions Options => options;
+
+    internal override string Describe() =>
+        $"Remeshed(edge {options.TargetEdgeLength:0.###}, {options.Iterations} passes)";
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;

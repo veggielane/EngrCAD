@@ -234,6 +234,9 @@ public static class ConstructionTree
                 foreach (var operand in hull.Operands)
                     AddShape(node, operand, ref next);
                 break;
+            case RemeshShape remesh:
+                AddShape(node, remesh.Child, ref next);
+                break;
             case OffsetShape offset:
                 AddShape(node, offset.Child, ref next);
                 break;

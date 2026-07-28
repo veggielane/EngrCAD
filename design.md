@@ -139,6 +139,29 @@ Each engine uses the data structure its mathematics wants:
   (`MeshSignSource.WindingNumber`) that, unlike the default pseudonormal, accepts open
   meshes; the default path is byte-for-byte unchanged.
 
+- **Remeshing is exposed as a `Shape` node, not a `Part` display option** — the decision
+  worth writing down, because both readings are defensible. A remesh looks like a display
+  setting: the shape is unchanged and only the discretization moves. But that is only true
+  of the *tessellation*, and the modelling layer's whole contract is about what is exact.
+  A remeshed sphere is faithful to the mesh it was projected onto, not to the sphere, so
+  `ToBrep()` genuinely cannot express it and `ToImplicit()` genuinely produces a different
+  field from the child's. A `Part` flag would hide that behind a rendering knob; a node
+  makes `Explain` state it (Mesh native, Implicit bridged through a mesh SDF, B-Rep
+  Impossible) and lets the operation compose — `shape.Remeshed(2).ToMesh()` is a model, not
+  a viewer setting, and it survives export, MCP description and the construction tree. The
+  cost is that a design must say where the remesh happens, which is the honest requirement:
+  put it in the middle of a graph and everything downstream inherits a tessellation.
+  A `Part`-level display remesh remains a separate, smaller idea in the backlog.
+- **Region remeshing rides on the region operator's seam contract, which had to grow
+  first.** `MeshRegionOperator` originally refused any replacement that re-split a seam
+  edge, since the neighbour still held the un-split edge (a T-junction). Carrying the split
+  into the neighbours is what makes `RegionRemesher` and Loop subdivision round-trip, and
+  the ordering of its two checks is load-bearing: *every original seam vertex must be shown
+  present before any chain is walked*, because otherwise a replacement that MOVED a rim
+  vertex is indistinguishable from one that removed it and inserted a new one nearby — and
+  would be accepted as a refinement, welding a crack silently. Refinement is the feature;
+  the presence check is what keeps it from being a hole in the contract.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

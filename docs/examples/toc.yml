@@ -28,6 +28,8 @@
   href: geometry-inputs.md
 - name: 3D annotations (PMI)
   href: annotations.md
+- name: Remeshing
+  href: remeshing.md
 - name: Three representations
   href: representations.md
 - name: Exports

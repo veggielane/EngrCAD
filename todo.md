@@ -16,9 +16,11 @@ undo), STL/OBJ/OFF readers + `MeshRepair` v1, `HoleFiller` (simple/planar/FillAl
 `MeshDecimator` on `EditableMesh`, BSP boolean retired (`Csg.cs` and `BooleanMethod`
 deleted; the imprint boolean is the only one). Remaining:
 
-- [ ] **Expose remeshing through `Shape`/`Part`** (display quality, FEA prep) — and when
-  it lands it owes a `docs/examples` page, since today it is kernel API reachable through
-  no `Shape` operation.
+- [ ] **`Part`-level display remesh** — `Shape.Remeshed` is a graph node, so a remesh is a
+  modelling decision baked into the design. A viewer-only "give this part uniform triangles
+  for display/FEA export" switch on `Part` (a post-tessellation pass inside `GetMesh`) is a
+  different, smaller thing and is not built; it would need to interact with the mesh cache
+  and `MeshQuality` precedence.
 - [ ] Mutable in-place variants of fill/extrude once callers want them.
 
 ## Implicit engine (EngrCAD.Implicit)
