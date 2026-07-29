@@ -289,6 +289,28 @@ operations. Depends only on `EngrCAD.Core`.
   two booleans must clone first. The damage is silent otherwise: face/edge/vertex counts
   survive, so the solid still looks intact, and the second boolean either throws deep
   inside face tracing or returns a closed, `Validate`-clean, WRONG result.
+- **Face provenance** (`BrepFace.Provenance` / `DescendsFrom(parent)` / `AddProvenance(tag)`)
+  — the persistent half of topological naming, beside the semantic `BrepQueries` selectors.
+  A tag is stamped by the modelling layer (`Shape.Tag`) and then **inherited wherever a face
+  is derived from another**. `DescendsFrom` is the ONE rule and every derive site asks it
+  rather than restating a copy: `BrepSolid.Clone`, every `FaceSplitter` fragment and both
+  `BrepBoolean` re-wound-tool sites, plus the five sites that rebuild a solid face by face
+  from a **positional parent** — `Draft` (both the planar `BuildPrism` and the curved
+  carrier path), `CarrierBody.Rebuild`/`Shell` (curved shelling and curved draft share it),
+  `Shelling`'s polyhedral `Offset`/`Shell`, `Filleting`'s `FilletAllEdges` shrunk faces plus
+  rim surgery's rewritten face and `TrimNeighborBand`, and `ShapeHealing`'s `WorkFace`
+  rebuild.
+  **Two properties carry it.** It is **set-valued**: a boolean can split one face into
+  several, and shelling emits a wall AND its cavity twin from one parent, so a tag names a
+  set and never "the" face. And the failure is **one-sided** — a site that invents surface
+  simply does not tag, so a fillet band, a corner patch and a partial run's termination face
+  descend from no single face and stay empty. A query therefore returns FEWER faces, never a
+  face from somewhere else; an incomplete answer is a nuisance, a wrong one is a silent
+  misresolve. `FaceProvenanceTests` measures each site by tagging exactly ONE face and
+  asserting *where the tag landed* (located by `Bounds().Center` — `IsPlanar`'s origin is an
+  arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex, so
+  both read the rim), since an off-by-one in a parent array leaves the count right and the
+  meaning wrong.
 - **`BrepQueries` / `BrepSelection`** — the LINQ selection vocabulary over topology.
   `BrepQueries` classifies and measures: `IsPlanar` (incl. extruded straight lines) /
   `IsCylindrical` (incl. extruded circles and axis-parallel revolved lines) / `IsLinear` /

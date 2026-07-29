@@ -1972,19 +1972,37 @@ Design decisions:
   cardinality contract loudly. A scheme that promised "the" face would have to guess which
   fragment, which is precisely how naming schemes come to misresolve silently.
   **(b) The failure direction is the whole safety argument.** Inheritance is implemented at
-  the sites that derive a face from a parent; a site that builds a face from scratch, or an
-  algorithm that rebuilds the solid wholesale, simply does not tag — so a query returns
-  FEWER faces than the author expected, never a face from somewhere else. Landed: the
-  boolean pipeline (untouched faces pass through by reference; every `FaceSplitter`
-  fragment and every re-wound tool face inherits), `BrepSolid.Clone`, and therefore
-  `Drill`, patterns, transforms and `Shape.From(solid)`. Not landed, and stated rather than
-  hidden: `Draft`, `Shelling` and `FilletAllEdges` rebuild every face from scratch, and rim
-  surgery rewrites the blended face and its trimmed neighbours — all four have a
-  positional parent (`Shelling` already keeps a `Dictionary<BrepFace,int>` for exactly this
-  reason), so threading provenance is mechanical rather than hard, and it is filed instead
-  of done because the tests that pin the boundary are cheap and a half-propagated tag is
-  worth less than a documented one. STEP carries no provenance either, which is a format
-  limit rather than a choice.
+  the sites that derive a face from a parent; a site that builds a face from scratch simply
+  does not tag — so a query returns FEWER faces than the author expected, never a face from
+  somewhere else. Landed: the boolean pipeline (untouched faces pass through by reference;
+  every `FaceSplitter` fragment and every re-wound tool face inherits), `BrepSolid.Clone`,
+  and therefore `Drill`, patterns, transforms and `Shape.From(solid)` — **and every
+  wholesale-rebuild site**: `Draft`, `Shelling`, `Filleting`'s `FilletAllEdges` and rim
+  surgery, and `ShapeHealing`. Each of those discards its input's face objects and
+  constructs replacements, and each already walks its parents positionally, so the fix was
+  simply that every derive point ASK the existing `BrepFace.DescendsFrom` — no new API, and
+  a second inheritance helper would have been the mistake rather than the missing piece.
+  Two corrections to the shape this had been filed in are worth keeping. **It was recorded
+  as four sites and is really six derive points**, because `Draft` and `Shelling` each have
+  a planar path and a curved one and the two curved halves share `CarrierBody.Rebuild` /
+  `CarrierBody.Shell` — so a third of the work lives in a file naming neither operation,
+  which is exactly what a per-operation checklist misses. And **the reason recorded for the
+  work being easy was not the reason**: `Shelling`'s `Dictionary<BrepFace,int>` is never
+  consulted for this, since a positional loop counter already IS the correspondence.
+  What still carries nothing is a statement about the geometry rather than a gap — a fillet
+  band, a corner patch and a partial run's termination face descend from no single face, so
+  attributing them to one of the two surfaces they join would be a guess. The one case that
+  answers with MORE faces than the design named is shelling, where a wall and its cavity
+  twin both inherit from one parent; that is honest (the cavity wall exists only because the
+  outer one does) and it is *representable* precisely because (a) made a tag set-valued.
+  STEP carries no provenance either, which is a format limit rather than a choice.
+  **The boundary tests had to become measurements to stay worth having.** Asserting that a
+  tagged solid comes back with N tagged faces passes just as happily when a parent array is
+  off by one — the count is right and the meaning is wrong, which is the silent misresolve
+  (a) exists to prevent — so each site is now tested by tagging exactly ONE face and
+  asserting *which* output face carries it, located by `Bounds().Center` (`IsPlanar`'s origin
+  is an arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex;
+  both read the rim, and both would make the assertion agree with a wrong answer).
   **(c) A tag is REFUSED, not sanitized, when the descriptor grammar cannot spell it.** The
   descriptor is the cache key and the serialized form, and it is parsed back through
   `RefLexer.ReadIdentifier` — so a tag containing a space or a comma cannot survive its own

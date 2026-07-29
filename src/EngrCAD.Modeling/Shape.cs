@@ -1417,17 +1417,24 @@ public abstract class Shape
     /// bosses are indistinguishable to a query and trivially distinguishable by tag.</para>
     ///
     /// <para><b>The guarantee, and exactly where it stops.</b> A tag is inherited wherever
-    /// a face is derived from another, which covers everything the boolean pipeline does:
-    /// faces it does not touch are passed through by reference, and every fragment its face
-    /// splitting produces takes its parent's tags. So tags survive unions, differences,
-    /// intersections, <c>Drill</c>, patterns and transforms. They do <b>not</b> survive the
-    /// operations that rebuild a face on fresh geometry — <see cref="Draft"/>,
+    /// a face is derived from another. That covers everything the boolean pipeline does
+    /// (faces it does not touch are passed through by reference, and every fragment its face
+    /// splitting produces takes its parent's tags), so tags survive unions, differences,
+    /// intersections, <c>Drill</c>, patterns and transforms — and it covers the operations
+    /// that REBUILD a solid face by face, each of which hands every new face its positional
+    /// parent: <see cref="Draft"/>,
     /// <see cref="Shell(double, System.Collections.Generic.IEnumerable{int}?)"/>,
-    /// <see cref="RoundEdges"/>, and the faces a rim <see cref="Fillet(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/>
-    /// or <see cref="Chamfer(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/> rewrites
-    /// (the blend bands themselves are new material and are correctly untagged; the shrunk
-    /// top face and trimmed neighbours lose their tags today). A STEP round trip drops
-    /// provenance entirely — there is no AP214 entity for it.</para>
+    /// <see cref="RoundEdges"/>, and rim
+    /// <see cref="Fillet(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/> /
+    /// <see cref="Chamfer(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/> surgery.</para>
+    ///
+    /// <para>What carries no provenance is what is genuinely NEW rather than derived, and
+    /// that is a statement about the geometry rather than a gap: a fillet band, a corner
+    /// patch and a partial run's termination face descend from no single face, so they are
+    /// left untagged instead of being attributed to one of the two surfaces they join.
+    /// Shelling is the case worth knowing about in the other direction — a wall and its
+    /// cavity twin BOTH descend from one parent, so a tagged face there answers with two.
+    /// A STEP round trip drops provenance entirely; there is no AP214 entity for it.</para>
     ///
     /// <para><b>Two consequences worth internalizing.</b> A tag names a <em>set</em>, never
     /// "the" face: one face can split into several, so <see cref="FaceSetRef.Tagged"/> is

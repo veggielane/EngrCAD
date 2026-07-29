@@ -1645,19 +1645,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,
-  so a lost tag means fewer faces and never a wrong one — see design.md §6b). What remains,
-  each with a known parent to inherit from, so all four are mechanical rather than research:
-  - [ ] **`Draft.ApplyCore`** rebuilds the whole solid via `BuildPrism`; side face *i*
-    corresponds to `prism.SideFaces[i]` and the caps to `BaseCap`/`TopCap`. An index map
-    threaded through `BuildPrism` is the whole fix.
-  - [ ] **`Shelling.Offset`/`Shell`** already keeps a `Dictionary<BrepFace,int>` face index;
-    note one parent maps to TWO children (an outer wall and its inward twin), which
-    provenance already allows since it is a list.
-  - [ ] **`Filleting.FilletAllEdges`** re-emits every original face with a shrunk boundary
-    (a direct 1:1 parent) and adds genuinely new bands and corner patches, which correctly
-    stay untagged. **Rim surgery** (`FilletRim`/`ChamferRim`, the partial-run variants, and
-    `TrimNeighborBand`) likewise has the parent in hand at each site.
-  - [ ] **`ShapeHealing`** rebuilds through `WorkFace`; provenance would ride on that.
+  so a lost tag means fewer faces and never a wrong one — see design.md §6b.
+  **The five rebuild sites ✅ landed too**: `Draft` (planar `BuildPrism` + the curved
+  carrier path), `CarrierBody.Rebuild`/`Shell`, `Shelling`'s polyhedral `Offset`/`Shell`,
+  `Filleting`'s `FilletAllEdges` + rim surgery + `TrimNeighborBand`, and `ShapeHealing`'s
+  `WorkFace`. Every one asks the existing `BrepFace.DescendsFrom` rather than restating a
+  copy, and `FaceProvenanceTests` measures each by tagging ONE face and asserting where the
+  tag landed. **The filed framing had one thing wrong and one thing missing**: the four
+  named sites are really SIX derive points, because `Draft` and `Shelling` each have a
+  planar path and a curved one and the curved halves share `CarrierBody` — so the shared
+  rebuild is where two of the six live and neither `Draft.cs` nor `Shelling.cs` mentions
+  provenance at all; and `Shelling`'s `Dictionary<BrepFace,int>` was never needed, since
+  every one of these sites already iterates its parent array positionally and the index map
+  would have been a second spelling of the loop counter.) What remains:
   - [ ] **EDGE provenance.** Only faces carry tags today. An edge could report the tags of
     its two faces, which is enough for "fillet the edges of the boss" without a new store —
     but the sense in which an edge *belongs* to a step when its two faces disagree wants a

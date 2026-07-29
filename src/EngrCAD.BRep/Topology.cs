@@ -110,16 +110,22 @@ public sealed class BrepFace
     ///
     /// <para>A tag is stamped by the modelling layer (<c>Shape.Tag(name)</c> stamps every
     /// face of its child's lowering) and then <b>inherited</b> wherever a face is DERIVED
-    /// from another — every fragment a boolean's face splitting produces, and the reversed
-    /// copies a subtracted tool contributes. Faces built from scratch carry nothing, which
-    /// is the honest answer: a bore wall did not descend from the plate it was cut into.</para>
+    /// from another — every fragment a boolean's face splitting produces, the reversed
+    /// copies a subtracted tool contributes, and every face the rebuilding operations
+    /// (<see cref="Draft"/>, <see cref="Shelling"/>, <see cref="Filleting"/>,
+    /// <see cref="ShapeHealing"/>) re-emit from a positional parent. Faces built from
+    /// scratch carry nothing, which is the honest answer: a bore wall did not descend from
+    /// the plate it was cut into, and neither did a fillet band from the two faces it
+    /// blends.</para>
     ///
     /// <para><b>The guarantee is set-valued and one-sided</b>, and both halves matter. A
-    /// face can split into SEVERAL, so a tag names a set of faces and never "the" face;
-    /// and an operation that rebuilds a face on fresh geometry (rim filleting, shelling,
-    /// drafting) drops the tag rather than guessing, so a query can come back with fewer
-    /// faces than the author expected but never with a face from somewhere else. See
-    /// <c>Shape.Tag</c> for exactly where the guarantee stops.</para>
+    /// face can split into SEVERAL — and one face can generate several (shelling emits a
+    /// wall AND its cavity twin from one parent) — so a tag names a set of faces and never
+    /// "the" face. And a site that invents surface simply does not tag, so a query can come
+    /// back with fewer faces than the author expected but never with a face from somewhere
+    /// else. That direction is the whole safety argument: an incomplete answer is a
+    /// nuisance, a wrong one is a silent misresolve. See <c>Shape.Tag</c> for what still
+    /// carries no provenance.</para>
     /// </summary>
     public IReadOnlyList<string> Provenance { get; private set; } = [];
 

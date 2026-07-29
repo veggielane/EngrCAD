@@ -492,7 +492,11 @@ public static class Filleting
                     .Select(c => new BrepCoedge(straightEdges[(c.Edge, face)],
                         ReferenceEquals(straightEdges[(c.Edge, face)].StartVertex, corners[(c.StartVertex, face)])))
                     .ToList();
-                shrunk.Add(new BrepFace(face.Surface, [new BrepLoop(coedges)]));
+                // Same carrier, shrunk boundary — a direct 1:1 parent, so provenance rides
+                // through. The bands and corner patches below are genuinely new surface and
+                // deliberately inherit nothing: a fillet band did not descend from either
+                // face it blends.
+                shrunk.Add(new BrepFace(face.Surface, [new BrepLoop(coedges)]).DescendsFrom(face));
             }
 
             var spheres = incidence.Keys
@@ -873,7 +877,8 @@ public static class Filleting
                     : new ExtrudedSurface(
                         extruded.Generator.Transformed(Matrix4d.CreateTranslation(extruded.Direction * vLow)),
                         extruded.Direction * (1 - vLow));
-                return new BrepFace(trimmed, [.. neighbor.Loops], neighbor.IsReversed);
+                return new BrepFace(trimmed, [.. neighbor.Loops], neighbor.IsReversed)
+                    .DescendsFrom(neighbor);
             }
             case RevolvedSurface revolved when revolved.Generator.Underlying is Line3d:
             {
@@ -886,7 +891,8 @@ public static class Filleting
                     : new CurveSegment(revolved.Generator, uv.Y, domain.End);
                 return new BrepFace(
                     new RevolvedSurface(trimmedGenerator, revolved.AxisOrigin, revolved.AxisDirection, revolved.Angle),
-                    [.. neighbor.Loops], neighbor.IsReversed);
+                    [.. neighbor.Loops], neighbor.IsReversed)
+                    .DescendsFrom(neighbor);
             }
             default:
                 return null;
@@ -1265,8 +1271,11 @@ public static class Filleting
 
             // Shrunk top face (holes untouched).
             var newOuter = new BrepLoop([.. Enumerable.Range(0, n).Select(i => new BrepCoedge(topEdges[i], true))]);
+            // The blended face keeps its own carrier and its holes; only the outer rim moved
+            // inward, so it descends from the face it replaces.
             var newFace = new BrepFace(face.Surface,
-                [newOuter, .. face.Loops.Where(l => !ReferenceEquals(l, outer))]);
+                [newOuter, .. face.Loops.Where(l => !ReferenceEquals(l, outer))])
+                .DescendsFrom(face);
 
             // Lower the neighbors' rim edges (they traverse opposite the top face).
             for (int i = 0; i < n; i++)
@@ -1549,8 +1558,10 @@ public static class Filleting
                 }
                 newOuterCoedges.Add(loopCoedges[at]);
             }
+            // Same carrier, one stretch of the rim inset — the face it replaces is its parent.
             var newFace = new BrepFace(face.Surface,
-                [new BrepLoop(newOuterCoedges), .. face.Loops.Where(l => !ReferenceEquals(l, face.OuterLoop))]);
+                [new BrepLoop(newOuterCoedges), .. face.Loops.Where(l => !ReferenceEquals(l, face.OuterLoop))])
+                .DescendsFrom(face);
 
             // Lower the neighbors' rim edges; terminal neighbors also take the descent
             // segment so their loops keep closing through the untouched run vertex.

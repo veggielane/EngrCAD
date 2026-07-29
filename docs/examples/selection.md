@@ -118,24 +118,35 @@ feature's parameters.
 
 ### Exactly where the guarantee stops
 
-A tag is inherited wherever a face is *derived* from another, which covers the whole
-boolean pipeline: untouched faces pass through by reference and every split fragment takes
-its parent's tags.
+A tag is inherited wherever a face is *derived* from another. That covers the whole boolean
+pipeline (untouched faces pass through by reference and every split fragment takes its
+parent's tags) and the operations that **rebuild** a solid face by face, each of which hands
+every new face its positional parent.
 
 | Operation | Tag survives? |
 | --- | --- |
 | Union / intersection / difference, `Drill` | Yes — including the subtracted tool's own walls |
 | Transforms, patterns, mirroring | Yes |
 | `Shape.From(brepSolid)` (which clones) | Yes |
-| Rim `Fillet`/`Chamfer` | On the faces it does not rewrite. The shrunk blended face and the new bands carry nothing |
-| `RoundEdges` (whole-solid), `Draft`, `Shell` | No — these rebuild every face on fresh geometry |
+| Rim `Fillet`/`Chamfer` | Yes, on the rewritten face and its re-trimmed neighbours. The new blend bands carry nothing |
+| `RoundEdges` (whole-solid) | Yes, on each shrunk original face. The edge bands and corner patches carry nothing |
+| `Draft` | Yes — every tapered wall and both caps |
+| `Shell(t, openings)` | Yes — and a wall's **cavity twin inherits too**, so one tagged face answers with two |
+| `ShapeHealing.Heal` | Yes |
 | STEP export / import | No — there is no AP214 entity for provenance |
 | `ToImplicit()` / `ToMesh()` | Not applicable — a distance field and a triangle soup have no faces |
 
-The failure is deliberately **one-sided**: a lost tag yields *fewer* faces, never a face
+What carries no tag is what is genuinely **new** rather than derived, and that is a
+statement about the geometry rather than a gap: a fillet band, a corner patch and a partial
+run's termination face descend from no single face, so they are left untagged instead of
+being attributed to one of the two surfaces they join.
+
+The failure is deliberately **one-sided**: a missing tag yields *fewer* faces, never a face
 from somewhere else. So an over-narrow selection breaks its cardinality contract loudly
 instead of quietly blending the wrong edge — which is the whole reason to prefer a
-conservative scheme over a clever one.
+conservative scheme over a clever one. Shelling is the one case that answers with *more*
+than the design named, and it is honest rather than surprising: the cavity wall exists only
+because the outer wall does, and `Within` narrows to whichever you meant.
 
 Tags live inside the geometry-reference descriptor grammar, so they are restricted to ASCII
 letters, digits and underscores. A tag the grammar cannot spell is **refused with a

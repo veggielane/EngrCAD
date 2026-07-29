@@ -355,13 +355,21 @@ public static class ShapeHealing
         public bool Alive { get; set; } = true;
     }
 
-    private sealed class WorkFace(Surface surface, bool isReversed, int shell)
+    private sealed class WorkFace(Surface surface, bool isReversed, int shell, BrepFace source)
     {
         public Surface Surface { get; } = surface;
         public bool IsReversed { get; set; } = isReversed;
         public int Shell { get; set; } = shell;
         public List<WorkLoop> Loops { get; } = [];
         public bool Alive { get; set; } = true;
+
+        /// <summary>
+        /// The input face this one was loaded from, kept so the emitted face can inherit its
+        /// provenance. Healing only ever KILLS faces (degenerate removal) or rewires their
+        /// loops and senses — it never fuses two into one — so the parent stays 1:1 and a tag
+        /// cannot migrate between faces.
+        /// </summary>
+        public BrepFace Source { get; } = source;
     }
 
     private sealed class Work
@@ -412,7 +420,7 @@ public static class ShapeHealing
             {
                 foreach (var face in solid.Shells[s].Faces)
                 {
-                    var wf = new WorkFace(face.Surface, face.IsReversed, s);
+                    var wf = new WorkFace(face.Surface, face.IsReversed, s, face);
                     foreach (var loop in face.Loops)
                     {
                         var wl = new WorkLoop();
@@ -1275,7 +1283,8 @@ public static class ShapeHealing
                     foreach (var loop in face.Loops.Where(l => l.Alive && l.Coedges.Count > 0))
                         loops.Add(new BrepLoop([.. loop.Coedges.Select(c => new BrepCoedge(Edge(c.Edge), c.SameSense))]));
                     if (loops.Count > 0)
-                        faces.Add(new BrepFace(face.Surface, loops, face.IsReversed));
+                        faces.Add(new BrepFace(face.Surface, loops, face.IsReversed)
+                            .DescendsFrom(face.Source));
                 }
                 if (faces.Count > 0)
                     shells.Add(new BrepShell(faces));
