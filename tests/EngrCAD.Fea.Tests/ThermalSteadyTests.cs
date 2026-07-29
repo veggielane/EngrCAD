@@ -360,6 +360,64 @@ public class ThermalSteadyTests(ITestOutputHelper output)
 
     // ---- radial ----------------------------------------------------------------------
 
+    /// <summary>
+    /// The iterative solver reaches the same answer as the direct one, steady and
+    /// transient — the branch a caller takes for a large model, and one no other test in
+    /// this file exercises.
+    /// <para>The agreement bar is the CG tolerance rather than round-off, which is the
+    /// honest statement of what an iterative solve gives and exactly why
+    /// <see cref="FeaSolveMethod.Direct"/> stays the default: every exactness claim in
+    /// this suite is a claim about the direct path.</para>
+    /// </summary>
+    [Fact]
+    public void ConjugateGradient_AgreesWithTheDirectSolve()
+    {
+        var tets = StructuredTetMesh.Box(Vector3d.Zero, new Vector3d(40, 20, 10), 5, 3, 2);
+        var mesh = AnalysisMesh.Of(tets);
+
+        ThermalModel Build() => new ThermalModel(mesh, Metal)
+            .Temperature(StructuredTetMesh.XMin, 150)
+            .Convection(StructuredTetMesh.XMax, 0.04, 20)
+            .Generation(0.002);
+
+        var direct = ThermalSolver.Solve(Build());
+        var iterative = ThermalSolver.Solve(
+            Build(), new ThermalSolveOptions { Method = FeaSolveMethod.ConjugateGradient });
+
+        double span = direct.MaxTemperature - direct.MinTemperature;
+        double worst = 0;
+        for (int v = 0; v < mesh.NodeCount; v++)
+            worst = Math.Max(worst, Math.Abs(direct.TemperatureAt(v) - iterative.TemperatureAt(v)));
+
+        output.WriteLine(
+            $"steady: direct {direct.MinTemperature:F6}..{direct.MaxTemperature:F6}, "
+            + $"CG converged in {iterative.Report.Iterations} iterations "
+            + $"(|Ku-f|/|f| = {iterative.Report.RelativeResidual:E2})");
+        output.WriteLine(
+            $"  worst |direct - CG| {worst:E3} K on a {span:G6} K span -> {worst / span:E3}");
+        Assert.True(iterative.Report.Converged);
+        Assert.Equal(0, iterative.Report.FactorNonZeros);
+        Assert.True(worst / span < 1e-8, $"{worst / span:E3}");
+
+        // ...and the transient, where a step warm-starts from its predecessor. There is no
+        // factorization to count, so Factorizations is 0 and says so rather than lying.
+        double[] Transient(FeaSolveMethod method) =>
+        [
+            .. ThermalSolver.SolveTransient(
+                Build(),
+                new ThermalTransientOptions(2.0, 20) { InitialTemperature = 20, StoreEvery = 20 },
+                new ThermalSolveOptions { Method = method }).Final.Temperature,
+        ];
+
+        var directRun = Transient(FeaSolveMethod.Direct);
+        var iterativeRun = Transient(FeaSolveMethod.ConjugateGradient);
+        double worstStep = 0;
+        for (int v = 0; v < mesh.NodeCount; v++)
+            worstStep = Math.Max(worstStep, Math.Abs(directRun[v] - iterativeRun[v]));
+        output.WriteLine($"transient after 20 steps: worst |direct - CG| {worstStep:E3} K");
+        Assert.True(worstStep / span < 1e-8, $"{worstStep / span:E3}");
+    }
+
     private const double Inner = 10, Outer = 25, Height = 6;
     private const double InnerTemperature = 150, OuterTemperature = 30;
 
