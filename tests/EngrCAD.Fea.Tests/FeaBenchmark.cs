@@ -287,6 +287,48 @@ public class FeaBenchmark(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// What would actually move the factorization wall, read off the symbolic pass rather
+    /// than guessed from the algorithm's name. Three numbers decide it and none of them
+    /// needs the factorization to be run: how much work there is
+    /// (<see cref="SparseFactorAnalysis.UpdateCount"/>), how much of it is stuck on one
+    /// dependency chain (<see cref="SparseFactorAnalysis.ParallelCeiling"/>), and how long
+    /// the columns are (<see cref="SparseFactorAnalysis.LongestColumn"/>, which is what a
+    /// blocked/supernodal kernel pays in proportion to).
+    /// </summary>
+    [Fact]
+    public void WhatWouldMoveTheFactorizationWall()
+    {
+        if (!Enabled)
+            return;
+
+        output.WriteLine(
+            $"{"order",10} {"free DOF",10} {"ordering",9} {"factor nnz",12} {"updates",10} "
+            + $"{"longest col",12} {"parallel ceiling",17} {"analyse ms",11}");
+        foreach (var (order, n) in new[]
+        {
+            (ElementOrder.Linear, 4), (ElementOrder.Linear, 8), (ElementOrder.Linear, 12),
+            (ElementOrder.Quadratic, 2), (ElementOrder.Quadratic, 4),
+        })
+        {
+            var model = Cantilever(order, n);
+            var reduced = FeaAssembly.ReducedIndices(model, out int freeCount);
+            var matrix = FeaAssembly.Reduce(
+                FeaAssembly.Stiffness(model, TetQuadrature.For(model.Mesh.Order)), reduced, freeCount);
+
+            foreach (var ordering in new[] { SparseOrdering.Natural, SparseOrdering.Amd })
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var analysis = SparseCholesky.Analyze(matrix, ordering);
+                double ms = stopwatch.Elapsed.TotalMilliseconds;
+                output.WriteLine(
+                    $"{order,10} {freeCount,10:N0} {ordering,9} {analysis.FactorNonZeroCount,12:N0} "
+                    + $"{analysis.UpdateCount,10:E2} {analysis.LongestColumn,12:N0} "
+                    + $"{analysis.ParallelCeiling,16:F1}x {ms,11:F1}");
+            }
+        }
+    }
+
     [Fact]
     public void ThroughputAcrossTheWholePipeline()
     {

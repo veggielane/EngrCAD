@@ -24,6 +24,53 @@ public enum SparseOrdering
 }
 
 /// <summary>
+/// What <see cref="SparseCholesky.Analyze"/> reads off the symbolic pass: what a
+/// factorization will cost, before any of it is paid.
+/// </summary>
+/// <param name="Rows">Dimension of the matrix.</param>
+/// <param name="FactorNonZeroCount">Stored entries L will have, diagonal included — exactly
+/// what <see cref="SparseCholesky.FactorNonZeroCount"/> would report. The memory
+/// question.</param>
+/// <param name="UpdateCount">The numeric pass's inner-loop trip count, which its time is
+/// proportional to. A <c>double</c> because a large factorization overflows an int (a
+/// 19-million-entry factor's runs to 1e10).</param>
+/// <param name="CriticalPathUpdates">The heaviest root-to-leaf path of the elimination
+/// tree, in the same units. A column cannot start before its children finish, so this is a
+/// LOWER BOUND on any parallel schedule — <c>UpdateCount / CriticalPathUpdates</c> is the
+/// ceiling on what tree parallelism could ever buy, whatever the machine.</param>
+/// <param name="LongestColumn">Off-diagonal entries in the largest column of L. The
+/// supernode question: blocked (BLAS-3) factorizations pay in proportion to how much work
+/// sits in long columns.</param>
+/// <param name="Ordering">The ordering these numbers describe.</param>
+public readonly record struct SparseFactorAnalysis(
+    int Rows,
+    long FactorNonZeroCount,
+    double UpdateCount,
+    double CriticalPathUpdates,
+    int LongestColumn,
+    SparseOrdering Ordering)
+{
+    /// <summary>Stored entries of L over stored entries of A's upper triangle — the fill
+    /// ratio, reported by a factorization after the fact and by this before it.</summary>
+    public double FillRatio(PackedSparseMatrix a) =>
+        (double)FactorNonZeroCount / Math.Max(1, a.IsSymmetricUpper ? a.NonZeroCount : a.ToSymmetricUpper().NonZeroCount);
+
+    /// <summary>
+    /// <see cref="UpdateCount"/> over <see cref="CriticalPathUpdates"/>: the most a
+    /// perfectly scheduled parallel factorization could win over this sequential one. An
+    /// UPPER bound and nothing more — it assumes unlimited processors and free
+    /// synchronisation, so a real scheduler lands well below it.
+    /// </summary>
+    public double ParallelCeiling =>
+        CriticalPathUpdates > 0 ? UpdateCount / CriticalPathUpdates : 1;
+
+    /// <summary>A readable summary.</summary>
+    public override string ToString() =>
+        $"{Rows:N0} unknowns, factor {FactorNonZeroCount:N0} nnz, {UpdateCount:E2} updates, "
+        + $"longest column {LongestColumn:N0}, parallel ceiling {ParallelCeiling:F1}x ({Ordering})";
+}
+
+/// <summary>
 /// Sparse Cholesky factorization A = L·Lᵀ of a symmetric positive-definite matrix, by
 /// the standard up-looking algorithm (elimination tree + per-row reach; Davis,
 /// <i>Direct Methods for Sparse Linear Systems</i>, ch. 4). Factor once, then
@@ -151,63 +198,8 @@ public sealed class SparseCholesky
     public static SparseCholesky Factorize(
         PackedSparseMatrix a, SparseOrdering ordering, ProgressCancel? progress = null)
     {
-        ArgumentNullException.ThrowIfNull(a);
-        if (a.Rows != a.Columns)
-            throw new ArgumentException("Cholesky needs a square symmetric positive-definite matrix.", nameof(a));
-
-        var upper = a.IsSymmetricUpper ? a : a.ToSymmetricUpper();
-        int n = upper.Rows;
-
-        // Upper triangle in CSC form: column k lists rows i <= k ascending. (CSR rows of
-        // the upper triangle are its columns transposed.)
-        var (colStart, rowIndex, values) = UpperCsc(upper);
-
-        int[]? permutation = null;
-        if (ordering == SparseOrdering.Amd && n > 0)
-        {
-            // One checkpoint per phase for the linear passes, per the polling rule: their
-            // cost follows the matrix's own entry count, so a checkpoint inside would buy
-            // latency nobody can measure.
-            progress?.ThrowIfCancelled();
-            permutation = AmdOrdering.Order(n, colStart, rowIndex);
-            (colStart, rowIndex, values) = SymmetricPermute(n, colStart, rowIndex, values, permutation);
-        }
-        progress?.ThrowIfCancelled();
-
-        // Elimination tree (Davis 4.1) via path-compressed ancestors.
-        var parent = new int[n];
-        var ancestor = new int[n];
-        for (int k = 0; k < n; k++)
-        {
-            parent[k] = -1;
-            ancestor[k] = -1;
-            for (int p = colStart[k]; p < colStart[k + 1]; p++)
-            {
-                int i = rowIndex[p];
-                while (i != -1 && i < k)
-                {
-                    int next = ancestor[i];
-                    ancestor[i] = k;
-                    if (next == -1)
-                        parent[i] = k;
-                    i = next;
-                }
-            }
-        }
-
-        // Symbolic pass: column counts of L from each row's ereach.
-        var counts = new int[n]; // off-diagonal entries per column of L
-        var stamp = new int[n];
-        Array.Fill(stamp, -1);
-        var reach = new int[n];
-        var pathStack = new int[n];
-        for (int k = 0; k < n; k++)
-        {
-            progress?.ThrowIfCancelled();
-            int top = Ereach(k, colStart, rowIndex, parent, stamp, reach, pathStack);
-            for (int t = top; t < n; t++)
-                counts[reach[t]]++;
-        }
+        var (n, colStart, rowIndex, values, permutation, parent, counts, stamp, reach, pathStack) =
+            Symbolic(a, ordering, progress);
 
         // The numeric pass's exact inner-loop update count, available here because the
         // symbolic pass has just counted every column of L. Accumulated in double because a
@@ -232,6 +224,8 @@ public sealed class SparseCholesky
             cursor[j] = lColStart[j] + 1;
 
         // Numeric up-looking pass: row k of L solves L[0..k,0..k]·y = A[0..k, k].
+        // The stamps double as ereach's visited marks and are reset by value k, so the
+        // symbolic pass's leftovers have to be cleared before the numeric one reuses them.
         Array.Fill(stamp, -1);
         var x = new double[n]; // sparse accumulator, cleared entry-by-entry
         for (int k = 0; k < n; k++)
@@ -300,6 +294,128 @@ public sealed class SparseCholesky
 
         progress?.Report(1);
         return new SparseCholesky(n, lColStart, lRow, lVal, permutation, ordering);
+    }
+
+    /// <summary>
+    /// Everything a factorization knows before it does any arithmetic: the ordering, the
+    /// elimination tree and the column counts of L. Shared by
+    /// <see cref="Factorize(PackedSparseMatrix, SparseOrdering, ProgressCancel?)"/> and
+    /// <see cref="Analyze"/> so the prediction and the run cannot disagree about what the
+    /// factorization is — the "ask the same code rather than restating it" rule, which this
+    /// project has paid for three times elsewhere.
+    /// </summary>
+    private static (
+        int N, int[] ColStart, int[] RowIndex, double[] Values, int[]? Permutation,
+        int[] Parent, int[] Counts, int[] Stamp, int[] Reach, int[] PathStack)
+        Symbolic(PackedSparseMatrix a, SparseOrdering ordering, ProgressCancel? progress)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        if (a.Rows != a.Columns)
+            throw new ArgumentException("Cholesky needs a square symmetric positive-definite matrix.", nameof(a));
+
+        var upper = a.IsSymmetricUpper ? a : a.ToSymmetricUpper();
+        int n = upper.Rows;
+
+        // Upper triangle in CSC form: column k lists rows i <= k ascending. (CSR rows of
+        // the upper triangle are its columns transposed.)
+        var (colStart, rowIndex, values) = UpperCsc(upper);
+
+        int[]? permutation = null;
+        if (ordering == SparseOrdering.Amd && n > 0)
+        {
+            // One checkpoint per phase for the linear passes, per the polling rule: their
+            // cost follows the matrix's own entry count, so a checkpoint inside would buy
+            // latency nobody can measure.
+            progress?.ThrowIfCancelled();
+            permutation = AmdOrdering.Order(n, colStart, rowIndex);
+            (colStart, rowIndex, values) = SymmetricPermute(n, colStart, rowIndex, values, permutation);
+        }
+        progress?.ThrowIfCancelled();
+
+        // Elimination tree (Davis 4.1) via path-compressed ancestors.
+        var parent = new int[n];
+        var ancestor = new int[n];
+        for (int k = 0; k < n; k++)
+        {
+            parent[k] = -1;
+            ancestor[k] = -1;
+            for (int p = colStart[k]; p < colStart[k + 1]; p++)
+            {
+                int i = rowIndex[p];
+                while (i != -1 && i < k)
+                {
+                    int next = ancestor[i];
+                    ancestor[i] = k;
+                    if (next == -1)
+                        parent[i] = k;
+                    i = next;
+                }
+            }
+        }
+
+        // Symbolic pass: column counts of L from each row's ereach.
+        var counts = new int[n]; // off-diagonal entries per column of L
+        var stamp = new int[n];
+        Array.Fill(stamp, -1);
+        var reach = new int[n];
+        var pathStack = new int[n];
+        for (int k = 0; k < n; k++)
+        {
+            progress?.ThrowIfCancelled();
+            int top = Ereach(k, colStart, rowIndex, parent, stamp, reach, pathStack);
+            for (int t = top; t < n; t++)
+                counts[reach[t]]++;
+        }
+
+        return (n, colStart, rowIndex, values, permutation, parent, counts, stamp, reach, pathStack);
+    }
+
+    /// <summary>
+    /// What a factorization WILL cost, from the symbolic pass alone — no arithmetic, no L,
+    /// and typically a small fraction of a second where the factorization itself may be
+    /// minutes.
+    ///
+    /// <para>It exists because the two numbers that decide whether a direct solve is the
+    /// right choice are both known before the first multiply, and both are otherwise only
+    /// learnable by paying: <see cref="SparseFactorAnalysis.FactorNonZeroCount"/> says
+    /// whether L fits, and <see cref="SparseFactorAnalysis.UpdateCount"/> is the exact
+    /// inner-loop trip count the numeric pass will run, which is what its time is
+    /// proportional to. Compare two orderings, or two meshes, without factoring either.</para>
+    ///
+    /// <para>It is a PREDICTION of this implementation, not a general flop count: the
+    /// numbers come from the same symbolic pass the factorization runs, so they describe
+    /// the up-looking algorithm as written.</para>
+    /// </summary>
+    public static SparseFactorAnalysis Analyze(
+        PackedSparseMatrix a, SparseOrdering ordering = SparseOrdering.Natural,
+        ProgressCancel? progress = null)
+    {
+        var (n, _, _, _, _, parent, counts, _, _, _) = Symbolic(a, ordering, progress);
+
+        double totalUpdates = 0;
+        long nonZeros = n;   // the diagonal
+        int longest = 0;
+        // The elimination tree is the dependency graph of a column factorization: column j
+        // cannot start until its children are done. The heaviest root-to-leaf path is
+        // therefore a LOWER BOUND on any parallel schedule's work, whatever the machine —
+        // which is the number that says whether writing a parallel scheduler is worth it.
+        // Parents outrank children, so one ascending sweep suffices.
+        var below = new double[n];
+        double critical = 0;
+        for (int j = 0; j < n; j++)
+        {
+            double work = 0.5 * counts[j] * (counts[j] + 1);
+            totalUpdates += work;
+            nonZeros += counts[j];
+            longest = Math.Max(longest, counts[j]);
+
+            double level = below[j] + work;
+            critical = Math.Max(critical, level);
+            if (parent[j] >= 0)
+                below[parent[j]] = Math.Max(below[parent[j]], level);
+        }
+
+        return new SparseFactorAnalysis(n, nonZeros, totalUpdates, critical, longest, ordering);
     }
 
     /// <summary>Solves A·x = b using the factorization (forward then back substitution).</summary>

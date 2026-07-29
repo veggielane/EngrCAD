@@ -920,13 +920,45 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   Measured against it with the two interleaved in one sitting, Jacobi-preconditioned CG
   wins at EVERY size with linear elements and past ~15 000 unknowns with quadratic ones —
   2.0x / 3.9x / 15.3x / **48.6x** at 2 160 / 6 552 / 14 688 / 46 800 DOF — the OPPOSITE of
-  the Laplacian crossover recorded in CLAUDE.md, as that note itself predicts. Options in
-  order of value: a supernodal or left-looking blocked factorization in Core; a better
-  preconditioner than Jacobi (incomplete Cholesky, or algebraic multigrid, which is what
-  production FEA uses).
+  the Laplacian crossover recorded in CLAUDE.md, as that note itself predicts.
+  <br>**ASSESSED, not built — and the assessment says WHICH option, which was not obvious.**
+  `SparseCholesky.Analyze` (new, and cheap: 5–520 ms where the factorization is 0.1–134 s)
+  reads the three deciding numbers straight off the symbolic pass. On this project's
+  cantilever (`FeaBenchmark.WhatWouldMoveTheFactorizationWall`):
+
+  | | free DOF | ordering | factor nnz | updates | longest column | parallel ceiling |
+  | --- | ---: | --- | ---: | ---: | ---: | ---: |
+  | linear | 14 688 | Natural | 22 701 719 | 1.88e10 | 1 732 | 1.0x |
+  | linear | 14 688 | Amd | 8 769 703 | 4.32e9 | 1 702 | 1.6x |
+  | linear | 46 800 | Amd | 57 616 104 | 6.42e10 | 3 537 | 1.6x |
+  | quadratic | 14 688 | Natural | 96 705 622 | 4.20e11 | 12 956 | 1.0x |
+  | quadratic | 14 688 | Amd | 6 498 728 | 2.54e9 | 1 400 | 1.9x |
+
+  - **Tree parallelism is NOT the lever, and the number kills it outright**: the ceiling is
+    **1.0x natural and 1.6–1.9x AMD**, with unlimited processors and free synchronisation.
+    The reason is structural rather than incidental — in 3D, the top separator's columns are
+    a constant fraction of all the work and they form a CHAIN, so a schedule that respects
+    the elimination tree has almost nothing to overlap. Do not write a parallel scheduler
+    for the up-looking algorithm; it cannot pay.
+  - **Blocking IS the lever, and the same table says why**: the longest column is
+    1 400–3 748 entries under AMD, so the work that the tree cannot parallelise sits in a
+    few nearly-dense columns — which is exactly what a supernodal/multifrontal kernel turns
+    into dense BLAS-3, where the parallelism and the vectorisation both live. That is also
+    the answer to "why is the tree ceiling so low": the root separator is the work.
+  - **A better preconditioner remains unmeasured** and is the other honest option (IC(0),
+    or algebraic multigrid, which is what production FEA uses). Note the bar it has to
+    clear is not the factorization but CG-with-Jacobi, which already wins by 48.6x at the
+    top of the table — the direct path's value there is exactness, not speed.
+  - **The by-product is worth more than it looks**: `UpdateCount` predicts factor time at
+    **~1.0–1.3 ns per update** across a 15x size range and both element orders (idle
+    machine; the constant is machine-specific and spreads on a loaded one). So a caller can
+    be told what a factorization will cost BEFORE paying for it, which is the other half of
+    what `FeaSolveReport.Advisory` could not do.
   <br>Note for whoever takes this: **benchmark in Release**. The same runs in Debug look
   assembly-dominated (1 822 ms assemble against 657 ms factor on the docs bracket) and
-  would send the work into the wrong phase entirely.
+  would send the work into the wrong phase entirely. And **an idle machine**: the same
+  Release binary measured the 46 800-DOF factor at 79.0 s idle and 134.4 s with other work
+  on the box, so absolute times are only comparable within one sitting.
 - [ ] **FEA: should `Direct` still be the default, and what would settle it.** It is the
   default today for EXACTNESS, not speed — the verification claims (patch test to
   round-off, strain at 1e-13, the two orders agreeing on strain energy to twelve digits)

@@ -562,6 +562,31 @@ So CG wins everywhere with linear elements and past roughly 15 000 unknowns with
 quadratic ones, and at the top of the table it is not close — this library's up-looking
 Cholesky is unblocked, and 108 s is what a user experiences as "the solver hung".
 
+**What would move that factorization wall is now a measurement rather than a guess.**
+`SparseCholesky.Analyze` reads the deciding numbers off the symbolic pass in 5–520 ms,
+where the factorization it describes costs 0.1–134 s
+(`FeaBenchmark.WhatWouldMoveTheFactorizationWall`):
+
+| | free DOF | ordering | factor nnz | updates | longest column | parallel ceiling |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| linear | 14 688 | Natural | 22 701 719 | 1.88e10 | 1 732 | 1.0x |
+| linear | 14 688 | Amd | 8 769 703 | 4.32e9 | 1 702 | 1.6x |
+| linear | 46 800 | Amd | 57 616 104 | 6.42e10 | 3 537 | 1.6x |
+| quadratic | 14 688 | Natural | 96 705 622 | 4.20e11 | 12 956 | 1.0x |
+| quadratic | 14 688 | Amd | 6 498 728 | 2.54e9 | 1 400 | 1.9x |
+
+The **parallel ceiling** is total work over the elimination tree's heaviest root-to-leaf
+path — the most a perfectly scheduled parallel factorization could ever win, with unlimited
+processors and free synchronisation. At **1.0–1.9x** it rules out a parallel scheduler for
+this algorithm, and for a structural reason: in 3D the top separator's columns are a
+constant fraction of all the work and form a *chain*. The same table says where that work
+sits — a few nearly-dense columns of 1 400–3 748 entries — which is what a supernodal
+BLAS-3 kernel exists for. So blocking is the lever and scheduling is not.
+
+Useful by-product: the **update count predicts factor time at ~1.0–1.3 ns per update**
+across a 15x size range and both element orders (idle machine; the constant is
+machine-specific), so what a factorization will cost is answerable before paying for it.
+
 **The direct solver is still the default, and the reason is exactness, not speed.** This
 project's verification claims — the patch test reproduced to round-off, strain errors at
 1e-13, the two element orders agreeing on strain energy to twelve digits — cannot be made

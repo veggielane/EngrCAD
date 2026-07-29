@@ -522,6 +522,22 @@ chain's parity is consistent across every joint.
     reports **no** fraction on purpose — an iteration count is not progress, since the
     residual falls at a rate nobody knows in advance and the iteration cap is a stall
     detector rather than a work estimate.
+  - **`SparseCholesky.Analyze` → `SparseFactorAnalysis`** — what a factorization WILL cost,
+    from the symbolic pass alone: the stored entries L will have, the numeric pass's exact
+    inner-loop update count, the longest column, and the heaviest root-to-leaf path of the
+    elimination tree. It runs the *same* symbolic code the factorization runs (shared, not
+    restated), so the prediction and the run cannot disagree; measured, it costs 5–520 ms
+    where the factorization it describes costs 0.1–134 s.
+    <br>Two things it is for. **A cost estimate before the wait**: on this repo's FEA
+    cantilever the update count predicts factor time at **~1.0–1.3 ns per update** across a
+    15x size range and both element orders, so "this will take two minutes" is answerable in
+    a third of a second. And **deciding what would move the wall**, which it settled in a
+    direction that was not obvious: `ParallelCeiling` — total work over critical path, i.e.
+    the most a perfectly scheduled parallel factorization could ever win — measures
+    **1.0x natural and 1.6–1.9x AMD** on 3D elasticity, because the top separator's columns
+    are a constant fraction of all the work and form a *chain*. Tree parallelism cannot pay;
+    the same table's longest column (1 400–3 748 entries under AMD) says the work is in a
+    few nearly-dense columns, which is what a supernodal BLAS-3 kernel exists for.
   - **`AmdOrdering`** — approximate minimum degree (Amestoy–Davis–Duff 1996): quotient
     graph with element absorption (including the aggressive form), approximate external
     degrees, mass elimination, hash-detected supervariables, and an assembly-tree
