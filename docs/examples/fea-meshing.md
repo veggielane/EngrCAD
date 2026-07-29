@@ -481,18 +481,74 @@ deterministic walk, and there is no RNG anywhere. Two runs on the same input pro
 bit-identical output, including the order of the elements — so a mesh can be a regression
 baseline.
 
-## What kind of surface it wants (a real v1 limitation)
+## What kind of surface it wants
 
 Boundary recovery is happy with **CAD tessellations**: B-Rep output, primitives, Surface Nets
 fields, anything with structured triangle rows. Every fixture on this page recovers in
 **zero rounds** — the input triangles are already faces of the Delaunay tetrahedralization.
 
-It is **not** yet happy with **irregular remeshed surfaces**. An isotropic remesh
-([remeshing](remeshing.md)) produces a triangulation whose vertices sit at near-uniform
-spacing with no structure, and enough of its triangles fail to be Delaunay faces that
-red-subdivision does not clear them — measured, a remeshed cylinder and a remeshed sphere
-both exhaust the recovery budget. This is the intuitive advice being wrong: remeshing helps
-*element quality* in principle, but v1 recovery wants the structure it removes.
+**A remeshed surface is fine too, as long as its triangulation is Delaunay-clean.** That
+sentence used to read "recovery is not yet happy with irregular remeshed surfaces", and it was
+wrong in two directions. Measured:
+
+| input | worst angle | worst radius-edge | patches / triangles | recovery rounds |
+| --- | ---: | ---: | ---: | ---: |
+| remeshed sphere, `PreventLongEdgeFlips` | 36.3° | 0.84 | 832 / 832 | **0** |
+| remeshed sphere, plain | 14.6° | 1.99 | — | *refused* |
+| remeshed sphere, plain, coarser | 27.9° | 1.07 | — | *refused* |
+| remeshed box, plain | 0.145° | 198 | 7 / 1638 | **0** |
+| structured cylinder (no remesh) | 3.74° | 7.66 | 50 / 188 | **0** |
+
+Two things fall out of that table. A remesh is **not** the obstacle — the sphere meshes in zero
+rounds at three different target edge lengths with *one patch per triangle*, which is exactly
+the configuration the old explanation blamed. And triangle **quality** is not the criterion
+either: the box at a 0.145° worst angle meshes, while a sphere at 27.9° is refused.
+
+What decides it is whether the surface triangulation is **already the boundary of the Delaunay
+tetrahedralization of its own vertices**:
+
+- Where the surface is **flat**, a patch (a maximal coplanar group) lets the triangulation pick
+  its own diagonals, so there is nothing to recover — a box is six or seven patches however
+  badly it is triangulated.
+- Where it is **curved**, every triangle is its own patch and must appear *verbatim* as a face.
+  Refinement cannot manufacture that, so a surface triangle that is not locally Delaunay is a
+  permanent failure rather than a slow one.
+
+The practical rule is one flag. The remesher's flip stage is valence-driven with **no length
+term**, so it can replace a Delaunay diagonal with a longer one;
+[`RemeshOptions.PreventLongEdgeFlips`](remeshing.md) stops that, and with it a remeshed curved
+surface tetrahedralizes with no recovery at all.
+
+```csharp run:fea-remesh-clean
+var raw = Shape.Sphere(10).ToMesh(new MeshQuality { SegmentsPerCircle = 32 });
+
+// Delaunay-clean remesh: the flip stage may not lengthen an edge.
+var clean = Remesher.Remesh(raw, new RemeshOptions(TargetEdgeLength: 3.0)
+{
+    Iterations = 20,
+    FeatureAngleDegrees = 0,
+    PreventLongEdgeFlips = true,
+});
+
+var tets = TetMesher.Mesh(clean.Mesh, null, out var report);
+Console.WriteLine($"{tets.TetCount} elements, {report.RecoveryRounds} recovery round(s), " +
+                  $"{report.SurfacePatches} patches for {clean.Mesh.Triangulated().FaceCount} triangles");
+if (report.RecoveryRounds != 0)
+    throw new Exception("a Delaunay-clean remesh should need no recovery");
+```
+
+### When it does refuse
+
+A refusal now measures the input and says which of the two causes it is — and it no longer
+advises "remesh the surface", which was backwards for the input that most often reached it.
+`MeshPrimitives.Cylinder`'s n-gon caps triangulate as a one-corner fan (3.74° before any
+remeshing), and remeshing that makes it *worse*: across six settings the worst angle lands
+between 0.013° and 7.7° with a radius-edge ratio up to 2124. Conforming a Delaunay
+tetrahedralization to a 0.013° sliver is expensive by theory, not by implementation.
+
+Recovery also **stops as soon as it is not converging** rather than spending everything it was
+allowed: if the offending-face count has not improved on its best for five rounds, more rounds
+and a bigger Steiner budget provably will not help, and the message says so.
 
 ```csharp run:fea-remesh-limitation
 var raw = Shape.Cylinder(10, 20).ToMesh(new MeshQuality { SegmentsPerCircle = 48 });
@@ -505,7 +561,8 @@ try
 }
 catch (TetMeshException ex)
 {
-    // It refuses by name rather than returning a mesh whose boundary is not the surface.
+    // It refuses by name, reporting the INPUT's own worst triangle rather than blaming
+    // recovery — and never suggesting the remesh that produced the slivers.
     Console.WriteLine(ex.Message);
 }
 
@@ -516,5 +573,6 @@ if (report.RecoveryRounds != 0)
     throw new Exception("a CAD tessellation should need no recovery");
 ```
 
-So: mesh the tessellation directly, and reach for a sizing field rather than a remesh when
-you want to control element size. Lifting the restriction is the top item in the backlog.
+So: mesh the CAD tessellation directly where you have one, remesh with
+`PreventLongEdgeFlips` where you need a better surface, and reach for a sizing field rather
+than a remesh when all you want is to control element size.

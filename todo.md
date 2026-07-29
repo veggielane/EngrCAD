@@ -820,18 +820,39 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
 verified boundary recovery, radius-edge + sizing-field refinement, region ids from
 multi-body input, per-facet source-triangle tags, 10-node elements. Residuals below.
 
-- [ ] **Boundary recovery on irregular (remeshed) surfaces — the top gap.** Recovery is
-  happy with CAD tessellations (B-Rep output, primitives, Surface Nets): every fixture in
-  `EngrCAD.Fea.Tests` recovers in **zero rounds**, because the input triangles are already
-  Delaunay faces. It is *not* happy with an isotropic remesh — near-uniform vertex spacing
-  with no structure means enough triangles fail to be Delaunay faces that red subdivision
-  does not clear them, and the budget runs out (measured: a remeshed cylinder at three
-  parameter settings and a remeshed sphere, all refused; `RecoveryLimitationTests` pins it).
-  The irony is worth keeping: remeshing is the natural surface-quality prep and v1 recovery
-  wants exactly the structure it removes. The likely fix is the textbook one this v1
-  deliberately skipped — protecting-ball *segment and subfacet encroachment* driving recovery
-  (Shewchuk's CDT construction) instead of the weaker presence/red-subdivision scheme, which
-  would also give a termination proof rather than a budget.
+- [ ] **Conforming Delaunay for a CURVED non-Delaunay surface triangulation** (what is left of
+  the old "boundary recovery on remeshed surfaces" top gap, whose filed diagnosis was measured
+  and found wrong in two directions — see design.md §3b and the Fea README table).
+  **What was wrong**: a remeshed surface is not the obstacle (a remeshed sphere meshes in
+  **zero** recovery rounds at three target edge lengths once the remesh is Delaunay-clean,
+  *with one patch per triangle* — the configuration the old entry blamed), and triangle quality
+  is not the criterion either (a remeshed box at a **0.145°** worst angle and radius-edge
+  **198** meshes; a remeshed sphere at **27.9°** and **1.07** is refused; the structured
+  cylinder that recovers in zero rounds has *worse* triangles than the remeshed sphere that
+  does not). **What is actually left**: where a surface is flat a patch absorbs any diagonal and
+  nothing has to be recovered, but where it is curved every triangle is its own patch and must
+  appear verbatim as a Delaunay face, and refinement cannot manufacture that. The fix is the
+  textbook one this v1 deliberately skipped — protecting-ball *segment and subfacet
+  encroachment* (Shewchuk's CDT construction, or Murphy–Mount–Gable) — which carries a
+  termination proof where the budget carries none. Red subdivision is not a weak version of it;
+  it is a different thing that provably cannot reach it, which is why the practical answer
+  today is `RemeshOptions.PreventLongEdgeFlips` (measured to turn every refused sphere row into
+  a zero-round one) and the refusal now says so.
+  Already landed off this item: non-convergence detection (five rounds without improving on the
+  best offending count, the trimmed-face monotone-decrease rule) and a refusal that measures
+  the input's worst triangle and its curved fraction instead of advising a remesh.
+- [ ] **The remesher makes a cylinder primitive worse, and nothing catches it.** Measured
+  across six settings, `Remesher.Remesh` of `MeshPrimitives.Cylinder(10, 20, 48)` lands at a
+  worst angle between **0.013° and 7.7°** with a radius-edge ratio between **3.7 and 2124** —
+  `PreventLongEdgeFlips` included, so it is not the flip stage. The seed is that the primitive's
+  n-gon caps triangulate as a **one-corner fan** (worst angle 3.74° before any remeshing) and
+  the rim is pinned, so the remesher has little freedom on the cap and degrades it. Two
+  separable pieces: the cap fan is a poor triangulation for anything downstream to start from
+  (a fan is the cheapest correct answer, not a good one), and the remesher still has no
+  shape-quality measure of its own to notice — which is the already-filed
+  `RemeshResult` minimum-angle item, here with a fixture that motivates it. Note this is an
+  `EngrCAD.Mesh` item, not an Fea one; it surfaced because the tet mesher is the first consumer
+  that cannot tolerate it.
 - [ ] **Sliver removal (the second named gap in tet meshing).** Radius-edge bounds provably
   cannot exclude slivers, and the measurements say so: a refined `box 20³` is
   0.7–1.6% slivers below 10°, and elements with a *negative* floating-point volume
