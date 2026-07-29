@@ -932,20 +932,28 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   round-off, strain at 1e-13, the two orders agreeing on strain energy to twelve digits)
   are not statements one can make about an iterative solve stopped at a relative residual,
   so a CG default would make every headline accuracy claim a statement about an opt-in
-  path. That reasoning is written into the enum doc. Two things would change the answer,
-  and neither is free:
-  - **A multi-load-case entry point.** The classic second argument for a direct solver —
-    factor once, substitute many right-hand sides — is currently *false here*, because
-    `Solve` factors and discards, so a second load case pays for a second factorization.
-    An API taking N load vectors (or returning a reusable factorization) would make the
-    amortisation real and is worth having regardless: 0.3–6.8 ms per extra solve against a
-    whole CG run.
-  - **Evidence that a size-based automatic pick is sound.** Deliberately not done from the
-    numbers above: a crossover measured on one cantilever measures that cantilever's
-    conditioning, and baking its threshold into the library default would be exactly the
-    mistake the row above documents. Fixtures of genuinely different conditioning (a thin
-    shell-like plate, a near-incompressible nu, a graded mesh) would be needed before a
-    threshold means anything.
+  path. That reasoning is written into the enum doc.
+  - ✅ **A multi-load-case entry point** — `StructuralSolver.SolveAll` LANDED. The classic
+    second argument for a direct solver is now true here rather than filed: N cases pay for
+    one factorization and N substitutions, measured **3.5–3.8x for four cases and 6.94x for
+    eight** against solving them one at a time, with an extra right-hand side costing
+    0.7–27 ms against 34–4 706 ms to factor. It also divides the direct-vs-CG ratio by N,
+    since CG reuses nothing, and `FeaSolveReport.Advisory` now says so and falls silent once
+    the amortisation has won.
+  - [ ] **Evidence that a size-based automatic pick is sound.** Still deliberately not done:
+    a crossover measured on one cantilever measures that cantilever's conditioning, and
+    baking its threshold into the library default would be exactly the mistake the row above
+    documents. Fixtures of genuinely different conditioning (a thin shell-like plate, a
+    near-incompressible nu, a graded mesh) would be needed before a threshold means
+    anything.
+  - [ ] **A reusable factorization as a VALUE**, if a caller ever needs load cases it cannot
+    enumerate up front (an optimisation loop, an influence-coefficient sweep, a
+    load-stepping scheme). `SolveAll` takes the list eagerly, which is right for the case it
+    serves and wrong for a generator; the shape would be a `StructuralOperator` carrying the
+    reduced matrix, the DOF map and the factorization, with `Solve(loadCase)` on it. Filed
+    rather than built because nothing in the repo generates load cases lazily yet, and an
+    object that hands out a live factorization has a lifetime question (it is large, and it
+    silently goes stale if the model is edited) that a list does not.
   <br>Mitigated on both sides now: `FeaSolveReport.Advisory` names the slow factorization
   after the fact, and every solve entry point takes a `ProgressCancel` that reaches
   `SparseCholesky.Factorize`'s per-column loop, so the first run can be watched and

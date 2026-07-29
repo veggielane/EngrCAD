@@ -250,6 +250,35 @@ says what this run spent where and what the benchmark measured at a comparable s
 `ToText()` prints it. It fires on what *happened*, not on size: a system that factors
 quickly stays silent however large it is.
 
+### Several load cases at once
+
+The other classic argument for a direct solver — factor once, substitute many right-hand
+sides — is what `SolveAll` exists for. Build every case over **one** `AnalysisMesh` object,
+vary the loads (and prescribed *values*, if you use them), and the assembly and
+factorization happen once:
+
+```csharp
+var cases = loads.Select(f =>
+{
+    var m = new StructuralModel(mesh, Materials.Steel);
+    m.Fix(Facets.Tag(1));
+    m.Force(Facets.Tag(2), f);
+    return m;
+}).ToList();
+
+var results = StructuralSolver.SolveAll(cases);
+```
+
+Measured against the same cases solved one at a time (Release, alternating in one sitting):
+**3.5–3.8x for four cases and 6.9x for eight**, because an extra right-hand side costs
+0.7–27 ms where the factorization costs 34–4 706 ms. It also moves the direct-vs-iterative
+comparison, since CG reuses nothing and would pay for N whole runs.
+
+What the cases must share — the mesh *object*, the restraint mask, the materials — is
+checked and refused by name. That matters more than it sounds: pushing one case's loads
+through another's factorization returns a displacement field that converges, passes its own
+residual check, and is the answer to a different model.
+
 ### Watching, and stopping
 
 That advisory helps the second run and not the first, so every solve entry point also takes

@@ -569,12 +569,63 @@ about an iterative solve stopped at a relative residual. A default of CG would m
 headline accuracy claim a statement about an opt-in path. It also reports its fill, which
 is the diagnostic that says a mesh is bad.
 
-Two honesty notes on that decision. The usual second argument for a direct solver — factor
-once, solve many right-hand sides — **does not apply yet**: `Solve` factors and discards,
-so a second load case pays for a second factorization; the multi-load-case entry point is
-filed. And **no automatic size-based switch is offered**, deliberately, because a crossover
-measured on one operator measures that operator: baking a threshold taken from one
-cantilever into the library default would be the very mistake the row above documents.
+One honesty note on that decision: **no automatic size-based switch is offered**,
+deliberately, because a crossover measured on one operator measures that operator — baking
+a threshold taken from one cantilever into the library default would be the very mistake
+the row above documents.
+
+## Several load cases: `SolveAll`
+
+The other classic argument for a direct solver — factor once, substitute many right-hand
+sides — used to be one this library could not honour, because `Solve` factored and
+discarded. `StructuralSolver.SolveAll` is the entry point that makes it real:
+
+```csharp
+var mesh  = AnalysisMesh.Quadratic(tets);          // ONE mesh object
+var cases = loads.Select(f => { var m = new StructuralModel(mesh, steel);
+                                m.Fix(Facets.Tag(1));
+                                m.Force(Facets.Tag(2), f);
+                                return m; }).ToList();
+
+var results = StructuralSolver.SolveAll(cases);    // one assembly, one factorization
+```
+
+Measured (Release, win-x64, alternating in one sitting, best of three), against the same
+cases solved one at a time:
+
+| | free DOF | cases | separate | shared | speedup | factor | per extra RHS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| linear | 6 552 | 4 | 2 159 ms | 591 ms | **3.66x** | 524 ms | 6.69 ms |
+| linear | 14 688 | 4 | 18 310 ms | 4 839 ms | **3.78x** | 4 706 ms | 27.12 ms |
+| quadratic | 2 160 | 4 | 223 ms | 64 ms | 3.50x | 34 ms | 0.73 ms |
+| quadratic | 6 552 | 4 | 1 660 ms | 456 ms | 3.64x | 317 ms | 5.13 ms |
+| quadratic | 6 552 | 8 | 3 391 ms | 489 ms | **6.94x** | 330 ms | 10.83 ms |
+
+An extra right-hand side costs 0.7–27 ms against 34–4 706 ms to factor, so the speedup
+tracks the case count until the substitutions themselves start to matter — 3.5–3.8x of a
+possible 4, 6.9x of a possible 8. **It also changes the direct-vs-iterative comparison
+rather than merely improving a number**: CG reuses nothing but the matrix, so N cases cost
+N whole CG runs, and the ratio in the table above divides by N. `FeaSolveReport.Advisory`
+now says so, and stops firing once the amortisation has already won.
+
+**What the cases must share is checked, not assumed**, and the list is what they are allowed
+to differ in — loads, and the *values* of prescribed displacements. The stiffness matrix is
+a function of the mesh, the materials and which degrees of freedom the supports removed, so
+all three are compared: the mesh by reference (a reused factorization is a statement about
+one node numbering), the restraint mask per node exactly, the material per element by value.
+A prescribed *value* may differ freely because it moves to the right-hand side as
+`f -= K_fc·u_c`, which is per case by construction. The refusal names the case and what
+differs, because the alternative failure is silent: substituting one case's right-hand side
+through another's factorization returns a field that converges, passes its own residual
+check, and answers a question nobody asked.
+
+`Solve` is now literally `SolveAll([model])[0]` — one implementation, so the two cannot
+drift, and the single-case answer is bit-for-bit what it was.
+
+Every case's report carries the **same** `AssembleMs` and `FactorMs`, because there was one
+of each; only `SolveMs` is that case's own, and `LoadCases` says how many shared the cost.
+Reporting a per-case share of a shared cost would be a made-up number and reporting zero
+would hide what the run spent.
 
 Reach for `FeaSolveMethod.ConjugateGradient` for a large single solve — and the report
 now says so itself. **`FeaSolveReport.Advisory`** (surfaced in `ToText()`) fires when a

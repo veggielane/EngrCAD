@@ -37,11 +37,25 @@ public enum FeaSolveMethod
     /// same lesson from the opposite direction, where Core's grid Laplacian put the
     /// crossover somewhere else entirely), so baking a threshold taken from one cantilever
     /// into the library would be that mistake with a number attached.</para>
-    /// <para>The usual second argument for a direct solver — factor once, solve many
-    /// right-hand sides — does <b>not</b> apply here yet, and it would be dishonest to
-    /// claim it: <see cref="StructuralSolver.Solve"/> factors and discards, so a second
-    /// load case pays for a second factorization. A multi-load-case entry point is filed
-    /// in todo.md, and it is what would make the amortisation real.</para>
+    /// <para><b>The usual second argument for a direct solver — factor once, solve many
+    /// right-hand sides — is now real here, through
+    /// <see cref="StructuralSolver.SolveAll"/></b>, and it changes the comparison rather
+    /// than merely improving a number: N load cases pay for ONE factorization and N
+    /// substitutions where CG pays for N whole runs, so the ratio above divides by N.
+    /// Measured (Release, win-x64, interleaved, best of three):
+    /// <code>
+    ///   order       free DOF  cases   separate    shared   speedup   factor   per extra rhs
+    ///   linear         6 552      4     2159 ms    591 ms    3.66x    524 ms      6.69 ms
+    ///   linear        14 688      4    18310 ms   4839 ms    3.78x   4706 ms     27.12 ms
+    ///   quadratic      2 160      4      223 ms     64 ms    3.50x     34 ms      0.73 ms
+    ///   quadratic      6 552      4     1660 ms    456 ms    3.64x    317 ms      5.13 ms
+    ///   quadratic      6 552      8     3391 ms    489 ms    6.94x    330 ms     10.83 ms
+    /// </code>
+    /// An extra right-hand side costs 0.7–27 ms against 34–4 706 ms to factor, so the
+    /// speedup tracks the case count until the substitutions themselves start to matter
+    /// (3.5–3.8x of a possible 4, 6.9x of a possible 8). Before <c>SolveAll</c> existed this
+    /// paragraph said the amortisation did not apply, which was true and is what the entry
+    /// point was filed to fix.</para>
     /// <para><b>Where the amortisation IS real, in this project, is
     /// <see cref="ModalSolver"/> and <see cref="ThermalSolver.SolveTransient"/>.</b> A
     /// shift-and-invert Lanczos run factorizes <c>K - sigma·M</c> once and spends one
@@ -186,8 +200,14 @@ public sealed record FeaSolveReport
     /// <summary>Milliseconds spent factoring (0 for an iterative solve).</summary>
     public required double FactorMs { get; init; }
 
-    /// <summary>Milliseconds spent in the solve itself.</summary>
+    /// <summary>Milliseconds spent in the solve itself — for a multi-case run, THIS case's
+    /// substitution only, while <see cref="AssembleMs"/> and <see cref="FactorMs"/> are the
+    /// shared costs every case's report repeats.</summary>
     public required double SolveMs { get; init; }
+
+    /// <summary>How many load cases shared this assembly and factorization
+    /// (<see cref="StructuralSolver.SolveAll"/>); 1 for an ordinary solve.</summary>
+    public int LoadCases { get; init; } = 1;
 
     /// <summary>Condition-number estimate when
     /// <see cref="StructuralSolveOptions.EstimateCondition"/> was set — a power-iteration
@@ -228,7 +248,8 @@ public sealed record FeaSolveReport
                 + $", |Ku-f|/|f| = {RelativeResidual:E2}",
             $"strain energy {StrainEnergy:G6}",
             $"applied {Format(AppliedForce)}, reaction {Format(ReactionForce)}, equilibrium {EquilibriumResidual:E2}",
-            $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, solve {SolveMs:F1} ms",
+            $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, solve {SolveMs:F1} ms"
+                + (LoadCases > 1 ? $" (this case; assembly and factor shared by {LoadCases} load cases)" : ""),
         };
         if (ConditionEstimate is { } condition)
             lines.Add($"condition number ~ {condition:E2} (power-iteration estimate)");
@@ -292,6 +313,57 @@ public static class StructuralSolver
         ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(model);
+        // ONE implementation, reached through the general one: a single-case solve is the
+        // N = 1 member of the multi-case path, so the two can never drift and there is
+        // nothing to keep bit-identical by hand.
+        return SolveAll([model], options, progress)[0];
+    }
+
+    /// <summary>
+    /// Solves several load cases that share one stiffness matrix — assembling and factoring
+    /// ONCE and substituting per case.
+    ///
+    /// <para><b>This is what makes the direct solver's classic argument true here.</b> The
+    /// usual second reason to prefer a factorization over an iterative solve is that it is
+    /// reusable, and until this existed that was a claim the library could not honour:
+    /// <see cref="Solve"/> factors and discards, so a second load case paid for a second
+    /// factorization while a second CG run pays only for a second CG run. Measured on this
+    /// project's cantilever, an extra substitution costs a fraction of a millisecond against
+    /// tens of seconds to factor — see <c>FeaBenchmark.MultipleLoadCases</c>.</para>
+    ///
+    /// <para><b>What the cases must share is checked, not assumed</b>, and the list is what
+    /// they are allowed to differ in: loads, and the VALUES of prescribed displacements. The
+    /// stiffness matrix is a function of the mesh, the materials and which degrees of
+    /// freedom the supports removed, so all three must agree — the mesh by reference (the
+    /// same rule <see cref="StructuralModel.ThermalLoad(ThermalResults, double)"/> follows,
+    /// because a field crossing by node index needs the same node numbering, and here so
+    /// does a reused factorization), the restraint MASK per node exactly, and the material
+    /// per element by value. A prescribed value may differ freely because it moves to the
+    /// right-hand side as <c>f -= K_fc·u_c</c>, which is per case by construction.</para>
+    ///
+    /// <para>Every case's report carries the SAME <see cref="FeaSolveReport.AssembleMs"/> and
+    /// <see cref="FeaSolveReport.FactorMs"/>, because there was one of each; only
+    /// <see cref="FeaSolveReport.SolveMs"/> is that case's own. Reporting a share of the
+    /// shared cost per case would be a made-up number, and reporting zero would hide what the
+    /// run spent.</para>
+    /// </summary>
+    /// <param name="cases">The load cases, in the order the results come back.</param>
+    /// <param name="options">Solver settings, or null for the defaults.</param>
+    /// <param name="progress">Optional cooperative cancellation and progress; see
+    /// <see cref="Solve"/>.</param>
+    public static IReadOnlyList<StructuralResults> SolveAll(
+        IReadOnlyList<StructuralModel> cases,
+        StructuralSolveOptions? options = null,
+        ProgressCancel? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(cases);
+        if (cases.Count == 0)
+            throw new ArgumentException("At least one load case is needed.", nameof(cases));
+        for (int i = 0; i < cases.Count; i++)
+            ArgumentNullException.ThrowIfNull(cases[i], $"{nameof(cases)}[{i}]");
+
+        var model = cases[0];
+        RequireOneOperator(cases);
         options ??= new StructuralSolveOptions();
         var mesh = model.Mesh;
         if (options.EstimateCondition && options.Method != FeaSolveMethod.Direct)
@@ -326,13 +398,16 @@ public static class StructuralSolver
                 "Every degree of freedom is restrained; there is nothing to solve for.");
 
         var stopwatch = Stopwatch.StartNew();
-        var (matrix, rhs) = Assemble(model, reduced, freeCount, rule, progress);
+        var (matrix, rhs) = Assemble(cases, reduced, freeCount, rule, progress);
         double assembleMs = stopwatch.Elapsed.TotalMilliseconds;
 
-        var free = new double[freeCount];
-        double factorMs = 0, solveMs = 0;
-        bool converged = true;
-        int iterations = 0;
+        var free = new double[cases.Count][];
+        for (int c = 0; c < cases.Count; c++)
+            free[c] = new double[freeCount];
+        var solveMs = new double[cases.Count];
+        double factorMs = 0;
+        var converged = new bool[cases.Count];
+        var iterations = new int[cases.Count];
         int factorNonZeros = 0;
         double? condition = null;
 
@@ -351,85 +426,154 @@ public static class StructuralSolver
             factorMs = stopwatch.Elapsed.TotalMilliseconds;
             factorNonZeros = factor.FactorNonZeroCount;
 
-            stopwatch.Restart();
-            factor.Solve(rhs, free);
-            solveMs = stopwatch.Elapsed.TotalMilliseconds;
+            for (int c = 0; c < cases.Count; c++)
+            {
+                progress?.ThrowIfCancelled();
+                stopwatch.Restart();
+                factor.Solve(rhs[c], free[c]);
+                solveMs[c] = stopwatch.Elapsed.TotalMilliseconds;
+                converged[c] = true;
+            }
 
             if (options.EstimateCondition)
                 condition = EstimateCondition(matrix, factor, options.ConditionIterations);
         }
         else
         {
-            stopwatch.Restart();
-            var report = SparseSymmetricCG.Solve(matrix, rhs, free, options.Cg, progress);
-            solveMs = stopwatch.Elapsed.TotalMilliseconds;
-            converged = report.Converged;
-            iterations = report.Iterations;
+            // No amortisation to be had: an iterative solve reuses nothing but the matrix,
+            // so N cases cost N runs. Offered anyway because the caller's code should not
+            // have to change shape when the method does.
+            for (int c = 0; c < cases.Count; c++)
+            {
+                stopwatch.Restart();
+                var report = SparseSymmetricCG.Solve(matrix, rhs[c], free[c], options.Cg, progress);
+                solveMs[c] = stopwatch.Elapsed.TotalMilliseconds;
+                converged[c] = report.Converged;
+                iterations[c] = report.Iterations;
+            }
         }
 
-        // The full displacement vector: solved values at free DOFs, prescribed at the rest.
-        var displacement = new Vector3d[mesh.NodeCount];
-        for (int node = 0; node < mesh.NodeCount; node++)
+        var results = new StructuralResults[cases.Count];
+        for (int c = 0; c < cases.Count; c++)
         {
-            var prescribed = model.PrescribedOf(node);
-            double x = reduced[3 * node] >= 0 ? free[reduced[3 * node]] : prescribed.X;
-            double y = reduced[3 * node + 1] >= 0 ? free[reduced[3 * node + 1]] : prescribed.Y;
-            double z = reduced[3 * node + 2] >= 0 ? free[reduced[3 * node + 2]] : prescribed.Z;
-            displacement[node] = new Vector3d(x, y, z);
+            var thisCase = cases[c];
+            // The full displacement vector: solved values at free DOFs, prescribed at the rest.
+            var displacement = new Vector3d[mesh.NodeCount];
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                var prescribed = thisCase.PrescribedOf(node);
+                double x = reduced[3 * node] >= 0 ? free[c][reduced[3 * node]] : prescribed.X;
+                double y = reduced[3 * node + 1] >= 0 ? free[c][reduced[3 * node + 1]] : prescribed.Y;
+                double z = reduced[3 * node + 2] >= 0 ? free[c][reduced[3 * node + 2]] : prescribed.Z;
+                displacement[node] = new Vector3d(x, y, z);
+            }
+
+            var (reactions, strainEnergy) = ReactionsAndEnergy(thisCase, displacement, rule, progress);
+            var reactionTotal = Vector3d.Zero;
+            // Normalised against the sum of the individual load and reaction MAGNITUDES, not
+            // against the resultants. Two support forces that cancel are the normal case (a
+            // self-equilibrated load, or a model driven entirely by prescribed displacement,
+            // where both resultants are legitimately zero), and dividing by a resultant that
+            // is itself round-off reports a relative error of 1 for a perfect answer.
+            double loadScale = 0;
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                loadScale += thisCase.ForceOf(node).Length;
+                var restraint = thisCase.RestraintOf(node);
+                if (restraint == Dof.None)
+                    continue;
+                var reaction = new Vector3d(
+                    restraint.HasFlag(Dof.X) ? reactions[node].X : 0,
+                    restraint.HasFlag(Dof.Y) ? reactions[node].Y : 0,
+                    restraint.HasFlag(Dof.Z) ? reactions[node].Z : 0);
+                reactionTotal += reaction;
+                loadScale += reaction.Length;
+            }
+
+            var applied = thisCase.AppliedForce;
+            double equilibrium = loadScale > 0 ? (applied + reactionTotal).Length / loadScale : 0;
+
+            var reportOut = new FeaSolveReport
+            {
+                NodeCount = mesh.NodeCount,
+                ElementCount = mesh.ElementCount,
+                Order = mesh.Order,
+                TotalDofs = totalDofs,
+                FreeDofs = freeCount,
+                MatrixNonZeros = matrix.NonZeroCount,
+                FactorNonZeros = factorNonZeros,
+                Method = options.Method,
+                Ordering = options.Method == FeaSolveMethod.Direct ? options.Ordering : SparseOrdering.Natural,
+                Converged = converged[c],
+                Iterations = iterations[c],
+                RelativeResidual = Residual(matrix, free[c], rhs[c]),
+                StrainEnergy = strainEnergy,
+                AppliedForce = applied,
+                ReactionForce = reactionTotal,
+                EquilibriumResidual = equilibrium,
+                AssembleMs = assembleMs,
+                FactorMs = factorMs,
+                SolveMs = solveMs[c],
+                LoadCases = cases.Count,
+                ConditionEstimate = condition,
+                Advisory = AdvisoryFor(
+                    options.Method, freeCount, factorMs,
+                    assembleMs + factorMs + solveMs.Sum(), cases.Count),
+            };
+
+            results[c] = new StructuralResults(thisCase, displacement, reactions, reportOut);
         }
 
-        var (reactions, strainEnergy) = ReactionsAndEnergy(model, displacement, rule, progress);
-        var reactionTotal = Vector3d.Zero;
-        // Normalised against the sum of the individual load and reaction MAGNITUDES, not
-        // against the resultants. Two support forces that cancel are the normal case (a
-        // self-equilibrated load, or a model driven entirely by prescribed displacement,
-        // where both resultants are legitimately zero), and dividing by a resultant that
-        // is itself round-off reports a relative error of 1 for a perfect answer.
-        double loadScale = 0;
-        for (int node = 0; node < mesh.NodeCount; node++)
+        return results;
+    }
+
+    /// <summary>
+    /// Refuses a load-case list whose members do not share one stiffness matrix, naming the
+    /// case and what differs.
+    ///
+    /// <para>Checked rather than assumed because the failure is SILENT otherwise: substituting
+    /// case 2's right-hand side through case 1's factorization returns a displacement field
+    /// that converges, satisfies its own residual check and is the answer to a model nobody
+    /// asked about. The three things K depends on are the mesh, the materials and which
+    /// degrees of freedom the supports removed, so those are the three things compared.</para>
+    /// </summary>
+    private static void RequireOneOperator(IReadOnlyList<StructuralModel> cases)
+    {
+        var first = cases[0];
+        var mesh = first.Mesh;
+        for (int c = 1; c < cases.Count; c++)
         {
-            loadScale += model.ForceOf(node).Length;
-            var restraint = model.RestraintOf(node);
-            if (restraint == Dof.None)
-                continue;
-            var reaction = new Vector3d(
-                restraint.HasFlag(Dof.X) ? reactions[node].X : 0,
-                restraint.HasFlag(Dof.Y) ? reactions[node].Y : 0,
-                restraint.HasFlag(Dof.Z) ? reactions[node].Z : 0);
-            reactionTotal += reaction;
-            loadScale += reaction.Length;
+            var other = cases[c];
+            // Reference equality on the mesh: two meshes with the same nodes in a different
+            // order share no factorization, and a value comparison that said they did would
+            // scramble the answer by permutation.
+            if (!ReferenceEquals(other.Mesh, mesh))
+                throw new FeaException(
+                    $"Load case {c} was built on a different AnalysisMesh instance from case 0. "
+                    + "Load cases share one factorization, which is a statement about one node "
+                    + "numbering; build every case over the same mesh object.");
+
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                if (other.RestraintOf(node) != first.RestraintOf(node))
+                    throw new FeaException(
+                        $"Load case {c} restrains node {node} differently from case 0 "
+                        + $"({other.RestraintOf(node)} against {first.RestraintOf(node)}). Supports "
+                        + "are ELIMINATED rather than penalised, so a different restraint pattern "
+                        + "is a different matrix and cannot share a factorization. Prescribed "
+                        + "VALUES may differ freely - it is the mask that must match.");
+            }
+
+            for (int e = 0; e < mesh.ElementCount; e++)
+            {
+                if (!Equals(other.MaterialOf(e), first.MaterialOf(e)))
+                    throw new FeaException(
+                        $"Load case {c} gives element {e} a different material from case 0 "
+                        + $"({other.MaterialOf(e).Name} against {first.MaterialOf(e).Name}). The "
+                        + "stiffness matrix is a function of the materials, so the cases do not "
+                        + "share one.");
+            }
         }
-
-        var applied = model.AppliedForce;
-        double equilibrium = loadScale > 0 ? (applied + reactionTotal).Length / loadScale : 0;
-
-        var reportOut = new FeaSolveReport
-        {
-            NodeCount = mesh.NodeCount,
-            ElementCount = mesh.ElementCount,
-            Order = mesh.Order,
-            TotalDofs = totalDofs,
-            FreeDofs = freeCount,
-            MatrixNonZeros = matrix.NonZeroCount,
-            FactorNonZeros = factorNonZeros,
-            Method = options.Method,
-            Ordering = options.Method == FeaSolveMethod.Direct ? options.Ordering : SparseOrdering.Natural,
-            Converged = converged,
-            Iterations = iterations,
-            RelativeResidual = Residual(matrix, free, rhs),
-            StrainEnergy = strainEnergy,
-            AppliedForce = applied,
-            ReactionForce = reactionTotal,
-            EquilibriumResidual = equilibrium,
-            AssembleMs = assembleMs,
-            FactorMs = factorMs,
-            SolveMs = solveMs,
-            ConditionEstimate = condition,
-            Advisory = AdvisoryFor(
-                options.Method, freeCount, factorMs, assembleMs + factorMs + solveMs),
-        };
-
-        return new StructuralResults(model, displacement, reactions, reportOut);
     }
 
     /// <summary>
@@ -446,9 +590,17 @@ public static class StructuralSolver
     /// comparison at a stated size and fixture rather than as a prediction for the
     /// caller's model, because a crossover measured on one operator measures that
     /// operator's conditioning; see <see cref="FeaSolveMethod.Direct"/>.</para>
+    ///
+    /// <para><b>A multi-case run divides the ratio, and it has to.</b> The cited comparison
+    /// is one factorization against one CG run, but N load cases through
+    /// <see cref="SolveAll"/> pay for one factorization and N substitutions where CG would
+    /// pay for N whole runs — so the honest figure to quote is the ratio over N, and past
+    /// the point where that falls below 1 the note stops being advice and is dropped. This
+    /// is the mechanism the enum's "the amortisation is not real here" caveat was waiting
+    /// for.</para>
     /// </summary>
     internal static string? AdvisoryFor(
-        FeaSolveMethod method, int freeDofs, double factorMs, double totalMs)
+        FeaSolveMethod method, int freeDofs, double factorMs, double totalMs, int loadCases = 1)
     {
         // A DURATION, and therefore deliberately absolute — the epsilon ladder does not
         // reach it. Every relative tier in this codebase exists because a length, an area
@@ -461,17 +613,31 @@ public static class StructuralSolver
         // Dimensionless share of the solve, so no tier applies here either.
         const double DominatesShare = 0.8;
 
+        // The benchmark ratio at the top of the measured table, quoted rather than predicted.
+        const double BenchmarkRatio = 48.6;
+
         if (method != FeaSolveMethod.Direct || factorMs < SlowFactorMs)
             return null;
         if (!(totalMs > 0) || factorMs / totalMs < DominatesShare)
             return null;
+        // A factorization shared by enough cases has already beaten the alternative on the
+        // benchmark's own numbers, so there is nothing to advise.
+        if (loadCases > 1 && BenchmarkRatio / loadCases <= 1)
+            return null;
+
+        string amortised = loadCases > 1
+            ? $" This run shared one factorization across {loadCases} load cases, where CG would "
+              + $"pay for {loadCases} runs, so the comparison at this size is nearer "
+              + $"{BenchmarkRatio / loadCases:F1}x."
+            : "";
 
         return
             $"note: the factorization took {factorMs / 1000:F1} s, "
             + $"{factorMs / totalMs:P0} of this solve. On this project's cantilever benchmark "
             + "FeaSolveMethod.ConjugateGradient measured 48.6x faster than Direct at 46 800 free "
-            + $"DOF (2.2 s against 108.5 s) and 15.3x at 14 688; this solve has {freeDofs:N0}. "
-            + "The trade is an answer accurate to the iterative tolerance instead of exact, and "
+            + $"DOF (2.2 s against 108.5 s) and 15.3x at 14 688; this solve has {freeDofs:N0}."
+            + amortised
+            + " The trade is an answer accurate to the iterative tolerance instead of exact, and "
             + "no fill diagnostic — see FeaSolveMethod for why the default is not switched for you.";
     }
 
@@ -493,25 +659,40 @@ public static class StructuralSolver
     /// polled individually.</summary>
     private const int ElementCheckpoint = 1024;
 
-    private static (PackedSparseMatrix Matrix, double[] Rhs) Assemble(
-        StructuralModel model, int[] reduced, int freeCount, in TetQuadrature rule,
+    /// <summary>
+    /// The reduced stiffness matrix (shared by every load case) and one right-hand side per
+    /// case, in ONE pass over the elements — which is the point: a second case costs a
+    /// second gather of its prescribed values, not a second element stiffness.
+    ///
+    /// <para>The loops are in the same order whatever the case count, so a single-case
+    /// assembly adds to the builder and to the right-hand side in exactly the sequence it
+    /// always did. That is what makes <see cref="Solve"/> delegating here bit-identical
+    /// rather than merely equivalent.</para>
+    /// </summary>
+    private static (PackedSparseMatrix Matrix, double[][] Rhs) Assemble(
+        IReadOnlyList<StructuralModel> cases, int[] reduced, int freeCount, in TetQuadrature rule,
         ProgressCancel? progress = null)
     {
+        var model = cases[0];
         var mesh = model.Mesh;
         int perElement = mesh.NodesPerElement;
         int elementDofs = 3 * perElement;
+        int caseCount = cases.Count;
 
         var builder = new SparseMatrixBuilder(freeCount, freeCount);
-        var rhs = new double[freeCount];
-
-        for (int node = 0; node < mesh.NodeCount; node++)
+        var rhs = new double[caseCount][];
+        for (int c = 0; c < caseCount; c++)
         {
-            var force = model.ForceOf(node);
-            for (int axis = 0; axis < 3; axis++)
+            rhs[c] = new double[freeCount];
+            for (int node = 0; node < mesh.NodeCount; node++)
             {
-                int r = reduced[3 * node + axis];
-                if (r >= 0)
-                    rhs[r] = force[axis];
+                var force = cases[c].ForceOf(node);
+                for (int axis = 0; axis < 3; axis++)
+                {
+                    int r = reduced[3 * node + axis];
+                    if (r >= 0)
+                        rhs[c][r] = force[axis];
+                }
             }
         }
 
@@ -522,7 +703,25 @@ public static class StructuralSolver
         // and every read was a multiply-add into `reduced` plus a bounds-checked property
         // call into the model.
         var elementReduced = new int[elementDofs];
-        var elementPrescribed = new double[elementDofs];
+        var elementPrescribed = new double[caseCount][];
+        for (int c = 0; c < caseCount; c++)
+            elementPrescribed[c] = new double[elementDofs];
+        // Whether ANY case prescribes a nonzero displacement, decided once: the whole inner
+        // prescribed-column branch is dead for the overwhelmingly common model whose supports
+        // are all at zero, and hoisting the question keeps a multi-case run from paying for
+        // a per-case gather it will not read.
+        bool anyPrescribed = false;
+        for (int c = 0; c < caseCount && !anyPrescribed; c++)
+        {
+            for (int node = 0; node < mesh.NodeCount; node++)
+            {
+                if (cases[c].PrescribedOf(node) != Vector3d.Zero)
+                {
+                    anyPrescribed = true;
+                    break;
+                }
+            }
+        }
         var materials = ElementMaterials(model);
 
         for (int e = 0; e < mesh.ElementCount; e++)
@@ -534,11 +733,15 @@ public static class StructuralSolver
             {
                 int node = nodes[i];
                 positions[i] = mesh.Position(node);
-                var prescribed = model.PrescribedOf(node);
                 for (int a = 0; a < 3; a++)
-                {
                     elementReduced[3 * i + a] = reduced[3 * node + a];
-                    elementPrescribed[3 * i + a] = prescribed[a];
+                if (!anyPrescribed)
+                    continue;
+                for (int c = 0; c < caseCount; c++)
+                {
+                    var prescribed = cases[c].PrescribedOf(node);
+                    for (int a = 0; a < 3; a++)
+                        elementPrescribed[c][3 * i + a] = prescribed[a];
                 }
             }
             TetElement.Stiffness(mesh.Order, positions, materials[e], rule, ke);
@@ -565,11 +768,16 @@ public static class StructuralSolver
                             if (rj < 0)
                             {
                                 // Prescribed displacement: the known column moves to the
-                                // right-hand side. Zero-valued supports contribute nothing,
-                                // which is why the common case costs one multiply.
-                                double value = elementPrescribed[3 * j + b];
-                                if (value != 0)
-                                    rhs[ri] -= v * value;
+                                // right-hand side, per case. Zero-valued supports contribute
+                                // nothing, which is why the common case costs one multiply.
+                                if (!anyPrescribed)
+                                    continue;
+                                for (int c = 0; c < caseCount; c++)
+                                {
+                                    double value = elementPrescribed[c][3 * j + b];
+                                    if (value != 0)
+                                        rhs[c][ri] -= v * value;
+                                }
                             }
                             else if (ri <= rj)
                             {

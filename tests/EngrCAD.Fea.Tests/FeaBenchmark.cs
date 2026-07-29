@@ -92,6 +92,83 @@ public class FeaBenchmark(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// What <see cref="StructuralSolver.SolveAll"/> buys: the classic second argument for a
+    /// direct solver, measured rather than asserted. N load cases through one factorization
+    /// against the same N solved one at a time.
+    ///
+    /// <para><b>Interleaved, alternating, best of three.</b> This machine returns absolute
+    /// times several-fold apart across sittings, so an A/B taken in two sittings is noise
+    /// with units; and a warm-up BUDGET rather than a warm-up count, because JIT tiering
+    /// makes a single warm-up call meaningless.</para>
+    /// </summary>
+    [Fact]
+    public void MultipleLoadCases()
+    {
+        if (!Enabled)
+            return;
+
+        static IReadOnlyList<StructuralModel> Cases(AnalysisMesh mesh, int count)
+        {
+            var list = new List<StructuralModel>();
+            for (int i = 0; i < count; i++)
+            {
+                var model = new StructuralModel(mesh, Steel);
+                model.Fix(StructuredTetMesh.XMin);
+                model.Force(
+                    Facets.Tag(StructuredTetMesh.XMax),
+                    new Vector3d(200 * i, 500 * (i % 3), -4000 + 100 * i));
+                list.Add(model);
+            }
+            return list;
+        }
+
+        static AnalysisMesh MeshFor(ElementOrder order, int n)
+        {
+            var tets = StructuredTetMesh.Box(Vector3d.Zero, Size, 4 * n, 2 * n, n);
+            return order == ElementOrder.Linear ? AnalysisMesh.Of(tets) : AnalysisMesh.Quadratic(tets);
+        }
+
+        // Warm-up BUDGET, not a warm-up count.
+        var warmMesh = MeshFor(ElementOrder.Linear, 2);
+        var warmUntil = Stopwatch.StartNew();
+        while (warmUntil.Elapsed.TotalSeconds < 1.5)
+            _ = StructuralSolver.SolveAll(Cases(warmMesh, 2));
+
+        output.WriteLine(
+            $"{"order",10} {"free DOF",10} {"cases",6} {"separate ms",12} {"shared ms",10} "
+            + $"{"speedup",8} {"factor ms",10} {"per extra rhs",14}");
+        foreach (var (order, n, count) in new[]
+        {
+            (ElementOrder.Linear, 6, 4), (ElementOrder.Linear, 8, 4),
+            (ElementOrder.Quadratic, 2, 4), (ElementOrder.Quadratic, 3, 4),
+            (ElementOrder.Quadratic, 3, 8),
+        })
+        {
+            var mesh = MeshFor(order, n);
+            double separate = double.MaxValue, shared = double.MaxValue;
+            double factorMs = 0, perExtra = 0;
+            int freeDofs = 0;
+            for (int trial = 0; trial < 3; trial++)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                foreach (var model in Cases(mesh, count))
+                    _ = StructuralSolver.Solve(model);
+                separate = Math.Min(separate, stopwatch.Elapsed.TotalMilliseconds);
+
+                stopwatch.Restart();
+                var all = StructuralSolver.SolveAll(Cases(mesh, count));
+                shared = Math.Min(shared, stopwatch.Elapsed.TotalMilliseconds);
+                factorMs = all[0].Report.FactorMs;
+                freeDofs = all[0].Report.FreeDofs;
+                perExtra = all.Skip(1).Average(r => r.Report.SolveMs);
+            }
+            output.WriteLine(
+                $"{order,10} {freeDofs,10:N0} {count,6} {separate,12:F0} {shared,10:F0} "
+                + $"{separate / shared,7:F2}x {factorMs,10:F0} {perExtra,13:F2} ms");
+        }
+    }
+
     [Fact]
     public void ThroughputAcrossTheWholePipeline()
     {
