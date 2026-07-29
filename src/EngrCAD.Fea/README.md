@@ -306,24 +306,40 @@ i9-9900K, Release):
 
 **And the direct-vs-iterative verdict here is the opposite of the one Core measured on a
 Laplacian** — which is exactly the caveat CLAUDE.md already records, that such a crossover
-measures the operator's conditioning rather than the two algorithms. On 3D elasticity over
-tetrahedra, AMD-ordered Cholesky against Jacobi-preconditioned CG at 1e-10, single
-right-hand side (Release):
+measures the operator's conditioning rather than the two algorithms. AMD-ordered Cholesky
+against Jacobi-preconditioned CG at 1e-10, single right-hand side, the two **interleaved
+in one sitting** (this machine returns absolute times several-fold apart across sittings —
+only the within-sitting comparison means anything):
 
-| | free DOF | direct (factor + solve) | CG iterations | CG ms |
-| --- | ---: | ---: | ---: | ---: |
-| linear | 2 160 | 65 ms | 308 | **37 ms** |
-| linear | 6 552 | 524 ms | 471 | **153 ms** |
-| quadratic | 2 160 | **47 ms** | 395 | 92 ms |
-| quadratic | 6 552 | 342 ms | 579 | 334 ms |
+| | free DOF | direct | CG iterations | CG | winner |
+| --- | ---: | ---: | ---: | ---: | :-- |
+| linear | 2 160 | 247 ms | 308 | **122 ms** | CG 2.0x |
+| linear | 6 552 | 1 791 ms | 471 | **461 ms** | CG 3.9x |
+| linear | 14 688 | 10 754 ms | 634 | **705 ms** | CG 15.3x |
+| linear | 46 800 | 108 459 ms | 956 | **2 232 ms** | **CG 48.6x** |
+| quadratic | 2 160 | **45 ms** | 395 | 74 ms | direct 1.6x |
+| quadratic | 6 552 | **308 ms** | 579 | 354 ms | direct 1.1x |
+| quadratic | 14 688 | 2 688 ms | 770 | **1 094 ms** | CG 2.5x |
 
-CG wins three of the four already at a few thousand unknowns, and the gap widens: this
-library's up-looking Cholesky is unblocked and takes **79 s** to factor a 46 800-DOF
-linear system, against **323 ms** to assemble it and 249 ms to substitute. The direct
-solver keeps the default anyway, and deliberately: it is exact, deterministic, reports its
-fill as a diagnostic, and amortises across load cases (0.3–6.8 ms per extra right-hand
-side against a whole CG run). Reach for `FeaSolveMethod.ConjugateGradient` for one large
-solve, or when a factorization will not fit.
+So CG wins everywhere with linear elements and past roughly 15 000 unknowns with
+quadratic ones, and at the top of the table it is not close — this library's up-looking
+Cholesky is unblocked, and 108 s is what a user experiences as "the solver hung".
+
+**The direct solver is still the default, and the reason is exactness, not speed.** This
+project's verification claims — the patch test reproduced to round-off, strain errors at
+1e-13, the two element orders agreeing on strain energy to twelve digits — cannot be made
+about an iterative solve stopped at a relative residual. A default of CG would make every
+headline accuracy claim a statement about an opt-in path. It also reports its fill, which
+is the diagnostic that says a mesh is bad.
+
+Two honesty notes on that decision. The usual second argument for a direct solver — factor
+once, solve many right-hand sides — **does not apply yet**: `Solve` factors and discards,
+so a second load case pays for a second factorization; the multi-load-case entry point is
+filed. And **no automatic size-based switch is offered**, deliberately, because a crossover
+measured on one operator measures that operator: baking a threshold taken from one
+cantilever into the library default would be the very mistake the row above documents.
+
+Reach for `FeaSolveMethod.ConjugateGradient` for a large single solve.
 
 Whole-pipeline cost (Release), which says where the time actually goes:
 

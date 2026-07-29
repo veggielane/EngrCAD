@@ -8,17 +8,50 @@ namespace EngrCAD.Fea;
 public enum FeaSolveMethod
 {
     /// <summary>
-    /// Sparse Cholesky with an AMD fill-reducing ordering (the default). A stiffness
-    /// matrix is a pure Dirichlet-style operator — the regime where the direct solve wins
-    /// on the FIRST right-hand side: measured in Core's benchmark at 62 500 unknowns,
-    /// 221 ms to factor plus 5.8 ms per solve against CG's 858 iterations / 750 ms.
+    /// Sparse Cholesky with an AMD fill-reducing ordering — the default, and <b>not
+    /// because it is faster</b>. Measured on this project's own cantilever (Release,
+    /// win-x64, direct and CG interleaved in one sitting), it loses to
+    /// <see cref="ConjugateGradient"/> at every size tested with linear elements and the
+    /// gap widens sharply with the mesh:
+    /// <code>
+    ///   free DOF   direct     CG        element order
+    ///      2 160     247 ms     122 ms   linear      (CG 2.0x)
+    ///      6 552   1 791 ms     461 ms   linear      (CG 3.9x)
+    ///     14 688  10 754 ms     705 ms   linear      (CG 15.3x)
+    ///     46 800 108 459 ms   2 232 ms   linear      (CG 48.6x)
+    ///      2 160      45 ms      74 ms   quadratic   (direct 1.6x)
+    ///      6 552     308 ms     354 ms   quadratic   (direct 1.1x)
+    ///     14 688   2 688 ms   1 094 ms   quadratic   (CG 2.5x)
+    /// </code>
+    /// <para>It is the default because it is <b>exact and deterministic</b>, and that is
+    /// what this project's verification claims rest on: "the patch test is reproduced to
+    /// round-off", strain errors at 1e-13, the two element orders agreeing on strain
+    /// energy to twelve digits. None of those statements can be made about an iterative
+    /// solve stopped at a relative residual, so a default of CG would make every headline
+    /// accuracy claim a statement about an opt-in path. It also reports its fill, which is
+    /// the diagnostic that says a mesh is bad.</para>
+    /// <para><b>Choose <see cref="ConjugateGradient"/> for a large single solve</b> — the
+    /// table above is the rule, and past roughly 15 000 unknowns it is not close. No
+    /// automatic size-based switch is offered, deliberately: a crossover measured on one
+    /// operator is a measurement of that operator's conditioning (CLAUDE.md records the
+    /// same lesson from the opposite direction, where Core's grid Laplacian put the
+    /// crossover somewhere else entirely), so baking a threshold taken from one cantilever
+    /// into the library would be that mistake with a number attached.</para>
+    /// <para>The usual second argument for a direct solver — factor once, solve many
+    /// right-hand sides — does <b>not</b> apply here yet, and it would be dishonest to
+    /// claim it: <see cref="StructuralSolver.Solve"/> factors and discards, so a second
+    /// load case pays for a second factorization. A multi-load-case entry point is filed
+    /// in todo.md, and it is what would make the amortisation real.</para>
     /// </summary>
     Direct,
 
     /// <summary>
-    /// Jacobi-preconditioned conjugate gradients. Lower memory (no fill), and the honest
-    /// choice when a factorization will not fit; the iteration count is reported, so a
-    /// stalled solve says so instead of returning a plausible-looking wrong answer.
+    /// Jacobi-preconditioned conjugate gradients: lower memory (no fill), much faster on
+    /// large systems (see <see cref="Direct"/> for the measured table), and the only
+    /// option when a factorization will not fit. The answer is approximate to
+    /// <see cref="CgOptions.RelativeTolerance"/> rather than exact, and both the iteration
+    /// count and the achieved residual are reported, so a stalled solve says so instead of
+    /// returning a plausible-looking wrong answer.
     /// </summary>
     ConjugateGradient,
 }

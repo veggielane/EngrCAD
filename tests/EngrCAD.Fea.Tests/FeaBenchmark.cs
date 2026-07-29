@@ -66,11 +66,16 @@ public class FeaBenchmark(ITestOutputHelper output)
         if (!Enabled)
             return;
 
+        // The large linear rows are the point: the crossover only means something if it is
+        // measured where the factorization actually hurts. n = 12 is the 46 800-DOF case
+        // whose factor takes 79 s in ThroughputAcrossTheWholePipeline.
         output.WriteLine($"{"elements",10} {"free DOF",10} {"direct ms",10} {"CG iters",9} {"CG ms",9}");
         foreach (var (order, n) in new[]
         {
             (ElementOrder.Linear, 4), (ElementOrder.Linear, 6),
+            (ElementOrder.Linear, 8), (ElementOrder.Linear, 12),
             (ElementOrder.Quadratic, 2), (ElementOrder.Quadratic, 3),
+            (ElementOrder.Quadratic, 4),
         })
         {
             var direct = StructuralSolver.Solve(Cantilever(order, n));

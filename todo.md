@@ -592,17 +592,35 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   assemble, **79 009 ms to factor**, 249 ms to substitute and 45 ms to recover stress. The
   up-looking algorithm is unblocked (no supernodes, no BLAS-3 inner kernel), which is fine
   for the mesh Laplacians it was written for and is the binding constraint on FEA scale.
-  Measured against it, Jacobi-preconditioned CG already wins three of four benchmark cases
-  at a few thousand unknowns (37/153/334 ms against 65/524/342), the OPPOSITE of the
-  Laplacian crossover recorded in CLAUDE.md — as that note itself predicts, since a
-  crossover measures the operator's conditioning. Options in order of value: a supernodal
-  or left-looking blocked factorization in Core; a better preconditioner than Jacobi
-  (incomplete Cholesky, or algebraic multigrid, which is what production FEA uses); or
-  simply switching the default to CG above a measured DOF threshold, which is free but
-  gives up exactness and the multi-load-case amortisation.
+  Measured against it with the two interleaved in one sitting, Jacobi-preconditioned CG
+  wins at EVERY size with linear elements and past ~15 000 unknowns with quadratic ones —
+  2.0x / 3.9x / 15.3x / **48.6x** at 2 160 / 6 552 / 14 688 / 46 800 DOF — the OPPOSITE of
+  the Laplacian crossover recorded in CLAUDE.md, as that note itself predicts. Options in
+  order of value: a supernodal or left-looking blocked factorization in Core; a better
+  preconditioner than Jacobi (incomplete Cholesky, or algebraic multigrid, which is what
+  production FEA uses).
   <br>Note for whoever takes this: **benchmark in Release**. The same runs in Debug look
   assembly-dominated (1 822 ms assemble against 657 ms factor on the docs bracket) and
   would send the work into the wrong phase entirely.
+- [ ] **FEA: should `Direct` still be the default, and what would settle it.** It is the
+  default today for EXACTNESS, not speed — the verification claims (patch test to
+  round-off, strain at 1e-13, the two orders agreeing on strain energy to twelve digits)
+  are not statements one can make about an iterative solve stopped at a relative residual,
+  so a CG default would make every headline accuracy claim a statement about an opt-in
+  path. That reasoning is written into the enum doc. Two things would change the answer,
+  and neither is free:
+  - **A multi-load-case entry point.** The classic second argument for a direct solver —
+    factor once, substitute many right-hand sides — is currently *false here*, because
+    `Solve` factors and discards, so a second load case pays for a second factorization.
+    An API taking N load vectors (or returning a reusable factorization) would make the
+    amortisation real and is worth having regardless: 0.3–6.8 ms per extra solve against a
+    whole CG run.
+  - **Evidence that a size-based automatic pick is sound.** Deliberately not done from the
+    numbers above: a crossover measured on one cantilever measures that cantilever's
+    conditioning, and baking its threshold into the library default would be exactly the
+    mistake the row above documents. Fixtures of genuinely different conditioning (a thin
+    shell-like plate, a near-incompressible nu, a graded mesh) would be needed before a
+    threshold means anything.
 - [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
   embarrassingly parallel per element with a per-row merge at the end
   (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes

@@ -170,14 +170,26 @@ fill and 191x faster** — because fill is what decides whether a quadratic solv
 practical at all.
 
 `FeaSolveMethod.ConjugateGradient` is the alternative, and the honest measurement is that
-**it often wins here**: on 3D elasticity over tetrahedra, Jacobi-preconditioned CG beat
-the AMD-ordered direct solve in three of four benchmark cases at a few thousand unknowns
-(37 ms against 65, 153 against 524, 334 against 342), and this library's unblocked
-Cholesky takes 79 s to factor a 46 800-DOF system. That is the opposite of the crossover
-measured on a Laplacian, which is the point: such a comparison measures the *operator's
-conditioning*, not the two algorithms. The direct solver keeps the default because it is
-exact, deterministic, reports its fill, and amortises across load cases at a few
-milliseconds per extra right-hand side — reach for CG for one large solve.
+**it usually wins** — by a lot, on anything big. Interleaved in one sitting (Release):
+
+| | free DOF | direct | CG | winner |
+| --- | ---: | ---: | ---: | :-- |
+| linear | 2 160 | 247 ms | 122 ms | CG 2.0x |
+| linear | 14 688 | 10 754 ms | 705 ms | CG 15.3x |
+| linear | 46 800 | 108 459 ms | 2 232 ms | **CG 48.6x** |
+| quadratic | 6 552 | 308 ms | 354 ms | direct 1.1x |
+| quadratic | 14 688 | 2 688 ms | 1 094 ms | CG 2.5x |
+
+That is the opposite of the crossover measured on a Laplacian, which is the point: such a
+comparison measures the *operator's conditioning*, not the two algorithms.
+
+**The direct solver keeps the default because it is exact, not because it is fast.** The
+verification numbers below — a patch test reproduced to round-off, strain at 1e-13 — are
+statements that cannot be made about an iterative solve stopped at a relative residual, and
+a default of CG would make every one of them a claim about an opt-in path. **Pass
+`ConjugateGradient` for a large single solve**; past ~15 000 unknowns it is not close. No
+automatic size-based switch is offered, deliberately: a threshold taken from one cantilever
+would be the same mistake the table above documents.
 
 Supports are **eliminated, not penalised**: constrained degrees of freedom are removed from
 the system rather than given a large diagonal, so the reduced matrix is genuinely positive
