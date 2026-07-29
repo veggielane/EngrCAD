@@ -383,7 +383,11 @@ public static class FaceSplitter
                 // Endpoints off the surface are trivially outside the face.
                 if (surface.TryProjectPoint(curve.PointAt(endParam), out var uv, FaceGeometry.InverseEvaluationTolerance) &&
                     ParityContains(rawLoops, uv, period))
-                    throw new NotSupportedException("Open splitting curves must start and end outside the face.");
+                    throw new NotSupportedException(
+                        $"Open splitting curves must start and end outside the face: a {curve.GetType().Name} " +
+                        $"on a {surface.GetType().Name} ends at {curve.PointAt(endParam)} (uv {uv}), " +
+                        $"strictly inside the face's {face.Loops.Count} loop(s), with " +
+                        $"{crossings.Count} boundary crossing(s) found.");
             }
         }
 
