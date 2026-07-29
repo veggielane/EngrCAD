@@ -561,4 +561,138 @@ public class SketchConstraintTests
         Assert.Equal(5, result.RemainingDegreesOfFreedom);     // position 2 + angle + length + radius
         Assert.Contains(result.Diagnostics, d => d.Contains("degrees of freedom remain"));
     }
+
+    // ------------------------------------------------------- point-on-object
+
+    [Fact]
+    public void PointOnLine_PullsTheJointOntoTheCarrier()
+    {
+        // Corner 2 is drawn 0.3 off the line through corners 0 and 1; putting it ON that
+        // carrier must move it to exactly zero offset. The residual is the SIGNED offset,
+        // so this converges to the weld tier rather than stalling at sqrt(eps) the way a
+        // squared or unsigned form would.
+        var drawn = Sketch.Start(0, 0)
+            .LineTo(10, 0)
+            .LineTo(6, 0.3)
+            .LineTo(2, 4)
+            .Close();
+        var cs = drawn.Constrain();
+        var result = cs.PointOn(cs.Point(2), cs.Line(0)).Solve();
+
+        Assert.True(result.Converged, result.ToString());
+        var line = LineOf(result, 0);
+        var direction = (line.End - line.Start).Normalized();
+        var p2 = result.Sketch!.Segments[2].Start;
+        Assert.Equal(0, direction.Cross(p2 - line.Start), 9);
+    }
+
+    [Fact]
+    public void PointOnLine_UsesTheINFINITECarrier()
+    {
+        // The point is drawn well beyond the segment's own end, and the constraint still
+        // aligns it: the carrier is the line, not the drawn stretch. (A version that
+        // clamped to the segment would leave a residual here and report a contradiction.)
+        var drawn = Sketch.Start(0, 0)
+            .LineTo(4, 0)
+            .LineTo(11, 0.6)
+            .LineTo(2, 5)
+            .Close();
+        var cs = drawn.Constrain();
+        var result = cs.Horizontal(cs.Line(0)).PointOn(cs.Point(2), cs.Line(0)).Solve();
+
+        Assert.True(result.Converged, result.ToString());
+        var line = LineOf(result, 0);
+        var direction = (line.End - line.Start).Normalized();
+        var p2 = result.Sketch!.Segments[2].Start;
+        // Measure the residual the constraint IS, against the SOLVED line — Horizontal
+        // levels the line but does not pin its height, so asserting p2.Y == 0 would be
+        // asserting something the constraints never said.
+        Assert.Equal(0, direction.Cross(p2 - line.Start), 9);
+        Assert.True(p2.X > line.End.X,
+            $"the point should still sit past the segment's own end ({p2.X} vs {line.End.X})");
+    }
+
+    [Fact]
+    public void PointOnArc_PutsTheJointExactlyOneRadiusFromTheCentre()
+    {
+        // A slot's far corner pinned onto the round end's carrier circle. The oracle is
+        // the residual the constraint IS — |p − c| − r — read back off the solved sketch.
+        var drawn = Sketch.Start(-6, -2)
+            .LineTo(6, -2)
+            .ArcTo(new(6, 2), 2.4, clockwise: false)
+            .LineTo(-6, 2.6)
+            .Close();
+        var cs = drawn.Constrain();
+        var arc = cs.Arc(1);
+        var result = cs.PointOn(cs.Point(3), arc).Solve();
+
+        Assert.True(result.Converged, result.ToString());
+        var solvedArc = ArcOf(result, 1);
+        var p3 = result.Sketch!.Segments[3].Start;
+        Assert.Equal(solvedArc.Radius, (p3 - solvedArc.Center).Length, 9);
+    }
+
+    [Fact]
+    public void PointOnArc_CountsAsOneIndependentRow()
+    {
+        // Rank is what says a constraint did something rather than duplicating an
+        // existing row, and it is the number a redundant spelling would get wrong.
+        var drawn = Sketch.Start(-6, -2)
+            .LineTo(6, -2)
+            .ArcTo(new(6, 2), 2.4, clockwise: false)
+            .LineTo(-6, 2.6)
+            .Close();
+        // The baseline carries a constraint of its own: with none at all the solver returns
+        // early (nothing to solve), so its rank would not be comparable.
+        var baseline = drawn.Constrain();
+        var before = baseline.Horizontal(baseline.Line(0)).TrySolve();
+
+        var cs = drawn.Constrain();
+        var after = cs.Horizontal(cs.Line(0)).PointOn(cs.Point(3), cs.Arc(1)).TrySolve();
+
+        Assert.True(after.Converged, after.ToString());
+        Assert.Equal(before.ConstrainedDegreesOfFreedom + 1, after.ConstrainedDegreesOfFreedom);
+        Assert.Equal(0, after.RedundantConstraintRows);
+
+        // ...and stating it twice IS redundant, which is the other half of "one row".
+        var twice = drawn.Constrain();
+        var report = twice.Horizontal(twice.Line(0))
+            .PointOn(twice.Point(3), twice.Arc(1))
+            .PointOn(twice.Point(3), twice.Arc(1))
+            .TrySolve();
+        Assert.Equal(after.ConstrainedDegreesOfFreedom, report.ConstrainedDegreesOfFreedom);
+        Assert.Equal(1, report.RedundantConstraintRows);
+    }
+
+    [Fact]
+    public void PointOnArc_AtTheCentre_IsRefusedByName()
+    {
+        // |p − c| − r has no gradient direction at p = c, so the solve has no first order
+        // to work with — named rather than nudged, the stationary-configuration rule.
+        var drawn = Sketch.Start(-6, -2)
+            .LineTo(6, -2)
+            .ArcTo(new(6, 2), 2.4, clockwise: false)
+            .LineTo(-6, 2.6)
+            .Close();
+        var cs = drawn.Constrain();
+        var arc = cs.Arc(1);
+        // CenterOf gives a point ref that IS the arc's centre, so this reaches the
+        // degenerate configuration exactly rather than approximately — and it is the only
+        // way a valid closed loop can put a constrainable point there, since a JOINT at an
+        // arc's own centre would make the loop cross itself.
+        var e = Assert.Throws<ArgumentException>(() => cs.PointOn(cs.CenterOf(arc), arc));
+        Assert.Contains("no gradient direction", e.Message);
+
+        // ...while the ordinary configuration is accepted.
+        cs.PointOn(cs.Point(3), arc);
+    }
+
+    [Fact]
+    public void PointOn_RefusesAReferenceFromAnotherSketch()
+    {
+        var a = SloppyQuad().Constrain();
+        var b = SloppyQuad().Constrain();
+        Assert.Throws<ArgumentException>(() => a.PointOn(b.Point(0), a.Line(0)));
+        Assert.Throws<ArgumentException>(() => a.PointOn(a.Point(0), b.Line(0)));
+    }
 }

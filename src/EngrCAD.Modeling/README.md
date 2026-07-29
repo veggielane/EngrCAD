@@ -129,6 +129,15 @@ var body = Shape.Extrude(plate, 0.5);           // B-Rep: exact NURBS profile
 var vase = Shape.Revolve(vaseSketch);           // implicit: exact 2D signed distance
 ```
 
+**Point-on-object** constraints: `PointOn(point, line)` / `PointOn(point, arc)` pin a
+point to another entity's CARRIER (infinite line, whole circle — not the drawn stretch,
+which would be a branch selector in disguise). Point-on-line is the point-to-line
+dimension at zero, which is legitimate precisely because that residual is SIGNED and so
+stays first order through its own solution — unlike point-to-point distance, whose zero
+is a cone point and is refused in favour of `Coincident`; point-on-arc reuses the very
+row the solver already applies to an arc's own endpoints. A point drawn at an arc's
+centre is refused by name (`|p − c| − r` has no gradient direction there).
+
 **Elliptical arcs** are first-class: `Sketch.Ellipse(semiX, semiY[, rotation])` and the
 builder's `EllipticalArcTo(end, semiX, semiY, rotation, largeArc, clockwise)` — SVG's
 `A` command with the same two flags and the same out-of-range rule (semi-axes too small

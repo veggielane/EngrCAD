@@ -169,6 +169,26 @@ Entities address the sketch's normalized segment order, holes included — a was
 center + radius only (constrain them via `CenterOf`); bézier and elliptical-arc segments
 ride along with their endpoints in v1.
 
+**Point-on-object** — `cs.PointOn(point, line)` and `cs.PointOn(point, arc)` — pins a
+point to another entity's *carrier*, which is the sketcher's usual way of saying "this
+corner runs along that edge" or "this joint sits on that circle":
+
+```csharp
+var cs = drawn.Constrain();
+cs.PointOn(cs.Point(2), cs.Line(0));   // corner 2 anywhere on line 0's carrier
+cs.PointOn(cs.Point(3), cs.Arc(1));    // corner 3 on arc 1's carrier CIRCLE
+```
+
+Two things are worth stating because they are choices rather than accidents. The carrier
+is **infinite** — the point need not land between the line's own endpoints or inside the
+arc's drawn sweep, which is what makes the constraint useful against a datum edge;
+constrain the endpoints too if you mean the segment. And point-on-line is exactly the
+point-to-line *dimension* at zero, which is the right reduction rather than a shortcut:
+that residual is the signed offset, so it passes smoothly through zero, where the
+point-to-*point* distance's zero is a cone point and is refused in favour of
+`Coincident`. A point drawn exactly at an arc's centre is refused by name, since
+`|p − c| − r` has no gradient direction there.
+
 ## Placing sketches in 3D
 
 Sketches are pure 2D. The modeling operations place them with a `SketchPlane` —

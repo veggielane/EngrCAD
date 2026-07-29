@@ -859,6 +859,24 @@ with equal semi-axes deliberately stays an `Ellipse2d` rather than collapsing to
 silently changing a caller's type would make `IsCircular` and cylinder promotion depend on
 whether two doubles happened to be equal.
 
+**Point-on-object needed no new residual, and noticing that is the design.** A sketcher's
+point-on-line is the point-to-line DIMENSION at zero — legitimate because that residual is
+the *signed* offset `d̂ × (p − a)`, which passes smoothly through zero and is first order
+there, whereas the point-to-POINT distance's zero is a cone point (which is exactly why
+`Distance(point, point, 0)` is refused in favour of `Coincident`). Point-on-arc is
+`ArcEndpointConstraint` — the row the solver already applies internally to an arc's own two
+endpoints — asked with an arbitrary point index. So the whole feature is two public methods
+and no new mathematics, and the two spellings of "|p − c| = r" cannot drift because there is
+only one. Two policy choices ride on top: the carrier is INFINITE (a line's whole carrier, an
+arc's whole circle), because a point-on-object that refused to let the point pass the drawn
+stretch would be a branch selector wearing a constraint's name; and a point drawn exactly at
+an arc's centre is refused BY NAME, since `|p − c| − r`'s gradient there is the undefined
+direction `(p − c)/|p − c|` — the same stationary-configuration rule that names an `Angle`
+mate between exactly-parallel directions rather than nudging it. What is NOT offered is
+point-on-bézier or point-on-ellipse, and the reason is structural rather than effort: those
+carriers have no closed-form signed residual, so the foot parameter would have to become a
+solver VARIABLE, which is a different mechanism and is filed as such.
+
 **The defect it exposed is the more valuable half.** `BRepTessellator` handed the
 `segmentsPerCircle` density to `Circle3d` and nothing else, so an ellipse — whose parameter
 is equally an angle over one turn — fell to the generic `curveSamples`. An elliptical prism

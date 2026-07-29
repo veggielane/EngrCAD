@@ -471,8 +471,17 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   carries no centre/axis variables, so it rides the chord similarity like a bézier and
   tangency to one is not in the vocabulary; constraint serialization alongside feature
   history (deliberately not v1 — it does not fall out of the `[Param]` descriptor
-  pattern); bézier constraints (tangency at bézier endpoints); point-on-arc/curve
-  constraint.
+  pattern); bézier constraints (tangency at bézier endpoints). ~~point-on-arc/curve
+  constraint~~ ✅ **landed** as `PointOn(point, line)`/`PointOn(point, arc)` — the CARRIER,
+  and both reuse an existing residual rather than adding a spelling of one (point-on-line
+  IS the point-to-line dimension at zero, legitimate because that residual is signed;
+  point-on-arc IS `ArcEndpointConstraint` with an arbitrary point).
+  - [ ] **Point-on-BÉZIER and point-on-ELLIPSE** are the two the vocabulary still lacks,
+    and they are a different problem from the two that landed: a line's and a circle's
+    carrier have a closed-form signed residual (`d̂ × (p − a)`, `|p − c| − r`), where a
+    bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
+    its own foot parameter as a VARIABLE — which is the standard treatment and is real
+    work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
 - [ ] **A lane-wise `SketchRegion` kernel for elliptical arcs.** Every other segment kind
   has one; an ellipse lands in the `General` tier because its distance is `Curve2d`'s
   64-sample scan plus bracketed Newton (point-to-ellipse is a quartic root, so there is
