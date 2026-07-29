@@ -45,6 +45,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Offset` / `Shell(t)` (SDF skin) | ❌ no B-Rep form (`Shell(t)`'s message names the exact overload) | ✅ native | 🔶 polygonized |
 | `Shell(t, openings)` (exact inward hollow) | ✅ native (rigid + uniform scale; polyhedral child — `Shelling.Shell`) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Draft(angle, neutral, pull, faces?)` | ✅ native (rigid + uniform scale; planar-faced prisms — `Draft.Apply`) | 🔶 bridged | ✅ native |
+| `SheetMetalBody` (base flange + edge flanges) | ✅ native (rigid + uniform scale; bends welded in as topology — `SheetMetalSurgery`) · ❌ sheared (thickness and bend radius are lengths) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `RoundEdges(r)` (whole-solid rounding) | ✅ native (rigid + uniform scale; convex planar solids — `Filleting.FilletAllEdges`) | 🔶 bridged | ✅ native |
 | `Lattice` (gyroid & co.) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Chamfer` (planar-face rims) | ✅ native (miters; cone bands on circles) | 🔶 bridged | ✅ native |
@@ -594,6 +595,72 @@ var block = Shape.Box(30, 20, 12).RoundEdges(2);                          // box
   corner in one boolean-free morphological opening — exact cylindrical bands and
   spherical corner patches. Convex planar solids with 3-valent corners in v1;
   concave edges and general trihedral corners are refused by name.
+
+## Sheet metal (`SheetMetal.cs`, `SheetMetalFeatures.cs`)
+
+A sheet part is a **flat blank plus a list of bends**, and the two views of it — the
+folded body and the flat pattern — must agree exactly. `SheetMetalBody` holds the
+declaration and derives both from the same numbers.
+
+```csharp
+var spec = new SheetMetalSpec(Thickness: 1.5, BendRadius: 1.5, KFactor: SheetMaterials.MildSteel);
+
+var bracket = SheetMetalBody.Base(Sketch.Rectangle(90, 60), spec)
+    .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 25)          // a side wall
+    .WithFlange(SheetFlangeTarget.FlangeTip(0), length: 10);        // a return lip on it
+
+var solid = bracket.Solid;      // folded, B-Rep native
+var flat  = bracket.Unfold();   // blank + bend lines, in the base sketch's coordinates
+flat.ToDxf().SaveFile("bracket-flat.dxf");                          // CUT and BEND layers
+```
+
+**The bend model is two formulas, in `SheetMetalSpec` and nowhere else**, so the fold
+and the flat cannot disagree:
+
+- **bend allowance** `BA = θ·(R + K·T)` — the flat length one bend consumes, i.e. the
+  arc length of the neutral axis, which the **K-factor** locates as a fraction of the
+  thickness (0.5 = mid-sheet; real values 0.3–0.5). `SheetMaterials` carries the usual
+  defaults, transcribed and flagged verify-against-datasheet.
+- **outside setback** `OSSB = (R + T)·tan(θ/2)` — tangent line to **outer virtual
+  sharp**, which is the datum a flange's `Length` is measured from.
+- **bend deduction** `BD = 2·OSSB − BA` is derived, not a third model.
+
+Three conventions every dimension depends on: `Length` is measured from the outer
+virtual sharp; the bend is placed **bend-outside** (its tangent line IS the named
+edge, so the parent's flat region is exactly the outline drawn and the bend grows
+outboard of it); and **a flange folds toward the face its edge is quoted on**, that
+face becoming the inside of the bend.
+
+**The folded geometry is direct topology surgery, never a boolean** (`SheetMetalSurgery`
+in EngrCAD.BRep, the `Filleting` rim-surgery doctrine): a bend meets both the parent
+sheet and the flange wall *tangentially*, which is the coincident/tangent input the v1
+boolean refuses — and there is nothing to compute anyway, since every face is a closed
+form off `SheetBendSection`. Two exact `ExtrudedSurface` arc bands plus three planes
+are welded into the parent's loops; a full-width flange splices its cross-section into
+the neighbouring walls' loops, an inset one splits the wall into stubs and caps its own
+ends.
+
+**`Unfold()` is bookkeeping, not geometry re-derivation**: it walks the flange tree,
+gives each bend its allowance and splices a rectangle into the blank. Base-sketch holes
+carry through unchanged, because the flat pattern's coordinates *are* the base sketch's.
+`FlatPattern` carries the blank plus one `FlatBendLine` per bend (both tangent lines,
+angle, radius, allowance, up/down) and exports via `ToDxf()` (CUT / BEND layers, the
+BEND layer given the CENTER line type) or `ToDrawing()` for SVG.
+
+**The oracle**: a bend's folded material is `θ·T·(R + T/2)` per unit width while the
+blank spends `θ·T·(R + K·T)`, so folded and flat volumes agree **exactly at K = 0.5**
+and differ by **`Σ width·θ·T²·(0.5 − K)`** otherwise — a closed form, tested in both
+direction and magnitude.
+
+`BaseFlangeFeature` and `EdgeFlangeFeature` put all of it in the feature history; the
+bend line is an `EdgeSetRef` resolved per regeneration and mapped back into the tree by
+`SheetMetalBody.SiteFor`, so "the flange on THAT edge" survives an edit upstream of it.
+
+**v1 refuses by name** rather than approximating: bends along non-straight edges,
+closed corners / miters / bend reliefs, a flange flush at one end only, jogs, hems,
+louvres, two flanges sharing a stretch of edge, flanges on a flange's side edges, and
+multi-body sheets. Spring-back is out of scope (a property of the press, not the
+geometry).
 
 ## Patterns
 
