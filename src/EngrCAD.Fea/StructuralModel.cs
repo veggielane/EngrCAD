@@ -153,6 +153,7 @@ public sealed class StructuralModel
     private readonly Vector3d[] _prescribed;
     private readonly Vector3d[] _force;
     private readonly Dictionary<int, Material> _materials = [];
+    private readonly Dictionary<int, ElasticLaw> _laws = [];
     private readonly List<string> _conditions = [];
     private double[]? _deltaT;
 
@@ -232,8 +233,68 @@ public sealed class StructuralModel
         ArgumentNullException.ThrowIfNull(material);
         RequireElasticity(material);
         _materials[region] = material;
+        _laws.Remove(region);
         _conditions.Add($"material '{material.Name}' on region {region}");
         return this;
+    }
+
+    /// <summary>
+    /// Assigns an ORTHOTROPIC or fully anisotropic constitutive law to one region, replacing
+    /// the isotropic one its <see cref="Material"/> states.
+    ///
+    /// <para><b>The law does not replace the material, it sits beside it.</b> Density,
+    /// name and the thermal transport properties still come from the
+    /// <see cref="Material"/> — a modal solve of a composite part integrates the same
+    /// density a BOM weighs it with — and the law supplies only the elasticity and, if it
+    /// states one, the directional thermal expansion. That split is what keeps
+    /// <see cref="Material"/> in <c>EngrCAD.Core</c> where the document model can use it:
+    /// a material FRAME is a property of how the stuff was laid into this part rather than
+    /// of the stuff, so it is analysis data and belongs here.</para>
+    ///
+    /// <para>A law stating no expansion of its own inherits nothing — an anisotropic region
+    /// under a thermal load must state its expansion through
+    /// <see cref="ElasticLaw.WithThermalExpansion"/>, because a scalar coefficient on a
+    /// directional material is exactly the kind of quiet mismatch this project refuses. The
+    /// refusal fires at <see cref="ThermalLoad(IReadOnlyList{double}, double)"/>, where the
+    /// requirement is.</para>
+    /// </summary>
+    public StructuralModel SetElasticity(int region, ElasticLaw law)
+    {
+        ArgumentNullException.ThrowIfNull(law);
+        _laws[region] = law;
+        _conditions.Add($"elastic law '{law.Description}' on region {region}");
+        return this;
+    }
+
+    /// <summary>
+    /// The constitutive law of one element: the region's explicit
+    /// <see cref="SetElasticity"/> law, else the isotropic law its <see cref="Material"/>
+    /// states. Derived laws are cached per region, so the 6x6 inversion and frame rotation
+    /// are paid once per model rather than once per element.
+    /// </summary>
+    public ElasticLaw ElasticityOf(int element)
+    {
+        int region = Mesh.RegionOf(element);
+        if (_laws.TryGetValue(region, out var law))
+            return law;
+        law = ElasticLaw.FromMaterial(MaterialOf(element));
+        _laws[region] = law;
+        return law;
+    }
+
+    /// <summary>True when any region carries a non-isotropic law — what a report states and
+    /// what the thermal-load path checks before assuming a scalar expansion.</summary>
+    public bool HasAnisotropicRegions
+    {
+        get
+        {
+            foreach (var law in _laws.Values)
+            {
+                if (!law.IsIsotropic)
+                    return true;
+            }
+            return false;
+        }
     }
 
     /// <summary>
@@ -615,11 +676,29 @@ public sealed class StructuralModel
 
         for (int e = 0; e < Mesh.ElementCount; e++)
         {
+            var law = ElasticityOf(e);
             var material = MaterialOf(e);
-            double expansion = material.ThermalExpansion;
+            // The scalar path needs BOTH halves: the law must state no expansion of its own
+            // (or an isotropic law given a directional one would have it silently ignored),
+            // AND it must be isotropic (or the scalar route would multiply the MATERIAL's
+            // Lame parameters, which are not that region's stiffness at all).
+            bool scalar = law.IsIsotropic && !law.StatesOwnThermalExpansion;
+            if (!law.IsIsotropic && !law.StatesOwnThermalExpansion
+                && material.ThermalExpansion != 0)
+            {
+                throw new FeaException(
+                    $"Region {Mesh.RegionOf(e)} carries the elastic law '{law.Description}' "
+                    + $"but its thermal expansion is stated only on the material "
+                    + $"'{material.Name}', as a single scalar. A directional material's "
+                    + "expansion is directional too, and the scalar has no well-defined "
+                    + "meaning against an anisotropic stiffness - the load would be built "
+                    + "from the MATERIAL's Lame parameters, which are not this region's "
+                    + "stiffness. State it on the law instead: "
+                    + "ElasticLaw.WithThermalExpansion(frame, alpha1, alpha2, alpha3).");
+            }
             // Exact-zero semantic test: a material with no stated expansion produces no
             // thermal load, whatever the temperature.
-            if (expansion == 0)
+            if (scalar ? material.ThermalExpansion == 0 : !law.HasThermalStrain)
                 continue;
             anyExpansion = true;
 
@@ -629,12 +708,24 @@ public sealed class StructuralModel
                 positions[i] = Mesh.Position(nodes[i]);
                 values[i] = nodalTemperature[nodes[i]] - referenceTemperature;
             }
-            // E/(1-2nu) = 3K = 3·lambda + 2·mu, the hydrostatic stress a unit dilatation
-            // produces. Taken from the material's own Lame parameters rather than
-            // recomputed from E and nu, so the two cannot disagree.
-            double modulus = 3.0 * material.Lambda + 2.0 * material.Mu;
-            ThermalElement.ThermalExpansionLoad(
-                order, positions, values, modulus, expansion, rule, loads);
+
+            if (scalar)
+            {
+                // E/(1-2nu) = 3K = 3·lambda + 2·mu, the hydrostatic stress a unit dilatation
+                // produces. Taken from the material's own Lame parameters rather than
+                // recomputed from E and nu, so the two cannot disagree. This is the same
+                // bit-identity split TetElement.Stiffness makes: an isotropic model's load
+                // vector is exactly the one it was before anisotropy existed, and the general
+                // routine below is asserted to agree with it to round-off on an isotropic law.
+                double modulus = 3.0 * material.Lambda + 2.0 * material.Mu;
+                ThermalElement.ThermalExpansionLoad(
+                    order, positions, values, modulus, material.ThermalExpansion, rule, loads);
+            }
+            else
+            {
+                ThermalElement.ThermalExpansionLoad(
+                    order, positions, values, law.ThermalStressPerDegree, rule, loads);
+            }
             for (int i = 0; i < perElement; i++)
                 _force[nodes[i]] += loads[i];
         }
@@ -645,7 +736,13 @@ public sealed class StructuralModel
                 "A thermal load was applied but no material in the model states a thermal "
                 + "expansion coefficient, so the load is identically zero and the stress "
                 + "recovery would have nothing to subtract. Build the material with its "
-                + "thermalExpansion, or call Material.WithThermalExpansion(alpha).");
+                + "thermalExpansion, or call Material.WithThermalExpansion(alpha)"
+                + (HasAnisotropicRegions
+                    ? " - and note that a region carrying an ElasticLaw takes its expansion "
+                      + "from the LAW, through ElasticLaw.WithThermalExpansion(frame, a1, a2, "
+                      + "a3), because a directional material's expansion is directional too "
+                      + "and a scalar inherited from the Material would be a quiet mismatch."
+                    : "."));
         }
 
         _conditions.Add(

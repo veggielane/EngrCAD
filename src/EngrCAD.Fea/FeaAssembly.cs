@@ -67,7 +67,7 @@ internal static class FeaAssembly
                 for (int a = 0; a < 3; a++)
                     dofs[3 * i + a] = 3 * nodes[i] + a;
             }
-            TetElement.Stiffness(mesh.Order, positions, model.MaterialOf(e), rule, ke);
+            TetElement.Stiffness(mesh.Order, positions, model.ElasticityOf(e), rule, ke);
 
             for (int i = 0; i < elementDofs; i++)
             {

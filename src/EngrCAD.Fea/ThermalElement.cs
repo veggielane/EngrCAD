@@ -404,4 +404,61 @@ internal static class ThermalElement
                 loads[i] += grad[i] * weight;
         }
     }
+
+    /// <summary>
+    /// The thermal-expansion load for a general constitutive law:
+    /// <c>integral(B' · sigma0 · dT dV)</c>, where <paramref name="thermalStressPerDegree"/>
+    /// is <c>D · alpha</c> as a Voigt 6-vector in GLOBAL coordinates.
+    ///
+    /// <para>The isotropic overload above is the special case
+    /// <c>sigma0 = 3K·alpha·(1,1,1,0,0,0)</c>, kept separate so an isotropic model's load
+    /// vector stays bit-for-bit what it was — the same split
+    /// <c>TetElement.Stiffness</c> makes between the index form and <c>B'DB</c>, for the same
+    /// reason. What is NOT a special case is the shear: rotating an orthotropic expansion
+    /// off-axis produces genuine shear terms (a heated off-axis lamina shears), so those
+    /// three components are load-bearing rather than padding.</para>
+    /// </summary>
+    public static void ThermalExpansionLoad(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        ReadOnlySpan<double> nodalDeltaT,
+        ReadOnlySpan<double> thermalStressPerDegree,
+        in TetQuadrature rule,
+        Span<Vector3d> loads)
+    {
+        int n = nodePositions.Length;
+        loads[..n].Clear();
+        Span<double> shape = stackalloc double[10];
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+
+        double s0 = thermalStressPerDegree[0];
+        double s1 = thermalStressPerDegree[1];
+        double s2 = thermalStressPerDegree[2];
+        double s3 = thermalStressPerDegree[3];
+        double s4 = thermalStressPerDegree[4];
+        double s5 = thermalStressPerDegree[5];
+
+        for (int q = 0; q < rule.Count; q++)
+        {
+            var (r, s, t) = rule.Point(q);
+            if (!TetElement.ShapeGradients(order, nodePositions, r, s, t, grad, out double detJ))
+                continue;
+            TetElement.ShapeValues(order, r, s, t, shape);
+
+            double deltaT = 0;
+            for (int i = 0; i < n; i++)
+                deltaT += shape[i] * nodalDeltaT[i];
+
+            double weight = rule.Weight(q) * detJ * deltaT;
+            for (int i = 0; i < n; i++)
+            {
+                var g = grad[i];
+                // B_i' sigma0, with Voigt order (xx, yy, zz, xy, yz, zx).
+                loads[i] += new Vector3d(
+                    (g.X * s0 + g.Y * s3 + g.Z * s5) * weight,
+                    (g.Y * s1 + g.X * s3 + g.Z * s4) * weight,
+                    (g.Z * s2 + g.Y * s4 + g.X * s5) * weight);
+            }
+        }
+    }
 }
