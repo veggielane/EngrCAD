@@ -952,7 +952,10 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
     field would restore it — the sampling is the `SourceVertices` question, since an edge
     sample is not a mesh vertex — and the edges could then ride the same attribute path
     (a line program with `aDeformOffset`), which would keep them free during an animation
-    rather than merely correct in a still.
+    rather than merely correct in a still. The **wireframe** view has the same gap and
+    predates all of this: `WireframeEdges.Extract` reads the source half-edge mesh, so a
+    deformed part in Wireframe has always drawn its undeformed edges while its fills (and
+    now its point sprites) move. One line-program attribute closes both.
   - **Picking during an animation**: the pick BVH is built once at the part's own
     `DeformScale`, so a click is exact at factor 1 and off by the difference in
     exaggeration in between. A cheap fix is not obvious — rebuilding a spatial index per

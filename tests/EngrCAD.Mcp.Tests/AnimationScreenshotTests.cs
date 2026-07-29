@@ -118,6 +118,33 @@ public class AnimationScreenshotRenderTests
     }
 
     [SkippableFact]
+    public void A_deformation_track_reaches_the_render()
+    {
+        Skip.IfNot(EngrCad.CanRenderToImage,
+            $"offscreen GL unavailable: {OffscreenRenderer.UnavailableReason}");
+
+        // A deformation track is the one kind of track that does NOT travel as poses — it
+        // is a scalar the render pass applies as a uniform — so posing the instances is
+        // not enough and a still at t would otherwise silently show the wrong
+        // exaggeration. Two instants of a load ramp must differ.
+        var scene = new Scene(TestScenes.Coarse);
+        var plate = new Part("plate", Shape.Box(20, 8, 2));
+        scene.Add(plate);
+        scene.PreMesh();
+        var mesh = plate.GetMesh();
+        plate.AddResult(Mesh.MeshField.SampleVector(mesh, "u", "mm",
+            p => new Vector3d(0, 0, 0.05 * (p.X + 10) * (p.X + 10))));
+        plate.FieldDisplay = new FieldDisplay { Field = "u", Deform = "u", DeformScale = 4 };
+
+        var tools = new SceneTools(new SceneSession(scene, TestScenes.Coarse,
+            _ => new Animation(durationSeconds: 1).With(DeformationTracks.LoadRamp())));
+
+        byte[] flat = Png(tools.Screenshot(view: "front", width: 200, height: 160, t: 0));
+        byte[] peak = Png(tools.Screenshot(view: "front", width: 200, height: 160, t: 0.5));
+        Assert.NotEqual(flat, peak);
+    }
+
+    [SkippableFact]
     public void A_part_scope_still_narrows_a_posed_render()
     {
         Skip.IfNot(EngrCad.CanRenderToImage,

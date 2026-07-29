@@ -353,7 +353,12 @@ public sealed class SceneTools(SceneSession session)
             {
                 OffscreenRenderer.RenderToImage(instances, temporary, width, height, camera,
                     furniture: true, viewStyle, axis, offset, ambientOcclusion,
-                    sectionPlanes: planes, sectionCombine: combine);
+                    sectionPlanes: planes, sectionCombine: combine,
+                    // A deformation track reaches a render as one scalar rather than as
+                    // poses, so it has to be passed alongside the posed instances or a
+                    // still at t would show the model at the wrong exaggeration — the
+                    // same value EngrCad.RenderToImage(scene, animation, t) sends.
+                    deformFactor: animation?.At(t!.Value).DeformFactor ?? 1);
             }
             png = File.ReadAllBytes(temporary);
         }
