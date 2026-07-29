@@ -1876,24 +1876,36 @@ hand calculation used a textbook 200 GPa where `Materials.Steel` is 210, and
 independent check that agreed to a few percent *and supplied a fluent physical story for
 the residual*, which is what stopped the enquiry.
 
-Two discriminators would have caught it, and the cheaper one is the surprise. **Size**:
-mode 1 of a slender cantilever must agree with Euler–Bernoulli to well under 1% (the FEA
-suite's own measurement on a 100 × 10 × 10 bar is −0.07%), so 2.5% is out of family in
-either direction. **Sign**: a 3D solid has shear deformation and rotary inertia that beam
-theory omits and both SOFTEN it, so the continuum answer lies below the Euler–Bernoulli
-one — measured −0.07%, −4.34%, −9.98% for bending modes 1, 2, 3, monotonically further
-below as the wavelength shortens — and an FE result *above* EB is therefore not a small
-discrepancy but the wrong direction. Note the sign test's honest limit: displacement-based
-FE is Rayleigh–Ritz on a subspace, so its eigenvalues bound the true ones from ABOVE, and
-a coarse mesh can overshoot EB legitimately. At mode 1 the softening is only 0.07%, so the
-margin is thin and the test is weak; it is decisive at the higher modes where softening is
-percent-level. **A cross-check landing within a few percent with a ready explanation for
-the gap is the most dangerous kind, and for a bending comparison the SIGN of the gap is a
-cheaper discriminator than its size.** Same family as the tests-that-pass-for-the-wrong-
-reason traps recorded elsewhere here, and a better example than most, because nothing
-failed: the number was close, the story was fluent, and the only thing wrong was a
-constant nobody re-read. Where a solver is in the room, quote its own answer for the exact
-mesh the page renders rather than a hand calculation at all.
+Two discriminators, and **which of them actually works here is the surprise — the
+plausible one is the weak one.** *Size* has teeth: mode 1 of a slender cantilever must
+agree with Euler–Bernoulli to well under 1% (the modal suite's own converged measurement
+on a 100 × 10 × 10 bar is −0.07%), so 2.5% is out of family in either direction. *Sign*
+sounds stronger and is not: a 3D solid has shear deformation and rotary inertia that beam
+theory omits and both SOFTEN it, so the **converged** answer lies below the
+Euler–Bernoulli one — measured −0.07%, −4.34%, −9.98% for bending modes 1, 2, 3,
+monotonically further below as the wavelength shortens.
+
+But "an FE bending result above EB is the wrong direction" is FALSE, and
+`docs/examples/fea-modal.md`'s own refinement table prints the counterexample: against
+EB's 835.5 Hz that cantilever reads 852.10 (+1.98%), 838.30 (+0.33%), 834.92 (−0.07%) and
+833.78 (−0.21%) at 5×1×1, 10×2×2, 20×2×2 and 30×3×3. **Two of the four levels sit above
+EB, legitimately.** Both are upper bounds on the truth and neither bounds the other:
+displacement-based FE is Rayleigh–Ritz on a subspace, so its eigenvalues bound the true
+ones from above; and EB is itself a kinematically constrained model that also drops rotary
+inertia, so it does too. On a coarse mesh the discretization stiffening simply wins. The
+sign test is therefore a statement about a CONVERGED mesh — decisive at the higher modes
+where the softening is percent-level, worthless at mode 1 where it is 0.07% — and +2.5% is
+a value the coarsest mesh there genuinely produces, so **a sign-only reading of this error
+would have shrugged and moved on.** Only the magnitude caught it.
+
+**The transferable rule: a cross-check that lands within a few percent AND supplies a
+ready explanation for the gap is the most dangerous kind — so check the MAGNITUDE against
+a converged reference before reading anything into the sign, because the sign of an
+unconverged comparison is a property of the mesh rather than of the physics.** Same family
+as the tests-that-pass-for-the-wrong-reason traps recorded elsewhere here, and a better
+example than most, because nothing failed: the number was close, the story was fluent, and
+the only thing wrong was a constant nobody re-read. Where a solver is in the room, quote
+its own answer for the exact mesh the page renders rather than hand-calculating at all.
 
 **What deliberately did not ride along: transient thermal playback.** Temperature per time
 step is a *colour* animation, and colour has no single-uniform form — it needs the colour
