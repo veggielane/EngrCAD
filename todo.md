@@ -1395,18 +1395,34 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   catalogue-designation lookup could rebuild `ComponentFeature`). Persistent topological
   IDs are no longer open in the abstract: `Shape.Tag` + `BrepFace.Provenance` landed, and
   what remains is the per-algorithm inheritance filed under "Topological naming residuals".
-- [ ] **Geometry-reference vocabulary follow-ups** — the named queries cover what the
-  standard features need and no more. Wanted next: `PlaneRef.Offset(distance)` and
-  `PlaneRef.Rotated` (an offset construction plane is the commonest missing one);
-  `FaceSetRef.Largest` / `SmallestArea` (needs a face-area query — `BrepQueries` has
-  none, and a curved trimmed face's area is not free); `FaceSetRef.Touching(point)` and
-  `.AdjacentTo(faceRef)`; radius/length *ranges* rather than exact values (today
-  `Cylindrical(r)` and `Circular(r)` compare at the weld tier, which is right for
-  exactly-constructed geometry and useless as a filter); a `VertexRef`. Also: the
-  `Shape` API's own selector overloads still take raw `Func`s — `FaceSetRef.AsSelector`
-  bridges them, but `Shape.Fillet(radius, FaceSetRef)` overloads would let a design
-  outside a feature history use the same vocabulary, and `Draft`/`Shelling`'s per-face
-  predicates could take one too.
+- [ ] **Geometry-reference vocabulary follow-ups.** Landed: `PlaneRef.Offset(distance)`
+  and `PlaneRef.Rotated(degrees, inPlaneAxis)` (resolve the base, then move — so a
+  derived plane re-finds its base per regeneration; axes carried verbatim, rotation axis
+  in the base's own coordinates, exact-zero returns the base itself),
+  `FaceSetRef.LargestByArea`/`SmallestByArea` over `BrepSelection.Area`,
+  `Touching(point)` (carrier projection THEN the face's trim test, so a point over a bore
+  matches nothing), `AdjacentTo(set)`, `CylindricalBetween(min, max)`, and the `Shape`
+  overloads (`Fillet`/`Chamfer`/`ChamferAtAngle`/`FilletEdges`/`ChamferEdges` in constant
+  and variable-law forms take `FaceSetRef`/`EdgeSetRef`). Remaining:
+  - **`Shell` cannot take one without a source break** — its `openings` parameter is a
+    *nullable* `Func`, so a reference-typed overload makes the existing `Shell(t, null)`
+    ambiguous at every call site. Either rename the reference-typed entry
+    (`ShellOpening(...)`) or leave callers on `openings.AsSelector("openings")`, which is
+    what the doc comment now says. `Draft`'s per-face predicate has the same shape.
+  - **Edge-length and circular-radius RANGES** — `CylindricalBetween` covers faces;
+    `EdgeSetRef.Circular(r)` and edge length still compare exactly. Same pattern, ten
+    lines, wanted the first time someone selects "every fillet edge under 2".
+  - **A `VertexRef`** — assessed, and it is not the trivial fifth member it looks like.
+    The other four resolve to things the kernel already treats as objects (a face, an
+    edge, a frame); a vertex's USES are a *point* (anchor a dimension, seed
+    `Touching`, place a pattern) and the natural spellings — "the corner between these
+    three faces", "the highest vertex of this face", "the ends of this edge" — are all
+    derived rather than stored, so the type's real content is the query set, not the
+    resolution. It also needs a cardinality decision the others did not: "the corner
+    where these faces meet" is exactly-one while "this face's corners" is a set, so it
+    wants BOTH a `VertexRef` and a `VertexSetRef` or an honest reason it does not.
+    Worth doing when a consumer exists (a vertex-anchored dimension is the likeliest);
+    inventing it before then would fix the query set by guesswork.
 - [ ] **Assemblies follow-ups** (v2 landed: BOM, exploded views, mates — now ACROSS
   assembly levels with typed `FaceRef`/`AxisRef` references and
   `SaveMates`/`LoadMates` persistence — STEP assembly export + import, tree

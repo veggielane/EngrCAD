@@ -109,6 +109,73 @@ EdgeSetRef.From("long edges", s => s.Edges.Where(e => e.Length() > 30))
 Lambda-backed references work everywhere a named one does, but they cannot be
 written to (or read from) a parameter file — they print as `opaque(label)`.
 
+## Derived planes, ranking, points and neighbours
+
+A construction plane is usually stated relative to something the model already has, so
+a `PlaneRef` can be moved:
+
+```csharp run:geometry-input-derived-plane
+var solid = (Shape.Box(40, 30, 10).Translate(0, 0, 5)
+    - Shape.Cylinder(3, 20).Translate(-12, 0, 5)
+    - Shape.Cylinder(7, 20).Translate(12, 0, 5)).ToBrep();
+
+// "30 above the top face", and "the top face tipped 30 degrees about its own x axis".
+var raised = PlaneRef.TopPlane.Offset(30);
+var tilted = PlaneRef.TopPlane.Rotated(30, (1, 0));
+
+if (Math.Abs(raised.Resolve(solid, "plane").Origin.Z - 40) > 1e-9)
+    throw new Exception("offset should sit 30 above the top face at z = 10");
+
+// It re-finds its base every time, which is the point: change the plate and the
+// derived plane follows.
+var thicker = Shape.Box(40, 30, 16).Translate(0, 0, 8).ToBrep();
+if (Math.Abs(raised.Resolve(thicker, "plane").Origin.Z - 46) > 1e-9)
+    throw new Exception("a derived plane follows its base");
+
+// Ranking, a point, the neighbours, and a radius RANGE.
+var bigFlats = FaceSetRef.LargestByArea(FaceSetRef.OfKind(SurfaceKind.Planar), 2);
+var underTheCursor = FaceSetRef.Touching((0, 12, 10));
+var wallsRoundTheTop = FaceSetRef.AdjacentTo(FaceSetRef.PlanarWithNormal(Vector3d.UnitZ));
+var smallBores = FaceSetRef.CylindricalBetween(0, 5);
+
+if (bigFlats.Resolve(solid, "faces").Count != 2) throw new Exception("two big flats");
+if (underTheCursor.Resolve(solid, "faces").Count != 1) throw new Exception("one face at that point");
+if (smallBores.Resolve(solid, "faces").Count != 1) throw new Exception("one bore under radius 5");
+if (wallsRoundTheTop.Resolve(solid, "faces").Count != 6) throw new Exception("four walls and two bores");
+```
+
+An offset carries its base's **in-plane axes** unchanged, so a sketch coordinate means
+the same thing on the derived plane as on the base; a rotation's axis is given in the
+base plane's own coordinates, so it survives the base being re-resolved somewhere else.
+`Touching` decides membership by projecting onto the face's carrier and then applying
+the face's own trim loops — so a point directly over a bore belongs to *no* face, which
+a bounding-box test could never tell you. And a radius RANGE is the filter an exact
+radius deliberately is not: `Cylindrical(3)` compares at the weld tier, which is right
+for exactly-constructed geometry and useless for "every bore under 5".
+
+## The same vocabulary outside a feature history
+
+`Shape`'s rim operations take these references directly, so a plain design gets the
+same readable failures a `Feature` does:
+
+```csharp run:geometry-input-shape-selectors
+var box = Shape.Box(30, 20, 6);
+
+double typed = box.Fillet(2, FaceSetRef.PlanarWithNormal(Vector3d.UnitZ)).ToMesh().Volume();
+double lambda = box.Fillet(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ)).ToMesh().Volume();
+if (Math.Abs(typed - lambda) > 1e-9) throw new Exception("the two spellings are the same call");
+
+try
+{
+    Shape.Box(10, 10, 10).Fillet(1, FaceSetRef.Cylindrical(99)).ToBrep();
+    throw new Exception("a box has no radius-99 bore");
+}
+catch (GeometryInputException e) when (e.Message.Contains("faces:"))
+{
+    // "faces: expected at least one cylindrical face of radius 99, found 0."
+}
+```
+
 ## Validation names the input
 
 Declared references resolve **before** `Apply`, all-or-nothing. A query that

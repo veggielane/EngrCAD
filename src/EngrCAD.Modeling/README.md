@@ -438,6 +438,40 @@ LINQ). `FaceSetRef.From/Where` and `EdgeSetRef.From` take a lambda
 when no named query fits. A `SketchPlane` — and a `SketchPlane?` whose null means "the
 top plane" — converts implicitly, so incumbent code is untouched.
 
+**Derived construction planes**: `plane.Offset(distance)` and
+`plane.Rotated(degrees, inPlaneAxis)` build a plane FROM a resolved one, which is what
+"30 above the top face" and "the top face drafted 7°" have always wanted. They resolve
+their base first, so `PlaneRef.TopPlane.Offset(30)` re-finds the top face on every
+regeneration and stays 30 above whatever it now is; a thickness change moves everything
+built on it. Two details are load-bearing: an offset carries the base's **in-plane axes
+verbatim** (sketch coordinates on the derived plane must mean what they meant on the
+base — re-deriving the axes from the normal would move every hole on it), and a
+rotation's axis is stated in the **base plane's own coordinates**, so it means the same
+thing wherever a re-resolved base ends up. An exactly-zero offset or rotation returns
+the base itself, so no-op wrappers never reach a descriptor.
+
+**Ranking, points, neighbours and ranges**: `FaceSetRef.LargestByArea(set, n)` /
+`SmallestByArea(set, n)` (over `BrepSelection.Area` — ordering-grade, exact for planar
+faces and ~1–2% for curved trimmed ones, deliberately not a mass property);
+`Touching(point, tolerance?)` — "the face I clicked on", decided by carrier projection
+**then the face's own trim test**, so a point over a hole belongs to no face where a
+bounds test would say otherwise, and set-valued because a point on an edge legitimately
+matches two; `AdjacentTo(set)` — the neighbours sharing an edge, minus the named faces,
+in solid face order so it is stable across regenerations; and
+`CylindricalBetween(min, max)`, the FILTER that an exact radius deliberately is not (an
+exact radius compares at the weld tier, which is right for exactly-constructed geometry
+and useless for "every bore under 3 mm").
+
+**The `Shape` API speaks the same vocabulary.** `Fillet`/`Chamfer`/`ChamferAtAngle`/
+`FilletEdges`/`ChamferEdges`, in their constant and variable-law forms, all take a
+`FaceSetRef`/`EdgeSetRef` beside the raw `Func`, bridged by `AsSelector` with the
+parameter's own name — so a design outside a feature history gets the same readable
+failure ("faces: expected at least one cylindrical face of radius 99, found 0") that a
+`Feature` gets, and the same descriptor if it wants to persist the selection. `Shell` is
+the one deliberate omission: its `openings` parameter is a *nullable* Func, so a second
+reference-typed overload would make the existing `Shell(t, null)` ambiguous at every
+call site — write `Shell(t, openings.AsSelector("openings"))` there.
+
 Three properties make them more than sugar:
 
 - **The `Descriptor` is the cache key AND the serialized form.** One canonical

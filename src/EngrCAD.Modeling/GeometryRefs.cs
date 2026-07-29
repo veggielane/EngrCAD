@@ -397,6 +397,60 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
     public static FaceSetRef Tagged(string tag) =>
         new TaggedFaces(RefSyntax.RequireIdentifier(tag, nameof(tag)));
 
+    /// <summary>
+    /// The <paramref name="count"/> largest of <paramref name="faces"/> by area
+    /// (<see cref="BrepSelection.Area"/>) — "the two big flats", said without naming a
+    /// size. Ranking only: a planar face's area is exact (the boundary integral with
+    /// closed-form arc terms) while a curved trimmed face's is midpoint quadrature to
+    /// ~1–2%, which is plenty to ORDER faces and is deliberately not a mass property
+    /// (that stays <c>BrepMassProperties</c>' job).
+    /// </summary>
+    public static FaceSetRef LargestByArea(FaceSetRef faces, int count = 1) =>
+        new AreaRankedFaces(faces, count, largest: true);
+
+    /// <summary>The <paramref name="count"/> smallest of <paramref name="faces"/> by
+    /// area — see <see cref="LargestByArea"/> for the accuracy note.</summary>
+    public static FaceSetRef SmallestByArea(FaceSetRef faces, int count = 1) =>
+        new AreaRankedFaces(faces, count, largest: false);
+
+    /// <summary>
+    /// The faces whose surface passes through <paramref name="point"/> (within
+    /// <paramref name="tolerance"/>, defaulting to the weld tier) — "the face I clicked
+    /// on", written down. Several faces legitimately match a point on an edge or a
+    /// vertex, which is why this is set-valued; compose with
+    /// <see cref="FaceRef.One(FaceSetRef)"/> when the design means exactly one and
+    /// wants to be told if it is wrong.
+    /// <para>Membership is decided by <c>TryProjectPoint</c> onto the face's carrier
+    /// followed by the face's own trim test, so a point on a hole's rim belongs to the
+    /// bore and to the face the hole is in, and a point over a hole belongs to
+    /// neither.</para>
+    /// </summary>
+    public static FaceSetRef Touching(in Vector3d point, double? tolerance = null) =>
+        new TouchingFaces(point, tolerance ?? Tolerance.Default.Linear);
+
+    /// <summary>
+    /// The faces sharing an edge with <paramref name="faces"/> — the neighbours, without
+    /// the named faces themselves. "The walls around the pocket floor" is
+    /// <c>AdjacentTo(FaceSetRef.Tagged("pocket"))</c>; ordering follows the solid's face
+    /// order, so it is stable across regenerations of the same construction.
+    /// </summary>
+    public static FaceSetRef AdjacentTo(FaceSetRef faces) => new AdjacentFaces(faces);
+
+    /// <summary>
+    /// Cylindrical faces whose radius falls in [<paramref name="min"/>,
+    /// <paramref name="max"/>] — the FILTER that <see cref="Cylindrical(double?)"/>
+    /// deliberately is not. An exact radius compares at the weld tier, which is right
+    /// for exactly-constructed geometry and useless for "every bore under 3 mm"; a range
+    /// is the honest spelling of that question.
+    /// </summary>
+    public static FaceSetRef CylindricalBetween(double min, double max)
+    {
+        if (!(max >= min))
+            throw new ArgumentException(
+                $"A radius range needs max >= min (got [{min:g6}, {max:g6}]).", nameof(max));
+        return new CylindricalRangeFaces(min, max);
+    }
+
     /// <summary>Escape hatch: any lambda over the lowered solid. Subsumes the raw
     /// selector overloads on <see cref="Shape"/>; not serializable.</summary>
     public static FaceSetRef From(string label, Func<BrepSolid, IEnumerable<BrepFace>> selector) =>
@@ -458,12 +512,47 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
                     throw new FormatException($"unknown surface kind '{kindName}'");
                 return OfKind(kind);
             }
+            case "cylindricalBetween":
+            {
+                lexer.Expect('(');
+                double min = lexer.ReadNumber();
+                lexer.Expect(',');
+                double max = lexer.ReadNumber();
+                lexer.Expect(')');
+                return CylindricalBetween(min, max);
+            }
             case "nthByRadius":
             {
                 lexer.Expect('(');
                 int index = (int)lexer.ReadNumber();
                 lexer.Expect(')');
                 return NthByRadius(index);
+            }
+            case "largestByArea":
+            case "smallestByArea":
+            {
+                lexer.Expect('(');
+                var inner = ParseFrom(lexer);
+                lexer.Expect(',');
+                int count = (int)lexer.ReadNumber();
+                lexer.Expect(')');
+                return name == "largestByArea" ? LargestByArea(inner, count) : SmallestByArea(inner, count);
+            }
+            case "touching":
+            {
+                lexer.Expect('(');
+                var point = lexer.ReadVector();
+                lexer.Expect(',');
+                double tolerance = lexer.ReadNumber();
+                lexer.Expect(')');
+                return Touching(point, tolerance);
+            }
+            case "adjacentTo":
+            {
+                lexer.Expect('(');
+                var inner = ParseFrom(lexer);
+                lexer.Expect(')');
+                return AdjacentTo(inner);
             }
             case "groupAlong":
             {
@@ -655,6 +744,94 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
                     $"form {groups.Count} group(s) along {Describe(direction)}.");
             return groups[resolved];
         }
+    }
+
+    private sealed class AreaRankedFaces(FaceSetRef faces, int count, bool largest) : FaceSetRef
+    {
+        public override string Descriptor => RefSyntax.Call(
+            largest ? "largestByArea" : "smallestByArea", faces.Descriptor, RefSyntax.Number(count));
+
+        public override string Subject =>
+            count == 1
+                ? $"the {(largest ? "largest" : "smallest")} {faces.Subject} by area"
+                : $"the {count} {(largest ? "largest" : "smallest")} {faces.Subject}s by area";
+
+        public override bool IsSerializable => faces.IsSerializable;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName)
+        {
+            if (count < 1)
+                throw new GeometryInputException(
+                    $"{inputName}: an area ranking needs a positive count (got {count}).");
+            var matched = faces.Resolve(solid, inputName);
+            if (matched.Count < count)
+                throw new GeometryInputException(
+                    $"{inputName}: asked for the {count} {(largest ? "largest" : "smallest")} " +
+                    $"{faces.Subject}s by area, but only {matched.Count} exist.");
+            // OrderBy is stable, so equal areas keep the solid's own face order and the
+            // selection is reproducible across regenerations of the same construction.
+            var ranked = largest
+                ? matched.OrderByDescending(f => f.Area())
+                : matched.OrderBy(f => f.Area());
+            return ranked.Take(count);
+        }
+    }
+
+    private sealed class TouchingFaces(Vector3d point, double tolerance) : FaceSetRef
+    {
+        public override string Descriptor =>
+            RefSyntax.Call("touching", RefSyntax.Vector(point), RefSyntax.Number(tolerance));
+
+        public override string Subject => $"face through the point {Describe(point)}";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName)
+        {
+            foreach (var face in solid.Faces)
+            {
+                // Carrier first, trim second: a point over a hole lands ON the carrier
+                // and is then correctly rejected by the face's own loops, which is
+                // exactly the distinction a bounds test cannot make. The projection
+                // itself proves nothing about proximity — a plane accepts every point in
+                // space — so the distance check is separate and is the caller's
+                // tolerance, while the pullback uses the inverse-evaluation tier.
+                if (!face.Surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance))
+                    continue;
+                if ((face.Surface.PointAt(uv.X, uv.Y) - point).LengthSquared > tolerance * tolerance)
+                    continue;
+                if (FaceGeometry.Contains(face, point))
+                    yield return face;
+            }
+        }
+    }
+
+    private sealed class AdjacentFaces(FaceSetRef faces) : FaceSetRef
+    {
+        public override string Descriptor => RefSyntax.Call("adjacentTo", faces.Descriptor);
+        public override string Subject => $"face adjacent to the {faces.Subject}";
+        public override bool IsSerializable => faces.IsSerializable;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName)
+        {
+            var named = faces.Resolve(solid, inputName).ToHashSet();
+            var edges = named.SelectMany(f => f.Edges()).ToHashSet();
+            // Solid face order, not edge-walk order: stable across regenerations, which
+            // is what a persisted reference needs.
+            return solid.Faces.Where(f => !named.Contains(f) && f.Edges().Any(edges.Contains));
+        }
+    }
+
+    private sealed class CylindricalRangeFaces(double min, double max) : FaceSetRef
+    {
+        public override string Descriptor => RefSyntax.Call(
+            "cylindricalBetween", RefSyntax.Number(min), RefSyntax.Number(max));
+
+        public override string Subject => $"cylindrical face of radius {min:g6}..{max:g6}";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName) =>
+            solid.Faces.Where(f => f.IsCylindrical(out _, out _, out double radius)
+                                && radius >= min && radius <= max);
     }
 
     private sealed class OpaqueFaces(string label, Func<BrepSolid, IEnumerable<BrepFace>> selector) : FaceSetRef
@@ -882,6 +1059,36 @@ public abstract class PlaneRef : GeometryRef<SketchPlane>
     public static implicit operator PlaneRef(SketchPlane? plane) =>
         plane is { } value ? At(value) : TopPlane;
 
+    /// <summary>
+    /// This plane moved <paramref name="distance"/> along its own normal — the
+    /// construction plane a feature is most often built on ("30 above the top face"),
+    /// and the query the vocabulary was missing most.
+    /// <para>Composes with everything, because it resolves its BASE first and then
+    /// translates: <c>PlaneRef.TopPlane.Offset(30)</c> re-finds the top face on every
+    /// regeneration and stays 30 above whatever it now is. In-plane axes are carried
+    /// through unchanged, so sketch coordinates on the offset plane mean exactly what
+    /// they meant on the base — an offset that silently re-derived its axes would move
+    /// every hole on it.</para>
+    /// </summary>
+    public PlaneRef Offset(double distance) =>
+        distance == 0 ? this : new OffsetPlane(this, distance);   // exact-zero: no-op stays the base
+
+    /// <summary>
+    /// This plane rotated <paramref name="degrees"/> about an in-plane axis through its
+    /// origin: <paramref name="axis"/> is given in the base plane's OWN coordinates
+    /// (<c>(1, 0)</c> is its x axis), so a rotation means the same thing wherever the
+    /// base ends up — the point of a reference being re-resolved per regeneration.
+    /// A draft plane is <c>PlaneRef.TopPlane.Rotated(7, (1, 0))</c>.
+    /// </summary>
+    public PlaneRef Rotated(double degrees, in Vector2d axis)
+    {
+        if (!(axis.LengthSquared > 0))
+            throw new ArgumentException("A rotation axis needs a direction.", nameof(axis));
+        // Exact-zero semantic test: a zero rotation is the base itself, so a descriptor
+        // round trip cannot pick up a no-op wrapper.
+        return degrees == 0 ? this : new RotatedPlane(this, degrees, axis.Normalized());
+    }
+
     public static PlaneRef Parse(string descriptor)
     {
         var lexer = new RefLexer(descriptor);
@@ -903,6 +1110,26 @@ public abstract class PlaneRef : GeometryRef<SketchPlane>
                 var face = FaceRef.ParseFrom(lexer);
                 lexer.Expect(')');
                 return On(face);
+            }
+            case "offset":
+            {
+                lexer.Expect('(');
+                var basePlane = ParseFrom(lexer);
+                lexer.Expect(',');
+                double distance = lexer.ReadNumber();
+                lexer.Expect(')');
+                return basePlane.Offset(distance);
+            }
+            case "rotated":
+            {
+                lexer.Expect('(');
+                var basePlane = ParseFrom(lexer);
+                lexer.Expect(',');
+                double degrees = lexer.ReadNumber();
+                lexer.Expect(',');
+                var axis = lexer.ReadVector2();
+                lexer.Expect(')');
+                return basePlane.Rotated(degrees, axis);
             }
             case "plane":
             {
@@ -942,6 +1169,54 @@ public abstract class PlaneRef : GeometryRef<SketchPlane>
 
         public override SketchPlane Resolve(BrepSolid? solid, string inputName) =>
             SketchPlane.On(face.Resolve(solid, inputName));
+    }
+
+    private sealed class OffsetPlane(PlaneRef basePlane, double distance) : PlaneRef
+    {
+        public override string Descriptor =>
+            RefSyntax.Call("offset", basePlane.Descriptor, RefSyntax.Number(distance));
+
+        public override string Subject => $"{basePlane.Subject}, offset {distance:g6} along its normal";
+        public override bool IsSerializable => basePlane.IsSerializable;
+        public override bool RequiresBody => basePlane.RequiresBody;
+
+        public override SketchPlane Resolve(BrepSolid? solid, string inputName)
+        {
+            var plane = basePlane.Resolve(solid, inputName);
+            // The in-plane axes are carried through VERBATIM: sketch coordinates on the
+            // offset plane must mean what they meant on the base, and re-deriving the
+            // axes from the normal would move every point on it.
+            return SketchPlane.At(plane.Origin + plane.Normal * distance, plane.XAxis, plane.YAxis);
+        }
+    }
+
+    private sealed class RotatedPlane(PlaneRef basePlane, double degrees, Vector2d axis) : PlaneRef
+    {
+        public override string Descriptor => RefSyntax.Call(
+            "rotated", basePlane.Descriptor, RefSyntax.Number(degrees), RefSyntax.Vector2(axis));
+
+        public override string Subject =>
+            $"{basePlane.Subject}, rotated {degrees:g6}° about its in-plane axis {Describe(axis)}";
+
+        public override bool IsSerializable => basePlane.IsSerializable;
+        public override bool RequiresBody => basePlane.RequiresBody;
+
+        public override SketchPlane Resolve(BrepSolid? solid, string inputName)
+        {
+            var plane = basePlane.Resolve(solid, inputName);
+            // The axis is stated in the BASE plane's own coordinates, so it is lifted
+            // into world space here — which is what makes the rotation mean the same
+            // thing wherever a re-resolved base ends up.
+            var world = (plane.XAxis * axis.X + plane.YAxis * axis.Y).Normalized();
+            var rotation = Matrix4d.CreateFromAxisAngle(world, degrees * Math.PI / 180);
+            return SketchPlane.At(
+                plane.Origin,
+                rotation.TransformVector(plane.XAxis),
+                rotation.TransformVector(plane.YAxis));
+        }
+
+        private static string Describe(in Vector2d v) =>
+            $"({v.X:g6}, {v.Y:g6})";
     }
 
     private sealed class TopPlaneRef : PlaneRef
