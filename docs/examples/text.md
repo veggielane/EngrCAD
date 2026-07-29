@@ -90,7 +90,7 @@ scene.Add(new Part("marks", marks, Palette.Brass));
 var camera = new CameraState(-Math.PI / 2, 1.3, 95, (0, 0, 2));
 ```
 
-![ENGRCAD engraved around the rim of a steel dial](images/text-on-path.png)
+![ENGRCAD in raised brass lettering following the rim of a steel dial](images/text-on-path.png)
 
 Four conventions carry it, and each was a real choice:
 
