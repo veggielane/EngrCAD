@@ -959,56 +959,46 @@
     /// </summary>
     private static async Task<PartKeys> UploadPartAsync(WebGlContext gl, Part part, int index)
     {
-        var mesh = part.GetMesh();
-        var render = RenderMesh.CreateFlat(mesh);
-        // Simulation results, through the SHARED FieldRendering: the same colour floats
-        // and the same displacement attributes both desktop passes upload. The geometry
-        // uploaded is the UNDEFORMED mesh — the vertex shader displaces it from
-        // uDeformScale, so animating a result is a uniform here exactly as it is on the
-        // desktop — and the undeformed shape also goes up as a ghost.
-        var field = FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out _)
-            ? built
-            : (FieldMeshData?)null;
+        // The CPU half is the shared PartUploads.Build — the same call both desktop passes
+        // make, so the browser uploads identical positions, normals, colour and
+        // displacement floats and edge segments. The policy here is the window's, for the
+        // same reason: every piece goes up whatever the current style, because the style
+        // is a dropdown. No occlusion delegate — there is no bake in the browser, and the
+        // attribute's constant-when-absent rule makes that exactly the flat-lit shading.
+        var upload = PartUploads.Build(part, PartUploadRequest.All);
+        var render = upload.Render;
+        var field = upload.Field;
+
         string meshKey = $"part{index}";
         await gl.UploadMeshAsync(meshKey, render.Positions, render.Normals, render.Indices,
             occlusion: default, fieldColors: field?.Colors ?? [], deformation: field?.Deformation ?? []);
 
         string? ghostKey = null;
-        if (field is { ShowGhost: true })
+        if (upload.ShowGhost)
         {
             ghostKey = $"part{index}.ghost";
             await gl.UploadMeshAsync(ghostKey, render.Positions, render.Normals, render.Indices);
         }
 
         string? edgeKey = null;
-        // A deformed part gets no edge overlay: its exact B-Rep edges describe geometry
-        // that has moved (the desktop rule, stated in each pass because each decides
-        // what to upload separately).
-        var featureEdges = field is { Deformed: true } ? [] : part.GetFeatureEdges();
-        if (featureEdges.Count > 0)
+        if (upload.FeatureEdges.Count > 0)
         {
             edgeKey = $"part{index}.edges";
             // Packed by the shared RenderGeometry.SegmentVertices, so the browser uploads
             // the same floats in the same order as both desktop passes.
-            await gl.UploadLineVerticesAsync(edgeKey, RenderGeometry.SegmentVertices(featureEdges));
+            await gl.UploadLineVerticesAsync(edgeKey, RenderGeometry.SegmentVertices(upload.FeatureEdges));
         }
 
         string? wireKey = null;
-        var wireEdges = WireframeEdges.Extract(mesh);
-        if (wireEdges.Count > 0)
+        if (upload.WireEdges.Count > 0)
         {
             wireKey = $"part{index}.wire";
-            await gl.UploadLineVerticesAsync(wireKey, RenderGeometry.SegmentVertices(wireEdges));
+            await gl.UploadLineVerticesAsync(wireKey, RenderGeometry.SegmentVertices(upload.WireEdges));
         }
 
         return new PartKeys(
-            meshKey, edgeKey, featureEdges.Count * 2, wireKey, wireEdges.Count * 2,
-            // Picking follows what is DRAWN at the part's own exaggeration: a BVH is a
-            // spatial index and cannot be a uniform, so it is built once over the
-            // displaced triangles (FieldRendering.PickShape states what an animation
-            // costs that).
-            PickMesh.Build(field is { } f ? FieldRendering.PickShape(render, f) : render),
-            field is not null, ghostKey, field?.DeformScale ?? 0);
+            meshKey, edgeKey, upload.FeatureEdgeVertexCount, wireKey, upload.WireEdgeVertexCount,
+            upload.RequirePick, upload.FieldColored, ghostKey, upload.DeformScale);
     }
 
     /// <summary>

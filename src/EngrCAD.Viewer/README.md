@@ -543,6 +543,18 @@ edges, BVH) is deduped by part reference. A future optimization is true GPU
 instancing (one draw call per part with a matrix buffer); today it is one draw call
 per instance over shared buffers, which is already flat in memory.
 
+**The CPU prep itself is shared with the browser**: everything either pass does before
+its first GL call is `PartUploads.Build(part, request)` in `EngrCAD.Viewer.Core` — render
+mesh, field colour/displacement buffers, feature-edge and wireframe segments, occlusion,
+pick BVH — so the three front ends cannot upload different bytes for one part. What stays
+here is the *policy* each pass states in its `PartUploadRequest`: the window asks for
+every piece (a view-style dropdown must never trigger a re-upload) and supplies the
+**never-bake** occlusion source `AmbientOcclusion.TryGet`, so an upload can never stall
+the render thread; the one-shot offscreen pass asks only for what its resolved
+`EffectiveMode` draws, never for a pick BVH, and bakes occlusion inline because a headless
+render must be deterministic. Neither the choice of pieces nor the upload cache is shared,
+deliberately — see `EngrCAD.Viewer.Core/README.md`.
+
 **Re-posing without re-uploading**: `SetInstancePoses(instances)` replaces only the
 per-instance world matrices of the list already shown. It exists for the exploded
 view, where `Tab.Instances(factor)` returns the same parts in the same order at every

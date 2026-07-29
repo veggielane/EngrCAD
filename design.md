@@ -2971,6 +2971,29 @@ for `in`-parameters being illegal in expression trees.
   `GL` or does not; there was no third category to argue about. The seam's one cost is
   two forced class renames (linking and uploading split out of `ViewerShaders` and
   `RenderGeometry`), because a C# class cannot span assemblies.
+- **Extract the VALUE, not the lifecycle - which is why `PartUploads` exists and
+  `ViewerModel` still does not.** All three front ends built the same five things per part
+  before touching GL (`RenderMesh.CreateFlat`, the `FieldRendering.TryBuild` result, the
+  occlusion array, `Part.GetFeatureEdges`, `WireframeEdges.Extract`, plus a `PickMesh`),
+  and each is a pure function of the part. That extracts cleanly as `PartUpload` +
+  `PartUploads.Build`. What does NOT extract is *scheduling*: the window streams uploads
+  per part through `TabMeshLoader` on two threads, the offscreen pass is one-shot and
+  synchronous, and the browser interleaves awaited JS uploads on one thread. A shared
+  "ViewerModel" would have to abstract exactly the part that must not look the same, so it
+  stays declined. **Two things `Build` deliberately does not do, and each is a real
+  per-front-end policy rather than an accident.** (a) It does not decide WHICH pieces to
+  build - the one-shot offscreen pass skips what its resolved mode cannot use because it
+  has no dropdown to change its mind, while the window and the browser build everything so
+  a style dropdown never re-uploads; the caller states its policy in a `PartUploadRequest`.
+  (b) It does not own the cache: all three key on `Part` reference, but the browser
+  releases on tab switch, the window on GL deinit and the offscreen pass with its context.
+  Occlusion arrives as a *delegate* for the same reason - the window asks a never-bake
+  cache read (so an upload cannot stall the render thread) while the offscreen pass bakes
+  inline to stay deterministic, and those are different questions, not one flag. What DOES
+  belong in the shared code is every rule about the CONTENT, and the payoff is one of
+  them: **a part carrying a displacement draws no feature-edge overlay at any factor** had
+  been written out three times, once per pass. Verified the only way a pure render
+  refactor can be: all 108 committed docs PNGs byte-identical.
 - **Assembly name is not namespace, deliberately.** `EngrCAD.Viewer.Core` publishes types
   in namespace `EngrCAD.Viewer`. Nothing in .NET requires a namespace to live in one
   assembly, and `SectionPlane`/`ViewStyle` are public API with call sites in options,

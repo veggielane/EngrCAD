@@ -1804,33 +1804,24 @@ UI dependencies, which makes this unusually feasible.
   full suite green and all 53 rendered docs PNGs byte-identical. Note `TabMeshLoader`
   is Avalonia-free but **thread-model-bound** — the browser keeps its own
   single-threaded loader by design (EngrCAD.Web README).
-- [ ] **The `ViewerModel` abstraction (Scene→render-instances shared by Avalonia,
-  offscreen AND the web client)** — assessed during the step-2 move and deliberately NOT
-  forced. What the three front ends genuinely share is already extracted (frame values,
-  camera, modes, pick, widget geometry); what remains different is the *lifecycle*:
-  the window streams uploads per part through `TabMeshLoader` (two threads), the
-  offscreen pass is one-shot and synchronous, and the browser interleaves awaited JS
-  uploads on one thread. A shared ViewerModel would have to abstract exactly that
-  lifecycle, which is the part that must NOT look the same (the TabMeshLoader lesson).
-  The honest next step is smaller: extract the *pure* per-part upload description
-  (mesh + feature edges + wire edges + pick BVH, keyed by part reference) that all
-  three build today by hand, and leave scheduling to each front end.
-  **Re-assessed while the pose/measure rungs landed, and the shape is now clearer.**
-  The three passes build the same five things per part — `RenderMesh.CreateFlat(mesh)`,
-  the `FieldRendering.TryBuild` result and whether the ghost pass applies, the occlusion
-  array (window/offscreen only), `Part.GetFeatureEdges()` segments, `WireframeEdges`
-  segments, and a `PickMesh` — and every one is a pure function of `(Part, quality,
-  fields, ambientOcclusion)`. So the extractable piece is a `PartUpload` VALUE plus a
-  `PartUploads.Build(part, ...)` in `Viewer.Core`, with each front end keeping its own
-  dictionary, its own GL calls and its own scheduling. Two things it must NOT do: decide
-  WHICH of the five to build (the offscreen pass deliberately skips what its one-shot
-  mode cannot use, the other two deliberately build all of them so a dropdown never
-  re-uploads — a shared "what to build" rule would silently make one of those wrong),
-  and own the cache (the browser's release-on-tab-switch and the window's
-  release-on-deinit are different lifetimes). Worth about a day; the payoff is that the
-  ~40 lines each pass repeats — including the "a deformed part gets NO edge overlay"
-  rule, currently stated three times — become one. Nothing is blocked on it, which is
-  why it is still filed rather than done.
+- [x] **The per-part upload description** — `PartUpload` + `PartUploads.Build(part,
+  request)` + `PartUploadRequest` in `EngrCAD.Viewer.Core`: the render mesh, the
+  `FieldRendering.TryBuild` result (and its error), the occlusion array, the feature-edge
+  and wireframe segments and the pick BVH, built once for the window, the offscreen pass
+  and the browser. The caller states which pieces it wants and where occlusion comes from
+  (a delegate — never-bake cache read in the window, bake-inline offscreen, none in the
+  browser); the cache and every GL call stay with each front end. The payoff was the
+  content rules, above all **"a deformed part gets NO edge overlay at any factor"**, which
+  had been written out three times. Oracle: all 108 committed docs PNGs byte-identical.
+- [ ] **The full `ViewerModel` abstraction (Scene→render-instances shared by Avalonia,
+  offscreen AND the web client)** — assessed twice and still deliberately NOT forced.
+  Everything the three front ends genuinely share is now extracted (frame values, camera,
+  modes, pick, widget geometry, and — as of the item above — the per-part upload value);
+  what remains different is the *lifecycle*: the window streams uploads per part through
+  `TabMeshLoader` (two threads), the offscreen pass is one-shot and synchronous, and the
+  browser interleaves awaited JS uploads on one thread. A shared ViewerModel would have to
+  abstract exactly that lifecycle, which is the part that must NOT look the same (the
+  TabMeshLoader lesson). Nothing is blocked on it.
 - [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
   written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
   shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —

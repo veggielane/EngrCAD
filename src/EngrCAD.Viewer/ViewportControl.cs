@@ -379,43 +379,30 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Uploads one distinct part's buffers and registers them for deletion.</summary>
     private SharedMesh UploadShared(GL gl, Part part)
     {
-        var mesh = part.GetMesh();
-        var render = RenderMesh.CreateFlat(mesh);
-        // Simulation results, if the part shows any: a colour buffer for attribute 3
-        // and, for a deformed-shape display, the displacement attributes for 4-7. The
-        // geometry uploaded is the UNDEFORMED mesh either way — the shader displaces it
-        // from a uniform, which is what keeps an animated result off the re-upload path.
-        FieldMeshData? field = null;
-        if (_showFields)
+        // Everything before the first GL call is the shared PartUploads.Build: the render
+        // mesh, the field colour/displacement buffers, both edge sets, the pick BVH and —
+        // through the delegate below — the occlusion array. What stays here is the policy
+        // (all four pieces, because the view-style dropdown must never re-upload) and the
+        // uploads themselves.
+        var upload = PartUploads.Build(part, PartUploadRequest.All with
         {
-            if (FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out string? fieldError))
-                field = built;
-            else if (fieldError is not null)
-                ShowStatus(fieldError);   // a display asked for and not honourable, named
-        }
+            Fields = _showFields,
+            // Only if it is ALREADY cached: TryGet never bakes, so this upload can never
+            // stall the render thread. An uncached part goes up without an occlusion
+            // buffer, which reads the constant 1.0 and is exactly the flat-lit shading;
+            // the background bake (StartOcclusionBake) then publishes its result and
+            // BackfillOcclusion attaches it on a later frame.
+            Occlusion = _ambientOcclusion ? static (m, _) => Viewer.AmbientOcclusion.TryGet(m) : null,
+        });
+        if (upload.FieldError is { } fieldError)
+            ShowStatus(fieldError);   // a display asked for and not honourable, named
 
-        // B-Rep-backed parts get their edge overlay from the ACTUAL B-Rep edges
-        // (exact circles stay smooth at coarse tessellation); others fall back to
-        // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
-        // A DEFORMED part gets none: those edges describe geometry that has moved, and
-        // drawing them over the displaced shape would be a wrong outline rather than a
-        // coarse one. The test is whether the part CARRIES a displacement, not what the
-        // scale happens to be at this instant: the draw list must not depend on an
-        // animation's t, which is the rule that lets a whole clip reuse one upload.
-        var featureEdges = field is { Deformed: true }
-            ? []
-            : part.GetFeatureEdges();
-        var wireEdges = WireframeEdges.Extract(mesh);
-        // Baked per-vertex occlusion, but ONLY if it is already cached: TryGet never
-        // bakes, so this upload can never stall the render thread. An uncached part goes
-        // up without an occlusion buffer, which reads the constant 1.0 and is exactly the
-        // flat-lit shading; the background bake (StartOcclusionBake) then publishes its
-        // result and BackfillOcclusion attaches it on a later frame.
-        var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(gl, render,
-            _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null,
-            field?.Colors, field?.Deformation);
-        var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
-        var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
+        var render = upload.Render;
+        var field = upload.Field;
+        var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(
+            gl, render, upload.Occlusion, field?.Colors, field?.Deformation);
+        var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.FeatureEdges));
+        var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.WireEdges));
 
         // The undeformed shape, ghosted behind the deformed one — the comparison IS the
         // point of a deformed-shape plot. It keeps its OWN buffers rather than re-drawing
@@ -424,25 +411,21 @@ public sealed class ViewportControl : OpenGlControlBase
         // displaced shading is per triangle) and no baked occlusion attached to it.
         uint ghostVao = 0, ghostVbo = 0, ghostEbo = 0;
         int ghostIndexCount = 0;
-        if (field is { ShowGhost: true })
+        if (upload.ShowGhost)
         {
             (ghostVao, ghostVbo, ghostEbo, _, _, _) = RenderUploads.UploadMesh(gl, render);
-            ghostIndexCount = render.Indices.Length;
+            ghostIndexCount = upload.IndexCount;
         }
 
         _gpuBuffers.Add(new PartBuffers(
             part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo, fieldVbo, deformVbo,
             ghostVao, ghostVbo, ghostEbo));
 
-        return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
-            edgeVao, edgeVbo, featureEdges.Count * 2,
-            wireVao, wireVbo, wireEdges.Count * 2,
-            // Picking follows what is DRAWN at the part's own exaggeration: the pick BVH
-            // is a spatial index, so unlike the shading it cannot be a uniform, and it is
-            // built once over the displaced triangles (FieldRendering.PickShape states
-            // what that costs while an animation is running).
-            PickMesh.Build(field is { } f ? FieldRendering.PickShape(render, f) : render), aoVbo,
-            field is not null, field?.DeformScale ?? 0, ghostVao, ghostIndexCount);
+        return new SharedMesh(vao, vbo, ebo, upload.IndexCount,
+            edgeVao, edgeVbo, upload.FeatureEdgeVertexCount,
+            wireVao, wireVbo, upload.WireEdgeVertexCount,
+            upload.RequirePick, aoVbo,
+            upload.FieldColored, upload.DeformScale, ghostVao, ghostIndexCount);
     }
 
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
