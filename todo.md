@@ -736,17 +736,50 @@ sampling step, `.vtu` export. Verified: patch tests exact to 1e-13, manufactured
 orders 2.00/1.00 (linear) and 3.03/2.02 (quadratic), cantilever within 0.01% of
 Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
 
-- [ ] **FEA: modal analysis (the named follow-on to the static solver).** The assembly,
-  the boundary-condition vocabulary and the element library are all in place; what is
-  missing is a consistent MASS matrix (the same quadrature over `rho·N_i·N_j`, and the
-  lumped variant for comparison) and a generalized symmetric eigen-solver for
-  `K·x = lambda·M·x` at the low end of the spectrum. Lanczos or subspace iteration over
-  `SparseCholesky` (shift-and-invert, which the existing factorization already supports —
-  `StructuralSolver.EstimateCondition`'s inverse power iteration is the one-vector case of
-  exactly this). Deliberately not started with the static path: the verification bar there
-  is analytic natural frequencies (a cantilever's `1.875²/(2·pi·L²)·sqrt(EI/rho·A)`, a
-  free-free bar's axial modes) and it deserves the same treatment the static cases got
-  rather than being bolted on.
+**Modal analysis landed** (`ModalSolver`/`ModalSolveOptions`/`MassLumping`/`ModalSolveReport`,
+`ModalResults`/`VibrationMode`/`RigidBodyMode`, `LanczosEigen`, `RigidBodyModes` shared with
+the static solver, `TetElement.ConsistentMass` shared with `ThermalElement.Capacity`; docs
+`examples/fea-modal.md`) — shift-and-invert Lanczos with deflation, locking and restarts over
+ONE factorization; consistent and HRZ mass (row-sum refused by name for 10-node elements);
+rigid-body modes separated rather than refused. Verified: axial bar within 0.021% with
+convergence orders 2.00/4.12 against theory 2/4, cantilever −0.07% from Euler-Bernoulli with
+the shear gap growing by mode, simply-supported within 0.62% of Timoshenko, free-free rigid
+modes at 2.4e-12 of the first elastic eigenvalue, orthogonality at 7.1e-15/5.8e-13, effective
+mass 61.09% against the classical 0.6132. Residuals below.
+
+- [ ] **FEA: Rayleigh (proportional) damping, and damped modes.** `C = a·M + b·K` rides the
+  two matrices modal analysis already assembles, and it is the input a frequency-response or
+  a transient-dynamics solve needs. Undamped real modes stay the default; a genuinely
+  non-proportional `C` makes the eigenproblem quadratic (complex modes, a doubled state-space
+  form) and is a different piece of work that should be scoped separately rather than
+  smuggled in behind the same API.
+- [ ] **FEA: frequency response (harmonic analysis).** The natural next consumer of the
+  modes: `(K − omega²·M + i·omega·C)·u = f` swept over a frequency range, either by modal
+  superposition (cheap once the modes exist, and exactly what the participation factors and
+  effective masses are for) or by direct complex solves per frequency (accurate, and needs a
+  complex sparse factorization `EngrCAD.Core.Solvers` does not have). Modal superposition
+  first, with the truncation error stated from the extracted effective-mass fraction rather
+  than assumed away.
+- [ ] **FEA: buckling and stress stiffening — the other eigenproblem, and it reuses
+  `LanczosEigen` unchanged.** Linear buckling is `K·phi = -lambda·K_g·phi` with `K_g` the
+  GEOMETRIC stiffness assembled from a static solve's stress field, so the new work is one
+  element matrix (`integral(sigma_ij · dN_a/dx_i · dN_b/dx_j)`) plus the wiring that runs a
+  static solve first and hands its stresses on; the eigensolver, the shift machinery and the
+  mode publishing are already there. Stress stiffening is the same `K_g` added to `K` in a
+  modal solve, which is what shifts a spinning or preloaded part's frequencies. Note the
+  shift logic needs revisiting: `K_g` is indefinite, so `K − sigma·K_g` is not made positive
+  definite by a negative shift the way `K − sigma·M` is.
+- [ ] **FEA: block Lanczos, for multiplicity three and above.** Locking and restarting
+  recovers the SECOND member of a degenerate pair, and the solver targets one extra mode so a
+  missed copy has a run to appear in — but neither is a proof of completeness for a triple
+  root, and axisymmetric parts have them. A block method (block size 2–4) finds a whole
+  eigenspace at once and is the standard answer; it is filed rather than pretended, and the
+  limitation is stated in `ModalResults`' docs and the README.
+- [ ] **FEA: transient dynamics (direct time integration).** Newmark-beta or HHT-alpha over
+  `M·a + C·v + K·u = f(t)`, at a constant step so ONE factorization serves the run — the same
+  argument `ThermalSolver.SolveTransient` already makes, and the same reason its step is
+  constant. Different in kind from modal superposition: it takes nonlinearity and arbitrary
+  load histories, and it does not need the modes at all.
 - [ ] **FEA: orthotropic and anisotropic materials.** `Material` is isotropic and the
   assembly reads `Lambda`/`Mu` directly, which is the right inner loop for the common
   case; a general law needs the full 6x6 constitutive matrix plus a material FRAME per
@@ -840,14 +873,10 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   embarrassingly parallel per element with a per-row merge at the end
   (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes
   every element stiffness a second time rather than reusing the assembly's.
-- [ ] **FEA: modal analysis** — the same assembly plus a consistent MASS matrix and a
-  generalized eigen-solver. The mass matrix is `ThermalElement.Capacity`'s shape with
-  three degrees of freedom per node instead of one, including its quadrature rule two
-  degrees above the stiffness's, so that half is a known quantity now; the eigen-solver
-  (subspace iteration or Lanczos on `SparseCholesky`) is the new work.
 - [ ] **FEA: contact, plasticity, large deformation.** Each is a different mathematical
   problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
-  one), and none should start before modal, which reuses the assembly as it stands.
+  one). Modal has landed, so the assembly is now shared by three physics and a fourth
+  consumer would be the fifth reason not to fork it.
 - [ ] **FEA API hygiene** (from the code-quality review of the structural landing; the
   correctness items it found were fixed in place, these are the residue):
   - `AnalysisMesh.Regions` and `FacetTags` run `Distinct().Order().ToArray()` on EVERY

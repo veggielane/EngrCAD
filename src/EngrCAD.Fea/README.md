@@ -1,10 +1,11 @@
 # EngrCAD.Fea
 
-Simulation: **tetrahedral meshing**, **linear-static structural analysis** and **heat
+Simulation: **tetrahedral meshing**, **linear-static structural analysis**, **heat
 conduction** (steady and transient, with thermal-expansion coupling back into the structural
-solve). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
-`Shape.ToMesh()`, `BRepTessellator`, Surface Nets, an imported STL), fills it with
-tetrahedra, and solves on them.
+solve) and **modal analysis** (natural frequencies and mode shapes). Takes a closed manifold
+surface mesh (which every EngrCAD representation reaches — `Shape.ToMesh()`,
+`BRepTessellator`, Surface Nets, an imported STL), fills it with tetrahedra, and solves on
+them.
 
 Kernel-clean: references only `EngrCAD.Core` and `EngrCAD.Mesh`, no UI and no rendering.
 Results leave as `MeshField`s, which is what lets the viewer colour-map them without ever
@@ -43,10 +44,14 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `ThermalSolver` / `ThermalSolveOptions` / `ThermalSolveReport` | Steady and theta-scheme transient solves, and the energy balance |
 | `ThermalTransientOptions` / `ThermalTimeScheme` / `ThermalTransientReport` | Step, count, scheme, initial condition; one factorization per run |
 | `ThermalResults` / `ThermalTransientResults` | Temperature, heat flux, per-state publishing and `.vtu` |
-| `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent loads, quadrature |
+| `ModalSolver` / `ModalSolveOptions` / `MassLumping` / `ModalSolveReport` | Mass assembly, the shift, the eigensolve, and what it cost |
+| `ModalResults` / `VibrationMode` / `RigidBodyMode` | Frequencies, mode shapes, participation factors, publishing and `.vtu` |
+| `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, consistent loads, quadrature |
 | `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
-| `FeaGuards` | Internal: the element-Jacobian guard BOTH solvers ask, rather than each restating |
-| `SurfaceSampler` | Internal: the display-mesh correspondence both results types publish through |
+| `LanczosEigen` | Internal: shift-and-invert Lanczos with deflation, locking and restarts |
+| `RigidBodyModes` / `SmallSymmetricEigen` | Internal: the surviving-rigid-motion computation the static solver REFUSES on and the modal solver REPORTS, plus the small dense eigensolver both need |
+| `FeaGuards` | Internal: the element-Jacobian guard EVERY solver asks, rather than each restating |
+| `SurfaceSampler` | Internal: the display-mesh correspondence every results type publishes through |
 
 ```csharp
 var surface = Shape.Box(40, 30, 6)
@@ -713,7 +718,195 @@ the restraints alone (measured 67 MPa, a quarter of `E·alpha·dT`). A 3-2-1 res
   them. The step is constant, deliberately.
 - Coupling is **one-way**: temperature drives stress, and deformation does not feed back into
   conduction. Two-way coupling is a different (staggered or monolithic) solver.
-- No contact, plasticity, large deformation, or modal analysis. Modal is the nearest —
-  the same assembly plus a mass matrix and a generalized eigen-solver — and is filed
-  rather than started, because a static solver that is verified is worth more than two
-  that are not.
+- No contact, plasticity or large deformation. Each is a different mathematical problem
+  rather than a bigger version of this one.
+
+---
+
+# Modal analysis (natural frequencies)
+
+The generalized symmetric eigenproblem `K·phi = lambda·M·phi` over the same `AnalysisMesh`,
+the same materials and the same supports a `StructuralModel` already carries. Docs page:
+[`docs/examples/fea-modal.md`](../../docs/examples/fea-modal.md).
+
+```csharp
+var model = new StructuralModel(AnalysisMesh.Of(tets), Materials.Steel);
+model.Fix(Facets.OnPlane(new Vector3d(-40, 0, 0), Vector3d.UnitX));
+
+var results = ModalSolver.Solve(model, new ModalSolveOptions { ModeCount = 6 });
+Console.WriteLine(results.ToText());                      // frequencies + effective masses
+
+foreach (var field in results.SampleOnto(surface))        // one vector field per mode
+    part.AddResult(field);
+part.FieldDisplay = new FieldDisplay
+{
+    Field = ModalResults.FieldNames.Shape(1),
+    Deform = ModalResults.FieldNames.Shape(1),
+    DeformScale = 8,
+};
+```
+
+`omega = sqrt(lambda)` and `f = omega/2pi` come out in rad/s and Hz with no conversion,
+because the mm/N/tonne system is consistent in seconds (one tonne is one N·s²/mm).
+
+## The mass matrix IS the thermal capacity matrix
+
+Both are `integral(constant · N_i · N_j dV)`, so there is **one implementation**
+(`TetElement.ConsistentMass`) with `rho` where the capacity has `rho·c`; the structural
+assembly then replicates each scalar entry onto the 3x3 identity block, because an isotropic
+inertia couples no two axes. `ThermalElement.Capacity` delegates to it. That matters because
+the quadrature rule is the thing to get wrong: `TetQuadrature.ForMass` is **two degrees above**
+`TetQuadrature.For`, and two copies would be two chances to under-integrate.
+
+**Under-integrating is silent.** An n-point rule produces a matrix of rank n, so the
+stiffness's rule gives a 4-node mass of rank 1 and a 10-node mass of rank 4 — singular either
+way — while `sum_ij N_i N_j = (sum_i N_i)² = 1` exactly, so the total is still exactly
+`rho·V`. "Does the mass matrix add up to the mass" passes it.
+
+The check with teeth is the **rotational inertia**: a rigid rotation is linear in position, so
+both element orders represent it exactly and `u' M u` must equal the tetrahedron's own
+`omega' I omega`. Against `MeshMassProperties`' closed-form polyhedral moments — independent
+arithmetic in another project — the production rule agrees to **2.2e-16 … 9.4e-15 relative**,
+while the one-point rule reports **−2.4e-27 against a true 1.4e-10**: no rotational inertia at
+all, because every entry being equal collapses `u' M u` to the square of the mean nodal value
+and the mean of a rotation about the centroid is zero.
+
+### Lumping
+
+`MassLumping.Consistent` (default), `Hrz`, and `RowSum` for **linear elements only**.
+
+**Row-sum lumping is refused by name for 10-node elements**: their row sums are `−V/20` at
+every CORNER node — a negative mass, a node that accelerates towards a force pushing it away
+— the same integral that already makes a quadratic element's consistent gravity load negative
+at the corners. HRZ scales the consistent matrix's own strictly positive diagonal
+`rho·integral(N_i² dV)` to preserve the element mass, and for a 4-node tetrahedron it produces
+exactly the row sums (`rho·V/4`), which is asserted rather than assumed.
+
+The reason to offer lumping is that the two schemes **bracket** the truth, not that either is
+better. On a 16-element axial bar whose exact first frequency is 25 860.97 Hz: consistent
+25 895.53 Hz (**+0.134%**), lumped 25 812.76 Hz (**−0.186%**).
+
+## The eigensolver, and why the direct factorization finally pays
+
+Shift-and-invert Lanczos on `A^-1 M` with `A = K − sigma·M`, in the M inner product. The
+operator's eigenvalues are `1/(lambda − sigma)`, so the frequencies nearest the shift are its
+LARGEST — and extreme eigenvalues are what Lanczos converges to first.
+
+**`FeaSolveMethod.Direct` records, honestly, that "factor once, solve many right-hand sides"
+does NOT apply to the static solver, which factors and discards. Here it does.** One
+factorization of `K − sigma·M` serves one back-substitution per Lanczos step;
+`ModalSolveReport.Iterations` says how many, and on this project's fixtures it is 18–23 solves
+off a single factorization for three to eight modes. No iterative linear solver is offered on
+this path for exactly that reason — it would have to converge afresh for every one of those
+steps.
+
+Three implementation rules, each of which cost something:
+
+- **Full reorthogonalization (two passes), and then locking and restarting.** Reorthogonalizing
+  stops round-off manufacturing spurious duplicate eigenvalues; but it also makes a GENUINE
+  multiplicity invisible, since a single-vector Krylov space contains one vector per
+  eigenspace and a square shaft's two identical bending modes are a real, common multiplicity.
+  Converged modes therefore join the deflation set and a fresh start vector is orthogonalized
+  against them, so the next run's extreme eigenvalue is the second copy. The solver also
+  targets **one more mode than asked for** and returns the lowest `wanted`, which is what
+  gives a missed copy a run to appear in before the extra one is discarded.
+- **A CONTIGUOUS converged prefix, never "whatever has converged".** Ritz values converge from
+  the extreme end inwards but not in lock step, so a run can have the second eigenvalue
+  converged while the first is still moving. Accepting out of order returns eigenvalues 2 and
+  3 as "the two lowest" — measured on a 19 440-DOF cantilever asked for ONE mode, it returned
+  **4 997.9 Hz** for a first bending mode of **834.9 Hz**, a plausible number that happened to
+  be the second bending pair.
+- **Convergence is MEASURED.** The textbook `beta_m·|y_m|` bound describes the residual of the
+  shifted, inverted operator — one transformation away from what a caller cares about. This
+  computes `K phi − lambda M phi` and reports it (`ModalSolveReport.WorstResidual`, and per
+  mode).
+
+## Rigid-body modes are separated, not refused
+
+`StructuralSolver` refuses an unrestrained model; `ModalSolver` keeps its zero-frequency modes,
+because a modal analysis of a free-free body is perfectly well posed. **The same machinery
+answers both** (`RigidBodyModes.Surviving`, extracted from the static solver rather than
+restated), so a refusal there and a mode listing here cannot describe the same physics
+differently.
+
+They are deflated out of the Krylov space so they can never be reported as the first six
+structural modes, `VibrationMode.Number` starts at 1 on the lowest mode that stores strain
+energy, and `RigidBodyMode.Eigenvalue` is the **measured** Rayleigh quotient of the exact rigid
+field — zero in exact arithmetic, and in practice a conditioning measurement of that model.
+
+Because `K` is singular when rigid modes exist, the factorization takes a small negative shift
+(`ModalSolveReport.Shift`, reported; escalated and re-reported if a shift will not factor). A
+fully restrained model needs none and the report says **exactly zero** — that factorization is
+literally the static solver's.
+
+## Mode shapes have no amplitude and no sign
+
+- `VibrationMode.Shape` is **mass-normalised** (`phi' M phi = 1`): the scale every modal
+  identity is stated in, and a magnitude of one over the square root of a mass — not a
+  displacement.
+- The **published** field is rescaled to a peak nodal magnitude of exactly **1 model length
+  unit**, labelled `"mode shape"` rather than `"mm"`, so `DeformScale = 8` means "the
+  most-displaced node moves 8 mm".
+- The **sign is pinned** (largest-magnitude component positive) so two solves agree bit for
+  bit. A convention for reproducibility, not physics.
+
+Field names are `ModalResults.FieldNames.Shape(n)` = `"Mode 1"`, `"Mode 2"`, … The frequency is
+deliberately not in the name: a field name is a document handle a `FieldDisplay` stores and a
+saved document round-trips, and a name carrying a computed number would stop resolving the
+moment a parameter changed.
+
+## Verification
+
+Full tables are on the [docs page](../../docs/examples/fea-modal.md). The headline numbers,
+all on structured Kuhn meshes:
+
+- **Axial bar** (Poisson's ratio zero and transverse DOFs removed, so the 3D and 1D problems
+  are identical and there is NO modelling gap): free-free `n/(2L)·sqrt(E/rho)` matched to
+  **+0.021% / +0.081% / +0.170%** at 40 linear elements, every one above the exact value as a
+  Rayleigh quotient over a subspace must be; fixed-fixed +0.025% / +0.095% / +0.194%.
+- **Convergence order** on that bar: **2.04, 2.01, 2.00** (linear) and **4.13, 4.25, 4.12**
+  (quadratic), against theory 2 and 4 — an eigenvalue converges at `O(h^2p)`.
+- **Cantilever** 100×10×10, quadratic, against Euler-Bernoulli's `beta·L` = 1.875/4.694/7.855:
+  **−0.07% / −4.34% / −9.98%**, the gap growing with the mode number because a solid has shear
+  deformation and rotary inertia that beam theory does not. Refinement is monotone from above
+  (852.10 → 838.30 → 834.92 → 833.78 Hz), and the degenerate pairs split by 0.043% / 0.076% /
+  0.132% — a direct measurement of the discretization, since Kuhn's subdivision picks its
+  diagonals by index order and no reflection preserves that.
+- **Simply-supported** 100×12×8, `beta·L = n·pi`: within **+0.09% / +0.12% / +0.37% / +0.62%**
+  of Timoshenko while diverging from Euler-Bernoulli by up to 8% — the clearest available
+  statement that the divergence belongs to the theory.
+- **Free-free**: six rigid modes at eigenvalues −1.1e-3 … 1.6e-3 against a first elastic
+  eigenvalue of 6.84e8, i.e. **2.41e-12 of it at worst** and under 2.3e-3 Hz; the seventh mode
+  (`beta·L = 4.730041`) at 4 162.1 Hz against Euler-Bernoulli's 4 253.3 (−2.14%).
+- **Orthogonality**, with the products assembled independently of the solver:
+  `phi_i' M phi_j − delta_ij` at **7.1e-15 / 7.6e-15** and
+  `(phi_i' K phi_j − lambda_i·delta_ij)/lambda_i` at **5.8e-13 / 1.6e-11** for linear /
+  quadratic.
+- **Effective mass**: a uniform cantilever's classical first-mode participation is 0.6132;
+  measured **61.09%**.
+
+### A modelling trap the simply-supported fixture cost
+
+The axial rigid translation has to be removed somehow, and **pinning `u_x` at a single node —
+exactly what a static 3-2-1 restraint does — is wrong in dynamics.** In statics a single-node
+restraint is a local disturbance Saint-Venant confines to its neighbourhood; in dynamics it
+creates a genuine mode in which the whole body translates axially while a few elements around
+the pinned node deform, at a frequency set by the MESH rather than by the beam. Measured: a
+spurious mode at **5 540 Hz**, sitting between the second and third bending modes and carrying
+96% of the axial effective mass. Holding `u_x = 0` along the beam's own centroidal line removes
+the axial family instead and adds no bending stiffness at all, because pure bending has
+`u_x = −z·w'(x)` measured from the neutral axis and that is identically zero on it.
+
+## Limitations
+
+- **No damping**, so these are undamped natural frequencies. Rayleigh (proportional) damping
+  rides the same two matrices and is the natural next step.
+- **No frequency response and no transient dynamics.** Modal superposition needs the modes plus
+  a load history; direct integration needs a different stepping loop.
+- **No prestress**, so no buckling and no stress stiffening. Both want a geometric stiffness
+  matrix `K_g(sigma)` assembled from a static solve's stress field — a second matrix, the same
+  eigensolver.
+- **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the second
+  member of a degenerate pair; a triple root wants a block method.
+- **Sliver elements** are the same binding constraint every solver here has, refused by name by
+  the same shared guard.

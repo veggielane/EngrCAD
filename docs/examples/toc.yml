@@ -52,6 +52,8 @@
   href: fea-structural.md
 - name: Thermal analysis (FEA)
   href: fea-thermal.md
+- name: Modal analysis (FEA)
+  href: fea-modal.md
 - name: Three representations
   href: representations.md
 - name: Saving documents

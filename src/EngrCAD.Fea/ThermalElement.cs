@@ -128,9 +128,11 @@ internal static class ThermalElement
     /// The rule a CAPACITY matrix of this element order needs. Degree <c>2p</c>, two
     /// higher than the conductivity's: degree 2 for 4-node elements and degree 5 (the
     /// cheapest available rule above 4) for 10-node ones.
+    /// <para>Asks <see cref="TetQuadrature.ForMass"/>, which the modal solver's mass matrix
+    /// also asks — a capacity matrix and a mass matrix are the same integral, so they must
+    /// not be able to disagree about the rule it needs.</para>
     /// </summary>
-    public static TetQuadrature CapacityRule(ElementOrder order) =>
-        order == ElementOrder.Linear ? TetQuadrature.Degree2 : TetQuadrature.Degree5;
+    public static TetQuadrature CapacityRule(ElementOrder order) => TetQuadrature.ForMass(order);
 
     /// <summary>
     /// The element conductivity matrix <c>K_ij = integral(k · grad N_i · grad N_j dV)</c>,
@@ -182,36 +184,20 @@ internal static class ThermalElement
     /// — the same <c>-V/20</c> that already surprises people about
     /// <see cref="TetElement.BodyLoadWeights"/>; and the whole matrix sums to
     /// <c>rho·c·V</c>, the body's actual heat capacity.</para>
+    ///
+    /// <para><b>It delegates to <see cref="TetElement.ConsistentMass"/></b>, which is the
+    /// same integral under the other physics' name: a capacity matrix IS a mass matrix with
+    /// <c>rho·c</c> where the mass matrix has <c>rho</c>. Two copies would be two chances to
+    /// under-integrate, and under-integrating THIS matrix is the silent error the class
+    /// remarks describe.</para>
     /// </summary>
     public static void Capacity(
         ElementOrder order,
         ReadOnlySpan<Vector3d> nodePositions,
         double volumetricHeatCapacity,
         in TetQuadrature rule,
-        Span<double> ce)
-    {
-        int n = nodePositions.Length;
-        ce[..(n * n)].Clear();
-        Span<double> shape = stackalloc double[10];
-        Span<Vector3d> grad = stackalloc Vector3d[10];
-
-        for (int q = 0; q < rule.Count; q++)
-        {
-            var (r, s, t) = rule.Point(q);
-            if (!TetElement.ShapeGradients(order, nodePositions, r, s, t, grad, out double detJ))
-                continue;
-            TetElement.ShapeValues(order, r, s, t, shape);
-            double weight = rule.Weight(q) * detJ * volumetricHeatCapacity;
-
-            for (int i = 0; i < n; i++)
-            {
-                double wi = weight * shape[i];
-                int row = i * n;
-                for (int j = 0; j < n; j++)
-                    ce[row + j] += wi * shape[j];
-            }
-        }
-    }
+        Span<double> ce) =>
+        TetElement.ConsistentMass(order, nodePositions, volumetricHeatCapacity, rule, ce);
 
     /// <summary>
     /// The surface matrix a convective facet contributes,
