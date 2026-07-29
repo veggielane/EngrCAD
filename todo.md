@@ -924,13 +924,32 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   meet at an angle, which is exactly why the current layer is deliberately
   straight-sided; and coincident interfaces between bodies (v1 meshes disjoint bodies
   only, and refuses overlapping ones by name).
-- [ ] **`Predicates3d.InSphere`'s exact stage allocates** (`BigInteger`), unlike
-  `Orient3d`'s stack-allocated expansion form — a deliberate trade recorded in the
-  class doc, since the expansion form of `insphereexact` needs ~6000-component
-  intermediates and hundreds of lines of hand-unrolled sign bookkeeping. An
-  `ArrayPool`-backed expansion form is the fix if profiling ever shows it matters;
-  `Predicates3d.InSphereEscalations` is the counter that would show it (a 4×4×4 lattice
-  escalates constantly, a random cloud never).
+- [ ] **`Predicates3d.InSphere`'s exact stage allocates, and it MEASURABLY matters** — the
+  profiling this entry asked for has now been done (`TetMesherBenchmark.InSphereExactStage_CostAndHowOftenItIsPaid`,
+  win-x64, Release). The exact stage escalates to `BigInteger`, unlike `Orient3d`'s
+  stack-allocated expansion form — a deliberate trade recorded in the class doc, since the
+  expansion form of `insphereexact` needs ~6000-component intermediates and hundreds of lines
+  of hand-unrolled sign bookkeeping. **Per call**: an escalated `InSphere` costs **9 229 ns and
+  5 698 bytes** against **73 ns and 0.1 bytes** for one the filter settles — 126× slower, and
+  the only allocation in either. **Per mesh**, using `TetMeshDiagnostics.InSphereEscalations`:
+
+  | mesh | tets | escalations | per tet | total alloc | est. from the exact stage |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | box 20³ conforming | 6 | 29 | 4.83 | 0.6 MB | 0.2 MB |
+  | box 20³, h = 2 | 40 593 | 12 054 | 0.30 | 191.6 MB | **65.5 MB (34%)** |
+  | sphere r10, 48×24, h = 2.5 | 14 583 | 50 690 | 3.48 | 478.9 MB | **275.4 MB (58%)** |
+
+  So on a SPHERE — whose tessellation vertices are all exactly cospherical, i.e. the documented
+  degenerate case rather than an exotic one — the exact stage is **more than half the mesher's
+  total allocation** and roughly 0.47 s of pure escalation. Every CAD sphere and cylinder
+  tessellation has this shape, so it is the normal case, not the hostile one. The estimate
+  column is escalations × the lattice's measured bytes-per-escalation and is an ESTIMATE:
+  `BigInteger` size follows the operands' exponent range, so a model at a different scale will
+  differ. Two fixes, in increasing order of work: an `ArrayPool`-backed or `stackalloc`
+  fixed-width big-integer for the 15 decomposed mantissas (the allocation is 15 `BigInteger`s
+  plus the determinant's products, all of bounded width once the inputs are known finite), or
+  Shewchuk's `insphereexact` expansion form. **Note this is an `EngrCAD.Core` item**; it is
+  filed from Fea because the tet mesher is what pays it.
 - [ ] **Feed the mesher from the model, not just from a mesh.** `TetMesher` takes a
   `HalfEdgeMesh`, so B-Rep face identity reaches it only if the caller threads a
   per-triangle tag array through. `BRepTessellator` knows the provenance; exposing it

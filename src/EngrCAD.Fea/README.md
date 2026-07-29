@@ -558,6 +558,17 @@ the linear mesh.
 - `TetGeometry`'s numbers are **measurements**, not decisions: no combinatorial branch in the
   mesher reads one. That separation is what lets the quality report be approximate without
   ever making the mesh wrong.
+- **The exact `InSphere` stage is where this project's allocation goes, and cospherical input
+  is the normal case rather than the hostile one.** `Predicates3d.InSphere` escalates to
+  `BigInteger` when its filter cannot settle the sign, which costs **9 229 ns and 5 698 bytes**
+  against **73 ns and 0.1 bytes** for a filtered call (win-x64, Release). A tessellated sphere's
+  vertices are *all* exactly cospherical, so it escalates 3.48 times per element and the exact
+  stage accounts for an estimated **58% of the mesher's total allocation** on a Ø20 sphere
+  (275 of 479 MB); a refined box escalates 0.30 times per element, for 34%.
+  `TetMeshDiagnostics.InSphereEscalations` reports it per run, and
+  `TetMesherBenchmark.InSphereExactStage_CostAndHowOftenItIsPaid` is the measurement. Fixing it
+  is a Core change (a pooled or fixed-width big integer, or Shewchuk's `insphereexact`
+  expansion form) and is filed in todo.md.
 
 # Structural analysis (linear static)
 
