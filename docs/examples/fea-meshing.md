@@ -11,9 +11,10 @@ var surface = Shape.Box(40, 30, 6)
 
 var tets = TetMesher.Mesh(surface, null, out var report);
 
+// One line naming every count and the volume residual: elements, input triangles and
+// patches, Steiner points added per phase, recovery rounds, and how far the filled
+// volume sits from the surface's own.
 Console.WriteLine(report);
-// e.g. 1284 tets from 224 triangles / 62 patches / 116 vertices;
-//      0 boundary + 0 quality Steiner points, 0 recovery round(s); volume residual 3.55E-15
 
 if (report.VolumeResidual > 1e-9)
     throw new Exception($"the tet mesh does not fill its own surface: {report.VolumeResidual:E2}");
@@ -137,8 +138,9 @@ var tets = TetMesher.Mesh(surface, new TetMeshOptions
 {
     RefineQuality = true,
     RadiusEdgeRatio = 2.0,
-    // Fine at the bore wall, coarsening with distance from it.
-    SizingField = p => 3.0 + 0.9 * Math.Max(0, bore.Evaluate(p)),
+    // Fine at the bore wall, coarsening with distance from it. Element count grows as the
+    // CUBE of the reciprocal size, so halving the base here would be an eightfold bill.
+    SizingField = p => 4.5 + 1.1 * Math.Max(0, bore.Evaluate(p)),
 });
 
 var cutaway = tets.SurfaceOf(t =>
