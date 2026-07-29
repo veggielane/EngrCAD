@@ -804,17 +804,20 @@ public static class BrepBoolean
     }
 
     /// <summary>A point strictly interior to the face, for inside/outside classification.</summary>
-    private static Vector3d ProbePoint(BrepFace face)
+    internal static Vector3d ProbePoint(BrepFace face)
     {
         var loops = FaceGeometry.PullLoops(face);
 
-        // Planar-style faces: centroids of the outer loop's triangles. A loop whose
-        // unwrapped u-span covers the surface period wraps the band and cannot bound a
-        // planar region — projection jitter gives such loops a tiny nonzero area, and
-        // triangulating the sliver would put the probe on the fragment boundary.
+        // Planar-style faces: centroids of the outer loop's triangles. A loop that WRAPS the
+        // surface period bounds a band, not a planar region — projection jitter gives such
+        // loops a tiny nonzero area, and triangulating the sliver would put the probe on the
+        // fragment boundary. Wrapping is net u DRIFT, never u SPAN: a contractible facet may
+        // reach three quarters of the way round and come back (see
+        // FaceGeometry.LoopWrapsPeriod), and the band path below would then probe halfway to
+        // the surface's own domain edge — outside the fragment, classifying it away.
         var outer = loops[0];
         double periodU = FaceGeometry.PeriodU(face.Surface);
-        bool wrapsU = periodU > 0 && outer.Max(p => p.X) - outer.Min(p => p.X) > 0.75 * periodU;
+        bool wrapsU = FaceGeometry.LoopWrapsPeriod(outer, periodU);
         if (!wrapsU && Math.Abs(FaceGeometry.LoopSignedArea(outer)) > 1e-12)
         {
             // Largest triangles first: a sliver's centroid hugs the fragment boundary,

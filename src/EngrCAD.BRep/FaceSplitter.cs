@@ -351,7 +351,7 @@ public static class FaceSplitter
                     // carrier surface, so the wrapping curve pulls back onto it — but
                     // with no boundary crossings it lies outside the fragment's region
                     // and must not split it (splitting would fabricate a phantom band).
-                    if (rawLoops.Any(l => l.Max(p => p.X) - l.Min(p => p.X) < 0.75 * period))
+                    if (rawLoops.Any(l => !FaceGeometry.LoopWrapsPeriod(l, period)))
                         return [face];
                     // Several wrapping cuts can hit the same band (a tool crossing a
                     // bore pierces its wall twice): each sub-band shares the full
@@ -1144,8 +1144,7 @@ public static class FaceSplitter
             .Select(l =>
             {
                 var polyline = LoopPolyline(l, surface, period);
-                bool wraps = period > 0 &&
-                    polyline.Max(p => p.X) - polyline.Min(p => p.X) > 0.75 * period;
+                bool wraps = FaceGeometry.LoopWrapsPeriod(polyline, period);
                 return (Coedges: l, Polyline: polyline,
                     Area: orientation * FaceGeometry.LoopSignedArea(polyline), Wraps: wraps);
             })

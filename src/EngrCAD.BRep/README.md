@@ -743,6 +743,19 @@ operations. Depends only on `EngrCAD.Core`.
   into band sub-faces — pulled signed area is meaningless for them (the hemisphere
   band between a bitten equator and an untouched cap ring is the canonical case).
 
+  **"Wraps the period" is net u DRIFT, never u SPAN** — one rule,
+  `FaceGeometry.LoopWrapsPeriod`, asked by all three sites that need it (this tracing,
+  wrap-splitting's "every loop must span the band" precondition, and
+  `BrepBoolean.ProbePoint`). A contractible loop may reach most of the way round the
+  period and come back: a threaded rod's end-chamfer facet on its cone spans **272°** and
+  closes with a net drift of 0.02 rad. A span test files that as a band boundary and every
+  consumer then does something structurally wrong with it — the tracer hunts a partner
+  boundary to pair it with, wrap-splitting lets a wrapping cut fabricate a phantom band out
+  of it, and `ProbePoint` walks halfway toward the surface's own v domain edge and lands
+  outside the fragment entirely, so the boolean classifies the facet away. A genuine wrap
+  drifts a full period; a contractible loop returns to where it started. The span survives
+  as the cheap first half of an AND (no loop can drift a period without spanning one).
+
 - **`Filleting`** — rim chamfering and filleting as topology surgery on an existing solid
   (no booleans): the outer rim of a planar face is replaced by a bevel or blend band, the
   face shrinks, and the neighbours drop.

@@ -344,14 +344,14 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
       single-use edges on the rod's top cap).
     - `ExtractInteriorChains` must honour mandatory breaks BEFORE chaining: the chain path
       builds one edge per curve and would span a break the other side has already split at.
-    - **`BrepBoolean.ProbePoint` decides "this loop wraps the band" by u-SPAN, and that is a
-      latent bug on its own.** A perfectly contractible loop may reach more than three
-      quarters of the way round: the chamfer facet on the cone spans **272°** and closes
-      (net drift 0.02 rad). A span test then sends it to the band path, whose probe walks
-      halfway to the surface's own domain edge and lands outside the fragment entirely, so
-      the facet is classified away. The right test is the net u DRIFT over the traversal
-      (which `FaceSplitter.TraceFaces` already computes for its own band pairing); the span
-      can stay as the cheap first half of an AND.
+    - ~~`BrepBoolean.ProbePoint` decides "this loop wraps the band" by u-SPAN~~ ✅ **landed
+      ahead of the rest** (it was a latent bug on its own): `FaceGeometry.LoopWrapsPeriod`
+      is now the one rule — span as the cheap first half of an AND, net u DRIFT as the
+      decision — and all three sites ask it (`ProbePoint`, `TraceFaces`' band pairing, and
+      wrap-splitting's "every loop must span the band" precondition, the last two of which
+      had the same latent defect). `LoopWrapTests` + `ProbePointWrapTests` pin it, the
+      latter on a hand-built 272° contractible facet whose probe used to land outside
+      itself.
     - `BRepTessellator.IsFullHelicalBand` admitted a 4-coedge band whose two rails came out
       of the split with DIFFERENT spans, and its sheared grid pairs row j of one rail with
       row j of the other — so it threw an internal "boundary polylines disagree in sample

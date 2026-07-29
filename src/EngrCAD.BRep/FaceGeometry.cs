@@ -162,6 +162,43 @@ public static class FaceGeometry
         return result;
     }
 
+    /// <summary>
+    /// Whether a pulled-back loop <b>wraps</b> the surface's periodic direction — i.e. it is a
+    /// band boundary (a bore wall's ring, a cut running right round a cylinder) rather than the
+    /// boundary of a contractible region on the same surface.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The decision is the net u DRIFT over the traversal, not the u SPAN.</b> A loop
+    /// that reaches far round the period and comes back is contractible however far it reached:
+    /// the chamfer facet on a threaded rod's end cone spans <b>272°</b> and closes with a net
+    /// drift of 0.02 rad. A span test calls that a band boundary, and every consumer then does
+    /// something structurally wrong with it — <c>BrepBoolean.ProbePoint</c> walks halfway to the
+    /// surface's own domain edge and lands outside the fragment entirely (so the facet is
+    /// classified away), <c>FaceSplitter.TraceFaces</c> files it for bottom-to-top band pairing,
+    /// and <c>SplitByCurve</c> lets a wrapping cut fabricate a phantom band out of it. A genuine
+    /// wrap drifts a full period; a contractible loop returns to where it started.</para>
+    /// <para>The span survives as the cheap first half of an AND: it rejects almost every loop
+    /// without touching the endpoints, and no loop can drift a period without spanning one. Both
+    /// halves read the polyline <see cref="PullLoops"/> produces — traversal-ordered, unwrapped
+    /// stepwise, and with each coedge's final sample dropped as the junction with the next — so
+    /// a full wrap's drift is a period less one sampling step, comfortably past the half-period
+    /// threshold at any usable sample count.</para>
+    /// </remarks>
+    public static bool LoopWrapsPeriod(IReadOnlyList<Vector2d> pulledLoop, double period)
+    {
+        if (period <= 0 || pulledLoop.Count < 2)
+            return false;
+        double min = double.PositiveInfinity, max = double.NegativeInfinity;
+        foreach (var p in pulledLoop)
+        {
+            min = Math.Min(min, p.X);
+            max = Math.Max(max, p.X);
+        }
+        if (max - min <= 0.75 * period)
+            return false;
+        return Math.Abs(pulledLoop[^1].X - pulledLoop[0].X) > 0.5 * period;
+    }
+
     /// <summary>Signed area of a pulled-back closed polyline; positive = counter-clockwise in (u, v).</summary>
     public static double LoopSignedArea(IReadOnlyList<Vector2d> loop)
     {
