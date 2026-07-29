@@ -107,6 +107,24 @@ public sealed class ComponentFeature : Feature
             Suppressed = suppressed,
         };
 
+    /// <summary>
+    /// The catalogue item and its placement points — the constructor data that makes this
+    /// placement reconstructible from <c>FeatureHistory.SaveHistory</c>.
+    /// <para>Returns null for a component outside the built-in catalogue (a user's own
+    /// <see cref="HardwareComponent"/> subclass), which is then written as a type/name/
+    /// parameters record like any other opaque feature and comes back only through
+    /// <c>LoadHistory</c>'s resolve hook — the standing rule that what cannot round-trip
+    /// is NAMED rather than guessed at.</para>
+    /// </summary>
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveInputs() =>
+        InputJson.SaveComponent(Component) is { } component
+            ? new System.Text.Json.Nodes.JsonObject
+            {
+                ["component"] = component,
+                ["points"] = InputJson.SavePoints(Points),
+            }
+            : null;
+
     /// <summary>Host bounds for "through the body" depths, reusing the context's cached
     /// B-Rep lowering rather than lowering a second time.</summary>
     private static Aabb HostBounds(FeatureContext context) =>

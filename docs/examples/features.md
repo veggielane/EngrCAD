@@ -168,12 +168,23 @@ if (a != b) throw new Exception("round-trip changed the geometry");
 if (loaded.History.SaveHistory() != json) throw new Exception("unstable serialized form");
 ```
 
+A placed [standard component](components.md) is data too: `ComponentFeature` writes its
+catalogue item as a **kind plus the factory arguments that built it**, never as its
+`Designation` — "ISO 4762 M6×20" says nothing about the clearance fit, the seating or
+whether the socket is modelled, and a lossy key is how a reload comes back as a
+plausible *different* screw. So a host prepared by placed fasteners reopens parametric
+and its bores move when the plate does.
+
 Your own `[Param]`-only feature classes join with
 `registry.Register<MyFeature>()` (or `Register(type, factory)` plus a
 `Feature.SaveInputs` override for constructor inputs). **What cannot round-trip, and
 why:** `BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
-`VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
-`HardwareComponent` is a code object), and `Feature.FromFunc` lambdas. `SaveHistory`
+`VariableChamferRimFeature` (its setback law is code), a `ComponentFeature` holding a
+component outside the built-in catalogue (your own `HardwareComponent` subclass — it is
+refused at *save* time rather than written as something a load rebuilds wrong), and
+`Feature.FromFunc` lambdas. `SaveHistory`
 still *writes* them — type, name, parameters — and `LoadHistory` either skips them
 with a warning naming each, or hands the record to your `resolveOpaque` hook to supply
-the instance.
+the instance. One place that still bites: `ComponentAssembly(name, shape)` seeds its
+history with a lambda over an arbitrary `Shape`, so a host built *that* way keeps one
+opaque record — the `BooleanFeature` limitation showing through, not a component one.

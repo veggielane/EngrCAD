@@ -496,6 +496,57 @@ public class DocumentPersistenceTests
         Assert.Equal(2, result.Scene.Tabs[0].Parts[0].History!.Features.Count);
     }
 
+    /// <summary>
+    /// A HOST prepared by a component placement reopens parametric — the fastener bores
+    /// are the history's, not a snapshot's, so editing the plate re-cuts them. (The
+    /// screw's own body is a separate catalogue part with no recipe and stays a snapshot;
+    /// that is the test below.)
+    /// <para>The base feature has to be data too, which is the boundary worth stating:
+    /// <c>ComponentAssembly(name, shape)</c> seeds its history with a lambda over an
+    /// arbitrary <see cref="Shape"/>, so a host built that way still carries one opaque
+    /// record — the <see cref="BooleanFeature"/> limitation, not a component one. Start
+    /// the history with a sketch extrude and the whole thing is data.</para>
+    /// </summary>
+    [Fact]
+    public void AHostWithPlacedHardware_ReopensParametric()
+    {
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(60, 40)) { Height = 8 });
+        history.Add(new ComponentFeature(
+            StandardComponents.CapScrew(4, 16, ScrewSeating.OnFace),
+            [new(-20, 0), new(20, 0)]));
+
+        var scene = new Scene(new MeshQuality { SegmentsPerCircle = 16, CurveSamples = 12 });
+        var plate = new Part("plate", history);
+        scene.Add(plate);
+        var document = new Document(scene);
+
+        string first = document.Save();
+        var loaded = Document.Load(first);
+        Assert.Empty(loaded.Warnings);          // the placement is data now, not an opaque record
+        Assert.Equal(first, loaded.Document.Save());
+
+        var host = loaded.Scene.Tabs[0].Parts[0];
+        Assert.NotNull(host.History);
+        Assert.Contains(host.History!.Features, f => f is ComponentFeature);
+        Assert.Equal(
+            MeshMassProperties.Compute(plate.GetMesh(scene.Options)).Volume,
+            MeshMassProperties.Compute(host.GetMesh(scene.Options)).Volume,
+            9);
+
+        // The boundary, pinned: a ComponentAssembly-built host keeps ONE opaque record,
+        // and it is the base body's lambda rather than anything about the component.
+        var build = new ComponentAssembly("plate", Shape.Box(60, 40, 8));
+        build.Place(
+            StandardComponents.CapScrew(4, 16, ScrewSeating.OnFace),
+            [new(-20, 0)],
+            SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY));
+        var reloaded = FeatureHistory.LoadHistory(build.History.SaveHistory());
+        Assert.Contains("FuncFeature", Assert.Single(reloaded.Warnings), StringComparison.Ordinal);
+        Assert.Single(reloaded.History.Features);   // the ComponentFeature DID come back
+        Assert.IsType<ComponentFeature>(reloaded.History.Features[0]);
+    }
+
     [Fact]
     public void HardwareParts_KeepTheirGeometry_AndSayTheComponentDidNotComeBack()
     {

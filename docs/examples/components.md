@@ -99,6 +99,33 @@ Leave the face argument out and the component seats on the body's top face, re-r
 on every regeneration: change an upstream thickness parameter and the fasteners move
 with the face they sit on, their holes re-cut through the new body.
 
+A placement is also **data**, so a saved [document](documents.md) reopens with its
+fasteners still parametric — the bores come back as the history's, not as a snapshot's:
+
+```csharp run:smart-fastener-roundtrip
+var history = new FeatureHistory();
+history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(60, 40)) { Height = 8 });
+history.Add(new ComponentFeature(
+    StandardComponents.CapScrew(6, 20, ScrewSeating.OnFace, ClearanceFit.Close, hexSocket: true),
+    [new(-15, 0), new(15, 0)]));
+
+var loaded = FeatureHistory.LoadHistory(history.SaveHistory());
+if (!loaded.Complete) throw new Exception(string.Join("; ", loaded.Warnings));
+
+// The component comes back by its ARGUMENTS, not by its designation — which carries the
+// size and the length and says nothing about the fit, the seating or the socket.
+var screw = (SocketHeadCapScrew)((ComponentFeature)loaded.History.Features[1]).Component;
+if (screw.Fit != ClearanceFit.Close || screw.Seating != ScrewSeating.OnFace || !screw.HexSocket)
+    throw new Exception("a designation-keyed reload would have lost these");
+```
+
+The boundary is stated rather than discovered: a `HardwareComponent` of your own is
+refused at *save* time (its inputs are simply not written) and comes back only through
+`LoadHistory`'s `resolveOpaque` hook — and a host built with
+`ComponentAssembly(name, shape)` keeps one opaque record for its base body, because an
+arbitrary `Shape` has no serialized form. Start the history with a sketch extrude and
+the whole thing is data.
+
 ## The full fastener stack
 
 `PlaceThrough` prepares **both** bodies from one call — clearance (and counterbore) in

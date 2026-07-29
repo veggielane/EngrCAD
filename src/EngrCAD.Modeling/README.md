@@ -464,14 +464,25 @@ assembly): the writer's default case throws, and `Document.Save` has no catch ar
 document down rather than degrading one feature. That is not hypothetical — elliptical
 arcs became first-class after this envelope landed, `FromCurves` learned the case, the
 writer did not, and any document holding an elliptical sketch feature could not be saved
-at all. What cannot round-trip, and why:
-`BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
-`VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
-`HardwareComponent` is a code object), and `FromFunc` lambdas — `SaveHistory` still
-writes their type/name/parameters so the file is an honest record, and `LoadHistory`
-skips each with a warning naming it unless the caller's `resolveOpaque` hook supplies
-the instance. User feature classes join with `Register<T>()` (parameterless) or
-`Register(type, factory)` paired with a `SaveInputs` override.
+at all. `ComponentFeature` is data too: its catalogue item travels as a **kind plus the
+factory arguments that built it**, never as its `Designation` — "ISO 4762 M6×20" says
+nothing about the clearance fit, the seating or whether the socket is modelled, and a
+lossy key is how a reload comes back as a plausible *different* screw. So a host prepared
+by placed fasteners reopens parametric, and a `ComponentFeature` holding a component
+outside the built-in catalogue (a user's own `HardwareComponent`) is refused at SAVE time
+— `SaveInputs` returns null — rather than written as something a load rebuilds wrong.
+
+What cannot round-trip, and why: `BooleanFeature` (an arbitrary `Shape` graph has no
+serialized form), `VariableChamferRimFeature` (its setback law is code), a
+`ComponentFeature` over a non-catalogue component, and `FromFunc` lambdas — `SaveHistory`
+still writes their type/name/parameters so the file is an honest record, and
+`LoadHistory` skips each with a warning naming it unless the caller's `resolveOpaque`
+hook supplies the instance. Note where that still bites in practice:
+`ComponentAssembly(name, shape)` seeds its history with a lambda over an arbitrary
+`Shape`, so a host built that way keeps one opaque record — the `BooleanFeature`
+limitation showing through, not a component one. User feature classes join with
+`Register<T>()` (parameterless) or `Register(type, factory)` paired with a `SaveInputs`
+override.
 
 ### Geometry inputs (`GeometryRefs.cs`)
 
