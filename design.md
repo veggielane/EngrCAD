@@ -972,6 +972,57 @@ to plot.
   sphere 3 244 facets / 0 folds / 0.9994 with volume ratios 4.35 / 5.08, and refinement
   measured IDLE on 16 of 19 corpus members' trimmed faces — the "refinement is not a
   convergence mechanism" lesson, now enforced structurally rather than remembered.
+- **"Refinement is not a convergence mechanism" was the right lesson and only half the
+  rule; the other half is that refinement may not make a face WORSE.** Interior rows
+  demoted `Refine` to residue duty, which is where it belonged — but residue duty still
+  let it do damage wherever the base's quality is capped by something refinement cannot
+  see. The measured case is a boundary COARSER than the interior grid: a marching-tracer
+  rim keeps whatever sample count the tracer's arc-length step gave it however fine the
+  grid becomes, so an interior edge from that rim to a dense natural row is oversized by
+  the step metric and gets bisected — and lifting the midpoint onto the surface swings
+  the two halves past it, turning a correct facet into an inverted one. Refusing the
+  split leaves the parent facet, oversized and correct: exactly the fidelity trade
+  `Refine` already documents, now taken deliberately. The test compares each child's
+  facet-vs-surface agreement against `min(parent, 0)` — no constant, and it states both
+  halves at once (an agreeing facet may not become opposing; an already-opposing one may
+  not get worse). **The reason this is worth recording is what it says about diagnosis,
+  not about refinement**: two residuals had been filed against the BASE triangulation —
+  the torus-with-a-bore as "the periodic-band tier pairs its chains by u and falls to the
+  inverting merge walk", the drilled sphere implicitly by being audited only where it
+  looked clean — and driving the same faces with `refine: false` showed the base
+  fold-free at every density tried while refinement inflated the torus's tube halves ×4.1
+  and inverted 53 facets, and gave the drilled sphere 127 folds at 192/96. The merge walk
+  was reached **zero** times. A tier was blamed for a stage that ran after it, and the
+  measurement that settled it was simply turning the later stage off — the same move that
+  settled the ear-clipper's convergence stall, and worth reaching for earlier: **when a
+  pipeline stage is suspected, run the pipeline without it before theorising about it.**
+- **A degeneracy rule stated as "exactly zero" is a rule that does not fire, and the
+  monotone sweep's turn test was one.** The sweep pops at a convex turn and deliberately
+  does NOT treat collinear as a turn, because a ring's samples are collinear in uv and
+  popping there emits the zero-area facets the whole trimmed tier exists to avoid. That
+  intent was right and the test was `cross > 0`, i.e. exact — so on a constant-parameter
+  boundary run, where the true cross is exactly zero, the decision fell to the pullback's
+  own round-off. The consequence is not a harmless degenerate facet, and this is the part
+  worth keeping: **uv-collinear is not 3D-collinear**, so three consecutive samples of a
+  curved rim span a REAL facet whose normal is the rim's binormal rather than the
+  surface's — the same trap the tier order was designed around, arriving through the tier
+  that was supposed to be the cure, and invisible to every sliver guard because the facet
+  is degenerate only in uv. It was found by a fingerprint rather than by a symptom: every
+  fold on a threaded rod's 45° lead-in chamfer measured facet-vs-surface agreement of
+  **exactly −0.7071**, which is −cos 45°, the angle between the cone and the end plane the
+  fan was lying in. The fix is to test the dimensionless SINE of the turn
+  (`|cross| ≤ 1e-9·|b−a|·|c−b|`), and the reason that is not a tuned constant is that
+  dividing by the two edge lengths *separates* the populations instead of shrinking both —
+  the noise is absolute in uv while a genuine turn scales with the chord, so the measured
+  gap is ~4e-12 against ~1.6e-2, ten orders. Radians being dimensionless is why this guard
+  is deliberately absolute where the ladder's default is relative. **The oracle that
+  proves it exact is the facet COUNT, not the fold count**: over 76 scanned chamfer
+  depths, exactly the 10 that folded changed and the other 66 stayed byte-identical, with
+  every changed row keeping its facet count to the unit — so the guard adds and removes no
+  geometry and only stops arithmetic from choosing a diagonal. Same shape as the
+  `PolygonFan` tie guard (408 of 960 UV-sphere quads decided by an ulp) and as
+  `MeshDecimator`'s absolute-epsilon-on-an-area: a predicate is only as meaningful as the
+  scale it is compared against.
   as a visibly crumpled fan and had **zero** strictly-inverted triangles - before *and*
   after. What was wrong was a worst facet-vs-surface dot of 0.0198, an 88.9 degree sliver,
   which any inversion count calls clean. Nor is a count a convergence test: volume excess

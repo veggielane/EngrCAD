@@ -190,14 +190,23 @@ public class TrimmedFaceRefusalTests
     /// of the tube — measured 2916.5 / 2998.7 / 3009.4 / 3014.5 / 3018.4 / 3019.6 / 3020.5 at
     /// 16/32/48/64/96/128/192 segments per circle against 3021.1.</para>
     ///
-    /// <para><b>The residual, pinned so it cannot rot and filed as open work</b>: the bore's rim
-    /// on the tube band is a marching-tracer polyline baked in at boolean time with 15–17
-    /// samples, and each torus face takes HALF of it — split at the face seam rather than at the
-    /// rim's u-extremes, so the half is not u-monotone. The periodic-band tier pairs its chains
-    /// by u, which is exactly the configuration that inverts, and the fold count therefore GROWS
-    /// with density: 2 / 0 / 0 / 1 / 1 / 14 / 53 at the densities above, worst normal agreement
-    /// −0.304 / 0.743 / 0.994 / −0.133 / −0.179 / −0.226 / −0.304. The bound below is a RECORD
-    /// of today's behaviour, not a bar the tessellator should be allowed to sit at.</para>
+    /// <para><b>The folds are gone, and the diagnosis they were filed under was wrong.</b> The
+    /// entry blamed the periodic-band tier pairing its chains by u and falling to the merge walk
+    /// — measured, the merge walk is reached <b>zero</b> times here at any density, and both
+    /// chains are u-monotone, so the band takes the ordinary interior-rows path. Every fold was
+    /// created by <b>refinement</b>: with `refine: false` the BASE triangulation is fold-free at
+    /// 16/32/48/64/96/128/192 alike, while refinement inflated these two faces ×4.1 at 192 and
+    /// turned 53 facets inside out. `Refine` now refuses a split that would flip a facet the
+    /// parent had right, so the count is 0 at every density above.</para>
+    ///
+    /// <para><b>The residual that remains is fidelity, not orientation, and it is filed as open
+    /// work</b>: the bore's rim is a marching-tracer polyline baked in at boolean time with 15–17
+    /// samples however fine the grid around it becomes, so near it the base carries facets the
+    /// rows cannot level and refinement can only decline to split. Worst facet-vs-surface
+    /// agreement at 192/96 is ~0.009 refined against ~0.18 unrefined — no longer inverted, still
+    /// near-perpendicular, and notably WORSE than leaving it alone, which is the sign that the
+    /// real fix is a row path covering the coarse-rim region rather than anything in `Refine`.
+    /// The bounds below are a RECORD of today's behaviour, not a bar to sit at.</para>
     /// </summary>
     [Fact]
     public void TorusCutWithABore_BuildsWithARecordedTessellationResidual()
@@ -226,10 +235,16 @@ public class TrimmedFaceRefusalTests
         Assert.True(expected - previous < 0.001 * expected,
             $"192 segments must be within 0.1% of {expected}, measured {previous}");
 
-        // The residual. Zero at the two densities where the corpus measures the trimmed tiers,
-        // and growing above them — see the remarks.
-        Assert.Equal(0, TessellationQuality.Audit(solid, 48, 24).Folds);
-        Assert.InRange(TessellationQuality.Audit(solid, 192, 96).Folds, 1, 60);
+        // No folds at any density — including the two well above where the corpus measures,
+        // which is where they used to appear and grow.
+        foreach (var (s, c) in (ReadOnlySpan<(int, int)>)[(48, 24), (128, 64), (192, 96)])
+            Assert.Equal(0, TessellationQuality.Audit(solid, s, c).Folds);
+
+        // The fidelity residual, recorded rather than barred: near the coarse traced rim the
+        // facets stay near-perpendicular to the surface, and refinement makes that WORSE than
+        // leaving the base alone. Both numbers are pinned so the finding cannot rot.
+        var refined = TessellationQuality.Audit(solid, 192, 96);
+        Assert.InRange(refined.WorstDot, 0.0, 0.10);
     }
 
     /// <summary>Midpoint rule, enough for a napkin integral used only as a test oracle.</summary>

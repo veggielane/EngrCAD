@@ -287,12 +287,53 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   0 on Box − Sphere). Residuals filed below.
 - [ ] **Trimmed-face residuals after the interior-rows upgrade** (all bounded, none a
   fold-or-refusal class):
-  - `Box(20,20,20) − Sphere(12)` stays out of the corpus: at each hole rim's u-extreme
-    the rim tangent goes vertical, no level path anchors cleanly, and a narrow column a
-    few steps tall remains for refinement — worst agreement 0.7024 at 48/24 against the
-    0.9239 floor (locked with committed baselines in
-    `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`). A per-column cut at the
-    rim's turning vertex is the likely finish.
+  - `Box(20,20,20) − Sphere(12)` stays out of the corpus — **but the reason recorded here
+    was backwards, and the measurement that settles it also rules out the obvious fix.**
+    The entry said a narrow column at each hole rim's u-extreme "remains for refinement",
+    i.e. that refinement was covering for a missing row. Measured with
+    `AuditTrimmedPath(..., refine: false)`, the BASE triangulation is the BETTER mesh at
+    every density from 48/24 up, and it CLEARS the corpus floor at 96/48 where the shipped
+    (refined) result does not:
+
+    | density | floor | refined | base only |
+    |---|---|---|---|
+    | 16/8 | 0.3827 | **0.8832** | 0.8369 |
+    | 48/24 | 0.9239 | 0.7024 | **0.9014** |
+    | 96/48 | 0.9808 | 0.9240 | **0.9814** |
+    | 192/96 | 0.9952 | 0.9727 | **0.9952** |
+
+    So what holds this member below the bar is refinement, not a missing level path — and
+    note the 16/8 row, which is why the fix is not simply "refine less": at the COARSEST
+    density refinement genuinely helps (0.8369 → 0.8832). Refinement helps where the base
+    is coarse and hurts where it is already at grid density.
+
+    **The blunt version was built and measured and is NOT the answer.** Strengthening the
+    landed guard from "a split may not invert a facet" to "a split may not make any facet
+    agree WORSE than its parent" does exactly what this table asks — refinement goes idle
+    on this solid (worst dot equal to the base at every density, triangle counts within
+    0.05% of it) and 96/48 clears the floor — and it breaks two other things: the 16/8 row
+    above regresses below its own committed floor, and
+    `WholeSolidFilletBooleanTests.BandCrossingTool_ConvergesWithTessellationDensity` stalls
+    (steps 9.236e-3 then 8.741e-3, where the test requires them to shrink), because there
+    refinement is doing real convergence work. A rule that cannot tell those two situations
+    apart is not the fix.
+
+    What is left is the original idea stated correctly: a row path that reaches the column
+    at the rim's turning vertex, so the BASE is right there and refinement has nothing to
+    do — plus, plausibly, a density-aware gate so refinement keeps its coarse-mesh duty and
+    drops its fine-mesh interference. Committed baselines live in
+    `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`.
+  - **A sub-depth chamfer cone is an extreme-aspect strip, and its facets are coarse
+    even though they are now fold-free.** Measured over all 76 scanned depths (M6×1 /
+    M8×1.25 / M10×1.5 / M12×1.75, both ends, 64 segments per circle): 0 folds and 0
+    slivers everywhere, worst facet-vs-surface agreement **0.513 … 0.979**, well under the
+    corpus floor `cos(3·2π/64) = 0.957`. The cause is geometry rather than triangulation —
+    at the shallowest step the cone band is 0.034 mm tall around a 25 mm circumference, an
+    aspect near 740 — so the sweep cannot improve it and the fix would be density that
+    follows the band's own ASPECT rather than the circle count (the same shape as
+    `SurfaceIntersection`'s anisotropic second seeding pass, one layer up). Until then a
+    chamfered rod is deliberately NOT a corpus member, and
+    `SubDepthChamfersCarryNoFoldsAtAnyFraction` bars at 0.4 with the reason stated.
   - The hand-built spherical band with meridian cross edges (`TrimmedBandGapTests`,
     test 1) declines rows in BOTH orientations because its boundary coordinates tie
     bit-exactly in both axes (closed-form azimuth, deterministic profile solves), and
@@ -303,21 +344,31 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   - `TriangulateBandWithHoles`/`ZipSlabs` has no interior rows — irrelevant today
     because every reachable band-with-holes lives on a cylinder or extrusion (ruled in
     v, chords exact), but a revolved band with holes would want the same treatment.
-  - **A wrapping band whose boundary carries a coarse INTRUDING bump folds, and worse with
-    density.** Newly reachable: carrier clipping turned `Torus(12,4) − plane − a blind Ø3
-    bore` from a refusal into a `Validate`-clean genus-1 solid whose volume converges
-    monotonically upward on the exact Pappus value (2916.5 / 2998.7 / 3009.4 / 3014.5 /
-    3018.4 / 3019.6 / 3020.5 at 16/32/48/64/96/128/192 against 3021.1) — but the torus's
-    tube is split into two `RevolvedSurface` halves at the generator seam, so each takes HALF
-    the bore rim, split at the seam rather than at the rim's u-extremes, and that half is not
-    u-monotone. The periodic-band tier pairs its chains by u, which is exactly the
-    configuration that inverts (the `ZipBand` lesson), and the rim is a 15–17-sample tracer
-    polyline that does not refine with the grid: folds run 2 / 0 / 0 / 1 / 1 / 14 / 53 and
-    worst agreement −0.304 / 0.743 / 0.994 / −0.133 / −0.179 / −0.226 / −0.304. Pinned as a
-    RECORD (not a bar) by
-    `TrimmedFaceRefusalTests.TorusCutWithABore_BuildsWithARecordedTessellationResidual`. The
-    fix is either splitting such a rim at its u-extremes before it becomes a boundary chain,
-    or routing a band with a non-monotone boundary run to the slab sweep.
+  - ~~**A wrapping band whose boundary carries a coarse INTRUDING bump folds, and worse
+    with density.**~~ ✅ **the folds are fixed, and the recorded diagnosis was wrong.**
+    The entry blamed the periodic-band tier pairing its chains by u and falling to the
+    inverting merge walk. Measured on that exact solid: **the merge walk is reached zero
+    times at any density**, both chains ARE u-monotone, and interior rows engage normally
+    — so the tier named was never involved. Every fold came from **refinement**: driving
+    the same faces with `refine: false` leaves the base fold-free at 16/32/48/64/96/128/192
+    alike, while refinement inflated the two tube halves ×4.1 at 192 segments and inverted
+    53 facets. `Refine` now refuses a split that would turn an agreeing facet into an
+    opposing one, and folds are 0 at every one of those densities (was
+    2 / 0 / 0 / 1 / 1 / 14 / 53). **The same guard cleared a defect nobody had filed**:
+    the drilled sphere, a corpus member audited only to 96/48, carried 127 folds at 192/96
+    (worst −0.9367) on its pole-bounded face and now carries none.
+  - **Refinement still makes a coarse-rim face WORSE, just no longer inside out.** Beside
+    a marching-tracer rim — 15–17 samples baked in at boolean time, whatever the grid
+    density — worst facet-vs-surface agreement at 192/96 is ~0.009 refined against ~0.18
+    unrefined on `Torus(12,4) − plane − Ø3 bore`, and **0.0079 refined against 0.9144
+    unrefined** on the drilled sphere's pole face. That the unrefined base is the better
+    mesh is the finding: the fix is a row path that covers the region beside a coarse
+    boundary so refinement stays idle there (the interior-rows argument, extended to a
+    boundary the rows currently cannot level against), NOT another rule inside `Refine`.
+    Recorded by `TrimmedFaceRefusalTests.TorusCutWithABore_...`, which now pins 0 folds at
+    48/24, 128/64 and 192/96 and bounds the worst dot as a record rather than a bar.
+    A second, independent lever on the same residual is to make the tracer's sample count
+    follow the tessellation density instead of its own arc-length step.
   ~~Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5~~ ✅ **fixed and verified** — see below.
 - ~~**A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by
@@ -405,18 +456,27 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     And `BRepTessellator.SampleEdge` read a `CurveSegment`'s [0, 1] domain as RADIANS,
     giving every split spiral edge the same count at any density.
 
-    **What remains**: a sporadic ~10% of chamfer depths still fails, loudly, in
-    tessellation or the boolean. Scanned at 5% steps of the thread depth on
-    M6×1 / M8×1.25 / M10×1.5 / M12×1.75 (both ends, length 5P − 0.2, 64 segments per
-    circle), the failures are 1 / 3 / 1 / 2 of 19 sub-depth steps each and at unrelated
-    fractions — an ALIGNMENT phenomenon, not a depth threshold, the same shape as the
-    Surface Nets ambiguous-face and torus-pinhole findings. The one traced to a face is a
-    SINGLE inverted facet of 102 in the chamfer cone's strip zip
-    (`TrimmedFaceTessellator.SweepCycle`), on a loop congruent in uv with one that zips
-    cleanly and differing only in which of its two long constant-v chains sits at the
-    maximum KEY — so `SweepCycle`'s extreme tie-break and chain assignment is where to
-    look. A change there is boolean-critical and wants its own pass over the trimmed
-    corpus, which is why it is filed rather than attempted alongside the chamfer.
+    ~~**What remains**: a sporadic ~10% of chamfer depths still fails, loudly…~~
+    ✅ **fixed** — and two things in the old diagnosis were wrong, both worth recording.
+    The failures were **not loud**: re-scanning at `88d6e14`, all 76 depths built,
+    validated and tessellated without an exception, so nothing failed in the boolean at
+    all — what remained was 10 depths (0 / 4 / 3 / 3 per size, not 1 / 3 / 1 / 2) emitting
+    SILENT folds, which is a worse failure than a throw and is why the count-based
+    assertions never saw it. And the tie-break was **innocent**: `SweepCycle` takes the
+    LAST of the tied minimum run and the FIRST of the tied maximum run exactly as
+    documented, and on these loops there are no ties at all — measured, `lo` and `hi` are
+    each a single vertex. The congruence the entry noticed was real but pointed one level
+    down: the two cone faces differ in which chain is DENSE (65 samples against 8), so on
+    one of them `lower[0]` lands at the same v as the whole 65-sample upper run, and every
+    pop test along that run then compares three points that are collinear BY CONSTRUCTION.
+    The defect is `SweepMonotone`'s `TurnsIntoInterior` reading the exact sign of a cross
+    product whose true value is zero: pure round-off, so the sweep popped on ~1e-15 of
+    jitter and fanned the rim flat into the end plane at facet-vs-surface agreement
+    **−0.7071 = −cos 45°** exactly. Fixed by testing the dimensionless SINE of the turn;
+    see the Interop README and design.md for why that constant is not tuned and why the
+    facet COUNT (not the fold count) is the oracle that proves it exact — exactly the 10
+    rows change, the other 66 stay byte-identical, and no changed row gains or loses a
+    facet. Pinned by `ChamferedThreadTests.SubDepthChamfersCarryNoFoldsAtAnyFraction`.
   - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
     needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
     it keeps each carrier in its own family and has no `HelicalSurface` case, and a

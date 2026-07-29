@@ -1908,15 +1908,50 @@ internal static class TrimmedFaceTessellator
     /// <summary>
     /// Whether the diagonal closing (<paramref name="a"/>, <paramref name="b"/>,
     /// <paramref name="c"/>) lies inside the slab: a left turn below the interior (lower
-    /// chain) and a right turn above it (upper chain). Exactly collinear is deliberately
-    /// NOT a turn — a ring's samples are exactly collinear in uv, and popping there would
-    /// emit the zero-area triangles this whole file exists to avoid.
+    /// chain) and a right turn above it (upper chain). Collinear is deliberately NOT a
+    /// turn — a ring's samples are collinear in uv, and popping there would emit the
+    /// zero-area triangles this whole file exists to avoid.
+    /// <para><b>Collinear has to mean "straight to within round-off", not "bit-exactly
+    /// straight".</b> The cross product is <c>|b−a|·|c−b|·sin(turn)</c>, so on a
+    /// constant-parameter boundary run — where the true turn is exactly zero — what is
+    /// left is the pullback's own noise, and reading its SIGN emits a facet decided by
+    /// arithmetic. In uv that facet is degenerate and harmless; in MODEL space it is
+    /// nothing of the sort, because uv-collinear is not 3D-collinear (the standing trap
+    /// this file exists to avoid): three consecutive samples of a curved rim span a real
+    /// facet whose normal is the rim's binormal rather than the surface's. Measured on a
+    /// threaded rod's 45-degree lead-in chamfer, whose cone face carries a 65-sample rim
+    /// at constant v — the pop fired on ~1e-15 of jitter and emitted a fan lying flat in
+    /// the end plane, at facet-vs-surface agreement <b>−0.7071 = −cos(45°)</b> exactly,
+    /// the angle between the end plane and the cone. It fired for 10 of 76 scanned
+    /// chamfer depths and not the rest, which is what an arithmetic tie-break looks like.
+    /// <para>The test is therefore the dimensionless SINE of the turn, not the raw cross:
+    /// dividing by the two edge lengths is what separates the two populations rather than
+    /// merely shrinking both, since the noise is absolute in uv while a genuine turn
+    /// scales with the chord. Measured separation on the chamfer cone: ~4e-12 for a
+    /// jitter turn against ~1.6e-2 for a real one at 64 segments/circle (~4e-3 at 256) —
+    /// ten orders, so the threshold is not a tuned constant. Radians are dimensionless,
+    /// which is why this one is deliberately ABSOLUTE (the epsilon ladder's stated
+    /// exception for angular guards) rather than relative to the region's extent: the
+    /// comparison that matters is local to the triple.</para>
+    /// <para>Declining to pop is always SAFE: the vertices simply stay on the stack and
+    /// are fanned later from the opposite chain, which is the correct band triangulation
+    /// and already the path an exactly-collinear run takes.</para></para>
     /// </summary>
     private static bool TurnsIntoInterior(List<Vector2d> uv, int a, int b, int c, bool lower)
     {
+        // The cross keeps its original (b−a)x(c−a) spelling: it is algebraically the same
+        // as (b−a)x(c−b) and NOT bit-identical to it, so re-associating it here would
+        // move geometry wherever the guard does not fire.
         double cross = (uv[b] - uv[a]).Cross(uv[c] - uv[a]);
+        // |cross| = |ab|*|bc|*|sin(turn)|; a turn under a nanoradian is not a turn.
+        if (Math.Abs(cross) <= TurnSine * (uv[b] - uv[a]).Length * (uv[c] - uv[b]).Length)
+            return false;
         return lower ? cross > 0 : cross < 0;
     }
+
+    /// <summary>The smallest turn the monotone sweep will act on, as a sine. Dimensionless
+    /// (radians), so deliberately absolute — see <see cref="TurnsIntoInterior"/>.</summary>
+    private const double TurnSine = 1e-9;
 
     /// <summary>
     /// Appends a triangle wound CCW in uv, taking the winding from its own signed area.
@@ -2413,6 +2448,60 @@ internal static class TrimmedFaceTessellator
                     break;
                 }
             }
+
+            // Whether splitting this edge turns any owner's agreeing facet into an
+            // opposing one. Agreement is measured against the surface normal at the
+            // facet's own uv centroid — legal here, and only here, because we are IN
+            // parameter space: the audit's rule against centroids is about a 3D centroid
+            // sitting a sagitta off the surface so inverse evaluation fails, which cannot
+            // arise when the uv is already known.
+            double Agreement(in Vector2d ua, in Vector2d ub, in Vector2d uc,
+                in Vector3d pa, in Vector3d pb, in Vector3d pc)
+            {
+                var n = (pb - pa).Cross(pc - pa);
+                double length = n.Length;
+                if (length <= 0)
+                    return -1;
+                var centre = new Vector2d((ua.X + ub.X + uc.X) / 3, (ua.Y + ub.Y + uc.Y) / 3);
+                return n.Dot(NormalAt(surface, period, centre).Normalized()) / length;
+            }
+
+            bool WouldFold()
+            {
+                foreach (int t in owners)
+                {
+                    var (a, b, c) = Rotate(triangles[t], key);
+                    if (a < 0 || c == midIndex)
+                        continue; // already rewritten, or the sliver simply vanishes
+                    double parent = Agreement(uv[a], uv[b], uv[c], points[a], points[b], points[c]);
+                    double left = Agreement(uv[a], mid, uv[c], points[a], midPoint, points[c]);
+                    double right = Agreement(mid, uv[b], uv[c], midPoint, points[b], points[c]);
+                    if (Math.Min(left, right) < Math.Min(parent, 0))
+                        return true;
+                }
+                return false;
+            }
+
+            // A split may never make a face WORSE than the base it was handed. Refinement
+            // exists to carry curvature between honest samples; where a boundary is
+            // coarser than the interior grid — a traced rim keeps the sample count the
+            // TRACER's arc-length step gave it, however fine the grid around it becomes —
+            // bisecting an interior edge that runs from that coarse boundary to a dense
+            // row lifts the midpoint onto the surface and swings the two halves past it,
+            // so a facet that agreed with the surface is replaced by one that opposes it.
+            // Measured on `Torus(12,4) − plane − Ø3 bore` and on the drilled sphere: the
+            // BASE triangulation is fold-free at every density tried, and every fold at
+            // 128 and 192 segments was created here. Refusing the split leaves the parent
+            // facet — already oversized, already correct — which is the fidelity trade
+            // this method's remarks already permit, taken deliberately rather than by
+            // accident. The comparison is against `min(parent, 0)` rather than against 0,
+            // which needs no constant and says both halves of the rule at once: a facet
+            // that agrees may not be split into one that opposes, and a facet that already
+            // opposes may not be split into one that opposes MORE. A degenerate child
+            // scores −1 and is refused with them.
+            if (WouldFold())
+                continue;
+
             if (midIndex < 0)
             {
                 midIndex = uv.Count;
@@ -2470,13 +2559,28 @@ internal static class TrimmedFaceTessellator
     /// <summary>Evaluates the surface at an unwrapped uv (periodic u brought back into the domain).</summary>
     private static Vector3d EvaluateAt(Surface surface, double period, in Vector2d uv)
     {
+        var (u, v) = InDomain(surface, period, uv);
+        return surface.PointAt(u, v);
+    }
+
+    /// <summary>The surface normal at an unwrapped uv, wrapped exactly as
+    /// <see cref="EvaluateAt"/> wraps it so the two cannot disagree about which point of
+    /// the surface is meant.</summary>
+    private static Vector3d NormalAt(Surface surface, double period, in Vector2d uv)
+    {
+        var (u, v) = InDomain(surface, period, uv);
+        return surface.NormalAt(u, v);
+    }
+
+    private static (double U, double V) InDomain(Surface surface, double period, in Vector2d uv)
+    {
         double u = uv.X;
         var domainU = surface.DomainU;
         if (period > 0)
             u = domainU.Start + (((u - domainU.Start) % period) + period) % period;
         else
             u = domainU.Clamp(u);
-        return surface.PointAt(u, surface.DomainV.Clamp(uv.Y));
+        return (u, surface.DomainV.Clamp(uv.Y));
     }
 
     private static (int, int) EdgeKey(int a, int b) => a < b ? (a, b) : (b, a);

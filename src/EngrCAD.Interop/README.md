@@ -202,6 +202,47 @@ logging complements them, never replaces them.
        - a **band whose chains meet at a point** (a cross edge of no steps) is just a
          monotone polygon with a single extreme vertex, where the sweep starts anyway.
 
+       **"Collinear is not a turn" has to mean straight to within ROUND-OFF, not
+       bit-exactly straight** — and the gap between those two readings was a real defect.
+       The pop test is the sign of `(b−a)×(c−a)`, which on a constant-parameter boundary
+       run is `|b−a|·|c−b|·sin(0)`, i.e. nothing but the pullback's own noise; an exact
+       `> 0` therefore emits a facet chosen by arithmetic. In uv that facet is degenerate
+       and harmless, and in MODEL space it is nothing of the sort, because **uv-collinear
+       is not 3D-collinear** — three consecutive samples of a curved rim span a real facet
+       whose normal is the rim's binormal, the standing trap this whole file exists to
+       avoid, arriving through the tier that was supposed to be the cure. Measured on a
+       threaded rod's 45° lead-in chamfer, whose cone face carries a 65-sample rim at
+       constant v: the pop fired on ~1e-15 of jitter and fanned that rim flat into the end
+       plane at facet-vs-surface agreement **−0.7071 = −cos 45°** exactly — the angle
+       between the end plane and the cone, which is what makes the number a fingerprint
+       rather than a symptom. `TurnsIntoInterior` now tests the dimensionless **sine** of
+       the turn (`|cross| ≤ 1e-9·|b−a|·|c−b|` is not a turn). Dividing by the two edge
+       lengths is what separates the populations rather than shrinking both, since the
+       noise is absolute in uv while a genuine turn scales with the chord: ~4e-12 for a
+       jitter turn against ~1.6e-2 for a real one at 64 segments/circle (~4e-3 at 256),
+       ten orders apart, so the constant is not tuned. Radians are dimensionless, which is
+       why this guard is deliberately absolute — the epsilon ladder's stated exception for
+       angular guards — rather than relative to the region's extent; the comparison that
+       matters is local to the triple. Declining to pop is always safe: the vertices stay
+       on the stack and are fanned later from the opposite chain, which is both the
+       correct band triangulation and already the path an exactly-collinear run took.
+       **The evidence that it is exactly right is the triangle COUNT.** Scanning 5% steps
+       of the thread depth on M6×1 / M8×1.25 / M10×1.5 / M12×1.75, both ends chamfered:
+       10 of 76 depths folded — 0/4/3/3 per size, at unrelated fractions, an alignment
+       phenomenon rather than a threshold — and after the guard **exactly those 10 rows
+       change and the other 66 are byte-identical**, with every changed row keeping its
+       facet count to the unit (16 526 → 16 526, …). The guard adds and removes no
+       geometry; it only stops round-off from choosing the diagonal. Folds went N → 0 and
+       worst agreement −0.7071 → 0.513…0.730, landing inside the 0.562…0.979 band the
+       never-folding depths already occupied — one population, so no quality was traded
+       for the fix. (That band is coarse because a sub-depth chamfer cone is an
+       extreme-aspect strip — 0.034 mm tall around a 25 mm circumference at the shallowest
+       step — which is a separate residual, filed, and NOT something the sweep can fix.)
+       Pinned by `ChamferedThreadTests.SubDepthChamfersCarryNoFoldsAtAnyFraction` over all
+       ten, which also asserts the fixture still CARRIES the configuration (each cone
+       still presenting ≥ 32 rim vertices at one radius in an end plane), so it cannot
+       quietly stop testing the trap.
+
        Neither shape is reachable from the `Shape` API yet — the constructions that would
        make one (a spherical band between two meridian cuts, a cone fragment through the
        apex) are refused earlier by the exact B-Rep boolean, and a sweep of eighteen
@@ -335,6 +376,60 @@ logging complements them, never replaces them.
     grid that defines the quality bar — and **pole-fan edges are refinement-exempt**,
     because the pole's u is arbitrary so a fan edge's uv u-span is an artifact
     (refining a *flat* vase disk's fan bent it into 467 folds at worst −1.0).
+
+    **A third rule joined them, and it is the one that says what refinement may NOT do:
+    a split may never turn a facet that AGREED with the surface into one that opposes
+    it.** The demotion above left refinement with residue duty, and residue duty still
+    let it do damage wherever the base's own quality is capped by something refinement
+    cannot see. The measured case is a boundary COARSER than the interior grid: a
+    marching-tracer rim keeps whatever sample count the tracer's arc-length step gave it,
+    however fine the grid around it becomes, so an interior edge running from that rim to
+    a dense natural row is oversized by the metric and gets bisected — and lifting the
+    midpoint onto the surface swings the two halves past it, replacing a correct facet
+    with an inverted one. Refusing the split leaves the parent facet, which is oversized
+    and correct: the fidelity trade `Refine` already documents, taken deliberately.
+    The test compares each child's facet-vs-surface agreement against `min(parent, 0)`,
+    which needs no constant and states both halves at once (an agreeing facet may not
+    become an opposing one; an already-opposing facet may not become worse), with a
+    degenerate child scoring −1 and refused alongside. Agreement is read at the facet's
+    own **uv** centroid — legal here and only here, because the standing rule against
+    centroids is about a 3D centroid sitting a sagitta off the surface so inverse
+    evaluation fails, which cannot arise when the uv is already known.
+
+    **This retired two filed residuals whose recorded diagnosis was wrong.**
+    `Torus(12,4) − plane − Ø3 bore` was filed as the periodic-band tier pairing its
+    chains by u and falling to the inverting merge walk; measured, **the merge walk is
+    reached zero times** on that solid at any density, both chains are u-monotone, and
+    interior rows engage normally. Driving the same faces with `refine: false` shows the
+    BASE triangulation fold-free at 16/32/48/64/96/128/192 alike, while refinement
+    inflated the two tube halves **×4.1** at 192 segments and inverted 53 facets. Folds
+    now run **0 at every one of those densities** (was 2 / 0 / 0 / 1 / 1 / 14 / 53). The
+    same guard cleared the drilled sphere — a corpus member, audited only up to 96/48 —
+    which carried **127 folds at 192/96 (worst −0.9367)** on its pole-bounded face and
+    now carries none. Both had been read as base-triangulation defects; neither was.
+
+    What remains on those two is fidelity rather than orientation, and it is filed:
+    beside a coarse traced rim the facets stay near-perpendicular, worst agreement ~0.009
+    refined against ~0.18 unrefined on the torus and 0.0079 against **0.9144** on the
+    drilled sphere's pole face — i.e. refinement still makes those faces WORSE, just no
+    longer inside out. That the unrefined base is the better mesh is the sign the real
+    fix is a row path covering the coarse-rim region, not another rule in `Refine`.
+
+    **And the blunt version of that rule was built, measured and rejected, which is what
+    makes the boundary here a decision rather than an omission.** Strengthening the guard
+    from "may not invert a facet" to "may not make any facet agree WORSE than its parent"
+    does exactly what the fidelity numbers ask: on `Box(20,20,20) − Sphere(12)` — the
+    corpus's hardest shape, whose residual was likewise filed as a missing level path —
+    refinement goes idle, the worst dot matches the base at every density, and 96/48
+    CLEARS the corpus floor (0.9814 against 0.9808) where the shipped result sits at
+    0.9240. It also breaks two things. At the COARSEST density refinement genuinely helps
+    (16/8 measures 0.8369 base against 0.8832 refined), so the strong rule regresses that
+    row below its own committed floor; and
+    `WholeSolidFilletBooleanTests.BandCrossingTool_ConvergesWithTessellationDensity`
+    stalls, its volume steps going 9.236e-3 then 8.741e-3 where the test requires them to
+    shrink. **Refinement helps where the base is coarse and hurts where the base is
+    already at grid density**, and a rule that cannot tell those apart is not the fix —
+    so the guard stays at the inversion test, which is the part that is unambiguous.
   - **Progress + cancellation** (`ProgressCancel? progress = null`, free when absent) is
     polled at **edge and face boundaries** — the coarse checkpoints, since one trimmed face
     is an indivisible ear-clipping job — and cancellation throws rather than returning a
