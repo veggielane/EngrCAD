@@ -464,7 +464,12 @@ The v1 landed (`Animation`/tracks/`AnimationPlayback` in Viewer.Core, APNG + GIF
 frame-sequence export in Viewer, the SceneHost transport, DocsGen `animate:` fences +
 `docs/examples/animation.md`) — the load-bearing rule held: an animation moves poses
 and the camera only, `Animation.At(t)` is pure, and one evaluation path serves
-scrubbing, playback, export and docs. What remains:
+scrubbing, playback, export and docs. **Batched export + stills landed** since:
+`OffscreenRenderer.RenderSequence` holds ONE EGL context, one set of programs and one
+set of uploaded buffers for a whole clip (24 frames at 480x360, win-x64: **1069 ms ->
+165 ms, 6.5x**, with the batched pixels asserted byte-identical to one `Render` per
+frame), and `EngrCad.RenderToImage(scene, animation, t, ...)` + the MCP `screenshot`
+`t` parameter both pose through the one `EngrCad.PoseAt` seam. What remains:
 
 - [ ] **Web viewport transport** — the whole machine (`Animation`, `AnimationPlayback`)
   is UI-free in `Viewer.Core` precisely so the Blazor viewport can reuse it: a
@@ -479,16 +484,6 @@ scrubbing, playback, export and docs. What remains:
 - [ ] **Explode motion along the explode PATH** — `ExplodeTrack` lerps straight along
   `ExplodeOffset`; assembly instructions sometimes want dogleg paths (out, then over).
   Ties into the explode-path renderer item under Assemblies follow-ups.
-- [ ] **Reuse one EGL context across an animation's frames** — `OffscreenRenderer.Render`
-  creates and destroys a context per call, so a 36-frame export pays 36 context
-  creations plus 36 mesh uploads. A batch render entry holding one context and one set
-  of uploaded buffers (poses change per frame, buffers do not — the SetInstancePoses
-  insight applied offscreen) should make exports several times faster.
-- [ ] **`EngrCad.RenderToImage(scene, animation, t, ...)` sugar + an MCP `screenshot`
-  `t` parameter** — a single evaluated frame as a still, so an AI assistant can ask for
-  "the mechanism at t = 0.3". Both are thin: evaluate `At(t)`, pass the sample's
-  instances/camera to the existing render; the MCP side wants a schema addition and a
-  session test.
 - [ ] **WebP animation** needs a VP8/VP8L encoder — not something to hand-roll; it
   means taking a dependency (libwebp or a managed port). Worth it only if the payload
   difference matters for the docs site (the committed APNGs are the size pressure to
@@ -1330,6 +1325,11 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   carries the path today); worth it if assistants use the tool blind.
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
+- [ ] **`screenshot`'s `t` covers the animation; the RPC bridge's `viewer_screenshot`
+  does not** — a running window has its own playback position, so "capture what is on
+  screen at t" would mean driving the transport over RPC (a `set_animation_time` verb)
+  rather than re-evaluating headlessly. Small, but it needs the windowed manual pass
+  above to be worth anything.
 - [ ] **Persisting session edits**: `set_param` edits die with the session by design
   (source is the truth). A `save_document` tool writing `Document.Save` JSON next to the
   model would let an assistant hand its tuning back to the user as one file — the whole

@@ -72,7 +72,7 @@ instead:
 | `list_tabs` | What tabs exist, and how much is in each. |
 | `list_parts` | Every part: name, tab, geometry kind (Shape / B-Rep / mesh / SDF), how many times it is placed and where, colour, display mode, whether it has an exact B-Rep route. |
 | `describe_part` | Faces, vertices, closed, volume, surface area, local and world bounding boxes, placement, annotations — and the **construction tree**, the ordered record of how the part was built (booleans, drills, fillets, sketches; or the parametric feature list with its `[Param]` values). |
-| `screenshot` | A rendered PNG. Standard views (`iso`, `front`, `back`, `left`, `right`, `top`, `bottom`), display styles (`shaded-edges`, `shaded`, `wireframe`, `points`), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open to show bores and wall thickness, image size, and an optional `tab`/`part` filter. |
+| `screenshot` | A rendered PNG. Standard views (`iso`, `front`, `back`, `left`, `right`, `top`, `bottom`), display styles (`shaded-edges`, `shaded`, `wireframe`, `points`), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open to show bores and wall thickness, image size, an optional `tab`/`part` filter, and `t` — a position on the program's [animation](animation.md) timeline, so an assistant can ask for the mechanism at half stroke. |
 | `export` | Writes `.step` (exact B-Rep, one file per part), `.stl` or `.obj` (meshes merged with instance transforms), or `.png`. |
 | `reload` | Re-runs the scene factory after the model's source changed — the headless equivalent of hot reload. A model that throws leaves the previous scene in place and reports the error. |
 

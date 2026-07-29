@@ -113,7 +113,7 @@ public static class EngrCadMcp
         try
         {
             // The scene is built here — after the redirection — so its own printing is safe.
-            session = new SceneSession(sceneFactory, options.Quality);
+            session = new SceneSession(sceneFactory, options.Quality, options.Animation);
         }
         catch (Exception e)
         {

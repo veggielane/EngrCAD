@@ -116,20 +116,23 @@ public static class AnimationExport
             fixedCamera = CameraMath.DefaultCamera(bounds);
         }
 
-        var pixels = new List<byte[]>(frames);
+        // Evaluate the whole timeline FIRST, then render it in one batch: an animation
+        // moves poses only, so every frame draws the same parts and
+        // OffscreenRenderer.RenderSequence can hold one EGL context, one set of linked
+        // programs and one set of uploaded buffers for all of them.
+        var timeline = new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera)>(frames);
         CameraState used = fixedCamera ?? CameraMath.DefaultCamera(Aabb.Empty);
         for (int i = 0; i < frames; i++)
         {
             double t = loop ? i / (double)frames : i / (double)(frames - 1);
             var sample = animation.At(t);
-            var instances = sample.Instances ?? defaults;
             used = sample.Camera ?? fixedCamera
                 ?? throw new InvalidOperationException(
                     "No camera: the animation has no camera track and none was supplied.");
-            pixels.Add(OffscreenRenderer.Render(
-                instances, width, height, used, furniture: true, style,
-                ambientOcclusion: ambientOcclusion));
+            timeline.Add((sample.Instances ?? defaults, used));
         }
+        var pixels = OffscreenRenderer.RenderSequence(
+            timeline, width, height, furniture: true, style, ambientOcclusion: ambientOcclusion);
         return (pixels, used);
     }
 }

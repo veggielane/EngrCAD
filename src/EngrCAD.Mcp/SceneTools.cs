@@ -222,6 +222,10 @@ public sealed class SceneTools(SceneSession session)
     /// <param name="width">Image width in pixels (default 1280).</param>
     /// <param name="height">Image height in pixels (default 800).</param>
     /// <param name="ambientOcclusion">Baked ambient occlusion (default on).</param>
+    /// <param name="t">Timeline position in [0, 1] of the program's animation — "the
+    /// mechanism at t = 0.3". Requires the model to declare one
+    /// (<c>EngrCad.Configure().WithAnimation(...)</c>); the frame comes from the same
+    /// pure <c>Animation.At(t)</c> the window scrubs and every export samples.</param>
     public CallToolResult Screenshot(
         [Description("Standard view: iso (default), front, back, left, right, top, bottom.")]
         string? view = null,
@@ -254,7 +258,10 @@ public sealed class SceneTools(SceneSession session)
         [Description("Image width in pixels, 16-4096 (default 1280).")] int width = 1280,
         [Description("Image height in pixels, 16-4096 (default 800).")] int height = 800,
         [Description("Baked ambient occlusion — depth shading in pockets and bores (default true).")]
-        bool ambientOcclusion = true)
+        bool ambientOcclusion = true,
+        [Description("Animation timeline position in [0, 1] — renders the model posed at that instant. "
+                   + "Only for models that declare an animation (WithAnimation).")]
+        double? t = null)
     {
         // Arguments are validated before the GL check so a typo is reported as a typo
         // even on a machine with no GPU (and so the validation is testable there).
@@ -280,6 +287,14 @@ public sealed class SceneTools(SceneSession session)
             return Error(planesError);
         if (planes is not null && offset is not null)
             return Error("Pass either sectionPlanes or sectionAxis/sectionOffset, not both.");
+        if (t is { } time && (!double.IsFinite(time) || time is < 0 or > 1))
+            return Error("t must be a timeline fraction between 0 and 1.");
+        var animation = t is null ? null : Session.Animation;
+        if (t is not null && animation is null)
+            return Error(
+                "This model declares no animation, so there is no timeline to sample. "
+                + "A program adds one with EngrCad.Configure().WithAnimation(scene => ...); "
+                + "omit t to render the model as built.");
         if (!TryResolveInstances(tab, part, out var instances, out string? scopeError))
             return Error(scopeError);
         // Debug modifiers: Hidden parts (and non-isolated parts under an active
@@ -287,6 +302,19 @@ public sealed class SceneTools(SceneSession session)
         instances = DebugFilter.Shown(instances);
         if (instances.Count == 0)
             return Error("Nothing to render: the scene (or the requested tab/part) has no parts.");
+
+        // The animation poses the WHOLE document (a pose track produces the scene's
+        // instance list), so a tab/part scope is applied afterwards by part reference —
+        // the same identity Scene.AllParts dedupes by.
+        if (animation is not null)
+        {
+            var scoped = instances.Select(i => i.Part).ToHashSet();
+            instances = [.. EngrCad.PoseAt(Session.Scene, animation, t!.Value)
+                .Where(i => scoped.Contains(i.Part))];
+            if (instances.Count == 0)
+                return Error($"Nothing to render at t = {t:g6}: the animation posed no instance of "
+                           + "the requested tab/part.");
+        }
 
         if (!EngrCad.CanRenderToImage)
             return Error(
@@ -298,9 +326,13 @@ public sealed class SceneTools(SceneSession session)
         try
         {
             PrepareGeometry(tab, part, instances);
+            // An animation's own camera track wins unless the caller asked for a
+            // specific pose — the same precedence the window and the exports use.
             camera = explicitCamera
                 ? ExplicitCamera(cameraYaw, cameraPitch, cameraDistance, cameraTarget, cameraEye, instances)
-                : NamedViews.For(view ?? "iso", instances, Session.Quality);
+                : view is null && animation?.At(t!.Value).Camera is { } tracked
+                    ? tracked
+                    : NamedViews.For(view ?? "iso", instances, Session.Quality);
         }
         catch (ArgumentException e)
         {

@@ -631,6 +631,46 @@ nearest-palette search exists to disagree with the split, and an image with ≤2
 distinct colours reproduces exactly. The LZW encoder is locked by a round-trip against
 an independently written decoder, including the 4096-entry table reset.
 
+### One context for the whole clip
+
+Every format above goes through `OffscreenRenderer.RenderSequence(frames, …)`, which
+holds **one** EGL context, **one** set of linked programs and **one** set of uploaded
+per-part buffers for the entire clip; only the per-instance matrices and the camera
+change between frames. That is the offscreen restatement of the insight that lets the
+window animate through `SetInstancePoses` without touching a GPU buffer, and it is
+sound for exactly the reason the animation contract states: **an animation moves poses,
+never geometry**, so every frame draws the same parts and the cache keys on `Part`
+reference. Measured on a 24-frame 480×360 export of a four-occurrence exploding
+assembly (win-x64): **1069 ms → 165 ms, 6.5×** (6.68× on a second sitting). The saving
+is not only the context — the per-part `RenderMesh.CreateFlat`, occlusion lookup,
+feature-edge and wireframe extraction behind each upload used to be repeated per frame
+too.
+
+The claim is pinned by an oracle rather than by a stopwatch alone:
+`AnimationStillTests.BatchedSequenceIsByteIdenticalToOneRenderPerFrame` asserts the
+batched pixels equal one `Render` call per frame **byte for byte** — a speed claim
+about a render path means nothing without it. (Overlay layers still build their small
+line buffers per frame, so a clip accumulates a few of those inside its one context;
+they die with it, as everything offscreen does.)
+
+### A single instant as a still
+
+```csharp
+EngrCad.RenderToImage(scene, animation, t: 0.3, "at-0.3.png");
+```
+
+renders one evaluated instant — "the mechanism at t = 0.3". It is the same pure
+`Animation.At(t)` the window scrubs and the export samples, so a still, a scrubbed
+viewport and frame ⌊t·N⌋ of the APNG agree by construction (asserted). The camera
+follows the same precedence as the exports: the animation's own camera track wins,
+then an explicit `camera:`, then the auto-framing over the union of the first and last
+frames' bounds — *not* per-t framing, or a sequence of stills would jump.
+
+The posing itself is `EngrCad.PoseAt(scene, animation, t)`, public because the MCP
+server's `screenshot` `t` parameter goes through it too: one seam, so no consumer can
+have its own idea of what an instant looks like. It evaluates no geometry (posing is
+matrices) and applies the debug modifiers, like every other render entry point.
+
 ## Bill of materials
 
 The **BOM** toolbar button shows the current tab's parts list — quantities per distinct

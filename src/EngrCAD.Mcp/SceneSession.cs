@@ -18,8 +18,11 @@ public sealed class SceneSession
 {
     private readonly Func<Scene> _factory;
     private readonly MeshQuality? _fallbackQuality;
+    private readonly Func<Scene, Viewer.Animation?>? _animationFactory;
     private readonly Lock _gate = new();
     private Scene _scene;
+    private Viewer.Animation? _animation;
+    private bool _animationBuilt;
     private int _generation;
 
     /// <summary>Wraps a scene factory (the same delegate <c>EngrCad.Run</c> takes).
@@ -27,21 +30,50 @@ public sealed class SceneSession
     /// <param name="factory">Builds the scene; re-invoked by <see cref="Reload"/>.</param>
     /// <param name="fallbackQuality">Host-level mesh quality used only when the scene
     /// did not choose its own (<see cref="Scene.ResolveQuality"/>).</param>
-    public SceneSession(Func<Scene> factory, MeshQuality? fallbackQuality = null)
+    /// <param name="animationFactory">The host's <c>EngrCadOptions.Animation</c>, if any
+    /// — what the <c>screenshot</c> tool's <c>t</c> parameter evaluates. Built lazily
+    /// (track construction may mesh for bounds) and rebuilt after a reload.</param>
+    public SceneSession(Func<Scene> factory, MeshQuality? fallbackQuality = null,
+        Func<Scene, Viewer.Animation?>? animationFactory = null)
     {
         _factory = factory ?? throw new ArgumentNullException(nameof(factory));
         _fallbackQuality = fallbackQuality;
+        _animationFactory = animationFactory;
         _scene = factory();
     }
 
     /// <summary>Wraps an already-built scene; <see cref="Reload"/> then rebuilds
     /// nothing and says so (useful for tests and static documents).</summary>
-    public SceneSession(Scene scene, MeshQuality? fallbackQuality = null)
+    public SceneSession(Scene scene, MeshQuality? fallbackQuality = null,
+        Func<Scene, Viewer.Animation?>? animationFactory = null)
     {
         ArgumentNullException.ThrowIfNull(scene);
         _scene = scene;
         _factory = () => scene;
         _fallbackQuality = fallbackQuality;
+        _animationFactory = animationFactory;
+    }
+
+    /// <summary>
+    /// The host's animation over the current scene, or null when the program declared
+    /// none (<c>EngrCad.Configure().WithAnimation(...)</c>). Built on first ask rather
+    /// than at startup — the laziness rule this whole session follows, since track
+    /// construction can mesh for bounds — and discarded by <see cref="Reload"/> so the
+    /// timeline follows the model.
+    /// </summary>
+    public Viewer.Animation? Animation
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_animationBuilt)
+                    return _animation;
+                _animationBuilt = true;
+                _animation = _animationFactory?.Invoke(_scene);
+                return _animation;
+            }
+        }
     }
 
     /// <summary>The current scene. Replaced wholesale by <see cref="Reload"/>, so a
@@ -84,6 +116,8 @@ public sealed class SceneSession
         lock (_gate)
         {
             _scene = rebuilt;
+            _animation = null;          // the timeline belongs to the scene it was built over
+            _animationBuilt = false;
             _generation++;
             return rebuilt;
         }
