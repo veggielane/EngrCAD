@@ -1616,8 +1616,13 @@ internal sealed class SceneHost
     /// <see cref="RegenerateAndRefresh"/> pattern with the undo stack in front of it. A
     /// refused edit changed nothing (that is <see cref="DocumentEdit"/>'s contract), so
     /// the only thing to do about it is say so in the status bar.
+    /// <para><paramref name="republish"/> is false for an edit that cannot move geometry
+    /// — a material, say — where re-running the tab's mesh loader would be wasted work AND
+    /// would clear the selection out from under the control that was just used. Undo and
+    /// redo still republish, deliberately: the stack does not know what it is taking back,
+    /// and a republish is always correct where skipping one is not.</para>
     /// </summary>
-    private void RunEdit(string description, Action action)
+    private void RunEdit(string description, Action action, bool republish = true)
     {
         if (_editInFlight)
         {
@@ -1645,11 +1650,18 @@ internal sealed class SceneHost
                 RefreshUndoButtons();
                 if (!ReferenceEquals(_scene, scene))
                     return;   // a live reload replaced the document while we edited
-                // Old tree nodes (and their preview cache entries) are stale now.
-                _previewCache.Clear();
-                Viewport.SetConstructionPreview(null);
-                _previewKey = null;
-                ShowTab(_currentTab, keepCamera: true);
+                if (republish)
+                {
+                    // Old tree nodes (and their preview cache entries) are stale now.
+                    _previewCache.Clear();
+                    Viewport.SetConstructionPreview(null);
+                    _previewKey = null;
+                    ShowTab(_currentTab, keepCamera: true);
+                }
+                else
+                {
+                    ShowProperties(Viewport.Selected);
+                }
                 _statusText.Text = message;
             });
         });
@@ -2083,6 +2095,10 @@ internal sealed class SceneHost
             _ => part.Geometry.GetType().Name,
         });
         AddProperty("Display", part.DisplayMode.ToString().ToLowerInvariant());
+        // A document property, so it sits ABOVE the HasMesh gate below: saying what a part
+        // is made of must not wait for it to tessellate. Its consequence - the Mass row -
+        // is a measurement and stays below.
+        AddMaterialEditor(part);
 
         // Simulation results: the min/max probe readout. Everything here is resolved
         // WITHOUT meshing (Part.TryResolveFieldDisplay does not), so it is legal above
@@ -2120,9 +2136,8 @@ internal sealed class SceneHost
         AddProperty("Closed", mesh.IsClosed ? "yes" : "no");
         AddProperty("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)");
         AddProperty("Area", mesh.SurfaceArea().ToString("G6"));
-        if (part.Material is { } material)
+        if (part.Material is not null)
         {
-            AddProperty("Material", material.Name);
             // The display mesh's mass, so this row can never lower a B-Rep on the UI thread
             // and always agrees with the Volume row above it (PartMassProperties owns the rule).
             AddProperty("Mass", part.DisplayMassGrams() is { } grams ? $"{grams:G4} g" : "— (open)");
@@ -2131,6 +2146,65 @@ internal sealed class SceneHost
         AddProperty("Size", $"{size.X:G4} × {size.Y:G4} × {size.Z:G4}");
         var position = instance.World.TransformPoint(Vector3d.Zero);
         AddProperty("Position", $"{position.X:G4}, {position.Y:G4}, {position.Z:G4}");
+    }
+
+    /// <summary>
+    /// The material editor: a dropdown over <see cref="Materials.All"/> plus "(none)",
+    /// following the typed-<c>[Param]</c>-editor precedent exactly — an enum-shaped
+    /// choice gets a choice control, and it writes through the one seam
+    /// (<see cref="DocumentEdits.SetMaterial"/>) that saving, MCP and the undo stack
+    /// already share, so it is one undo step and never a second way to apply a value.
+    ///
+    /// <para><b>A material the catalogue does not carry is listed too</b> — one a design
+    /// built, or a <see cref="FastenerMaterials"/> grade a catalogue component brought
+    /// with it — because a dropdown that cannot show the current value would read as
+    /// "nothing set" and one wrong click would silently discard it.</para>
+    ///
+    /// <para>Nothing about the geometry changes, so this does NOT republish the tab (see
+    /// <see cref="RunEdit"/>'s <c>republish</c>): a material drives mass, the bill of
+    /// materials and — at add time only — the default colour, and a part already on screen
+    /// has its colour, so an existing part is never silently recoloured.</para>
+    /// </summary>
+    private void AddMaterialEditor(Part part)
+    {
+        // WHICH rows the dropdown offers is ParamEditors.MaterialChoices in Viewer.Core:
+        // a pure rule, so it is asserted as a value and a browser panel cannot grow a
+        // second opinion about what "(none)" and a custom material mean.
+        var options = ParamEditors.MaterialChoices(part.Material);
+        int selected = 0;
+        for (int i = 0; i < options.Count; i++)
+        {
+            if (Equals(options[i], part.Material))
+            {
+                selected = i;
+                break;
+            }
+        }
+
+        var combo = new ComboBox
+        {
+            ItemsSource = options.Select(ParamEditors.MaterialLabel).ToList(),
+            SelectedIndex = selected,
+            FontSize = 12,
+            Padding = new Thickness(4, 2),
+            Margin = new Thickness(0, 0, 0, 4),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        ToolTip.SetTip(combo, part.Material is { } stated
+            ? $"{stated.Name} - {stated.DensityKilogramsPerCubicMetre:G4} kg/m3"
+            : "What this part is made of - drives its mass and the bill of materials");
+        // Subscribe AFTER SelectedIndex, so rebuilding the panel does not fire an edit.
+        combo.SelectionChanged += (_, _) =>
+        {
+            int index = combo.SelectedIndex;
+            if (index < 0 || index >= options.Count || Equals(options[index], part.Material))
+                return;
+            var edit = DocumentEdits.SetMaterial(part, options[index]);
+            RunEdit(edit.Description, () => _undo.Do(edit), republish: false);
+        };
+
+        _properties.Children.Add(new TextBlock { Text = "Material", Foreground = DimText, FontSize = 10 });
+        _properties.Children.Add(combo);
     }
 
     private void AddProperty(string label, string value)

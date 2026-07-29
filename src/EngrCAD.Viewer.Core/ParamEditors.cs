@@ -1,3 +1,4 @@
+using EngrCAD.Core;
 using EngrCAD.Modeling;
 
 namespace EngrCAD.Viewer;
@@ -86,6 +87,36 @@ public static class ParamEditors
         };
         return HasRange(parameter) ? Math.Clamp(value, parameter.Min, parameter.Max) : value;
     }
+
+    /// <summary>
+    /// What a MATERIAL dropdown offers for a part currently made of
+    /// <paramref name="current"/>: <c>null</c> (the "(none)" row — unstated is a legal and
+    /// common answer, so it must be reachable) first, then
+    /// <see cref="Materials.All"/> in catalogue order.
+    ///
+    /// <para><b>A material the catalogue does not carry is appended</b> — one a design
+    /// built with <c>new Material(...)</c>, or a <c>FastenerMaterials</c> grade a
+    /// catalogue component brought with it. Without that row the dropdown would show
+    /// nothing selected for a part that plainly states a material, which reads as "not
+    /// set", and one idle click would discard it. Comparison is the record's value
+    /// equality, so a re-derived copy of a catalogue entry matches its row rather than
+    /// producing a duplicate.</para>
+    ///
+    /// <para>Pure and here for the same reason <see cref="KindFor"/> is: the desktop panel
+    /// and any browser one must offer the same list, and the rule is then asserted as a
+    /// value instead of by looking at a window.</para>
+    /// </summary>
+    public static IReadOnlyList<Material?> MaterialChoices(Material? current)
+    {
+        var choices = new List<Material?>(Materials.All.Count + 2) { null };
+        choices.AddRange(Materials.All);
+        if (current is not null && !choices.Contains(current))
+            choices.Add(current);
+        return choices;
+    }
+
+    /// <summary>The label a <see cref="MaterialChoices"/> row shows.</summary>
+    public static string MaterialLabel(Material? material) => material?.Name ?? "(none)";
 
     private static bool IsNumeric(Type type) =>
         type == typeof(double) || type == typeof(float) || type == typeof(int) || type == typeof(long);

@@ -255,8 +255,12 @@ already coloured would be a second, hidden edit.
   [`Document.Save`/`Load`](documents.md); only the properties actually stated are
   written, so a file for a scene with no materials is byte-identical to what it
   always was.
-- **The viewer.** The properties panel shows the material name and the part's mass
-  (from the display mesh, so it can never lower a B-Rep on the UI thread), and the
-  BOM overlay shows the material column.
+- **The viewer.** The properties panel has a **material dropdown** over the catalogue
+  (plus "(none)", and plus the current material when a design built its own or a
+  catalogue component brought one) — it writes through `DocumentEdits.SetMaterial`, so
+  it is one Ctrl+Z step, and it sits above the panel's mesh gate because saying what a
+  part is made of must not wait for it to tessellate. The **Mass** row below is the
+  measurement (from the display mesh, so it can never lower a B-Rep on the UI thread),
+  and the BOM overlay shows the material column.
 - **MCP.** `describe_part` reports the material with its density in *both*
   spellings — tonne/mm³ to compute with, kg/m³ to check against a datasheet.
