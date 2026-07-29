@@ -1847,8 +1847,24 @@ reading `40X DEFORMED` over a frame drawn at 20× is exactly the lie the title e
 prevent. And a `DeformationTrack` returning a scalar is what keeps the no-geometry rule
 intact with nothing weakened — `LoadRamp` is honest for a **linear** solve (a linear
 result scales exactly, so intermediate frames are the answers rather than a tween) and
-`Oscillate` is the mode-shape law, with the caveat that a mode shape has no physical
-amplitude and its sign is a convention.
+`Oscillate` is the mode-shape law, whose caveats are the interesting part. Two are the
+expected ones — a mode shape has no physical amplitude and its sign is a convention — and
+the third is the one that actually misleads: **a mode does not animate at its own
+frequency, and the formula that says it can is dimensionally correct.**
+`cycles = frequency × duration` reads like the obvious binding and produces nonsense for
+every real part, because a steel blade 80 mm long and 6 mm thick rings near 780 Hz
+(`f₁ = (1.875²/2π)·√(EI/ρAL⁴)`, hand-checked at 764 Hz against an FE solve's 783), so a
+two-second clip would ask for ~1570 cycles — hundreds per rendered frame, aliasing into
+blur, and no frame rate fixes a mode that is genuinely faster than video. Stiff metal
+parts run from hundreds of hertz to tens of kilohertz; the structures slow enough to
+animate at true speed are things like tall buildings. So the API takes a small fixed cycle
+count and the docs state the slowdown factor. **Rank the caveats by what a reader will
+believe**: arbitrary amplitude and sign are things people half expect, whereas "the
+animation runs at the mode's frequency" sounds exactly like something a solver would
+arrange — which is why it is the one printed in bold beside the figure. (The wrong
+formula was in this repo's own docs for one commit, caught in review rather than by a
+test, which is itself the argument for writing the magnitude down: no assertion here
+would have failed, and the sentence read perfectly.)
 
 **What deliberately did not ride along: transient thermal playback.** Temperature per time
 step is a *colour* animation, and colour has no single-uniform form — it needs the colour

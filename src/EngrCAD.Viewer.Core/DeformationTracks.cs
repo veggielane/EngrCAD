@@ -56,9 +56,16 @@ public static class DeformationTracks
     /// <para><b>This is the mode-shape animation</b>, and it needs nothing from the
     /// solver beyond the mode published as an ordinary vector result: vibrating in a
     /// mode IS the shape scaled by <c>cos(omega*t)</c>, which is why the same track
-    /// serves a swaying beam and a ringing bracket. Set
-    /// <paramref name="cycles"/> = frequency x <c>Animation.Duration</c> to play it at
-    /// its own frequency, or 1 to see one period however long the clip is.</para>
+    /// serves a swaying beam and a ringing bracket. Use a small
+    /// <paramref name="cycles"/> — 2 or 3 — and state the slowdown.</para>
+    /// <para><b>Do NOT set cycles = frequency x Duration.</b> It is dimensionally right
+    /// and useless: a steel blade 80 mm long and 6 mm thick rings near 780 Hz, so a
+    /// two-second clip at true speed asks for ~1570 cycles, hundreds per rendered frame,
+    /// which aliases into noise or a stationary blur — and no frame rate fixes it,
+    /// because the mode is faster than video. Every stiff metal part is like this
+    /// (hundreds of hertz to tens of kilohertz); the structures slow enough to animate at
+    /// true speed are things like tall buildings. So a mode animates at a CHOSEN playback
+    /// rate, and the honest caption says by what factor it is slowed.</para>
     /// <para><b>Caveat to repeat wherever this is used</b>: a mode shape has no physical
     /// amplitude, and its sign is a convention. The animation's amplitude is a display
     /// choice; what is physical is the shape and the frequency. And a mode's DIRECTION is

@@ -246,8 +246,22 @@ lie the title exists to prevent.
 `DeformationTracks.Oscillate(amplitude, cycles)` swings the same uniform through
 `±amplitude` — which **is** the mode-shape animation, because vibrating in a mode is that
 mode's shape times `cos(ωt)`. Point a part's `FieldDisplay.Deform` at a mode's
-displacement result and set `cycles` to the mode's frequency times the clip's duration to
-play it at its own frequency (or leave it at 1 to see one period however long the clip is).
+displacement result, and use a small `cycles` (2 or 3 reads well).
+
+> [!IMPORTANT]
+> **Use a fixed small `cycles`, and state the slowdown. Do not compute
+> `cycles = frequency × duration`.** That formula is dimensionally correct and produces
+> nonsense for every real part, which is what makes it worth warning about: a steel blade
+> 80 mm long and 6 mm thick has a first bending mode near **780 Hz**
+> (`f₁ = (1.875²/2π)·√(EI/ρAL⁴)`), so a two-second clip at true speed would need ~1 570
+> cycles — hundreds per rendered frame. That aliases into noise or a stationary blur, and
+> no frame rate fixes it, because the mode is genuinely faster than video.
+>
+> Stiff metal parts run from hundreds of hertz to tens of kilohertz; the structures slow
+> enough to animate at true speed are things like tall buildings. So the honest caption
+> says the playback is slowed **and by how much**: two cycles over a two-second clip
+> against 780 Hz is roughly **780× slow motion**. A modal result reports each mode's
+> frequency and period, so a page can compute that factor rather than transcribe it.
 
 > [!NOTE]
 > **A mode shape has no physical amplitude, and its sign is a convention.** What is
@@ -261,6 +275,11 @@ play it at its own frequency (or leave it at 1 to see one period however long th
 > a round rod) the two bending modes are degenerate, and a solver returns an arbitrary
 > orthonormal basis of that eigenspace — so "mode 1" animates one valid member of a
 > family rather than *the* mode.
+>
+> Taken together those are four caveats, and the **playback rate** is the one an engineer
+> is most likely to be misled by: arbitrary amplitude and sign are things people half
+> expect, whereas "the animation runs at the mode's frequency" sounds exactly like
+> something a solver would arrange, so a viewer will believe it unless told otherwise.
 
 ### What deliberately does not follow
 
