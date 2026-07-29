@@ -66,6 +66,13 @@ public static class PartFacts
         facts.Add(("Closed", mesh.IsClosed ? "yes" : "no"));
         facts.Add(("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)"));
         facts.Add(("Area", mesh.SurfaceArea().ToString("G6")));
+        if (part.Material is { } material)
+        {
+            facts.Add(("Material", material.Name));
+            // Mesh-derived, like Volume above it — the shared PartMassProperties rule, so the
+            // browser and the window cannot report different masses for one part.
+            facts.Add(("Mass", part.DisplayMassGrams() is { } grams ? $"{grams:G4} g" : "— (open)"));
+        }
         if (instance is { } placed)
         {
             var size = placed.Bounds().Size;

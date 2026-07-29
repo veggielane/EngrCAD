@@ -19,10 +19,14 @@ public readonly record struct PrincipalInertia(Vector3d Moments, Frame3d Axes);
 /// <see cref="Density"/> — the kernel's answer to OCCT's <c>GProp_GProps</c>.
 /// </summary>
 /// <remarks>
-/// <para><b>Units are the caller's.</b> Lengths are model units; <see cref="Density"/> is
-/// mass per unit volume in whatever system the caller works in (for steel modelled in mm,
-/// 7.85e-6 kg/mm³). <see cref="Mass"/> is then in those mass units and inertia in
-/// mass·length². The default density of 1 makes mass numerically equal to volume.</para>
+/// <para><b>Units are the caller's</b>, and this type stays deliberately agnostic: lengths
+/// are model units and <see cref="Density"/> is mass per unit volume in whatever system the
+/// caller works in, so <see cref="Mass"/> comes back in those mass units and inertia in
+/// mass·length². The default density of 1 makes mass numerically equal to volume.
+/// <b>EngrCAD's own convention is <c>EngrCAD.Core.ModelUnits</c></b> — mm / N / MPa / tonne,
+/// so a density from a <c>Material</c> is tonne/mm³ (steel 7.85e-9) and the mass that comes
+/// back is in tonnes; <c>ModelUnits.MassToGrams</c> is how a report prints it. Callers
+/// working outside that system supply their own consistent pair.</para>
 /// <para>The stored quantity is the <b>volume-weighted</b> second-moment matrix about the
 /// centroid, S = ∫(r−c)(r−c)ᵀ dV (units length⁵, density-free). Everything else derives
 /// from it: <see cref="Inertia"/> = ρ·(tr(S)·Id − S), and the parallel-axis theorem moves

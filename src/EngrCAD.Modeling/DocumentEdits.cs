@@ -168,6 +168,21 @@ public static class DocumentEdits
             $"Recolour {part.Name}", () => part.Color, c => part.Color = c, color);
     }
 
+    /// <summary>
+    /// Assigns (or clears) a part's material. It is a plain value edit — the material feeds
+    /// mass properties and the BOM, neither of which is cached on the part, so nothing has to
+    /// be invalidated. The part's <b>colour is untouched</b>, deliberately: a material only
+    /// ever supplied the DEFAULT at add time, and silently recolouring a part someone has
+    /// already coloured would be a second, hidden edit inside this one.
+    /// </summary>
+    public static DocumentEdit SetMaterial(Part part, Material? material)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        return new ValueEdit<Material?>(
+            material is null ? $"Clear {part.Name}'s material" : $"{part.Name}: {material.Name}",
+            () => part.Material, m => part.Material = m, material);
+    }
+
     /// <summary>Re-places a part (its own transform, not an occurrence pose).</summary>
     public static DocumentEdit SetTransform(Part part, Matrix4d transform)
     {

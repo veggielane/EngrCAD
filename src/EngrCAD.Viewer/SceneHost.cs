@@ -2120,6 +2120,13 @@ internal sealed class SceneHost
         AddProperty("Closed", mesh.IsClosed ? "yes" : "no");
         AddProperty("Volume", mesh.IsClosed ? mesh.Volume().ToString("G6") : "— (open)");
         AddProperty("Area", mesh.SurfaceArea().ToString("G6"));
+        if (part.Material is { } material)
+        {
+            AddProperty("Material", material.Name);
+            // The display mesh's mass, so this row can never lower a B-Rep on the UI thread
+            // and always agrees with the Volume row above it (PartMassProperties owns the rule).
+            AddProperty("Mass", part.DisplayMassGrams() is { } grams ? $"{grams:G4} g" : "— (open)");
+        }
         var size = instance.Bounds().Size;
         AddProperty("Size", $"{size.X:G4} × {size.Y:G4} × {size.Z:G4}");
         var position = instance.World.TransformPoint(Vector3d.Zero);

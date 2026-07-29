@@ -1,4 +1,5 @@
 using System.Text;
+using EngrCAD.Core;
 
 namespace EngrCAD.Modeling;
 
@@ -27,6 +28,24 @@ public sealed record BomLine(Part Part, int Quantity, IReadOnlyList<string> Path
 
     /// <summary>True when the line is a catalogue component rather than a designed part.</summary>
     public bool IsHardware => Part.Hardware is not null;
+
+    /// <summary>What the part is made of, when it says — the whole material, not just its
+    /// name, so a purchasing view can reach the density and a report the datasheet figure.
+    /// A projection of <see cref="Part.Material"/>, so no line record had to change.</summary>
+    public Material? Material => Part.Material;
+
+    /// <summary>
+    /// The mass of ONE of these parts, in grams, or null when the part states no material.
+    /// <para><b>Evaluates geometry</b> (it measures the part's cached solid or display mesh),
+    /// which is why nothing in a default BOM calls it: a bill of materials is a cheap
+    /// document-model walk and must stay one. <see cref="Bom.ToText"/> and
+    /// <see cref="Bom.ToCsv"/> take it as an opt-in.</para>
+    /// </summary>
+    public double? UnitMassGrams => Part.MassGrams();
+
+    /// <summary>The mass of this line's whole quantity, in grams; null when the part states
+    /// no material. Same evaluation cost as <see cref="UnitMassGrams"/>, once.</summary>
+    public double? TotalMassGrams => UnitMassGrams * Quantity;
 }
 
 /// <summary>
@@ -209,40 +228,89 @@ public sealed class Bom
         return new BomNode(assembly.Name, null, assembly, quantity, total, children);
     }
 
+    /// <summary>True when at least one line's part states a <see cref="Part.Material"/> —
+    /// what decides whether the reports carry a MATERIAL column.</summary>
+    public bool HasMaterials => Lines.Any(l => l.Material is not null);
+
     /// <summary>
     /// The BOM as an aligned text table: quantity, item, kind, and where the occurrences
     /// are (the first few paths, then a count of the rest).
+    ///
+    /// <para>A <b>MATERIAL</b> column appears when any line's part states one, and not
+    /// otherwise — a column that would be empty on every row is not printed, so a scene that
+    /// uses no materials produces byte-identically what it always did. <b>MASS</b> and
+    /// <b>TOTAL</b> columns (in grams, with a total at the foot) are opt-in rather than
+    /// automatic, because they are the only part of a bill of materials that evaluates
+    /// geometry.</para>
     /// </summary>
-    public string ToText(int pathsShown = 3)
+    /// <param name="pathsShown">How many occurrence paths to list before "+N more".</param>
+    /// <param name="mass">Adds per-item and per-line mass in grams. Costs one mass-property
+    /// evaluation per distinct part (over the caches a <see cref="Part"/> already holds);
+    /// lines whose part states no material show "-".</param>
+    public string ToText(int pathsShown = 3, bool mass = false)
     {
         if (Lines.Count == 0)
             return "(empty bill of materials)";
 
+        bool materials = HasMaterials;
         var rows = Lines
             .Select(line => (
                 Qty: line.Quantity.ToString(),
                 line.Item,
                 Kind: line.IsHardware ? "catalogue" : "made",
+                Material: line.Material?.Name ?? "-",
+                Unit: mass ? Grams(line.UnitMassGrams) : "",
+                Total: mass ? Grams(line.TotalMassGrams) : "",
                 Where: Where(line, pathsShown)))
             .ToList();
 
         int qty = Math.Max(3, rows.Max(r => r.Qty.Length));
         int item = Math.Max(4, rows.Max(r => r.Item.Length));
         int kind = Math.Max(4, rows.Max(r => r.Kind.Length));
+        int material = Math.Max(8, rows.Max(r => r.Material.Length));
+        int unit = Math.Max(8, rows.Max(r => r.Unit.Length));
+        int total = Math.Max(9, rows.Max(r => r.Total.Length));
 
         var text = new StringBuilder();
         text.Append("QTY".PadLeft(qty)).Append("  ").Append("ITEM".PadRight(item)).Append("  ")
-            .Append("KIND".PadRight(kind)).Append("  ").Append("WHERE").Append('\n');
+            .Append("KIND".PadRight(kind)).Append("  ");
+        if (materials)
+            text.Append("MATERIAL".PadRight(material)).Append("  ");
+        if (mass)
+            text.Append("MASS (g)".PadLeft(unit)).Append("  ").Append("TOTAL (g)".PadLeft(total)).Append("  ");
+        text.Append("WHERE").Append('\n');
+
         foreach (var row in rows)
         {
             text.Append(row.Qty.PadLeft(qty)).Append("  ").Append(row.Item.PadRight(item)).Append("  ")
-                .Append(row.Kind.PadRight(kind)).Append("  ").Append(row.Where).Append('\n');
+                .Append(row.Kind.PadRight(kind)).Append("  ");
+            if (materials)
+                text.Append(row.Material.PadRight(material)).Append("  ");
+            if (mass)
+                text.Append(row.Unit.PadLeft(unit)).Append("  ").Append(row.Total.PadLeft(total)).Append("  ");
+            text.Append(row.Where).Append('\n');
         }
+
         text.Append('\n')
             .Append($"{Lines.Count} item{(Lines.Count == 1 ? "" : "s")}, ")
-            .Append($"{TotalQuantity} occurrence{(TotalQuantity == 1 ? "" : "s")}").Append('\n');
+            .Append($"{TotalQuantity} occurrence{(TotalQuantity == 1 ? "" : "s")}");
+        if (mass)
+        {
+            // Sum only the lines that HAVE a mass, and say so when some do not: a total that
+            // silently skipped the unstated parts would read as the assembly's weight.
+            var known = Lines.Select(l => l.TotalMassGrams).Where(m => m is not null).ToList();
+            if (known.Count > 0)
+            {
+                text.Append($", {known.Sum(m => m!.Value):0.###} g");
+                if (known.Count < Lines.Count)
+                    text.Append($" over the {known.Count} of {Lines.Count} items stating a material");
+            }
+        }
+        text.Append('\n');
         return text.ToString();
     }
+
+    private static string Grams(double? grams) => grams is { } g ? g.ToString("0.###") : "-";
 
     private static string Where(BomLine line, int pathsShown)
     {
@@ -254,19 +322,43 @@ public sealed class Bom
     }
 
     /// <summary>The BOM as CSV (header row; every occurrence path listed, ';'-separated
-    /// inside the quoted field) — RFC 4180 quoting, so item names may contain commas.</summary>
-    public string ToCsv()
+    /// inside the quoted field) — RFC 4180 quoting, so item names may contain commas.
+    /// <para>A <c>Material</c> column appears when any line states one, and mass columns when
+    /// <paramref name="mass"/> is asked for — the same two rules
+    /// <see cref="ToText(int, bool)"/> follows, so a scene with no materials writes exactly
+    /// the file it always did.</para></summary>
+    /// <param name="mass">Adds <c>UnitMassGrams</c> and <c>TotalMassGrams</c> columns; empty
+    /// for a line whose part states no material. Evaluates geometry.</param>
+    public string ToCsv(bool mass = false)
     {
-        var csv = new StringBuilder("Quantity,Item,Kind,Paths\n");
+        bool materials = HasMaterials;
+        var csv = new StringBuilder("Quantity,Item,Kind");
+        if (materials)
+            csv.Append(",Material");
+        if (mass)
+            csv.Append(",UnitMassGrams,TotalMassGrams");
+        csv.Append(",Paths\n");
+
         foreach (var line in Lines)
         {
             csv.Append(line.Quantity).Append(',')
                .Append(Quote(line.Item)).Append(',')
-               .Append(line.IsHardware ? "catalogue" : "made").Append(',')
-               .Append(Quote(string.Join(";", line.Paths))).Append('\n');
+               .Append(line.IsHardware ? "catalogue" : "made");
+            if (materials)
+                csv.Append(',').Append(Quote(line.Material?.Name ?? ""));
+            if (mass)
+            {
+                csv.Append(',').Append(Csv(line.UnitMassGrams))
+                   .Append(',').Append(Csv(line.TotalMassGrams));
+            }
+            csv.Append(',').Append(Quote(string.Join(";", line.Paths))).Append('\n');
         }
         return csv.ToString();
     }
+
+    // An unknown mass is an EMPTY cell, not a zero: a spreadsheet sums zeros silently.
+    private static string Csv(double? grams) =>
+        grams is { } g ? g.ToString("R", System.Globalization.CultureInfo.InvariantCulture) : "";
 
     /// <summary>The structured BOM as indented text (one line per node, level quantity
     /// and rolled-up total).</summary>

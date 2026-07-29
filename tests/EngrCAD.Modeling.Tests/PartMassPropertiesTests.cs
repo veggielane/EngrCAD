@@ -21,7 +21,7 @@ public class PartMassPropertiesTests
     [Fact]
     public void ShapePart_MeasuresTheExactSolid()
     {
-        const double density = 7.85e-6;   // steel, model in mm
+        const double density = 7.85e-9;   // steel in tonne/mm3, the ModelUnits convention
         var part = new Part("block", Shape.Box(20, 30, 10));
         var mp = part.MassProperties(density);
 
@@ -103,10 +103,10 @@ public class PartMassPropertiesTests
         assembly.Add(steel, Frame3d.WorldXY);
         assembly.Add(foam, Frame3d.WorldXY);
 
-        var total = assembly.Flatten().MassProperties(p => p.Name == "steel" ? 7.85e-6 : 1e-7);
+        var total = assembly.Flatten().MassProperties(p => p.Name == "steel" ? 7.85e-9 : 1e-10);
 
         AssertClose(16, total.Volume, 1e-12, "volume");
-        AssertClose(8 * 7.85e-6 + 8 * 1e-7, total.Mass, 1e-12, "mass");
+        AssertClose(8 * 7.85e-9 + 8 * 1e-10, total.Mass, 1e-12, "mass");
         AssertClose(total.Mass / total.Volume, total.Density, 1e-14, "bulk density");
         // The centre of mass sits next to the steel block, not halfway.
         Assert.True(total.Centroid.X < 0.2, $"centre of mass at {total.Centroid} should hug the steel block.");

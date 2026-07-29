@@ -155,6 +155,28 @@ public sealed class SceneTools(SceneSession session)
             ["position"] = PointJson(part.Transform.TransformPoint(Vector3d.Zero)),
         };
 
+        // The material, when the part states one — with the mass it implies, taken from the
+        // mesh already in hand (PartMassProperties.DisplayMassGrams), so describing a part
+        // never lowers a B-Rep. The density is echoed in BOTH spellings because the answer
+        // is only checkable against a datasheet in kg/m3 and only usable in a solve in the
+        // model's own tonne/mm3.
+        if (part.Material is { } material)
+        {
+            var record = new JsonObject
+            {
+                ["name"] = material.Name,
+                ["density"] = material.Density,
+                ["densityKgPerCubicMetre"] = material.DensityKilogramsPerCubicMetre,
+                ["massGrams"] = part.DisplayMassGrams(),
+            };
+            if (material.HasElasticity)
+            {
+                record["youngsModulus"] = material.YoungsModulus;
+                record["poissonsRatio"] = material.PoissonsRatio;
+            }
+            result["material"] = record;
+        }
+
         var instancePaths = new JsonArray();
         foreach (var instance in Session.Scene.AllInstances)
         {

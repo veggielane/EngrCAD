@@ -163,6 +163,7 @@ public sealed class StructuralModel
         ArgumentNullException.ThrowIfNull(material);
         if (mesh.ElementCount == 0)
             throw new FeaException("The analysis mesh has no elements.");
+        RequireElasticity(material);
         Mesh = mesh;
         DefaultMaterial = material;
         _restraint = new Dof[mesh.NodeCount];
@@ -195,9 +196,40 @@ public sealed class StructuralModel
     public StructuralModel SetMaterial(int region, Material material)
     {
         ArgumentNullException.ThrowIfNull(material);
+        RequireElasticity(material);
         _materials[region] = material;
         _conditions.Add($"material '{material.Name}' on region {region}");
         return this;
+    }
+
+    /// <summary>
+    /// Refuses a material with no Young's modulus, by name, at the point it is attached to
+    /// a structural model.
+    ///
+    /// <para><b>This is where the refusal belongs, and it used to sit in
+    /// <see cref="Material"/>'s constructor.</b> A material with a density and no modulus is
+    /// a perfectly good <i>document</i> material — most of a bill of materials is made of
+    /// them — so building one must be legal; only an analysis that integrates a stiffness
+    /// needs E, and only it can say so by name. Refusing here rather than at the solve is the
+    /// model's own doctrine (a selector that matches nothing is refused at the call), and it
+    /// matters more than usual because <see cref="Material.Lambda"/> and
+    /// <see cref="Material.Mu"/> are both <i>zero</i> without a modulus: the solve would not
+    /// be inaccurate, it would assemble an identically zero stiffness and then report
+    /// rigid-body modes for a model that has none.</para>
+    /// </summary>
+    private static void RequireElasticity(Material material)
+    {
+        if (material.HasElasticity)
+            return;
+        throw new FeaException(
+            $"A structural model needs elastic properties, and the material '{material.Name}' "
+            + "states no Young's modulus. Lame's parameters are then both zero, so the "
+            + "stiffness matrix would be identically zero rather than merely wrong. A material "
+            + "with only a name and a density is a legal DOCUMENT material (it is what a bill "
+            + "of materials is made of), which is why this is refused here and not when the "
+            + "material is built: give it a modulus with the constructor's youngsModulus and "
+            + "poissonsRatio, or call Material.WithElasticity(E, nu) - remembering that the "
+            + "mm/N/MPa/tonne system wants E in MPa, so steel is 210000.");
     }
 
     /// <summary>The restraint mask on one node.</summary>

@@ -415,6 +415,8 @@ internal static class DocumentWriter
         // load warns that the component itself did not come back.
         if (part.Hardware is { } hardware)
             json["hardware"] = hardware.Designation;
+        if (part.Material is { } material)
+            json["material"] = SaveMaterial(material);
 
         json["geometry"] = SaveGeometry(part, options, quality);
 
@@ -456,6 +458,34 @@ internal static class DocumentWriter
             json["fieldDisplay"] = record;
         }
 
+        return json;
+    }
+
+    /// <summary>
+    /// A material as JSON. Every property is written only when it is stated, which is what
+    /// keeps the save-load-save fixed point byte-identical for the common document material
+    /// (a name, a density and nothing else) — and what makes an unstated modulus survive the
+    /// round trip as unstated rather than coming back as a zero that means the same thing but
+    /// prints differently. Densities are in tonne/mm³, the one convention
+    /// (<c>ModelUnits</c>).
+    /// </summary>
+    private static JsonObject SaveMaterial(Material material)
+    {
+        var json = new JsonObject { ["name"] = material.Name };
+        if (material.Density != 0)
+            json["density"] = material.Density;
+        if (material.YoungsModulus != 0)
+            json["youngsModulus"] = material.YoungsModulus;
+        if (material.PoissonsRatio != 0)
+            json["poissonsRatio"] = material.PoissonsRatio;
+        if (material.ThermalConductivity != 0)
+            json["thermalConductivity"] = material.ThermalConductivity;
+        if (material.SpecificHeat != 0)
+            json["specificHeat"] = material.SpecificHeat;
+        if (material.ThermalExpansion != 0)
+            json["thermalExpansion"] = material.ThermalExpansion;
+        if (material.Color is { } color)
+            json["color"] = new JsonArray(color.R, color.G, color.B);
         return json;
     }
 
@@ -726,6 +756,25 @@ internal static class DocumentReader
         return quality;
     }
 
+    /// <summary>A material back from <c>DocumentWriter.SaveMaterial</c>. An absent property
+    /// reads as zero, which is exactly what "not stated" means to <see cref="Material"/> —
+    /// so the writer's write-only-when-stated rule and this are one convention, not two.</summary>
+    private static Material LoadMaterial(JsonElement element) =>
+        new(
+            element.GetProperty("name").GetString() ?? "material",
+            Number(element, "youngsModulus"),
+            Number(element, "poissonsRatio"),
+            Number(element, "density"),
+            Number(element, "thermalConductivity"),
+            Number(element, "specificHeat"),
+            Number(element, "thermalExpansion"),
+            element.TryGetProperty("color", out var c)
+                ? new PartColor(c[0].GetSingle(), c[1].GetSingle(), c[2].GetSingle())
+                : null);
+
+    private static double Number(JsonElement element, string name) =>
+        element.TryGetProperty(name, out var value) ? value.GetDouble() : 0;
+
     private static Part? LoadPart(
         JsonElement element, string name, DocumentLoadOptions options,
         List<string> warnings, List<string> snapshots)
@@ -792,6 +841,8 @@ internal static class DocumentReader
             part.Ghost = ghost.GetBoolean();
         if (element.TryGetProperty("isolated", out var isolated))
             part.Isolated = isolated.GetBoolean();
+        if (element.TryGetProperty("material", out var material))
+            part.Material = LoadMaterial(material);
         if (element.TryGetProperty("hardware", out var hardware))
         {
             warnings.Add($"part '{name}': it was placed from catalogue item " +
