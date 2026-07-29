@@ -864,7 +864,11 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   `Document`/`DocumentFile.cs` — scene structure + per-part feature history + assemblies
   and poses + mates + annotations + results, with snapshots for geometry that has no
   recipe, warnings-not-exceptions on load, and a byte-identical save→load→save fixed
-  point). Open:
+  point; and `DocumentEdits.cs`/`UndoStack.cs` — reversible edits with grouping, the
+  serializer as the undo test oracle, and refused edits leaving the document untouched.
+  Note the one place the assessment was overruled by building it: undo stores EDITS, not
+  document snapshots, because a `Scene` snapshot is not a cheap value — design.md §6b).
+  Open:
   - [ ] **Materials.** The envelope has no material because `Part` has no material — see
     the per-part-material item above; when it lands it is one more part record field.
   - [ ] **`Shape`-graph serialization** would let a code-built `Shape` part save as a
@@ -884,6 +888,14 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   - [ ] **Joint/coupling persistence** (also filed under mechanisms) is the other layer a
     document silently loses today: `Document` saves the `MateSet`s but not the `Joint`s
     built on top of them.
+  - [ ] **Undo does not reach every mutation yet.** The `DocumentEdits` vocabulary covers
+    what a UI performs today; the gaps are deliberate rather than forgotten —
+    add/remove a whole `Part` or `Tab` (needs `Tab.Remove`/`Scene.RemoveTab`, and a removed
+    part may still be placed by occurrences, so the edit has to decide whether it takes
+    them with it), committing a `MateSet.Solve` as one undoable repose of every occurrence
+    it moved (mechanically easy — one `CompoundEdit` of `Repose`s — but it wants the solver
+    to report which frames it wrote), and `Part.Results`/`FieldDisplay`. None is hard; each
+    is a decision about scope rather than about mechanism.
 
 ## build123d / CadQuery parity (open items)
 

@@ -49,7 +49,10 @@ public static class Palette
 /// </summary>
 public sealed class Part
 {
-    public string Name { get; }
+    /// <summary>The part's display name, unique among a tab's loose parts and assemblies.
+    /// Rename through <see cref="Scene.Rename"/>, which owns that uniqueness invariant —
+    /// a <see cref="Part"/> does not know which tab holds it.</summary>
+    public string Name { get; private set; }
 
     /// <summary>The geometry the part was created from (Shape, BrepSolid, HalfEdgeMesh,
     /// or Sdf). Fixed for directly built parts; a part with a <see cref="History"/> may
@@ -428,6 +431,43 @@ public sealed class Part
         }
         return this;
     }
+
+    /// <summary>Detaches an annotation; false when it was not attached. Undo needs its
+    /// position back, which is why <see cref="InsertAnnotation"/> exists beside it.</summary>
+    public bool RemoveAnnotation(Annotation annotation)
+    {
+        ArgumentNullException.ThrowIfNull(annotation);
+        lock (_meshLock)
+        {
+            if (!_annotationList.Remove(annotation))
+                return false;
+            _resolvedAnnotations = null;
+            return true;
+        }
+    }
+
+    /// <summary>The index of an attached annotation, or −1.</summary>
+    internal int IndexOfAnnotation(Annotation annotation)
+    {
+        lock (_meshLock)
+            return _annotationList.IndexOf(annotation);
+    }
+
+    /// <summary>Re-attaches an annotation AT ITS OLD POSITION — the undo counterpart of
+    /// <see cref="RemoveAnnotation"/>. Order is observable (the document file writes the
+    /// list in order), so restoring it is what makes undo serialize identically.</summary>
+    internal void InsertAnnotation(int index, Annotation annotation)
+    {
+        lock (_meshLock)
+        {
+            _annotationList.Insert(index, annotation);
+            _resolvedAnnotations = null;
+        }
+    }
+
+    /// <summary><see cref="Scene.Rename"/>'s writer: the uniqueness check lives on the
+    /// scene, which is the only thing that can see every tab.</summary>
+    internal void SetName(string name) => Name = name;
 
     /// <summary>
     /// Resolves all attached annotations against this part's geometry (selector-based
@@ -946,6 +986,35 @@ public sealed class Scene
     {
         var tab = _tabs.FirstOrDefault(t => t.Name == "Model") ?? AddTab("Model");
         return tab.Add(part);
+    }
+
+    /// <summary>
+    /// Renames a part, enforcing the invariant a <see cref="Tab"/> owns: names are unique
+    /// within a tab across its loose parts and assemblies. A part that appears only inside
+    /// assemblies has no such constraint (occurrences carry their own names), so it renames
+    /// freely.
+    /// <para>The rename lives here rather than on <see cref="Part"/> because a part does
+    /// not know which tabs hold it, and rather than on <see cref="Tab"/> because a part may
+    /// be shown in several — the scene is the only object that can see the whole
+    /// constraint.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException">The name is empty, or it collides with another
+    /// item in a tab that holds this part loose.</exception>
+    public void Rename(Part part, string name)
+    {
+        ArgumentNullException.ThrowIfNull(part);
+        if (string.IsNullOrWhiteSpace(name))
+            throw new ArgumentException("Part name must be non-empty.", nameof(name));
+        foreach (var tab in _tabs)
+        {
+            if (!tab.Parts.Contains(part))
+                continue;
+            if (tab.Parts.Any(p => !ReferenceEquals(p, part) && p.Name == name)
+                || tab.Assemblies.Any(a => a.Name == name))
+                throw new ArgumentException(
+                    $"Tab '{tab.Name}' already contains an item named '{name}'.", nameof(name));
+        }
+        part.SetName(name);
     }
 
     /// <summary>

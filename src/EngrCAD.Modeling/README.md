@@ -1378,6 +1378,55 @@ invalid file — bad JSON, a missing envelope, an unknown version — throws.
 a file carrying opaque records is smaller the second time by exactly those records and a
 fixed point from there. See `docs/examples/documents.md`.
 
+## Undo/redo (`DocumentEdits.cs`, `UndoStack.cs`)
+
+Editing goes through `DocumentEdit`s run by an `UndoStack` — the `MeshChangeSet`
+journaling pattern at document granularity: an edit captures whatever it is about to
+overwrite, so revert restores the previous state rather than recomputing it.
+
+```csharp
+var undo = new UndoStack();
+undo.Do(DocumentEdits.SetParameter(plate, history.Features[0], "Height", 16));
+undo.Undo();                                  // geometry rebuilds back
+
+using (undo.Group("Place the fasteners"))     // several edits, ONE Ctrl+Z
+{
+    foreach (var point in points)
+        undo.Do(DocumentEdits.AddOccurrence(rig, screw, seat.FrameAt(point)));
+}
+```
+
+The vocabulary is what a UI performs: `SetParameter`/`SetParameters`, `Suppress`,
+`AddFeature`/`RemoveFeature`, `Rename`/`SetColor`/`SetTransform`/`SetDisplayMode`/
+`SetClippedBySection`, `AddOccurrence`/`RemoveOccurrence`/`Repose`/`SetExplodeOffset`,
+`AddMate`/`RemoveMate`, `AddAnnotation`/`RemoveAnnotation`. Every parametric edit routes
+through the SAME JSON seam as `SaveParameters`/`LoadParameters` and the MCP server's
+`set_param`, and ends in `Part.Regenerate()`.
+
+**Two contracts, both tested against the document serializer as the oracle** (a
+hand-written state comparison agrees with a broken revert as happily as with a correct
+one):
+
+- **Revert restores a state that SERIALIZES identically** — not "equivalent", identical,
+  down to list positions and occurrence names. That is why `Assembly.Insert`,
+  `MateSet.Insert` and `Part.InsertAnnotation` exist beside the `Remove`s: re-adding would
+  append and re-derive the name, so an undone removal would come back in the wrong place
+  under a different name.
+- **A failed `Apply` leaves the document untouched.** Guards run before any mutation, and
+  a parametric edit whose regeneration fails takes its own value back and rebuilds before
+  throwing `DocumentEditException` (which carries the `RegenerationResult`). A refused edit
+  is not pushed onto the stack and does not discard the redo history either.
+
+Regeneration caching survives undo by construction: the cache is keyed on the parameter
+snapshot, so restoring the old value restores the old key and exactly the prefix a forward
+edit would invalidate re-runs — asserted, not assumed.
+
+The stack is **session state, not document state**: a `Document` is what the model IS, a
+history of how it got there belongs to the session, and that is also why the stack holds
+edits (a few captured values) rather than scene snapshots. `Limit` bounds it (200 steps,
+oldest dropped), `Record` takes an already-applied edit (the viewport-drag case), and
+`Changed` drives an Edit menu.
+
 ## Standard components ("smart" hardware)
 
 Real hardware, where **a component is more than geometry: placing it modifies the host

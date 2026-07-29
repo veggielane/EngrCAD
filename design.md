@@ -886,6 +886,34 @@ Design decisions:
   smaller the *second* time by exactly the records the load already warned about — then a
   fixed point from there. "A record was reported and dropped" and "the file is drifting"
   are different things, and the tests assert them separately.
+- **Undo journals values, and the SERIALIZER is its test oracle.** `DocumentEdit` is
+  `MeshChange` at document granularity: an edit captures whatever it is about to overwrite
+  and restores that on revert, rather than recomputing what the previous state must have
+  been. Two decisions are worth recording. First, **the oracle**: every undo test asserts
+  that `Document.Save()` after the undo is byte-identical to the save before the edit,
+  because a hand-written state comparison agrees with a broken revert exactly as happily as
+  with a correct one — and the serializer covers list positions, occurrence names and the
+  parameter values inside a feature history, which is precisely the surface a hand-written
+  check forgets. That is what forced `Assembly.Insert` / `MateSet.Insert` /
+  `Part.InsertAnnotation` to exist beside the `Remove`s: re-adding appends AND re-derives
+  the occurrence name, so an undone removal would silently come back last and possibly
+  renamed, which every field-by-field check would have passed. Second, **a refused edit is
+  not history**: `Part.Regenerate` already keeps the previous complete body when a rebuild
+  fails, but the bad parameter is still set, so an edit whose regeneration fails takes its
+  own value back and rebuilds before throwing — and is neither pushed onto the stack nor
+  allowed to discard the redo history, since the whole claim is that nothing happened.
+  Regeneration caching then survives undo *by construction* rather than by extra
+  machinery: the cache key is the parameter snapshot, so restoring the old value restores
+  the old key and re-runs exactly the prefix a forward edit would.
+- **The undo stack is session state, and that is why it stores edits rather than
+  snapshots.** todo.md's OCAF assessment proposed "a document snapshot is a value, an edit
+  produces a new one, and the viewer swaps scenes" — the hot-reload seam. Built out, that
+  is the wrong granularity here: a `Scene` snapshot is not a value in any cheap sense (its
+  parts cache display meshes, B-Rep lowerings, SDFs, feature edges, occlusion), so
+  snapshotting per keystroke would either throw those caches away or share them into two
+  documents that then diverge. An edit is a handful of captured doubles. Hot reload keeps
+  its whole-scene swap because it genuinely rebuilds everything from source; interactive
+  editing does not.
 - **A smart component's local origin is its SEATING DATUM, not the host face.** That one
   choice is what makes the hardware library composable: `SeatDepth` says how far below
   the host's face the datum sits and `InsertedLength` how far the body reaches below it,

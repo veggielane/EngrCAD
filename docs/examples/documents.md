@@ -151,6 +151,117 @@ if (first != second)
     throw new Exception("save -> load -> save must be byte-identical");
 ```
 
+## Undo and redo
+
+Editing a document goes through **`DocumentEdit`s** run by an **`UndoStack`**. An edit
+captures whatever it is about to overwrite, so undoing it restores the previous state
+exactly rather than recomputing it — the `MeshChangeSet` journaling pattern at document
+granularity.
+
+```csharp run:document-undo
+var history = new FeatureHistory();
+history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(60, 40)) { Height = 8 });
+history.Add(new HoleFeature(HoleSpec.Simple(6), [new(-20, 0), new(20, 0)]) { Depth = 12 });
+
+var scene = new Scene();
+var plate = history.ToPart("plate");
+scene.Add(plate);
+
+var undo = new UndoStack();
+double original = MeshMassProperties.Compute(plate.GetMesh()).Volume;
+
+// A parameter edit goes through the same JSON seam as SaveParameters and the MCP
+// server's set_param, and ends in Part.Regenerate().
+undo.Do(DocumentEdits.SetParameter(plate, history.Features[0], "Height", 16.0));
+double thicker = MeshMassProperties.Compute(plate.GetMesh()).Volume;
+
+Console.WriteLine($"undo: {undo.UndoDescription}");        // "Set plate.ExtrudeSketchFeature.Height"
+undo.Undo();
+double back = MeshMassProperties.Compute(plate.GetMesh()).Volume;
+
+if (!(thicker > original) || Math.Abs(back - original) > 1e-9)
+    throw new Exception($"{original} -> {thicker} -> {back}");
+```
+
+The vocabulary covers what a UI actually does: `SetParameter` / `SetParameters`,
+`Suppress`, `AddFeature` / `RemoveFeature`, `Rename` / `SetColor` / `SetTransform` /
+`SetDisplayMode` / `SetClippedBySection`, `AddOccurrence` / `RemoveOccurrence` / `Repose` /
+`SetExplodeOffset`, `AddMate` / `RemoveMate`, `AddAnnotation` / `RemoveAnnotation`.
+
+### One user-visible step
+
+`UndoStack.Group` collects everything done inside it into a single `CompoundEdit`, so
+"place six fasteners" is one Ctrl+Z rather than twelve. Groups nest; only the outermost
+becomes a step, and an empty one pushes nothing.
+
+```csharp run:document-undo-group
+var scene = new Scene();
+var plate = new Part("plate", Shape.Box(60, 40, 8));
+scene.Add(plate);
+
+var undo = new UndoStack();
+using (undo.Group("Style the plate"))
+{
+    undo.Do(DocumentEdits.SetColor(plate, Palette.Coral));
+    undo.Do(DocumentEdits.SetDisplayMode(plate, DisplayMode.Translucent));
+    undo.Do(DocumentEdits.SetClippedBySection(plate, false));
+}
+
+if (undo.Undoable.Count != 1)
+    throw new Exception("a group is one step");
+
+undo.Undo();                       // all three come back together
+if (plate.DisplayMode != DisplayMode.Shaded || !plate.ClippedBySection)
+    throw new Exception("the group did not undo as a unit");
+```
+
+### A refused edit changes nothing
+
+An edit that cannot be applied leaves the document exactly as it found it — including the
+parameter it was about to write. `Part.Regenerate` already keeps the previous complete body
+when a rebuild fails; what an edit adds is taking its own bad value back, then reporting
+what happened.
+
+```csharp run:document-undo-refusal
+var history = new FeatureHistory();
+history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(60, 40)) { Height = 8 });
+
+var scene = new Scene();
+var plate = history.ToPart("plate");
+scene.Add(plate);
+
+var document = new Document(scene);
+string before = document.Save();
+var undo = new UndoStack();
+
+try
+{
+    // Below the [Param(Min = 1e-9)] floor: the model will not rebuild.
+    undo.Do(DocumentEdits.SetParameter(plate, history.Features[0], "Height", -5.0));
+    throw new Exception("that should have been refused");
+}
+catch (DocumentEditException e)
+{
+    Console.WriteLine(e.Regeneration);          // names the feature and the violation
+}
+
+if (document.Save() != before)
+    throw new Exception("a refused edit must leave the document untouched");
+if (undo.CanUndo)
+    throw new Exception("a refused edit is not history");
+```
+
+A group behaves the same way: if any member fails, the ones that already succeeded are
+reverted before the exception leaves.
+
+### The stack is session state, not document state
+
+An undo history is not saved. A `Document` is what the model *is*; how it got there belongs
+to this editing session, which is also why the stack holds edits (a few captured values)
+rather than document snapshots. `UndoStack.Limit` bounds it (200 steps by default, oldest
+dropped first), `Clear()` forgets it, and `Changed` fires on every movement so an Edit menu
+can repaint from `CanUndo`/`UndoDescription`.
+
 ## What the format is not
 
 - **Not a geometry interchange format.** Use STEP for exact B-Reps and STL/3MF/OBJ for
