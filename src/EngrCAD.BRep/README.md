@@ -446,11 +446,18 @@ operations. Depends only on `EngrCAD.Core`.
   refuses the face outright. The generator parameter for that trim is solved geometrically
   against the loop points' own axial coordinate, never by projecting them onto the surface
   (the vCut lesson: a ~1e-7 projection error times the cone's slope shifts the ring radially
-  past the weld tolerance). Rejections are loud: curved faces with no exact offset (swept and
-  NURBS surfaces), non-circular curved edges, vertices where more than three faces meet (the
-  offset corner is over-determined and needs corner patches), adjacent openings (zero-width
-  rim), openings on a face with holes, multi-shell inputs, and an offset that locally folds
-  the solid. **Not** checked: an offset large enough to make distant surfaces pass through
+  past the weld tolerance).
+  **Higher-valence vertices are solved rather than refused wholesale**: four or more faces
+  at a vertex is over-determined and usually has no offset position at all, but "usually" is
+  not "always" — a square pyramid's apex has four planes that meet in a point BY SYMMETRY,
+  and offsetting each of them keeps that true. So the over-determined case goes through the
+  least-squares corner solve and is then CHECKED, and only a vertex whose offset planes
+  genuinely miss is refused (the message says a corner like that opens into a small face,
+  which is corner-patch construction rather than a carried-over rebuild). Rejections are
+  loud: curved faces with no exact offset (swept and NURBS surfaces), non-circular curved
+  edges, non-concurrent higher-valence vertices, adjacent openings (zero-width rim),
+  openings on a face with holes, multi-shell inputs, and an offset that locally folds the
+  solid. **Not** checked: an offset large enough to make distant surfaces pass through
   each other with no local symptom — the same contract OCCT offers and `OffsetCurve3d`
   already documents for curves.
 - **`SurfaceOffset` / `SurfaceCorner` / `CarrierBody`** — the curved-corner re-intersection
@@ -993,8 +1000,8 @@ ABOUT the pull direction now drafts exactly), caps with holes, and drafting abou
 non-planar neutral surface.
 Shelling gaps (curved faces now shell exactly — see `SurfaceOffset`/`SurfaceCorner` above):
 carriers with no same-family offset (swept and NURBS surfaces), non-circular curved edges,
-higher-valence vertices on a curved body, adjacent openings, and global self-intersection
-detection.
+higher-valence vertices whose offset planes are NOT concurrent (a concurrent one — a
+pyramid apex — now works), adjacent openings, and global self-intersection detection.
 `HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have

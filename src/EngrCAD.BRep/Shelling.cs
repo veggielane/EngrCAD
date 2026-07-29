@@ -283,11 +283,10 @@ public static partial class Shelling
             var vertexFaces = new int[vertices.Length][];
             for (int i = 0; i < vertices.Length; i++)
             {
-                if (incident[i].Count != 3)
+                if (incident[i].Count < 3)
                     throw new NotSupportedException(
-                        $"Offsetting v1 needs exactly three faces at every vertex; one vertex has " +
-                        $"{incident[i].Count}. A higher-valence corner's offset position is over-determined " +
-                        "(the offset planes do not meet in a point) and needs corner patches.");
+                        $"Offsetting needs at least three faces at every vertex; one vertex has " +
+                        $"{incident[i].Count}, so its offset position is not determined.");
                 vertexFaces[i] = [.. incident[i]];
             }
 
@@ -318,17 +317,49 @@ public static partial class Shelling
         public (Vector3d Origin, Vector3d Normal) OffsetPlane(int face, double distance) =>
             (Planes[face].Origin + Planes[face].Normal * distance, Planes[face].Normal);
 
-        /// <summary>Each vertex moved to the intersection of its three offset planes.</summary>
+        /// <summary>
+        /// Each vertex moved to the meeting point of its offset planes.
+        ///
+        /// <para>Three planes take the algebraic solve verbatim. A HIGHER-VALENCE vertex is
+        /// over-determined and usually has no offset position at all — which is why it used to
+        /// be refused outright — but "usually" is not "always": a square pyramid's apex has
+        /// four planes that meet in a point by symmetry, and offsetting each of them keeps that
+        /// true. So the over-determined case is now SOLVED in the least-squares sense and then
+        /// CHECKED, and only a vertex whose offset planes genuinely miss is refused. That is
+        /// the honest split: a corner that exists is built, and one that does not is named
+        /// rather than averaged into a point lying on none of its own faces.</para>
+        /// </summary>
         public Vector3d[] OffsetVertices(double[] offsets)
         {
             var positions = new Vector3d[Vertices.Length];
             for (int i = 0; i < positions.Length; i++)
             {
                 var faces = VertexFaces[i];
-                positions[i] = IntersectPlanes(
-                    OffsetPlane(faces[0], offsets[faces[0]]),
-                    OffsetPlane(faces[1], offsets[faces[1]]),
-                    OffsetPlane(faces[2], offsets[faces[2]]));
+                if (faces.Length == 3)
+                {
+                    positions[i] = IntersectPlanes(
+                        OffsetPlane(faces[0], offsets[faces[0]]),
+                        OffsetPlane(faces[1], offsets[faces[1]]),
+                        OffsetPlane(faces[2], offsets[faces[2]]));
+                    continue;
+                }
+
+                var carriers = new Surface[faces.Length];
+                for (int k = 0; k < faces.Length; k++)
+                {
+                    var (origin, normal) = OffsetPlane(faces[k], offsets[faces[k]]);
+                    var x = normal.ArbitraryPerpendicular(Tolerance.Default);
+                    carriers[k] = new PlaneSurface(origin, x, normal.Cross(x));
+                }
+                if (!SurfaceCorner.TrySolvePoint(
+                        carriers, Vertices[i].Position, out var corner, out var reason))
+                    throw new NotSupportedException(
+                        $"The vertex at {Vertices[i].Position} joins {faces.Length} faces and their offset " +
+                        $"planes do not meet in a point ({reason}). A higher-valence corner only survives an " +
+                        "offset when its planes happen to be concurrent (a pyramid apex is); otherwise the " +
+                        "offset opens the vertex into a small face, which is corner-patch construction rather " +
+                        "than a carried-over rebuild.");
+                positions[i] = corner.Point;
             }
             return positions;
         }

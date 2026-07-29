@@ -712,13 +712,22 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   - [ ] **A SEALED shell of a partial revolve** — moving the cap planes cuts the offset
     torus in a quartic rather than a circle, so the concentric hypothesis is genuinely
     false and the refusal is correct. Making it work needs the tier-(c) corner curve.
-  - [ ] **>3-valent vertices on a curved body** — the corner solve already reports the
-    least-squares residual and refuses when the carriers miss, which is the honest
-    answer; a genuinely over-determined corner needs corner PATCHES (the
+  - [ ] **Non-concurrent >3-valent vertices** — CONCURRENT ones ✅ landed: four or more
+    faces at a vertex is over-determined in general, but a square pyramid's apex has four
+    planes that meet in a point by symmetry and offsetting each keeps that true, so the
+    case now goes through the least-squares corner solve and is CHECKED rather than
+    refused wholesale. What is left is the genuinely non-concurrent corner, where the
+    offset opens the vertex into a small FACE — corner-patch construction (the
     `FilletAllEdges` machinery), not a better solve.
   - [ ] **Adjacent openings** — their shared rim has zero width, so the two openings must
-    MERGE into one rim loop: a topology pass, not new geometry. Unchanged by the curved
-    work, which reuses the same opening bookkeeping.
+    MERGE into one rim loop: a topology pass, not new geometry. Attempted and deliberately
+    NOT built during the curved-corner work, because the shape of the fix is not what the
+    note above assumed: the two openings lie on different PLANES, so they cannot become one
+    face. What is actually needed is for each opening's rim annulus to lose its zero-width
+    stretch along the shared edge — the outer edge there IS the inner edge, since neither
+    plane moved — which means re-tracing both rim loops rather than merging them. That is a
+    loop-surgery pass of the same kind `FaceSplitter` does, and doing it half-way would
+    leave a solid that validates and is wrong.
   - [ ] **Global self-intersection detection** — deliberately unchecked, as in OCCT and
     `OffsetCurve3d`.
   The `Shape` route exposes one thickness; per-face thickness and per-face draft angles
