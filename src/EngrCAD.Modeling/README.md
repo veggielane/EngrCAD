@@ -418,6 +418,19 @@ keep `Apply` a pure function of parameters + context), validates `[Param]` range
 first, stops at the first failure keeping the last good body, supports suppression,
 and reports per-feature statuses. `SaveParameters`/`LoadParameters` round-trip values
 as JSON so a design is re-tunable without recompiling.
+
+**Optional parameters** are spelt with the nullable type (`double?`, `int?`, `bool?`, an
+`enum?`): null means "not stated", the JSON seam carries it as `null`, the cache key
+renders it `"null"`, and a `[Param(Min=, Max=)]` range does not fire on it — a value that
+is not there cannot be out of range. Which spelling to reach for is decided by the
+**editor**, not by taste: `ParamEditors.KindFor` offers a slider exactly when the range is
+finite at both ends, and a slider is a total function onto its range with no way to say
+"unset", so a parameter behind one can be moved off "inherit" and never back. Hence the
+rule the sheet-metal flange follows — *a parameter whose editor can express absence
+(a text box: empty shows it, `null` sets it) takes the nullable type; one whose editor
+cannot keeps a sentinel outside its own legal range* (`EdgeFlangeFeature.KFactor`'s 0,
+which `SheetMetalSpec` refuses as a K-factor anyway, so it costs no legal value and sits
+at the slider's own minimum).
 Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, patterns,
 `BooleanFeature`) cover simple histories; `Feature.FromFunc` handles one-offs.
 `FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
@@ -442,8 +455,16 @@ What is data-constructible: `[Param]`-only features (fillet/chamfer rims, patter
 via their parameterless constructors; `HoleFeature` (its `HoleSpec` serializes kind +
 factory arguments and `WithTipAngle`); and `ExtrudeSketchFeature` /
 `RevolveSketchFeature`, because **a `Sketch` serializes exactly through the public
-`Curve2d` vocabulary** (`ToCurves`/`FromCurves` — lines, arcs, Béziers, hole loops;
-nothing flattened, `InputJson` in `FeatureRegistry.cs`). What cannot, and why:
+`Curve2d` vocabulary** (`ToCurves`/`FromCurves` — lines, circular *and elliptical* arcs,
+Béziers, hole loops; nothing flattened, `InputJson` in `FeatureRegistry.cs`). That
+vocabulary must cover everything `ToCurves` can emit, and it is a **test** rather than a
+convention (`EverySketchSegmentKind_HasAJsonForm` enumerates the segment types from the
+assembly): the writer's default case throws, and `Document.Save` has no catch around
+`SaveHistory`, so a curve kind the reader learned and the writer did not takes the whole
+document down rather than degrading one feature. That is not hypothetical — elliptical
+arcs became first-class after this envelope landed, `FromCurves` learned the case, the
+writer did not, and any document holding an elliptical sketch feature could not be saved
+at all. What cannot round-trip, and why:
 `BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
 `VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
 `HardwareComponent` is a code object), and `FromFunc` lambdas — `SaveHistory` still
@@ -801,6 +822,10 @@ direction and magnitude.
 `BaseFlangeFeature` and `EdgeFlangeFeature` put all of it in the feature history; the
 bend line is an `EdgeSetRef` resolved per regeneration and mapped back into the tree by
 `SheetMetalBody.SiteFor`, so "the flange on THAT edge" survives an edit upstream of it.
+The flange's per-bend overrides are also where the optional-parameter rule above is
+applied: `Width` and `BendRadius` are `double?` (null = take the body's), `KFactor` keeps
+a sentinel 0 because it is the one with a finite range and therefore the one behind a
+slider.
 
 **v1 refuses by name** rather than approximating: bends along non-straight edges,
 closed corners / miters / bend reliefs, a flange flush at one end only, jogs, hems,

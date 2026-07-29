@@ -90,6 +90,51 @@ features) cover simple histories out of the box. Their geometry inputs — the d
 plane, the rim faces, the pattern axis — are [typed
 references](geometry-inputs.md) that round-trip through the same JSON.
 
+### Optional parameters
+
+A parameter that means "not stated — inherit it from somewhere else" is spelt with the
+nullable type. `null` is a value JSON already has, so it round-trips; the regeneration
+cache key renders it `"null"`, so clearing one re-runs the feature; and a
+`[Param(Min=, Max=)]` range does not fire on it, because a value that is not there
+cannot be out of range.
+
+```csharp run:feature-optional-params
+sealed class Spacer : Feature
+{
+    [Param(Min = 1, Units = "mm")] public double Height { get; init; } = 10;
+
+    // null = "take the standard bore", not a magic 0.
+    [Param(Min = 0.1, Units = "mm", Description = "Bore radius override; empty inherits")]
+    public double? BoreRadius { get; init; }
+
+    public override Shape Apply(FeatureContext c) =>
+        Shape.Cylinder(8, Height)
+        - Shape.Cylinder(BoreRadius ?? 3, Height * 2).Translate(0, 0, -Height / 2);
+}
+
+var history = new FeatureHistory();
+history.Add(new Spacer { BoreRadius = 2.5 });
+if (!history.Regenerate().Succeeded) throw new Exception("regeneration failed");
+
+string saved = history.SaveParameters();                   // {"Spacer":{...,"BoreRadius":2.5}}
+history.LoadParameters("""{ "Spacer": { "BoreRadius": null } }""");
+if (((Spacer)history.Features[0]).BoreRadius is not null) throw new Exception("not cleared");
+if (!history.Regenerate().Succeeded) throw new Exception("null failed the Min = 0.1 range");
+
+history.LoadParameters(saved);                             // and back again
+if (((Spacer)history.Features[0]).BoreRadius != 2.5) throw new Exception("value lost");
+```
+
+**Which spelling to reach for is decided by the editor, not by taste.** The properties
+panel offers a *slider* exactly when `[Param(Min=, Max=)]` is finite at both ends, and a
+slider is a total function onto its range with no way to say "unset" — so a parameter
+behind one can be moved off "inherit" and never back. The rule: *a parameter whose editor
+can express absence (a text box: empty shows it, `null` sets it) takes the nullable type;
+one whose editor cannot keeps a sentinel outside its own legal range.*
+`EdgeFlangeFeature` applies both halves — `Width` and `BendRadius` are `double?`, while
+`KFactor` keeps a sentinel `0` (which a K-factor may never be) because its range is
+finite and its slider's minimum *is* 0.
+
 ## The feature registry and whole-history JSON
 
 `SaveParameters` re-tunes an existing history; **`SaveHistory` / `LoadHistory` rebuild
@@ -99,7 +144,9 @@ feature type with its parameter metadata (the UI-insertion catalogue) and says h
 which are **data-constructible** — `[Param]`-only features (fillets, chamfers,
 patterns) construct directly, and holes and sketch extrude/revolves reconstruct from
 their saved inputs (sketches serialize through the exact public `Curve2d` vocabulary,
-so lines, arcs and Béziers round-trip with nothing flattened).
+so lines, circular and elliptical arcs and Béziers round-trip with nothing flattened —
+a coverage the test suite enumerates from the segment types, because the writer's
+default case throws and `Document.Save` does not catch it).
 
 ```csharp run:feature-history-roundtrip
 var plate = Sketch.RoundedRectangle(40, 30, 5);

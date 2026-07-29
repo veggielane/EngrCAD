@@ -59,6 +59,23 @@ public sealed class BaseFlangeFeature(Sketch sketch) : Feature
 /// <para>Refuses by name when the body is not a sheet part: a flange is a declaration in a
 /// tree, not a surgery on arbitrary geometry, because the flat pattern has to be derivable
 /// from the same numbers.</para>
+///
+/// <para><b>How an OPTIONAL parameter is spelt, and why the three overrides here do not
+/// agree.</b> <see cref="EdgeFlange"/> states each override as <c>double?</c> — null means
+/// "take the body's". <see cref="Width"/> and <see cref="BendRadius"/> say the same thing
+/// the same way; <see cref="KFactor"/> keeps a sentinel 0. The deciding fact is not the
+/// serializer (a nullable <c>[Param]</c> round-trips through the JSON seam) but the
+/// EDITOR the parameter gets: <c>ParamEditors.KindFor</c> offers a SLIDER exactly when
+/// <c>[Param(Min=, Max=)]</c> is finite at both ends, and a slider is a total function
+/// onto its range with no way to say "unset" — so an optional parameter behind one could
+/// be moved off "inherit" and never back. K-factor is the one with a finite range (0, 1),
+/// its slider's minimum IS 0, and 0 is refused as a K-factor anyway
+/// (<c>SheetMetalSpec</c> requires it strictly inside (0, 1)) — so the sentinel costs no
+/// legal value and keeps "inherit" one drag away. Width and bend radius are unbounded
+/// above, get a text box, and a text box shows an unset value as empty and takes
+/// <c>null</c> back. <b>The rule: a parameter whose editor can express absence takes the
+/// nullable type; one whose editor cannot keeps a sentinel that is outside its legal
+/// range.</b></para>
 /// </summary>
 public sealed class EdgeFlangeFeature : Feature
 {
@@ -76,12 +93,21 @@ public sealed class EdgeFlangeFeature : Feature
     [Param(Min = 0, Units = "mm", Description = "Inset from the edge's start; 0 spans the whole edge")]
     public double StartOffset { get; init; }
 
-    [Param(Min = 0, Units = "mm", Description = "Span along the edge; 0 runs to its far end")]
-    public double Width { get; init; }
+    /// <summary>Span along the edge; <b>null runs to its far end</b> — the same "not
+    /// stated" <see cref="EdgeFlange.Width"/> carries, rather than a second spelling of
+    /// it. See the class remarks for why <see cref="KFactor"/> is the one that is not
+    /// nullable.</summary>
+    [Param(Min = 1e-9, Units = "mm", Description = "Span along the edge; empty runs to its far end")]
+    public double? Width { get; init; }
 
-    [Param(Min = 0, Units = "mm", Description = "Inside bend radius override; 0 uses the sheet's own")]
-    public double BendRadius { get; init; }
+    /// <summary>Inside bend radius override; <b>null uses the sheet's own</b>.</summary>
+    [Param(Min = 1e-9, Units = "mm", Description = "Inside bend radius override; empty uses the sheet's own")]
+    public double? BendRadius { get; init; }
 
+    /// <summary>
+    /// K-factor override; <b>0 uses the sheet's own</b>. Deliberately NOT nullable, unlike
+    /// its two neighbours — see the class remarks.
+    /// </summary>
     [Param(Min = 0, Max = 1 - 1e-6, Description = "K-factor override; 0 uses the sheet's own")]
     public double KFactor { get; init; }
 
@@ -113,10 +139,10 @@ public sealed class EdgeFlangeFeature : Feature
             Length,
             AngleDegrees,
             Direction,
-            BendRadius > 0 ? BendRadius : null,
+            BendRadius,
             KFactor > 0 ? KFactor : null,
             StartOffset,
-            Width > 0 ? Width : null)).Solid;
+            Width)).Solid;
     }
 }
 

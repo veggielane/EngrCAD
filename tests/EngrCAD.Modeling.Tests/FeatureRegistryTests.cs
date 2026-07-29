@@ -175,6 +175,73 @@ public class FeatureRegistryTests
         Assert.Equal(sketch.Area(), loaded.Area());
     }
 
+    /// <summary>
+    /// A sketch whose outer loop uses EVERY segment kind the vocabulary has — the fixture
+    /// the coverage test below reads, so a new segment type fails a test instead of
+    /// silently reaching <c>SaveCurves</c>' default case at save time.
+    /// </summary>
+    private static Sketch EverySegmentKind() =>
+        Sketch.Start(0, 0)
+            .LineTo(30, 0)                                     // LineSeg
+            .ArcTo(new(30, 12), 8, clockwise: false)           // ArcSeg
+            // EllipseSeg: SVG's A rx ry rot largeArc sweep, deliberately ROTATED so the
+            // two semi-axis vectors are not axis-aligned.
+            .EllipticalArcTo(new(18, 20), 9, 5, 35, largeArc: false, clockwise: false)
+            .BezierTo(new(12, 26), new(4, 22), new(0, 12))     // CubicSeg
+            .Close();
+
+    /// <summary>
+    /// Every sketch segment kind has a JSON form. This is a COVERAGE claim rather than a
+    /// fixture: the segment types are enumerated from the assembly, so adding one without
+    /// teaching <see cref="InputJson"/> about it fails here — at build time, in Modeling —
+    /// instead of at <c>Document.Save</c> time, in a user's session.
+    /// <para>The gap this pins was real: elliptical arcs became first-class after the
+    /// persistence work landed, <see cref="Sketch.FromCurves"/> learned the case and
+    /// <c>SaveCurves</c> did not, so a document holding an elliptical sketch feature could
+    /// not be SAVED at all (the FormatException escapes <c>Document.Save</c>, which has no
+    /// catch around <see cref="FeatureHistory.SaveHistory"/>).</para>
+    /// </summary>
+    [Fact]
+    public void EverySketchSegmentKind_HasAJsonForm()
+    {
+        var segmentBase = typeof(Sketch).Assembly.GetType("EngrCAD.Modeling.SketchSegment")!;
+        var kinds = typeof(Sketch).Assembly.GetTypes()
+            .Where(t => !t.IsAbstract && segmentBase.IsAssignableFrom(t))
+            .ToList();
+        Assert.NotEmpty(kinds);
+
+        var fixture = EverySegmentKind();
+        var used = fixture.Segments.Select(s => s.GetType()).ToHashSet();
+        Assert.Equal(
+            kinds.Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal),
+            used.Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal));
+
+        // Every one of them survives the round trip exactly: the vocabulary is stored, not
+        // sampled, so the enclosed area comes back bit-identical.
+        var saved = InputJson.SaveSketch(fixture);
+        using var document = JsonDocument.Parse(saved.ToJsonString());
+        var loaded = InputJson.LoadSketch(document.RootElement);
+        Assert.Equal(fixture.Area(), loaded.Area());
+        Assert.Equal(saved.ToJsonString(), InputJson.SaveSketch(loaded).ToJsonString());
+    }
+
+    [Fact]
+    public void EllipticalSketch_SurvivesAWholeHistoryRoundTrip()
+    {
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(EverySegmentKind()) { Height = 6, Name = "Cam" });
+
+        string json = history.SaveHistory();
+        var loaded = FeatureHistory.LoadHistory(json);
+        Assert.True(loaded.Complete, string.Join("; ", loaded.Warnings));
+        Assert.Equal(json, loaded.History.SaveHistory());   // the fixed point
+
+        var a = history.Regenerate();
+        var b = loaded.History.Regenerate();
+        Assert.True(a.Succeeded && b.Succeeded);
+        Assert.Equal(a.Body!.ToMesh().Volume(), b.Body!.ToMesh().Volume());
+    }
+
     [Fact]
     public void LoadHistory_SkipsWhatItCannotBuild_AndTheHookRescuesIt()
     {

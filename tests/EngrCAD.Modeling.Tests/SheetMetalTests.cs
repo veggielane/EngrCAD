@@ -404,6 +404,48 @@ public class SheetMetalTests
         Assert.Equal(1.0, BrepMassProperties.Compute(result.Body!.ToBrep()).Volume / body.Unfold().Volume, 6);
     }
 
+    /// <summary>
+    /// The flange overrides mean what <see cref="EdgeFlange"/> means, in the same
+    /// spelling: an unset <see cref="EdgeFlangeFeature.BendRadius"/> is <c>null</c> and
+    /// takes the body's, a stated one is used verbatim — and both survive a whole-history
+    /// round trip, which is what needed the JSON seam to carry nullable parameters at all.
+    /// </summary>
+    [Fact]
+    public void FlangeOverrides_AreNullWhenUnset_AndRoundTrip()
+    {
+        var registry = new FeatureRegistry();
+        var inherited = new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge() };
+        Assert.Null(inherited.BendRadius);
+        Assert.Null(inherited.Width);
+
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge(), BendRadius = 3.5 });
+
+        // The stated radius reaches the flange tree.
+        var body = SheetMetalFeatures.BodyOf(history.Regenerate().Body, "test");
+        Assert.Equal(3.5, Assert.Single(body.Flanges).BendRadius);
+
+        // ... and survives a parameter file. (The Edge is a lambda-backed query in this
+        // fixture, so re-loading its opaque marker warns — the documented behaviour, and
+        // the reason this asserts on the radius rather than on an empty warning list.)
+        string saved = history.SaveParameters();
+        Assert.Contains("\"BendRadius\": 3.5", saved, StringComparison.Ordinal);
+        Assert.Single(history.LoadParameters(saved));
+        Assert.Equal(3.5, ((EdgeFlangeFeature)history.Features[1]).BendRadius);
+        Assert.Equal(saved, history.SaveParameters());
+
+        // Clearing it is a value JSON can state, which is the whole point of the nullable
+        // spelling: "inherit" is null, not a number standing in for it.
+        Assert.Empty(history.LoadParameters(
+            """{ "EdgeFlangeFeature": { "BendRadius": null } }"""));
+        Assert.Null(((EdgeFlangeFeature)history.Features[1]).BendRadius);
+        Assert.Equal(
+            Radius,
+            Assert.Single(SheetMetalFeatures.BodyOf(history.Regenerate().Body, "test").Flanges)
+                .BendRadius ?? Radius);
+    }
+
     [Fact]
     public void EditingTheFlangeLengthReRunsOnlyTheFlangeAndMovesTheBlank()
     {

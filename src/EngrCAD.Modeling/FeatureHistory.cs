@@ -284,6 +284,15 @@ public sealed class FeatureHistory
 
     private static object? Convert(JsonElement element, Type type)
     {
+        // A NULLABLE parameter is the underlying type plus one extra value, and JSON
+        // already spells that value: null in, null out (SerializeValue passes it through
+        // untouched, and Feature.FormatValue already renders it as "null" in the cache
+        // key). Without this, a `double?` [Param] threw "unsupported parameter type
+        // Nullable`1" — swallowed into a warning by ApplyParameters, so the value was
+        // silently dropped on load, which is why every option here had been spelt as a
+        // sentinel 0 alongside a `double?` on the record underneath.
+        if (Nullable.GetUnderlyingType(type) is { } underlying)
+            return element.ValueKind == JsonValueKind.Null ? null : Convert(element, underlying);
         if (type == typeof(double))
             return element.GetDouble();
         if (type == typeof(float))

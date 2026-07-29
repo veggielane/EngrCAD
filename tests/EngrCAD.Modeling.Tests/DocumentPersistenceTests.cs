@@ -195,6 +195,44 @@ public class DocumentPersistenceTests
         Assert.Equal(second, Document.Load(second).Document.Save());
     }
 
+    /// <summary>
+    /// A document whose sketch uses an ELLIPTICAL arc saves. That reads as a triviality
+    /// and was not: elliptical arcs became first-class after this envelope landed,
+    /// <see cref="Sketch.FromCurves"/> learned the case and the writer did not, and
+    /// <see cref="Document.Save"/> has no catch around
+    /// <see cref="FeatureHistory.SaveHistory"/> — so the whole document threw
+    /// <see cref="FormatException"/> rather than losing one feature or degrading it to a
+    /// snapshot. Saving is the assertion; the fixed point and the regenerated volume are
+    /// the ones that say it came back as the same parametric model.
+    /// </summary>
+    [Fact]
+    public void ADocumentWithAnEllipticalSketch_SavesAndReloadsParametric()
+    {
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(
+            Sketch.Start(0, 0)
+                .LineTo(30, 0)
+                .EllipticalArcTo(new(10, 18), 14, 9, 25, largeArc: false, clockwise: false)
+                .Close())
+        { Height = 5 });
+
+        var scene = new Scene(new MeshQuality { SegmentsPerCircle = 16, CurveSamples = 12 });
+        scene.Add(new Part("cam", history));
+        var document = new Document(scene);
+
+        string first = document.Save();
+        var loaded = Document.Load(first);
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal(first, loaded.Document.Save());
+
+        var reloaded = loaded.Scene.Tabs[0].Parts[0];
+        Assert.NotNull(reloaded.History);
+        Assert.Equal(
+            MeshMassProperties.Compute(scene.Tabs[0].Parts[0].GetMesh(scene.Options)).Volume,
+            MeshMassProperties.Compute(reloaded.GetMesh(scene.Options)).Volume,
+            9);
+    }
+
     [Fact]
     public void LoadedHistory_RegeneratesToTheSameGeometry()
     {

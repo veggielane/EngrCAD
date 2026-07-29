@@ -211,9 +211,17 @@ public sealed class FeatureRegistry
 /// <summary>
 /// JSON forms for the constructor inputs the built-in factories understand. Sketches
 /// serialize through the exact public <see cref="Curve2d"/> vocabulary
-/// (<see cref="Sketch.ToCurves"/>/<see cref="Sketch.FromCurves"/>), so lines, arcs and
-/// Béziers round-trip with nothing flattened; hole specs write their kind and the
-/// factory arguments <see cref="HoleSpec"/> validates on the way back in.
+/// (<see cref="Sketch.ToCurves"/>/<see cref="Sketch.FromCurves"/>), so lines, circular and
+/// elliptical arcs and Béziers round-trip with nothing flattened; hole specs write their
+/// kind and the factory arguments <see cref="HoleSpec"/> validates on the way back in.
+///
+/// <para><b>The curve vocabulary here must cover everything <see cref="Sketch.ToCurves"/>
+/// can emit, and that is a test rather than a convention</b>
+/// (<c>FeatureRegistryTests.EverySketchSegmentKind_HasAJsonForm</c> enumerates the segment
+/// types from the assembly). The reason it is worth pinning: this writer's default case
+/// THROWS, and <see cref="Document.Save"/> has no catch around
+/// <see cref="FeatureHistory.SaveHistory"/> — so a curve kind the reader learned and the
+/// writer did not takes the whole document down rather than degrading one feature.</para>
 /// </summary>
 internal static class InputJson
 {
@@ -309,6 +317,17 @@ internal static class InputJson
                 ["arc"] = new JsonArray(
                     arc.Center.X, arc.Center.Y, arc.Radius, arc.StartAngle, arc.SweepAngle),
             },
+            // An elliptical arc stores BOTH semi-axis VECTORS, not a pair of lengths plus a
+            // rotation: that is the representation EllipseSeg carries, so a rotated ellipse
+            // round-trips without anyone re-deriving an angle from a vector and back.
+            Ellipse2d ellipse => new JsonObject
+            {
+                ["ellipse"] = new JsonArray(
+                    ellipse.Center.X, ellipse.Center.Y,
+                    ellipse.SemiAxisX.X, ellipse.SemiAxisX.Y,
+                    ellipse.SemiAxisY.X, ellipse.SemiAxisY.Y,
+                    ellipse.StartAngle, ellipse.SweepAngle),
+            },
             BezierCurve2d bezier => new JsonObject
             {
                 ["bezier"] = new JsonArray(
@@ -334,6 +353,14 @@ internal static class InputJson
                 curves.Add(new Arc2d(
                     new Vector2d(arc[0].GetDouble(), arc[1].GetDouble()),
                     arc[2].GetDouble(), arc[3].GetDouble(), arc[4].GetDouble()));
+            }
+            else if (entry.TryGetProperty("ellipse", out var ellipse))
+            {
+                curves.Add(new Ellipse2d(
+                    new Vector2d(ellipse[0].GetDouble(), ellipse[1].GetDouble()),
+                    new Vector2d(ellipse[2].GetDouble(), ellipse[3].GetDouble()),
+                    new Vector2d(ellipse[4].GetDouble(), ellipse[5].GetDouble()),
+                    ellipse[6].GetDouble(), ellipse[7].GetDouble()));
             }
             else if (entry.TryGetProperty("bezier", out var bezier))
             {
