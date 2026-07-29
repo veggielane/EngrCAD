@@ -904,6 +904,106 @@ reverses B's kept faces *properly*: loops re-wound (order and senses) in additio
 there. Boolean results therefore pass `Validate()` and Euler–Poincaré with the correct
 genus.
 
+### The native B-Rep archive (`BrepArchive`, `.ecb`) — and why it is TEXT
+
+STEP is the interchange format and will stay so; the native archive exists for the one
+thing STEP structurally cannot do here, which is carry this kernel's own surface family.
+`HelicalSurface` (every modelled thread), `LoftedSurface`, `SweptSurface`,
+`OffsetCurve3d`, `SpiralArc3d` and `PhaseShiftedCurve` have no AP214 entity, so the STEP
+writer either refuses them or samples them into a degree-1 approximation. A model
+containing a modelled thread therefore has, until now, had no lossless file
+representation at all.
+
+**Text, not binary, and the reason is the testing culture rather than the geometry.** A
+compact binary would win on size — an archive of a busy solid is a few hundred kilobytes
+where a packed one would be tens — on files nobody has complained about. What it would
+give up is the property this repo's whole verification approach rests on: things that
+*diff*. Golden fingerprints in `Region2dGoldenTests`, byte-compared docs PNGs,
+`BvhBuildOrderTests`' node-bit fingerprints and every "output is bit-identical" claim in
+CLAUDE.md are the same technique — commit the artifact, compare it, and let a diff name
+the regression. A committed corpus archive joins that toolkit directly; a binary one needs
+a decoder written before anyone can look at it, and in practice that means nobody looks.
+Exactness is not the trade-off it sounds like: .NET's round-trip `"R"` formatting is a
+bijection on finite doubles, so a value written and read back is bit-identical, and the
+tests assert the stronger property — **save → load → save is byte-for-byte a fixed
+point** — across the whole corpus.
+
+Structurally it is the STEP writer's entity model with none of the AP214 ceremony: a
+numbered entity table, `#n` references, one entity per line, dependencies always defined
+before use (the object graph is a DAG — nothing reachable from a surface leads back to an
+edge), so reading is a single pass and a forward reference is a malformed file reported by
+name.
+
+**The entity table is keyed on REFERENCE identity, never on structural equality**, and
+that is load-bearing rather than an optimization. `BrepEdge.IsClosedEdge` is literally
+`ReferenceEquals(StartVertex, EndVertex)`, so two coincident vertices and one shared
+vertex are *different solids*; a format that deduplicated by position could not tell them
+apart and would silently change topology. The same rule gives the sharing for free — an
+edge used by two faces is written once and referenced twice, and a seam curve shared by
+two edges comes back as one object rather than two that are free to drift apart under any
+later edit.
+
+Two smaller decisions, both with the same shape as things already recorded here.
+**Frames are rebuilt with `Frame3d.FromOrthonormal`**, the only factory that stores X and
+Y verbatim and derives Z = X × Y; `FromXY`/`FromNormal`/`FromZX` all re-derive, would move
+the axes by ulps, and the archive would stop being a fixed point — the `AxisRef`
+never-re-normalize-a-unit-vector lesson, again. And **the version is refused by name**
+rather than parsed hopefully, because a newer writer may have added entity forms and a
+partial parse of a solid we cannot build is worse than a clear message.
+
+Worth recording as a *measured* finding rather than an assumption: the two constructors
+that re-normalize a stored direction (`RevolvedSurface.AxisDirection`,
+`OffsetCurve3d.PlaneNormal`) turn out to be idempotent on their own output for every
+corpus member, so the fixed-point property holds with no exact-construction back door.
+That was not obvious in advance and is exactly why the fixed-point assertion exists rather
+than a tolerance comparison — a tolerance would have hidden the question.
+
+Scope: the archive is a **geometry** format, not a document format. It carries solids, not
+scenes, poses, features or materials; the document envelope is a separate item (see the
+OCAF assessment in `todo.md`), and smuggling scene structure into a B-Rep file would make
+both harder to version.
+
+### IGES: import only, and what "the useful subset" turned out to mean
+
+The standing assessment in `todo.md` was that IGES is legacy-only, worth an importer and
+never a writer. That held up, and the implementation added one thing worth recording: the
+useful subset is decided by **which entities map onto surfaces the kernel already has**,
+not by which entities are common. 118 ruled surface is a two-section `LoftedSurface`, 122
+tabulated cylinder is an `ExtrudedSurface`, 120 surface of revolution is a
+`RevolvedSurface` — each is a few lines because the target type exists. By the same test,
+entity 186 (Manifold Solid B-Rep Object) and its 502/504/508/510/514 supporting entities
+are **filed rather than built**: they are a second, parallel topology encoding inside the
+same file format, and mapping them is the same size of job as the whole rest of the
+reader — with the twist that a 186 file is the one case that would NOT need healing, so it
+buys correctness we currently get from `ShapeHealing` anyway.
+
+**The result is a face soup, and the design says so rather than hiding it.** IGES carries
+no shared topology at all: every 144 trimmed surface owns its boundary curves, so two
+faces meeting along an edge reference two coincident-but-distinct curves. The imported
+shell therefore has edges used once, `Validate()` refuses it, and `IsFaceSoup` states
+that as a return value. This is precisely the case `ShapeHealing` was built for (its own
+doc comment names foreign STEP for the same reason), so the honest import pipeline is
+three explicit steps — read, heal, wrap — and `Shape.From(path)` deliberately does not
+learn `.igs`, because it would hand back geometry that fails at lowering.
+
+Two decisions specific to a column-oriented format. **Record structure is validated up
+front and refused by name**: column 73 is the section letter and 74-80 the sequence
+number on *every* card, so a file without that shape is rejected before a parameter is
+read — `StlReader`'s "run the exact size test before any content sniffing" rule, applied
+to the first card-image reader in the codebase. And **Hollerith counts must be honoured
+when splitting fields**, which is not a nicety: an author field containing the parameter
+delimiter shifts every later Global parameter by one, and Global parameter 14 is the unit
+flag, so the failure mode is a file that imports cleanly at the wrong scale. That has a
+test.
+
+One more, and it is the same shape as the STEP reader's closed-generator disambiguation:
+**entity 104's conic type is classified from its own coefficients, not from its form
+number.** The form field is routinely wrong in real files, the discriminant `B² − 4AC` is
+exact arithmetic on data the file already gives, and a contradiction is reported as a
+diagnostic with the coefficients believed. Reading the declaration is right when the
+declaration is the only source (144's outer-vs-inner boundary); reading the geometry is
+right when the geometry is independently checkable.
+
 ## 6. Interop
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:

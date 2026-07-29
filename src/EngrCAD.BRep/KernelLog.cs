@@ -14,4 +14,9 @@ internal static partial class KernelLog
         Message = "STEP import: {Solids} solid(s), {Instances} instance(s), {Diagnostics} diagnostic(s) in {ElapsedMs:F0} ms")]
     public static partial void StepImported(
         ILogger logger, int solids, int instances, int diagnostics, double elapsedMs);
+
+    [LoggerMessage(EventId = 91, Level = LogLevel.Information,
+        Message = "IGES import: {Faces} trimmed surface(s), {Curves} loose curve(s), {Surfaces} untrimmed surface(s), {Diagnostics} diagnostic(s) in {ElapsedMs:F0} ms")]
+    public static partial void IgesImported(
+        ILogger logger, int faces, int curves, int surfaces, int diagnostics, double elapsedMs);
 }

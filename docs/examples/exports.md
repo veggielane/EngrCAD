@@ -1,7 +1,9 @@
 # Exports
 
-EngrCAD exports STEP (exact B-Rep), STL, OBJ, OFF, 3MF and AMF (meshes), and PNG
-renders. The snippets on this page run against a temp directory (`Scratch`) during the
+EngrCAD exports STEP (exact B-Rep), its own lossless `.ecb` B-Rep archive, STL, OBJ, OFF,
+3MF, AMF and glTF 2.0 (meshes), VTU (meshes plus simulation results), and PNG renders. The
+snippets on this page run against
+a temp directory (`Scratch`) during the
 docs build, so the export paths are exercised on every build — no screenshots needed
 here.
 
@@ -49,6 +51,76 @@ double size = imported.Solids[0].Vertices.Max(v => v.Position.X);
 Console.WriteLine($"1 m cube imported as {size} mm"); // 1000
 if (Math.Abs(size - 1000) > 1e-9)
     throw new Exception("metre units were not scaled");
+```
+
+## Native B-Rep archive (`.ecb`)
+
+STEP is the interchange format; the `.ecb` archive is the **lossless** one. It round-trips
+every curve and surface type the kernel has, including the ones STEP has no entity for —
+helical surfaces (modelled threads), lofted surfaces, swept (RMF) surfaces, offset curves,
+spiral arcs — plus trimmed edge domains and `CurveSegment` mappings.
+
+It is a **versioned, human-diffable text format**: a numbered entity table where every
+reference is `#n`, so shared topology stays shared (an edge used by two faces is written
+once and referenced twice), one entity per line, dependencies always defined before use.
+
+```csharp run:brep-archive-roundtrip
+// A modelled thread: a HelicalSurface, which STEP cannot represent at all.
+// (chamferEnds: false is the B-Rep-native form -- the end cones have no exact B-Rep.)
+var rod = Shape.ExternalThread(8, length: 10, chamferEnds: false).ToBrep();
+
+var path = Path.Combine(Scratch, "rod.ecb");
+BrepArchive.WriteFile(rod, path, name: "M8 rod");
+
+var result = BrepArchive.ReadFile(path);
+var restored = result.Single();
+restored.Validate();
+
+Console.WriteLine($"{result.Name}: {restored.Faces.Count()} faces, "
+    + $"{restored.Edges.Count()} edges, format v{result.Version}");
+if (restored.Faces.Count() != rod.Faces.Count())
+    throw new Exception("face count changed across the round trip");
+
+// save -> load -> save is byte-identical: the strong form of "exact".
+if (BrepArchive.Write(restored, "M8 rod") != File.ReadAllText(path))
+    throw new Exception("the archive is not a fixed point under round-trip");
+```
+
+The file reads like this — `Solid` at the end referencing shells, referencing faces,
+referencing surfaces and loops all the way down:
+
+```
+ENGRCAD-BREP 1
+UNITS MM
+NAME 'M8 rod'
+GENERATOR 'EngrCAD'
+
+#1 = Line((4 0 -0.078125), (4 0 0.078125))
+#2 = Helical((0 0 0 1 0 0 0 1 0), (4 -0.078125), (4 0.078125), 1.25, (0 50.26548))
+#3 = Vertex((4 0 -0.078125))
+...
+ROOT #57
+```
+
+Two contract points. An **unknown version is refused by name** rather than parsed
+hopefully — a newer writer may have added entity forms, and a partial parse of a solid we
+cannot build is worse than a clear message. And units are declared and checked, the lesson
+the STEP importer paid for.
+
+Reading gives you an ordinary `BrepSolid`, so it feeds straight back into the modelling
+API:
+
+```csharp run:brep-archive-reuse
+var original = (Shape.Box(30, 20, 10) - Shape.Cylinder(4, 30)).ToBrep();
+BrepArchive.WriteFile(original, Path.Combine(Scratch, "plate.ecb"));
+
+var reloaded = BrepArchive.ReadFile(Path.Combine(Scratch, "plate.ecb")).Single();
+var further = Shape.From(reloaded) - Shape.Cylinder(3, 30).Translate(10, 0, 0);
+
+var mesh = further.ToMesh();
+Console.WriteLine($"reloaded and cut again: {mesh.FaceCount} facets, closed = {mesh.IsClosed}");
+if (!mesh.IsClosed)
+    throw new Exception("the reloaded solid did not survive a second boolean");
 ```
 
 ### Healing imported files
@@ -134,6 +206,60 @@ using (var archive = System.IO.Compression.ZipFile.OpenRead(Path.Combine(Scratch
 }
 ```
 
+## glTF 2.0 (the web, AR and DCC route)
+
+`GltfWriter` writes binary `.glb` and self-contained `.gltf` (the buffer rides inline
+as a data URI, so there is no sidecar `.bin` to lose). It is the one mesh format here
+that **keeps the assembly hierarchy** instead of flattening it: glTF has real nodes, so
+`GltfScene.Plan` emits a node per tab, per sub-assembly and per occurrence, with **one
+mesh per distinct part however many times it is placed**. A fastener placed fifty times
+is written once — the same "one product, N occurrences" structure the STEP assembly
+writer uses, and the property the baking exporters (STL, OBJ, 3MF) structurally cannot
+have.
+
+```csharp run:export-gltf
+var bolt = new Part("bolt", Shape.Cylinder(2, 12), Palette.Steel);
+var plate = new Part("plate", Shape.Box(60, 40, 6), Palette.Brass);
+
+var stack = new Assembly("stack");
+stack.Add(plate);
+foreach (var x in new[] { -20.0, 0.0, 20.0 })
+    stack.Add(bolt, Frame3d.FromOrthonormal((x, 0, 6), Vector3d.UnitX, Vector3d.UnitY));
+
+var scene = new Scene();
+scene.AddTab("Assembly").Add(stack);
+
+var plan = GltfScene.WriteFile(scene, Path.Combine(Scratch, "stack.glb"));
+
+// TWO meshes for four placements: the bolt is written once and instanced.
+Console.WriteLine($"{plan.Geometries.Count} meshes, {plan.Roots.Count} root node(s)");
+if (plan.Geometries.Count != 2)
+    throw new Exception($"expected 2 meshes, got {plan.Geometries.Count}");
+
+var bytes = File.ReadAllBytes(Path.Combine(Scratch, "stack.glb"));
+if (System.Text.Encoding.ASCII.GetString(bytes, 0, 4) != "glTF")
+    throw new Exception("not a GLB");
+```
+
+Colours become PBR metallic-roughness materials, translucent parts declare
+`alphaMode: BLEND`, and a part carrying a `FieldDisplay` exports its simulation-result
+colours as the `COLOR_0` vertex attribute — the *same* colours the viewport draws, since
+both come from `FieldRendering.SourceColors`. So an FEA result can be handed to a
+browser or a phone as one file.
+
+Three conventions worth knowing:
+
+* **Y-up, metres.** glTF is Y-up and metric; EngrCAD is Z-up millimetres. The conversion
+  rides on a single root node built from exact values, so every part transform below it
+  stays verbatim. `new GltfOptions { YUp = false, Scale = 1 }` writes model coordinates.
+* **Winding is not flipped under mirroring.** The spec requires the *consumer* to reverse
+  winding when a node's transform has a negative determinant, so the transform is written
+  as-is; flipping here as well would double the correction.
+* **Deformation does not travel.** A displacement exaggeration is a viewing parameter and
+  glTF has nowhere to record one, so a file carrying 50×-displaced geometry would be
+  indistinguishable from a model that really is that shape. The colours go, the
+  displacement stays behind.
+
 ## OFF
 
 The writer twin of the OFF reader — handy for mesh-processing toolchains
@@ -154,11 +280,15 @@ no code changes, CI-friendly, no window:
 
 ```
 dotnet run --project MyDesign -- --export bracket.step   # STEP per B-Rep part
+dotnet run --project MyDesign -- --export bracket.ecb    # native lossless B-Rep archive
 dotnet run --project MyDesign -- --export bracket.stl    # merged binary STL
 dotnet run --project MyDesign -- --export bracket.obj    # merged OBJ
 dotnet run --project MyDesign -- --export bracket.off    # merged OFF
 dotnet run --project MyDesign -- --export bracket.3mf    # 3MF (named, colored objects)
 dotnet run --project MyDesign -- --export bracket.amf    # AMF (named, colored objects)
+dotnet run --project MyDesign -- --export bracket.glb    # glTF 2.0 (hierarchy + materials)
+dotnet run --project MyDesign -- --export bracket.gltf   # glTF 2.0, self-contained JSON
+dotnet run --project MyDesign -- --export bracket.vtu    # VTK unstructured grid + results
 dotnet run --project MyDesign -- --render bracket.png    # offscreen PNG render
 ```
 

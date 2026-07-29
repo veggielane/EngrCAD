@@ -904,6 +904,61 @@ operations. Depends only on `EngrCAD.Core`.
   outward-band convention the single-rim pole case reads — with the rim circle's own
   axis alignment folded in.
 
+- **Native B-Rep archive** (`BrepArchive.Write/Read/WriteFile/ReadFile` →
+  `BrepArchiveResult`; extension `.ecb`, wired into `--export`) — the **lossless**
+  round-trip STEP cannot give. Every curve and surface type in this project round-trips
+  as ITSELF, including the ones with no AP214 entity at all: `HelicalSurface` (every
+  modelled thread), `LoftedSurface`, `SweptSurface`, `OffsetCurve3d`, `SpiralArc3d`,
+  `PhaseShiftedCurve`, plus trimmed edge domains and `CurveSegment` mappings.
+  **Text, and that is a decision about testing rather than about geometry** (design.md
+  §5): a numbered entity table with `#n` references, one entity per line, `;` comments,
+  dependencies always defined before use — so a committed corpus archive can be *diffed*
+  the way the golden fingerprints and byte-compared docs PNGs already are, where a binary
+  would need a decoder written before anyone would look at it. Exactness is not given up
+  for it: `"R"` formatting is a bijection on finite doubles, and the tests assert the
+  strong form — **save → load → save is byte-for-byte a fixed point** over a 14-solid
+  corpus (box through threaded rod, whole-solid fillet and boolean output). **The entity
+  table keys on REFERENCE identity, never on structural equality**, which is load-bearing
+  and not an optimization: `BrepEdge.IsClosedEdge` *is*
+  `ReferenceEquals(StartVertex, EndVertex)`, so two coincident vertices and one shared
+  vertex are different solids, and deduplicating by position would silently change
+  topology. The same rule gives sharing for free — an edge used by two faces is written
+  once, a seam curve shared by two edges comes back as one object. Frames are rebuilt
+  with `Frame3d.FromOrthonormal`, the only factory that stores its axes verbatim (the
+  re-deriving ones would move them by ulps and the fixed point would break — the
+  `AxisRef` lesson). An **unknown version is refused by name**, as are foreign units and
+  dangling or forward references. Scope is deliberately GEOMETRY, not document: solids,
+  not scenes, poses, features or materials.
+- **IGES 5.3 import** (`IgesReader.Read/ReadFile` → `IgesReadResult`; the record layer is
+  the internal `IgesParser`) — **import only, deliberately**: IGES is a legacy format
+  whose remaining use is receiving files from old CAM and surfacing systems, and writing
+  it would mean maintaining a second, lossier encoding of geometry STEP already carries
+  better. Entities are the ones that map ONTO EXISTING kernel geometry rather than
+  needing new surface types: 110 line, 100 circular arc, 104 conic arc, 126/128 rational
+  B-spline curve and surface, 102 composite curve, 116 point, 108 plane, 118 ruled (a
+  two-section `LoftedSurface`), 120 surface of revolution, 122 tabulated cylinder (an
+  `ExtrudedSurface`), 124 transformation matrix, 142/144 trimmed parametric surface.
+  **The result is a FACE SOUP and says so** (`IsFaceSoup`): IGES carries no shared
+  topology, so every trimmed surface owns its boundary curves, two neighbouring faces
+  reference two coincident-but-distinct curves, and the assembled shell's edges are used
+  once rather than twice — `Validate()` refuses it until `ShapeHealing.Heal` has sewn it,
+  which is exactly the case healing was built for. Four rules carried over from
+  `StepReader`: units resolved from the Global section and scaled to millimetres (with
+  the exact-`==` guard that a millimetre file is bit-identical, not "scaled by 1");
+  unknown entity types skipped ONCE with a diagnostic naming the type and its first
+  offender; a bad entity costing only itself; and everything reported as DATA
+  (`Diagnostics`) rather than as log lines. Two things specific to a column-oriented
+  format: **record structure is validated up front and refused by name** — column 73 is
+  the section letter and 74-80 the sequence number on every card, so a file without that
+  shape is rejected before a parameter is read (`StlReader`'s size-test-first rule) — and
+  **Hollerith counts are honoured when splitting fields**, since an author field
+  containing the parameter delimiter would otherwise shift every later Global parameter
+  by one and silently change the file's units. The conic arc (104) is classified from its
+  own coefficients rather than from its form number, which is routinely wrong; a
+  contradiction is reported and the coefficients believed. The 142 boundary takes the
+  MODEL-space curve, not the parameter-space one — this topology has no pcurve slot
+  (trimming is 3D loops pulled back on demand), so the choice is stated rather than
+  silently made.
 - **Shape healing** (`ShapeHealing.Heal/Analyze` — OCCT `ShapeFix`): repairs imported
   face-soup topology; every repair is a return value (`ShapeHealingReport`), never a
   log line, and the input is never modified. Passes in order, each switchable: vertex

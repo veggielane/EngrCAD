@@ -791,6 +791,32 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   a proper OPC package (`[Content_Types].xml`, `_rels/.rels`,
   `3D/3dmodel.model`); AMF is plain ISO/ASTM 52915 XML. N-gons are
   fan-triangulated — both formats are triangles.
+- **`GltfWriter` / `GltfGeometry` / `GltfNode` / `GltfOptions`** — glTF 2.0 export
+  (binary `.glb` and self-contained `.gltf`, the buffer inline as a base64 data URI so
+  there is no sidecar to lose), dependency-free over `Utf8JsonWriter` plus a
+  hand-written GLB container. **The seam is a node FOREST over shared geometry, not a
+  flat part list**, and that is the whole reason glTF is worth having beside the others:
+  glTF has real hierarchy, so one `GltfGeometry` per distinct piece of geometry becomes
+  one glTF mesh and every placement becomes a `GltfNode` with its own matrix — the "one
+  product, N occurrences" structure the STEP assembly writer emits, which the baking
+  writers above structurally cannot express. (The `MeshExportPart` overload builds a
+  flat one-node-per-part forest for callers that only have that.) Four rules with
+  reasons: **winding is NOT flipped under mirroring** (the spec makes the *consumer*
+  reverse it when a node's global transform has a negative determinant, so flipping here
+  would double the correction and turn every mirrored instance inside out — the one
+  place this differs from every other writer here); **the Y-up/metre conversion is ONE
+  root node built from exact values** (`cos(-pi/2)` is 6.1e-17, and a diffable file
+  should not carry that), so part transforms below it stay verbatim and
+  `GltfOptions { YUp = false, Scale = 1 }` writes model coordinates; geometry is the
+  FLAT render mesh so a CAD model keeps its hard edges, at three vertices per triangle;
+  and a primitive carrying `COLOR_0` gets a **white** `baseColorFactor`, because glTF
+  multiplies the two and a part colour left in would tint every field value by it.
+  Colours are written verbatim as linear factors rather than converted from sRGB, so a
+  part looks in a glTF viewer the way it looks in EngrCAD's own viewport, which applies
+  no gamma conversion either. Per-vertex colours arrive indexed by SOURCE mesh vertex
+  (the same indexing a `MeshField` uses) and are spread across the flat mesh's
+  duplicates through `RenderMesh.SourceVertices` — never a position hash, which is
+  ambiguous wherever two distinct source vertices share a position.
 - **Mesh import** — `StlReader` (binary + ASCII, autodetected: the exact
   84 + 50·n byte-size test runs *before* any `solid` prefix sniffing, because binary
   exporters routinely write "solid" into the 80-byte header; the prefix + a

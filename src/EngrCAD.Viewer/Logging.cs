@@ -137,7 +137,7 @@ internal static partial class Log
     internal static partial void UnsupportedRenderFormat(ILogger logger, string extension);
 
     [LoggerMessage(EventId = 27, Level = LogLevel.Error,
-        Message = "Unsupported export format '{Extension}' — use .step, .stl, .obj, .3mf, .amf, or .off.")]
+        Message = "Unsupported export format '{Extension}' — use .step, .ecb, .stl, .obj, .3mf, .amf, .off, .vtu, .glb, or .gltf.")]
     internal static partial void UnsupportedExportFormat(ILogger logger, string extension);
 
     [LoggerMessage(EventId = 28, Level = LogLevel.Error,
@@ -165,6 +165,12 @@ internal static partial class Log
         Message = "wrote {Path} ({InstanceCount} instance(s), {Format})")]
     internal static partial void WroteMeshFormat(
         ILogger logger, string path, int instanceCount, string format);
+
+    /// <summary>A part that would not mesh. Named and dropped, never swallowed — the rest
+    /// of the scene still exports, so this is a warning like its STEP counterpart.</summary>
+    [LoggerMessage(EventId = 33, Level = LogLevel.Warning,
+        Message = "skipping '{PartName}': {Reason}")]
+    internal static partial void SkippingPart(ILogger logger, string partName, string reason);
 
     // ---- live modeling loop ----
 

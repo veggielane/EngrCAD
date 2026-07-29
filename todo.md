@@ -954,19 +954,50 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   disambiguation reads OUR outward-band sense convention, so a foreign face whose wire
   winding contradicts its own same-sense flag could still pick the wrong half (per-face
   winding validation is ShapeFix_Face territory, not started)
-- [ ] Data exchange: IGES, glTF, native BREP serialization format. Design assessment
-  (task #11, each its own project): **IGES** is a legacy-only format (fixed-column
-  Part 21-era encoding, entity soup, no product structure worth the name) whose one
-  remaining use is receiving files from old CAM systems — if ever built, import-only,
-  reusing the `StepReader` diagnostics conventions; do not write it. **glTF** is the
-  opposite: mesh-plus-materials for the web viewer and downstream DCC tools — it
-  belongs beside `StlWriter`/`ObjWriter` in the mesh export family (binary `.glb`, one
-  buffer, per-part nodes with instance transforms from `PartInstance`, colors from
-  `Part.Color`), no B-Rep semantics, and is the natural companion of the WASM viewer.
-  **Native BREP serialization** should be the STEP writer's entity model dumped
-  without the AP214 ceremony ONLY if a measured need (load time, exactness of swept
-  surfaces STEP cannot carry) appears; the honest alternative — version the format
-  from day one or don't ship it — is the whole cost.
+- [ ] Data exchange follow-ups (glTF, native BREP and IGES import all ✅ landed; the
+  original task-#11 assessment is kept below with each verdict recorded against it).
+  **IGES** ✅ **import landed** (`IgesReader` + internal `IgesParser`, docs
+  `examples/import.md`), export **filed and refused** — the assessment's "do not write
+  it" holds: a writer would be a second, lossier encoding of geometry STEP already
+  carries better. Landed entities: 110, 100, 104, 126, 128, 102, 116, 108, 118, 120,
+  122, 124, 142, 144. **Residuals, in rough value order**: (a) **186 MSBO + 502 vertex
+  list / 504 edge list / 508 loop / 510 face / 514 shell** — the one path that yields a
+  SEWN solid rather than a face soup, but it is a second parallel topology encoding
+  inside the same format, about as large as the rest of the reader, and it buys
+  correctness `ShapeHealing` already supplies; (b) 402 associativity / 308+408
+  subfigure instances, i.e. the nearest thing IGES has to assembly structure — worth it
+  only if a real file turns up needing it; (c) 106 copious data (the polyline family),
+  cheap and common in 2D-ish files; (d) 116-point and loose-curve output is returned but
+  nothing consumes it through the `Shape` API yet; (e) the 142 parameter-space curve is
+  discarded, since the topology has no pcurve slot — if one is ever added (a real
+  change, blast radius across `FaceSplitter`/`BrepArchive`/`StepWriter`/the
+  tessellator), IGES is a consumer waiting for it; (f) entity 314 colour and 406
+  properties are skipped silently rather than carried onto `Part.Color`.
+  **glTF** ✅ **landed** (`GltfWriter` in EngrCAD.Mesh + `GltfScene` in Viewer.Core;
+  `.glb`/`.gltf`, `--export` and MCP wiring, docs `examples/exports.md`) — and it went
+  further than this assessment expected: glTF has real hierarchy, so it preserves the
+  assembly tree with one mesh per distinct `Part` rather than flattening to
+  `PartInstance`s. Residual glTF follow-ups: no texture/UV support (nothing produces
+  UVs yet); `KHR_materials_*` extensions unused (a metalness/roughness pair per part is
+  all `Part` carries); the flat render mesh triples the vertex count against a
+  shared-vertex mesh, so a `KHR_draco_mesh_compression` or an indexed-with-smoothing-
+  groups path is the size lever if files ever get big; and a deformed `FieldDisplay`
+  exports undeformed by design (see the reasoning in `GltfScene`) — a glTF morph target
+  is the honest way to carry it, since a target's weight is exactly the exaggeration
+  factor the file currently has nowhere to record.
+  **Native BREP serialization** ✅ **landed** (`BrepArchive` in EngrCAD.BRep, `.ecb`,
+  `--export` wiring, docs `examples/exports.md`, decision recorded in design.md §5). The
+  measured need was the second one this assessment named: every modelled thread carries a
+  `HelicalSurface`, which STEP has no entity for, so a threaded part had no lossless file
+  representation at all. Versioned from day one, unknown versions refused by name. Format
+  residuals: no compression (a busy solid is a few hundred KB of text — fine today, and
+  the honest lever if it ever is not is gzip around the same bytes rather than a binary
+  encoding, since that keeps the diffability the format exists for); no scene/document
+  content by design (that is the OCAF envelope item below, which should REFERENCE `.ecb`
+  files rather than embed geometry); the reader does not tolerate forward references, so
+  a hand-reordered file is refused rather than sorted; and the `Diagnostics` list only
+  ever carries unknown-header warnings today — there is no partial-read mode, which is
+  the right call for a native format and the wrong one for an import format.
 - [ ] **HLR / drawing follow-ups** (v1 ✅ landed — `HiddenLineRemoval` classifying exact
   B-Rep feature edges against the display mesh, `DrawingSheet`/`DrawingView` with
   third/first-angle standard layouts and section views, `SheetAnnotation` dimensions,
@@ -1085,8 +1116,9 @@ honest no) is recorded in design.md §6b with the comparison committed as
 - [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
   `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
   build123d's edge-classification line types) and **VTK/VTU** ✅ (`VtuWriter` +
-  `--export .vtu`, geometry plus simulation results as point data); remaining: glTF,
-  VRML.
+  `--export .vtu`, geometry plus simulation results as point data) and **glTF 2.0** ✅
+  (`GltfWriter` + `GltfScene`, `.glb`/`.gltf`, hierarchy-preserving with per-part PBR
+  materials and `COLOR_0` result colours); remaining: VRML.
 - [ ] **Deliberately NOT taking**: string selectors (type-unsafe, and LINQ is strictly
   better in C#), Python-style implicit "pending" state carried between builder calls
   (hard to reason about and worse without context managers — confirmed by the builder

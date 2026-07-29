@@ -449,10 +449,11 @@ public sealed class SceneTools(SceneSession session)
     /// Writes the scene to a file the caller names: <c>.step</c> (exact B-Rep, one file
     /// per part), <c>.stl</c>/<c>.obj</c>/<c>.off</c> (meshes, instances merged with
     /// their transforms), <c>.3mf</c>/<c>.amf</c> (per-instance objects with names and
-    /// colors), or <c>.png</c> (a render).
+    /// colors), <c>.glb</c>/<c>.gltf</c> (glTF 2.0 for the web — PBR materials, one mesh
+    /// per distinct part however many times it is placed), or <c>.png</c> (a render).
     /// </summary>
     public CallToolResult Export(
-        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .3mf, .amf, .off, .png).")]
+        [Description("Destination file path; the extension picks the format (.step, .stl, .obj, .3mf, .amf, .off, .glb, .gltf, .png).")]
         string path,
         [Description("Export only this tab (omit for the whole scene).")] string? tab = null,
         [Description("Image width in pixels for .png exports, 16-4096 (default 1280).")]
@@ -535,12 +536,32 @@ public sealed class SceneTools(SceneSession session)
                         ["instances"] = instances.Count,
                     });
 
+                case ".glb" or ".gltf":
+                {
+                    // Instancing survives (one mesh per distinct part) even though the
+                    // scoped instance list has already flattened the hierarchy — the
+                    // tool's scope is a filter, and a filtered subtree is not a tree.
+                    var plan = GltfScene.Plan(instances, quality);
+                    if (plan.Geometries.Count == 0)
+                        return Error("Nothing to export: no part in scope could be meshed.");
+                    GltfWriter.WriteFile(plan.Geometries, plan.Roots, path);
+                    return Ok(new JsonObject
+                    {
+                        ["wrote"] = Path.GetFullPath(path),
+                        ["format"] = "glTF 2.0",
+                        ["instances"] = instances.Count,
+                        ["meshes"] = plan.Geometries.Count,
+                        ["skipped"] = plan.Skipped.Count,
+                    });
+                }
+
                 case ".step" or ".stp":
                     return ExportStep(path, instances);
 
                 default:
                     return Error(
-                        $"Unsupported export format '{extension}' — use .step, .stl, .obj, .3mf, .amf, .off, or .png.");
+                        $"Unsupported export format '{extension}' — use .step, .stl, .obj, "
+                        + ".3mf, .amf, .off, .glb, .gltf, or .png.");
             }
         }
         catch (Exception e)
