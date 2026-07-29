@@ -189,7 +189,7 @@ public class TrimmedHelicalFaceTests
         // the AxialRate = rate, Slope = 0 members, the cap cut the AxialRate = 0 one, and
         // only the cone cut varies both. So "is a spiral arc" cannot be the gate.
         Assert.Equal(4, spirals.Count);
-        Assert.Single(spirals.Where(s => s.IsPlanar));
+        Assert.Single(spirals, s => s.IsPlanar);
         Assert.Equal(2, spirals.Count(s => s.Slope == 0 && !s.IsPlanar));   // the rails
     }
 

@@ -84,7 +84,7 @@ public class PartialRunTests
         // 6 box faces + 2 bands + 2 terminations.
         Assert.Equal(10, solid.Faces.Count());
         // The interior corner mitered on the bicylinder ellipse.
-        Assert.Single(solid.Edges.Where(e => e.Curve is Ellipse3d));
+        Assert.Single(solid.Edges, e => e.Curve is Ellipse3d);
     }
 
     [Fact]
