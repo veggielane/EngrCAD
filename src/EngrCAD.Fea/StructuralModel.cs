@@ -78,13 +78,30 @@ public static class Facets
     /// pair is exact (a planar triangle whose normal is parallel and whose centroid is on
     /// the plane lies in it entirely).
     /// </summary>
-    public static Func<FacetRef, bool> OnPlane(Vector3d point, Vector3d normal, double tolerance = 1e-6)
+    public static Func<FacetRef, bool> OnPlane(
+        Vector3d point, Vector3d normal, double relativeTolerance = 1e-3)
     {
-        var n = normal.Normalized();
+        if (!normal.TryNormalize(Tolerance.Default, out var n))
+            throw new FeaException($"Facets.OnPlane needs a non-zero plane normal; got {normal}.");
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(relativeTolerance);
         double offset = n.Dot(point);
-        return f => Math.Abs(n.Dot(f.Centroid) - offset) <= tolerance
-                 && Math.Abs(n.Dot(f.Normal)) >= 1.0 - 1e-6;
+        return f =>
+            // Distance measured against the facet's OWN size (the square root of its
+            // area) — the scale-free tier. An absolute length here would be wrong in both
+            // directions away from unit scale: it selects everything on a 5 um part and
+            // nothing on a 2 m weldment. A facet genuinely in the plane sits at round-off
+            // while the nearest one that is not sits about its own size away, so the two
+            // are separated by orders of magnitude and the constant can be loose.
+            Math.Abs(n.Dot(f.Centroid) - offset) <= relativeTolerance * Math.Sqrt(f.Area)
+            // ...and its normal is parallel to the plane's. This test is DIMENSIONLESS —
+            // a dot product of unit vectors — so its epsilon is an angle, not a length.
+            && Math.Abs(n.Dot(f.Normal)) >= 1.0 - ParallelTolerance;
     }
+
+    /// <summary>How far a facet's normal may lean off a plane's and still count as lying
+    /// in it: 1e-6 on a dot product of unit vectors, about 0.08 degrees. Dimensionless, so
+    /// it carries no model scale.</summary>
+    private const double ParallelTolerance = 1e-6;
 
     /// <summary>Facets whose outward normal is within <paramref name="maxAngleDegrees"/>
     /// of <paramref name="direction"/> — "the top surface", "the loaded flank".</summary>
@@ -183,13 +200,25 @@ public sealed class StructuralModel
     }
 
     /// <summary>The restraint mask on one node.</summary>
-    public Dof RestraintOf(int node) => _restraint[node];
+    public Dof RestraintOf(int node)
+    {
+        RequireNode(node);
+        return _restraint[node];
+    }
 
     /// <summary>The prescribed displacement of one node (components without a restraint are ignored).</summary>
-    public Vector3d PrescribedOf(int node) => _prescribed[node];
+    public Vector3d PrescribedOf(int node)
+    {
+        RequireNode(node);
+        return _prescribed[node];
+    }
 
     /// <summary>The applied nodal force on one node.</summary>
-    public Vector3d ForceOf(int node) => _force[node];
+    public Vector3d ForceOf(int node)
+    {
+        RequireNode(node);
+        return _force[node];
+    }
 
     /// <summary>Number of nodes carrying at least one restraint.</summary>
     public int RestrainedNodeCount => _restraint.Count(d => d != Dof.None);
@@ -224,6 +253,8 @@ public sealed class StructuralModel
         var sum = Vector3d.Zero;
         for (int v = 0; v < _force.Length; v++)
         {
+            // Exact-zero skip: an unloaded node contributes exactly nothing to the moment,
+            // so this is a semantic test rather than a tolerance.
             if (_force[v] != Vector3d.Zero)
                 sum += (Mesh.Position(v) - about).Cross(_force[v]);
         }
@@ -232,13 +263,23 @@ public sealed class StructuralModel
 
     // ---- supports -------------------------------------------------------------------
 
-    /// <summary>Fully or partially fixes every node of the selected facets.</summary>
+    /// <summary>
+    /// Fully or partially fixes every node of the selected facets.
+    /// <para><b>A fix is a prescribe-to-zero</b>, so it CLEARS any displacement already
+    /// prescribed on the axes it names. Leaving the old value in place would make
+    /// <c>Prescribe(...).Fix(...)</c> silently keep an enforced deflection while both the
+    /// API and the condition log said "fix"; spelling it this way also makes the two
+    /// orderings commute.</para>
+    /// </summary>
     public StructuralModel Fix(Func<FacetRef, bool> facets, Dof dofs = Dof.All)
     {
         ArgumentNullException.ThrowIfNull(facets);
         var nodes = SelectNodes(facets, nameof(Fix));
         foreach (int node in nodes)
+        {
             _restraint[node] |= dofs;
+            _prescribed[node] = Combine(_prescribed[node], Vector3d.Zero, dofs);
+        }
         _conditions.Add($"fix {dofs} on {nodes.Count} nodes");
         return this;
     }
@@ -247,11 +288,13 @@ public sealed class StructuralModel
     public StructuralModel Fix(int tag, Dof dofs = Dof.All) => Fix(Facets.Tag(tag), dofs);
 
     /// <summary>Fixes one node directly — the escape hatch, and how a statically
-    /// determinate 3-2-1 restraint is built.</summary>
+    /// determinate 3-2-1 restraint is built. Clears any prescribed displacement on the
+    /// axes it names (see <see cref="Fix(Func{FacetRef, bool}, Dof)"/>).</summary>
     public StructuralModel FixNode(int node, Dof dofs = Dof.All)
     {
         RequireNode(node);
         _restraint[node] |= dofs;
+        _prescribed[node] = Combine(_prescribed[node], Vector3d.Zero, dofs);
         _conditions.Add($"fix {dofs} on node {node}");
         return this;
     }
@@ -314,24 +357,31 @@ public sealed class StructuralModel
     public StructuralModel Force(Func<FacetRef, bool> facets, Vector3d totalForce)
     {
         ArgumentNullException.ThrowIfNull(facets);
+
+        // ONE pass over the selector, and the matched list is what the load is applied to.
+        // Asking the predicate a second time would let a stateful one answer differently,
+        // so the traction would be derived from one facet set and applied to another —
+        // and the exact-resultant guarantee above, which is the whole point of this
+        // overload, would quietly stop holding.
+        var matched = new List<int>();
         double area = 0;
-        int matched = 0;
         for (int f = 0; f < Mesh.FacetCount; f++)
         {
             if (!facets(Describe(f)))
                 continue;
-            matched++;
+            matched.Add(f);
             area += Mesh.FacetArea(f).Length;
         }
-        if (matched == 0)
+        if (matched.Count == 0)
             throw NothingSelected(nameof(Force));
         if (!(area > 0))
             throw new FeaException(
-                $"Force selected {matched} facets whose total area is zero; a traction cannot be derived.");
+                $"Force selected {matched.Count} facets whose total area is zero; "
+                + "a traction cannot be derived.");
 
         var traction = totalForce / area;
-        ApplySurfaceLoad(facets, nameof(Force), _ => traction);
-        _conditions.Add($"force {totalForce} over {matched} facets ({area:G6} area)");
+        ApplyToFacets(matched, _ => traction);
+        _conditions.Add($"force {totalForce} over {matched.Count} facets ({area:G6} area)");
         return this;
     }
 
@@ -353,6 +403,8 @@ public sealed class StructuralModel
         for (int e = 0; e < Mesh.ElementCount; e++)
         {
             double density = MaterialOf(e).Density;
+            // Exact-zero semantic test: a weightless material contributes no body load.
+            // Material's constructor has already refused a negative density.
             if (density == 0)
                 continue;
             var nodes = Mesh.Element(e);
@@ -475,29 +527,35 @@ public sealed class StructuralModel
     private int ApplySurfaceLoad(
         Func<FacetRef, bool> facets, string caller, Func<FacetRef, Vector3d> traction)
     {
+        var matched = new List<int>();
+        for (int f = 0; f < Mesh.FacetCount; f++)
+        {
+            if (facets(Describe(f)))
+                matched.Add(f);
+        }
+        if (matched.Count == 0)
+            throw NothingSelected(caller);
+        ApplyToFacets(matched, traction);
+        return matched.Count;
+    }
+
+    /// <summary>Distributes a traction over an already-selected facet list.</summary>
+    private void ApplyToFacets(List<int> facets, Func<FacetRef, Vector3d> traction)
+    {
         int perFacet = Mesh.NodesPerFacet;
         Span<Vector3d> positions = stackalloc Vector3d[perFacet];
         Span<double> weights = stackalloc double[perFacet];
-        int matched = 0;
 
-        for (int f = 0; f < Mesh.FacetCount; f++)
+        foreach (int f in facets)
         {
-            var reference = Describe(f);
-            if (!facets(reference))
-                continue;
-            matched++;
             var nodes = Mesh.Facet(f);
             for (int i = 0; i < perFacet; i++)
                 positions[i] = Mesh.Position(nodes[i]);
             TetElement.FacetLoadWeights(Mesh.Order, positions, weights);
-            var t = traction(reference);
+            var t = traction(Describe(f));
             for (int i = 0; i < perFacet; i++)
                 _force[nodes[i]] += t * weights[i];
         }
-
-        if (matched == 0)
-            throw NothingSelected(caller);
-        return matched;
     }
 
     private FeaException NothingSelected(string caller)

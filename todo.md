@@ -611,6 +611,22 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
   one), and none should start before thermal and modal, which reuse the assembly as it
   stands.
+- [ ] **FEA API hygiene** (from the code-quality review of the structural landing; the
+  correctness items it found were fixed in place, these are the residue):
+  - `AnalysisMesh.Regions` and `FacetTags` run `Distinct().Order().ToArray()` on EVERY
+    get, and `Bounds`/`Volume` recompute over all nodes/elements per get. All are cold
+    paths today, but the shape invites `for (…) if (mesh.Regions.Contains(x))`. Cache
+    them, or make them methods so the cost is visible at the call site.
+  - `AnalysisMesh.Nodes`, `StructuralResults.Displacement`/`Reactions` hand internal
+    arrays out as `IReadOnlyList<T>`, castable back to `T[]` and mutable by any consumer.
+    `ReadOnlyCollection` or a copy — the same question `MeshField` answered by copying.
+  - `AnalysisMesh.Of` overflows `TetCount * 10` above ~215 M elements and
+    `3 * NodeCount` above ~716 M nodes. It fails loudly (negative array length) but with
+    a bare `OverflowException`; one up-front refusal naming the limit would match the
+    refuse-by-name convention.
+  - `StructuralResults`' two lazy caches are unsynchronised (documented in the type, not
+    enforced). Fine while a results object belongs to whoever solved for it; worth
+    revisiting if the viewer ever resolves fields off the render thread.
 - [ ] **FEA: thermal (steady-state + transient)** — heat conduction on the same tet
   meshes: conductivity matrix, boundary conditions (fixed temperature, heat flux,
   convection h·(T−T∞)), steady solve first, transient with implicit time stepping

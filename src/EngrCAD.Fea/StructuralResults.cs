@@ -45,22 +45,22 @@ public sealed class StructuralResults
 {
     private readonly Vector3d[] _displacement;
     private readonly Vector3d[] _reaction;
-    private readonly TetQuadrature _rule;
     private SymmetricTensor3[]? _nodalStress;
     private double[]? _nodalVonMises;
 
+    // Not thread-safe: the two lazy caches below are unsynchronised, so a first read from
+    // several threads would recompute rather than corrupt, but would waste the work. A
+    // results object belongs to whoever solved for it.
     internal StructuralResults(
         StructuralModel model,
         Vector3d[] displacement,
         Vector3d[] reaction,
-        FeaSolveReport report,
-        in TetQuadrature rule)
+        FeaSolveReport report)
     {
         Model = model;
         _displacement = displacement;
         _reaction = reaction;
         Report = report;
-        _rule = rule;
     }
 
     /// <summary>The model that was solved.</summary>
@@ -76,7 +76,25 @@ public sealed class StructuralResults
     public IReadOnlyList<Vector3d> Displacement => _displacement;
 
     /// <summary>Displacement of one node.</summary>
-    public Vector3d DisplacementAt(int node) => _displacement[node];
+    public Vector3d DisplacementAt(int node)
+    {
+        RequireNode(node);
+        return _displacement[node];
+    }
+
+    private void RequireNode(int node)
+    {
+        if ((uint)node >= (uint)_displacement.Length)
+            throw new ArgumentOutOfRangeException(
+                nameof(node), node, $"The analysis mesh has {_displacement.Length} nodes.");
+    }
+
+    private void RequireElement(int element)
+    {
+        if ((uint)element >= (uint)Mesh.ElementCount)
+            throw new ArgumentOutOfRangeException(
+                nameof(element), element, $"The analysis mesh has {Mesh.ElementCount} elements.");
+    }
 
     /// <summary>
     /// Nodal force residuals: the support reaction at a restrained degree of freedom, and
@@ -85,7 +103,11 @@ public sealed class StructuralResults
     public IReadOnlyList<Vector3d> Reactions => _reaction;
 
     /// <summary>The reaction at one node (see <see cref="Reactions"/>).</summary>
-    public Vector3d ReactionAt(int node) => _reaction[node];
+    public Vector3d ReactionAt(int node)
+    {
+        RequireNode(node);
+        return _reaction[node];
+    }
 
     /// <summary>Strain energy ½·u'·K·u.</summary>
     public double StrainEnergy => Report.StrainEnergy;
@@ -140,19 +162,36 @@ public sealed class StructuralResults
     /// <summary>Strain at the centroid of one element. <b>Tensor</b> shear components
     /// (e_xy), not the engineering shear (g_xy = 2·e_xy) the Voigt form carries
     /// internally — a tensor is what composes under a change of frame.</summary>
-    public SymmetricTensor3 ElementStrain(int element) =>
-        StrainAt(element, 0.25, 0.25, 0.25);
+    public SymmetricTensor3 ElementStrain(int element)
+    {
+        RequireElement(element);
+        return StrainAt(element, 0.25, 0.25, 0.25);
+    }
 
     /// <summary>Stress at the centroid of one element.</summary>
-    public SymmetricTensor3 ElementStress(int element) => StressAt(element, 0.25, 0.25, 0.25);
+    public SymmetricTensor3 ElementStress(int element)
+    {
+        RequireElement(element);
+        return StressAt(element, 0.25, 0.25, 0.25);
+    }
 
     /// <summary>von Mises stress at the centroid of one element — the per-element value,
     /// before any averaging.</summary>
     public double ElementVonMises(int element) => TetElement.VonMises(ElementStress(element));
 
-    /// <summary>Stress at one of an element's own nodes (local index 0..3 or 0..9).</summary>
+    /// <summary>Stress at one of an element's own nodes (local index 0..3 for a linear
+    /// element, 0..9 for a quadratic one).</summary>
     public SymmetricTensor3 ElementStressAtNode(int element, int localNode)
     {
+        RequireElement(element);
+        // Bounds-checked here rather than left to the shape-function table: the linear and
+        // quadratic coordinate tables are separate static arrays, so an out-of-range local
+        // index would read ANOTHER node's coordinates and return a plausible wrong stress
+        // instead of throwing.
+        if ((uint)localNode >= (uint)Mesh.NodesPerElement)
+            throw new ArgumentOutOfRangeException(
+                nameof(localNode), localNode,
+                $"A {Mesh.Order} element has {Mesh.NodesPerElement} nodes.");
         var (r, s, t) = TetElement.NodeCoordinates(Mesh.Order, localNode);
         return StressAt(element, r, s, t);
     }
@@ -318,18 +357,12 @@ public sealed class StructuralResults
     /// </summary>
     /// <param name="lengthUnits">Unit label for displacement (default "mm").</param>
     /// <param name="stressUnits">Unit label for stress (default "MPa").</param>
-    public IReadOnlyList<MeshField> Fields(string lengthUnits = "mm", string stressUnits = "MPa")
-    {
-        var vonMises = NodalVonMises;
-        var values = new double[vonMises.Count];
-        for (int v = 0; v < values.Length; v++)
-            values[v] = vonMises[v];
-        return
-        [
-            MeshField.Vector(FieldNames.Displacement, lengthUnits, _displacement),
-            MeshField.Scalar(FieldNames.VonMises, stressUnits, values),
-        ];
-    }
+    public IReadOnlyList<MeshField> Fields(string lengthUnits = "mm", string stressUnits = "MPa") =>
+    [
+        // MeshField's constructor copies, so neither array is handed out by reference.
+        MeshField.Vector(FieldNames.Displacement, lengthUnits, _displacement),
+        MeshField.Scalar(FieldNames.VonMises, stressUnits, NodalVonMises),
+    ];
 
     /// <summary>The field names this class produces — so a <c>FieldDisplay</c> and a
     /// solver cannot disagree about a spelling.</summary>
@@ -395,6 +428,9 @@ public sealed class StructuralResults
         }
         var bvh = Bvh.Build(boxes);
 
+        if (Mesh.FacetCount == 0)
+            throw new FeaException("The analysis mesh has no boundary facets to sample from.");
+
         var displacement = new Vector3d[displayMesh.VertexCount];
         var stress = new double[displayMesh.VertexCount];
         double worst = 0;
@@ -410,9 +446,12 @@ public sealed class StructuralResults
                 continue;
             }
 
-            if (!bvh.Nearest(p, facet => DistanceToFacet(facet, p), out int nearest, out double distance))
-                throw new FeaException(
-                    "The analysis mesh has no boundary facets to sample from.");
+            // The struct-metric overload, not the delegate one: this runs once per display
+            // vertex, and a closure per call is the allocation Core's own Bvh doc names
+            // (measured 104 B/call -> 0 when MeshSdf made the same move). Traversal order
+            // is identical, so the answer is bit-for-bit the delegate form's.
+            var metric = new FacetDistance(this, p);
+            bvh.Nearest(p, ref metric, out int nearest, out double distance);
             worst = Math.Max(worst, distance);
 
             var f = Mesh.Facet(nearest);
@@ -447,12 +486,18 @@ public sealed class StructuralResults
     public IReadOnlyList<MeshField> SampleOnto(HalfEdgeMesh displayMesh) =>
         SampleOnto(displayMesh, out _);
 
-    private double DistanceToFacet(int facet, in Vector3d p)
+    /// <summary>Allocation-free exact distance from one query point to a boundary facet's
+    /// corner triangle, for <c>Bvh.Nearest&lt;TMetric&gt;</c>.</summary>
+    private readonly struct FacetDistance(StructuralResults results, Vector3d point) : IBvhDistance
     {
-        var f = Mesh.Facet(facet);
-        var closest = Distance3d.ClosestPointOnTriangle(
-            p, Mesh.Position(f[0]), Mesh.Position(f[1]), Mesh.Position(f[2]));
-        return closest.DistanceTo(p);
+        public double DistanceTo(int facet)
+        {
+            var mesh = results.Mesh;
+            var f = mesh.Facet(facet);
+            var closest = Distance3d.ClosestPointOnTriangle(
+                point, mesh.Position(f[0]), mesh.Position(f[1]), mesh.Position(f[2]));
+            return closest.DistanceTo(point);
+        }
     }
 
     private static (double L0, double L1, double L2) Barycentric(
@@ -502,8 +547,14 @@ public sealed class StructuralResults
         WriteVtu(writer, lengthUnits, stressUnits);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// A one-line summary. Deliberately does NOT report peak stress: reading it would
+    /// trigger the whole nodal recovery pass, so a debugger tooltip, a log line or this
+    /// object appearing in an exception message would silently do the work. The stress is
+    /// one property away when it is actually wanted.
+    /// </summary>
     public override string ToString() =>
-        $"max displacement {MaxDisplacement:G6}, max von Mises {MaxVonMises:G6} over "
-        + $"{Mesh.ElementCount:N0} elements";
+        $"{Mesh.ElementCount:N0} {(Mesh.Order == ElementOrder.Linear ? "linear" : "quadratic")} "
+        + $"elements, max displacement {MaxDisplacement:G6}"
+        + (_nodalVonMises is { } stress ? $", max von Mises {stress.Max():G6}" : "");
 }

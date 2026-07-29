@@ -106,9 +106,11 @@ internal readonly struct TetQuadrature
         var points = new List<double>();
         var weights = new List<double>();
 
+        // Takes all FOUR barycentric coordinates although only three are stored, so the
+        // permutation groups below can be read straight off Keast's published table
+        // instead of being re-derived. (r, s, t) = (L1, L2, L3); L0 = 1 - r - s - t.
         void Add(double l0, double l1, double l2, double l3, double w)
         {
-            // (r, s, t) = (L1, L2, L3); L0 is implied by 1 - r - s - t.
             _ = l0;
             points.Add(l1);
             points.Add(l2);
@@ -344,16 +346,23 @@ internal static class TetElement
             for (int i = 0; i < n; i++)
             {
                 var gi = grad[i];
+                // Unpacked into locals rather than read through Vector3d's indexer, which
+                // is a throwing four-arm switch: the inner pair of loops would dispatch it
+                // nine times per (i, j), i.e. about 900 times per 10-node element.
+                double gix = gi.X, giy = gi.Y, giz = gi.Z;
                 for (int j = 0; j < n; j++)
                 {
                     var gj = grad[j];
-                    double dot = mu * gi.Dot(gj) * weight;
+                    double gjx = gj.X, gjy = gj.Y, gjz = gj.Z;
+                    double dot = mu * (gix * gjx + giy * gjy + giz * gjz) * weight;
                     for (int a = 0; a < 3; a++)
                     {
-                        double gia = gi[a], gja = gj[a];
+                        double gia = a == 0 ? gix : a == 1 ? giy : giz;
+                        double gja = a == 0 ? gjx : a == 1 ? gjy : gjz;
                         int row = (3 * i + a) * dofs + 3 * j;
-                        for (int b = 0; b < 3; b++)
-                            ke[row + b] += weight * (lambda * gia * gj[b] + mu * gja * gi[b]);
+                        ke[row] += weight * (lambda * gia * gjx + mu * gja * gix);
+                        ke[row + 1] += weight * (lambda * gia * gjy + mu * gja * giy);
+                        ke[row + 2] += weight * (lambda * gia * gjz + mu * gja * giz);
                         ke[row + a] += dot;
                     }
                 }
@@ -446,6 +455,9 @@ internal static class TetElement
         // and add nothing.
         var a = facetNodes[0];
         double area = (facetNodes[1] - a).Cross(facetNodes[2] - a).Length * 0.5;
+        // Exact-zero semantic test, not a degeneracy threshold: a facet of no area carries
+        // no load whatever the traction, while a merely SMALL facet correctly gets a small
+        // one — so there is nothing here for an epsilon to protect against.
         if (area == 0)
             return;
 

@@ -186,7 +186,8 @@ public static class Materials
     /// <summary>Nylon 6/6: E = 2.0 GPa, nu = 0.39, rho = 1140 kg/m³.</summary>
     public static Material Nylon { get; } = new("Nylon 6/6", 2_000, 0.39, 1.14e-9);
 
-    /// <summary>Every catalogue entry, in declaration order.</summary>
+    /// <summary>Every catalogue entry: the metals in declaration order, then the
+    /// polymers.</summary>
     public static IReadOnlyList<Material> All { get; } =
     [
         Steel, StainlessSteel304, Aluminium6061, Aluminium7075, Titanium6Al4V,

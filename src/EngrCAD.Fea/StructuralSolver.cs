@@ -42,11 +42,26 @@ public sealed record StructuralSolveOptions
     /// iteration and report it. Off by default because it costs roughly
     /// <see cref="ConditionIterations"/> extra back-substitutions; on, it is the number
     /// that tells a badly shaped mesh from a badly posed model.
+    /// <para><b>Direct solves only.</b> The small end of the spectrum needs inverse
+    /// iteration, which needs the factorization, so combining this with
+    /// <see cref="FeaSolveMethod.ConjugateGradient"/> is refused rather than quietly
+    /// reporting null.</para>
     /// </summary>
     public bool EstimateCondition { get; init; }
 
-    /// <summary>Iterations per end of the spectrum for <see cref="EstimateCondition"/>.</summary>
-    public int ConditionIterations { get; init; } = 100;
+    /// <summary>Iterations per end of the spectrum for <see cref="EstimateCondition"/>.
+    /// Must be at least 1: at zero, both ends would report the Rayleigh quotient of a
+    /// START VECTOR and the ratio would come out near 1 — a plausible-looking wrong
+    /// answer, which is the one thing this class exists not to produce.</summary>
+    public int ConditionIterations
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            field = value;
+        }
+    } = 100;
 
     /// <summary>
     /// Quadrature rule override, for tests that check the production rule is exact.
@@ -182,22 +197,23 @@ public sealed record FeaSolveReport
 /// the material, and choosing it wrong is invisible in the answer.</para>
 ///
 /// <para><b>An unrestrained body is refused BEFORE the factorization, by name.</b> The
-/// six rigid-body modes are built per connected component, restricted to the constrained
-/// degrees of freedom, and the rank of that restriction is read from a diagonally pivoted
-/// Cholesky — the same rank-revealing device <c>MateSolver</c> uses, for the same reason.
-/// Anything left over is a motion the supports do not remove, and the message says which
-/// body and roughly which motions. Letting the factorization discover it instead gives
-/// "nonpositive pivot at column 4713", which tells nobody anything.</para>
+/// six rigid-body modes are built per connected component and restricted to the
+/// constrained degrees of freedom; the NULL SPACE of that restriction is exactly the set
+/// of motions the supports permit at zero energy, and it comes from a Jacobi
+/// eigen-decomposition of the small Gram matrix. Each surviving motion is then unpacked
+/// back into a translation and a located axis, so the message says which body and which
+/// motions. Letting the factorization discover it instead gives "nonpositive pivot at
+/// column 4713", which tells nobody anything.</para>
 /// </summary>
 public static class StructuralSolver
 {
     /// <summary>
-    /// Relative pivot floor for the rigid-body rank test. The pivots of a Gram matrix are
-    /// SQUARED singular values, so 1e-12 here is a 1e-6 relative singular value — the
-    /// floor the sketch-constraint solver arrived at, after 1e-8 proved to sit below
-    /// pivoted elimination's own round-off and report impossible ranks.
+    /// Relative eigenvalue floor for the rigid-body null-space test. A Gram matrix's
+    /// eigenvalues are SQUARED singular values, so 1e-12 here is a 1e-6 relative singular
+    /// value — the floor the sketch-constraint solver arrived at, after 1e-8 proved to sit
+    /// below the elimination's own round-off and report impossible ranks.
     /// </summary>
-    private const double RankPivotFloor = 1e-12;
+    private const double RankEigenvalueFloor = 1e-12;
 
     /// <summary>Solves a model and returns displacements, stresses and the report.</summary>
     public static StructuralResults Solve(StructuralModel model, StructuralSolveOptions? options = null)
@@ -205,6 +221,11 @@ public static class StructuralSolver
         ArgumentNullException.ThrowIfNull(model);
         options ??= new StructuralSolveOptions();
         var mesh = model.Mesh;
+        if (options.EstimateCondition && options.Method != FeaSolveMethod.Direct)
+            throw new FeaException(
+                $"EstimateCondition needs the factorization for its inverse iteration, so it is "
+                + $"available only with {nameof(FeaSolveMethod.Direct)}; {options.Method} was asked "
+                + "for. Returning null there would be a silent no-op on an option the caller set.");
 
         // ONE rule for the whole solve: the degeneracy guard, the assembly, the reaction
         // pass and the stress recovery all integrate at the same points. Selecting it
@@ -333,7 +354,7 @@ public static class StructuralSolver
             ConditionEstimate = condition,
         };
 
-        return new StructuralResults(model, displacement, reactions, reportOut, rule);
+        return new StructuralResults(model, displacement, reactions, reportOut);
     }
 
     private static TetQuadrature SelectRule(ElementOrder order, int? degree) => degree switch
@@ -342,7 +363,9 @@ public static class StructuralSolver
         1 => TetQuadrature.Degree1,
         2 => TetQuadrature.Degree2,
         3 => TetQuadrature.Degree3,
-        _ => throw new ArgumentOutOfRangeException(nameof(degree), degree, "Rules of degree 1, 2 and 3 are available."),
+        5 => TetQuadrature.Degree5,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(degree), degree, "Rules of degree 1, 2, 3 and 5 are available."),
     };
 
     private static (PackedSparseMatrix Matrix, double[] Rhs) Assemble(
@@ -368,37 +391,55 @@ public static class StructuralSolver
 
         var ke = new double[elementDofs * elementDofs];
         var positions = new Vector3d[perElement];
+        // The element's reduced DOF indices and its prescribed values, gathered ONCE per
+        // element: the inner loops read them up to 900 times each for a 10-node element,
+        // and every read was a multiply-add into `reduced` plus a bounds-checked property
+        // call into the model.
+        var elementReduced = new int[elementDofs];
+        var elementPrescribed = new double[elementDofs];
+        var materials = ElementMaterials(model);
 
         for (int e = 0; e < mesh.ElementCount; e++)
         {
             var nodes = mesh.Element(e);
             for (int i = 0; i < perElement; i++)
-                positions[i] = mesh.Position(nodes[i]);
-            TetElement.Stiffness(mesh.Order, positions, model.MaterialOf(e), rule, ke);
+            {
+                int node = nodes[i];
+                positions[i] = mesh.Position(node);
+                var prescribed = model.PrescribedOf(node);
+                for (int a = 0; a < 3; a++)
+                {
+                    elementReduced[3 * i + a] = reduced[3 * node + a];
+                    elementPrescribed[3 * i + a] = prescribed[a];
+                }
+            }
+            TetElement.Stiffness(mesh.Order, positions, materials[e], rule, ke);
 
             for (int i = 0; i < perElement; i++)
             {
                 for (int a = 0; a < 3; a++)
                 {
-                    int ri = reduced[3 * nodes[i] + a];
+                    int ri = elementReduced[3 * i + a];
                     if (ri < 0)
                         continue;
                     int row = (3 * i + a) * elementDofs;
                     for (int j = 0; j < perElement; j++)
                     {
-                        var prescribed = model.PrescribedOf(nodes[j]);
                         for (int b = 0; b < 3; b++)
                         {
                             double v = ke[row + 3 * j + b];
+                            // Exact-zero skip, deliberate: a structurally absent entry is
+                            // absent from the sparsity pattern too, which is what CSR
+                            // means. It decides the pattern, so it is not a tolerance.
                             if (v == 0)
                                 continue;
-                            int rj = reduced[3 * nodes[j] + b];
+                            int rj = elementReduced[3 * j + b];
                             if (rj < 0)
                             {
                                 // Prescribed displacement: the known column moves to the
                                 // right-hand side. Zero-valued supports contribute nothing,
                                 // which is why the common case costs one multiply.
-                                double value = prescribed[b];
+                                double value = elementPrescribed[3 * j + b];
                                 if (value != 0)
                                     rhs[ri] -= v * value;
                             }
@@ -419,12 +460,23 @@ public static class StructuralSolver
         return (builder.ToSymmetricUpper(), rhs);
     }
 
+    /// <summary>Each element's material resolved once, so the assembly and reaction loops
+    /// index an array instead of hashing a region id per element.</summary>
+    private static Material[] ElementMaterials(StructuralModel model)
+    {
+        var materials = new Material[model.Mesh.ElementCount];
+        for (int e = 0; e < materials.Length; e++)
+            materials[e] = model.MaterialOf(e);
+        return materials;
+    }
+
     private static (Vector3d[] Reactions, double StrainEnergy) ReactionsAndEnergy(
         StructuralModel model, Vector3d[] displacement, in TetQuadrature rule)
     {
         var mesh = model.Mesh;
         int perElement = mesh.NodesPerElement;
         int elementDofs = 3 * perElement;
+        var materials = ElementMaterials(model);
 
         var internalForce = new Vector3d[mesh.NodeCount];
         var ke = new double[elementDofs * elementDofs];
@@ -443,7 +495,7 @@ public static class StructuralSolver
                 ue[3 * i + 1] = u.Y;
                 ue[3 * i + 2] = u.Z;
             }
-            TetElement.Stiffness(mesh.Order, positions, model.MaterialOf(e), rule, ke);
+            TetElement.Stiffness(mesh.Order, positions, materials[e], rule, ke);
 
             for (int i = 0; i < perElement; i++)
             {
@@ -499,8 +551,9 @@ public static class StructuralSolver
         int n = a.Rows;
         var v = new double[n];
         var w = new double[n];
-        // A deterministic start with no special structure: an all-ones vector is
-        // orthogonal to some eigenvectors of a symmetric operator often enough to matter.
+        // A deterministic start, deliberately NOT all-ones: that vector is orthogonal to
+        // some eigenvectors of a symmetric operator often enough to matter, and power
+        // iteration started orthogonal to the dominant one never finds it.
         for (int i = 0; i < n; i++)
             v[i] = 1.0 + (i % 7) * 0.13 - (i % 3) * 0.21;
         Normalize(v);
@@ -566,6 +619,8 @@ public static class StructuralSolver
             for (int j = i + 1; j < 4; j++)
                 longest = Math.Max(longest, mesh.Position(e[i]).DistanceTo(mesh.Position(e[j])));
         }
+        // Exact-zero division guard (the scale-free tier): a tetrahedron with no
+        // longest edge has all four vertices coincident and no shape to measure.
         if (longest == 0)
             return 0;
         return mesh.ElementVolume(element) / (longest * longest * longest);
@@ -646,9 +701,16 @@ public static class StructuralSolver
             if (reduced[dof] >= 0)
                 inverse[reduced[dof]] = dof;
         }
-        for (int r = 0; r < matrix.Rows && dead.Count < 8; r++)
+        int deadCount = 0;
+        for (int r = 0; r < matrix.Rows; r++)
         {
+            // Exact-zero test, deliberately: a stiffness matrix's diagonal entry is a
+            // strain energy and is strictly positive wherever anything resists motion, so
+            // "not positive" is a structural fact rather than a tolerance question.
             if (matrix[r, r] > 0)
+                continue;
+            deadCount++;
+            if (dead.Count >= 8)
                 continue;
             int dof = inverse[r];
             dead.Add($"node {dof / 3} {"XYZ"[dof % 3]} at {model.Mesh.Position(dof / 3)}");
@@ -656,7 +718,7 @@ public static class StructuralSolver
 
         string detail = dead.Count > 0
             ? $" Degrees of freedom with no stiffness: {string.Join("; ", dead)}"
-                + (dead.Count == 8 ? " (and more)" : "") + "."
+                + (deadCount > dead.Count ? " (and more)" : "") + "."
             : " Every degree of freedom has stiffness, so the cause is either a mechanism"
                 + " or a mesh too ill-conditioned to factor.";
 
@@ -700,9 +762,14 @@ public static class StructuralSolver
     /// <para>The six rigid-body modes of a body are built over its own nodes, normalised,
     /// and restricted to the constrained degrees of freedom. A combination of them that
     /// vanishes on every constrained DOF is a motion the supports permit at zero energy —
-    /// exactly a null vector of the stiffness matrix. The dimension of that space is
-    /// <c>modes - rank(Gram)</c>, and the rank comes from a diagonally pivoted Cholesky,
-    /// which is rank-revealing for a positive semi-definite matrix.</para>
+    /// exactly a null vector of the stiffness matrix. Those combinations are the null
+    /// space of the modes' Gram matrix over the constrained degrees of freedom, taken from
+    /// a Jacobi eigen-decomposition.</para>
+    /// <para><b>The null space and not merely its dimension.</b> A rank count answers "how
+    /// many motions survive" but not "which", and the difference is not cosmetic: an
+    /// earlier version reported which candidate modes a pivoted Cholesky had failed to
+    /// eliminate, which for a model pinned at a single node named three TRANSLATIONS when
+    /// the surviving motions were three ROTATIONS about that node.</para>
     /// <para>Per BODY rather than globally, because a fully fixed part beside a floating
     /// one is singular in a way no whole-model rigid mode describes.</para>
     /// </summary>
@@ -751,8 +818,10 @@ public static class StructuralSolver
                 norm[k] = Math.Sqrt(sum);
             }
 
-            // A mode of zero norm is no motion at all (a single-node body has no
-            // rotations); drop it from the candidate set rather than dividing by it.
+            // A mode whose norm is negligible against the largest is no motion at all
+            // (a single-node body has no rotations, a collinear one has one degenerate
+            // rotation); drop it rather than dividing by it. Relative, not exact-zero,
+            // because the norms carry the model's own scale.
             int candidateCount = 0;
             double largest = 0;
             for (int k = 0; k < 6; k++)
@@ -791,7 +860,7 @@ public static class StructuralSolver
             var nullVectors = new List<double[]>();
             for (int i = 0; i < candidateCount; i++)
             {
-                if (eigenvalues[i] <= dominant * RankPivotFloor)
+                if (eigenvalues[i] <= dominant * RankEigenvalueFloor)
                 {
                     var vector = new double[candidateCount];
                     for (int j = 0; j < candidateCount; j++)
@@ -802,6 +871,16 @@ public static class StructuralSolver
             int surviving = nullVectors.Count;
             if (surviving == 0)
                 continue;
+
+            // THIS BODY's extent, not the whole model's: the translation-versus-rotation
+            // verdict below weighs |w|·extent against |t|, so on a model holding one large
+            // part and one small one the whole-model extent would decide the small part's
+            // description by the large part's size. Computed once per body rather than
+            // once per surviving mode.
+            var bodyBounds = Aabb.Empty;
+            foreach (int v in nodes)
+                bodyBounds = bodyBounds.Union(mesh.Position(v));
+            double bodyExtent = bodyBounds.Size.Length;
 
             // Each null vector IS a surviving motion, so it can be described rather than
             // guessed at: unpack it back into a translation and a rotation about the
@@ -823,7 +902,7 @@ public static class StructuralSolver
                     else
                         rotation += unit * coefficient;
                 }
-                names.Add(DescribeMotion(translation, rotation, centroid, mesh.Bounds.Size.Length));
+                names.Add(DescribeMotion(translation, rotation, centroid, bodyExtent));
             }
 
             string body = componentCount == 1
@@ -894,13 +973,18 @@ public static class StructuralSolver
 
         for (int sweep = 0; sweep < 60; sweep++)
         {
-            double off = 0;
+            // Converged when the off-diagonal mass is negligible against the diagonal's
+            // — a RELATIVE test, the form SymmetricEigen3 uses. An exact-zero test would
+            // essentially never fire (round-off keeps a sum of squares positive), leaving
+            // the sweep cap as the real termination rule, which the loop does not say.
+            double off = 0, diagonal = 0;
             for (int p = 0; p < n; p++)
             {
+                diagonal += m[p * n + p] * m[p * n + p];
                 for (int q = p + 1; q < n; q++)
                     off += m[p * n + q] * m[p * n + q];
             }
-            if (off <= 0)
+            if (off <= 1e-30 * diagonal)
                 break;
 
             for (int p = 0; p < n; p++)
@@ -908,6 +992,8 @@ public static class StructuralSolver
                 for (int q = p + 1; q < n; q++)
                 {
                     double apq = m[p * n + q];
+                    // Exact-zero semantic test: an entry that is already zero needs no
+                    // rotation to annihilate it.
                     if (apq == 0)
                         continue;
                     double theta = (m[q * n + q] - m[p * n + p]) / (2 * apq);
