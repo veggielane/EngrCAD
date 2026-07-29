@@ -83,6 +83,24 @@ patches on a 12×6 UV sphere). Deriving the boundary from a classification decid
 independently has neither problem: a flat tetrahedron has no volume, is never kept, and its
 two interior-facing faces fall out as the boundary with no tie to break.
 
+## What kind of surface it wants — the v1 limitation
+
+Boundary recovery is happy with **CAD tessellations**: B-Rep output, primitives, Surface Nets
+fields, anything with structured triangle rows. Every fixture in the test suite recovers in
+**zero rounds** — the input triangles are already faces of the Delaunay tetrahedralization.
+
+It is **not** yet happy with **irregular remeshed surfaces**. An isotropic remesh
+(`Remesher.Remesh`) produces near-uniform vertex spacing with no structure, and enough of its
+triangles fail to be Delaunay faces that red subdivision does not clear them — measured, a
+remeshed cylinder (at three parameter settings) and a remeshed sphere all exhaust the recovery
+budget. The mesher **refuses by name** rather than returning a mesh whose boundary is quietly
+not the input surface, and `RecoveryLimitationTests` pins that so the eventual fix is visible.
+
+This is worth stating plainly because the intuitive advice is wrong: remeshing improves
+element quality in principle, but v1 recovery wants exactly the structure a remesh removes.
+Mesh the tessellation directly and use a sizing field to control element size. Lifting the
+restriction is the top backlog item.
+
 ## Contracts
 
 - **Orientation is an invariant, not a convention**: every tetrahedron satisfies

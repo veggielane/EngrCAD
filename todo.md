@@ -443,7 +443,19 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
 verified boundary recovery, radius-edge + sizing-field refinement, region ids from
 multi-body input, per-facet source-triangle tags, 10-node elements. Residuals below.
 
-- [ ] **Sliver removal (the named gap in tet meshing).** Radius-edge bounds provably
+- [ ] **Boundary recovery on irregular (remeshed) surfaces — the top gap.** Recovery is
+  happy with CAD tessellations (B-Rep output, primitives, Surface Nets): every fixture in
+  `EngrCAD.Fea.Tests` recovers in **zero rounds**, because the input triangles are already
+  Delaunay faces. It is *not* happy with an isotropic remesh — near-uniform vertex spacing
+  with no structure means enough triangles fail to be Delaunay faces that red subdivision
+  does not clear them, and the budget runs out (measured: a remeshed cylinder at three
+  parameter settings and a remeshed sphere, all refused; `RecoveryLimitationTests` pins it).
+  The irony is worth keeping: remeshing is the natural surface-quality prep and v1 recovery
+  wants exactly the structure it removes. The likely fix is the textbook one this v1
+  deliberately skipped — protecting-ball *segment and subfacet encroachment* driving recovery
+  (Shewchuk's CDT construction) instead of the weaker presence/red-subdivision scheme, which
+  would also give a termination proof rather than a budget.
+- [ ] **Sliver removal (the second named gap in tet meshing).** Radius-edge bounds provably
   cannot exclude slivers, and the measurements say so: a refined `box 20³` is
   0.7–1.6% slivers below 10°, and elements with a *negative* floating-point volume
   exist even where the exact predicate says strictly positive. The standard answers

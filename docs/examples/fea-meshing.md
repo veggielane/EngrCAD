@@ -32,6 +32,14 @@ The boundary of the tet mesh is the input surface — that is the contract — s
 alone tells you nothing new. `TetMesh.SurfaceOf` takes a predicate over elements and returns
 the outer surface of just those, which is how you look *inside* the mesh.
 
+Its `shrink` parameter decides what kind of answer you get. At the default `1.0` the
+selection is welded into one surface — the true cut face, whose enclosed volume is exactly
+the selected elements' volume. Below 1 each element becomes its own tetrahedron scaled about
+its centroid: disjoint bodies, so every element is individually visible *and* the result is
+manifold whatever you selected. That second point matters — an arbitrary half-space of a tet
+mesh can leave two elements meeting at a single vertex, which is a bow-tie, and
+`HalfEdgeMesh.Build` rejects those by design.
+
 ```csharp render:fea-tet-cutaway style:shaded-edges
 var surface = Shape.Box(40, 30, 8)
     .Subtract(Shape.Cylinder(7, 30))
@@ -44,14 +52,15 @@ var tets = TetMesher.Mesh(surface, new TetMeshOptions
     MaxElementSize = 6.0,
 });
 
-// Keep the elements on one side of a plane: the cut face shows real tetrahedra.
+// Keep the elements on one side of a plane, drawn slightly shrunk so each one is
+// individually visible (shrink also makes the result manifold whatever you select).
 var cutaway = tets.SurfaceOf(t =>
 {
     var e = tets.GetTet(t);
     var centroid = (tets.Position(e.A) + tets.Position(e.B)
                   + tets.Position(e.C) + tets.Position(e.D)) * 0.25;
     return centroid.Y < 0;
-});
+}, shrink: 0.88);
 
 var scene = new Scene();
 scene.Add(new Part("tet mesh", cutaway) { Color = new PartColor(0.55f, 0.68f, 0.85f) });
@@ -138,7 +147,7 @@ var cutaway = tets.SurfaceOf(t =>
     var centroid = (tets.Position(e.A) + tets.Position(e.B)
                   + tets.Position(e.C) + tets.Position(e.D)) * 0.25;
     return centroid.Y < 0;
-});
+}, shrink: 0.88);
 
 var scene = new Scene();
 scene.Add(new Part("graded mesh", cutaway) { Color = new PartColor(0.85f, 0.62f, 0.35f) });
@@ -274,21 +283,40 @@ deterministic walk, and there is no RNG anywhere. Two runs on the same input pro
 bit-identical output, including the order of the elements — so a mesh can be a regression
 baseline.
 
-## Preparing a surface
+## What kind of surface it wants (a real v1 limitation)
 
-Meshing quality follows the surface it is given. If the tessellation has slivers or wildly
-uneven triangles, [remeshing](remeshing.md) first is the tool:
+Boundary recovery is happy with **CAD tessellations**: B-Rep output, primitives, Surface Nets
+fields, anything with structured triangle rows. Every fixture on this page recovers in
+**zero rounds** — the input triangles are already faces of the Delaunay tetrahedralization.
 
-```csharp run:fea-remesh-first
+It is **not** yet happy with **irregular remeshed surfaces**. An isotropic remesh
+([remeshing](remeshing.md)) produces a triangulation whose vertices sit at near-uniform
+spacing with no structure, and enough of its triangles fail to be Delaunay faces that
+red-subdivision does not clear them — measured, a remeshed cylinder and a remeshed sphere
+both exhaust the recovery budget. This is the intuitive advice being wrong: remeshing helps
+*element quality* in principle, but v1 recovery wants the structure it removes.
+
+```csharp run:fea-remesh-limitation
 var raw = Shape.Cylinder(10, 20).ToMesh(new MeshQuality { SegmentsPerCircle = 48 });
-var even = Remesher.Remesh(raw, new RemeshOptions(TargetEdgeLength: 3.0)
-{
-    Iterations = 12,
-    FeatureAngleDegrees = 30,
-});
+var even = Remesher.Remesh(raw, new RemeshOptions(TargetEdgeLength: 3.0) { Iterations = 12 });
 
-var tets = TetMesher.Mesh(even.Mesh, null, out var report);
-Console.WriteLine($"{tets.TetCount} elements, volume residual {report.VolumeResidual:E2}");
-if (report.VolumeResidual > 1e-9)
-    throw new Exception("remeshed surface failed the volume identity");
+try
+{
+    TetMesher.Mesh(even.Mesh, new TetMeshOptions { MaxSteinerPoints = 20_000 });
+    throw new Exception("this limitation appears to be fixed — update the docs!");
+}
+catch (TetMeshException ex)
+{
+    // It refuses by name rather than returning a mesh whose boundary is not the surface.
+    Console.WriteLine(ex.Message);
+}
+
+// The tessellation it came from meshes without a single recovery round.
+var direct = TetMesher.Mesh(raw, null, out var report);
+Console.WriteLine($"{direct.TetCount} elements, {report.RecoveryRounds} recovery round(s)");
+if (report.RecoveryRounds != 0)
+    throw new Exception("a CAD tessellation should need no recovery");
 ```
+
+So: mesh the tessellation directly, and reach for a sizing field rather than a remesh when
+you want to control element size. Lifting the restriction is the top item in the backlog.

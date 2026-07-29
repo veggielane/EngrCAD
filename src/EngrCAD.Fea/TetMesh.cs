@@ -217,14 +217,33 @@ public sealed class TetMesh
     /// section plane exposes become visible geometry rather than an abstraction).
     /// </summary>
     /// <param name="includeTet">Predicate on element index.</param>
+    /// <param name="shrink">
+    /// 1.0 (the default) welds the selection into one surface — the true cut face. A value
+    /// below 1 instead emits each selected element as its OWN shrunken tetrahedron, scaled
+    /// about its centroid: disjoint bodies, so the result is manifold whatever the selection
+    /// looks like, and every individual element is visible. Use it for pictures; use 1.0 when
+    /// the enclosed volume has to mean something.
+    ///
+    /// <para>The distinction is not cosmetic, and the welded form is the fragile one. A
+    /// welded selection is manifold only if the selection is, and two elements meeting at just
+    /// a vertex or an edge make a bow-tie that <c>HalfEdgeMesh.Build</c> rejects by design.
+    /// An arbitrary half-space of a tet mesh produces that **routinely** — measured on both a
+    /// half-sphere and a refined box — so pass a shrink factor for pictures and reserve 1.0
+    /// for selections you know to be solid, where the enclosed volume is the point.</para>
+    /// </param>
     /// <returns>A surface mesh of the selected elements' boundary.</returns>
-    public EngrCAD.Mesh.HalfEdgeMesh SurfaceOf(Func<int, bool> includeTet)
+    public EngrCAD.Mesh.HalfEdgeMesh SurfaceOf(Func<int, bool> includeTet, double shrink = 1.0)
     {
         ArgumentNullException.ThrowIfNull(includeTet);
+        if (!(shrink > 0) || shrink > 1)
+            throw new ArgumentOutOfRangeException(nameof(shrink), shrink, "Shrink must be in (0, 1].");
 
         var selected = new bool[TetCount];
         for (int t = 0; t < TetCount; t++)
             selected[t] = includeTet(t);
+
+        if (shrink < 1.0)
+            return ShrunkenElements(selected, shrink);
 
         // Count how many SELECTED elements use each face; a face used once is on the cut.
         var usage = new Dictionary<(int, int, int), int>();
@@ -266,6 +285,44 @@ public sealed class TetMesh
                     continue;
                 faces.Add([Map(a), Map(b), Map(c)]);
             }
+        }
+
+        try
+        {
+            return EngrCAD.Mesh.HalfEdgeMesh.Build(positions, faces);
+        }
+        catch (ArgumentException ex)
+        {
+            // The selection itself is non-manifold — two elements meeting at only a vertex or
+            // an edge — which an arbitrary half-space of a tet mesh produces readily. Name the
+            // cause and the fix rather than leaking the mesh builder's message.
+            throw new TetMeshException(
+                "The selected elements do not weld into a manifold surface: somewhere two of them " +
+                "meet at only a vertex or an edge, which is a bow-tie. Pass a shrink factor below 1 " +
+                "to draw each element as its own body instead, or select a solid region. " +
+                $"(Underlying: {ex.Message})", ex);
+        }
+    }
+
+    /// <summary>Each selected element as its own tetrahedron, scaled about its centroid.</summary>
+    private EngrCAD.Mesh.HalfEdgeMesh ShrunkenElements(bool[] selected, double shrink)
+    {
+        var positions = new List<Vector3d>();
+        var faces = new List<int[]>();
+
+        for (int t = 0; t < TetCount; t++)
+        {
+            if (!selected[t])
+                continue;
+            var tet = GetTet(t);
+            var centroid = (_positions[tet.A] + _positions[tet.B]
+                          + _positions[tet.C] + _positions[tet.D]) * 0.25;
+
+            int b = positions.Count;
+            for (int i = 0; i < 4; i++)
+                positions.Add(centroid + (_positions[tet[i]] - centroid) * shrink);
+            for (int f = 0; f < 4; f++)
+                faces.Add([b + FaceTable[f][0], b + FaceTable[f][1], b + FaceTable[f][2]]);
         }
 
         return EngrCAD.Mesh.HalfEdgeMesh.Build(positions, faces);
