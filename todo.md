@@ -621,6 +621,25 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
     mistake the row above documents. Fixtures of genuinely different conditioning (a thin
     shell-like plate, a near-incompressible nu, a graded mesh) would be needed before a
     threshold means anything.
+  <br>Partly mitigated already: `FeaSolveReport.Advisory` names the slow factorization
+  after the fact, so a caller learns about the alternative without reading a benchmark
+  table. What it cannot do is warn BEFORE the wait — see the next item.
+- [ ] **FEA: a pre-solve channel (the advisory's missing half).** `FeaSolveReport.Advisory`
+  tells a caller about a slow factorization once it has finished, which helps the second
+  run and not the first: the free-DOF count and the element order are both known before the
+  factor begins, and assembly has already completed in a few hundred ms, so the heads-up
+  could come 100 s earlier. Two candidate seams, and picking one is a **project-level
+  decision rather than a solver one**:
+  - An optional trailing `ILogger`, which is the precedent Interop and BRep set for exactly
+    this ("the long operations accept an optional trailing ILogger", event IDs 80/90). It
+    would mean `EngrCAD.Fea` taking the `Microsoft.Extensions.Logging.Abstractions`
+    reference, and CLAUDE.md currently records the leaf kernels (Core, Mesh, Implicit) as
+    deliberately dependency-free — Fea did not exist when that line was written, so
+    somebody has to decide whether it is a leaf in that sense.
+  - An optional `ProgressCancel`, which Core already owns and `TetMesher.Mesh` already
+    takes. This is the better shape — it would let a user ABORT a runaway factorization
+    rather than merely be told about it — but it needs `SparseCholesky.Factorize` to accept
+    one, since the 100 s is inside Core and there is currently no way out of it.
 - [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
   embarrassingly parallel per element with a per-row merge at the end
   (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes

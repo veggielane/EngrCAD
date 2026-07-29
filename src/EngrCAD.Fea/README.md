@@ -339,7 +339,24 @@ filed. And **no automatic size-based switch is offered**, deliberately, because 
 measured on one operator measures that operator: baking a threshold taken from one
 cantilever into the library default would be the very mistake the row above documents.
 
-Reach for `FeaSolveMethod.ConjugateGradient` for a large single solve.
+Reach for `FeaSolveMethod.ConjugateGradient` for a large single solve — and the report
+now says so itself. **`FeaSolveReport.Advisory`** (surfaced in `ToText()`) fires when a
+direct factorization both took real time *and* dominated its own solve, stating what this
+run spent where, citing the benchmark ratio at a named size and fixture, and naming the
+trade:
+
+```
+note: the factorization took 104.8 s, 99% of this solve. On this project's cantilever
+benchmark FeaSolveMethod.ConjugateGradient measured 48.6x faster than Direct at 46 800
+free DOF (2.2 s against 108.5 s) and 15.3x at 14 688; this solve has 46 800. The trade is
+an answer accurate to the iterative tolerance instead of exact, and no fill diagnostic.
+```
+
+Both conditions are about **what happened**, never about size alone: a system that factors
+quickly stays silent however many unknowns it has. That is what keeps it from being a
+disguised threshold — and it is the asymmetry that makes a heuristic acceptable here after
+one was refused for the default. A wrong threshold in a default produces a worse answer; a
+wrong threshold in an advisory produces a line of text nobody needed.
 
 Whole-pipeline cost (Release), which says where the time actually goes:
 

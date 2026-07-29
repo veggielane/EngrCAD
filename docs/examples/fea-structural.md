@@ -191,6 +191,12 @@ a default of CG would make every one of them a claim about an opt-in path. **Pas
 automatic size-based switch is offered, deliberately: a threshold taken from one cantilever
 would be the same mistake the table above documents.
 
+You do not have to remember that, though — **the report tells you**. When a direct
+factorization both takes real time and dominates its own solve, `FeaSolveReport.Advisory`
+says what this run spent where and what the benchmark measured at a comparable size, and
+`ToText()` prints it. It fires on what *happened*, not on size: a system that factors
+quickly stays silent however large it is.
+
 Supports are **eliminated, not penalised**: constrained degrees of freedom are removed from
 the system rather than given a large diagonal, so the reduced matrix is genuinely positive
 definite and its conditioning is the model's own.

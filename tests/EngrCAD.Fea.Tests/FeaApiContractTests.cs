@@ -93,6 +93,63 @@ public class FeaApiContractTests(ITestOutputHelper output)
             () => new StructuralSolveOptions { ConditionIterations = iterations });
     }
 
+    // ---- the slow-factorization advisory -------------------------------------------
+
+    [Fact]
+    public void TheAdvisoryIsAboutWHATHAPPENED_NotAboutTheModelsSize()
+    {
+        // The report's advisory fires on a factorization that actually took real time and
+        // actually dominated its solve — never on size alone. A small model factors fast,
+        // so it stays silent however the rest of the run behaves; that is the property
+        // that keeps it from being a disguised threshold, and it is why a heuristic is
+        // acceptable here when one was refused for the default.
+        var model = new StructuralModel(Block(ElementOrder.Quadratic, 2), Steel);
+        model.Fix(StructuredTetMesh.XMin);
+        model.Force(Facets.Tag(StructuredTetMesh.XMax), new Vector3d(0, 0, -500));
+
+        var direct = StructuralSolver.Solve(model);
+        var iterative = StructuralSolver.Solve(
+            model, new StructuralSolveOptions { Method = FeaSolveMethod.ConjugateGradient });
+
+        output.WriteLine(
+            $"{direct.Report.FreeDofs:N0} free DOF, factor {direct.Report.FactorMs:F0} ms: "
+            + $"advisory {(direct.Report.Advisory is null ? "silent" : "raised")}");
+
+        Assert.Null(direct.Report.Advisory);
+        Assert.Null(iterative.Report.Advisory);
+        Assert.DoesNotContain("note:", direct.Report.ToText());
+
+        // And when it does fire it states the run's own numbers, cites the fixture the
+        // ratio came from, and names the trade rather than telling anyone what to do.
+        var raised = direct.Report with
+        {
+            Method = FeaSolveMethod.Direct,
+            FactorMs = 104_800,
+            AssembleMs = 300,
+            SolveMs = 250,
+            Advisory = null,
+        };
+        raised = raised with
+        {
+            Advisory = StructuralSolver.AdvisoryFor(
+                raised.Method, raised.FreeDofs, raised.FactorMs,
+                raised.AssembleMs + raised.FactorMs + raised.SolveMs),
+        };
+        output.WriteLine(raised.Advisory);
+        Assert.NotNull(raised.Advisory);
+        Assert.Contains("104.8 s", raised.Advisory);
+        Assert.Contains("ConjugateGradient", raised.Advisory);
+        Assert.Contains("cantilever benchmark", raised.Advisory);
+        Assert.Contains("accurate to the iterative tolerance", raised.Advisory);
+        Assert.Contains(raised.Advisory, raised.ToText());
+
+        // A slow factorization that did NOT dominate says nothing either: the advisory is
+        // about where the time went, and if assembly took most of it the answer is
+        // elsewhere.
+        Assert.Null(StructuralSolver.AdvisoryFor(FeaSolveMethod.Direct, 50_000, 3_000, 60_000));
+        Assert.Null(StructuralSolver.AdvisoryFor(FeaSolveMethod.ConjugateGradient, 50_000, 9_000, 10_000));
+    }
+
     // ---- guard clauses -------------------------------------------------------------
 
     [Fact]

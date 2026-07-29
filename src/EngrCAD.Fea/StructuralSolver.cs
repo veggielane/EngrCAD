@@ -187,6 +187,24 @@ public sealed record FeaSolveReport
     /// ESTIMATE, honest about being one, not a bound.</summary>
     public double? ConditionEstimate { get; init; }
 
+    /// <summary>
+    /// A note about this solve worth acting on, or null when there is nothing to say.
+    /// Appears in <see cref="ToText"/>.
+    ///
+    /// <para><b>It is a measurement, not a decision.</b> The one case it currently covers
+    /// is a direct factorization that dominated its own solve: the text states what THIS
+    /// run spent where, cites the benchmark ratio at a comparable size, and names the
+    /// trade the alternative carries. Nothing switches — <see cref="FeaSolveMethod"/>
+    /// explains at length why an automatic size-based pick would be unfounded — but a
+    /// caller who has just waited two minutes should not have to go and read a benchmark
+    /// table to find out there was a faster option.</para>
+    ///
+    /// <para>That asymmetry is what makes a heuristic acceptable here and not there: a
+    /// wrong threshold in a default produces a worse answer, while a wrong threshold in an
+    /// advisory produces a line of text nobody needed.</para>
+    /// </summary>
+    public string? Advisory { get; init; }
+
     /// <summary>A readable summary.</summary>
     public string ToText()
     {
@@ -207,6 +225,8 @@ public sealed record FeaSolveReport
         };
         if (ConditionEstimate is { } condition)
             lines.Add($"condition number ~ {condition:E2} (power-iteration estimate)");
+        if (Advisory is { } advisory)
+            lines.Add(advisory);
         return string.Join(Environment.NewLine, lines);
     }
 
@@ -385,9 +405,46 @@ public static class StructuralSolver
             FactorMs = factorMs,
             SolveMs = solveMs,
             ConditionEstimate = condition,
+            Advisory = AdvisoryFor(
+                options.Method, freeCount, factorMs, assembleMs + factorMs + solveMs),
         };
 
         return new StructuralResults(model, displacement, reactions, reportOut);
+    }
+
+    /// <summary>
+    /// The note for <see cref="FeaSolveReport.Advisory"/>, or null.
+    ///
+    /// <para>Both conditions are about what THIS RUN measured, not about what a model of
+    /// this size is predicted to cost: the factorization has to have taken real time AND
+    /// to have dominated the solve it was part of. A system that factors quickly says
+    /// nothing however many unknowns it has, which is the property that keeps this from
+    /// being a disguised threshold on size.</para>
+    ///
+    /// <para>The cited ratio is from <c>FeaBenchmark.DirectVersusIterative</c> — one
+    /// cantilever, direct and CG interleaved in a single sitting. It is quoted as a
+    /// comparison at a stated size and fixture rather than as a prediction for the
+    /// caller's model, because a crossover measured on one operator measures that
+    /// operator's conditioning; see <see cref="FeaSolveMethod.Direct"/>.</para>
+    /// </summary>
+    internal static string? AdvisoryFor(
+        FeaSolveMethod method, int freeDofs, double factorMs, double totalMs)
+    {
+        const double SlowFactorMs = 2_000;
+        const double DominatesShare = 0.8;
+
+        if (method != FeaSolveMethod.Direct || factorMs < SlowFactorMs)
+            return null;
+        if (!(totalMs > 0) || factorMs / totalMs < DominatesShare)
+            return null;
+
+        return
+            $"note: the factorization took {factorMs / 1000:F1} s, "
+            + $"{factorMs / totalMs:P0} of this solve. On this project's cantilever benchmark "
+            + "FeaSolveMethod.ConjugateGradient measured 48.6x faster than Direct at 46 800 free "
+            + $"DOF (2.2 s against 108.5 s) and 15.3x at 14 688; this solve has {freeDofs:N0}. "
+            + "The trade is an answer accurate to the iterative tolerance instead of exact, and "
+            + "no fill diagnostic — see FeaSolveMethod for why the default is not switched for you.";
     }
 
     private static TetQuadrature SelectRule(ElementOrder order, int? degree) => degree switch
