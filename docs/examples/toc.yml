@@ -56,6 +56,8 @@
   href: fea-modal.md
 - name: Buckling and frequency response (FEA)
   href: fea-buckling.md
+- name: Transient dynamics (FEA)
+  href: fea-transient.md
 - name: Three representations
   href: representations.md
 - name: Saving documents

@@ -969,14 +969,34 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   root, and axisymmetric parts have them. A block method (block size 2–4) finds a whole
   eigenspace at once and is the standard answer; it is filed rather than pretended, and the
   limitation is stated in `ModalResults`' docs and the README.
-- [ ] **FEA: transient dynamics (direct time integration).** Newmark-beta or HHT-alpha over
-  `M·a + C·v + K·u = f(t)`, at a constant step so ONE factorization serves the run — the same
-  argument `ThermalSolver.SolveTransient` already makes, and the same reason its step is
-  constant. Different in kind from modal superposition: it takes nonlinearity and arbitrary
-  load histories, and it does not need the modes at all. It is also the ONE consumer that
-  genuinely wants `C` as a matrix rather than as per-mode ratios, so it is where
-  `RayleighDamping` would first be assembled — `alpha·M + beta·K` through `FeaAssembly.Combine`,
-  which already exists.
+- [ ] **FEA: transient dynamics — several load patterns with independent histories.**
+  `TransientSolveOptions.LoadFactor` scales the model's ONE spatial load pattern by one scalar
+  law, which covers a step, an impulse, a ramp, a harmonic drive and a measured trace. What it
+  cannot express is the archetypal real case of gravity held constant while a shaker runs: that
+  needs `f(t) = sum_i g_i(t)·f_i` over a LIST of patterns, and the list has to be proven to
+  share one stiffness matrix — which is exactly `StructuralSolver.SolveAll`'s contract, so
+  `RequireOneOperator` is the check it would reuse rather than a new one. The shape is a
+  `(StructuralModel pattern, Func<double,double> factor)` list with the single-pattern form as
+  sugar over it, mirroring `Solve` being `SolveAll([model])[0]`.
+- [ ] **FEA: transient dynamics — base excitation (support motion as a history).** A prescribed
+  displacement is currently HELD constant for the run and is deliberately not scaled by the load
+  factor (a support that has been moved stays moved). A seismic or shaker input needs `u_c(t)`
+  with its own `v_c(t)` and `a_c(t)`, which changes the right-hand side from one constant
+  correction to a per-step one — `TransientSolver` already forms it as a full-vector product
+  against the effective operator for exactly that reason, so it is a change of one line plus the
+  vocabulary for stating the history. The alternative formulation (relative coordinates plus a
+  `-M·1·a_ground` load) needs no new plumbing at all and is worth measuring against it first.
+- [ ] **FEA: transient dynamics — adaptive time stepping.** The step is constant so ONE
+  factorization serves the run, which is the whole performance argument. Adaptive stepping
+  refactors at every change, so it is only worth it where the response has widely separated
+  scales (an impact followed by a ring-down); the honest form is a small set of step sizes with
+  a factorization cached per size, not a continuously varying one.
+- [ ] **FEA: nonlinear transient (contact, plasticity, large deformation).** Each makes the
+  problem a nonlinear solve WRAPPING the linear stepper, with a Newton residual iteration inside
+  every step — the stiffness is re-evaluated about the current configuration rather than once
+  about the undeformed one. `TransientSolver`'s loop is the inner half of it and its energy
+  identity is the natural convergence diagnostic (an energy-balance residual that stops falling
+  is a Newton that has stalled). Filed as a different solver, not an option.
 - [ ] **FEA: nonlinear buckling (post-buckling and imperfection sensitivity).** The linear
   eigenvalue factor is computed about ONE static state and assumes the prestress scales with
   the load without redistributing. A shell or a thin-walled section can buckle at a fraction of

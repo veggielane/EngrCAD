@@ -791,9 +791,10 @@ candidate it saw but did not accept, and both solvers' refusals name which case 
 diagonalise C: `phi' C phi = diag(alpha + beta·omega_n²)`, so the equations separate and
 `zeta_n = alpha/(2·omega_n) + beta·omega_n/2` is the whole of what any consumer needs. Forming
 `C` in order to project it back down to those numbers would be arithmetic with nothing to show
-for it, so this project has no damping matrix and that is a design statement. (The one future
-consumer that genuinely wants the matrix is direct time integration, and `FeaAssembly.Combine`
-already builds it.)
+for it, so this project has no damping matrix and that is a design statement. (This paragraph
+used to carry a prediction that direct time integration would be "the one future consumer that
+genuinely wants the matrix". It landed, and it does not — §3g says why, and the statement above
+now holds without qualification.)
 
 **What proportional damping excludes is stated precisely rather than implied away**: a discrete
 dashpot, two materials with different loss factors in one model, viscoelasticity, joint friction
@@ -828,6 +829,174 @@ rather than defaulted**, because a default would be this project inventing a mat
 And a **free-free model is refused**: a rigid mode's `F_n/(0 − W²)` grows without bound as the
 frequency falls, which is a true statement about a body that accelerates away and a useless one
 to plot.
+
+## 3g. Transient dynamics (`EngrCAD.Fea`)
+
+Direct time integration of `M·a + C·v + K·u = f(t)` by the Newmark / HHT-alpha family. The
+physics is the structural solver's and the plumbing is the thermal transient's; what is new is a
+scheme parameter with two stability conditions in it, an initial condition that has to be
+SOLVED, and an energy statement that is an identity rather than a check.
+
+### It is a different question from modal superposition, not a slower answer to the same one
+
+§3f's harmonic solver answers "what does this do under a steady sine at each of these
+frequencies" by projecting onto a handful of modes. This answers "what does it do next" for an
+arbitrary load history, needs no modes at all, and is the route a nonlinear solve would
+eventually wrap — the residual iteration a contact or plasticity model needs goes INSIDE a step
+of this loop, and there is nowhere to put it in a modal sum. The price is symmetrical: it
+computes every instant whether or not anything is happening, where modal superposition computes
+a whole frequency at a time.
+
+### The filed prediction about the damping matrix was wrong, and the correction is the finding
+
+todo.md filed this as "the ONE consumer that genuinely wants `C` as a matrix rather than as
+per-mode ratios, so it is where `RayleighDamping` would first be assembled", and §3f repeated
+it. Building the solver shows it is false. Under proportional damping every appearance of `C`
+is one of exactly two things, and neither wants the matrix:
+
+- a **product**, `C·x = alpha·(M·x) + beta·(K·x)`. Those are two matrix-vector products the
+  stepper already performs against matrices it already holds — and CHEAPER than one product
+  against an assembled `C` would be, because a mass matrix's node-pair block is a scalar times
+  the identity while a stiffness's is full, so `M` has far fewer stored entries than `K` and
+  an assembled `C` would inherit `K`'s sparsity;
+- a scalar **multiple** folded into the effective stiffness, which collects as
+  `[a0 + (1+alpha)·a1·alpha_R]·M + [(1+alpha)(1 + a1·beta_R)]·K` — one `FeaAssembly.Combine`
+  with two coefficients, which is why that overload exists.
+
+So forming `C` would cost a third sparse matrix to buy a slower operation. No damping matrix
+exists anywhere in this project and §3f's statement now stands unqualified. The general shape is
+worth keeping: **a prediction about what a future consumer will need is a hypothesis, and the
+consumer arriving is the experiment.** Four agents in a row have found a filed diagnosis wrong;
+this is the fifth.
+
+### The initial acceleration is a solve against M, and assuming it away is a modelling error
+
+`a(0) = M⁻¹(f(0) − C·v(0) − K·u(0))` is the equation of motion at `t = 0` read for the one
+quantity the caller does not supply. It is a solve against **M**, not against K, so it is a
+SECOND factorization — and the temptation to skip it is real, because `a(0) = 0` is what a body
+"starting at rest" sounds like. It is not: a body released from a displaced position, or one
+whose load is already on at `t = 0`, is accelerating at that instant. Starting from zero puts a
+spurious half-step into the answer whose symptom is a startup wobble that decays, which is
+indistinguishable from physics by inspection. It is skipped only when the right-hand side is
+EXACTLY zero — an exact-zero test, since the acceleration is a linear image of that vector — and
+`Factorizations` reports which happened, so the cost is visible rather than mysterious.
+
+### An unrestrained body is accepted, where the static solver refuses one
+
+`StructuralSolver` refuses a free body by name and describes the surviving rigid motions,
+because `K` alone is singular. The effective stiffness is `a0·M + … + K` with
+`a0 = 1/(beta·dt²) > 0`, and a consistent mass matrix is positive definite, so the stepping
+matrix is positive definite **whatever the supports do**. A free body under a transient load
+flies away, and that is the answer rather than an error. It is the same exemption §3d makes for
+an insulated body's transient — in both cases the time-derivative term supplies the definiteness
+the steady operator lacks — and in both cases the refusal that remains belongs to the STEADY
+problem, where nothing pins the answer's level. The non-refusal is pinned by a test so that
+nobody copies the static guard across on the reasonable-looking grounds that the two solvers
+share a model type.
+
+### The scheme is one value, and both stability conditions are enforced rather than documented
+
+`TimeIntegration` carries `beta`, `gamma` and `alpha` together. The alternative — an enum beside
+two loose doubles — lets a caller name a member and supply coefficients that contradict it, and
+leaves the solver to decide which to believe. Every member here is a named factory that computes
+its own coefficients, so a scheme is either one of the families or a pair the constructor has
+checked against `2·beta >= gamma >= 1/2`. Both halves refuse by name:
+
+- **`gamma < 1/2` has NEGATIVE numerical damping.** The amplitude grows step after step at every
+  step size, so it is not an accuracy-for-cost trade but an answer that diverges while looking
+  like a resonance.
+- **`2·beta < gamma` is conditionally stable.** Central difference and linear acceleration are
+  legitimate schemes; what this library cannot do is tell a caller whether their step is inside
+  the limit, because that needs the largest eigenvalue of `K·phi = lambda·M·phi`, which nothing
+  here computes. Refusing beats returning something that silently explodes.
+
+**Explicit integration is refused for a structural reason rather than for effort.** Its whole
+appeal is that a DIAGONAL mass matrix turns a step into a division. This library has no diagonal
+mass to offer for the element it recommends: §3e refuses row-sum lumping for 10-node tetrahedra
+because the corner row sums are `−V/20`, a negative mass, and HRZ is a scaled approximation
+whose error would then be inseparable from the integrator's. An explicit scheme over a
+CONSISTENT mass would solve a system every step, which is what explicit integration exists not
+to do.
+
+**HHT is the member that buys dissipation without losing an order.** Newmark damps by raising
+`gamma`, which unbalances the velocity update and costs the second order outright. HHT keeps the
+update relations and instead evaluates the internal and damping forces at a weighted point
+between the ends of the step, with the load at the matching instant `t(n+1) + alpha·dt`; the
+`gamma` it then chooses is above 1/2, but the weighting cancels the leading error term. At
+`alpha = 0` beta = 1/4 and gamma = 1/2 fall out of its own formulas, so it IS the default
+member — asserted as a value AND as bit-identical output, which is what every `alpha != 0`
+exact-zero branch in the stepper exists to guarantee.
+
+### The energy balance is an identity, which is why it is the strongest lever here
+
+For the trapezoidal member the update relations collapse to
+`u(n+1) − u(n) = (dt/2)(v(n) + v(n+1))` and `v(n+1) − v(n) = (dt/2)(a(n) + a(n+1))`, from which
+
+```
+E(n+1) − E(n) = (dt/4)·(v(n)+v(n+1))'·[M(a(n)+a(n+1)) + K(u(n)+u(n+1))]
+```
+
+and substituting the equation of motion at both ends turns the bracket into exactly the
+trapezoidal work of the load minus the trapezoidal viscous dissipation. Nothing is approximated,
+damped and loaded cases included, so `EnergyBalanceResidual` is a defect detector rather than a
+tolerance — the same status §3d's first law has, reached by the same route. For a dissipative
+scheme the identical number becomes the MEASUREMENT instead: it is the energy the algorithm
+removed, which is what a user of numerical damping wants reported. One quantity, two readings,
+and `IsSecondOrder` / `SpectralRadiusAtInfinity` say which a run is in.
+
+The denominator needs one care the thermal version also needed: a free vibration does no work
+and dissipates nothing, so a scale built only from the flows would be zero for exactly the run
+that most wants the check. Adding the peak energy makes that case read as the relative energy
+drift.
+
+### Two fixture traps, and both were found only because a measured order was impossible
+
+**(a) Where a convergence error is SAMPLED decides the order it reports.** A Newmark run's error
+has two components — a phase lag and an amplitude decay — and a single-instant probe sees
+whichever one that instant exposes. Read at a whole number of periods the exact cosine is
+STATIONARY, so a phase lag `d` enters as `u0·d²/2` rather than `u0·d`: an `O(dt²)` scheme
+measured **3.9997** against a theory of 2. Moving the probe to a quarter period fixes that and
+breaks the other half — there the amplitude multiplies zero, so the FIRST-ORDER control, whose
+entire job is to prove the study can tell 1 from 2, measured **1.344**. The error has to be a
+norm over the run on a time grid common to every refinement level. The rule generalises past
+this fixture: **a convergence probe measures the error component its sampling point exposes, and
+the control that exists to catch a broken study can be broken the same way.**
+
+**(b) HHT's amplification matrix is DEFECTIVE in the high-frequency limit.** A two-point energy
+ratio put the spectral radius **4.138% high at every radius** and converged to that offset
+rather than drifting — which ruled out "not asymptotic yet" and pointed straight at the
+`alpha`-to-`rho` relation, the kind of transcribed formula this project has been caught getting
+wrong before. Deriving the limit settles it the other way: eliminating the acceleration leaves a
+2x2 block with trace `2 − 4/(1−alpha)` and determinant `((1+alpha)/(1−alpha))²`, and its
+discriminant `trace² − 4·det` is **identically zero for every alpha**. So there is a double real
+eigenvalue at `−rho_inf` with a single eigenvector, the state decays as `n·rho^n` rather than
+`rho^n`, and the energy as `n²·rho^(2n)`. Dividing the `n²` out is the whole correction, and it
+is exact: `(30/20)^(2/20) = 1.041380`, the measured offset to six digits. The formula was right
+and the estimator was not — which is the same shape as §3e's residual-floor finding, where the
+number that looked like a solver defect was a property of the measurement.
+
+### Verified against closed forms with no discretization error at all
+
+The fixture is a finite element model whose reduced system is exactly `1 x 1`: every degree of
+freedom restrained but one. That is the idiom §3e records as WRONG in dynamics, and the
+distinction is worth stating rather than assuming. That warning is about MODELLING — a
+single-node restraint on a real part creates a genuine spurious mode whose frequency belongs to
+the mesh rather than to the part. Here nothing is being modelled: the system is made scalar
+deliberately so that `m·q'' + c·q' + k·q = f(t)` is not an approximation of the finite element
+problem but IS it, which is the only way to check a time integrator against a closed form with
+no space discretization in the way. Its stiffness comes from a static solve and its frequency
+from a modal solve, so the reference is never the transient's own arithmetic.
+
+The predictions are derived rather than bounded, which is what separates "the integrator works"
+from "the integrator is THIS integrator": Newmark's amplification eigenvalues are
+`(1 − W²/4 ± iW)/(1 + W²/4)` with `W = omega·dt`, of modulus exactly 1 (hence the preserved
+amplitude) and argument `W − W³/12`, so the algorithmic frequency is `omega·(1 − W²/12)` and
+the error after N periods is `amplitude·2·pi·N·W²/12`. Measured against that: step
+amplification exactly **2.0000**, damped step **1.8544825** against 1.8544679, and the four
+phase-error cases within **0.1%** of prediction. The companion check is a single MODE seeded on
+a real mesh, where the response provably stays in the mode, leaking **8.5e-11** and matching the
+predicted algorithmic frequency ratio to **eleven digits** — a check the transient and the
+eigensolver can only both pass if both are right.
 
 ## 4. Implicit engine
 

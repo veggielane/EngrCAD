@@ -132,4 +132,42 @@ internal static class FeaGuards
             + "below; this is the sliver-removal gap named in the mesher's README. Refine the "
             + "mesh, or mesh a less elongated body.");
     }
+
+    /// <summary>
+    /// Refuses a model whose materials carry no density, by name — the guard every solve with
+    /// a mass matrix in it needs.
+    ///
+    /// <para><b>Shared rather than restated for the reason this whole class exists.</b> A zero
+    /// density is LEGAL for a static solve (it means gravity does nothing), so the mistake
+    /// survives every check until an eigenproblem or a time integration, and both of those
+    /// want to name the same materials with the same unit warning. Only the CONSEQUENCE
+    /// differs between them, so only the consequence is a parameter.</para>
+    /// </summary>
+    /// <param name="model">The model to check.</param>
+    /// <param name="consequence">One sentence saying what this particular analysis cannot do
+    /// without mass — it opens the message.</param>
+    public static void RequireDensity(StructuralModel model, string consequence)
+    {
+        var missing = new List<string>();
+        for (int e = 0; e < model.Mesh.ElementCount; e++)
+        {
+            var material = model.MaterialOf(e);
+            // Exact-zero semantic test: Material's constructor has already refused a
+            // negative density, and zero is documented there as "weightless", which is a
+            // legal static material and an impossible dynamic one.
+            if (material.Density == 0 && !missing.Contains(material.Name))
+                missing.Add(material.Name);
+        }
+        if (missing.Count == 0)
+            return;
+
+        throw new FeaException(
+            $"{consequence} {(missing.Count == 1 ? "The material" : "These materials")} "
+            + $"in this model {(missing.Count == 1 ? "states" : "state")} a density of zero: "
+            + $"{string.Join(", ", missing)}. A zero density is legal for a STATIC solve (it "
+            + "simply means gravity does nothing), which is why this surfaces only here. Build "
+            + "the material with its density, or call Material.WithDensity(rho) - remembering "
+            + "that the mm/N/MPa/tonne system wants tonne/mm3, so steel is 7.85e-9 rather "
+            + "than 7850.");
+    }
 }

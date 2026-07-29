@@ -54,12 +54,15 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `RayleighDamping` / `ModalDamping` | `C = alpha·M + beta·K` fitted to two frequencies, or a flat / tabulated per-mode ratio — no damping matrix is ever assembled |
 | `HarmonicSolver` / `HarmonicSolveOptions` / `HarmonicSweep` | Steady-state response by modal superposition, with the mode-acceleration truncation correction |
 | `HarmonicResponse` | Complex response over the sweep: modal coordinates, transfer functions, amplitude fields, CSV |
+| `TimeIntegration` | The Newmark / HHT scheme as ONE value — beta, gamma and alpha together, with both stability conditions enforced at construction |
+| `TransientSolver` / `TransientSolveOptions` / `TransientSolveReport` | Direct time integration of `M·a + C·v + K·u = f(t)` at a constant step, and the energy balance |
+| `TransientResults` / `TransientState` | Every stored instant: a full `StructuralResults` plus velocity, acceleration and energies |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
-| `FeaAssembly` | Internal: the DOF index map, whole-model stiffness and geometric-stiffness assembly, reduction and matrix sums — shared so two eigen-solvers cannot build different `K`s |
+| `FeaAssembly` | Internal: the DOF index map, whole-model stiffness, MASS and geometric-stiffness assembly, reduction and weighted matrix sums — shared so the modal, buckling and transient solvers cannot build different `K` or `M` |
 | `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
 | `LanczosEigen` | Internal: shift-and-invert Lanczos with deflation, locking and restarts — the inner-product METRIC is a parameter separate from the right-hand matrix, which is what lets one implementation serve vibration (metric M) and buckling (metric K) |
 | `RigidBodyModes` / `SmallSymmetricEigen` | Internal: the surviving-rigid-motion computation the static solver REFUSES on and the modal solver REPORTS, plus the small dense eigensolver both need |
-| `FeaGuards` | Internal: the element-Jacobian guard EVERY solver asks, rather than each restating |
+| `FeaGuards` | Internal: the element-Jacobian guard and the material-density guard EVERY solver asks, rather than each restating |
 | `SurfaceSampler` | Internal: the display-mesh correspondence every results type publishes through |
 
 ## `Material` is not ours — it lives in `EngrCAD.Core`
@@ -1647,9 +1650,8 @@ frequency.
 
 - **Proportional damping only** (above). Non-proportional damping is a quadratic eigenproblem
   and a different solver.
-- **Harmonic (steady-state) response only.** There is no transient dynamics: Newmark or HHT at
-  a constant step would reuse the thermal transient's one-factorization-serves-every-step
-  argument, and is filed.
+- **Harmonic (steady-state) response only** on this path. Direct time integration is a separate
+  solver - see [Transient dynamics](#transient-dynamics-direct-time-integration) below.
 - **Nodal-force excitation only.** Base acceleration would ride the participation factors the
   modal results already carry; a load whose spatial shape changes with frequency needs the
   direct solve.
@@ -1657,3 +1659,169 @@ frequency.
   static part of what the truncated modes miss, which is most of it; a residual VECTOR (the
   static response orthogonalised against the kept modes, added to the basis) would handle the
   rest and is filed.
+
+# Transient dynamics (direct time integration)
+
+`TransientSolver.Solve` steps `M·a + C·v + K·u = f(t)` forward by the **Newmark / HHT-alpha**
+family, over the same `AnalysisMesh`, the same materials and the same supports and `Facets`
+selectors everything else here takes. Docs: [`fea-transient.md`](../../docs/examples/fea-transient.md).
+
+**Different in kind from modal superposition, not a slower version of it.** `HarmonicSolver`
+answers "what does this do under a steady sine at each of these frequencies" by projecting onto
+a handful of modes; this answers "what does it do next" for an arbitrary load history, needs no
+modes at all, and is the route a nonlinear solve would eventually wrap. The price is that it
+computes every instant whether or not anything is happening.
+
+## One factorization for the run - the third place that is genuinely true
+
+The effective stiffness `a0·M + (1+alpha)·a1·C + (1+alpha)·K` depends on the step, the scheme
+and the model and on nothing else, so a CONSTANT step lets it be factored once and every step
+after that is a back-substitution. That is the argument `ThermalSolver.SolveTransient` and
+`StructuralSolver.SolveAll` already make, and this is its third instance.
+
+The **second** factorization is the one that is easy to skip and must not be:
+
+```
+a(0) = M^-1 . (f(0) - C.v(0) - K.u(0))
+```
+
+is a solve against **M**, not against K. A body released from a displaced position, or one
+whose load is already on at `t = 0`, is accelerating at that instant; starting from `a(0) = 0`
+puts a spurious half-step into the answer whose symptom - a startup wobble that decays - looks
+exactly like physics. It is skipped only when that right-hand side is EXACTLY zero, and
+`TransientSolveReport.Factorizations` reports which happened.
+
+## The damping matrix is never assembled - and the backlog entry said it would be
+
+todo.md filed this solver as "the ONE consumer that genuinely wants `C` as a matrix rather than
+as per-mode ratios, so it is where `RayleighDamping` would first be assembled". **That is
+wrong, and the correction is worth keeping.** Proportional damping means every appearance of C
+is one of two things:
+
+- a PRODUCT, `C.x = alpha.(M.x) + beta.(K.x)` - two matrix-vector products this solver already
+  performs, and cheaper than one product against an assembled C would be, because the mass
+  matrix's blocks are scalar multiples of the identity and M therefore has far fewer stored
+  entries than K;
+- a scalar MULTIPLE folded into the effective stiffness, which collects as `(...)M + (...)K`
+  through `FeaAssembly.Combine`'s two-coefficient form.
+
+So no damping matrix exists anywhere in this project, and `ModalDamping`'s claim that none does
+stands unqualified. A NON-proportional model would genuinely need one - and would also need a
+vocabulary for stating one, which does not exist here either.
+
+## An unrestrained body is ACCEPTED, and that is a decision
+
+`StructuralSolver` refuses one by name, because `K` alone is singular for a free body. The
+effective stiffness carries `a0.M` with `a0 = 1/(beta.dt^2) > 0`, and a consistent mass matrix
+is positive definite, so the stepping matrix is positive definite whatever the supports do. A
+free body under a transient load flies away, which is the answer - the same exemption the
+thermal transient makes for an insulated body. Pinned by a test so that nobody copies the
+static guard across.
+
+## The scheme is ONE value
+
+`TimeIntegration` carries beta, gamma and alpha together, and every member is a named factory
+that computes its own coefficients - an enum beside two loose doubles would let a caller state
+a name and a pair that contradict it. Both stability conditions are enforced at construction
+rather than documented:
+
+| refused | why |
+| --- | --- |
+| `gamma < 1/2` | NEGATIVE numerical damping: the amplitude grows at every step size |
+| `2.beta < gamma` | conditionally stable, and the safe step needs the largest eigenvalue of `K.phi = lambda.M.phi`, which nothing here computes |
+| `alpha` outside `[-1/3, 0]` | below it HHT drops to first order; positive alpha amplifies |
+| `TimeIntegration.CentralDifference` | explicit integration pays only with a DIAGONAL mass matrix, and row-sum lumping is itself refused for 10-node elements (`-V/20` at every corner) - so an explicit step here would still solve a linear system |
+
+`HilberHughesTaylor(0)` IS `AverageAcceleration`: beta = 1/4 and gamma = 1/2 fall out of HHT's
+own formulas, and the two produce **bit-identical** output (asserted over 4824 values of a
+damped, loaded, 200-step run), which is what every `alpha != 0` exact-zero branch in the stepper
+exists to guarantee.
+
+## The energy balance is an IDENTITY
+
+For `AverageAcceleration` the trapezoidal update relations give
+`u(n+1) - u(n) = (dt/2)(v(n) + v(n+1))` and `v(n+1) - v(n) = (dt/2)(a(n) + a(n+1))`, from which
+
+```
+E(n+1) - E(n) = (dt/4) . (v(n)+v(n+1))' . [M(a(n)+a(n+1)) + K(u(n)+u(n+1))]
+```
+
+and putting the equation of motion at both ends into the bracket turns it into exactly the work
+of the load plus the viscous dissipation. Nothing is approximated, so
+`TransientSolveReport.EnergyBalanceResidual` is a defect detector rather than a tolerance -
+**4.4e-13** relative over 3000 steps undamped, **1.4e-13** with work 1.44 and dissipation 6.28
+both large. For a dissipative scheme the same number becomes the MEASUREMENT: it is the energy
+the algorithm removed.
+
+## Verification
+
+The fixture is a model whose reduced system is exactly `1 x 1` - every degree of freedom
+restrained but one - so there is **no discretization error at all**. That is the idiom the
+modal work recorded as wrong in dynamics, and the distinction matters: that warning is about
+MODELLING, where a single-node restraint creates a spurious mode whose frequency belongs to the
+mesh. Here nothing is being modelled; the reduced system is made scalar deliberately so that
+`m.q'' + c.q' + k.q = f(t)` IS the finite element problem. Its stiffness comes from a static
+solve and its frequency from a modal solve, so the references are never the transient's own
+arithmetic.
+
+| case | closed form | measured |
+| --- | --- | --- |
+| step load, dynamic amplification | exactly 2 | **2.0000** |
+| damped step, zeta = 5% | 1.8544679 | **1.8544825** |
+| free vibration, 10 periods at 100 steps/period | 2.067% | **2.014%** |
+| initial velocity (impulse) | 2.067% | **2.066%** |
+| damped step response, worst error | 0.06051% | **0.06058%** |
+| damped free vibration, worst error | 0.1513% | **0.1513%** |
+| harmonic drive, closed form / `HarmonicSolver` | - | **0.027%** / **0.027%** |
+| time order: Newmark / HHT / gamma = 0.6 / real mesh | 2 / 2 / **1** / 2 | **2.000 / 2.000 / 0.9925 / 2.000** |
+| single-mode seed: leak out of mode 1 / mode 2 | 0 | **8.5e-11** / **7.9e-11** |
+| measured vs predicted algorithmic frequency ratio | - | **eleven digits** |
+| free body: `sum(M.a)` against the applied force | exact | **1.2e-11** |
+| spectral radius at rho = 0.95/0.9/0.8/0.6/0.5 | `(1+alpha)/(1-alpha)` | within **1e-4** relative |
+
+The phase-error predictions are derived rather than quoted: Newmark's `(1/4, 1/2)` amplification
+eigenvalues are `(1 - W^2/4 +/- iW)/(1 + W^2/4)` with `W = omega.dt`, whose modulus is exactly 1
+(hence the preserved amplitude) and whose argument is `W - W^3/12`, so the algorithmic frequency
+is `omega.(1 - W^2/12)` and the displacement error after N periods is `amplitude.2.pi.N.W^2/12`.
+For a damped run that product peaks at `t = 1/(zeta.omega)` with value
+`amplitude.W^2/(12.zeta.e)`.
+
+### Two fixture traps, both found by an impossible measurement
+
+**(a) A convergence error read at a MAXIMUM of the cosine reports double the order.** The exact
+solution is stationary there, so a phase lag `d` enters as `u0.d^2/2` rather than `u0.d`, and an
+`O(dt^2)` scheme measured **3.9997** against a theory of 2 (HHT measured 3.18, a mixture with
+its own amplitude term). Moving the probe to a QUARTER period fixes the phase reading and
+breaks the other half: there the amplitude multiplies zero, so the FIRST-order control - the
+row whose whole job is to prove the study can tell 1 from 2 - measured **1.344**. The error has
+to be a norm over the run, sampled on a grid common to every refinement level. Note that the
+trap is invisible to exactly the test that exists to detect a broken study.
+
+**(b) HHT's amplification matrix is DEFECTIVE in the high-frequency limit.** A two-point energy
+ratio measured the spectral radius **4.138% high at every radius** and converged to that offset
+rather than drifting, which ruled out "not asymptotic yet" and looked like a wrong
+`alpha`-to-`rho` formula. Eliminating the acceleration leaves a 2x2 block with trace
+`2 - 4/(1-alpha)` and determinant `((1+alpha)/(1-alpha))^2`, whose discriminant `trace^2 - 4.det`
+is **identically zero for every alpha**: a double real eigenvalue at `-rho_inf` with one
+eigenvector, so the state decays as `n.rho^n` and the energy as `n^2.rho^(2n)`. Dividing the
+`n^2` out is the whole correction and it is exact - `(30/20)^(2/20) = 1.041380`, the measured
+offset to six digits. The formula was right; the estimator was not.
+
+## Limitations
+
+- **Linear only.** The stiffness is evaluated once about the undeformed configuration and never
+  updated, so contact, plasticity, large deformation and follower loads are outside it. Each
+  makes the problem a nonlinear solve WRAPPING this one, with a residual iteration inside every
+  step - a different solver rather than an option.
+- **Constant step.** Adaptive stepping would refactor at every change, which is the entire cost
+  of the method.
+- **One spatial load pattern** scaled by one scalar history. A superposition of patterns with
+  independent histories needs a LIST proven to share one stiffness matrix, which is exactly
+  `StructuralSolver.SolveAll`'s contract, and is filed.
+- **No base excitation.** A prescribed displacement is held CONSTANT for the run and is not
+  scaled by the load factor; a support whose motion is a history of its own is a different
+  feature.
+- **Proportional damping only**, as everywhere here.
+- **Consistent mass only.** `MassLumping` exists for the modal solver, where consistent and
+  lumped bracket the truth; a diagonal M buys nothing on this path because the effective
+  stiffness carries K and has to be factored whatever M looks like.
