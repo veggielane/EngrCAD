@@ -34,6 +34,26 @@ concerns.
   analysis, as in the original. These predicates are the robustness foundation for 2D
   arrangement/sketch work (locked by tests against `BigInteger` exact arithmetic,
   including the classic Kettner ulp-grid where the naive determinant fails).
+- **`Predicates3d`** — the 3D companion: `Orient3d(a, b, c, d)` and
+  `InSphere(a, b, c, d, e)` (plus `*Sign`, plus `SignedVolume6`/`InSphereOriented`
+  convenience forms) with the same guarantee — the SIGN is exactly correct for all finite
+  double inputs, so exactly-coplanar quadruples and exactly-cospherical quintuples yield
+  exactly `0.0`. That is what lets a Delaunay tetrahedralization treat a structured CAD
+  grid (all eight corners of a cube are cospherical) as a *tie* rather than as noise.
+  **The two exact stages are built differently, deliberately**: `Orient3d` escalates to
+  Shewchuk's `orient3dexact` — expansion arithmetic in `stackalloc` spans, longest
+  intermediate 96 doubles, zero heap allocation — while `InSphere` escalates to a
+  `BigInteger` evaluation of the same determinant, because the expansion form of
+  `insphereexact` needs ~6000-component intermediates and several hundred lines of
+  hand-unrolled sign bookkeeping (a liability, not an asset, when the BigInteger form is
+  *visibly* the determinant). The filter carries everything that is not within its own
+  error bound of degenerate; `InSphereEscalations` counts the allocating stage so a
+  consumer can report its rate instead of guessing. Shewchuk's expansion macros are
+  shared with `Predicates2d` via internal `ShewchukExpansions` — one copy, because two
+  copies of a numerical routine drift.
+  **Note the sign convention trap**: `Orient3d` follows Shewchuk (positive when `d` is
+  *below* the plane `abc`), which is **minus** six times the signed tetrahedron volume —
+  hence the separately named `SignedVolume6`.
 - **`Geometry2.Arrangement2d`** — planar arrangement of 2D segments: `Insert` splits
   existing edges (and the inserted segment) at proper crossings, T-junctions, and
   collinear overlaps, with all incidence DECISIONS made by the exact predicates and all

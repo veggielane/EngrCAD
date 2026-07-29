@@ -222,6 +222,59 @@ Each engine uses the data structure its mathematics wants:
   crossing per undirected edge, computed from the lower-indexed vertex, so adjacent
   triangles share endpoints bit-identically and chains assemble combinatorially.
 
+## 3b. Tetrahedral meshing (`EngrCAD.Fea`)
+
+**Why its own project.** A `TetMesh` is a genuinely different structure from a
+`HalfEdgeMesh` — structure-of-arrays vertices, four vertex indices per element, tagged
+boundary facets, no half-edge topology at all — and the algorithms that build it share
+nothing with the surface engine's booleans, subdivision or decimation. Folding it into
+`EngrCAD.Mesh` would put a volume representation inside the surface engine to save one
+project reference, and Simulation has a lot of growing left (stiffness assembly, thermal,
+results fields) that wants somewhere to grow. The dependency shape settles it: Fea needs
+Core (predicates, BVH, solvers) and Mesh (the input surface, winding numbers), and nothing
+needs Fea — a clean leaf.
+
+**The pipeline.** Delaunay tetrahedralization of the surface's vertices (incremental
+Bowyer–Watson over exact `Predicates3d`) → classification → boundary recovery → optional
+quality refinement. Three decisions in it are load-bearing, and each was reached by a
+failure rather than by design.
+
+1. **Recovery works per planar PATCH, not per input triangle.** A Delaunay triangulation
+   picks its own diagonal across a coplanar quad, and both diagonals are equally Delaunay
+   when the four corners are cocircular — which they are on every box. Demanding the *input*
+   triangle therefore cannot converge: every refinement of a cocircular configuration is
+   cocircular again (measured: a unit cube exhausted a 500 000-point Steiner budget). A patch
+   — union-find over edge-adjacent, coplanar, equally-tagged triangles — states the property
+   that actually matters, that the skin equals the input surface *as a point set*, while
+   leaving the triangulation free inside a flat region. A patch never straddles two tags, so
+   boundary conditions stay attributable.
+2. **Classification comes BEFORE the boundary.** The natural arrangement is the reverse —
+   recover the triangles, flood-fill between them — and beyond the diagonal problem it has a
+   second, subtler failure: an exactly-coplanar quad makes the tetrahedralization contain a
+   **flat tetrahedron**, whose four faces are *both* diagonals at once. "The faces lying in
+   this patch" then covers the patch twice, an area-coverage test reads exactly 2.0000×, and
+   refinement never converges (measured: 40 of 72 patches on a 12×6 UV sphere, the excess
+   halving per round and never reaching zero). Deriving the boundary from a classification
+   decided **independently** — the winding number at each element's centroid — has neither
+   problem: a flat tetrahedron has no volume, is never kept, and its two interior-facing
+   faces fall out as the boundary with no tie to break.
+3. **Refinement follows Ruppert's rule in Ruppert's ORDER.** A circumcentre that encroaches a
+   boundary sub-triangle is never inserted; the sub-triangle is split instead. Inserting
+   first and repairing the boundary afterwards is the same two operations in the wrong order
+   and it cascades. Two guards make it terminate: the accepted batch must be **independent**
+   (the packing bound that makes Delaunay refinement finite holds only against the
+   triangulation as it was when a circumcentre was computed, so a stale queue voids it), and
+   encroachment splitting has a **size floor** (a circumcentre sitting essentially on the
+   surface would otherwise encroach forever, each split halving the balls while the point
+   stays inside).
+
+**What is guaranteed and what is not.** Guaranteed: the boundary is the input surface, the
+volume identity holds to round-off, every element is positively oriented (checked exactly),
+output is deterministic, and every refusal names what failed. *Not* guaranteed: sliver-free
+elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityReport` reports
+minimum dihedral beside radius-edge and counts what the first measure cannot see. Sliver
+exudation is the named next step (todo.md).
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

@@ -500,15 +500,60 @@ feeds the mesher, results feed back into the viewer as fields on the mesh. The m
 engine's half-edge structure and the implicit engine's SDFs are both real assets here
 (SDF-guided sizing fields, inside/outside tests via winding numbers).
 
-- [ ] **Meshing for FEA** — volumetric (tet) meshing from any representation:
-  surface mesh → tetrahedra (Delaunay refinement or advancing front; study TetGen/
-  NETGEN-class algorithms), with quality controls (aspect-ratio/dihedral bounds,
-  sizing fields — an `Sdf` makes a natural sizing/gradation field), boundary-layer
-  preservation, and second-order (10-node) tets for accuracy. Hex-dominant or
-  voxel/SDF-based meshing (cut cells from `Sdf.Sampled` grids) as an alternative
-  route. Also: surface-mesh quality prep (isotropic remeshing above is a
-  prerequisite) and region/attribute tagging (material per body, face groups for
-  boundary conditions — B-Rep face identity → mesh facet tags).
+**Tet meshing landed** (`EngrCAD.Fea`: `TetMesher`, `TetMesh`, `TetQuality`,
+`QuadraticTetMesh`, on Core's new exact `Predicates3d`) — conforming Delaunay with
+verified boundary recovery, radius-edge + sizing-field refinement, region ids from
+multi-body input, per-facet source-triangle tags, 10-node elements. Residuals below.
+
+- [ ] **Boundary recovery on irregular (remeshed) surfaces — the top gap.** Recovery is
+  happy with CAD tessellations (B-Rep output, primitives, Surface Nets): every fixture in
+  `EngrCAD.Fea.Tests` recovers in **zero rounds**, because the input triangles are already
+  Delaunay faces. It is *not* happy with an isotropic remesh — near-uniform vertex spacing
+  with no structure means enough triangles fail to be Delaunay faces that red subdivision
+  does not clear them, and the budget runs out (measured: a remeshed cylinder at three
+  parameter settings and a remeshed sphere, all refused; `RecoveryLimitationTests` pins it).
+  The irony is worth keeping: remeshing is the natural surface-quality prep and v1 recovery
+  wants exactly the structure it removes. The likely fix is the textbook one this v1
+  deliberately skipped — protecting-ball *segment and subfacet encroachment* driving recovery
+  (Shewchuk's CDT construction) instead of the weaker presence/red-subdivision scheme, which
+  would also give a termination proof rather than a budget.
+- [ ] **Sliver removal (the second named gap in tet meshing).** Radius-edge bounds provably
+  cannot exclude slivers, and the measurements say so: a refined `box 20³` is
+  0.7–1.6% slivers below 10°, and elements with a *negative* floating-point volume
+  exist even where the exact predicate says strictly positive. The standard answers
+  are **sliver exudation** (Cheng et al.'s weighted-Delaunay perturbation) and
+  optimization-based smoothing (Klingner–Shewchuk's `Stellar`: smoothing + topological
+  transformations driven by a quality objective). Either would run as a post-pass over
+  a finished `TetMesh`, which is why the mesher reports quality rather than claiming
+  it. Until then, `TetQualityReport.SliverCount` is the honest interface.
+- [ ] **Tet meshing performance.** Measured 31k–80k tets/s (win-x64, Release), which is
+  usable but well off TetGen. The profile is Delaunay build + per-pass classification;
+  the obvious lever is replacing the winding-number classification inside the
+  refinement loop with a flood fill over element adjacency once the boundary is known
+  (winding numbers only for the initial seed). Also: `SurfacePatches`/`ClaimFaces`
+  rebuild per round rather than incrementally, and `BuildEncroachmentIndex` rebuilds a
+  BVH per refinement pass.
+- [ ] **Tet meshing breadth**: boundary-layer (prismatic) elements for CFD-style
+  analyses; hex-dominant or voxel/SDF-based meshing (cut cells from `Sdf.Sampled`
+  grids) as an alternative route; *curved* (iso-parametric) quadratic elements, whose
+  mid-edge nodes would sit on the true surface rather than at edge midpoints — note
+  that this needs a decision about what a shared node means where two boundary patches
+  meet at an angle, which is exactly why the current layer is deliberately
+  straight-sided; and coincident interfaces between bodies (v1 meshes disjoint bodies
+  only, and refuses overlapping ones by name).
+- [ ] **`Predicates3d.InSphere`'s exact stage allocates** (`BigInteger`), unlike
+  `Orient3d`'s stack-allocated expansion form — a deliberate trade recorded in the
+  class doc, since the expansion form of `insphereexact` needs ~6000-component
+  intermediates and hundreds of lines of hand-unrolled sign bookkeeping. An
+  `ArrayPool`-backed expansion form is the fix if profiling ever shows it matters;
+  `Predicates3d.InSphereEscalations` is the counter that would show it (a 4×4×4 lattice
+  escalates constantly, a random cloud never).
+- [ ] **Feed the mesher from the model, not just from a mesh.** `TetMesher` takes a
+  `HalfEdgeMesh`, so B-Rep face identity reaches it only if the caller threads a
+  per-triangle tag array through. `BRepTessellator` knows the provenance; exposing it
+  (a per-triangle source-face array beside the mesh) would make
+  `TetMeshOptions.FacetTags` populate itself and let boundary conditions be attached
+  with the `BrepQueries`/`FaceRef` selector vocabulary instead of by hand.
 - [ ] **FEA: structural (linear static)** — small-strain linear elasticity on tet
   meshes: element stiffness (linear + quadratic tets), assembly into sparse symmetric
   systems, boundary conditions from tagged B-Rep faces (fixed supports, loads:
