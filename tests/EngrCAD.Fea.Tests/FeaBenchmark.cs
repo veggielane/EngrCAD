@@ -92,6 +92,243 @@ public class FeaBenchmark(ITestOutputHelper output)
         }
     }
 
+    /// <summary>
+    /// What <see cref="StructuralSolver.SolveAll"/> buys: the classic second argument for a
+    /// direct solver, measured rather than asserted. N load cases through one factorization
+    /// against the same N solved one at a time.
+    ///
+    /// <para><b>Interleaved, alternating, best of three.</b> This machine returns absolute
+    /// times several-fold apart across sittings, so an A/B taken in two sittings is noise
+    /// with units; and a warm-up BUDGET rather than a warm-up count, because JIT tiering
+    /// makes a single warm-up call meaningless.</para>
+    /// </summary>
+    [Fact]
+    public void MultipleLoadCases()
+    {
+        if (!Enabled)
+            return;
+
+        static IReadOnlyList<StructuralModel> Cases(AnalysisMesh mesh, int count)
+        {
+            var list = new List<StructuralModel>();
+            for (int i = 0; i < count; i++)
+            {
+                var model = new StructuralModel(mesh, Steel);
+                model.Fix(StructuredTetMesh.XMin);
+                model.Force(
+                    Facets.Tag(StructuredTetMesh.XMax),
+                    new Vector3d(200 * i, 500 * (i % 3), -4000 + 100 * i));
+                list.Add(model);
+            }
+            return list;
+        }
+
+        static AnalysisMesh MeshFor(ElementOrder order, int n)
+        {
+            var tets = StructuredTetMesh.Box(Vector3d.Zero, Size, 4 * n, 2 * n, n);
+            return order == ElementOrder.Linear ? AnalysisMesh.Of(tets) : AnalysisMesh.Quadratic(tets);
+        }
+
+        // Warm-up BUDGET, not a warm-up count.
+        var warmMesh = MeshFor(ElementOrder.Linear, 2);
+        var warmUntil = Stopwatch.StartNew();
+        while (warmUntil.Elapsed.TotalSeconds < 1.5)
+            _ = StructuralSolver.SolveAll(Cases(warmMesh, 2));
+
+        output.WriteLine(
+            $"{"order",10} {"free DOF",10} {"cases",6} {"separate ms",12} {"shared ms",10} "
+            + $"{"speedup",8} {"factor ms",10} {"per extra rhs",14}");
+        foreach (var (order, n, count) in new[]
+        {
+            (ElementOrder.Linear, 6, 4), (ElementOrder.Linear, 8, 4),
+            (ElementOrder.Quadratic, 2, 4), (ElementOrder.Quadratic, 3, 4),
+            (ElementOrder.Quadratic, 3, 8),
+        })
+        {
+            var mesh = MeshFor(order, n);
+            double separate = double.MaxValue, shared = double.MaxValue;
+            double factorMs = 0, perExtra = 0;
+            int freeDofs = 0;
+            for (int trial = 0; trial < 3; trial++)
+            {
+                var stopwatch = Stopwatch.StartNew();
+                foreach (var model in Cases(mesh, count))
+                    _ = StructuralSolver.Solve(model);
+                separate = Math.Min(separate, stopwatch.Elapsed.TotalMilliseconds);
+
+                stopwatch.Restart();
+                var all = StructuralSolver.SolveAll(Cases(mesh, count));
+                shared = Math.Min(shared, stopwatch.Elapsed.TotalMilliseconds);
+                factorMs = all[0].Report.FactorMs;
+                freeDofs = all[0].Report.FreeDofs;
+                perExtra = all.Skip(1).Average(r => r.Report.SolveMs);
+            }
+            output.WriteLine(
+                $"{order,10} {freeDofs,10:N0} {count,6} {separate,12:F0} {shared,10:F0} "
+                + $"{separate / shared,7:F2}x {factorMs,10:F0} {perExtra,13:F2} ms");
+        }
+    }
+
+    /// <summary>
+    /// Where the ASSEMBLY's time goes, which is a different question from where the SOLVE's
+    /// time goes and has to be asked before anything is parallelised: the element loop looks
+    /// embarrassingly parallel, but only the part that computes element stiffnesses actually
+    /// is — the scatter into the builder is a shared write whose ORDER decides the last bits
+    /// of every summed entry.
+    /// </summary>
+    [Fact]
+    public void WhereAssemblyTimeGoes()
+    {
+        if (!Enabled)
+            return;
+
+        var warmUntil = Stopwatch.StartNew();
+        while (warmUntil.Elapsed.TotalSeconds < 1.5)
+            _ = StructuralSolver.Solve(Cantilever(ElementOrder.Linear, 2));
+
+        output.WriteLine(
+            $"{"order",10} {"elements",10} {"free DOF",10} {"ke only",9} {"assemble",9} "
+            + $"{"ke share",9} {"reactions",10}");
+        foreach (var (order, n) in new[]
+        {
+            (ElementOrder.Linear, 6), (ElementOrder.Linear, 8),
+            (ElementOrder.Quadratic, 3), (ElementOrder.Quadratic, 4),
+        })
+        {
+            var model = Cantilever(order, n);
+            var mesh = model.Mesh;
+            var rule = TetQuadrature.For(mesh.Order);
+            int perElement = mesh.NodesPerElement;
+            int elementDofs = 3 * perElement;
+
+            double keOnly = double.MaxValue, assemble = double.MaxValue, reactions = double.MaxValue;
+            for (int trial = 0; trial < 3; trial++)
+            {
+                // Element stiffnesses alone, thrown away: the parallelisable half.
+                var ke = new double[elementDofs * elementDofs];
+                var positions = new Vector3d[perElement];
+                var stopwatch = Stopwatch.StartNew();
+                double sink = 0;
+                for (int e = 0; e < mesh.ElementCount; e++)
+                {
+                    var nodes = mesh.Element(e);
+                    for (int i = 0; i < perElement; i++)
+                        positions[i] = mesh.Position(nodes[i]);
+                    TetElement.Stiffness(mesh.Order, positions, model.MaterialOf(e), rule, ke);
+                    sink += ke[0];
+                }
+                keOnly = Math.Min(keOnly, stopwatch.Elapsed.TotalMilliseconds);
+                Assert.NotEqual(0.0, sink);
+
+                var results = StructuralSolver.Solve(model);
+                assemble = Math.Min(assemble, results.Report.AssembleMs);
+                reactions = Math.Min(reactions, results.Report.ReactionMs);
+            }
+
+            // The other two thirds of the question: of the 90% that is NOT element
+            // stiffness, how much is appending to the builder and how much is packing it?
+            double adds = double.MaxValue, pack = double.MaxValue;
+            int rawEntries = 0, longestRow = 0;
+            for (int trial = 0; trial < 3; trial++)
+            {
+                var reduced = FeaAssembly.ReducedIndices(model, out int freeCount);
+                var builder = new SparseMatrixBuilder(freeCount, freeCount);
+                var ke = new double[elementDofs * elementDofs];
+                var positions = new Vector3d[perElement];
+                var dofs = new int[elementDofs];
+                var perRow = new int[freeCount];
+                int entries = 0;
+
+                var stopwatch = Stopwatch.StartNew();
+                for (int e = 0; e < mesh.ElementCount; e++)
+                {
+                    var nodes = mesh.Element(e);
+                    for (int i = 0; i < perElement; i++)
+                    {
+                        positions[i] = mesh.Position(nodes[i]);
+                        for (int a = 0; a < 3; a++)
+                            dofs[3 * i + a] = reduced[3 * nodes[i] + a];
+                    }
+                    TetElement.Stiffness(mesh.Order, positions, model.MaterialOf(e), rule, ke);
+                    for (int i = 0; i < elementDofs; i++)
+                    {
+                        int ri = dofs[i];
+                        if (ri < 0)
+                            continue;
+                        for (int j = 0; j < elementDofs; j++)
+                        {
+                            double v = ke[i * elementDofs + j];
+                            if (v == 0)
+                                continue;
+                            int rj = dofs[j];
+                            if (rj >= 0 && ri <= rj)
+                            {
+                                builder.Add(ri, rj, v);
+                                perRow[ri]++;
+                                entries++;
+                            }
+                        }
+                    }
+                }
+                adds = Math.Min(adds, stopwatch.Elapsed.TotalMilliseconds);
+
+                stopwatch.Restart();
+                _ = builder.ToSymmetricUpper();
+                pack = Math.Min(pack, stopwatch.Elapsed.TotalMilliseconds);
+                rawEntries = entries;
+                longestRow = perRow.Max();
+            }
+
+            output.WriteLine(
+                $"{order,10} {mesh.ElementCount,10:N0} {3 * mesh.NodeCount,10:N0} {keOnly,9:F0} "
+                + $"{assemble,9:F0} {keOnly / assemble,8:P0} {reactions,10:F0}"
+                + $"   [ke+adds {adds:F0} ms, pack {pack:F0} ms, {rawEntries:N0} raw entries, "
+                + $"longest row {longestRow}]");
+        }
+    }
+
+    /// <summary>
+    /// What would actually move the factorization wall, read off the symbolic pass rather
+    /// than guessed from the algorithm's name. Three numbers decide it and none of them
+    /// needs the factorization to be run: how much work there is
+    /// (<see cref="SparseFactorAnalysis.UpdateCount"/>), how much of it is stuck on one
+    /// dependency chain (<see cref="SparseFactorAnalysis.ParallelCeiling"/>), and how long
+    /// the columns are (<see cref="SparseFactorAnalysis.LongestColumn"/>, which is what a
+    /// blocked/supernodal kernel pays in proportion to).
+    /// </summary>
+    [Fact]
+    public void WhatWouldMoveTheFactorizationWall()
+    {
+        if (!Enabled)
+            return;
+
+        output.WriteLine(
+            $"{"order",10} {"free DOF",10} {"ordering",9} {"factor nnz",12} {"updates",10} "
+            + $"{"longest col",12} {"parallel ceiling",17} {"analyse ms",11}");
+        foreach (var (order, n) in new[]
+        {
+            (ElementOrder.Linear, 4), (ElementOrder.Linear, 8), (ElementOrder.Linear, 12),
+            (ElementOrder.Quadratic, 2), (ElementOrder.Quadratic, 4),
+        })
+        {
+            var model = Cantilever(order, n);
+            var reduced = FeaAssembly.ReducedIndices(model, out int freeCount);
+            var matrix = FeaAssembly.Reduce(
+                FeaAssembly.Stiffness(model, TetQuadrature.For(model.Mesh.Order)), reduced, freeCount);
+
+            foreach (var ordering in new[] { SparseOrdering.Natural, SparseOrdering.Amd })
+            {
+                var stopwatch = Stopwatch.StartNew();
+                var analysis = SparseCholesky.Analyze(matrix, ordering);
+                double ms = stopwatch.Elapsed.TotalMilliseconds;
+                output.WriteLine(
+                    $"{order,10} {freeCount,10:N0} {ordering,9} {analysis.FactorNonZeroCount,12:N0} "
+                    + $"{analysis.UpdateCount,10:E2} {analysis.LongestColumn,12:N0} "
+                    + $"{analysis.ParallelCeiling,16:F1}x {ms,11:F1}");
+            }
+        }
+    }
+
     [Fact]
     public void ThroughputAcrossTheWholePipeline()
     {
@@ -100,7 +337,7 @@ public class FeaBenchmark(ITestOutputHelper output)
 
         output.WriteLine(
             $"{"order",10} {"elements",10} {"free DOF",10} {"assemble",9} {"factor",8} "
-            + $"{"solve",8} {"stress",8} {"total ms",9}");
+            + $"{"solve",8} {"react",8} {"stress",8} {"total ms",9}");
         foreach (var (order, n) in new[]
         {
             (ElementOrder.Linear, 4), (ElementOrder.Linear, 8), (ElementOrder.Linear, 12),
@@ -119,7 +356,8 @@ public class FeaBenchmark(ITestOutputHelper output)
             var r = results.Report;
             output.WriteLine(
                 $"{order,10} {r.ElementCount,10:N0} {r.FreeDofs,10:N0} {r.AssembleMs,9:F0} "
-                + $"{r.FactorMs,8:F0} {r.SolveMs,8:F1} {stressMs,8:F0} {solveMs + stressMs,9:F0}");
+                + $"{r.FactorMs,8:F0} {r.SolveMs,8:F1} {r.ReactionMs,8:F0} {stressMs,8:F0} "
+                + $"{solveMs + stressMs,9:F0}");
         }
     }
 }

@@ -57,7 +57,28 @@ public static class SparseSymmetricCG
     /// symmetric-upper storage is the natural form, but general storage of a symmetric
     /// matrix works identically.
     /// </summary>
-    public static SparseSolveReport Solve(PackedSparseMatrix a, ReadOnlySpan<double> b, Span<double> x, CgOptions? options = null)
+    /// <param name="progress">
+    /// Optional cooperative cancellation, polled once per iteration. Exists so that a
+    /// caller offering cancellation over a linear solve can offer it whichever method runs
+    /// — a <see cref="ProgressCancel"/> that aborts a <see cref="SparseCholesky"/>
+    /// factorization and then sits helpless through a stalling ten-thousand-iteration CG
+    /// run would be the same broken promise from the other side.
+    /// <para><b>No fraction is reported, deliberately.</b> An iteration count is not
+    /// progress: the residual falls geometrically at a rate nobody knows in advance, so
+    /// iteration k of a cap of 10n says nothing about how near the answer is, and a bar
+    /// driven by it would crawl to 10% and finish. The iteration cap is a stall detector,
+    /// not a work estimate — see <see cref="CgOptions.MaxIterations"/>.</para>
+    /// </param>
+    /// <exception cref="OperationCanceledException">Cancellation was requested. The
+    /// iterate in <paramref name="x"/> is left wherever the loop stopped, which is the one
+    /// unavoidable difference from the factorization's all-or-nothing contract — CG works
+    /// in the caller's own buffer.</exception>
+    public static SparseSolveReport Solve(
+        PackedSparseMatrix a,
+        ReadOnlySpan<double> b,
+        Span<double> x,
+        CgOptions? options = null,
+        ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(a);
         if (a.Rows != a.Columns)
@@ -113,6 +134,7 @@ public static class SparseSymmetricCG
         int iteration = 0;
         while (iteration < maxIterations)
         {
+            progress?.ThrowIfCancelled();
             iteration++;
             a.Multiply(p, ap);
             double pap = Dot(p, ap);

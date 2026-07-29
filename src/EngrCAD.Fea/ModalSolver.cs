@@ -317,7 +317,15 @@ public static class ModalSolver
     private const double ShiftEscalation = 100.0;
 
     /// <summary>Solves for the lowest natural frequencies and their mode shapes.</summary>
-    public static ModalResults Solve(StructuralModel model, ModalSolveOptions? options = null)
+    /// <param name="model">The model to solve.</param>
+    /// <param name="options">Solve options, or null for the defaults.</param>
+    /// <param name="progress">Optional cooperative cancellation and progress; see
+    /// <see cref="StructuralSolver.Solve"/> for why the reported fraction is the
+    /// factorization's own. The Lanczos run after it polls at each restart rather than each
+    /// step, since a step is one back-substitution and a restart is where the run can
+    /// legitimately be abandoned.</param>
+    public static ModalResults Solve(
+        StructuralModel model, ModalSolveOptions? options = null, ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         options ??= new ModalSolveOptions();
@@ -378,7 +386,8 @@ public static class ModalSolver
 
         double shift = rigidModes.Length == 0 ? 0 : -ShiftFraction * DiagonalScale(k, m);
         stopwatch.Restart();
-        var (factor, usedShift) = Factorize(k, m, shift, options.Ordering, model, prestressScale);
+        var (factor, usedShift) = Factorize(
+            k, m, shift, options.Ordering, model, prestressScale, progress);
         double factorMs = stopwatch.Elapsed.TotalMilliseconds;
 
         int krylov = options.MaxKrylovDimension
@@ -390,7 +399,7 @@ public static class ModalSolver
         // documents at length — its right-hand matrix is indefinite.)
         var eigen = LanczosEigen.Solve(
             k, m, m, factor, usedShift, deflation, options.ModeCount,
-            options.Tolerance, krylov, options.MaxRestarts);
+            options.Tolerance, krylov, options.MaxRestarts, progress);
         double eigenMs = stopwatch.Elapsed.TotalMilliseconds;
 
         if (eigen.Pairs.Count == 0)
@@ -747,7 +756,8 @@ public static class ModalSolver
     /// </summary>
     private static (SparseCholesky Factor, double Shift) Factorize(
         PackedSparseMatrix k, PackedSparseMatrix m, double shift,
-        SparseOrdering ordering, StructuralModel model, double prestressScale)
+        SparseOrdering ordering, StructuralModel model, double prestressScale,
+        ProgressCancel? progress = null)
     {
         Exception? last = null;
         double current = shift;
@@ -756,7 +766,7 @@ public static class ModalSolver
             var a = current == 0 ? k : FeaAssembly.Combine(k, m, -current);
             try
             {
-                return (SparseCholesky.Factorize(a, ordering), current);
+                return (SparseCholesky.Factorize(a, ordering, progress), current);
             }
             catch (InvalidOperationException ex)
             {

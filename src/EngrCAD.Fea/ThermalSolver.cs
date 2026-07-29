@@ -402,7 +402,13 @@ public sealed record ThermalTransientReport
 public static class ThermalSolver
 {
     /// <summary>Solves for the steady temperature field.</summary>
-    public static ThermalResults Solve(ThermalModel model, ThermalSolveOptions? options = null)
+    /// <param name="model">The model to solve.</param>
+    /// <param name="options">Solver settings, or null for the defaults.</param>
+    /// <param name="progress">Optional cooperative cancellation and progress; see
+    /// <see cref="StructuralSolver.Solve"/> for why the reported fraction is the
+    /// factorization's own.</param>
+    public static ThermalResults Solve(
+        ThermalModel model, ThermalSolveOptions? options = null, ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         options ??= new ThermalSolveOptions();
@@ -429,7 +435,7 @@ public static class ThermalSolver
         double assembleMs = stopwatch.Elapsed.TotalMilliseconds;
 
         var free = new double[freeCount];
-        var solved = RunLinearSolve(reducedMatrix, rhs, free, options, model, reduced);
+        var solved = RunLinearSolve(reducedMatrix, rhs, free, options, model, reduced, progress);
 
         var temperature = Expand(model, reduced, free);
         var balance = EnergyBalance(model, conduction, load, temperature, capacityRate: null);
@@ -473,10 +479,22 @@ public static class ThermalSolver
     /// instead, which is a different approximation with its own error, so it is filed
     /// rather than smuggled in under one name.</para>
     /// </summary>
+    /// <param name="model">The model to step.</param>
+    /// <param name="transient">Step, count, scheme and initial condition.</param>
+    /// <param name="options">Solver settings, or null for the defaults.</param>
+    /// <param name="progress">
+    /// Optional cooperative cancellation and progress. <b>This is the one solve here whose
+    /// progress fraction is not the factorization's</b>, and for a reason that is the same
+    /// argument the other way round: a transient factors ONCE and then spends the run in
+    /// back-substitutions, so the honest measure of how far along it is, is the step number
+    /// — a quantity that is genuinely uniform in cost, unlike a factorization's columns. The
+    /// factorization in front of it reports nothing and only polls.
+    /// </param>
     public static ThermalTransientResults SolveTransient(
         ThermalModel model,
         ThermalTransientOptions transient,
-        ThermalSolveOptions? options = null)
+        ThermalSolveOptions? options = null,
+        ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(transient);
@@ -536,7 +554,11 @@ public static class ThermalSolver
         {
             try
             {
-                factor = SparseCholesky.Factorize(a, options.Ordering);
+                // Cancellation only: the run's own progress is its step count, so letting
+                // the factorization drive the fraction would run the bar to 1 before the
+                // first step.
+                factor = SparseCholesky.Factorize(
+                    a, options.Ordering, progress is null ? null : new ProgressCancel(() => progress.CancelRequested));
             }
             catch (InvalidOperationException ex)
             {
@@ -576,6 +598,11 @@ public static class ThermalSolver
         stopwatch.Restart();
         for (int step = 1; step <= transient.Steps; step++)
         {
+            if (progress is not null)
+            {
+                progress.ThrowIfCancelled();
+                progress.Report((double)(step - 1) / transient.Steps);
+            }
             conduction.Multiply(current, conductionNow);
             capacity.Multiply(current, capacityNow);
             for (int node = 0; node < mesh.NodeCount; node++)
@@ -596,7 +623,7 @@ public static class ThermalSolver
             else
             {
                 freeCurrent.CopyTo(freeNext, 0);   // a warm start: the previous step
-                var cg = SparseSymmetricCG.Solve(a, rhs, freeNext, options.Cg);
+                var cg = SparseSymmetricCG.Solve(a, rhs, freeNext, options.Cg, progress);
                 converged &= cg.Converged;
             }
             worstResidual = Math.Max(worstResidual, Residual(a, freeNext, rhs));
@@ -628,6 +655,7 @@ public static class ThermalSolver
                 times.Add(step * dt);
             }
         }
+        progress?.Report(1);
         double stepMs = stopwatch.Elapsed.TotalMilliseconds;
 
         double storedFinal = StoredEnergy(capacity, current);
@@ -1001,7 +1029,8 @@ public static class ThermalSolver
 
     private static LinearSolve RunLinearSolve(
         PackedSparseMatrix matrix, double[] rhs, double[] free,
-        ThermalSolveOptions options, ThermalModel model, int[] reduced)
+        ThermalSolveOptions options, ThermalModel model, int[] reduced,
+        ProgressCancel? progress = null)
     {
         var stopwatch = Stopwatch.StartNew();
         if (options.Method == FeaSolveMethod.Direct)
@@ -1009,7 +1038,7 @@ public static class ThermalSolver
             SparseCholesky factor;
             try
             {
-                factor = SparseCholesky.Factorize(matrix, options.Ordering);
+                factor = SparseCholesky.Factorize(matrix, options.Ordering, progress);
             }
             catch (InvalidOperationException ex)
             {
@@ -1022,7 +1051,7 @@ public static class ThermalSolver
                 true, 0, factor.FactorNonZeroCount, factorMs, stopwatch.Elapsed.TotalMilliseconds);
         }
 
-        var report = SparseSymmetricCG.Solve(matrix, rhs, free, options.Cg);
+        var report = SparseSymmetricCG.Solve(matrix, rhs, free, options.Cg, progress);
         return new LinearSolve(
             report.Converged, report.Iterations, 0, 0, stopwatch.Elapsed.TotalMilliseconds);
     }

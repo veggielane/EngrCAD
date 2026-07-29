@@ -562,6 +562,31 @@ So CG wins everywhere with linear elements and past roughly 15 000 unknowns with
 quadratic ones, and at the top of the table it is not close — this library's up-looking
 Cholesky is unblocked, and 108 s is what a user experiences as "the solver hung".
 
+**What would move that factorization wall is now a measurement rather than a guess.**
+`SparseCholesky.Analyze` reads the deciding numbers off the symbolic pass in 5–520 ms,
+where the factorization it describes costs 0.1–134 s
+(`FeaBenchmark.WhatWouldMoveTheFactorizationWall`):
+
+| | free DOF | ordering | factor nnz | updates | longest column | parallel ceiling |
+| --- | ---: | --- | ---: | ---: | ---: | ---: |
+| linear | 14 688 | Natural | 22 701 719 | 1.88e10 | 1 732 | 1.0x |
+| linear | 14 688 | Amd | 8 769 703 | 4.32e9 | 1 702 | 1.6x |
+| linear | 46 800 | Amd | 57 616 104 | 6.42e10 | 3 537 | 1.6x |
+| quadratic | 14 688 | Natural | 96 705 622 | 4.20e11 | 12 956 | 1.0x |
+| quadratic | 14 688 | Amd | 6 498 728 | 2.54e9 | 1 400 | 1.9x |
+
+The **parallel ceiling** is total work over the elimination tree's heaviest root-to-leaf
+path — the most a perfectly scheduled parallel factorization could ever win, with unlimited
+processors and free synchronisation. At **1.0–1.9x** it rules out a parallel scheduler for
+this algorithm, and for a structural reason: in 3D the top separator's columns are a
+constant fraction of all the work and form a *chain*. The same table says where that work
+sits — a few nearly-dense columns of 1 400–3 748 entries — which is what a supernodal
+BLAS-3 kernel exists for. So blocking is the lever and scheduling is not.
+
+Useful by-product: the **update count predicts factor time at ~1.0–1.3 ns per update**
+across a 15x size range and both element orders (idle machine; the constant is
+machine-specific), so what a factorization will cost is answerable before paying for it.
+
 **The direct solver is still the default, and the reason is exactness, not speed.** This
 project's verification claims — the patch test reproduced to round-off, strain errors at
 1e-13, the two element orders agreeing on strain energy to twelve digits — cannot be made
@@ -569,12 +594,63 @@ about an iterative solve stopped at a relative residual. A default of CG would m
 headline accuracy claim a statement about an opt-in path. It also reports its fill, which
 is the diagnostic that says a mesh is bad.
 
-Two honesty notes on that decision. The usual second argument for a direct solver — factor
-once, solve many right-hand sides — **does not apply yet**: `Solve` factors and discards,
-so a second load case pays for a second factorization; the multi-load-case entry point is
-filed. And **no automatic size-based switch is offered**, deliberately, because a crossover
-measured on one operator measures that operator: baking a threshold taken from one
-cantilever into the library default would be the very mistake the row above documents.
+One honesty note on that decision: **no automatic size-based switch is offered**,
+deliberately, because a crossover measured on one operator measures that operator — baking
+a threshold taken from one cantilever into the library default would be the very mistake
+the row above documents.
+
+## Several load cases: `SolveAll`
+
+The other classic argument for a direct solver — factor once, substitute many right-hand
+sides — used to be one this library could not honour, because `Solve` factored and
+discarded. `StructuralSolver.SolveAll` is the entry point that makes it real:
+
+```csharp
+var mesh  = AnalysisMesh.Quadratic(tets);          // ONE mesh object
+var cases = loads.Select(f => { var m = new StructuralModel(mesh, steel);
+                                m.Fix(Facets.Tag(1));
+                                m.Force(Facets.Tag(2), f);
+                                return m; }).ToList();
+
+var results = StructuralSolver.SolveAll(cases);    // one assembly, one factorization
+```
+
+Measured (Release, win-x64, alternating in one sitting, best of three), against the same
+cases solved one at a time:
+
+| | free DOF | cases | separate | shared | speedup | factor | per extra RHS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| linear | 6 552 | 4 | 2 159 ms | 591 ms | **3.66x** | 524 ms | 6.69 ms |
+| linear | 14 688 | 4 | 18 310 ms | 4 839 ms | **3.78x** | 4 706 ms | 27.12 ms |
+| quadratic | 2 160 | 4 | 223 ms | 64 ms | 3.50x | 34 ms | 0.73 ms |
+| quadratic | 6 552 | 4 | 1 660 ms | 456 ms | 3.64x | 317 ms | 5.13 ms |
+| quadratic | 6 552 | 8 | 3 391 ms | 489 ms | **6.94x** | 330 ms | 10.83 ms |
+
+An extra right-hand side costs 0.7–27 ms against 34–4 706 ms to factor, so the speedup
+tracks the case count until the substitutions themselves start to matter — 3.5–3.8x of a
+possible 4, 6.9x of a possible 8. **It also changes the direct-vs-iterative comparison
+rather than merely improving a number**: CG reuses nothing but the matrix, so N cases cost
+N whole CG runs, and the ratio in the table above divides by N. `FeaSolveReport.Advisory`
+now says so, and stops firing once the amortisation has already won.
+
+**What the cases must share is checked, not assumed**, and the list is what they are allowed
+to differ in — loads, and the *values* of prescribed displacements. The stiffness matrix is
+a function of the mesh, the materials and which degrees of freedom the supports removed, so
+all three are compared: the mesh by reference (a reused factorization is a statement about
+one node numbering), the restraint mask per node exactly, the material per element by value.
+A prescribed *value* may differ freely because it moves to the right-hand side as
+`f -= K_fc·u_c`, which is per case by construction. The refusal names the case and what
+differs, because the alternative failure is silent: substituting one case's right-hand side
+through another's factorization returns a field that converges, passes its own residual
+check, and answers a question nobody asked.
+
+`Solve` is now literally `SolveAll([model])[0]` — one implementation, so the two cannot
+drift, and the single-case answer is bit-for-bit what it was.
+
+Every case's report carries the **same** `AssembleMs` and `FactorMs`, because there was one
+of each; only `SolveMs` is that case's own, and `LoadCases` says how many shared the cost.
+Reporting a per-case share of a shared cost would be a made-up number and reporting zero
+would hide what the run spent.
 
 Reach for `FeaSolveMethod.ConjugateGradient` for a large single solve — and the report
 now says so itself. **`FeaSolveReport.Advisory`** (surfaced in `ToText()`) fires when a
@@ -595,7 +671,87 @@ disguised threshold — and it is the asymmetry that makes a heuristic acceptabl
 one was refused for the default. A wrong threshold in a default produces a worse answer; a
 wrong threshold in an advisory produces a line of text nobody needed.
 
-Whole-pipeline cost (Release), which says where the time actually goes:
+## Cancelling a solve
+
+Every solve entry point takes Core's optional trailing `ProgressCancel`:
+
+```csharp
+using var source = new CancellationTokenSource();
+var watch = new ProgressCancel(source.Token, fraction => Console.WriteLine($"{fraction:P0}"));
+
+var results = StructuralSolver.Solve(model, null, watch);
+```
+
+`StructuralSolver.Solve`, `ThermalSolver.Solve` / `SolveTransient`, `ModalSolver.Solve` and
+`BucklingSolver.Solve` all take it, and cancellation surfaces as
+`OperationCanceledException` with nothing partial returned.
+
+**What makes the parameter honest is that `SparseCholesky.Factorize` honours it.** The
+advisory above names a slow factorization once it has finished, which helps the second run
+and not the first — and the first run is where someone waits a minute and a half wondering
+whether it has hung. Adding the parameter here *before* the factorization could be
+interrupted would have advertised a cancellation that cannot cancel 99% of the work, which
+is worse than none at all; `SparseSymmetricCG.Solve` takes one for the same reason from the
+other side, so the promise holds whichever method runs.
+
+**The fraction reported is the factorization's own**, and that is a measurement rather than
+a shortcut: on any model slow enough to want a progress bar the factorization *is* the
+solve (79.0 s of 80 s at 46 800 unknowns, against 0.32 s to assemble and 0.25 s to
+substitute), so inventing per-phase weights would put a made-up number in front of a
+measured one. Assembly, the reaction/energy pass and the element guards poll for
+cancellation at element checkpoints and report no fraction; an iterative solve reports none
+at all, because an iteration count is not progress.
+
+**The one solve whose fraction is not the factorization's is the transient**, and the
+reason is the same argument reversed: it factors once and then spends the run in
+back-substitutions of uniform cost, so its step number is a genuinely exact measure of how
+far along it is. It reports one fraction per step.
+
+## Where assembly's time goes — and what it is worth parallelising
+
+The element loop looks embarrassingly parallel, so it is worth knowing what is actually in
+it before anyone parallelises it. Measured with the phases separated
+(`FeaBenchmark.WhereAssemblyTimeGoes`, Release, win-x64, shares taken within one sitting):
+
+| | elements | free DOF | element stiffness | whole assembly | its share | reactions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| linear | 10 368 | 6 825 | 4 ms | 22 ms | 17% | 5 ms |
+| linear | 24 576 | 15 147 | 9 ms | 149 ms | 6% | 15 ms |
+| quadratic | 1 296 | 6 825 | 10 ms | 56 ms | 18% | 12 ms |
+| quadratic | 3 072 | 15 147 | 18 ms | 130 ms | 14% | 18 ms |
+
+**Computing the element stiffnesses is 6–18% of assembly.** The rest is the scatter into
+the matrix builder, which is a shared write whose ORDER decides the last bits of every
+summed entry — so it is the part that cannot be parallelised without giving up bit-identical
+output. Two things follow, and both were reached by measuring rather than by reasoning about
+the loop's shape:
+
+- **The parallel element loop is declined, with the number.** It can address at most the
+  6–18%, and assembly is itself ~4% of a quadratic direct solve and ~13% of a large
+  iterative one, so a perfect parallelisation of the parallelisable half is worth under 2%
+  of a solve. The shape that *would* work if that share ever grows: per-block
+  `SparseMatrixBuilder`s merged **in block order**, which reproduces the serial add sequence
+  exactly and so keeps the packed values bit-identical — the merge is the cost, and it is a
+  copy of every entry.
+- **Caching element stiffnesses for the reaction pass is declined too.** The todo's
+  suggestion was that the reaction/energy pass recomputes every element stiffness a second
+  time, which it does — but the whole pass is 5–18 ms against hundreds of milliseconds to
+  assemble and seconds to factor, and the recomputation is at most 60–90% of that. Holding
+  every element stiffness would cost 95 MB on the largest linear case to save single-digit
+  milliseconds. `FeaSolveReport.ReactionMs` now reports the phase, so the decision has a
+  number attached instead of hiding inside "total".
+
+What the measurement *did* find is one layer down and is fixed: `SparseMatrixBuilder`'s
+per-row insertion sort was O(k²) at k = 612 raw entries per row, which a 10-node
+tetrahedral mesh reaches routinely. Replacing it with a stable key sort took quadratic
+packing from **250 ms to 31 ms** (7.25x on the sort itself, measured against the old code
+transcribed verbatim and alternating in one sitting) and made it linear in the entry count.
+See the Core README. The general lesson is in CLAUDE.md: *an asymptotic guard justified by
+the caller you had is not a guard, and a new consumer is exactly the event that invalidates
+it.*
+
+Whole-pipeline cost (Release, **idle machine**, and note the assemble column predates the
+packing fix above, so it is now an upper bound), which says where the time actually goes:
 
 | | elements | free DOF | assemble | factor | solve | stress | total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

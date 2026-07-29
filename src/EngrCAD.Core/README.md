@@ -325,8 +325,9 @@ chain's parity is consistent across every joint.
   `Func<bool>`, sticky once observed) + coarse progress reporting for long operations,
   taken as an optional trailing `ProgressCancel? progress = null` parameter (zero
   overhead when absent). Cancellation surfaces as `OperationCanceledException`; kernel
-  algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize` and
-  `MeshDecimator.Decimate`.
+  algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize`,
+  `MeshDecimator.Decimate`, `BRepTessellator.Tessellate` and — because it is the slowest
+  single operation in the library — `SparseCholesky.Factorize` and `SparseSymmetricCG.Solve`.
 - **Integer grid types** (g3: Vector2i/Vector3i/Interval1i/AxisAlignedBox3i):
   `Vector2i`/`Vector3i` (tuple conversion, operators, `ComponentProduct` as a `long`
   for overflow-safe grid sample counts, `ToVector2d/3d`), `Interval1i` (**inclusive**
@@ -455,7 +456,35 @@ chain's parity is consistent across every joint.
     duplicates; packing stable-sorts per row so assembly is deterministic for a
     deterministic add sequence; symmetric-upper packing *rejects* lower-triangle adds
     rather than mirroring them, since a mirror would double-count a convention-following
-    assembly). Also: `Multiply(other)` (Gustavson row-merge SpMM — the bi-Laplacian L²
+    assembly).
+    <br>**The per-row sort is a stable O(k log k) key sort, and the reason is a
+    measurement.** It was an insertion sort, justified in a comment by "assembly rows are
+    short (a vertex's ring), so the quadratic worst case never bites" — true of the mesh
+    Laplacians the class was written for, false of the 3D finite-element assembly that is
+    now its heaviest consumer: a 10-node tetrahedral mesh puts **612 raw entries** in its
+    worst row, because every element touching a node contributes 30 columns to each of that
+    node's rows. Each entry is now keyed as `(column, add-index)` packed into one long, so
+    the ordinary primitive sort puts duplicates in add order and stability stops being an
+    algorithm choice. Measured with the old sort transcribed verbatim as the baseline and
+    the two **alternating in one sitting** (`SparseMatrixBuilderBenchmark`, i9-9900K,
+    win-x64, Release):
+
+    | longest row | rows | entries | insertion | key sort | speedup |
+    |---:|---:|---:|---:|---:|---:|
+    | 6 (a vertex ring) | 40 000 | 160 120 | 1.4 ms | 1.1 ms | 1.31x |
+    | 24 | 20 000 | 320 185 | 4.7 ms | 3.6 ms | 1.30x |
+    | 90 (4-node tet row) | 12 000 | 719 506 | 28.1 ms | 14.9 ms | 1.89x |
+    | 612 (10-node tet row) | 3 000 | 1 212 416 | 241.5 ms | 33.3 ms | **7.25x** |
+
+    End to end a quadratic FEA assembly's packing went **250 ms → 31 ms** and stopped
+    growing superlinearly with the entry count. Nothing is slower, including at the row
+    length the class was written for. Output is bit-for-bit unchanged — both sorts are
+    stable, so duplicates are summed in the same order, and a floating-point sum is a
+    function of its order; a test packs the same rows both ways and compares the bits.
+    (Packing a pair into a long for **sorting** is sound in a way that packing one for
+    **hashing** is not — this codebase's recorded trap is that `long.GetHashCode` is
+    `lo ^ hi`, which collapses structured keys into a handful of buckets; a comparison reads
+    all 64 bits and is exactly lexicographic.) Also: `Multiply(other)` (Gustavson row-merge SpMM — the bi-Laplacian L²
     construction), `ToGeneral()`/`ToSymmetricUpper()` (the latter takes the stored upper
     triangle as truth without comparing the lower, because the two halves of a
     numerically symmetric product differ in their last bits — same terms, different
@@ -474,6 +503,41 @@ chain's parity is consistent across every joint.
     `Natural`, because reordering changes the summation order and an AMD-ordered solve is
     therefore *not* bit-identical to the natural one — every existing consumer's committed
     numbers were measured natural.
+    <br>**Cancellable, and the progress fraction is work rather than columns.** `Factorize`
+    takes the optional trailing `ProgressCancel` and polls it once per eliminated column —
+    the finest granularity available without restructuring the inner loops, and the one that
+    matters, because this is where an FEA solve spends 99% of its time (79.0 s of an 80 s
+    solve at 46 800 unknowns). The reported fraction is the numeric pass's **inner-loop
+    update count**, which is exact rather than an estimate: the symbolic pass has already
+    counted every column of L, column *j* is used by exactly as many rows as it has
+    off-diagonal entries, and it carries one more entry each time — so the total is
+    `sum_j c_j·(c_j + 1)/2`, known before the first multiply. Column number would be a
+    misleading bar wherever the factor **fills**: a dense factor has done 12.5% of its work
+    at the halfway column. (Where the factor is merely *banded* — a natural-ordered 2D grid
+    Laplacian, the shape this class was written for — the two agree closely, 0.468 at
+    halfway; the re-weighting costs nothing there and is what makes the number honest on the
+    systems worth cancelling.) Reports are throttled to 200 steps, and the accumulator is
+    guarded by the null check so a caller who passes no progress pays nothing in the
+    innermost loop. `SparseSymmetricCG.Solve` takes one too and polls per iteration, but
+    reports **no** fraction on purpose — an iteration count is not progress, since the
+    residual falls at a rate nobody knows in advance and the iteration cap is a stall
+    detector rather than a work estimate.
+  - **`SparseCholesky.Analyze` → `SparseFactorAnalysis`** — what a factorization WILL cost,
+    from the symbolic pass alone: the stored entries L will have, the numeric pass's exact
+    inner-loop update count, the longest column, and the heaviest root-to-leaf path of the
+    elimination tree. It runs the *same* symbolic code the factorization runs (shared, not
+    restated), so the prediction and the run cannot disagree; measured, it costs 5–520 ms
+    where the factorization it describes costs 0.1–134 s.
+    <br>Two things it is for. **A cost estimate before the wait**: on this repo's FEA
+    cantilever the update count predicts factor time at **~1.0–1.3 ns per update** across a
+    15x size range and both element orders, so "this will take two minutes" is answerable in
+    a third of a second. And **deciding what would move the wall**, which it settled in a
+    direction that was not obvious: `ParallelCeiling` — total work over critical path, i.e.
+    the most a perfectly scheduled parallel factorization could ever win — measures
+    **1.0x natural and 1.6–1.9x AMD** on 3D elasticity, because the top separator's columns
+    are a constant fraction of all the work and form a *chain*. Tree parallelism cannot pay;
+    the same table's longest column (1 400–3 748 entries under AMD) says the work is in a
+    few nearly-dense columns, which is what a supernodal BLAS-3 kernel exists for.
   - **`AmdOrdering`** — approximate minimum degree (Amestoy–Davis–Duff 1996): quotient
     graph with element absorption (including the aggressive form), approximate external
     degrees, mass elimination, hash-detected supervariables, and an assembly-tree

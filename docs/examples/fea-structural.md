@@ -250,6 +250,59 @@ says what this run spent where and what the benchmark measured at a comparable s
 `ToText()` prints it. It fires on what *happened*, not on size: a system that factors
 quickly stays silent however large it is.
 
+### Several load cases at once
+
+The other classic argument for a direct solver — factor once, substitute many right-hand
+sides — is what `SolveAll` exists for. Build every case over **one** `AnalysisMesh` object,
+vary the loads (and prescribed *values*, if you use them), and the assembly and
+factorization happen once:
+
+```csharp
+var cases = loads.Select(f =>
+{
+    var m = new StructuralModel(mesh, Materials.Steel);
+    m.Fix(Facets.Tag(1));
+    m.Force(Facets.Tag(2), f);
+    return m;
+}).ToList();
+
+var results = StructuralSolver.SolveAll(cases);
+```
+
+Measured against the same cases solved one at a time (Release, alternating in one sitting):
+**3.5–3.8x for four cases and 6.9x for eight**, because an extra right-hand side costs
+0.7–27 ms where the factorization costs 34–4 706 ms. It also moves the direct-vs-iterative
+comparison, since CG reuses nothing and would pay for N whole runs.
+
+What the cases must share — the mesh *object*, the restraint mask, the materials — is
+checked and refused by name. That matters more than it sounds: pushing one case's loads
+through another's factorization returns a displacement field that converges, passes its own
+residual check, and is the answer to a different model.
+
+### Watching, and stopping
+
+That advisory helps the second run and not the first, so every solve entry point also takes
+Core's optional trailing `ProgressCancel`:
+
+```csharp
+using var source = new CancellationTokenSource();   // wire this to a Cancel button
+var watch = new ProgressCancel(source.Token, fraction => Console.WriteLine($"{fraction:P0}"));
+
+var results = StructuralSolver.Solve(model, null, watch);
+```
+
+Cancellation reaches `SparseCholesky.Factorize`'s per-column elimination loop, which is the
+only thing that makes the parameter honest — the factorization is 99% of a slow solve, so a
+cancellation that could not reach it would advertise something it cannot do. It reaches the
+conjugate-gradient path too, and the transient thermal stepper.
+
+The **fraction** is the factorization's own, and that is a measurement rather than a
+shortcut: on any model slow enough to want a progress bar the factorization *is* the solve.
+Inside it the fraction counts *work*, not columns — a factor that fills has done only about
+an eighth of its arithmetic at the halfway column. Assembly and the reaction pass poll for
+cancellation but report no fraction, and an iterative solve reports none at all, because an
+iteration count is not progress.
+
 Supports are **eliminated, not penalised**: constrained degrees of freedom are removed from
 the system rather than given a large diagonal, so the reduced matrix is genuinely positive
 definite and its conditioning is the model's own.
