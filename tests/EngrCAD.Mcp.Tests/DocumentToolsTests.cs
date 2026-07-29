@@ -123,13 +123,15 @@ public class DocumentToolsTests : IDisposable
     {
         // The SDF blob in the fixture has no history, so it can only come back as a
         // snapshot — the file must say so rather than let a client discover later that
-        // editing it does nothing.
+        // editing it does nothing. Named "tab/part", the spelling describe_part and
+        // set_param already accept, so a client can act on the report without re-deriving
+        // which tab each name belongs to.
         var tools = new SceneTools(new SceneSession(TestScenes.Basic(), TestScenes.Coarse));
         string file = Path_("mixed.json");
         var saved = Payload(tools.SaveDocument(file));
         var snapshots = ((JsonArray)saved["snapshots"]!).Select(n => (string)n!).ToList();
-        Assert.Contains("blob", snapshots);
-        Assert.Contains("bracket", snapshots);   // a Shape graph has no recipe either
+        Assert.Contains("field/blob", snapshots);
+        Assert.Contains("Model/bracket", snapshots);   // a Shape graph has no recipe either
     }
 
     [Fact]

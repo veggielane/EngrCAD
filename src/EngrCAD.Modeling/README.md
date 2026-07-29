@@ -1613,6 +1613,15 @@ bit), and `DocumentLoadResult.Snapshots` names every part that came back that wa
 `DocumentSaveOptions.EmbedGeometry = false` writes a recipe-only file where those parts
 become an explicit "no geometry" record naming the reason.
 
+Those names are **`"tab/part"`** — the qualified spelling every part-taking tool already
+accepts. A bare name would not do: part names are unique per TAB, not per document, so a
+model with a `housing` in two tabs would report one string twice and a host acting on the
+report would edit whichever it found first. That is also why the list is collected as
+`Part` *references* and resolved once the tabs are wired: parts are read before the tabs
+that reference them, so when a snapshot is recorded its tab does not exist yet. A part
+that ended up in no tab keeps its bare name — there is none to give, and inventing one
+would say less than saying less.
+
 Embedded rather than an external reference, deliberately: a document that points at files
 beside it is a manifest, and the reference breaks the first time the file moves. The one
 case an external reference genuinely wins — a scan mesh large enough that inlining it is

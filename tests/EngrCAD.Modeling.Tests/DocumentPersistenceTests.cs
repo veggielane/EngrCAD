@@ -350,8 +350,10 @@ public class DocumentPersistenceTests
         var result = Document.Load(original.Save());
 
         // "jig" (a raw mesh) and "shim" (a Shape with no history) have no construction
-        // record; "plate" does.
-        Assert.Equal(["jig", "shim"], result.Snapshots.Order());
+        // record; "plate" does. Named "tab/part" — the spelling every part-taking tool
+        // accepts — and note "jig" sits inside an assembly two levels down, so the tab is
+        // read through Tab.AllParts rather than off its loose part list.
+        Assert.Equal(["Model/jig", "Spares/shim"], result.Snapshots.Order());
 
         var jigBefore = original.Scene.AllParts.First(p => p.Name == "jig").GetMesh(original.Scene.Options);
         var jigAfter = result.Scene.AllParts.First(p => p.Name == "jig").GetMesh();
@@ -364,6 +366,36 @@ public class DocumentPersistenceTests
             Assert.Equal(beforePositions[i], afterPositions[i]);
         for (int f = 0; f < beforeFaces.Count; f++)
             Assert.Equal(beforeFaces[f], afterFaces[f]);
+    }
+
+    [Fact]
+    public void SnapshotNames_SeparateTwoTabsSharingAPartName()
+    {
+        // The whole reason the report is qualified: part names are unique per TAB, not per
+        // document, so a bare-name report would print one string twice and a host acting on
+        // it would edit whichever tab it happened to find first.
+        var scene = new Scene();
+        scene.AddTab("Left").Add(new Part("housing", MeshPrimitives.Box(4, 4, 4)));
+        scene.AddTab("Right").Add(new Part("housing", MeshPrimitives.Box(6, 6, 6)));
+
+        var result = Document.Load(new Document(scene).Save());
+        Assert.Equal(["Left/housing", "Right/housing"], result.Snapshots.Order());
+    }
+
+    [Fact]
+    public void ASnapshotPartInNoTab_KeepsItsBareName()
+    {
+        // A part the file carries but no tab references has no tab to name, and inventing
+        // one would say less than saying nothing. The parts table is flat, so the record
+        // still loads — the tab reference is what is missing, and that is edited out of the
+        // file here because a Scene has no API for a part belonging to nothing.
+        var scene = new Scene();
+        scene.AddTab("Only").Add(new Part("stray", MeshPrimitives.Box(2, 2, 2)));
+        Assert.Equal(["Only/stray"], Document.Load(new Document(scene).Save()).Snapshots);
+
+        var node = System.Text.Json.Nodes.JsonNode.Parse(new Document(scene).Save())!;
+        node["tabs"]!.AsArray()[0]!["parts"]!.AsArray().Clear();
+        Assert.Equal(["stray"], Document.Load(node.ToJsonString()).Snapshots);
     }
 
     [Fact]

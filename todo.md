@@ -1944,12 +1944,6 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   covers the "hand the tuning back" case that motivated it.
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
-- [ ] **`DocumentLoadResult.Snapshots` names parts by BARE name, not "tab/part"** — the
-  doc comment claimed the path form and the code has always written the name; the
-  comment is now honest. Names are unique per TAB, so the report is ambiguous for a
-  document whose tabs share a part name. Changing it is one line plus the two assertions
-  that pin the spelling (`DocumentPersistenceTests`, `DocumentToolsTests`), left out of
-  the sweep that found it because a reporting-format change deserves its own commit.
 
 ## App layer / infrastructure
 

@@ -147,10 +147,11 @@ public sealed class DocumentLoadOptions
 /// </summary>
 /// <param name="Document">The rebuilt document.</param>
 /// <param name="Warnings">One message per record that could not be fully restored.</param>
-/// <param name="Snapshots">Names of parts loaded from an embedded mesh — present and
-/// correct, but not parametric. (Bare part names, not "tab/part" paths: names are
-/// unique per TAB, so this is ambiguous for a document whose tabs share a part name —
-/// filed in todo.md rather than changed silently, since the spelling is asserted.)</param>
+/// <param name="Snapshots">Parts loaded from an embedded mesh — present and correct, but
+/// not parametric — named <c>"tab/part"</c>, the qualified spelling every part-taking tool
+/// accepts. Part names are unique per TAB rather than per document, so a bare name would be
+/// ambiguous the moment two tabs shared one; a part that ended up in no tab at all keeps its
+/// bare name, since there is no tab to name.</param>
 public sealed record DocumentLoadResult(
     Document Document, IReadOnlyList<string> Warnings, IReadOnlyList<string> Snapshots)
 {
@@ -642,7 +643,9 @@ internal static class DocumentReader
                 $"document version {version} is not readable by this build (it reads 1..{Document.Version})");
 
         var warnings = new List<string>();
-        var snapshots = new List<string>();
+        // The PARTS that came back as snapshots, in file order; qualified with their tab
+        // names once the tabs are wired (see Qualify, below).
+        var snapshots = new List<Part>();
 
         var scene = root.TryGetProperty("quality", out var quality)
             ? new Scene(LoadQuality(quality))
@@ -728,7 +731,32 @@ internal static class DocumentReader
             }
         }
 
-        return new DocumentLoadResult(document, warnings, snapshots);
+        return new DocumentLoadResult(document, warnings, [.. snapshots.Select(p => Qualify(scene, p))]);
+    }
+
+    /// <summary>
+    /// How a load report names one part: <c>"tab/part"</c> — the qualified spelling every
+    /// part-taking tool already accepts ("Part name, as reported by list_parts; 'tab/part'
+    /// also works").
+    /// <para>The bare name is not enough, because names are unique per TAB: a document with
+    /// a "housing" in two tabs would report the same string twice and a host acting on it
+    /// would edit whichever it found first. Qualifying is the whole reason the snapshot list
+    /// is collected as <see cref="Part"/> references and resolved here rather than at load
+    /// time — parts are read before the tabs that reference them, so at the point a
+    /// snapshot is recorded its tab is not yet known.</para>
+    /// <para>A part in NO tab (loaded, then referenced by nothing) keeps its bare name:
+    /// there is no tab to name, and inventing one would be worse than saying less.</para>
+    /// </summary>
+    private static string Qualify(Scene scene, Part part)
+    {
+        // AllParts, not the tab's loose parts: a snapshot inside an assembly is still that
+        // tab's part, and it is the same walk describe_part resolves a name through.
+        foreach (var tab in scene.Tabs)
+        {
+            if (tab.AllParts.Contains(part))
+                return $"{tab.Name}/{part.Name}";
+        }
+        return part.Name;
     }
 
     private static MeshQuality LoadQuality(JsonElement element)
@@ -777,7 +805,7 @@ internal static class DocumentReader
 
     private static Part? LoadPart(
         JsonElement element, string name, DocumentLoadOptions options,
-        List<string> warnings, List<string> snapshots)
+        List<string> warnings, List<Part> snapshots)
     {
         var color = element.TryGetProperty("color", out var c)
             ? new PartColor(c[0].GetSingle(), c[1].GetSingle(), c[2].GetSingle())
@@ -823,7 +851,9 @@ internal static class DocumentReader
                     warnings.Add($"part '{name}': its embedded mesh could not be rebuilt ({exception.Message})");
                     return null;
                 }
-                snapshots.Add(name);
+                // Recorded as the PART, not its name: the report qualifies each with its
+                // tab, and parts load before the tabs that reference them.
+                snapshots.Add(part);
                 break;
             default:
                 warnings.Add($"part '{name}': no geometry in the file" +
