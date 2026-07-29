@@ -1493,6 +1493,73 @@ every crossing. This closed booleans that cross a whole-solid fillet's bands, an
 nobody was aiming at — cuts that break out through a face boundary part-way, such as a bore
 swallowing a rounded rectangle's corner.
 
+##### Clipping a carrier curve to the pair's shared trim — and why the rule is ASYMMETRIC
+
+Step (2) intersects CARRIERS. A carrier is unbounded (a plane) or bounded only by its own
+parameter rectangle — a helical band's domain is the bounding rectangle of a
+parallelogram-shaped face — so the curve it returns runs past both faces. Step (3) already
+discarded the stretches outside the face *it* was splitting; nothing discarded the stretches
+outside the *other* one, so a face was split along geometry the pair does not share. The cost
+is visible two ways: a pocket tool's four wall lines cut a host face into **9** fragments
+where the tool's footprint asks for **2**, and a chamfer cone's cut ran past a threaded rod's
+cap and arrived at the cone face as a dangling edge no arrangement can trace.
+
+The obvious rule — hand both faces the stretches inside both trims — is wrong, and wrong in
+the direction that matters. **Wherever the two faces share a boundary, clipping to the partner
+cuts the curve exactly ON this face's own boundary**, turning a transversal crossing into a
+tangential touch and leaving the arrangement an endpoint no boundary edge owns. Measured on
+`Box(20,20,10) & Box(10,30,10)`, whose side walls meet along their full height: every vertical
+curve stopped exactly on both walls' rims and tracing did not close. So the rule is
+**asymmetric — each face drops only the stretches that lie inside ITSELF and outside its
+partner**. Keeping the stretches that lie outside this face costs nothing (the splitter drops
+them by loop parity) and restores the crossing, so the clip removes exactly the over-split it
+exists to remove and nothing else.
+
+Two properties keep the two solids welding. The **breakpoints are shared**: one list per face
+pair, the union of both faces' exact `CrossingParameters`, so wherever the pair genuinely
+shares a stretch the two sides cut it at identical parameters. And a **curve that survives
+whole is returned as ITSELF**, not as a full-domain segment, because wrap-splitting and
+hole-splitting both key on `IsClosed` — which is also what makes every transversal boolean
+bit-for-bit unchanged.
+
+**The keep/drop test errs toward KEEPING, and that direction is the safety argument**: a
+stretch wrongly kept only reproduces the un-clipped behaviour, while one wrongly dropped loses
+a seam silently and the boolean returns two touching shells. It errs three ways — a probe that
+does not project onto the surface at all counts as inside; parity is two-sided
+(`FaceGeometry.ContainsTwoSided`), so a POLE-BOUNDED face answers instead of calling every
+point on itself outside; and a stretch running ALONG the boundary counts as inside, because
+where two solids mate the shared rim IS a face boundary on one side. Without the pole rule a
+sphere-through-a-box union lost its whole seam curve and came back at Euler 4.
+
+Three downstream mechanisms had to learn the same fact — **that a closed curve may now arrive
+clipped**. The closed-curve seam anchor is conditional on both sides still seeing the closed
+curve (a slot through a bore shares with the slot's floor only the arc inside the slot's
+width, so the bore wall is cut there and never wrap-splits while the floor still sees the full
+circle; the stale anchor left the +x arc as two edges against the wall's one). A closed CHAIN
+that wraps the period must go to the arrangement rather than to `SplitByClosedCurveChain`,
+since the two sides of a wrapping cut are two bands and neither is a hole in the other. And
+that chain's pulled polyline must be unwrapped stepwise across its junctions, or the winding
+comes out by luck (see the BRep README).
+
+**The oracle had to be re-argued, and the honest answer is that it moved.** "All rendered docs
+PNGs byte-identical" cannot be the bar for a change that legitimately re-decomposes faces: a
+plate with a flush pocket went from 18 faces to 11 and a two-bore plate with a pocket from 20
+to 13, and although the display mesh keeps its polygon count and its volume to nine decimals,
+the *triangulation* of a face-with-one-hole is not the triangulation of eight rectangles. What
+survives as an oracle is what the faces MEAN: fewer, better-shaped faces with the same volume
+is an improvement; a changed silhouette would not be. Seven of the 106 rendered PNGs moved,
+every one a B-Rep-boolean scene and none with a changed silhouette — including a
+construction-preview overlay, whose exact B-Rep edges are pixel-for-pixel where they were. The
+committed ambient-occlusion fingerprints were re-taken for exactly the two fixtures whose face
+count fell, with the measurement recorded beside them.
+
+One process note, because it nearly became a wrong conclusion: the first DocsGen pass was
+polled *while it was still running* and reported four movers, so three more appeared on the
+next run and looked like nondeterminism in the renderer. Two further runs from a clean
+checkout produced all seven bit-identically (SHA-256 equal), which settles it the way this
+project settles such things — re-verify the artifact rather than reason about the code. Never
+read a build's output directory before the build says it is done.
+
 #### Coincident (flush) planar surface
 
 Transversal intersection is not the only way two solids can meet: they can *share*

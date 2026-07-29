@@ -324,14 +324,53 @@ public static class FaceGeometry
     /// Whether a 3D point lies within a face (inside the outer loop, outside the holes),
     /// by parity of an upward-v ray against all pulled-back loops. Periodic u is handled
     /// by shifting each segment into the test point's period.
+    /// <para><b>One-sided, and that is a real blind spot</b>: an upward ray cannot see a rim
+    /// that lies BELOW the probe, so this calls every point of a pole-bounded face outside.
+    /// Callers for whom that is the wrong error — anything deciding what to KEEP — should ask
+    /// <see cref="ContainsTwoSided"/>. This spelling stays because it is what the face
+    /// splitter's arrangement and the boolean's fragment classification have always used, and
+    /// both handle poles by their own structural routes.</para>
     /// </summary>
-    public static bool Contains(BrepFace face, in Vector3d point, int samplesPerCurve = 32)
+    public static bool Contains(BrepFace face, in Vector3d point, int samplesPerCurve = 32) =>
+        CountCrossings(face, point, samplesPerCurve, out int above, out _) && (above & 1) == 1;
+
+    /// <summary>
+    /// Whether a 3D point lies within a face, deciding a POLE-BOUNDED face correctly: the same
+    /// even-odd parity as <see cref="Contains"/>, run in BOTH v directions.
+    ///
+    /// <para>A vertical line crosses a closed trim an even number of times in total, so on a
+    /// properly closed face the two directions AGREE and this is exactly <see cref="Contains"/>.
+    /// They disagree in one situation only — one side of the parameter domain is a degenerate
+    /// POINT rather than a rim (a sphere's or an axis-touching revolve's pole), so a probe
+    /// between the rim and the pole has a crossing on one side and none on the other. The probe
+    /// is then inside, which is why the disagreement resolves to true.</para>
+    ///
+    /// <para>The tie-break therefore also makes this the spelling that ERRS TOWARD INSIDE, which
+    /// is what a keep-or-drop decision wants: keeping a stretch that should have gone only
+    /// reproduces the un-clipped behaviour, while dropping one that should have stayed loses a
+    /// seam silently and the boolean returns two touching shells.</para>
+    /// </summary>
+    public static bool ContainsTwoSided(BrepFace face, in Vector3d point, int samplesPerCurve = 32)
     {
+        if (!CountCrossings(face, point, samplesPerCurve, out int above, out int below))
+            return false;
+        bool aboveOdd = (above & 1) == 1, belowOdd = (below & 1) == 1;
+        return aboveOdd == belowOdd ? aboveOdd : true;
+    }
+
+    /// <summary>
+    /// Crossings of the two v rays from the point's parameters against every pulled-back loop,
+    /// or false when the point does not lie on the face's surface at all. Periodic u is handled
+    /// by shifting each segment into the test point's period.
+    /// </summary>
+    private static bool CountCrossings(
+        BrepFace face, in Vector3d point, int samplesPerCurve, out int above, out int below)
+    {
+        above = below = 0;
         if (!face.Surface.TryProjectPoint(point, out var uv, InverseEvaluationTolerance))
             return false;
 
         double period = PeriodU(face.Surface);
-        int crossings = 0;
         foreach (var loop in PullLoops(face, samplesPerCurve))
         {
             for (int i = 0; i < loop.Count; i++)
@@ -354,9 +393,11 @@ public static class FaceGeometry
                     continue;
                 double t = (uv.X - a.X) / (b.X - a.X);
                 if (a.Y + t * (b.Y - a.Y) > uv.Y)
-                    crossings++;
+                    above++;
+                else
+                    below++;
             }
         }
-        return (crossings & 1) == 1;
+        return true;
     }
 }

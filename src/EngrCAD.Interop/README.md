@@ -501,6 +501,47 @@ logging complements them, never replaces them.
     still what every curve crossing the face boundary at both ends gets, bit for bit) and one
     simultaneous arrangement. Only the second can place a curve that TERMINATES inside the
     face, which is what a face-pair curve becomes once it is clipped to the other face's trim.
+  - **Intersection curves are CLIPPED to the pair's shared trim** (`ClipToFace`).
+    `SurfaceIntersection` intersects CARRIERS, and a carrier is either unbounded (a plane) or
+    bounded only by its own parameter rectangle (a helical band's domain is the bounding
+    rectangle of a parallelogram-shaped face), so the curve it returns runs past both faces.
+    Each face's splitter already discarded the stretches outside ITSELF; nothing discarded the
+    stretches outside the OTHER face, so a face was split along geometry the pair does not
+    share. Measured: a pocket's four wall lines cut a host face into **9** fragments where the
+    tool's footprint asks for **2** (a plate with a flush pocket went from 18 faces to 11, a
+    two-bore plate with a pocket from 20 to 13, with the display mesh's polygon count and
+    volume unchanged), and a chamfer cone's cut ran past a threaded rod's cap and arrived at
+    the cone face as a dangling edge no arrangement can trace.
+
+    **Three rules carry it, each paid for by a measured failure.**
+    (a) **The rule is ASYMMETRIC**: each face drops only the stretches that lie inside ITSELF
+    and outside its partner. Handing both faces the intersection of the two trims — the
+    obvious symmetric form — is wrong wherever the two faces share a boundary, because
+    clipping to the partner then cuts the curve exactly ON this face's own boundary and turns
+    a transversal crossing into a tangential touch (`Box(20,20,10) & Box(10,30,10)`, whose
+    side walls meet along their full height: every vertical curve stopped on both walls' rims
+    and tracing did not close). Keeping the stretches outside THIS face costs nothing — the
+    splitter drops them by loop parity anyway — and restores the crossing.
+    (b) **The breakpoints are shared**, computed once per face pair from BOTH faces' exact
+    `CrossingParameters`, so wherever the pair genuinely shares a stretch the two sides cut it
+    at identical parameters and the seam edges pair.
+    (c) **The containment test errs toward KEEPING** (`InsideForClip`): a stretch wrongly kept
+    only reproduces the un-clipped behaviour, one wrongly dropped loses a seam silently and
+    the boolean returns two touching shells. Three ways: a probe that does not project onto
+    the surface at all counts as inside; parity is `FaceGeometry.ContainsTwoSided`, so a
+    POLE-BOUNDED face answers instead of calling every point on itself outside (without it a
+    sphere-through-a-box union lost its whole seam curve and came back at Euler 4); and a
+    stretch running ALONG the boundary counts as inside, because where two solids mate the
+    shared rim IS a face boundary on one side.
+
+    **A curve surviving whole is returned as ITSELF**, not as a full-domain segment — a closed
+    curve must stay closed, since wrap-splitting and hole-splitting both key on `IsClosed` —
+    so every boolean whose curves already lie inside both trims gets bit-for-bit what it got
+    before. The closed-curve **seam anchor is conditional on both sides still seeing the closed
+    curve** (`SeamBreaks`' `anchored` flag): a slot through a bore shares with the slot's floor
+    only the arc inside the slot's width, so the bore wall is cut there and never wrap-splits
+    while the floor still sees the full circle — the stale anchor left the +x arc as two edges
+    against the wall's one, six unpaired edges in all.
   - **`ProbePoint` decides "this fragment is a band" by net u DRIFT, not u SPAN**
     (`FaceGeometry.LoopWrapsPeriod`, the one rule the face splitter's tracing and
     wrap-splitting also ask). The band path probes halfway toward the surface's own v

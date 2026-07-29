@@ -202,9 +202,82 @@ public static class FaceSplitter
     {
         if (chain.Count < 2)
             throw new ArgumentException("A chain needs at least two curves (use SplitByClosedCurve for one).", nameof(chain));
-        const double junctionTolerance = 1e-6;
+        var ordered = OrderChain(chain);
+        if (!FaceGeometry.Contains(face, chain[0].PointAt(chain[0].Domain.Mid)))
+            throw new ArgumentException("The chain must lie inside the face.", nameof(chain));
 
-        // Order and orient the curves end-to-start starting from chain[0] forward.
+        // One vertex per junction (vertex k = traversal start of curve k), one edge per
+        // curve over its own domain; reversed traversal flips the coedge sense, not the
+        // edge direction.
+        var vertices = ordered
+            .Select(o => new BrepVertex(o.Curve.PointAt(o.Forward ? o.Curve.Domain.Start : o.Curve.Domain.End)))
+            .ToList();
+        var edges = new List<BrepEdge>(ordered.Count);
+        for (int k = 0; k < ordered.Count; k++)
+        {
+            var (curve, forward) = ordered[k];
+            var traversalStart = vertices[k];
+            var traversalEnd = vertices[(k + 1) % ordered.Count];
+            edges.Add(forward
+                ? new BrepEdge(curve, curve.Domain, traversalStart, traversalEnd)
+                : new BrepEdge(curve, curve.Domain, traversalEnd, traversalStart));
+        }
+
+        // Winding from the pulled-back traversal.
+        var pulled = PullChain(ordered, face.Surface);
+        bool traversalCcw = FaceGeometry.LoopSignedArea(pulled) > 0;
+        bool holeAlongTraversal = face.IsReversed ? traversalCcw : !traversalCcw;
+
+        BrepLoop ChainLoop(bool alongTraversal) => new(alongTraversal
+            ? [.. Enumerable.Range(0, edges.Count).Select(k => new BrepCoedge(edges[k], ordered[k].Forward))]
+            : [.. Enumerable.Range(0, edges.Count).Reverse().Select(k => new BrepCoedge(edges[k], !ordered[k].Forward))]);
+
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, ChainLoop(holeAlongTraversal)], face.IsReversed)
+            .DescendsFrom(face);
+        var disk = createDisk
+            ? new BrepFace(face.Surface, [ChainLoop(!holeAlongTraversal)], face.IsReversed).DescendsFrom(face)
+            : null;
+        return new ChainSplitResult(faceWithHole, disk, edges);
+    }
+
+    /// <summary>
+    /// Whether a closed chain of curves <b>wraps</b> the face's periodic direction, i.e. bounds
+    /// a BAND rather than a contractible patch.
+    ///
+    /// <para><see cref="SplitByClosedCurveChain"/> makes a face-with-hole plus a disk, which is
+    /// the wrong topology for a wrapping chain — the two sides of a wrapping cut are two bands,
+    /// each still reaching right round the surface, and neither is a hole in the other. Callers
+    /// that assemble chains opportunistically (the boolean's interior-chain extraction) ask this
+    /// first and hand a wrapping chain to the arrangement instead, which already pairs wrapping
+    /// loops bottom-to-top by v.</para>
+    ///
+    /// <para>Reached once carrier clipping landed: a bore breaking out through the rim of an
+    /// axis-touching revolve's flat cap gets its z-constant cut clipped to the arc the cap
+    /// actually shares, so the bore wall's cut is no longer a closed circle that
+    /// <see cref="SplitBandByWrapCurve"/> would take — it is that arc joined end to end with the
+    /// curve where the wall leaves the sphere, and together they still go right round.</para>
+    /// </summary>
+    /// <exception cref="ArgumentException">The curves do not form a single closed loop — the
+    /// same precondition, checked the same way, as <see cref="SplitByClosedCurveChain"/>, so a
+    /// caller asking this first can never be told "yes" about a chain that call would reject.
+    /// </exception>
+    public static bool ChainWrapsPeriod(BrepFace face, IReadOnlyList<Curve3d> chain)
+    {
+        double period = FaceGeometry.PeriodU(face.Surface);
+        if (period <= 0 || chain.Count < 2)
+            return false;
+        return FaceGeometry.LoopWrapsPeriod(PullChain(OrderChain(chain), face.Surface), period);
+    }
+
+    /// <summary>
+    /// Orders and orients a chain's curves end-to-start from <c>chain[0]</c> forward, throwing
+    /// when they do not form a single closed loop.
+    /// </summary>
+    private static List<(Curve3d Curve, bool Forward)> OrderChain(IReadOnlyList<Curve3d> chain)
+    {
+        // Chain junctions match at the inverse-evaluation scale: endpoints come from
+        // independent tracer/analytic curves, not exactly-shared vertices.
+        const double junctionTolerance = 1e-6;
         var remaining = chain.Skip(1).ToList();
         var ordered = new List<(Curve3d Curve, bool Forward)> { (chain[0], true) };
         var start = chain[0].PointAt(chain[0].Domain.Start);
@@ -231,48 +304,48 @@ public static class FaceSplitter
         }
         if (tail.DistanceTo(start) >= junctionTolerance)
             throw new ArgumentException("The chain does not close.", nameof(chain));
-        if (!FaceGeometry.Contains(face, chain[0].PointAt(chain[0].Domain.Mid)))
-            throw new ArgumentException("The chain must lie inside the face.", nameof(chain));
+        return ordered;
+    }
 
-        // One vertex per junction (vertex k = traversal start of curve k), one edge per
-        // curve over its own domain; reversed traversal flips the coedge sense, not the
-        // edge direction.
-        var vertices = ordered
-            .Select(o => new BrepVertex(o.Curve.PointAt(o.Forward ? o.Curve.Domain.Start : o.Curve.Domain.End)))
-            .ToList();
-        var edges = new List<BrepEdge>(ordered.Count);
-        for (int k = 0; k < ordered.Count; k++)
-        {
-            var (curve, forward) = ordered[k];
-            var traversalStart = vertices[k];
-            var traversalEnd = vertices[(k + 1) % ordered.Count];
-            edges.Add(forward
-                ? new BrepEdge(curve, curve.Domain, traversalStart, traversalEnd)
-                : new BrepEdge(curve, curve.Domain, traversalEnd, traversalStart));
-        }
-
-        // Winding from the pulled-back traversal.
+    /// <summary>
+    /// An ordered chain pulled into parameter space as one continuous polyline.
+    ///
+    /// <para><b>Each run must be shifted into the running polyline's period before it is
+    /// appended.</b> <see cref="FaceGeometry.PullCurve"/> unwraps a run only against ITSELF,
+    /// starting from the raw projection of its own first sample, so on a periodic surface the
+    /// next run can begin a whole period away from where the last one ended and the
+    /// concatenation jumps by ±period at every junction — after which the signed area that
+    /// decides the winding, and the drift that decides whether the chain wraps, are both noise.
+    /// A whole-period shift preserves the run's own continuity, and on an aperiodic surface
+    /// (period 0) this is a no-op, so nothing built on a plane or a fillet band moves.</para>
+    ///
+    /// <para>Measured on a Ø6 tool crossing a rounded box's fillet bands: the 8-curve chain on
+    /// the tool's cylindrical wall spans 227 degrees straddling u = 0, and the disk came back
+    /// wound CW on an unreversed face — every one of its eight edges then had the same sense as
+    /// its partner, and <c>BrepSolid.Validate</c> refused the result.</para>
+    /// </summary>
+    private static List<Vector2d> PullChain(
+        IReadOnlyList<(Curve3d Curve, bool Forward)> ordered, Surface surface)
+    {
+        double period = FaceGeometry.PeriodU(surface);
         var pulled = new List<Vector2d>();
         foreach (var (curve, forward) in ordered)
         {
-            var run = FaceGeometry.PullCurve(curve, face.Surface);
+            var run = FaceGeometry.PullCurve(curve, surface);
             if (!forward)
                 run.Reverse();
+            if (period > 0 && pulled.Count > 0 && run.Count > 0)
+            {
+                double shift = period * Math.Round((pulled[^1].X - run[0].X) / period);
+                if (shift != 0)
+                {
+                    for (int i = 0; i < run.Count; i++)
+                        run[i] = new Vector2d(run[i].X + shift, run[i].Y);
+                }
+            }
             pulled.AddRange(run.Take(run.Count - 1)); // drop the duplicate junction sample
         }
-        bool traversalCcw = FaceGeometry.LoopSignedArea(pulled) > 0;
-        bool holeAlongTraversal = face.IsReversed ? traversalCcw : !traversalCcw;
-
-        BrepLoop ChainLoop(bool alongTraversal) => new(alongTraversal
-            ? [.. Enumerable.Range(0, edges.Count).Select(k => new BrepCoedge(edges[k], ordered[k].Forward))]
-            : [.. Enumerable.Range(0, edges.Count).Reverse().Select(k => new BrepCoedge(edges[k], !ordered[k].Forward))]);
-
-        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, ChainLoop(holeAlongTraversal)], face.IsReversed)
-            .DescendsFrom(face);
-        var disk = createDisk
-            ? new BrepFace(face.Surface, [ChainLoop(!holeAlongTraversal)], face.IsReversed).DescendsFrom(face)
-            : null;
-        return new ChainSplitResult(faceWithHole, disk, edges);
+        return pulled;
     }
 
     private sealed record Crossing(BrepEdge? Edge, double EdgeParam, double CurveParam)
@@ -1657,7 +1730,17 @@ public static class FaceSplitter
 
         // Pair wrapping loops into band regions by v: walking upward, a bottom
         // (material-above) boundary opens a band that the next top boundary closes.
-        var wrapping = loopData.Where(d => d.Wraps)
+        //
+        // Boundaries at the SAME v are the two sides of ONE cut, and a cut closes the band
+        // below it before it opens the band above — so within a group of coincident v the tops
+        // must come first. Without that the order between them is whatever the trace happened
+        // to produce, and half the time the walk sees two bottoms in a row and refuses. Grouped
+        // rather than sorted with a tolerant comparator, which would not be a strict weak
+        // ordering. Reached once carrier clipping turned an interior wrapping CUT into a chain
+        // the arrangement handles instead of SplitBandByWrapCurve: measured on
+        // Torus(12,4) − plane − a blind Ø3 bore, where the wall carries its own two rings plus
+        // both traversals of the torus-surface cut.
+        var byV = loopData.Where(d => d.Wraps)
             .Select(d =>
             {
                 double drift = d.Polyline[^1].X - d.Polyline[0].X;
@@ -1666,6 +1749,31 @@ public static class FaceSplitter
             })
             .OrderBy(d => d.AverageV)
             .ToList();
+        var wrapping = new List<(List<BrepCoedge> Coedges, List<Vector2d> Polyline, bool IsBottom, double AverageV)>();
+        if (byV.Count > 0)
+        {
+            // Scale-free tie window: two traversals of one cut differ only by sampling order
+            // (~1e-15 relative), and v carries no model units, so the window is relative to the
+            // wrapping loops' own v extent with a floor of 1 for a domain that is a single row.
+            double vTie = 1e-9 * Math.Max(1, byV[^1].AverageV - byV[0].AverageV);
+            for (int i = 0; i < byV.Count;)
+            {
+                int j = i;
+                while (j + 1 < byV.Count && byV[j + 1].AverageV - byV[i].AverageV <= vTie)
+                    j++;
+                for (int k = i; k <= j; k++)
+                {
+                    if (!byV[k].IsBottom)
+                        wrapping.Add(byV[k]);
+                }
+                for (int k = i; k <= j; k++)
+                {
+                    if (byV[k].IsBottom)
+                        wrapping.Add(byV[k]);
+                }
+                i = j + 1;
+            }
+        }
         var bandRegions = new List<(List<List<BrepCoedge>> Loops, List<List<Vector2d>> Polylines)>();
         (List<BrepCoedge> Coedges, List<Vector2d> Polyline)? openBottom = null;
         foreach (var boundary in wrapping)

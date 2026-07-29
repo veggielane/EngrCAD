@@ -655,7 +655,16 @@ operations. Depends only on `EngrCAD.Core`.
   (periodic-aware; `PullCurveRuns` tolerates curves that only partially lie on a bounded
   surface — off-surface stretches separate contiguous runs, and cut ends gain one
   extrapolated seed sample so crossings at a band's end rings are still found),
-  point-in-face classification, splitting faces by closed interior curves (hole + disk
+  point-in-face classification (**two spellings, deliberately**: `Contains` is the
+  one-sided upward-v ray parity the splitter's arrangement and the boolean's fragment
+  classification have always used, and it has a blind spot — an upward ray cannot see a rim
+  BELOW the probe, so it calls every point of a pole-bounded face outside; `ContainsTwoSided`
+  runs the same parity in BOTH v directions, which agree on a properly closed trim and
+  disagree exactly when one side of the domain is a degenerate POINT, and resolves the
+  disagreement to *inside*. That makes it both the pole-correct rule and the one that errs
+  toward inside, which is what a keep-or-drop decision wants — `PlanarSection`'s cross-section
+  test, where the finding originated (a sphere's section came back empty), and the boolean's
+  carrier clip both ask it), splitting faces by closed interior curves (hole + disk
   sharing one manifold edge), open/crossing curves (full parameter-space arrangement:
   boundary edges split at crossings — refined by 3D curve–curve Gauss–Newton, exact from
   both solids' sides; crossing seeds slightly inclusive so cuts through split-created
@@ -767,12 +776,35 @@ operations. Depends only on `EngrCAD.Core`.
   whose terminus is a real corner the neighbouring face's curve continues from, from a
   **TRACER-TRUNCATED** one, whose terminus is an artefact of the marching step and has nothing
   to meet — and tracer truncation is common, so without the clause the new path engages on
-  ordinary geometry. Measured on `Torus(12, 4) − plane − Ø3 bore`, a construction that is a
-  documented refusal either way: routed to the arrangement it failed as *"two band-bottom
-  boundaries with no top between them"* instead of as the boolean's own *"unclosed solid"* —
-  one stage earlier and less informatively. The arrangement cannot help a curve with no
-  partner; it can only trade one refusal for another. One curve therefore never qualifies,
-  which is what makes `SplitByCurve` exactly the incumbent function.
+  ordinary geometry. The arrangement cannot help a curve with no partner; it can only trade
+  one refusal for another. One curve therefore never qualifies, which is what makes
+  `SplitByCurve` exactly the incumbent function.
+
+  **A closed CHAIN that wraps the period is not a hole** (`ChainWrapsPeriod`, asked by the
+  boolean's interior-chain extraction before it commits to the chain path).
+  `SplitByClosedCurveChain` makes a face-with-hole plus a disk, which is the right topology
+  for a contractible chain and the wrong one for a wrapping cut: the two sides of a wrapping
+  cut are two BANDS, each still reaching right round, and neither is a hole in the other. Such
+  chains only started arriving once the boolean clipped its carrier curves — a bore breaking
+  out through the rim of a flat cap gets its z-constant cut trimmed to the arc the cap shares,
+  so the bore wall's cut is that arc joined end to end with the curve where the wall leaves
+  the body, and together they still go right round. A wrapping chain goes to the arrangement,
+  which already pairs wrapping loops bottom-to-top by v.
+
+  Two numerical rules the chain path needs, both no-ops on an aperiodic surface:
+  **each pulled run must be shifted into the running polyline's period before it is
+  appended** (`PullCurve` unwraps a run only against ITSELF, starting from the raw projection
+  of its own first sample, so on a periodic surface the concatenation jumps by ±period at
+  every junction and both the signed area that decides the winding and the drift that decides
+  whether the chain wraps become noise — measured on a Ø6 tool crossing a rounded box's fillet
+  bands, whose 8-curve chain on the tool's cylindrical wall spans 227° straddling u = 0: the
+  disk came back wound CW on an unreversed face, every one of its eight edges had the same
+  sense as its partner, and `Validate` refused the result); and **wrapping boundaries at the
+  SAME v must be ordered TOPS FIRST** in `TraceFaces`' band pairing, because they are the two
+  sides of ONE cut and a cut closes the band below before it opens the band above — otherwise
+  the order between them is whatever the trace happened to produce and half the time the walk
+  sees two bottoms in a row and refuses. They are GROUPED by a scale-free v window rather than
+  sorted through a tolerant comparator, which would not be a strict weak ordering.
 
   Wrap-splitting refuses faces with
   non-wrapping loops (a contractible fragment can share the band's carrier surface; a
