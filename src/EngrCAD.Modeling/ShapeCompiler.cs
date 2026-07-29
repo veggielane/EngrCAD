@@ -252,15 +252,18 @@ internal static class ShapeCompiler
                 if (!TryDecomposeThreadPlacement(m, out _, out _, out _, out _))
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a sheared or non-uniformly scaled placement cannot re-place a helical thread exactly"));
-                else if (thread.ChamferLength > 0)
+                else if (thread.ChamferLength >= thread.Spec.ThreadDepth)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "end chamfers have no B-Rep form yet — the 45° cone ∩ helical-band cut is now EXACT (a conical SpiralArc3d) and the trimmed bands tessellate, but FaceSplitter cannot yet split a face along a curve that terminates exactly ON its boundary, which that cut does by construction; pass chamferEnds: false, or use ToMesh/ToImplicit"));
+                        "a chamfer at or past the thread depth puts the cone's base exactly on the minor diameter, tangent to every root band along the end plane — coincident curved-surface boolean input; pass a shallower chamferLength, or use ToMesh/ToImplicit"));
                 // Deliberate exact-zero test: "no clearance requested" is a user-parameter
                 // contract (any nonzero offset means distance-field clearance), not a
                 // geometric comparison.
                 else if (thread.ProfileOffset != 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "printing clearance offsets the profile as a distance field (reflex corners round into arcs) with no exact B-Rep counterpart — model clearance via ToMesh/ToImplicit"));
+                else if (thread.ChamferLength > 0)
+                    entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "boolean-free helical sweep, its ends chamfered by a coaxial cone that cuts every band in an exact conical SpiralArc3d; not STEP-exportable"));
                 else
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "boolean-free helical sweep (SolidFactory.MakeThreadedRod); not STEP-exportable"));
@@ -802,8 +805,11 @@ internal static class ShapeCompiler
             }
 
             // Exact-zero user-parameter gate (matches the Explain classification above):
-            // only the unmodified basic profile has an exact B-Rep form.
-            case ThreadShape thread when thread.ProfileOffset == 0 && thread.ChamferLength <= 0:
+            // only the unmodified basic profile has an exact B-Rep form, and only a
+            // SUB-DEPTH end chamfer stays clear of the root bands it would otherwise be
+            // tangent to.
+            case ThreadShape thread
+                when thread.ProfileOffset == 0 && thread.ChamferLength < thread.Spec.ThreadDepth:
             {
                 // The ISO 68-1 basic profile, crest centered at phase 0 — the SAME
                 // phase convention as Sdf.Thread (solid = {r ≤ R((z − P·θ/2π) mod P)}
@@ -821,13 +827,30 @@ internal static class ShapeCompiler
                 double rMinor = spec.MinorDiameter / 2 * scale;
                 var frame = Frame3d.FromOrthonormal(
                     translation, rotation.Rotate(Vector3d.UnitX), rotation.Rotate(Vector3d.UnitY));
-                return SolidFactory.MakeThreadedRod(
+                double length = thread.Length * scale;
+                var rod = SolidFactory.MakeThreadedRod(
                 [
                     new Vector2d(rMajor, -pitch / 16),
                     new Vector2d(rMajor, pitch / 16),
                     new Vector2d(rMinor, 3 * pitch / 8),
                     new Vector2d(rMinor, 5 * pitch / 8),
-                ], pitch, thread.Length * scale, frame, spec.LeftHand ^ reflected);
+                ], pitch, length, frame, spec.LeftHand ^ reflected);
+                // Deliberate exact-zero test: "no chamfer requested" is a user-parameter
+                // contract, and skipping the two booleans keeps an unchamfered rod's
+                // topology bit-for-bit what it has always been.
+                if (thread.ChamferLength <= 0)
+                    return rod;
+                double chamfer = thread.ChamferLength * scale;
+                // Both ends, so the B-Rep is the same solid Sdf.Thread's start/end
+                // chamfers describe. Each tool meets the rod ONLY on its cone, which cuts
+                // every helical band in an exact conical SpiralArc3d.
+                foreach (bool atMaxAxial in (ReadOnlySpan<bool>)[true, false])
+                {
+                    var tool = SolidFactory.MakeThreadEndChamferTool(
+                        rMajor, chamfer, atMaxAxial ? length : 0, atMaxAxial, frame);
+                    rod = WithImplicitRouteHint(() => BrepBoolean.Difference(rod, tool));
+                }
+                return rod;
             }
 
             case ThreadedHoleShape hole when hole.Clearance == 0:

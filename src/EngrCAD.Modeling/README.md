@@ -59,9 +59,9 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) + draft/shell/round-edges/loft/taper (each defined by LENGTHS and ANGLES alone, which every isometry preserves; draft takes the pull direction's linear image, un-negated — a pull is transported, not conjugated like a revolve's axis) · ❌ `SheetMetalBody` (a flange tree is ordered and edge-quoted, so a reflection would need it rebuilt the other way round, not re-placed) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
-| `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
+| `ExternalThread` (no clearance, chamfer &lt; thread depth) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; a sub-depth lead-in chamfer is one difference against `SolidFactory.MakeThreadEndChamferTool`, whose cone cuts every band in an exact conical `SpiralArc3d`; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
 | `ThreadedHole` (no clearance) | ✅ **native** (pilot + thread as ONE clipped-profile helical tool; spiral-arc chains split the drilled faces) | ✅ native | ✅ native (B-Rep tessellation) |
-| `ExternalThread` (chamfers) / either with clearance | ❌ reported per cause — a chamfer's cone∩band cut is now EXACT (a conical `SpiralArc3d`) and its trimmed bands tessellate, but `FaceSplitter` cannot split a face along a curve terminating exactly ON its boundary, which that cut does by construction; clearance is a distance-field profile offset with no exact counterpart | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
+| `ExternalThread` (chamfer ≥ thread depth — the `chamferEnds: true` default) / either with clearance | ❌ reported per cause — a full-depth chamfer puts the cone's base exactly on the minor diameter, tangent to every root band along the end plane (coincident curved-surface boolean input); clearance is a distance-field profile offset whose rounded reflex corners have no exact counterpart | ✅ native (exact-sign thread SDF) | 🔶 polygonized |
 | `Heightmap(heights, cellSize)` (OpenSCAD `surface()`; grids, `.dat`, grayscale PNG via `Heightmap.ReadDat/ReadPng`) | ❌ mesh construction | ✅ exact mesh SDF | ✅ native (manifold-by-construction terrain solid) |
 | `From(BrepSolid)` | ✅ (untransformed) · ❌ transformed | 🔶 bridged (mesh SDF) | ✅ tessellated |
 | `From(HalfEdgeMesh)` | ❌ no mesh→B-Rep import | ✅ exact mesh SDF (closed meshes) | ✅ as-is |
@@ -926,7 +926,8 @@ the fine pitches are round numbers to begin with. `StandardHoles.Tapped(ThreadSp
 the pilot for any spec, fine or custom, from the spec's own tap drill. ⚠ Verify the pitch
 and tap-drill columns against a current standard before production use.
 `ExternalThread` is a threaded rod along +Z (45° lead-in chamfers to the minor
-diameter on both ends by default); `ThreadedHole` cuts a tap-drill pilot (via `Drill`,
+diameter on both ends by default; `chamferLength` asks for a shallower one, which is
+also the B-Rep-native range); `ThreadedHole` cuts a tap-drill pilot (via `Drill`,
 truncating the internal crests as tapping does) plus a modeled thread void per point.
 
 **Clearance** is the printing fit allowance, applied normal to the flanks (the profile
@@ -960,11 +961,15 @@ unmodified — zero clearance and `chamferEnds: false` — via
 co-rotating sweep (one exact `HelicalSurface` band per profile facet sharing `Helix3d`
 rails, flat caps bounded by spiral arcs; crest phase-aligned with the SDF so all three
 representations are the *same* geometry; any length, no whole-turn constraint; not
-STEP-exportable). Such threads mesh through exact B-Rep tessellation. With chamfers
-(the default) or clearance, B-Rep stays **Impossible with a per-cause report** — 45°
-chamfer cones cutting helical bands are future surface-intersection work, and
-clearance offsets the profile as a distance field (reflex corners round into arcs, no
-exact B-Rep counterpart) — and meshes come from Surface Nets, the printing route.
+STEP-exportable). Such threads mesh through exact B-Rep tessellation. **A SUB-DEPTH
+lead-in chamfer is Native too**: a coaxial cone meets a helical band in an exact conical
+`SpiralArc3d`, so `chamferLength: 0.5` is one ordinary difference against
+`SolidFactory.MakeThreadEndChamferTool`. The `chamferEnds: true` default asks for a
+chamfer of the full thread depth, which puts the cone's base exactly on the minor
+diameter and therefore TANGENT to every root band along the end plane — coincident
+curved-surface boolean input — so it, and any clearance (a distance-field profile offset
+whose reflex corners round into arcs), keep B-Rep **Impossible with a per-cause report**,
+and meshes come from Surface Nets, the printing route.
 **`ThreadedHole` is B-Rep-native at zero clearance** via a subtlety worth knowing:
 the B-Rep path does NOT drill the pilot separately (the pilot bore wall and the
 thread tool's root band would be coaxial — tangent, unsupported boolean input);

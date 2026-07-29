@@ -315,93 +315,47 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch
   series** ✅ landed too; **general trimmed helical FACES and the coaxial analytic
   intersection family** ✅ landed as well — see below) — remaining:
-  - [ ] **(a) 45° end-chamfer cones in B-Rep — the standing diagnosis was WRONG, and the
-    real one is bigger.** This entry used to say the blocker was that
-    "`FaceSplitter.SplitByCurve` refuses an open curve that terminates exactly ON the face
-    boundary". **It does not, and never did.** Measured directly: a line from (0, 5) to
-    (10, 5) splits a 10×10 planar face into two, and the exact cone∩band `SpiralArc3d`
-    splits EVERY helical band of an M8 rod (all four, ends landing on v = 0 / v = 1 rails).
-    The refusal that actually fires is `Open splitting curves must start and end outside the
-    face` — raised on the TOOL's cone face, where the arc ends strictly INSIDE it.
+  - [ ] **(a) 45° end-chamfer cones in B-Rep — a SUB-DEPTH chamfer ✅ landed; a residual
+    ~10% of depths still refuses.** `Shape.ExternalThread(..., chamferLength: 0.5)` now
+    lowers to a `Validate`-clean, two-manifold solid whose tessellation is closed and whose
+    volume converges: one ordinary difference against the new
+    `SolidFactory.MakeThreadEndChamferTool`, every pair it makes analytic. Measured
+    (win-x64, M8×1.25, 6 mm rod, 32/64/128/256 segments per circle) the plain rod is
+    246.5616 / 247.7583 / 248.0578 / 248.1329 and one 0.5 mm chamfer 245.8516 / 246.9694 /
+    247.2383 / 247.3058, so the chamfer measures 0.7100 / 0.7889 / 0.8195 / 0.8271 —
+    settling on the prototype's ~0.83. Every vertex of the chamfered B-Rep tessellation
+    reads |sdf| ≤ 1.14e-15 against `Sdf.Thread`'s own chamfered field, so the two
+    representations are the same geometry rather than similar ones (`ChamferedThreadTests`).
+    The `chamferEnds: true` DEFAULT — a chamfer of the full thread depth — stays Impossible
+    by name: the cone's base lands exactly on the minor diameter and therefore tangent to
+    every root band along the end plane.
 
-    **Root cause.** `SurfaceIntersection` intersects CARRIERS, and a `HelicalSurface` band's
-    parameter domain is the bounding RECTANGLE of its parallelogram-shaped face, so the
-    exact cone cut runs past both cap cuts. On the band that owns the overrun `SplitByCurve`
-    discards it by parity; on the cone face the same arc is a dangling edge ending in open
-    space, and an arrangement with a dangling edge cannot be traced. Measured on
-    `rod − revolve(outside-the-cone region)`: four of the five arcs on the cone face ran past
-    the rod's top cap and one lay ENTIRELY past it.
+    **Four defects had to go, and only one was about chamfers** (all four written up in the
+    READMEs). The recognizer did NOT decline the cone — it declined the tool's coaxial
+    ANNULUS, which `TryCoaxialProfileLine` refuses by design (its b is infinite) and whose
+    doc comment said it was "handled by `PlaneHelical` after the caller synthesizes the
+    plane", except no caller ever did; the pair fell to the tracer and its polyline ended
+    strictly inside the band. A cone's cut on a CONSTANT-radius band is a circle exactly,
+    but the general expressions reached it only up to rounding, so `IsPlanar` — an
+    exact-zero test — came out true at one end of a rod and false at the other.
+    `CurveSegment.PointAt` wrapped a parameter one ULP past an OPEN base's domain end,
+    teleporting the last sample to the base's START (0.375 mm off the face, after which the
+    band tier stopped recognizing a band and the ear clipper folded 244 of 3562 facets).
+    And `BRepTessellator.SampleEdge` read a `CurveSegment`'s [0, 1] domain as RADIANS,
+    giving every split spiral edge the same count at any density.
 
-    **The fix is to clip each intersection curve to the OTHER face's trim, and it was
-    prototyped end to end.** With clipping plus the three follow-on fixes below, the
-    boolean returns a `Validate`-clean, two-manifold **7-face solid** whose tessellation is
-    closed and whose volume converges: **245.73 / 246.94 / 247.23** at 32/64/128
-    segments-per-circle against the unchamfered rod's 246.56 / 247.76 / 248.06 — a stable
-    0.83 difference at every density, which is the chamfer.
-
-    **The splitter half is now LANDED.** ~~Clipping is incompatible with the
-    one-curve-at-a-time splitter~~ — it was, and is not any more.
-    `FaceSplitter.SplitByCurves(face, curves)` ✅ takes a face's whole curve list, and
-    `BrepBoolean.SplitAll` ✅ hands it over, so the routing decision lives in one place: the
-    curve-at-a-time CASCADE (bit-for-bit what every existing boolean gets) when each curve
-    can close its own arrangement, and ONE SIMULTANEOUS ARRANGEMENT when a curve TERMINATES
-    inside the face — nodes against the boundary, against every other curve, and at
-    coincident ENDPOINTS, then one `TraceFaces` walk. See the BRep README. **The gate needs
-    a PARTNER at the terminus**, which is the finding worth keeping: "a curve stops inside
-    the face" alone also describes a TRACER-TRUNCATED curve, whose end is an artefact with
-    nothing to meet, and routing those to the arrangement only trades one refusal for
-    another.
-
-    **The CLIP is now LANDED too** (`BrepBoolean.ClipToFace`/`ClipBreakpoints`), and it did
-    NOT unblock the chamfer — see the two blockers below, one of which turned out to be a
-    third. The 22-of-443 failure list this entry recorded resolved to four causes and all
-    four are fixed; the ones worth keeping are in the READMEs and design.md §5, and the
-    headline is that **the clip's rule had to become ASYMMETRIC**: handing both faces the
-    stretches inside both trims cuts the curve exactly ON a face's own boundary wherever the
-    two faces SHARE a boundary, so each face now drops only the stretches inside ITSELF and
-    outside its partner. Landed with it: `FaceGeometry.ContainsTwoSided` (the pole-bounded
-    keep-bias, shared with `PlanarSection`), the conditional closed-curve seam anchor,
-    `FaceSplitter.ChainWrapsPeriod` (a wrapping chain is two bands, not a hole plus a disk),
-    the stepwise periodic unwrap in the chain pull, and `TraceFaces`' tops-first tie-break
-    for wrapping boundaries at the same v. `CarrierClipTests` pins the five claims.
-
-    Two follow-on fixes the prototype named that turned out NOT to be needed, recorded so
-    nobody re-derives them: `ExtractInteriorChains` does not need to honour mandatory breaks
-    before chaining (the wrapping-chain reroute takes the case that motivated it), and
-    `SeamBreaks` does not need to MAP a closed curve's seam parameter into a clipped piece —
-    the anchor is simply dropped when the clip left either side with open pieces, since
-    nothing anchors there any more. Already landed earlier: `FaceGeometry.LoopWrapsPeriod`
-    as the one net-u-DRIFT rule (`LoopWrapTests` + `ProbePointWrapTests`).
-    - [ ] `BRepTessellator.IsFullHelicalBand` admits a 4-coedge band whose two rails came out
-      of the split with DIFFERENT spans, and its sheared grid pairs row j of one rail with
-      row j of the other — so it throws an internal "boundary polylines disagree in sample
-      count". It should check that pairing precondition, exactly as `IsRingPairedBand` does.
-      Not reachable while the chamfer is blocked; keep it filed with the chamfer.
-
-    **What still blocks the chamfer, re-measured WITH the clip landed** (M8×1.25, a 6 mm
-    rod, `rod − revolve(the region outside a 45° cone)`; the unchamfered rod reproduces the
-    prototype's 246.56 / 247.76 / 248.06 at 32/64/128 exactly, so the fixture is the same one):
-    - A **sub-depth chamfer (0.5)** now fails as `Open splitting curves must start and end
-      outside the face: a **PolylineCurve3d** on a HelicalSurface ends at … strictly inside
-      the face`. The curve is a TRACER POLYLINE, not the exact conical `SpiralArc3d` the
-      coaxial analytic family is supposed to give — so the next step is to find out why
-      `TryCoaxialProfileLine` declines this cone (its carrier is a `RevolvedSurface` of a
-      slanted line, which is the case it claims; suspect the tool's *other* faces, or a
-      generator whose sampled (radius, axial) fit is rejected). Until the cut is analytic
-      the clip cannot help: a truncated tracer end has no partner to meet, which is exactly
-      the case `NeedsSimultaneousArrangement` refuses on purpose.
-    - The **default full-depth chamfer** still puts the cone's base radius exactly ON the
-      minor diameter, so the cone is TANGENT to every root band along the cap plane — a
-      coincident/tangent curved-face input the boolean refuses by design. It now fails as
-      "unclosed solid" with 2 of 16 edges unpaired rather than "Arrangement tracing did not
-      close". Flipping the `Explain` classification needs the tangent case too, or the API
-      needs to admit sub-depth chamfers as the Native subset.
-    - ~~The SECOND chamfer's "An edge's two uses must have opposite sense"~~ ✅ **fixed** —
-      it was never chamfer-specific and never a seam-SEALING defect: `SplitByClosedCurveChain`
-      pulled each chain curve independently, so on a PERIODIC surface the concatenation
-      jumped a whole period at every junction and the signed area deciding which side is the
-      disk came out by luck. Diagnosed on the smallest case as this entry advised, and the
-      four `WholeSolidFilletBooleanTests.BandCrossingTool_*` failures went with it.
+    **What remains**: a sporadic ~10% of chamfer depths still fails, loudly, in
+    tessellation or the boolean. Scanned at 5% steps of the thread depth on
+    M6×1 / M8×1.25 / M10×1.5 / M12×1.75 (both ends, length 5P − 0.2, 64 segments per
+    circle), the failures are 1 / 3 / 1 / 2 of 19 sub-depth steps each and at unrelated
+    fractions — an ALIGNMENT phenomenon, not a depth threshold, the same shape as the
+    Surface Nets ambiguous-face and torus-pinhole findings. The one traced to a face is a
+    SINGLE inverted facet of 102 in the chamfer cone's strip zip
+    (`TrimmedFaceTessellator.SweepCycle`), on a loop congruent in uv with one that zips
+    cleanly and differing only in which of its two long constant-v chains sits at the
+    maximum KEY — so `SweepCycle`'s extreme tie-break and chain assignment is where to
+    look. A change there is boolean-critical and wants its own pass over the trimmed
+    corpus, which is why it is filed rather than attempted alongside the chamfer.
   - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
     needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
     it keeps each carrier in its own family and has no `HelicalSurface` case, and a

@@ -397,6 +397,23 @@ operations. Depends only on `EngrCAD.Core`.
     m = (m·FlipY)·FlipY leaves a proper similarity placing a rod of the opposite
     handedness, which is why a mirrored thread is Native rather than refused.
 
+  - `MakeThreadEndChamferTool(majorRadius, chamferLength, endAxial, atMaxAxial[, frame])`
+    — the solid a 45° lead-in chamfer REMOVES from such a rod: the region outside a
+    coaxial cone that reaches `majorRadius` exactly `chamferLength` from the end face.
+    Subtract it and the chamfer is exact, because a coaxial cone cuts every helical band
+    in a conical `SpiralArc3d` (see `SurfaceIntersection`).
+    **Every face of the tool but the cone clears the rod**, which is the whole reason it
+    is a four-corner revolve rather than the cone alone: the generator is extended past
+    both ends by a quarter of the chamfer, so the flat bounding it sits at a radius
+    strictly outside the rod and the flat capping it sits axially outside the end face —
+    the tool-overshoot rule `Drill` follows, which keeps every intersecting pair
+    transversal. (That overshoot is belt and braces rather than load-bearing now that a
+    coaxial annulus is itself an exact cut; a tool whose flat rim lies ON the crest
+    cylinder is exactly the input that found that gap.) A chamfer at or past the thread
+    depth puts the cone tangent to every root band along the end plane — coincident
+    curved-surface boolean input — and is refused one layer up, in the Shape compiler:
+    this factory builds the tool for whatever chamfer it is given.
+
 - **`Draft`** — draft angles (OCCT `BRepOffsetAPI_DraftAngle`), the moulding/casting taper:
   `Draft.Apply(solid, neutralOrigin, pullDirection, angle, faceSelector?)` (or the
   `neutralFace` overload, which pulls *into* the solid so drafting about a box's bottom face
@@ -542,7 +559,21 @@ operations. Depends only on `EngrCAD.Core`.
   cut is one complete iso-v helix, the runout-diameter case) — as the exact conical
   `SpiralArc3d` derived above, clipped to v ∈ [0, 1], to the carrier's own generator
   extent and to the band's u domain, with parallel profiles (dr = b·dz) reporting nothing
-  since they never cross transversally; **bounded planar carriers** (below), and a general marching tracer
+  since they never cross transversally. **A coaxial ANNULUS joins that family from the
+  other end**: its generator is perpendicular to the axis, so no `r = a + b·z` form
+  describes it at all (its b is infinite) and it is recognized separately
+  (`TryCoaxialDisk`) and cut as the axis-perpendicular PLANE it is, clipped to its own
+  radial extent — one implementation of that cut, shared with the `PlaneSurface` case.
+  Recognizing it is not a nicety: a chamfer tool's flat is exactly this surface, and
+  without the arm the pair fell to the marching tracer, whose polyline hugged the
+  annulus's own v = 0 edge where its rim sat on the crest cylinder and ended strictly
+  inside the band — which face splitting refuses by name, three faces away from the
+  cause. **And a cone's cut on a CONSTANT-radius band is a circle, exactly**: a crest or
+  root flat has dr = 0, so the cut's axial coordinate is the single z where a + b·z = r₀,
+  computed in that closed form rather than through the general v-linear expressions,
+  which reach it only up to rounding. `SpiralArc3d.IsPlanar` is an exact-zero test every
+  downstream tier reads, so with the rounded form the SAME chamfer came out planar at one
+  end of a rod and not at the other; **bounded planar carriers** (below), and a general marching tracer
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
   sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are
@@ -727,7 +758,22 @@ operations. Depends only on `EngrCAD.Core`.
   there is nothing to fix and no reason to move an existing probe). Note the predicate is
   deliberately not a test on `Underlying`: a segment's
   underlying curve is its base's, which says nothing about the parameter mapping the
-  rule turns on. Closed curves interior to a face honor **mandatory seam breaks**
+  rule turns on.
+
+  **A `CurveSegment`'s WRAP is only meaningful on a CLOSED base** (`CurveSegmentWrapTests`).
+  A segment straddling a circle's seam legitimately runs past its base's domain end, and
+  there wrapping IS what the parameter means — but an OPEN base has nothing on the other
+  side, and the clipping arithmetic that builds these segments routinely overshoots the
+  end by an ULP. The unconditional wrap did not nudge such a sample, it TELEPORTED it to
+  the base's START. Measured on a thread's end chamfer: a conical spiral trimmed to a face
+  ended one ulp past its carrier arc's domain, so the edge's last sample came back 0.375 mm
+  away at the other end of the arc, off the face entirely; the pulled-back loop then
+  carried a stray vertex at the surface's v = 1, the trimmed band tier stopped recognizing
+  a band, the ear clipper ran instead and folded 244 of 3562 facets — three stages
+  downstream of one ulp, and reported as a non-manifold weld. An open base's parameter is
+  now clamped to its own domain.
+
+  Closed curves interior to a face honor **mandatory seam breaks**
   (`SplitByInteriorClosedCurve`: hole and disk loops built from matching `CurveSegment`
   arcs, so a boolean's other side — which cuts the same circle at its own boundary
   crossings — pairs edge-for-edge in seam sealing). Open splitting curves may
