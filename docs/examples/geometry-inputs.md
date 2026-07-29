@@ -84,6 +84,8 @@ PlaneRef.At(SketchPlane.XY)                   // explicit; needs no body
 EdgeSetRef.RimOf(faces)                       // those faces' outer-loop edges
 EdgeSetRef.Convex                             // the edges a chamfer removes material from
 EdgeSetRef.Circular(radius: 2)                // bore rims
+EdgeSetRef.CircularBetween(0, 5)              // every rim under radius 5
+EdgeSetRef.ShorterThan(2)                     // every edge under 2 long
 FaceSetRef.RimFacesOf(edges)                  // the complete rims covering an edge set
 AxisRef.OfCylindrical(FaceSetRef.Cylindrical(3))  // "pattern about that bore"
 AxisRef.Of(origin, direction)                 // explicit; needs no body
@@ -142,6 +144,21 @@ if (bigFlats.Resolve(solid, "faces").Count != 2) throw new Exception("two big fl
 if (underTheCursor.Resolve(solid, "faces").Count != 1) throw new Exception("one face at that point");
 if (smallBores.Resolve(solid, "faces").Count != 1) throw new Exception("one bore under radius 5");
 if (wallsRoundTheTop.Resolve(solid, "faces").Count != 6) throw new Exception("four walls and two bores");
+
+// Edges take ranges too: by RADIUS (the twin of CylindricalBetween) and by LENGTH.
+var smallRims = EdgeSetRef.CircularBetween(0, 5);
+var shortEdges = EdgeSetRef.ShorterThan(12);
+var longEdges = EdgeSetRef.LongerThan(41);
+
+if (smallRims.Resolve(solid, "edges").Count != 2) throw new Exception("both rims of the small bore");
+if (shortEdges.Resolve(solid, "edges").Count != 4) throw new Exception("the four 10 mm verticals");
+if (longEdges.Resolve(solid, "edges").Count != 2) throw new Exception("the big bore's two rims");
+
+// A range nests like any other term, so the composed query is still one parseable
+// string — still a cache key, still a serialized form.
+if (FaceSetRef.RimFacesOf(shortEdges.Optional()).Descriptor
+    != "rimFacesOf(optional(lengthBetween(0,12)))")
+    throw new Exception("descriptors compose");
 ```
 
 An offset carries its base's **in-plane axes** unchanged, so a sketch coordinate means
@@ -152,6 +169,16 @@ the face's own trim loops — so a point directly over a bore belongs to *no* fa
 a bounding-box test could never tell you. And a radius RANGE is the filter an exact
 radius deliberately is not: `Cylindrical(3)` compares at the weld tier, which is right
 for exactly-constructed geometry and useless for "every bore under 5".
+
+Edges carry the same two range shapes. `EdgeSetRef.CircularBetween(min, max)` is the
+radius one; `LongerThan` / `ShorterThan` / `Between` filter on
+`BrepQueries.Length`, which is exact for lines and circular arcs and a 64-chord
+polyline otherwise — so it is honestly a filter on a *measured* length, which is why
+there is deliberately no exact-length query beside it to be mistaken for the same
+thing. An open-ended range gets its own descriptor term (`lengthAtLeast(2)`) rather
+than an infinite bound, because the grammar's numbers are a digit/sign/exponent scan
+and widening them to read `Infinity` would change every reference type's parser to
+spell one range.
 
 ## The same vocabulary outside a feature history
 

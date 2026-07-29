@@ -30,13 +30,16 @@ public class FeatureRegistryTests
         Assert.True(all.Single(t => t.Name == nameof(HoleFeature)).CanCreate);
         Assert.True(all.Single(t => t.Name == nameof(ExtrudeSketchFeature)).CanCreate);
         Assert.True(all.Single(t => t.Name == nameof(RevolveSketchFeature)).CanCreate);
+        // A catalogue placement is data too: the component travels as its kind plus the
+        // factory arguments that built it (see ComponentPlacement_RoundTrips below for
+        // where that stops — a component outside the catalogue).
+        Assert.True(all.Single(t => t.Name == nameof(ComponentFeature)).CanCreate);
 
         // Code inputs cannot be data: the reason names the constructor's demands.
         var boolean = all.Single(t => t.Name == nameof(BooleanFeature));
         Assert.False(boolean.CanCreate);
         Assert.Contains("Shape", boolean.Reason);
         Assert.False(all.Single(t => t.Name == nameof(VariableChamferRimFeature)).CanCreate);
-        Assert.False(all.Single(t => t.Name == nameof(ComponentFeature)).CanCreate);
     }
 
     [Fact]
@@ -173,6 +176,189 @@ public class FeatureRegistryTests
 
         // The curve vocabulary is exact, so the enclosed area is bit-identical.
         Assert.Equal(sketch.Area(), loaded.Area());
+    }
+
+    /// <summary>
+    /// A sketch whose outer loop uses EVERY segment kind the vocabulary has — the fixture
+    /// the coverage test below reads, so a new segment type fails a test instead of
+    /// silently reaching <c>SaveCurves</c>' default case at save time.
+    /// </summary>
+    private static Sketch EverySegmentKind() =>
+        Sketch.Start(0, 0)
+            .LineTo(30, 0)                                     // LineSeg
+            .ArcTo(new(30, 12), 8, clockwise: false)           // ArcSeg
+            // EllipseSeg: SVG's A rx ry rot largeArc sweep, deliberately ROTATED so the
+            // two semi-axis vectors are not axis-aligned.
+            .EllipticalArcTo(new(18, 20), 9, 5, 35, largeArc: false, clockwise: false)
+            .BezierTo(new(12, 26), new(4, 22), new(0, 12))     // CubicSeg
+            .Close();
+
+    /// <summary>
+    /// Every sketch segment kind has a JSON form. This is a COVERAGE claim rather than a
+    /// fixture: the segment types are enumerated from the assembly, so adding one without
+    /// teaching <see cref="InputJson"/> about it fails here — at build time, in Modeling —
+    /// instead of at <c>Document.Save</c> time, in a user's session.
+    /// <para>The gap this pins was real: elliptical arcs became first-class after the
+    /// persistence work landed, <see cref="Sketch.FromCurves"/> learned the case and
+    /// <c>SaveCurves</c> did not, so a document holding an elliptical sketch feature could
+    /// not be SAVED at all (the FormatException escapes <c>Document.Save</c>, which has no
+    /// catch around <see cref="FeatureHistory.SaveHistory"/>).</para>
+    /// </summary>
+    [Fact]
+    public void EverySketchSegmentKind_HasAJsonForm()
+    {
+        var segmentBase = typeof(Sketch).Assembly.GetType("EngrCAD.Modeling.SketchSegment")!;
+        var kinds = typeof(Sketch).Assembly.GetTypes()
+            .Where(t => !t.IsAbstract && segmentBase.IsAssignableFrom(t))
+            .ToList();
+        Assert.NotEmpty(kinds);
+
+        var fixture = EverySegmentKind();
+        var used = fixture.Segments.Select(s => s.GetType()).ToHashSet();
+        Assert.Equal(
+            kinds.Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal),
+            used.Select(t => t.Name).OrderBy(n => n, StringComparer.Ordinal));
+
+        // Every one of them survives the round trip exactly: the vocabulary is stored, not
+        // sampled, so the enclosed area comes back bit-identical.
+        var saved = InputJson.SaveSketch(fixture);
+        using var document = JsonDocument.Parse(saved.ToJsonString());
+        var loaded = InputJson.LoadSketch(document.RootElement);
+        Assert.Equal(fixture.Area(), loaded.Area());
+        Assert.Equal(saved.ToJsonString(), InputJson.SaveSketch(loaded).ToJsonString());
+    }
+
+    [Fact]
+    public void EllipticalSketch_SurvivesAWholeHistoryRoundTrip()
+    {
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(EverySegmentKind()) { Height = 6, Name = "Cam" });
+
+        string json = history.SaveHistory();
+        var loaded = FeatureHistory.LoadHistory(json);
+        Assert.True(loaded.Complete, string.Join("; ", loaded.Warnings));
+        Assert.Equal(json, loaded.History.SaveHistory());   // the fixed point
+
+        var a = history.Regenerate();
+        var b = loaded.History.Regenerate();
+        Assert.True(a.Succeeded && b.Succeeded);
+        Assert.Equal(a.Body!.ToMesh().Volume(), b.Body!.ToMesh().Volume());
+    }
+
+    // ---- catalogue placements ----
+
+    /// <summary>
+    /// A placed catalogue component round-trips, so a document holding fasteners reopens
+    /// PARAMETRIC rather than as a snapshot plus a warning. The assertion with teeth is
+    /// that the reloaded component is the same ARGUMENTS, not the same designation: an
+    /// ISO 4762 designation carries the size and the length and says nothing about the
+    /// clearance fit, the seating or the socket, so a designation-keyed reload would come
+    /// back as a plausible different screw with the same name.
+    /// </summary>
+    [Fact]
+    public void ComponentPlacement_RoundTrips_ByArgumentsNotByDesignation()
+    {
+        // Deliberately non-default in every argument the designation cannot carry.
+        var screw = StandardComponents.CapScrew(
+            6, 20, ScrewSeating.OnFace, ClearanceFit.Close, hexSocket: true);
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(60, 40)) { Height = 8 });
+        history.Add(new ComponentFeature(screw, [new(-15, 0), new(15, 0)]) { Depth = 12 });
+
+        string json = history.SaveHistory();
+        var loaded = FeatureHistory.LoadHistory(json);
+        Assert.True(loaded.Complete, string.Join("; ", loaded.Warnings));
+        Assert.Equal(json, loaded.History.SaveHistory());   // the fixed point
+
+        var back = (SocketHeadCapScrew)((ComponentFeature)loaded.History.Features[1]).Component;
+        Assert.Equal(screw.Designation, back.Designation);
+        Assert.Equal(ScrewSeating.OnFace, back.Seating);        // none of these three...
+        Assert.Equal(ClearanceFit.Close, back.Fit);             // ...is in the designation
+        Assert.True(back.HexSocket);
+        Assert.Equal(2, ((ComponentFeature)loaded.History.Features[1]).Points.Count);
+        Assert.Equal(12, ((ComponentFeature)loaded.History.Features[1]).Depth);
+
+        // And it is the same model: the host is cut the same way.
+        var a = history.Regenerate();
+        var b = loaded.History.Regenerate();
+        Assert.True(a.Succeeded && b.Succeeded, a.ToString() + "\n" + b.ToString());
+        Assert.Equal(a.Body!.ToMesh().Volume(), b.Body!.ToMesh().Volume());
+    }
+
+    /// <summary>Every catalogue kind has a JSON form — the same coverage claim the sketch
+    /// vocabulary makes, and for the same reason: what is not covered must be REFUSED at
+    /// save time, not written as something a load rebuilds wrong.</summary>
+    [Fact]
+    public void EveryCatalogueComponentKind_RoundTrips()
+    {
+        HardwareComponent[] catalogue =
+        [
+            StandardComponents.CapScrew(6, 20),
+            StandardComponents.ButtonScrew(5, 16),
+            StandardComponents.CskScrew(4, 12),
+            StandardComponents.Nut(6),
+            StandardComponents.Washer(6),
+            StandardComponents.TrisertInsert(4),
+            StandardComponents.Bearing("608"),
+            StandardComponents.Dowel(4, 12),
+        ];
+
+        // The list IS the catalogue: a new HardwareComponent subclass fails here rather
+        // than reaching SaveComponent's null arm in a user's document.
+        var kinds = typeof(HardwareComponent).Assembly.GetTypes()
+            .Where(t => !t.IsAbstract && t.IsPublic && typeof(HardwareComponent).IsAssignableFrom(t))
+            .Select(t => t.Name)
+            .OrderBy(n => n, StringComparer.Ordinal);
+        Assert.Equal(kinds, catalogue.Select(c => c.GetType().Name).OrderBy(n => n, StringComparer.Ordinal));
+
+        foreach (var component in catalogue)
+        {
+            var saved = InputJson.SaveComponent(component);
+            Assert.NotNull(saved);
+            using var document = JsonDocument.Parse(saved!.ToJsonString());
+            var back = InputJson.LoadComponent(document.RootElement);
+            Assert.Equal(component.GetType(), back.GetType());
+            Assert.Equal(component.Designation, back.Designation);
+            Assert.Equal(component.SeatDepth, back.SeatDepth);
+            Assert.Equal(component.InsertedLength, back.InsertedLength);
+            Assert.Equal(saved.ToJsonString(), InputJson.SaveComponent(back)!.ToJsonString());
+        }
+    }
+
+    private sealed class HomeMadeSpacer : HardwareComponent
+    {
+        public override string Designation => "shop spacer";
+        public override double SeatDepth => 0;
+        public override double InsertedLength => 0;
+        protected override Shape BuildBody() => Shape.Cylinder(4, 6);
+        public override Shape Prepare(ComponentSite site) => site.Body;
+    }
+
+    /// <summary>The boundary, stated rather than discovered: a component outside the
+    /// built-in catalogue is refused at save time (no inputs written), warned about by
+    /// name at load, and rescued only by the caller's hook — the same one-sided failure
+    /// every other opaque record has.</summary>
+    [Fact]
+    public void AComponentOutsideTheCatalogue_IsNamedRatherThanGuessedAt()
+    {
+        var mine = new HomeMadeSpacer();
+        Assert.Null(InputJson.SaveComponent(mine));
+
+        var history = new FeatureHistory();
+        history.Add(new ExtrudeSketchFeature(Sketch.Rectangle(40, 40)) { Height = 6 });
+        history.Add(new ComponentFeature(mine, [new(0, 0)]));
+
+        string json = history.SaveHistory();
+        var skipped = FeatureHistory.LoadHistory(json);
+        Assert.False(skipped.Complete);
+        Assert.Contains("shop spacer", Assert.Single(skipped.Warnings), StringComparison.Ordinal);
+
+        var rescued = FeatureHistory.LoadHistory(json, resolveOpaque: record =>
+            record.TypeName == nameof(ComponentFeature)
+                ? new ComponentFeature(new HomeMadeSpacer(), [new(0, 0)])
+                : null);
+        Assert.True(rescued.Complete);
+        Assert.Equal(2, rescued.History.Features.Count);
     }
 
     [Fact]

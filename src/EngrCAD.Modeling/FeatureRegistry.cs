@@ -32,11 +32,17 @@ public sealed record FeatureTypeInfo(
 /// <see cref="Feature.SaveInputs"/> (holes carry their <see cref="HoleSpec"/> and
 /// points; sketch extrude/revolve carry their <see cref="Sketch"/>, serialized through
 /// the exact public <see cref="Curve2d"/> vocabulary — <see cref="Sketch.ToCurves"/> /
-/// <see cref="Sketch.FromCurves"/> — so nothing is flattened). What CANNOT round-trip,
-/// and why: <see cref="BooleanFeature"/> (an arbitrary <see cref="Shape"/> graph has no
-/// serialized form), <see cref="VariableChamferRimFeature"/> (its setback law is code),
-/// <see cref="ComponentFeature"/> (a catalogue <see cref="HardwareComponent"/> is a
-/// code object), and <see cref="Feature.FromFunc"/> lambdas. Those load through
+/// <see cref="Sketch.FromCurves"/> — so nothing is flattened; and
+/// <see cref="ComponentFeature"/> carries its catalogue item as a KIND plus the factory
+/// arguments that built it, never as its <see cref="HardwareComponent.Designation"/>,
+/// which is lossy — "ISO 4762 M6×20" says nothing about the clearance fit, the seating or
+/// whether the socket is modelled, and a lossy key is how a reload comes back as a
+/// plausible DIFFERENT screw). What CANNOT round-trip, and why:
+/// <see cref="BooleanFeature"/> (an arbitrary <see cref="Shape"/> graph has no serialized
+/// form), <see cref="VariableChamferRimFeature"/> (its setback law is code), a
+/// <see cref="ComponentFeature"/> holding a component outside the built-in catalogue
+/// (a user's own <see cref="HardwareComponent"/> subclass), and
+/// <see cref="Feature.FromFunc"/> lambdas. Those load through
 /// <c>LoadHistory</c>'s resolve hook or not at all — a warning either way the hook
 /// returns null.</para>
 ///
@@ -83,6 +89,13 @@ public sealed class FeatureRegistry
         RegisterFactory(typeof(BaseFlangeFeature), inputs =>
             new BaseFlangeFeature(
                 InputJson.LoadSketch(Require(inputs, nameof(BaseFlangeFeature)).GetProperty("sketch"))));
+        RegisterFactory(typeof(ComponentFeature), inputs =>
+        {
+            var element = Require(inputs, nameof(ComponentFeature));
+            return new ComponentFeature(
+                InputJson.LoadComponent(element.GetProperty("component")),
+                InputJson.LoadPoints(element.GetProperty("points")));
+        });
     }
 
     private static JsonElement Require(JsonElement? inputs, string type) =>
@@ -211,9 +224,17 @@ public sealed class FeatureRegistry
 /// <summary>
 /// JSON forms for the constructor inputs the built-in factories understand. Sketches
 /// serialize through the exact public <see cref="Curve2d"/> vocabulary
-/// (<see cref="Sketch.ToCurves"/>/<see cref="Sketch.FromCurves"/>), so lines, arcs and
-/// Béziers round-trip with nothing flattened; hole specs write their kind and the
-/// factory arguments <see cref="HoleSpec"/> validates on the way back in.
+/// (<see cref="Sketch.ToCurves"/>/<see cref="Sketch.FromCurves"/>), so lines, circular and
+/// elliptical arcs and Béziers round-trip with nothing flattened; hole specs write their
+/// kind and the factory arguments <see cref="HoleSpec"/> validates on the way back in.
+///
+/// <para><b>The curve vocabulary here must cover everything <see cref="Sketch.ToCurves"/>
+/// can emit, and that is a test rather than a convention</b>
+/// (<c>FeatureRegistryTests.EverySketchSegmentKind_HasAJsonForm</c> enumerates the segment
+/// types from the assembly). The reason it is worth pinning: this writer's default case
+/// THROWS, and <see cref="Document.Save"/> has no catch around
+/// <see cref="FeatureHistory.SaveHistory"/> — so a curve kind the reader learned and the
+/// writer did not takes the whole document down rather than degrading one feature.</para>
 /// </summary>
 internal static class InputJson
 {
@@ -276,6 +297,100 @@ internal static class InputJson
         return hole;
     }
 
+    // ---- catalogue components ----
+
+    /// <summary>
+    /// A catalogue <see cref="HardwareComponent"/> as its KIND plus the factory arguments
+    /// that built it — the <see cref="SaveHoleSpec"/> pattern, for the same reason: the
+    /// geometry is derived from a standards table, so the arguments ARE the component and
+    /// storing anything else would be storing a copy of the table.
+    /// <para>A component outside the built-in catalogue returns null and is REFUSED by
+    /// name at save time, rather than written as something a load would rebuild wrong —
+    /// the failure direction the whole persistence layer keeps. It travels through
+    /// <c>LoadHistory</c>'s <c>resolveOpaque</c> hook exactly as it did before.</para>
+    /// <para>The <see cref="HardwareComponent.Designation"/> is deliberately NOT the key:
+    /// it is lossy (an ISO 4762 designation says nothing about the clearance fit, the
+    /// seating or whether the socket is modelled), and a lossy key is how a reload comes
+    /// back as a plausible different screw.</para>
+    /// </summary>
+    internal static JsonObject? SaveComponent(HardwareComponent component) => component switch
+    {
+        SocketHeadCapScrew s => new JsonObject
+        {
+            ["kind"] = "capScrew",
+            ["size"] = s.Size,
+            ["length"] = s.Length,
+            ["seating"] = s.Seating.ToString(),
+            ["fit"] = s.Fit.ToString(),
+            ["hexSocket"] = s.HexSocket,
+        },
+        ButtonHeadScrew s => new JsonObject
+        {
+            ["kind"] = "buttonScrew",
+            ["size"] = s.Size,
+            ["length"] = s.Length,
+            ["fit"] = s.Fit.ToString(),
+        },
+        CountersunkScrew s => new JsonObject
+        {
+            ["kind"] = "cskScrew",
+            ["size"] = s.Size,
+            ["length"] = s.Length,
+            ["fit"] = s.Fit.ToString(),
+        },
+        HexNut n => new JsonObject
+        {
+            ["kind"] = "nut",
+            ["size"] = n.Size,
+            ["fit"] = n.Fit.ToString(),
+        },
+        PlainWasher w => new JsonObject { ["kind"] = "washer", ["size"] = w.Size },
+        ThreadedInsert i => new JsonObject { ["kind"] = "trisert", ["size"] = i.Size },
+        DeepGrooveBearing b => new JsonObject { ["kind"] = "bearing", ["code"] = b.Code },
+        // The inserted length is written EXPLICITLY rather than as "null = half": the
+        // constructor's default is arithmetic on another argument, and a file that
+        // records the answer cannot drift from it if that arithmetic ever changes.
+        DowelPin p => new JsonObject
+        {
+            ["kind"] = "dowel",
+            ["diameter"] = p.Diameter,
+            ["length"] = p.Length,
+            ["inserted"] = p.Inserted,
+        },
+        _ => null,
+    };
+
+    internal static HardwareComponent LoadComponent(JsonElement element)
+    {
+        string kind = element.GetProperty("kind").GetString()
+            ?? throw new FormatException("a component record carries a 'kind' string");
+        double Number(string name) => element.GetProperty(name).GetDouble();
+        TEnum Choice<TEnum>(string name) where TEnum : struct, Enum =>
+            Enum.Parse<TEnum>(element.GetProperty(name).GetString()
+                ?? throw new FormatException($"'{name}' is an enum name"), ignoreCase: true);
+
+        return kind switch
+        {
+            "capScrew" => StandardComponents.CapScrew(
+                Number("size"), Number("length"),
+                Choice<ScrewSeating>("seating"), Choice<ClearanceFit>("fit"),
+                element.GetProperty("hexSocket").GetBoolean()),
+            "buttonScrew" => StandardComponents.ButtonScrew(
+                Number("size"), Number("length"), Choice<ClearanceFit>("fit")),
+            "cskScrew" => StandardComponents.CskScrew(
+                Number("size"), Number("length"), Choice<ClearanceFit>("fit")),
+            "nut" => StandardComponents.Nut(Number("size"), Choice<ClearanceFit>("fit")),
+            "washer" => StandardComponents.Washer(Number("size")),
+            "trisert" => StandardComponents.TrisertInsert(Number("size")),
+            "bearing" => StandardComponents.Bearing(
+                element.GetProperty("code").GetString()
+                ?? throw new FormatException("a bearing record carries a 'code' string")),
+            "dowel" => StandardComponents.Dowel(
+                Number("diameter"), Number("length"), Number("inserted")),
+            _ => throw new FormatException($"unknown component kind '{kind}'"),
+        };
+    }
+
     // ---- sketches ----
 
     internal static JsonObject SaveSketch(Sketch sketch)
@@ -309,6 +424,17 @@ internal static class InputJson
                 ["arc"] = new JsonArray(
                     arc.Center.X, arc.Center.Y, arc.Radius, arc.StartAngle, arc.SweepAngle),
             },
+            // An elliptical arc stores BOTH semi-axis VECTORS, not a pair of lengths plus a
+            // rotation: that is the representation EllipseSeg carries, so a rotated ellipse
+            // round-trips without anyone re-deriving an angle from a vector and back.
+            Ellipse2d ellipse => new JsonObject
+            {
+                ["ellipse"] = new JsonArray(
+                    ellipse.Center.X, ellipse.Center.Y,
+                    ellipse.SemiAxisX.X, ellipse.SemiAxisX.Y,
+                    ellipse.SemiAxisY.X, ellipse.SemiAxisY.Y,
+                    ellipse.StartAngle, ellipse.SweepAngle),
+            },
             BezierCurve2d bezier => new JsonObject
             {
                 ["bezier"] = new JsonArray(
@@ -334,6 +460,14 @@ internal static class InputJson
                 curves.Add(new Arc2d(
                     new Vector2d(arc[0].GetDouble(), arc[1].GetDouble()),
                     arc[2].GetDouble(), arc[3].GetDouble(), arc[4].GetDouble()));
+            }
+            else if (entry.TryGetProperty("ellipse", out var ellipse))
+            {
+                curves.Add(new Ellipse2d(
+                    new Vector2d(ellipse[0].GetDouble(), ellipse[1].GetDouble()),
+                    new Vector2d(ellipse[2].GetDouble(), ellipse[3].GetDouble()),
+                    new Vector2d(ellipse[4].GetDouble(), ellipse[5].GetDouble()),
+                    ellipse[6].GetDouble(), ellipse[7].GetDouble()));
             }
             else if (entry.TryGetProperty("bezier", out var bezier))
             {

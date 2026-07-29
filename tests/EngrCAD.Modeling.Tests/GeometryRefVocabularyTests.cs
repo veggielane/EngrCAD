@@ -193,6 +193,96 @@ public class GeometryRefVocabularyTests
         Assert.Throws<ArgumentException>(() => FaceSetRef.CylindricalBetween(9, 1));
     }
 
+    /// <summary>
+    /// The edge twin of the radius range. A bore's rim carries the drill's radius
+    /// verbatim, so <c>EdgeSetRef.Circular(r)</c> compares at the weld tier and is right
+    /// — and cannot answer "every rim under 5", which is what the range is for.
+    /// </summary>
+    [Fact]
+    public void ACircularEdgeRangeFiltersWhereAnExactRadiusCannot()
+    {
+        var solid = Block();
+
+        Assert.Equal(2, EdgeSetRef.Circular(3).Resolve(solid, "edges").Count);   // both rims of the Ø6 bore
+
+        var small = EdgeSetRef.CircularBetween(0, 5).Resolve(solid, "edges");
+        Assert.All(small, e => Assert.True(e.IsCircular(out _, out _, out double r) && r <= 5));
+        Assert.Equal(2, small.Count);
+        Assert.Equal(4, EdgeSetRef.CircularBetween(0, 100).Resolve(solid, "edges").Count);
+
+        AssertDescriptorIsAFixedPoint(EdgeSetRef.CircularBetween(1.5, 9));
+        Assert.Throws<ArgumentException>(() => EdgeSetRef.CircularBetween(9, 1));
+    }
+
+    /// <summary>
+    /// Length ranges — "every edge under 2", the question a chamfer list asks. The block
+    /// is 40 × 30 × 10, so its straight edges come in exactly three lengths and each bound
+    /// picks a set whose size is arithmetic rather than a measurement.
+    /// </summary>
+    [Fact]
+    public void ALengthRangeSelectsEdgesByHowLongTheyAre()
+    {
+        var solid = Block();
+
+        // Four verticals at 10, four at 30, four at 40 — plus the eight bore rims, whose
+        // circumferences (2*pi*3 = 18.85 and 2*pi*7 = 43.98) land among them, which is why
+        // the assertions below read the lengths rather than counting blind.
+        var shortest = EdgeSetRef.ShorterThan(12).Resolve(solid, "edges");
+        Assert.All(shortest, e => Assert.True(e.Length() <= 12));
+        Assert.Equal(4, shortest.Count);                       // the four 10 mm verticals
+
+        var band = EdgeSetRef.Between(29, 31).Resolve(solid, "edges");
+        Assert.Equal(4, band.Count);
+        Assert.All(band, e => Assert.Equal(30, e.Length(), 9));
+
+        var longest = EdgeSetRef.LongerThan(41).Resolve(solid, "edges");
+        Assert.Equal(2, longest.Count);                        // the Ø14 bore's two rims
+        Assert.All(longest, e => Assert.True(e.IsCircular(out _, out _, out double r)
+                                             && Math.Abs(r - 7) < 1e-9));
+
+        // Every edge is covered exactly once by a partition of the length axis.
+        Assert.Equal(
+            solid.Edges.Count(),
+            EdgeSetRef.ShorterThan(12).Resolve(solid, "e").Count
+            + EdgeSetRef.Between(12 + 1e-9, 41).Resolve(solid, "e").Count
+            + EdgeSetRef.LongerThan(41 + 1e-9).Resolve(solid, "e").Count);
+    }
+
+    [Fact]
+    public void LengthRangeDescriptorsAreFixedPoints_OpenEndedOnesToo()
+    {
+        AssertDescriptorIsAFixedPoint(EdgeSetRef.Between(1.5, 9));
+        // An open-ended range gets its own TERM rather than an infinite bound, because the
+        // grammar's numbers are a digit/sign/exponent scan.
+        Assert.Equal("lengthAtLeast(2)", EdgeSetRef.LongerThan(2).Descriptor);
+        AssertDescriptorIsAFixedPoint(EdgeSetRef.LongerThan(2));
+        Assert.Equal("lengthBetween(0,2)", EdgeSetRef.ShorterThan(2).Descriptor);
+
+        Assert.Throws<ArgumentException>(() => EdgeSetRef.Between(9, 1));
+    }
+
+    /// <summary>A range nests inside the rest of the grammar, descriptor and all — which
+    /// is the property that makes it more than a helper: the composed term is still one
+    /// parseable string, so it is still a cache key and still a serialized form.</summary>
+    [Fact]
+    public void ALengthRangeNestsInsideTheGrammar()
+    {
+        var solid = Block();
+        AssertDescriptorIsAFixedPoint(FaceSetRef.RimFacesOf(EdgeSetRef.LongerThan(35).Optional()));
+        Assert.Equal(
+            "rimFacesOf(optional(lengthAtLeast(35)))",
+            FaceSetRef.RimFacesOf(EdgeSetRef.LongerThan(35).Optional()).Descriptor);
+
+        // And the range agrees with the hand-written filter it replaces, on a selection
+        // that is not empty (which is what stops this being 0 == 0).
+        var rim = EdgeSetRef.RimOf(FaceSetRef.PlanarWithNormal(Vector3d.UnitZ)).Resolve(solid, "edges");
+        var byHand = rim.Where(e => e.Length() >= 35).ToList();
+        Assert.NotEmpty(byHand);
+        Assert.Equal(
+            byHand.Count,
+            EdgeSetRef.LongerThan(35).Resolve(solid, "edges").Count(rim.Contains));
+    }
+
     // ---- the Shape overloads ----
 
     [Fact]

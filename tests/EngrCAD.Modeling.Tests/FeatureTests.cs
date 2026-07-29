@@ -189,6 +189,115 @@ public class FeatureTests
         Assert.Equal(40, ((PlateFeature)history.Features[0]).Width);
     }
 
+    /// <summary>
+    /// A feature with OPTIONAL parameters — "null means take the default from somewhere
+    /// else", which is what a per-flange radius override, a per-instance thickness or any
+    /// inherited setting is. Every optional shape the seam has to carry: a number, an
+    /// integer, a flag and an enum.
+    /// </summary>
+    private sealed class OptionalsFeature : Feature
+    {
+        [Param(Min = 0.1, Units = "mm", Description = "null = inherit")]
+        public double? Radius { get; init; }
+
+        [Param(Min = 1, Max = 64)]
+        public int? Segments { get; init; }
+
+        [Param]
+        public bool? Rounded { get; init; }
+
+        [Param]
+        public DisplayMode? Mode { get; init; }
+
+        public override Shape Apply(FeatureContext context) =>
+            Shape.Cylinder(Radius ?? 5, 10);
+    }
+
+    /// <summary>
+    /// Nullable <c>[Param]</c> values round-trip. Before this, <c>Convert</c> had no
+    /// nullable case and threw "unsupported parameter type Nullable`1" — which
+    /// <c>ApplyParameters</c> swallows into a warning, so the value was SILENTLY DROPPED
+    /// on load and the feature came back at its constructor default. The rest of the seam
+    /// already handled it: <c>SerializeValue</c> passes null through and
+    /// <c>Feature.FormatValue</c> renders it "null" in the cache key.
+    /// </summary>
+    [Fact]
+    public void NullableParameters_RoundTripThroughJson_IncludingNull()
+    {
+        var history = new FeatureHistory();
+        history.Add(new OptionalsFeature
+        {
+            Radius = 7.25,
+            Segments = 12,
+            Rounded = true,
+            Mode = DisplayMode.Wireframe,
+        });
+
+        string saved = history.SaveParameters();
+
+        // Set every one to null through the JSON seam: "not stated" is a value JSON has.
+        var warnings = history.LoadParameters("""
+            { "OptionalsFeature": { "Radius": null, "Segments": null,
+                                    "Rounded": null, "Mode": null } }
+            """);
+        Assert.Empty(warnings);
+
+        var cleared = (OptionalsFeature)history.Features[0];
+        Assert.Null(cleared.Radius);
+        Assert.Null(cleared.Segments);
+        Assert.Null(cleared.Rounded);
+        Assert.Null(cleared.Mode);
+
+        // And the saved values come back — this is the half that used to fail silently.
+        Assert.Empty(history.LoadParameters(saved));
+        var restored = (OptionalsFeature)history.Features[0];
+        Assert.Equal(7.25, restored.Radius);
+        Assert.Equal(12, restored.Segments);
+        Assert.True(restored.Rounded);
+        Assert.Equal(DisplayMode.Wireframe, restored.Mode);
+
+        // The file is a fixed point, which is what says nothing was quietly re-defaulted.
+        Assert.Equal(saved, history.SaveParameters());
+    }
+
+    /// <summary>A null optional is still a cache-key term, so clearing one re-runs the
+    /// feature rather than replaying a stale body; and a range on an optional does not
+    /// fire on "not stated", which has no value to be out of range.</summary>
+    [Fact]
+    public void ANullOptional_InvalidatesTheCache_AndPassesRangeValidation()
+    {
+        var history = new FeatureHistory();
+        var feature = new OptionalsFeature { Radius = 7.25 };
+        history.Add(feature);
+        Assert.Equal(FeatureOutcome.Applied, history.Regenerate().Statuses[0].Outcome);
+        Assert.Equal(FeatureOutcome.Cached, history.Regenerate().Statuses[0].Outcome);
+
+        history.LoadParameters("""{ "OptionalsFeature": { "Radius": null } }""");
+        var result = history.Regenerate();
+        Assert.Equal(FeatureOutcome.Applied, result.Statuses[0].Outcome);
+        Assert.True(result.Succeeded, result.ToString());   // Min = 0.1 does not fire on null
+    }
+
+    [Fact]
+    public void NullableParameters_RoundTripThroughAWholeHistory()
+    {
+        var registry = new FeatureRegistry();
+        registry.Register<OptionalsFeature>();
+        var history = new FeatureHistory();
+        history.Add(new OptionalsFeature { Radius = 3.5, Rounded = false });
+
+        string json = history.SaveHistory();
+        var loaded = FeatureHistory.LoadHistory(json, registry);
+        Assert.True(loaded.Complete, string.Join("; ", loaded.Warnings));
+        Assert.Equal(json, loaded.History.SaveHistory());
+
+        var back = (OptionalsFeature)loaded.History.Features[0];
+        Assert.Equal(3.5, back.Radius);
+        Assert.False(back.Rounded);
+        Assert.Null(back.Segments);
+        Assert.Null(back.Mode);
+    }
+
     [Fact]
     public void Selectors_SurviveUpstreamParameterChanges()
     {

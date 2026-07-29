@@ -1283,6 +1283,45 @@ public abstract class EdgeSetRef : GeometryRef<IReadOnlyList<BrepEdge>>
     /// <summary>Circular edges (bore rims), optionally of a given radius.</summary>
     public static EdgeSetRef Circular(double? radius = null) => new CircularEdges(radius);
 
+    /// <summary>
+    /// Circular edges whose radius falls in [<paramref name="min"/>,
+    /// <paramref name="max"/>] — the FILTER that <see cref="Circular(double?)"/>
+    /// deliberately is not, and the edge twin of
+    /// <see cref="FaceSetRef.CylindricalBetween"/>. An exact radius compares at the weld
+    /// tier, which is right for exactly-constructed geometry (a bore rim carries the
+    /// drill's radius verbatim) and useless for "every rim under 3"; a range is the honest
+    /// spelling of that question.
+    /// </summary>
+    public static EdgeSetRef CircularBetween(double min, double max) =>
+        new CircularRangeEdges(RequireRange(min, max, "A radius range"), max);
+
+    /// <summary>
+    /// Edges whose <see cref="BrepQueries.Length(BrepEdge)"/> falls in
+    /// [<paramref name="min"/>, <paramref name="max"/>] — "every edge under 2", the
+    /// question a chamfer list asks. Note what the measure is: exact for lines and
+    /// circular arcs and a 64-chord polyline otherwise, so this is a FILTER on a measured
+    /// length rather than a claim about an exact one — which is why there is no
+    /// exact-length query beside it to be mistaken for the same thing.
+    /// </summary>
+    public static EdgeSetRef LongerThan(double min) => Between(min, double.PositiveInfinity);
+
+    /// <inheritdoc cref="LongerThan"/>
+    public static EdgeSetRef ShorterThan(double max) => Between(0, max);
+
+    /// <inheritdoc cref="LongerThan"/>
+    public static EdgeSetRef Between(double min, double max) =>
+        new LengthRangeEdges(RequireRange(min, max, "A length range"), max);
+
+    private static double RequireRange(double min, double max, string what)
+    {
+        // Exact-zero semantic comparison, deliberately: an inverted range is a modelling
+        // mistake to name, not a near-degenerate case to tolerate.
+        if (!(max >= min))
+            throw new ArgumentException(
+                $"{what} needs max >= min (got [{min:g6}, {max:g6}]).", nameof(max));
+        return min;
+    }
+
     /// <summary>The circular edges carrying the <paramref name="index"/>-th smallest
     /// distinct radius (<see cref="BrepSelection.NthByRadius(IEnumerable{BrepEdge}, int)"/>;
     /// 0 = smallest, −1 = largest) — "the rims of the middle hole size".</summary>
@@ -1321,6 +1360,31 @@ public abstract class EdgeSetRef : GeometryRef<IReadOnlyList<BrepEdge>>
                 var faces = FaceSetRef.ParseFrom(lexer);
                 lexer.Expect(')');
                 return RimOf(faces);
+            }
+            case "circularBetween":
+            {
+                lexer.Expect('(');
+                double min = lexer.ReadNumber();
+                lexer.Expect(',');
+                double max = lexer.ReadNumber();
+                lexer.Expect(')');
+                return CircularBetween(min, max);
+            }
+            case "lengthBetween":
+            {
+                lexer.Expect('(');
+                double min = lexer.ReadNumber();
+                lexer.Expect(',');
+                double max = lexer.ReadNumber();
+                lexer.Expect(')');
+                return Between(min, max);
+            }
+            case "lengthAtLeast":
+            {
+                lexer.Expect('(');
+                double min = lexer.ReadNumber();
+                lexer.Expect(')');
+                return LongerThan(min);
             }
             case "nthByRadius":
             {
@@ -1383,6 +1447,42 @@ public abstract class EdgeSetRef : GeometryRef<IReadOnlyList<BrepEdge>>
                     yield return edge;
             }
         }
+    }
+
+    private sealed class CircularRangeEdges(double min, double max) : EdgeSetRef
+    {
+        public override string Descriptor => RefSyntax.Call(
+            "circularBetween", RefSyntax.Number(min), RefSyntax.Number(max));
+
+        public override string Subject => $"circular edge of radius {min:g6}..{max:g6}";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepEdge> Select(BrepSolid solid, string inputName) =>
+            solid.Edges.Where(e => e.IsCircular(out _, out _, out double radius)
+                                && radius >= min && radius <= max);
+    }
+
+    private sealed class LengthRangeEdges(double min, double max) : EdgeSetRef
+    {
+        // An open-ended range gets its OWN term rather than an infinite bound: the
+        // descriptor grammar's numbers are a digit/sign/exponent scan, so "Infinity"
+        // would need the lexer widened to letters at a number position — a change to
+        // every reference type's parser to spell one range.
+        public override string Descriptor => double.IsPositiveInfinity(max)
+            ? RefSyntax.Call("lengthAtLeast", RefSyntax.Number(min))
+            : RefSyntax.Call("lengthBetween", RefSyntax.Number(min), RefSyntax.Number(max));
+
+        public override string Subject => double.IsPositiveInfinity(max)
+            ? $"edge of length {min:g6} or more"
+            : $"edge of length {min:g6}..{max:g6}";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepEdge> Select(BrepSolid solid, string inputName) =>
+            solid.Edges.Where(e =>
+            {
+                double length = e.Length();
+                return length >= min && length <= max;
+            });
     }
 
     private sealed class RadiusIndexEdges(int index) : EdgeSetRef

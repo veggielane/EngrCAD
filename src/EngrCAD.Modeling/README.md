@@ -418,6 +418,19 @@ keep `Apply` a pure function of parameters + context), validates `[Param]` range
 first, stops at the first failure keeping the last good body, supports suppression,
 and reports per-feature statuses. `SaveParameters`/`LoadParameters` round-trip values
 as JSON so a design is re-tunable without recompiling.
+
+**Optional parameters** are spelt with the nullable type (`double?`, `int?`, `bool?`, an
+`enum?`): null means "not stated", the JSON seam carries it as `null`, the cache key
+renders it `"null"`, and a `[Param(Min=, Max=)]` range does not fire on it — a value that
+is not there cannot be out of range. Which spelling to reach for is decided by the
+**editor**, not by taste: `ParamEditors.KindFor` offers a slider exactly when the range is
+finite at both ends, and a slider is a total function onto its range with no way to say
+"unset", so a parameter behind one can be moved off "inherit" and never back. Hence the
+rule the sheet-metal flange follows — *a parameter whose editor can express absence
+(a text box: empty shows it, `null` sets it) takes the nullable type; one whose editor
+cannot keeps a sentinel outside its own legal range* (`EdgeFlangeFeature.KFactor`'s 0,
+which `SheetMetalSpec` refuses as a K-factor anyway, so it costs no legal value and sits
+at the slider's own minimum).
 Standard features (`ExtrudeSketchFeature`, `HoleFeature`, `FilletRimFeature`, patterns,
 `BooleanFeature`) cover simple histories; `Feature.FromFunc` handles one-offs.
 `FeatureHistory.BodyAfter(i)` is the **rollback** accessor: the body as of feature `i`
@@ -442,15 +455,34 @@ What is data-constructible: `[Param]`-only features (fillet/chamfer rims, patter
 via their parameterless constructors; `HoleFeature` (its `HoleSpec` serializes kind +
 factory arguments and `WithTipAngle`); and `ExtrudeSketchFeature` /
 `RevolveSketchFeature`, because **a `Sketch` serializes exactly through the public
-`Curve2d` vocabulary** (`ToCurves`/`FromCurves` — lines, arcs, Béziers, hole loops;
-nothing flattened, `InputJson` in `FeatureRegistry.cs`). What cannot, and why:
-`BooleanFeature` (an arbitrary `Shape` graph has no serialized form),
-`VariableChamferRimFeature` (its setback law is code), `ComponentFeature` (a catalogue
-`HardwareComponent` is a code object), and `FromFunc` lambdas — `SaveHistory` still
-writes their type/name/parameters so the file is an honest record, and `LoadHistory`
-skips each with a warning naming it unless the caller's `resolveOpaque` hook supplies
-the instance. User feature classes join with `Register<T>()` (parameterless) or
-`Register(type, factory)` paired with a `SaveInputs` override.
+`Curve2d` vocabulary** (`ToCurves`/`FromCurves` — lines, circular *and elliptical* arcs,
+Béziers, hole loops; nothing flattened, `InputJson` in `FeatureRegistry.cs`). That
+vocabulary must cover everything `ToCurves` can emit, and it is a **test** rather than a
+convention (`EverySketchSegmentKind_HasAJsonForm` enumerates the segment types from the
+assembly): the writer's default case throws, and `Document.Save` has no catch around
+`SaveHistory`, so a curve kind the reader learned and the writer did not takes the whole
+document down rather than degrading one feature. That is not hypothetical — elliptical
+arcs became first-class after this envelope landed, `FromCurves` learned the case, the
+writer did not, and any document holding an elliptical sketch feature could not be saved
+at all. `ComponentFeature` is data too: its catalogue item travels as a **kind plus the
+factory arguments that built it**, never as its `Designation` — "ISO 4762 M6×20" says
+nothing about the clearance fit, the seating or whether the socket is modelled, and a
+lossy key is how a reload comes back as a plausible *different* screw. So a host prepared
+by placed fasteners reopens parametric, and a `ComponentFeature` holding a component
+outside the built-in catalogue (a user's own `HardwareComponent`) is refused at SAVE time
+— `SaveInputs` returns null — rather than written as something a load rebuilds wrong.
+
+What cannot round-trip, and why: `BooleanFeature` (an arbitrary `Shape` graph has no
+serialized form), `VariableChamferRimFeature` (its setback law is code), a
+`ComponentFeature` over a non-catalogue component, and `FromFunc` lambdas — `SaveHistory`
+still writes their type/name/parameters so the file is an honest record, and
+`LoadHistory` skips each with a warning naming it unless the caller's `resolveOpaque`
+hook supplies the instance. Note where that still bites in practice:
+`ComponentAssembly(name, shape)` seeds its history with a lambda over an arbitrary
+`Shape`, so a host built that way keeps one opaque record — the `BooleanFeature`
+limitation showing through, not a component one. User feature classes join with
+`Register<T>()` (parameterless) or `Register(type, factory)` paired with a `SaveInputs`
+override.
 
 ### Geometry inputs (`GeometryRefs.cs`)
 
@@ -484,7 +516,9 @@ Queries nest and are named: `FaceSetRef.PlanarWithNormal(n)` / `Cylindrical(r?)`
 `GroupAlong(set, direction, n)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
 `Top` / `Bottom` / `LargestByArea(set)` / `Largest`, `PlaneRef.TopPlane` / `OnTopFace`
 / `On(faceRef)` / `At(plane)`, `EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)` /
-`NthByRadius(n)`, `AxisRef.OfCylindrical(face)` / `Of(origin, direction)`. The
+`CircularBetween(min, max)` / `LongerThan(min)` / `ShorterThan(max)` /
+`Between(min, max)` / `NthByRadius(n)`, `AxisRef.OfCylindrical(face)` /
+`Of(origin, direction)`. The
 ordering/grouping ones are the serializable spellings of `BrepSelection` in
 EngrCAD.BRep (`SortAlong`/`Extreme`/`GroupAlong`/`GroupByCoplanar`/`FilterBy`/
 `Area`/`NthByRadius` — the build123d `sort_by`/`group_by`/`filter_by` capability as
@@ -515,6 +549,15 @@ in solid face order so it is stable across regenerations; and
 `CylindricalBetween(min, max)`, the FILTER that an exact radius deliberately is not (an
 exact radius compares at the weld tier, which is right for exactly-constructed geometry
 and useless for "every bore under 3 mm").
+
+Edges carry both range shapes: `EdgeSetRef.CircularBetween(min, max)` is the radius one
+(`Circular(r)` is likewise weld-tier exact), and `LongerThan`/`ShorterThan`/`Between`
+filter on `BrepQueries.Length` — exact for lines and circular arcs, a 64-chord polyline
+otherwise, so it is honestly a filter on a MEASURED length and there is deliberately no
+exact-length query beside it to be mistaken for the same thing. An open-ended range
+gets its own descriptor term (`lengthAtLeast(2)`) rather than an infinite bound: the
+grammar's numbers are a digit/sign/exponent scan, and widening them to read `Infinity`
+would touch every reference type's parser to spell one range.
 
 **The `Shape` API speaks the same vocabulary.** `Fillet`/`Chamfer`/`ChamferAtAngle`/
 `FilletEdges`/`ChamferEdges`, in their constant and variable-law forms, all take a
@@ -801,6 +844,10 @@ direction and magnitude.
 `BaseFlangeFeature` and `EdgeFlangeFeature` put all of it in the feature history; the
 bend line is an `EdgeSetRef` resolved per regeneration and mapped back into the tree by
 `SheetMetalBody.SiteFor`, so "the flange on THAT edge" survives an edit upstream of it.
+The flange's per-bend overrides are also where the optional-parameter rule above is
+applied: `Width` and `BendRadius` are `double?` (null = take the body's), `KFactor` keeps
+a sentinel 0 because it is the one with a finite range and therefore the one behind a
+slider.
 
 **v1 refuses by name** rather than approximating: bends along non-straight edges,
 closed corners / miters / bend reliefs, a flange flush at one end only, jogs, hems,
