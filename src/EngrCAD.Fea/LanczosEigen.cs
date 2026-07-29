@@ -1,3 +1,4 @@
+using EngrCAD.Core;
 using EngrCAD.Core.Solvers;
 
 namespace EngrCAD.Fea;
@@ -111,6 +112,12 @@ internal static class LanczosEigen
     /// <param name="tolerance">Relative residual a pair must reach to be locked.</param>
     /// <param name="maxKrylov">Cap on the Krylov dimension of ONE run.</param>
     /// <param name="maxRestarts">Cap on the number of restarts.</param>
+    /// <param name="progress">Optional cooperative cancellation, polled once per RESTART.
+    /// Per restart rather than per Lanczos step because a step is one back-substitution
+    /// against an already-built factorization — bounded and short — while a restart is a
+    /// whole run's worth of them, and it is the unit at which the loop can legitimately be
+    /// abandoned. No fraction is reported: how many restarts a spectrum needs is not known
+    /// until it converges.</param>
     public static LanczosResult Solve(
         PackedSparseMatrix k,
         PackedSparseMatrix m,
@@ -121,7 +128,8 @@ internal static class LanczosEigen
         int wanted,
         double tolerance,
         int maxKrylov,
-        int maxRestarts)
+        int maxRestarts,
+        ProgressCancel? progress = null)
     {
         int n = k.Rows;
         var locked = new List<EigenPair>();
@@ -148,6 +156,7 @@ internal static class LanczosEigen
 
         while (locked.Count < target && restart <= maxRestarts)
         {
+            progress?.ThrowIfCancelled();
             var start = StartVector(n, restart);
             if (!Purge(metric, deflate, start, scratchS))
             {

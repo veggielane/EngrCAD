@@ -238,8 +238,12 @@ public static class BucklingSolver
     /// <param name="reference">A completed static solve. It supplies the prestress AND the
     /// model, which is what makes it impossible to stiffen one model with another's stress.</param>
     /// <param name="options">Solve options, or null for the defaults.</param>
+    /// <param name="progress">Optional cooperative cancellation and progress; see
+    /// <see cref="StructuralSolver.Solve"/> for why the reported fraction is the
+    /// factorization's own.</param>
     public static BucklingResults Solve(
-        StructuralResults reference, BucklingSolveOptions? options = null)
+        StructuralResults reference, BucklingSolveOptions? options = null,
+        ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(reference);
         options ??= new BucklingSolveOptions();
@@ -278,7 +282,7 @@ public static class BucklingSolver
         SparseCholesky factor;
         try
         {
-            factor = SparseCholesky.Factorize(k, options.Ordering);
+            factor = SparseCholesky.Factorize(k, options.Ordering, progress);
         }
         catch (InvalidOperationException ex)
         {
@@ -299,7 +303,7 @@ public static class BucklingSolver
         // is zero, so `factor` really is a factorization of `K - 0·B`.
         var eigen = LanczosEigen.Solve(
             k, b, k, factor, 0.0, [], options.ModeCount,
-            options.Tolerance, krylov, options.MaxRestarts);
+            options.Tolerance, krylov, options.MaxRestarts, progress);
         double eigenMs = stopwatch.Elapsed.TotalMilliseconds;
 
         if (eigen.Pairs.Count == 0)

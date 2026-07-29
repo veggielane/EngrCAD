@@ -325,8 +325,9 @@ chain's parity is consistent across every joint.
   `Func<bool>`, sticky once observed) + coarse progress reporting for long operations,
   taken as an optional trailing `ProgressCancel? progress = null` parameter (zero
   overhead when absent). Cancellation surfaces as `OperationCanceledException`; kernel
-  algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize` and
-  `MeshDecimator.Decimate`.
+  algorithms never return partial geometry. Wired into `SurfaceNets.Polygonize`,
+  `MeshDecimator.Decimate`, `BRepTessellator.Tessellate` and — because it is the slowest
+  single operation in the library — `SparseCholesky.Factorize` and `SparseSymmetricCG.Solve`.
 - **Integer grid types** (g3: Vector2i/Vector3i/Interval1i/AxisAlignedBox3i):
   `Vector2i`/`Vector3i` (tuple conversion, operators, `ComponentProduct` as a `long`
   for overflow-safe grid sample counts, `ToVector2d/3d`), `Interval1i` (**inclusive**
@@ -474,6 +475,25 @@ chain's parity is consistent across every joint.
     `Natural`, because reordering changes the summation order and an AMD-ordered solve is
     therefore *not* bit-identical to the natural one — every existing consumer's committed
     numbers were measured natural.
+    <br>**Cancellable, and the progress fraction is work rather than columns.** `Factorize`
+    takes the optional trailing `ProgressCancel` and polls it once per eliminated column —
+    the finest granularity available without restructuring the inner loops, and the one that
+    matters, because this is where an FEA solve spends 99% of its time (79.0 s of an 80 s
+    solve at 46 800 unknowns). The reported fraction is the numeric pass's **inner-loop
+    update count**, which is exact rather than an estimate: the symbolic pass has already
+    counted every column of L, column *j* is used by exactly as many rows as it has
+    off-diagonal entries, and it carries one more entry each time — so the total is
+    `sum_j c_j·(c_j + 1)/2`, known before the first multiply. Column number would be a
+    misleading bar wherever the factor **fills**: a dense factor has done 12.5% of its work
+    at the halfway column. (Where the factor is merely *banded* — a natural-ordered 2D grid
+    Laplacian, the shape this class was written for — the two agree closely, 0.468 at
+    halfway; the re-weighting costs nothing there and is what makes the number honest on the
+    systems worth cancelling.) Reports are throttled to 200 steps, and the accumulator is
+    guarded by the null check so a caller who passes no progress pays nothing in the
+    innermost loop. `SparseSymmetricCG.Solve` takes one too and polls per iteration, but
+    reports **no** fraction on purpose — an iteration count is not progress, since the
+    residual falls at a rate nobody knows in advance and the iteration cap is a stall
+    detector rather than a work estimate.
   - **`AmdOrdering`** — approximate minimum degree (Amestoy–Davis–Duff 1996): quotient
     graph with element absorption (including the aggressive form), approximate external
     degrees, mass elimination, hash-detected supervariables, and an assembly-tree

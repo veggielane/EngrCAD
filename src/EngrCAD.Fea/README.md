@@ -595,6 +595,40 @@ disguised threshold — and it is the asymmetry that makes a heuristic acceptabl
 one was refused for the default. A wrong threshold in a default produces a worse answer; a
 wrong threshold in an advisory produces a line of text nobody needed.
 
+## Cancelling a solve
+
+Every solve entry point takes Core's optional trailing `ProgressCancel`:
+
+```csharp
+using var source = new CancellationTokenSource();
+var results = StructuralSolver.Solve(model, null, new ProgressCancel(source.Token, f => bar.Value = f));
+```
+
+`StructuralSolver.Solve`, `ThermalSolver.Solve` / `SolveTransient`, `ModalSolver.Solve` and
+`BucklingSolver.Solve` all take it, and cancellation surfaces as
+`OperationCanceledException` with nothing partial returned.
+
+**What makes the parameter honest is that `SparseCholesky.Factorize` honours it.** The
+advisory above names a slow factorization once it has finished, which helps the second run
+and not the first — and the first run is where someone waits a minute and a half wondering
+whether it has hung. Adding the parameter here *before* the factorization could be
+interrupted would have advertised a cancellation that cannot cancel 99% of the work, which
+is worse than none at all; `SparseSymmetricCG.Solve` takes one for the same reason from the
+other side, so the promise holds whichever method runs.
+
+**The fraction reported is the factorization's own**, and that is a measurement rather than
+a shortcut: on any model slow enough to want a progress bar the factorization *is* the
+solve (79.0 s of 80 s at 46 800 unknowns, against 0.32 s to assemble and 0.25 s to
+substitute), so inventing per-phase weights would put a made-up number in front of a
+measured one. Assembly, the reaction/energy pass and the element guards poll for
+cancellation at element checkpoints and report no fraction; an iterative solve reports none
+at all, because an iteration count is not progress.
+
+**The one solve whose fraction is not the factorization's is the transient**, and the
+reason is the same argument reversed: it factors once and then spends the run in
+back-substitutions of uniform cost, so its step number is a genuinely exact measure of how
+far along it is. It reports one fraction per step.
+
 Whole-pipeline cost (Release), which says where the time actually goes:
 
 | | elements | free DOF | assemble | factor | solve | stress | total |

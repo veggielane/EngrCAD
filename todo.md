@@ -946,38 +946,34 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
     mistake the row above documents. Fixtures of genuinely different conditioning (a thin
     shell-like plate, a near-incompressible nu, a graded mesh) would be needed before a
     threshold means anything.
-  <br>Partly mitigated already: `FeaSolveReport.Advisory` names the slow factorization
-  after the fact, so a caller learns about the alternative without reading a benchmark
-  table. What it cannot do is warn BEFORE the wait — see the next item.
-- [ ] **`SparseCholesky.Factorize` should take a `ProgressCancel`** (Core, and the pre-solve
-  half of the FEA advisory below). `FeaSolveReport.Advisory` names a slow factorization
-  once it has finished, which helps the second run and not the first — and the first run is
-  where someone waits 108 s wondering whether it has hung. **This needs no dependency or
-  architecture decision at all**: `ProgressCancel` is Core's own optional-trailing-param
-  cancellation convention, already wired into `SurfaceNets.Polygonize`,
-  `MeshDecimator.Decimate` and `BRepTessellator.Tessellate`, so accepting one in
-  `SparseCholesky` is an addition in the vocabulary Core already speaks. It is also
-  strictly better than a warning, because it lets a user ABORT rather than read about it
-  afterwards. Poll per eliminated column, following the "polling follows cost rather than
-  code structure" rule.
-  <br>Deliberately NOT done from the FEA side first: `StructuralSolver.Solve` could take a
-  `ProgressCancel` today and thread it through assembly, the reaction pass and stress
-  recovery — but the factorization is 99% of the time on exactly the models where anyone
-  would reach for it, so the parameter would advertise a cancellation that cannot cancel
-  the slow part. An API that looks like it works is worse than one that is absent.
-- [ ] **FEA: an optional `ILogger` on the solve — RULED PERMITTED, do the `ProgressCancel`
-  item above first.** Recorded here so it is not escalated a third time. The rule as it
-  now stands does not say "Viewer and Mcp only" — the app-layer work already relaxed it to
-  **"extends inward on a weighed per-project basis"**, and `EngrCAD.Interop` and
-  `EngrCAD.BRep` both carry the reference (event IDs 80/90). Weighing Fea by that same
-  rule: it is a long-running operation with nothing above it to report on its behalf,
-  which is exactly the condition the Interop/BRep grants were made for, so it qualifies.
-  What does NOT follow is that it should be done now — cancellation beats narration for
-  the case that prompted this, so land `SparseCholesky`'s `ProgressCancel` first and only
-  add the logger if a genuine reporting need survives it. Core, Mesh and Implicit stay
+  <br>Mitigated on both sides now: `FeaSolveReport.Advisory` names the slow factorization
+  after the fact, and every solve entry point takes a `ProgressCancel` that reaches
+  `SparseCholesky.Factorize`'s per-column loop, so the first run can be watched and
+  aborted rather than only read about afterwards.
+- [ ] **FEA: an optional `ILogger` on the solve — RULED PERMITTED, and the `ProgressCancel`
+  prerequisite has now LANDED, so this is a live decision rather than a deferred one.**
+  Recorded here so it is not escalated a third time. The rule as it now stands does not say
+  "Viewer and Mcp only" — the app-layer work already relaxed it to **"extends inward on a
+  weighed per-project basis"**, and `EngrCAD.Interop` and `EngrCAD.BRep` both carry the
+  reference (event IDs 80/90). Weighing Fea by that same rule: it is a long-running
+  operation with nothing above it to report on its behalf, which is exactly the condition
+  the Interop/BRep grants were made for, so it qualifies. Core, Mesh and Implicit stay
   dependency-free: each still has a consumer seam above it, which is the actual test the
-  rule applies. The two agents were right to surface rather than decide; the answer is
-  that the current rule already covers it.
+  rule applies.
+  <br>**What the `ProgressCancel` work leaves for a logger to do, assessed rather than
+  assumed.** Cancellation and a live fraction now cover the case that prompted the item (a
+  caller who wants to know it has not hung, and to abort). Two genuinely different needs
+  survive, and both are narration rather than control: (a) *which phase* a solve is in —
+  the fraction says how far the factorization has got but not that assembly finished in
+  0.3 s and the factorization is the thing running, which is what a user reads to decide
+  whether the mesh is the problem; and (b) an *unattended* run (a CI regression sweep, a
+  batch of load cases) where nobody is holding a progress callback and the record has to
+  survive the process. Neither is served by a return value, since both are about what
+  happened *during* rather than *at the end*. A logger would take event IDs in a new decade
+  (100s), Information for phase boundaries with the sizes and the milliseconds, Debug for
+  per-element or per-step detail. Still worth pausing on: `FeaSolveReport` already carries
+  every number such a log line would print, so the honest scope is timestamps and ordering,
+  not new information.
   <br>Original framing, kept because it states the question well:
   The other candidate pre-solve channel, and the precedent is real: Interop and BRep took
   the `Microsoft.Extensions.Logging.Abstractions` reference for exactly this ("the long
@@ -987,8 +983,7 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   (Core, Mesh, Implicit) as staying dependency-free on the reasoning that everything the
   backlog named was reachable at the Interop/BRep seams. `EngrCAD.Fea` did not exist when
   that was written and has no such seam above it — it is a leaf that is also a long
-  operation, which is the case the rule never had to consider. Worth noting the
-  `ProgressCancel` item above may make this moot for the case that prompted it.
+  operation, which is the case the rule never had to consider.
 - [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
   embarrassingly parallel per element with a per-row merge at the end
   (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes

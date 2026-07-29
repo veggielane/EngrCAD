@@ -48,6 +48,13 @@ public enum SparseOrdering
 /// in the FACTORED order; with a permutation in play, <see cref="Permutation"/> maps it
 /// back to the caller's index.
 /// </para>
+/// <para>
+/// <b>Cancellable.</b> <see cref="Factorize(PackedSparseMatrix, SparseOrdering, ProgressCancel?)"/>
+/// takes Core's optional trailing <see cref="ProgressCancel"/> and polls it per eliminated
+/// column, which matters because this is the slowest single operation in the library — an
+/// FEA stiffness matrix at 46 800 unknowns takes over a minute and a half here, against a
+/// third of a second to assemble. A null argument costs one null check per column.
+/// </para>
 /// </remarks>
 public sealed class SparseCholesky
 {
@@ -112,7 +119,37 @@ public sealed class SparseCholesky
     /// factorization solves the same system to the same accuracy but is NOT bit-identical
     /// to the natural one — a different elimination order is different arithmetic.
     /// </summary>
-    public static SparseCholesky Factorize(PackedSparseMatrix a, SparseOrdering ordering)
+    /// <param name="a">The matrix to factor.</param>
+    /// <param name="ordering">The elimination order.</param>
+    /// <param name="progress">
+    /// Optional cooperative cancellation and progress. Polled once per eliminated column of
+    /// the numeric pass — the finest granularity available without restructuring the inner
+    /// loops, so the worst-case latency between a cancel request and the
+    /// <see cref="OperationCanceledException"/> is one column's own elimination.
+    /// <para>The reported fraction is the numeric pass's <b>inner-loop update count</b>, not
+    /// the column number, and it is exact rather than an estimate: the symbolic pass has
+    /// already counted every column of L, and column j is used by exactly as many rows as it
+    /// has off-diagonal entries, accumulating one more entry each time — so the total is
+    /// <c>sum over j of c_j·(c_j + 1)/2</c>, known before the first multiply.
+    /// <b>Column number is a misleading progress bar wherever the factor FILLS</b>: the
+    /// arithmetic a column costs grows with how many entries already stand in the columns it
+    /// updates, so a dense factor has spent only 12.5% of its work at the halfway column and
+    /// a bar driven by column number would be reading 50%. (Where the factor is merely
+    /// BANDED — a natural-ordered 2D grid Laplacian, the shape this class was first written
+    /// for — the two agree closely: 0.468 at halfway, measured. The re-weighting costs
+    /// nothing there and is what makes the number honest on the systems worth
+    /// cancelling.)</para>
+    /// <para>Progress covers the numeric pass only, and the doc says so rather than
+    /// inventing a weighting for the phases in front of it: the ordering, the elimination
+    /// tree and the symbolic pass are linear in the matrix's own entries and are together a
+    /// small fraction of a factorization that is worth cancelling. They still poll for
+    /// cancellation, at their phase boundaries and per symbolic column.</para>
+    /// </param>
+    /// <exception cref="OperationCanceledException">Cancellation was requested. No partial
+    /// factorization is returned — the kernel convention that a cancelled operation produces
+    /// nothing rather than something half-built.</exception>
+    public static SparseCholesky Factorize(
+        PackedSparseMatrix a, SparseOrdering ordering, ProgressCancel? progress = null)
     {
         ArgumentNullException.ThrowIfNull(a);
         if (a.Rows != a.Columns)
@@ -128,9 +165,14 @@ public sealed class SparseCholesky
         int[]? permutation = null;
         if (ordering == SparseOrdering.Amd && n > 0)
         {
+            // One checkpoint per phase for the linear passes, per the polling rule: their
+            // cost follows the matrix's own entry count, so a checkpoint inside would buy
+            // latency nobody can measure.
+            progress?.ThrowIfCancelled();
             permutation = AmdOrdering.Order(n, colStart, rowIndex);
             (colStart, rowIndex, values) = SymmetricPermute(n, colStart, rowIndex, values, permutation);
         }
+        progress?.ThrowIfCancelled();
 
         // Elimination tree (Davis 4.1) via path-compressed ancestors.
         var parent = new int[n];
@@ -161,10 +203,24 @@ public sealed class SparseCholesky
         var pathStack = new int[n];
         for (int k = 0; k < n; k++)
         {
+            progress?.ThrowIfCancelled();
             int top = Ereach(k, colStart, rowIndex, parent, stamp, reach, pathStack);
             for (int t = top; t < n; t++)
                 counts[reach[t]]++;
         }
+
+        // The numeric pass's exact inner-loop update count, available here because the
+        // symbolic pass has just counted every column of L. Accumulated in double because a
+        // large factorization's update count overflows int (a 19-million-entry factor's runs
+        // to 1e10).
+        double totalUpdates = 0;
+        if (progress is not null)
+        {
+            foreach (int c in counts)
+                totalUpdates += 0.5 * c * (c + 1);
+        }
+        double doneUpdates = 0;
+        double nextReport = 0;
 
         var lColStart = new int[n + 1];
         for (int j = 0; j < n; j++)
@@ -180,6 +236,20 @@ public sealed class SparseCholesky
         var x = new double[n]; // sparse accumulator, cleared entry-by-entry
         for (int k = 0; k < n; k++)
         {
+            if (progress is not null)
+            {
+                progress.ThrowIfCancelled();
+                // Reported on WORK crossing a threshold rather than every column: a
+                // factorization has as many columns as unknowns, and a callback that
+                // repaints a UI 46 800 times would cost more than the arithmetic it reports
+                // on. Two hundred steps is finer than any progress bar can show.
+                if (doneUpdates >= nextReport && totalUpdates > 0)
+                {
+                    progress.Report(doneUpdates / totalUpdates);
+                    nextReport = doneUpdates + totalUpdates / 200;
+                }
+            }
+
             int top = Ereach(k, colStart, rowIndex, parent, stamp, reach, pathStack);
 
             double d = 0;
@@ -197,6 +267,13 @@ public sealed class SparseCholesky
                 int j = reach[t];
                 double lkj = x[j] / lVal[lColStart[j]]; // divide by L[j,j]
                 x[j] = 0;
+                // Counted before the cursor moves: cursor[j] - lColStart[j] is the number of
+                // entries this use touches (the inner loop's trip count, plus the write that
+                // follows it), which is exactly the term the pre-computed total sums.
+                // Guarded rather than unconditional because this is the innermost loop in
+                // the library and a caller who passed no progress must pay nothing for one.
+                if (progress is not null)
+                    doneUpdates += cursor[j] - lColStart[j];
                 for (int p = lColStart[j] + 1; p < cursor[j]; p++)
                     x[lRow[p]] -= lVal[p] * lkj;
                 d -= lkj * lkj;
@@ -221,6 +298,7 @@ public sealed class SparseCholesky
             lVal[lColStart[k]] = Math.Sqrt(d);
         }
 
+        progress?.Report(1);
         return new SparseCholesky(n, lColStart, lRow, lVal, permutation, ordering);
     }
 
