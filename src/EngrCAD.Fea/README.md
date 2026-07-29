@@ -1,10 +1,13 @@
 # EngrCAD.Fea
 
-Simulation foundation: **tetrahedral meshing**. Takes a closed manifold surface mesh (which
-every EngrCAD representation reaches — `Shape.ToMesh()`, `BRepTessellator`, Surface Nets,
-an imported STL) and fills it with tetrahedra suitable for finite-element analysis.
+Simulation: **tetrahedral meshing** and **linear-static structural analysis**. Takes a
+closed manifold surface mesh (which every EngrCAD representation reaches —
+`Shape.ToMesh()`, `BRepTessellator`, Surface Nets, an imported STL), fills it with
+tetrahedra, and solves small-strain isotropic elasticity on them.
 
 Kernel-clean: references only `EngrCAD.Core` and `EngrCAD.Mesh`, no UI and no rendering.
+Results leave as `MeshField`s, which is what lets the viewer colour-map them without ever
+referencing this project.
 
 ## Why a separate project
 
@@ -30,6 +33,12 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `QuadraticTetMesh` | The 10-node (quadratic) layer, a pure function of the linear mesh |
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
 | `SurfacePatch` / `SurfacePatches` | Internal: coplanar same-tag triangle groups, the unit recovery works in |
+| `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, linear or quadratic |
+| `Material` / `Materials` | Isotropic linear elasticity (E, nu, density) + a nominal catalogue |
+| `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
+| `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
+| `StructuralResults` / `NodalAveraging` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
+| `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent loads, quadrature |
 
 ```csharp
 var surface = Shape.Box(40, 30, 6)
@@ -188,3 +197,339 @@ the linear mesh.
 - `TetGeometry`'s numbers are **measurements**, not decisions: no combinatorial branch in the
   mesher reads one. That separation is what lets the quality report be approximate without
   ever making the mesh wrong.
+
+# Structural analysis (linear static)
+
+Small-strain isotropic linear elasticity on the meshes above, 3 displacement degrees of
+freedom per node, on `EngrCAD.Core.Solvers`. Docs page: `docs/examples/fea-structural.md`.
+
+```csharp
+var surface = part.GetMesh();                                   // the display mesh IS the input
+var tets = TetMesher.Mesh(surface, new TetMeshOptions { RefineQuality = true, MaxElementSize = 14 });
+
+var model = new StructuralModel(AnalysisMesh.Quadratic(tets), Materials.Aluminium6061);
+model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -1200));
+
+var results = StructuralSolver.Solve(model);
+Console.WriteLine(results.Report.ToText());
+foreach (var field in results.SampleOnto(surface))               // onto the DISPLAY mesh
+    part.AddResult(field);
+results.WriteVtu("bracket.vtu");                                 // or ParaView
+```
+
+## Elements
+
+`AnalysisMesh` is the one type assembly, boundary conditions, load integration, stress
+recovery and publishing are written against, so the linear/quadratic difference is two
+integers rather than two implementations. It wraps a `TetMesh` or a `QuadraticTetMesh` and
+copies nothing but index arrays.
+
+- **Stiffness is assembled in index form, not as B'DB.** For an isotropic material the
+  integrand collapses to `K_ij^ab = L·N_i,a·N_j,b + M·N_i,b·N_j,a + M·(gradN_i · gradN_j)·d_ab`,
+  the same matrix at a fraction of the arithmetic and with the symmetry manifest. A test
+  asserts it against an explicit `B' D B` written independently.
+- **Quadrature is the cheapest exact rule**: one point for a linear element (whose B is
+  constant), the four-point degree-2 rule for a quadratic one. That is exact *only* because
+  a straight-sided 10-node tetrahedron has a constant Jacobian, which makes B linear and
+  `B'DB` quadratic — and that claim is not taken on trust: `TetElementTests` asserts the
+  stiffness is unchanged under an independent degree-3 rule, with a **negative control**
+  that moves one mid-edge node off its midpoint and checks the two rules then disagree.
+- `BodyForce` integrates with a **degree-5** rule instead, because a caller's field is not
+  a polynomial of the element's making and under-integrating a load caps a convergence
+  study at the quadrature's order rather than the element's.
+
+Two consistent-load results are worth knowing before they look like bugs. A uniform
+traction on a **6-node facet** puts exactly **zero** on the corners and A/3 on each
+mid-edge node. A body load on a **10-node element** puts **−V/20** on each corner and V/5
+on each mid-edge node. Both sum correctly (to A and to V), which is what makes
+`Force(selector, total)` preserve a resultant exactly; both fall out of the quadrature
+rather than being special-cased; both are pinned by tests.
+
+## Boundary conditions
+
+A condition names a **facet selector** (`Facets.Tag`/`Tags`/`OnPlane`/`FacingAlong`/
+`InBox`/`All` + `And`/`Or`) and the tag is `TetFacet.SourceTriangle` — so supplying
+`TetMeshOptions.FacetTags` makes a condition name a B-Rep face rather than a coordinate,
+the same topological-naming story as the rest of EngrCAD. Supports are `Fix`/`FixNode`/
+`Prescribe`/`PrescribeNode` with a per-axis `Dof` mask; loads are `Pressure` (positive
+pushes *into* the body), `Traction`, `Force` (a total spread over the selection),
+`Gravity`, `BodyForce` and `NodalForce`.
+
+**A selector that matches nothing is refused at the call**, naming the tags that do exist.
+A quietly ineffective support surfaces much later as a singular system, and the message
+there cannot point at the typo.
+
+## Solving
+
+Supports are **eliminated, not penalised**: constrained degrees of freedom are removed
+from the system rather than given a large diagonal, so the reduced matrix is genuinely
+positive definite, its conditioning is the model's own, and a prescribed non-zero
+displacement moves cleanly to the right-hand side as `f_free -= K_fc · u_c`. A penalty
+stiffness would have to be chosen relative to the material, and choosing it wrong is
+invisible in the answer.
+
+**An unrestrained body is refused BEFORE the factorization, per connected body, with the
+surviving motion described rather than counted.** The six rigid modes are built over each
+component's own nodes, normalised, and restricted to the constrained degrees of freedom;
+the null space of that restriction (from a Jacobi eigen-decomposition, floor 1e-12 on the
+Gram's eigenvalues = a 1e-6 relative singular value, the sketch-constraint solver's rule)
+IS the set of surviving motions, and each is unpacked back into a translation and a
+located axis:
+
+```
+The model is not restrained: 3 rigid-body modes survive the supports
+(rotation about the axis through (10, 7.5, 5) along (1, 0, 0); ...).
+```
+
+Per **body** because a fully fixed part beside a floating one is singular in a way no
+whole-model rigid mode describes. Naming the modes needs the null space and not just the
+rank: a first attempt reported "which candidate modes were not pivoted", which for a model
+pinned at one node named three *translations* when the surviving motions were three
+*rotations*. An axis is a line, so the quoted point is its closest approach to the body's
+centroid — pin the centroid and you get the pinned node back, pin a corner and you get the
+same lines through a different point on each.
+
+Default is `SparseCholesky` with `SparseOrdering.Amd`.
+`StructuralSolveOptions.EstimateCondition` adds a power/inverse-power estimate of the
+condition number (measured to rise 4.42x when h halves, against the theoretical 4).
+
+**AMD ordering is what decides whether a quadratic solve is practical at all** (win-x64,
+i9-9900K, Release):
+
+| | free DOF | natural nnz | natural ms | AMD nnz | AMD ms | fill | speed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| linear | 1 008 | 226 089 | 41 | 88 326 | 7 | 2.6x | 5.9x |
+| linear | 3 960 | 2 411 921 | 742 | 995 878 | 168 | 2.4x | 4.4x |
+| quadratic | 2 160 | 2 136 147 | 1 604 | 314 977 | 35 | 6.8x | 46x |
+| quadratic | 6 552 | 19 383 964 | 64 834 | 1 723 544 | 340 | **11.3x** | **191x** |
+
+**And the direct-vs-iterative verdict here is the opposite of the one Core measured on a
+Laplacian** — which is exactly the caveat CLAUDE.md already records, that such a crossover
+measures the operator's conditioning rather than the two algorithms. AMD-ordered Cholesky
+against Jacobi-preconditioned CG at 1e-10, single right-hand side, the two **interleaved
+in one sitting** (this machine returns absolute times several-fold apart across sittings —
+only the within-sitting comparison means anything):
+
+| | free DOF | direct | CG iterations | CG | winner |
+| --- | ---: | ---: | ---: | ---: | :-- |
+| linear | 2 160 | 247 ms | 308 | **122 ms** | CG 2.0x |
+| linear | 6 552 | 1 791 ms | 471 | **461 ms** | CG 3.9x |
+| linear | 14 688 | 10 754 ms | 634 | **705 ms** | CG 15.3x |
+| linear | 46 800 | 108 459 ms | 956 | **2 232 ms** | **CG 48.6x** |
+| quadratic | 2 160 | **45 ms** | 395 | 74 ms | direct 1.6x |
+| quadratic | 6 552 | **308 ms** | 579 | 354 ms | direct 1.1x |
+| quadratic | 14 688 | 2 688 ms | 770 | **1 094 ms** | CG 2.5x |
+
+So CG wins everywhere with linear elements and past roughly 15 000 unknowns with
+quadratic ones, and at the top of the table it is not close — this library's up-looking
+Cholesky is unblocked, and 108 s is what a user experiences as "the solver hung".
+
+**The direct solver is still the default, and the reason is exactness, not speed.** This
+project's verification claims — the patch test reproduced to round-off, strain errors at
+1e-13, the two element orders agreeing on strain energy to twelve digits — cannot be made
+about an iterative solve stopped at a relative residual. A default of CG would make every
+headline accuracy claim a statement about an opt-in path. It also reports its fill, which
+is the diagnostic that says a mesh is bad.
+
+Two honesty notes on that decision. The usual second argument for a direct solver — factor
+once, solve many right-hand sides — **does not apply yet**: `Solve` factors and discards,
+so a second load case pays for a second factorization; the multi-load-case entry point is
+filed. And **no automatic size-based switch is offered**, deliberately, because a crossover
+measured on one operator measures that operator: baking a threshold taken from one
+cantilever into the library default would be the very mistake the row above documents.
+
+Reach for `FeaSolveMethod.ConjugateGradient` for a large single solve — and the report
+now says so itself. **`FeaSolveReport.Advisory`** (surfaced in `ToText()`) fires when a
+direct factorization both took real time *and* dominated its own solve, stating what this
+run spent where, citing the benchmark ratio at a named size and fixture, and naming the
+trade:
+
+```
+note: the factorization took 104.8 s, 99% of this solve. On this project's cantilever
+benchmark FeaSolveMethod.ConjugateGradient measured 48.6x faster than Direct at 46 800
+free DOF (2.2 s against 108.5 s) and 15.3x at 14 688; this solve has 46 800. The trade is
+an answer accurate to the iterative tolerance instead of exact, and no fill diagnostic.
+```
+
+Both conditions are about **what happened**, never about size alone: a system that factors
+quickly stays silent however many unknowns it has. That is what keeps it from being a
+disguised threshold — and it is the asymmetry that makes a heuristic acceptable here after
+one was refused for the default. A wrong threshold in a default produces a worse answer; a
+wrong threshold in an advisory produces a line of text nobody needed.
+
+Whole-pipeline cost (Release), which says where the time actually goes:
+
+| | elements | free DOF | assemble | factor | solve | stress | total |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| linear | 3 072 | 2 160 | 10 ms | 32 ms | 0.8 ms | 6 ms | 53 ms |
+| linear | 24 576 | 14 688 | 93 ms | 4 493 ms | 25 ms | 10 ms | 4.7 s |
+| linear | 82 944 | 46 800 | 323 ms | 79 009 ms | 249 ms | 45 ms | 80 s |
+| quadratic | 384 | 2 160 | 59 ms | 63 ms | 1.5 ms | 1 ms | 140 ms |
+| quadratic | 3 072 | 14 688 | 364 ms | 3 299 ms | 19 ms | 6 ms | 3.8 s |
+
+Note what this table is for: in **Debug** the same runs look assembly-dominated (1 822 ms
+to assemble against 657 ms to factor on the docs bracket), which is the opposite
+conclusion and would have sent the next optimization into the wrong phase. Benchmark in
+Release, and re-measure where the time goes after every win.
+
+## Results
+
+`StructuralResults` carries nodal `Displacement` and `Reactions`, per-element
+`ElementStress`/`ElementStrain`, averaged `NodalStress`/`NodalVonMises`, and
+`PrincipalStress`. Nodal values are a **volume-weighted** average of the elements meeting
+at a node (`NodalAveraging`), which is what a colour map wants and what converges — and it
+also smooths a genuine discontinuity at a material interface or a re-entrant corner, which
+is why the element values stay public: their jump is the standard error indicator, and
+averaging it away is the standard way to hide a mesh that is too coarse. Quadratic stress
+is evaluated **at** the nodes rather than extrapolated from the integration points;
+superconvergent recovery is filed.
+
+`SampleOnto(displayMesh)` closes the gap between a solver's vertex set and a display
+mesh's. A display vertex whose position matches an analysis boundary node **bit for bit**
+takes that node's value directly — which covers essentially every vertex in the normal
+case, since the same mesh was fed to the mesher and its vertices survive verbatim
+(measured: max sampling distance exactly 0.0) — and anything else falls back to the
+closest point on the nearest boundary facet, interpolated with that facet's own shape
+functions. The distance is reported, so a mismatched pairing exposes itself instead of
+looking like an answer.
+
+## Verification
+
+A solver is worth what its verification is worth. All of these are in
+`tests/EngrCAD.Fea.Tests`, on **structured** meshes (`StructuredTetMesh`, Kuhn's
+subdivision) so a measured convergence order means something — see below for why the
+Delaunay mesher is not the fixture for this.
+
+**Element level.** Every element's stiffness annihilates all six rigid-body modes (a
+rotation field is linear, so both element types represent it exactly and the residual is
+pure round-off); the matrix is symmetric and positive semi-definite; the index form equals
+an independently written `B'DB`.
+
+**Patch tests** — a constant-strain state reproduced exactly, to round-off:
+
+| | Linear | Quadratic |
+| --- | ---: | ---: |
+| Displacement patch, relative displacement error | 2.4e-15 | 1.8e-14 |
+| Displacement patch, relative strain error | 9.1e-14 | 1.5e-13 |
+| Traction patch, stress error against 25 MPa | 3.9e-12 | 1.1e-11 |
+| Traction patch, relative displacement error | 4.0e-14 | 2.5e-13 |
+
+The two orders also return **the same strain energy to twelve digits** (3.17847) wherever
+both reproduce the field exactly.
+
+**Convergence order**, by the method of manufactured solutions (cubic displacement field,
+body force derived analytically, Dirichlet everywhere so there is no singularity to limit
+the rate):
+
+| | L2 measured | theory | energy measured | theory |
+| --- | ---: | ---: | ---: | ---: |
+| Linear | **2.00** | 2 | **1.00** | 1 |
+| Quadratic | **3.03** | 3 | **2.02** | 2 |
+
+**Cantilever**, 100 × 10 × 10 mm, 1000 N tip load, steel:
+
+| | h | elements | tip (mm) | error vs the FE limit |
+| --- | ---: | ---: | ---: | ---: |
+| linear | 5.00 | 192 | 0.55157 | −71.0% |
+| linear | 2.50 | 1 536 | 1.15880 | −39.2% |
+| linear | 1.25 | 12 288 | 1.63297 | −14.3% |
+| quadratic | 10.00 | 24 | 1.81094 | −4.9% |
+| quadratic | 5.00 | 192 | 1.87899 | −1.4% |
+| quadratic | 2.50 | 1 536 | **1.89778** | **−0.4%** |
+
+Euler–Bernoulli `PL³/3EI` = **1.90476 mm**; Timoshenko (k = 5/6) = **1.91962 mm**; the
+Richardson-extrapolated finite-element limit is **1.90494 mm**, i.e. **+0.01% from
+Euler–Bernoulli and −0.76% from Timoshenko**. That near-perfect agreement with the
+*simpler* model is two effects cancelling and is reported as such: the 3D solve includes
+shear deformation (softening it towards Timoshenko) while the built-in end is a genuine
+three-dimensional clamp (stiffening it back). Note also how stiff linear tetrahedra are in
+bending — 14% low at twelve thousand elements against 0.4% for quadratic at an eighth as
+many. **The order measured on this fixture is 1.86, not 3**, because the clamped edge
+carries a stress singularity; that is why the order table above uses a manufactured
+solution instead.
+
+**Stress concentration**, 120 × 40 × 2 mm plate, Ø10 central hole (d/W = 0.25), plane
+strain imposed exactly by fixing z at every node:
+
+| | elements | K_tn | vs Howland | mesh spread |
+| --- | ---: | ---: | ---: | ---: |
+| linear | 768 | 1.8352 | −24.6% | 9.50% |
+| linear | 3 072 | 2.1941 | −9.8% | 5.08% |
+| linear | 12 288 | 2.3566 | −3.1% | 2.27% |
+| quadratic | 768 | 2.3206 | −4.6% | 3.54% |
+| quadratic | 3 072 | **2.4216** | **−0.4%** | 0.60% |
+
+Kirsch's infinite-plate K_t = 3 is the wrong number for a real plate: **the finite-width
+correction is Howland's exact strip solution in Peterson's polynomial fit** (Chart 4.1),
+against the NET section, `K_tn = 2 + 0.284L − 0.600L² + 1.32L³` with `L = 1 − d/W`, giving
+**2.4324** at d/W = 0.25 — equivalently 3.2432 on the gross section, nearly 8% above 3.
+Far-field stress is recovered to 0.03% on the finest quadratic mesh and 0.37% on the
+coarsest linear one, which is what makes every K_t above mean anything.
+
+The "mesh spread" column is a finding worth keeping. Theory says all four peak nodes (two
+angles by two thickness layers) read identically; the y-reflection is exact to the last
+bit while the **z-reflection is not**, because Kuhn's subdivision picks its diagonals by
+logical index order and no reflection preserves that. The spread is therefore a *direct
+measurement* of the discretization error rather than an estimate of it, and the location
+claim ("the peak is on the perpendicular diameter") is held to exactly that bar — a
+self-calibrating threshold, since a claim about where a peak is cannot be sharper than the
+discretization measuring it.
+
+**Rigid body and equilibrium**, all to round-off: a rigid motion prescribed on the
+boundary produces a rigid motion inside (strain at 1e-14 of the field's own scale, energy
+at 1e-15 of a comparable straining motion's); a self-equilibrated load gives identical
+strains (4.6e-13 relative) and identical strain energy under two different 3-2-1
+restraints; the answer is **frame-indifferent** (strain energy and peak von Mises agree to
+1e-12 when the whole model, its loads and its supports are rigidly placed elsewhere);
+gravity reacts the exact weight; a uniform pressure over a closed surface has no
+resultant; a total force distributed over a face set sums back to itself.
+
+## What the verification cost, and why the fixtures are structured
+
+**The Delaunay mesher's slivers are the binding constraint on a structural solve, and they
+are a mesher problem, not a solver one.** Measured on a 100 × 10 × 10 beam at a 5.0 size
+target: 31 214 elements of which **9 954 (32%) are slivers below 10°**, minimum dihedral
+0.000°, minimum element volume 5e-17, and **two elements whose exact signed volume is
+strictly positive while their double-precision volume is exactly 0.0**. A stiffness matrix
+assembled from that is not numerically positive definite and the factorization fails. The
+same mesher on a 20³ box gives 1% slivers and behaves perfectly, so the trigger is
+elongation. Verification fixtures are therefore structured (Kuhn's subdivision of a grid),
+which also gives exactly geometrically similar refinement sequences — the thing a measured
+order needs.
+
+The solver **refuses** a non-positive Jacobian by name rather than absorbing it, and the
+test that pins it uses the four corner coordinates of a real offending tetrahedron,
+verbatim, so the guard cannot rot while the mesher changes.
+
+**The guard has to ask the assembly's own arithmetic, not restate it.** The first version
+tested the corner triple product `(b−a)×(c−a)·(d−a)`, which is the same mathematical
+quantity the isoparametric Jacobian is but different arithmetic — and it disagreed in the
+last bits, so elements passed the guard and were then integrated as exactly zero. That
+surfaced as a 10-node mid-edge node with *no stiffness at all*, on an element whose corner
+volume read a healthy 1.2e-15. It is the "one shared rule only holds if every caller asks
+it" lesson from the tessellator, in a solver.
+
+One more measurement from the same work: a **two-material bar in series** elongates 0.769%
+less than the 1D formula `σ(L/2)(1/E₁ + 1/E₂)` predicts, because the two halves want
+different Poisson contractions and the interface constrains them — correct physics,
+reported rather than tuned away.
+
+Run the throughput and ordering tables yourself with `ENGRCAD_BENCH=1` and
+`--filter FullyQualifiedName~FeaBenchmark` in Release.
+
+## Limitations
+
+- **Sliver elements** (above) — the mesher's top quality gap, and the reason long thin
+  bodies do not yet solve. Compact ones do.
+- **Element-associated results have nowhere to go**: `MeshField` is vertex-only in v1, so
+  a per-element stress cannot be exported or displayed, only read in code.
+- Quadratic stress is evaluated at the nodes rather than recovered from the
+  superconvergent integration points.
+- Materials are **isotropic** only. Orthotropic and anisotropic laws need a full 6×6
+  constitutive matrix with a material frame; the assembly is already written against
+  `Lambda`/`Mu` and would need the general form.
+- No contact, plasticity, large deformation, or modal analysis. Modal is the nearest —
+  the same assembly plus a mass matrix and a generalized eigen-solver — and is filed
+  rather than started, because a static solver that is verified is worth more than two
+  that are not.

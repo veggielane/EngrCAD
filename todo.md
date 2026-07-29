@@ -615,14 +615,126 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   (a per-triangle source-face array beside the mesh) would make
   `TetMeshOptions.FacetTags` populate itself and let boundary conditions be attached
   with the `BrepQueries`/`FaceRef` selector vocabulary instead of by hand.
-- [ ] **FEA: structural (linear static)** — small-strain linear elasticity on tet
-  meshes: element stiffness (linear + quadratic tets), assembly into sparse symmetric
-  systems, boundary conditions from tagged B-Rep faces (fixed supports, loads:
-  force/pressure/gravity), solve (start with `EngrCAD.Core.Solvers`' ✅-landed
-  `SparseSymmetricCG`/`SparseCholesky` — note the AMD-ordering follow-up above, which
-  FEA-scale systems will need), derive stress/strain (von
-  Mises), display as color fields + deformed-shape overlay in the viewer. Modal
-  analysis as a follow-on (eigen-solver).
+**Structural (linear static) landed** (`Material`/`Materials`, `AnalysisMesh`,
+`StructuralModel`/`Facets`/`Dof`, `StructuralSolver`/`FeaSolveReport`,
+`StructuralResults`, `TetElement`/`TetQuadrature`; docs `examples/fea-structural.md`) —
+4- and 10-node tets, AMD-ordered sparse Cholesky or CG, facet-selector boundary
+conditions, volume-weighted nodal stress, `MeshField` publishing with a display-mesh
+sampling step, `.vtu` export. Verified: patch tests exact to 1e-13, manufactured-solution
+orders 2.00/1.00 (linear) and 3.03/2.02 (quadratic), cantilever within 0.01% of
+Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
+
+- [ ] **FEA: modal analysis (the named follow-on to the static solver).** The assembly,
+  the boundary-condition vocabulary and the element library are all in place; what is
+  missing is a consistent MASS matrix (the same quadrature over `rho·N_i·N_j`, and the
+  lumped variant for comparison) and a generalized symmetric eigen-solver for
+  `K·x = lambda·M·x` at the low end of the spectrum. Lanczos or subspace iteration over
+  `SparseCholesky` (shift-and-invert, which the existing factorization already supports —
+  `StructuralSolver.EstimateCondition`'s inverse power iteration is the one-vector case of
+  exactly this). Deliberately not started with the static path: the verification bar there
+  is analytic natural frequencies (a cantilever's `1.875²/(2·pi·L²)·sqrt(EI/rho·A)`, a
+  free-free bar's axial modes) and it deserves the same treatment the static cases got
+  rather than being bolted on.
+- [ ] **FEA: orthotropic and anisotropic materials.** `Material` is isotropic and the
+  assembly reads `Lambda`/`Mu` directly, which is the right inner loop for the common
+  case; a general law needs the full 6x6 constitutive matrix plus a material FRAME per
+  region (a laminate, a rolled plate, a printed part's layer direction — `Materials.Pla`
+  already carries the caveat that a printed part is not isotropic). The index-form
+  stiffness would fall back to `B' D B` for those elements only.
+- [ ] **FEA: superconvergent stress recovery.** Quadratic stress is evaluated directly AT
+  the nodes rather than extrapolated from the integration points, where it is
+  superconvergent. Measured effect on this project's verification cases is small (Kirsch
+  lands at -0.44% as it is), so it is a refinement rather than a defect; the natural form
+  is Zienkiewicz-Zhu patch recovery, which would also give a per-element error estimator
+  for free — and an error estimator is worth more than the accuracy it buys.
+- [ ] **FEA: the factorization is the wall, and it is Core's to move.** In Release the
+  cost is overwhelmingly `SparseCholesky`: at 46 800 DOF a linear solve measures 323 ms to
+  assemble, **79 009 ms to factor**, 249 ms to substitute and 45 ms to recover stress. The
+  up-looking algorithm is unblocked (no supernodes, no BLAS-3 inner kernel), which is fine
+  for the mesh Laplacians it was written for and is the binding constraint on FEA scale.
+  Measured against it with the two interleaved in one sitting, Jacobi-preconditioned CG
+  wins at EVERY size with linear elements and past ~15 000 unknowns with quadratic ones —
+  2.0x / 3.9x / 15.3x / **48.6x** at 2 160 / 6 552 / 14 688 / 46 800 DOF — the OPPOSITE of
+  the Laplacian crossover recorded in CLAUDE.md, as that note itself predicts. Options in
+  order of value: a supernodal or left-looking blocked factorization in Core; a better
+  preconditioner than Jacobi (incomplete Cholesky, or algebraic multigrid, which is what
+  production FEA uses).
+  <br>Note for whoever takes this: **benchmark in Release**. The same runs in Debug look
+  assembly-dominated (1 822 ms assemble against 657 ms factor on the docs bracket) and
+  would send the work into the wrong phase entirely.
+- [ ] **FEA: should `Direct` still be the default, and what would settle it.** It is the
+  default today for EXACTNESS, not speed — the verification claims (patch test to
+  round-off, strain at 1e-13, the two orders agreeing on strain energy to twelve digits)
+  are not statements one can make about an iterative solve stopped at a relative residual,
+  so a CG default would make every headline accuracy claim a statement about an opt-in
+  path. That reasoning is written into the enum doc. Two things would change the answer,
+  and neither is free:
+  - **A multi-load-case entry point.** The classic second argument for a direct solver —
+    factor once, substitute many right-hand sides — is currently *false here*, because
+    `Solve` factors and discards, so a second load case pays for a second factorization.
+    An API taking N load vectors (or returning a reusable factorization) would make the
+    amortisation real and is worth having regardless: 0.3–6.8 ms per extra solve against a
+    whole CG run.
+  - **Evidence that a size-based automatic pick is sound.** Deliberately not done from the
+    numbers above: a crossover measured on one cantilever measures that cantilever's
+    conditioning, and baking its threshold into the library default would be exactly the
+    mistake the row above documents. Fixtures of genuinely different conditioning (a thin
+    shell-like plate, a near-incompressible nu, a graded mesh) would be needed before a
+    threshold means anything.
+  <br>Partly mitigated already: `FeaSolveReport.Advisory` names the slow factorization
+  after the fact, so a caller learns about the alternative without reading a benchmark
+  table. What it cannot do is warn BEFORE the wait — see the next item.
+- [ ] **`SparseCholesky.Factorize` should take a `ProgressCancel`** (Core, and the pre-solve
+  half of the FEA advisory below). `FeaSolveReport.Advisory` names a slow factorization
+  once it has finished, which helps the second run and not the first — and the first run is
+  where someone waits 108 s wondering whether it has hung. **This needs no dependency or
+  architecture decision at all**: `ProgressCancel` is Core's own optional-trailing-param
+  cancellation convention, already wired into `SurfaceNets.Polygonize`,
+  `MeshDecimator.Decimate` and `BRepTessellator.Tessellate`, so accepting one in
+  `SparseCholesky` is an addition in the vocabulary Core already speaks. It is also
+  strictly better than a warning, because it lets a user ABORT rather than read about it
+  afterwards. Poll per eliminated column, following the "polling follows cost rather than
+  code structure" rule.
+  <br>Deliberately NOT done from the FEA side first: `StructuralSolver.Solve` could take a
+  `ProgressCancel` today and thread it through assembly, the reaction pass and stress
+  recovery — but the factorization is 99% of the time on exactly the models where anyone
+  would reach for it, so the parameter would advertise a cancellation that cannot cancel
+  the slow part. An API that looks like it works is worse than one that is absent.
+- [ ] **FEA: an optional `ILogger` on the solve — an OWNER'S decision, surfaced not taken.**
+  The other candidate pre-solve channel, and the precedent is real: Interop and BRep took
+  the `Microsoft.Extensions.Logging.Abstractions` reference for exactly this ("the long
+  operations accept an optional trailing `ILogger`", event IDs 80/90). What makes it
+  Chris's call rather than an implementer's is that CLAUDE.md records the current line as a
+  deliberate REVERSAL of the earlier `IEngrCadLog` shim, and records the leaf kernels
+  (Core, Mesh, Implicit) as staying dependency-free on the reasoning that everything the
+  backlog named was reachable at the Interop/BRep seams. `EngrCAD.Fea` did not exist when
+  that was written and has no such seam above it — it is a leaf that is also a long
+  operation, which is the case the rule never had to consider. Worth noting the
+  `ProgressCancel` item above may make this moot for the case that prompted it.
+- [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
+  embarrassingly parallel per element with a per-row merge at the end
+  (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes
+  every element stiffness a second time rather than reusing the assembly's.
+- [ ] **FEA: contact, plasticity, large deformation.** Each is a different mathematical
+  problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
+  one), and none should start before thermal and modal, which reuse the assembly as it
+  stands.
+- [ ] **FEA API hygiene** (from the code-quality review of the structural landing; the
+  correctness items it found were fixed in place, these are the residue):
+  - `AnalysisMesh.Regions` and `FacetTags` run `Distinct().Order().ToArray()` on EVERY
+    get, and `Bounds`/`Volume` recompute over all nodes/elements per get. All are cold
+    paths today, but the shape invites `for (…) if (mesh.Regions.Contains(x))`. Cache
+    them, or make them methods so the cost is visible at the call site.
+  - `AnalysisMesh.Nodes`, `StructuralResults.Displacement`/`Reactions` hand internal
+    arrays out as `IReadOnlyList<T>`, castable back to `T[]` and mutable by any consumer.
+    `ReadOnlyCollection` or a copy — the same question `MeshField` answered by copying.
+  - `AnalysisMesh.Of` overflows `TetCount * 10` above ~215 M elements and
+    `3 * NodeCount` above ~716 M nodes. It fails loudly (negative array length) but with
+    a bare `OverflowException`; one up-front refusal naming the limit would match the
+    refuse-by-name convention.
+  - `StructuralResults`' two lazy caches are unsynchronised (documented in the type, not
+    enforced). Fine while a results object belongs to whoever solved for it; worth
+    revisiting if the viewer ever resolves fields off the render thread.
 - [ ] **FEA: thermal (steady-state + transient)** — heat conduction on the same tet
   meshes: conductivity matrix, boundary conditions (fixed temperature, heat flux,
   convection h·(T−T∞)), steady solve first, transient with implicit time stepping

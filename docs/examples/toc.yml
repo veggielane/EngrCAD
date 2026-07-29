@@ -48,6 +48,8 @@
   href: quality.md
 - name: Tetrahedral meshing (FEA)
   href: fea-meshing.md
+- name: Structural analysis (FEA)
+  href: fea-structural.md
 - name: Three representations
   href: representations.md
 - name: Saving documents

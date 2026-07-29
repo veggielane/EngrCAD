@@ -275,6 +275,92 @@ elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityRepo
 minimum dihedral beside radius-edge and counts what the first measure cannot see. Sliver
 exudation is the named next step (todo.md).
 
+## 3c. Structural analysis (`EngrCAD.Fea`)
+
+Small-strain isotropic linear elasticity on those meshes, 3 displacement degrees of freedom
+per node, assembled onto `EngrCAD.Core.Solvers`. Full numbers in the project README; this
+records the decisions.
+
+**One analysis view, not two element pipelines.** `AnalysisMesh` wraps either a `TetMesh`
+or a `QuadraticTetMesh` and reduces the difference to two integers (`NodesPerElement`,
+`NodesPerFacet`). Assembly, boundary conditions, load integration, stress recovery and
+publishing are written once against it. Writing them twice would be two chances to get the
+same thing wrong, and the tests would then have to be doubled to catch it.
+
+**Stiffness in index form, quadrature at the cheapest exact rule.** For an isotropic
+material `B'DB` collapses to `L·N_i,a·N_j,b + M·N_i,b·N_j,a + M·(gradN_i · gradN_j)·d_ab`,
+which is the same matrix with the symmetry manifest instead of emergent; a test asserts it
+against an independently written `B'DB`. The rule is one point for a linear element and the
+four-point degree-2 rule for a quadratic one — exact **only** because a straight-sided
+10-node tetrahedron has a constant Jacobian. That is a property of the mesh, not of the
+element, so it is *tested* rather than assumed: the stiffness must be unchanged under an
+independent degree-3 rule, with a negative control that displaces one mid-edge node and
+checks the two rules then disagree. A caller's `BodyForce` gets a degree-5 rule instead,
+because under-integrating a load caps a convergence study at the quadrature's order rather
+than the element's — a limit that looks exactly like a formulation defect.
+
+**Supports are eliminated, not penalised.** Constrained degrees of freedom are removed from
+the system rather than given a large diagonal, so the reduced matrix is genuinely positive
+definite, its conditioning is the model's own, and a prescribed non-zero displacement moves
+cleanly to the right-hand side as `f_free -= K_fc · u_c`. A penalty stiffness has to be
+chosen relative to the material, and choosing it wrong is invisible in the answer.
+
+**An unrestrained body is refused before the factorization, per connected body, with the
+surviving motion DESCRIBED.** The six rigid modes are built over each component's own
+nodes, normalised, and restricted to the constrained degrees of freedom; the null space of
+that restriction is exactly the set of motions the supports permit at zero energy. It is
+found by Jacobi eigen-decomposition of the 6×6 Gram (floor 1e-12 on eigenvalues = a 1e-6
+relative singular value, the sketch-constraint solver's rule, since a Gram's eigenvalues
+are squared singular values), and each null vector is unpacked back into a translation and
+a located axis. Three points about that:
+
+- **Per body**, because a fully fixed part beside a floating one is singular in a way no
+  whole-model rigid mode describes — the same reason `MeshRepair` votes orientation per
+  connected component.
+- **The null space, not the rank.** A first version reported which candidate modes a
+  pivoted Cholesky had not eliminated, which for a model pinned at one node named three
+  *translations* when the surviving motions were three *rotations*. A rank tells you how
+  many; only a null vector tells you which.
+- **An axis is a line**, so the quoted point is its closest approach to the body's
+  centroid. Pin the centroid and the pinned node comes back; pin a corner and the same
+  lines come back through a different point on each. Documented rather than special-cased.
+
+Letting the factorization discover it instead gives "nonpositive pivot at column 4713",
+which tells nobody anything — the same argument as `BrepBoolean.Verified` and the
+trimmed-face refusals.
+
+**Nodal stress is a volume-weighted average, and the element values stay public.** A
+displacement-based element gives a stress field that jumps across element faces. Averaging
+is what a colour map wants and what converges — and it also smooths a *genuine*
+discontinuity at a material interface or a re-entrant corner. The jump between neighbouring
+elements is the standard error indicator, so hiding it behind the average would remove the
+one cheap way to see that a mesh is too coarse.
+
+**Publishing samples onto the display mesh by exact match first.** A tet solve's vertex set
+need not be the display mesh's, so `SampleOnto` matches by bit-exact position where it can
+— which is essentially every vertex in the normal case, because the same mesh was fed to
+the mesher and its vertices survive verbatim — and falls back to the closest point on the
+nearest boundary facet, interpolated with that facet's own shape functions. The sampling
+distance is a reported out-parameter, so pairing two meshes that are not the same body
+exposes itself instead of returning a plausible field.
+
+**Verification fixtures are structured, and that was forced by measurement.** The Delaunay
+mesher on a 100 × 10 × 10 beam returns 32% slivers, a minimum dihedral of 0.000° and two
+elements whose exact signed volume is positive while their double-precision volume is
+exactly 0.0; the factorization fails. Verifying a solver against that would be measuring
+the mesher. Kuhn's subdivision of a grid gives bounded element quality, exactly
+geometrically similar refinement sequences (which is what a measured convergence order
+needs) and box-face tags a boundary condition can name. It lives in the test project: a
+structured mesher is not a feature this project is shipping.
+
+**Two lessons the work paid for**, both recorded in CLAUDE.md's numerical notes: a
+degeneracy guard must ask the assembly's own arithmetic rather than restate it (the first
+version tested the corner triple product where assembly integrates the isoparametric
+Jacobian — same quantity, different bits, and elements passed the guard then integrated to
+zero), and an order measured against a *different model's* answer stalls at the modelling
+difference (the cantilever's clamped-edge singularity caps it at 1.86, which is why the
+order table comes from a manufactured solution instead).
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`
