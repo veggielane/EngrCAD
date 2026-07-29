@@ -50,6 +50,8 @@
   href: fea-meshing.md
 - name: Structural analysis (FEA)
   href: fea-structural.md
+- name: Thermal analysis (FEA)
+  href: fea-thermal.md
 - name: Three representations
   href: representations.md
 - name: Saving documents

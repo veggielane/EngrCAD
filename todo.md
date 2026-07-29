@@ -728,10 +728,14 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   embarrassingly parallel per element with a per-row merge at the end
   (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes
   every element stiffness a second time rather than reusing the assembly's.
+- [ ] **FEA: modal analysis** — the same assembly plus a consistent MASS matrix and a
+  generalized eigen-solver. The mass matrix is `ThermalElement.Capacity`'s shape with
+  three degrees of freedom per node instead of one, including its quadrature rule two
+  degrees above the stiffness's, so that half is a known quantity now; the eigen-solver
+  (subspace iteration or Lanczos on `SparseCholesky`) is the new work.
 - [ ] **FEA: contact, plasticity, large deformation.** Each is a different mathematical
   problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
-  one), and none should start before thermal and modal, which reuse the assembly as it
-  stands.
+  one), and none should start before modal, which reuses the assembly as it stands.
 - [ ] **FEA API hygiene** (from the code-quality review of the structural landing; the
   correctness items it found were fixed in place, these are the residue):
   - `AnalysisMesh.Regions` and `FacetTags` run `Distinct().Order().ToArray()` on EVERY
@@ -748,11 +752,37 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   - `StructuralResults`' two lazy caches are unsynchronised (documented in the type, not
     enforced). Fine while a results object belongs to whoever solved for it; worth
     revisiting if the viewer ever resolves fields off the render thread.
-- [ ] **FEA: thermal (steady-state + transient)** — heat conduction on the same tet
-  meshes: conductivity matrix, boundary conditions (fixed temperature, heat flux,
-  convection h·(T−T∞)), steady solve first, transient with implicit time stepping
-  after; temperature fields in the viewer. Thermal→structural coupling (thermal
-  expansion loads) once both exist.
+- [ ] **FEA thermal follow-ups** (v1 ✅ landed — `ThermalModel`/`ThermalSolver`/
+  `ThermalResults` + `StructuralModel.ThermalLoad`, docs `examples/fea-thermal.md`):
+  - [ ] **Time-varying boundary conditions.** The stepping already carries the previous
+    state whole rather than collapsing the prescribed columns (it has to, for the first
+    step of a step change), so a per-step prescribed value is one line plus a way to
+    express it — a `Func<double, double>` per condition, or a load-step list. Note the
+    constant step is what buys the single factorization, so a time-varying *step* is a
+    different and much larger change.
+  - [ ] **Lumped capacity**, for monotonicity under backward Euler at short steps and for
+    a future explicit scheme. Row-sum lumping is unavailable for 10-node elements (it
+    gives −V/20 at every corner, a negative capacity), so this means a scaled-diagonal
+    (HRZ) scheme — a different approximation with its own error, which is why it is a
+    named option rather than a quiet default.
+  - [ ] **Temperature-dependent properties and radiation.** Both make conduction
+    nonlinear in the unknown, so both are an outer iteration wrapping this solver rather
+    than a change to it. Radiation is the more commonly wanted;
+    `sigma·epsilon·(T⁴ − Tsurr⁴)` linearised about the current temperature reuses the
+    convection matrix's assembly exactly.
+  - [ ] **Anisotropic conductivity** — a `k` tensor with a material frame, the thermal
+    twin of the orthotropic-elasticity item. `ThermalElement.Conductivity` takes a scalar
+    and would need the 3×3 form; everything above it is unchanged.
+  - [ ] **Two-way coupling** (deformation feeding back into conduction) is a staggered or
+    monolithic solver, not an extension of the one-way path. Filed for completeness; the
+    one-way direction covers thermal stress, which is what is usually wanted.
+  - [ ] **A transient stores every state's full field**, so a long run at `StoreEvery = 1`
+    is O(steps × nodes) doubles. `StoreEvery` is the current answer; a callback per step
+    (write to `.vtu` and discard) would let a run of any length stream.
+  - [ ] **`Part.Results` has no time axis**, so publishing a transient means choosing one
+    state. That is the "time-varying results (a load step / frequency slider driving
+    `Part.Results`)" item already filed under results follow-ups; the thermal solver is
+    now a second caller wanting it.
 - [ ] **Results/fields follow-ups** (v1 ✅ landed — `MeshField`/`FieldRange` +
   `VtuWriter` in EngrCAD.Mesh, `Part.Results`/`FieldDisplay`/`TryResolveFieldDisplay` in
   Modeling, `ColorMaps`/`FieldRendering`/`FieldLegend` in Viewer.Core, drawn in all
