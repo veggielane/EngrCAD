@@ -1550,6 +1550,46 @@ instead of honouring it; and a 40×20 plate with a Ø12 bore extruded 5 mm comes
 error that is a FLOOR no tessellation density can lower, because it is baked into the
 profile before any solid exists.
 
+**The open-path STROKE completes the offset family, and it is where "exact" stops being an
+adjective and becomes an equality.** `CurvedRegion2dOffset.Stroke(path, width, cap, join)`
+sweeps a chain of lines and arcs — a toolpath footprint, a slot from its centre line, an SVG
+`A`-command stroke — through the same union of primitives the offset uses: one FULL-WIDTH
+slab per edge, corner joins offered on BOTH sides of every interior joint, end caps. Two
+primitives are new and both are closed form. An arc's slab is the **annular sector** between
+radii r ± w/2 over the arc's own angular span, which is precisely the set of points whose
+nearest point on the path is interior to that arc, and whose area is
+`(sweep/2)((r+w/2)² − (r−w/2)²) = sweep·r·w` — the squares cancel, so the test is an equality
+rather than a bound. When `w/2 ≥ r` the band swallows the centre and the slab becomes the pie
+SECTOR of radius r + w/2, still exact because every point of that sector sits at radius
+between 0 and r + w/2 and so within max(r, w/2) = w/2 of the circle. Round caps are exact
+half-discs, so with round caps and round joins the result **IS** the path's Minkowski sum with
+a disc, where the polygonal twin's documentation has to say "short of it by the inscribed-arc
+sagitta". That difference is a floor and not a tolerance, and it is measured: the same quarter
+arc flattened to 4/8/16/32 chords and stroked polygonally approaches the curved answer
+strictly from below and is still 1e-3 short at 32 chords.
+
+**One contract deliberately differs from the polygonal twin, and the reason is the input
+vocabulary.** A chain that returns to its start is stroked as a CIRCUIT — the closing joint
+gets its joins, no caps are added — because a chain of EDGES makes closure structural, where
+the polygonal `Stroke` takes POINTS and can only have closure spelled by repeating the first
+one. Closure is read at the same weld tier the chain's own continuity is checked at, so "is
+this a chain" and "is this a circuit" cannot be answered by two different tolerances. It
+changes nothing under round joins with round caps — a full disc at the closing vertex contains
+the join wedge, so the two readings agree as sets — and it is exactly what stops a
+butt-capped circuit carrying a notch or a mitered one losing its last corner. The notch is
+MEASURED rather than asserted in prose, and pinned by a test so the residual filed against the
+polygonal twin cannot rot into a guess: a 10×10 square at width 2 with miter joins comes back
+79 through the points spelling against 80 through the edge one, short by exactly the 1×1 outer
+corner square at the repeated start point.
+
+**The test that earns its keep is not an area formula.** Stroking a simple closed loop by w is
+the SAME SET as growing the region it bounds by w/2 and taking away the region shrunk by w/2 —
+and `Stroke` and `Offset` reach that set through different primitives (two-sided full-width
+slabs and two-sided joins against one-sided slabs, plus the complement trick for the shrink),
+so agreement is two constructions checking each other rather than one checking its own
+arithmetic. Asserted for round, miter and chamfer joins on a square and for a disc, where the
+annular-sector slab and the one-sided offset sector have to agree about the same curved band.
+
 ### Simplicity validation and simplification
 
 Two passes that look similar and are opposites. `Region2dValidation` REFUSES loops that are

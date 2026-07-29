@@ -82,6 +82,46 @@ foreach (var (region, i) in swept.Select((r, i) => (r, i)))
 Closed circuits work by repeating the first point — the stroke then encloses a hole
 (one region, one hole), which is how a contour pass differs from a pocket.
 
+### Stroking a CURVED path
+
+`Region2dOffset.Stroke` takes points, so an arc has to be flattened before it reaches
+one — and the deficit that leaves is a floor, not a tolerance: no chord count removes
+it. `CurvedRegion2dOffset.Stroke(path, width, cap, join)` takes a chain of
+`CurvedEdge2d` (lines and arcs) instead and keeps every primitive closed form. An arc's
+slab is the **annular sector** between radii `r ± width/2`, a round cap is an exact
+half-disc, and a round join an exact sector — so with round caps and joins the result
+*is* the path's Minkowski sum with a disc, nothing inscribed, and the swept area of an
+arc of radius `r` is exactly `sweep·r·width` plus one disc of radius `width/2`.
+
+Two conveniences ride on the edge vocabulary. A chain that returns to its start is
+recognized as a **circuit**, so its closing joint gets a corner join and no caps — where
+the repeated-point spelling above cannot claim one, and a butt-capped closed polyline is
+short by exactly that corner. And when `width/2` reaches the arc's own radius the band
+swallows the centre, which is handled exactly rather than refused: the slab becomes the
+pie sector of radius `r + width/2`.
+
+```csharp render:stroke-curved
+// A slot whose centre line is a straight run into a quarter turn: stroked to width and
+// extruded through an exact profile, so the ends and the bend stay true arcs.
+var centreLine = new[]
+{
+    CurvedEdge2d.Line((-20, 0), (0, 0)),
+    CurvedEdge2d.Arc((0, 10), 10, -Math.PI / 2, Math.PI / 2),
+};
+var swept = CurvedRegion2dOffset.Stroke(centreLine, width: 6);
+
+var scene = new Scene();
+scene.Add(new Part("plate", Shape.Box(64, 44, 4).Translate(-4, 6, 0), Palette.Steel));
+foreach (var (region, i) in swept.Select((r, i) => (r, i)))
+{
+    var (outer, holes) = Profile.FromCurvedRegion(region);
+    scene.Add(new Part($"slot {i}", Shape.Extrude(outer, Vector3d.UnitZ * 3, holes)
+        .Translate(0, 0, 2), Palette.Brass));
+}
+```
+
+![A straight-into-quarter-turn slot stroked to width above a plate](images/stroke-curved.png)
+
 ## Section: `projection(cut = true)`
 
 `Shape.Section(plane)` is the cross-section — the drawing-view section, and OpenSCAD's
@@ -190,8 +230,19 @@ representations for free, and exact under any affine transform.
 
 ## Exactness
 
-Everything on this page except `Section` on a B-Rep shape flattens curves to polylines
-first: the 2D arrangement the boolean runs on carries segments, not arcs. So a circle
-offset outward by `d` lands just *inside* π(r+d)² — round joins are inscribed arcs,
+Most of this page is polygonal: the `Region2d` arrangement the boolean runs on carries
+segments, not arcs, so curves reach it flattened at a chord tolerance. A circle offset
+outward by `d` then lands just *inside* π(r+d)² — round joins are inscribed arcs,
 matching `Sketch.ToRegions`'s one-sided contract, so errors never accumulate in the
-unsafe direction. Exact curved 2D booleans are open work.
+unsafe direction.
+
+The **curved tier** removes that step where the geometry is lines and arcs.
+`CurvedRegion2d` and its arrangement carry arcs unflattened, so a disc measures exactly
+πr², `CurvedRegion2dBoolean` returns arcs, `CurvedRegion2dOffset`'s round joins are
+exact sectors, and `Profile.FromCurvedRegion` turns the result into analytic arcs
+rather than chords — an extruded sketch boolean becomes an exact B-Rep instead of a
+prism of chords. From the `Sketch` API the entry points are `UnionExact`,
+`IntersectExact`, `SubtractExact` and `OffsetExact`. What the tier does **not** carry is
+Béziers and general NURBS: they are still flattened at the entry points, stated in the
+API contract rather than hidden, because the cell walk's tangent-plus-curvature
+tie-break is decidable for lines and circles and not for a third shape.

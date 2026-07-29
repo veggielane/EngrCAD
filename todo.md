@@ -523,10 +523,32 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     derivative. A jet comparison of bounded order is not sound in general; the honest
     v2 is probably to compare a small parametric offset off the node and refuse when
     even that ties.
-  - [ ] **`CurvedRegion2dOffset.Stroke`** — the open-path stroke of a curved chain
-    (the polygonal `Region2dOffset.Stroke` takes a polyline). All the primitives
-    already exist (annular-sector slabs, exact sector joins and caps); it is the
-    both-side join bookkeeping that has to be redone for arcs.
+  - ~~**`CurvedRegion2dOffset.Stroke`**~~ ✅ **done** — the open-path stroke of a curved
+    chain. The filed framing was right that the primitives existed and slightly wrong about
+    where the work was: the both-side join bookkeeping ported verbatim from the polygonal
+    twin (the existing `AddCornerJoin` took the two outward normals already, and a stroke
+    just calls it twice with them negated), and the real content was the arc SLAB — the
+    annular sector between r ± w/2, whose area `sweep·r·w` makes every test an equality
+    because the squares cancel, plus its `w/2 ≥ r` degeneration to a pie sector. **One
+    contract deliberately differs from the polygonal twin**: a chain that returns to its
+    start is stroked as a CIRCUIT (closing joint gets its joins, no caps), because a chain of
+    EDGES makes closure structural where a list of POINTS can only spell it by repeating the
+    first — read at the same weld tier the chain's own continuity check uses. It is invisible
+    under round joins + round caps and is what stops a butt-capped circuit carrying a notch:
+    measured, a 10×10 square at width 2 with miter joins comes back 79 through the points
+    spelling against 80 through the edge one. The oracle worth keeping is not an area formula
+    — stroking a simple closed loop by w is the same SET as `Grow(R, w/2) \ Shrink(R, w/2)`,
+    which `Stroke` and `Offset` reach by different primitives. Against the polygonal twin on
+    a quarter arc (r 8, w 3): flattening to 4/8/16/32 chords approaches the exact answer
+    strictly from below and is still 1e-3 short at 32 — a floor, not a tolerance.
+    - [ ] Residual, filed rather than done: a `Sketch`-level wrapper (`Sketch.StrokeExact`,
+      beside the existing `OffsetExact`) so a designer reaches it without dropping to Core.
+      That is Modeling work, not Core.
+    - [ ] Residual: the POLYGONAL `Region2dOffset.Stroke` still cannot recognize a circuit
+      (its input genuinely cannot express one unambiguously), so a butt-capped closed
+      polyline keeps the notch measured above. Left alone deliberately — it is pinned
+      bit-for-bit by `Region2dGoldenTests` and the fix belongs with an explicit `closed:`
+      flag, not with a first-point-equals-last-point guess.
   - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
     `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
     and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
