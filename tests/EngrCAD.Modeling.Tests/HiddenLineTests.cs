@@ -262,6 +262,30 @@ public class HiddenLineTests
         Assert.Equal(1, cross.Dot(frame.Z), 12);
     }
 
+    /// <summary>
+    /// An edge seen END-ON draws nothing and must not be emitted. It is the one
+    /// degenerate case the "at least two points" guard cannot catch, because such an
+    /// edge has two perfectly good 3D samples that land on one 2D point — and it is not
+    /// cosmetic-only: SVG strokes a zero-length path with a round cap as a filled dot,
+    /// so a drilled plate's front view came out sprayed with blobs from its own bore
+    /// walls (26 of 280 paths on the first drawings sheet).
+    /// </summary>
+    [Fact]
+    public void EdgesSeenEndOn_AreNotEmittedAsZeroLengthRuns()
+    {
+        // Every bore wall runs along -Y here, straight down the front view's line of
+        // sight, so each projects to a single point.
+        var plate = new Part("plate", Shape.Box(60, 40, 12)
+            .Drill(StandardHoles.Clearance(6), [(-20, 0), (0, 0), (20, 0)], 12));
+
+        var runs = HiddenLineRemoval.Project(plate, Front).Runs;
+
+        Assert.NotEmpty(runs);
+        Assert.All(runs, run => Assert.True(run.Length > 0,
+            $"a {run.Source}/{run.Visibility} run of {run.Points.Count} points has zero " +
+            "length: it would render as a dot rather than as line work"));
+    }
+
     /// <summary>Third-angle convention checks on the two frames a drawing leans on:
     /// a front view has model +X to the right and +Z up; a top view has +X right and
     /// +Y up (which is what puts the part's far side at the top of the page).</summary>

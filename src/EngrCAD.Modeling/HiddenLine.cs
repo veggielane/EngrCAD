@@ -505,9 +505,27 @@ public static class HiddenLineRemoval
             flat[i] = new Vector2d(local.X, local.Y);
             bounds = bounds.Union(new Vector3d(local.X, local.Y, 0));
         }
+        // An edge seen END-ON projects to a point: it has two distinct 3D samples, so the
+        // count guard above passes, but it draws no line work in THIS view. Emitting it
+        // anyway is not harmless — SVG strokes a zero-length path with a round cap as a
+        // filled dot, so a front view of a plate sprayed 26 stray blobs across the sheet
+        // from its own bore walls. The test is the run's 2D EXTENT against the same
+        // weld-tier distance the simplifier uses, because that is the scale below which
+        // this drawing has already decided two points are one.
+        double tolerance = extent * options.SimplifyFraction;
+        var span = flat[0];
+        double wide = 0, tall = 0;
+        foreach (var p in flat)
+        {
+            wide = Math.Max(wide, Math.Abs(p.X - span.X));
+            tall = Math.Max(tall, Math.Abs(p.Y - span.Y));
+        }
+        if (wide <= tolerance && tall <= tolerance)
+            return;
+
         // Undo the visibility sampling: the inserted points sit exactly on their chord,
         // so a weld-tier Douglas-Peucker drops them and leaves a curve's own samples.
-        var simplified = PolylineSimplify.Simplify(flat, extent * options.SimplifyFraction);
+        var simplified = PolylineSimplify.Simplify(flat, tolerance);
         runs.Add(new HiddenLineRun(
             simplified, visible ? EdgeVisibility.Visible : EdgeVisibility.Hidden, source));
     }
