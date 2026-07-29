@@ -133,13 +133,7 @@ public static class FieldRendering
     {
         ArgumentNullException.ThrowIfNull(field);
         ArgumentNullException.ThrowIfNull(render);
-        // One colour per SOURCE vertex first: the flat render mesh repeats each source
-        // vertex once per incident triangle, so sampling per render vertex would
-        // evaluate the map several times for the same value and (worse) leave the two
-        // copies free to disagree if the map ever became inexact.
-        var perSource = new (float R, float G, float B)[field.Count];
-        for (int v = 0; v < perSource.Length; v++)
-            perSource[v] = ColorMaps.Sample(map, range, field.ScalarAt(v));
+        var perSource = SourceColors(field, range, map);
 
         var colors = new float[render.VertexCount * 3];
         for (int v = 0; v < render.VertexCount; v++)
@@ -150,6 +144,26 @@ public static class FieldRendering
             colors[v * 3 + 2] = b;
         }
         return colors;
+    }
+
+    /// <summary>
+    /// One colour per SOURCE mesh vertex — the map sampled once per value, before any
+    /// render-mesh duplication.
+    /// <para>The flat render mesh repeats each source vertex once per incident triangle,
+    /// so sampling per RENDER vertex would evaluate the map several times for the same
+    /// value and (worse) leave the copies free to disagree if the map ever became
+    /// inexact. Consumers that place colours on something other than a render mesh — the
+    /// glTF exporter, which does its own spreading — take this directly, so the two
+    /// cannot compute different colours for one field.</para>
+    /// </summary>
+    public static (float R, float G, float B)[] SourceColors(
+        MeshField field, in FieldRange range, FieldColorMap map)
+    {
+        ArgumentNullException.ThrowIfNull(field);
+        var perSource = new (float R, float G, float B)[field.Count];
+        for (int v = 0; v < perSource.Length; v++)
+            perSource[v] = ColorMaps.Sample(map, range, field.ScalarAt(v));
+        return perSource;
     }
 
     /// <summary>

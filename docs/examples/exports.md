@@ -1,7 +1,8 @@
 # Exports
 
-EngrCAD exports STEP (exact B-Rep), STL, OBJ, OFF, 3MF and AMF (meshes), and PNG
-renders. The snippets on this page run against a temp directory (`Scratch`) during the
+EngrCAD exports STEP (exact B-Rep), STL, OBJ, OFF, 3MF, AMF and glTF 2.0 (meshes), VTU
+(meshes plus simulation results), and PNG renders. The snippets on this page run against
+a temp directory (`Scratch`) during the
 docs build, so the export paths are exercised on every build — no screenshots needed
 here.
 
@@ -134,6 +135,60 @@ using (var archive = System.IO.Compression.ZipFile.OpenRead(Path.Combine(Scratch
 }
 ```
 
+## glTF 2.0 (the web, AR and DCC route)
+
+`GltfWriter` writes binary `.glb` and self-contained `.gltf` (the buffer rides inline
+as a data URI, so there is no sidecar `.bin` to lose). It is the one mesh format here
+that **keeps the assembly hierarchy** instead of flattening it: glTF has real nodes, so
+`GltfScene.Plan` emits a node per tab, per sub-assembly and per occurrence, with **one
+mesh per distinct part however many times it is placed**. A fastener placed fifty times
+is written once — the same "one product, N occurrences" structure the STEP assembly
+writer uses, and the property the baking exporters (STL, OBJ, 3MF) structurally cannot
+have.
+
+```csharp run:export-gltf
+var bolt = new Part("bolt", Shape.Cylinder(2, 12), Palette.Steel);
+var plate = new Part("plate", Shape.Box(60, 40, 6), Palette.Brass);
+
+var stack = new Assembly("stack");
+stack.Add(plate);
+foreach (var x in new[] { -20.0, 0.0, 20.0 })
+    stack.Add(bolt, Frame3d.FromOrthonormal((x, 0, 6), Vector3d.UnitX, Vector3d.UnitY));
+
+var scene = new Scene();
+scene.AddTab("Assembly").Add(stack);
+
+var plan = GltfScene.WriteFile(scene, Path.Combine(Scratch, "stack.glb"));
+
+// TWO meshes for four placements: the bolt is written once and instanced.
+Console.WriteLine($"{plan.Geometries.Count} meshes, {plan.Roots.Count} root node(s)");
+if (plan.Geometries.Count != 2)
+    throw new Exception($"expected 2 meshes, got {plan.Geometries.Count}");
+
+var bytes = File.ReadAllBytes(Path.Combine(Scratch, "stack.glb"));
+if (System.Text.Encoding.ASCII.GetString(bytes, 0, 4) != "glTF")
+    throw new Exception("not a GLB");
+```
+
+Colours become PBR metallic-roughness materials, translucent parts declare
+`alphaMode: BLEND`, and a part carrying a `FieldDisplay` exports its simulation-result
+colours as the `COLOR_0` vertex attribute — the *same* colours the viewport draws, since
+both come from `FieldRendering.SourceColors`. So an FEA result can be handed to a
+browser or a phone as one file.
+
+Three conventions worth knowing:
+
+* **Y-up, metres.** glTF is Y-up and metric; EngrCAD is Z-up millimetres. The conversion
+  rides on a single root node built from exact values, so every part transform below it
+  stays verbatim. `new GltfOptions { YUp = false, Scale = 1 }` writes model coordinates.
+* **Winding is not flipped under mirroring.** The spec requires the *consumer* to reverse
+  winding when a node's transform has a negative determinant, so the transform is written
+  as-is; flipping here as well would double the correction.
+* **Deformation does not travel.** A displacement exaggeration is a viewing parameter and
+  glTF has nowhere to record one, so a file carrying 50×-displaced geometry would be
+  indistinguishable from a model that really is that shape. The colours go, the
+  displacement stays behind.
+
 ## OFF
 
 The writer twin of the OFF reader — handy for mesh-processing toolchains
@@ -159,6 +214,9 @@ dotnet run --project MyDesign -- --export bracket.obj    # merged OBJ
 dotnet run --project MyDesign -- --export bracket.off    # merged OFF
 dotnet run --project MyDesign -- --export bracket.3mf    # 3MF (named, colored objects)
 dotnet run --project MyDesign -- --export bracket.amf    # AMF (named, colored objects)
+dotnet run --project MyDesign -- --export bracket.glb    # glTF 2.0 (hierarchy + materials)
+dotnet run --project MyDesign -- --export bracket.gltf   # glTF 2.0, self-contained JSON
+dotnet run --project MyDesign -- --export bracket.vtu    # VTK unstructured grid + results
 dotnet run --project MyDesign -- --render bracket.png    # offscreen PNG render
 ```
 

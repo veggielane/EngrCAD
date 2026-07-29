@@ -840,11 +840,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   (task #11, each its own project): **IGES** is a legacy-only format (fixed-column
   Part 21-era encoding, entity soup, no product structure worth the name) whose one
   remaining use is receiving files from old CAM systems — if ever built, import-only,
-  reusing the `StepReader` diagnostics conventions; do not write it. **glTF** is the
-  opposite: mesh-plus-materials for the web viewer and downstream DCC tools — it
-  belongs beside `StlWriter`/`ObjWriter` in the mesh export family (binary `.glb`, one
-  buffer, per-part nodes with instance transforms from `PartInstance`, colors from
-  `Part.Color`), no B-Rep semantics, and is the natural companion of the WASM viewer.
+  reusing the `StepReader` diagnostics conventions; do not write it.
+  **glTF** ✅ **landed** (`GltfWriter` in EngrCAD.Mesh + `GltfScene` in Viewer.Core;
+  `.glb`/`.gltf`, `--export` and MCP wiring, docs `examples/exports.md`) — and it went
+  further than this assessment expected: glTF has real hierarchy, so it preserves the
+  assembly tree with one mesh per distinct `Part` rather than flattening to
+  `PartInstance`s. Residual glTF follow-ups: no texture/UV support (nothing produces
+  UVs yet); `KHR_materials_*` extensions unused (a metalness/roughness pair per part is
+  all `Part` carries); the flat render mesh triples the vertex count against a
+  shared-vertex mesh, so a `KHR_draco_mesh_compression` or an indexed-with-smoothing-
+  groups path is the size lever if files ever get big; and a deformed `FieldDisplay`
+  exports undeformed by design (see the reasoning in `GltfScene`) — a glTF morph target
+  is the honest way to carry it, since a target's weight is exactly the exaggeration
+  factor the file currently has nowhere to record.
   **Native BREP serialization** should be the STEP writer's entity model dumped
   without the AP214 ceremony ONLY if a measured need (load time, exactness of swept
   surfaces STEP cannot carry) appears; the honest alternative — version the format
@@ -910,8 +918,9 @@ honest no) is recorded in design.md §6b with the comparison committed as
 - [ ] **Exporter breadth** — 3MF/AMF/OFF ✅ and DXF/SVG v1 ✅ landed (`ThreeMfWriter`/
   `AmfWriter`/`OffWriter` + `--export`/MCP wiring; `DxfDocument`/`SvgDrawing` with
   build123d's edge-classification line types) and **VTK/VTU** ✅ (`VtuWriter` +
-  `--export .vtu`, geometry plus simulation results as point data); remaining: glTF,
-  VRML.
+  `--export .vtu`, geometry plus simulation results as point data) and **glTF 2.0** ✅
+  (`GltfWriter` + `GltfScene`, `.glb`/`.gltf`, hierarchy-preserving with per-part PBR
+  materials and `COLOR_0` result colours); remaining: VRML.
 - [ ] **Deliberately NOT taking**: string selectors (type-unsafe, and LINQ is strictly
   better in C#), Python-style implicit "pending" state carried between builder calls
   (hard to reason about and worse without context managers — confirmed by the builder

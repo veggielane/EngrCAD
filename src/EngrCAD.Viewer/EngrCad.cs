@@ -235,8 +235,9 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off|.vtu</c> → headless export, no window (CI-friendly;
-    /// <c>.vtu</c> carries the parts' simulation results as point data for ParaView);
+    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off|.vtu|.glb|.gltf</c> → headless export, no window
+    /// (CI-friendly; <c>.vtu</c> carries the parts' simulation results as point data for
+    /// ParaView, <c>.glb</c>/<c>.gltf</c> the assembly hierarchy and colours for the web);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// <c>--render</c> additionally honors
     /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
@@ -627,6 +628,9 @@ public static class EngrCad
                 Log.WroteMeshFormat(log, path, instances.Count, "AMF");
                 return 0;
 
+            case ".glb" or ".gltf":
+                return ExportGltf(scene, instances, path, quality, log);
+
             case ".vtu":
                 // VTK unstructured grid for ParaView: the geometry PLUS every part's
                 // simulation results. Arrays are the union of the parts' result names
@@ -650,6 +654,41 @@ public static class EngrCad
                 Log.UnsupportedExportFormat(log, Path.GetExtension(path));
                 return 2;
         }
+    }
+
+    /// <summary>
+    /// glTF 2.0 export of a whole scene (<c>.glb</c> binary or self-contained
+    /// <c>.gltf</c> JSON) — the web/AR/DCC route.
+    /// <para>Unlike the mesh formats above this one keeps the <b>assembly hierarchy</b>:
+    /// a glTF node per tab, per sub-assembly and per occurrence, with one mesh per
+    /// distinct part however many times it is placed. The debug-filtered instance list is
+    /// only used to decide WHICH parts export — the structure comes from the document, so
+    /// what a browser shows has the same tree the model tree does.</para>
+    /// </summary>
+    private static int ExportGltf(
+        Scene scene, IReadOnlyList<PartInstance> instances, string path,
+        MeshQuality quality, ILogger log)
+    {
+        var allowed = instances.Select(i => i.Part).Distinct().ToList();
+        var plan = GltfScene.Plan(scene, quality, explode: 0, allowed);
+        foreach (var (part, reason) in plan.Skipped)
+            Log.SkippingPart(log, part.Name, reason);
+        if (plan.Geometries.Count == 0)
+        {
+            Log.NothingToExport(log);
+            return 1;
+        }
+
+        GltfWriter.WriteFile(
+            plan.Geometries, plan.Roots, path,
+            GltfOptions.Default with
+            {
+                SceneName = scene.Tabs.Count == 1 ? scene.Tabs[0].Name : "EngrCAD scene",
+            });
+        Log.WroteMeshFormat(
+            log, path, instances.Count,
+            $"glTF 2.0, {plan.Geometries.Count} mesh(es)");
+        return 0;
     }
 
     /// <summary>
