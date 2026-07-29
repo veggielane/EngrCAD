@@ -54,6 +54,13 @@ public enum RemeshProjection
     /// to plain closest-point projection, so an unoriented target degrades to
     /// <see cref="Vertex"/> rather than failing.
     /// </para>
+    /// <para>
+    /// It <b>composes with <see cref="RemeshScheduling.Queue"/></b>: the accumulation walks
+    /// only the faces incident to the active set, which is exactly the set that can
+    /// contribute to a vertex the pass writes, visited in ascending face index so every sum
+    /// lands in the same order and the restriction is bit-identical rather than merely
+    /// equivalent.
+    /// </para>
     /// </summary>
     FaceAligned,
 }
@@ -144,6 +151,50 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// <summary>Flip interior edges when that brings the four incident valences closer to 6.</summary>
     public bool EnableFlips { get; init; } = true;
 
+    /// <summary>
+    /// Refuse a valence flip that would leave an edge longer than
+    /// <see cref="MaxEdgeLength"/> — the <b>bounded-maximum</b> mode. Off by default, so
+    /// every existing remesh stays bit-identical.
+    /// <para>
+    /// A plain remesh converges its edge-length <i>distribution</i> fast and its
+    /// <i>maximum</i> hardly at all: measured on a Ø20 × 20 cylinder at a 2 mm target, 95% of
+    /// edges reach the <c>[0.66 L, 1.33 L]</c> band within 14 passes while the longest sits
+    /// near 2 L however many passes are spent. <b>The cause is the flip stage, and only the
+    /// flip stage.</b> It is not a collapse leaving a long edge for the next pass to find,
+    /// and it is not smoothing or projection — with flips switched off the same run ends at
+    /// exactly 1.33 L with nothing out of band, because a sweep already splits everything too
+    /// long. The flip predicate is pure valence arithmetic that never looks at a length, so
+    /// on an elongated quad it swaps the short diagonal for the long one and manufactures
+    /// exactly the edge the split stage exists to remove.
+    /// </para>
+    /// <para>
+    /// <b>The rule is monotone, not absolute, and that distinction is the whole of it.</b>
+    /// A flip is refused only when the edge it would create is out of band <i>and no shorter
+    /// than the one it replaces</i>. Refusing every out-of-band flip instead — the obvious
+    /// form — strands the sliver whose only remedy was a flip from 2.5 L to 1.5 L, measured
+    /// as a worst triangle angle of <b>0.02°</b> on a remeshed box against 28.9° for the
+    /// monotone form. What the monotone form buys is an invariant: a flip can no longer raise
+    /// the longest edge, so the maximum falls monotonically toward
+    /// <see cref="MaxEdgeLength"/> under the sweep instead of being churned upward every
+    /// pass.
+    /// </para>
+    /// <para>
+    /// <b>It is a bound approached over passes, not a guarantee at pass one</b> (a 4 L edge
+    /// still needs two passes to halve twice), and the smoothing and projection stages run
+    /// after the sweep and move vertices by their own damped step. Measured maxima on the
+    /// cylinder: 2.26 / 2.01 / 2.08 / 1.60 L at 10 / 14 / 20 / 40 passes without it,
+    /// 1.64 / 1.46 / 1.30 / 1.31 L with.
+    /// </para>
+    /// <para>
+    /// Nothing measured trades against it — on a cylinder, a box and a UV sphere it improves
+    /// the in-band share, the maximum, the minimum and the run time together — with one
+    /// exception worth stating: on the cylinder the <i>worst triangle angle</i> is slightly
+    /// poorer (0.58° against 0.89°), because a refused flip is a valence left irregular. On
+    /// the box and the sphere that measure improves several fold.
+    /// </para>
+    /// </summary>
+    public bool PreventLongEdgeFlips { get; init; }
+
     /// <summary>Which smoothing rule the per-pass smoothing uses.</summary>
     public RemeshSmoothing Smoothing { get; init; } = RemeshSmoothing.Uniform;
 
@@ -207,6 +258,14 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// </summary>
     public bool PreventNormalFlips { get; init; } = true;
 
+    /// <summary>
+    /// Test seam: forces <see cref="RemeshProjection.FaceAligned"/> to accumulate over every
+    /// face even under <see cref="RemeshScheduling.Queue"/>, so the restricted path can be
+    /// held to bit-for-bit equality against the unrestricted one. A per-instance option
+    /// rather than a mutable static, so it cannot leak between parallel tests.
+    /// </summary>
+    internal bool AccumulateOverEveryFace { get; init; }
+
     /// <summary>Edges longer than this are split. <see cref="MaxLengthFactor"/> × <see cref="TargetEdgeLength"/>.</summary>
     public double MaxEdgeLength => TargetEdgeLength * MaxLengthFactor;
 
@@ -220,7 +279,17 @@ public sealed record RemeshOptions(double TargetEdgeLength)
 /// <param name="Collapses">Edges collapsed across all passes.</param>
 /// <param name="Flips">Edges flipped across all passes.</param>
 /// <param name="Iterations">Passes actually run.</param>
-public sealed record RemeshResult(HalfEdgeMesh Mesh, int Splits, int Collapses, int Flips, int Iterations);
+public sealed record RemeshResult(HalfEdgeMesh Mesh, int Splits, int Collapses, int Flips, int Iterations)
+{
+    /// <summary>
+    /// Faces the face-aligned projection actually accumulated, summed over every pass — the
+    /// diagnostic that makes the restricted accumulation's skipping OBSERVABLE. Without it a
+    /// bit-identity test between the restricted and unrestricted paths passes vacuously
+    /// whenever the active set happens to be the whole mesh, which is exactly what it did on
+    /// the first fixture tried. Zero for any other projection mode.
+    /// </summary>
+    internal int FacesAccumulated { get; init; }
+}
 
 /// <summary>
 /// Isotropic remeshing: drives a triangle mesh toward a uniform target edge length while
@@ -337,7 +406,10 @@ public static class Remesher
         }
         progress?.ThrowIfCancelled();
 
-        return new RemeshResult(editable.ToMesh(), state.Splits, state.Collapses, state.Flips, options.Iterations);
+        return new RemeshResult(editable.ToMesh(), state.Splits, state.Collapses, state.Flips, options.Iterations)
+        {
+            FacesAccumulated = state.FacesAccumulated,
+        };
     }
 
     // The stride must be coprime with the half-edge capacity or the sweep would revisit a
@@ -402,6 +474,7 @@ public static class Remesher
         public int Splits { get; private set; }
         public int Collapses { get; private set; }
         public int Flips { get; private set; }
+        public int FacesAccumulated { get; private set; }
 
         public void Pass()
         {
@@ -711,6 +784,14 @@ public static class Remesher
                 Collapses++;
                 return;
             }
+
+            // The flip is deliberately tried BEFORE the split, including on an edge that is
+            // too long: a flip is itself a remedy for a long edge, since the other diagonal
+            // of an elongated quad is the short one. Splitting such an edge first instead
+            // pins the bad configuration and adds a vertex to it — measured on the cylinder,
+            // reordering to split-before-flip took the in-band share 92.4% -> 85.6% and the
+            // worst triangle angle 0.89 degrees -> 0.17. What the flip stage must not do is
+            // CREATE a long edge, which is PreventLongEdgeFlips' job in TryFlip.
             if (_options.EnableFlips && !_mesh.IsBoundaryEdge(he) && TryFlip(he, twin, a, b))
             {
                 Flips++;
@@ -758,6 +839,23 @@ public static class Remesher
                 return false; // a flip destroys the edge, so a constrained edge may not flip
             int c = _mesh.Origin(_mesh.Prev(he));
             int d = _mesh.Origin(_mesh.Prev(twin));
+
+            // A flip replaces one diagonal of the quad (a, c, b, d) with the other, and the
+            // valence rule below never looks at a length — so on an elongated quad it will
+            // swap the short diagonal for the long one and manufacture exactly the edge the
+            // split stage exists to remove. That churn is the entire reason a plain remesh's
+            // maximum edge stalls near 2 L; see RemeshOptions.PreventLongEdgeFlips.
+            if (_options.PreventLongEdgeFlips)
+            {
+                double flipped = (_mesh.GetPosition(d) - _mesh.GetPosition(c)).LengthSquared;
+                if (flipped > _maxLengthSquared &&
+                    // STRICTLY shorter, exactly — a monotone-decrease rule, not a tolerance.
+                    // Permitting an equal length would let a pair of flips ping-pong; and
+                    // refusing an improving flip outright strands slivers whose only remedy
+                    // it was (measured: a worst triangle angle of 0.02 degrees on a box).
+                    flipped >= (_mesh.GetPosition(b) - _mesh.GetPosition(a)).LengthSquared)
+                    return false;
+            }
 
             // Valence-based: does the flip bring the four incident valences closer to 6?
             // Boundary vertices target their own current valence, which makes any flip that
@@ -943,13 +1041,32 @@ public static class Remesher
             EnsureVertexCapacity();
             EnsureAccumulators();
             ClearModified(candidates);
-            Array.Clear(_accumulated, 0, _mesh.VertexCapacity);
-            Array.Clear(_accumulatedWeight, 0, _mesh.VertexCapacity);
 
-            // The accumulation is over the WHOLE mesh even under queue scheduling: a vertex's
-            // position here is a function of its incident triangles, so a partial accumulation
-            // would weight it against a subset and move it for no geometric reason. Only the
-            // write set is restricted.
+            // A vertex's position here is a function of its INCIDENT triangles, so the faces
+            // that can contribute to anything this pass writes are exactly those incident to
+            // the active set. Under sweep scheduling that is every face, so nothing is gained
+            // by testing; under queue scheduling, skipping the rest is what makes face-aligned
+            // projection compose with the scheduler instead of costing O(faces) regardless.
+            bool restricted = _options.Scheduling == RemeshScheduling.Queue &&
+                              !_options.AccumulateOverEveryFace;
+            if (restricted)
+            {
+                // Only the vertices the pass WRITES need a zeroed accumulator, and it writes
+                // exactly the candidates. A non-candidate vertex of a visited face is
+                // accumulated onto too, and that value is never read — it is zeroed again the
+                // moment the vertex is itself a candidate, which is the only way it is read.
+                foreach (int v in candidates)
+                {
+                    _accumulated[v] = Vector3d.Zero;
+                    _accumulatedWeight[v] = 0;
+                }
+            }
+            else
+            {
+                Array.Clear(_accumulated, 0, _mesh.VertexCapacity);
+                Array.Clear(_accumulatedWeight, 0, _mesh.VertexCapacity);
+            }
+
             for (int f = 0; f < _mesh.FaceCapacity; f++)
             {
                 if (!_mesh.IsFace(f))
@@ -958,6 +1075,18 @@ public static class Remesher
                 int h1 = _mesh.Next(h0);
                 int h2 = _mesh.Next(h1);
                 int v0 = _mesh.Origin(h0), v1 = _mesh.Origin(h1), v2 = _mesh.Origin(h2);
+
+                // The whole cost of this stage is the projection below — a nearest-point query
+                // against the target — so the restriction skips THAT, not the cheap walk.
+                // Keeping the ascending face scan is what makes the restriction bit-identical
+                // for FREE: every surviving vertex sees its own incident faces in the same
+                // order the whole-mesh walk gave them, and floating-point addition is not
+                // associative. (Gathering the incident faces into a list instead needs an
+                // explicit sort to restore that order; it was built and measured no faster.)
+                if (restricted && !_vertexActive[v0] && !_vertexActive[v1] && !_vertexActive[v2])
+                    continue;
+                FacesAccumulated++;
+
                 var p0 = _mesh.GetPosition(v0);
                 var p1 = _mesh.GetPosition(v1);
                 var p2 = _mesh.GetPosition(v2);

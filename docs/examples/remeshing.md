@@ -50,10 +50,41 @@ if (after < 0.85) throw new Exception($"the remesh should be even, was {after:P0
 ```
 
 Note what that measures and what it does not. The **distribution** converges quickly;
-the single **longest** edge lags well behind it, because every collapse can leave a
-fresh edge of up to twice the target for the next pass to split again. Judge a remesh
-by the share in band, not by its extremes — and if the extremes matter, spend passes
-rather than expecting a bound.
+the single **longest** edge lags well behind it, sitting near 2 L however many passes
+are spent. Judge a plain remesh by the share in band, not by its extremes.
+
+## Bounding the longest edge
+
+Spending more passes does not fix the maximum, because the cause is not a shortage of
+passes. It is the **flip stage**: the flip rule is pure valence arithmetic that never
+looks at a length, so on an elongated quad it swaps the short diagonal for the long one
+and manufactures exactly the edge the split stage exists to remove. Switch flips off and
+the same run ends at *exactly* the 1.33 L threshold — the splits were doing their job all
+along.
+
+`PreventLongEdgeFlips` refuses a flip that would leave an edge above the split threshold,
+unless it is shorter than the edge it replaces (a flip from 2.5 L to 1.5 L is progress,
+and refusing it strands slivers). It is opt-in, so an existing remesh is unchanged:
+
+```csharp run:remesh-bounded
+var cylinder = Shape.Cylinder(10, 20);
+
+static double MaxEdge(HalfEdgeMesh mesh) => mesh.Edges.Max(e => e.Vector.Length);
+
+var options = new RemeshOptions(2.0) { Iterations = 14 };
+double plain = MaxEdge(cylinder.Remeshed(options).ToMesh());
+double bounded = MaxEdge(cylinder.Remeshed(options with { PreventLongEdgeFlips = true }).ToMesh());
+
+// Measured 4.02 mm (2.01 L) against 2.92 mm (1.46 L) — the threshold is 1.33 L = 2.66 mm.
+if (plain < 3.5) throw new Exception($"the plain maximum should stall high, was {plain:F2}");
+if (bounded > 3.0) throw new Exception($"the bounded maximum should reach the band, was {bounded:F2}");
+```
+
+It costs nothing measurable: on a cylinder, a box and a UV sphere it improves the in-band
+share, the maximum, the shortest edge *and* the run time together. The one measure that
+can go the other way is the worst triangle angle, because a refused flip is a valence left
+irregular — on the box and the sphere it improves several fold (5.6° → 28.9°, 5.2° → 30.9°)
+and on the cylinder it is slightly poorer (0.89° → 0.58°).
 
 ## What it keeps, and what it does not
 

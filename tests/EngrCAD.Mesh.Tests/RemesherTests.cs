@@ -590,6 +590,253 @@ public class RemesherTests
             () => Remesher.Remesh(GridPatch(3), new RemeshOptions(0.1) { FastSplitPasses = -1 }));
     }
 
+    // ------------------------------------------- face-aligned projection under queue scheduling
+
+    /// <summary>
+    /// The mesh must be fine enough relative to its target that regions actually settle: on a
+    /// COARSE fixture (a 20 × 13 sphere at a 0.22 target) the whole mesh stays awake every
+    /// pass even at 60 passes — measured, 42 996 faces accumulated of a possible 42 996 — so
+    /// the restriction never fires and any comparison against the unrestricted path is
+    /// vacuous. This is the same fixture family as <c>RemesherSchedulingBenchmark</c>'s.
+    /// </summary>
+    private static HalfEdgeMesh FaceAlignedQueueSphere() =>
+        MeshPrimitives.UvSphere(1.0, 48, 32).Triangulated();
+
+    private static RemeshOptions FaceAlignedQueueFixture(HalfEdgeMesh source) => new(0.08)
+    {
+        Iterations = 40,
+        FeatureAngleDegrees = 0,
+        Scheduling = RemeshScheduling.Queue,
+        Projection = RemeshProjection.FaceAligned,
+        ProjectionTarget = new MeshProjectionTarget(source),
+    };
+
+    /// <summary>
+    /// The restriction's correctness bar is not "it visits fewer faces" but "the accumulator
+    /// state comes out the same for the vertices it actually moves" — so this asserts
+    /// <b>bit-for-bit</b> equal positions against the unrestricted walk, on a run whose active
+    /// set is a proper subset of the mesh. If they differ, the restriction is wrong, not
+    /// merely faster.
+    /// <para>
+    /// Two things could break it and neither is visible in a tolerance comparison: dropping a
+    /// face that does contribute to a moved vertex, and visiting the contributing faces in a
+    /// different order (floating-point addition is not associative, which is why the
+    /// accumulation keeps its ascending face scan rather than gathering a list). Both were
+    /// checked by deliberately introducing them; the order break shows up in the last bits
+    /// only, as <c>…4258002</c> against <c>…42581595</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void FaceAlignedProjection_RestrictedAccumulationIsBitIdenticalUnderQueueScheduling()
+    {
+        var sphere = FaceAlignedQueueSphere();
+        var options = FaceAlignedQueueFixture(sphere);
+
+        var restricted = Remesher.Remesh(sphere, options);
+        var whole = Remesher.Remesh(sphere, options with { AccumulateOverEveryFace = true });
+
+        // FIRST: prove the restriction actually fires, or everything below is vacuous. A
+        // bit-identity assertion between two paths that turn out to be the same walk agrees
+        // with a broken restriction as happily as with a correct one — measured, it did:
+        // truncating the membership test to one of the triangle's three vertices (which drops
+        // faces that genuinely contribute) passed on the first fixture tried, because that
+        // fixture never let a single face be skipped. See FaceAlignedQueueSphere.
+        Assert.True(restricted.FacesAccumulated < whole.FacesAccumulated,
+            $"the restriction never skipped a face ({restricted.FacesAccumulated} of " +
+            $"{whole.FacesAccumulated}) — this fixture cannot tell a correct restriction from a broken one");
+
+        // THEN: the answer is bit-for-bit the whole-mesh answer. Not "close": dropping a face
+        // that does contribute, or visiting the contributors in a different order (float
+        // addition is not associative), both show up here and in no other assertion.
+        Assert.Equal(whole.Splits, restricted.Splits);
+        Assert.Equal(whole.Collapses, restricted.Collapses);
+        Assert.Equal(whole.Flips, restricted.Flips);
+        Assert.Equal(whole.Mesh.VertexCount, restricted.Mesh.VertexCount);
+        Assert.Equal(whole.Mesh.FaceCount, restricted.Mesh.FaceCount);
+        for (int v = 0; v < whole.Mesh.VertexCount; v++)
+        {
+            var a = restricted.Mesh.GetPosition(v);
+            var b = whole.Mesh.GetPosition(v);
+            Assert.True(BitConverter.DoubleToInt64Bits(a.X) == BitConverter.DoubleToInt64Bits(b.X) &&
+                        BitConverter.DoubleToInt64Bits(a.Y) == BitConverter.DoubleToInt64Bits(b.Y) &&
+                        BitConverter.DoubleToInt64Bits(a.Z) == BitConverter.DoubleToInt64Bits(b.Z),
+                $"vertex {v}: restricted {a} != whole-mesh {b}");
+        }
+    }
+
+    /// <summary>
+    /// Sweep scheduling keeps the whole-mesh walk deliberately: with every vertex active the
+    /// restriction could only add a membership test per face, and the plain loop is then both
+    /// faster and unchanged bit-for-bit from before the feature existed.
+    /// </summary>
+    [Fact]
+    public void FaceAlignedProjection_SweepSchedulingStillAccumulatesOverEveryFace()
+    {
+        var sphere = FaceAlignedQueueSphere();
+        var options = FaceAlignedQueueFixture(sphere) with { Scheduling = RemeshScheduling.Sweep };
+
+        var swept = Remesher.Remesh(sphere, options);
+        var forced = Remesher.Remesh(sphere, options with { AccumulateOverEveryFace = true });
+
+        Assert.Equal(forced.FacesAccumulated, swept.FacesAccumulated);
+    }
+
+    // ---------------------------------------------------------------- bounded maximum
+
+    /// <summary>Smallest angle of any triangle, in degrees — the shape-quality counterweight
+    /// to refusing valence flips (an edge-length band says nothing about slivers).</summary>
+    private static double WorstAngleDegrees(HalfEdgeMesh mesh)
+    {
+        double worst = 180;
+        foreach (var face in mesh.Faces)
+        {
+            var p = face.Vertices().Select(v => v.Position).ToArray();
+            if (p.Length != 3)
+                continue;
+            for (int i = 0; i < 3; i++)
+            {
+                var u = p[(i + 1) % 3] - p[i];
+                var w = p[(i + 2) % 3] - p[i];
+                if (u.Length == 0 || w.Length == 0)
+                    continue;
+                double cos = Math.Clamp(u.Dot(w) / (u.Length * w.Length), -1, 1);
+                worst = Math.Min(worst, Math.Acos(cos) * 180 / Math.PI);
+            }
+        }
+        return worst;
+    }
+
+    private static RemeshOptions BoundedFixture(HalfEdgeMesh source, int iterations = 14) =>
+        new(2.0) { Iterations = iterations, ProjectionTarget = new MeshProjectionTarget(source) };
+
+    /// <summary>
+    /// Pins the DIAGNOSIS, so it cannot rot: the edges a converged remesh leaves above the
+    /// split threshold are put there by the FLIP stage. Switching flips off — and nothing
+    /// else — takes the maximum to the threshold, while switching off the smoothing and
+    /// projection stages, the other plausible suspects, leaves it exactly as bad.
+    /// <para>
+    /// A collapse can stretch a neighbouring edge too, but only by half the length of the
+    /// edge it collapses, which is under <c>0.33 L</c> by the collapse threshold — bounded,
+    /// and an order below what a flip does. (It cannot be isolated the same way either:
+    /// disabling collapses stops the mesh coarsening at all, which is a different regime
+    /// rather than the same run without one mechanism.)
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void TheLongEdgesAConvergedRemeshLeavesComeFromFlips()
+    {
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (20, 20, 20))).Triangulated();
+        var options = BoundedFixture(box);
+
+        double baseline = EdgeLengths(Remesher.Remesh(box, options).Mesh).Max;
+        double withoutFlips = EdgeLengths(Remesher.Remesh(box, options with { EnableFlips = false }).Mesh).Max;
+        double withoutGeometryStages = EdgeLengths(Remesher.Remesh(box, options with
+        {
+            Smoothing = RemeshSmoothing.None,
+            ProjectionTarget = null,
+        }).Mesh).Max;
+
+        // Measured 2.65 L baseline, 1.36 L with no flips. The split stage already removes
+        // everything above 1.33 L, so whatever is left over is what a flip put there.
+        Assert.True(baseline > 2.0 * options.TargetEdgeLength,
+            $"the baseline should churn well past the threshold, measured {baseline / options.TargetEdgeLength:F2} L");
+        Assert.True(withoutFlips < 1.05 * options.MaxEdgeLength,
+            $"with no flips the sweep should reach the threshold, measured {withoutFlips / options.TargetEdgeLength:F2} L");
+        // The geometry stages are innocent: without them the maximum is no better.
+        Assert.True(withoutGeometryStages > 2.0 * options.TargetEdgeLength,
+            $"smoothing/projection are not the mechanism, measured {withoutGeometryStages / options.TargetEdgeLength:F2} L");
+    }
+
+    [Theory]
+    [InlineData(0)] // MeshPrimitives.Box
+    [InlineData(1)] // MeshPrimitives.Cylinder
+    [InlineData(2)] // MeshPrimitives.UvSphere
+    public void PreventLongEdgeFlips_BringsTheMaximumDownToTheThreshold(int fixtureId)
+    {
+        var source = fixtureId switch
+        {
+            0 => MeshPrimitives.Box(new Aabb((0, 0, 0), (20, 20, 20))).Triangulated(),
+            1 => MeshPrimitives.Cylinder(10, 20, 32).Triangulated(),
+            _ => MeshPrimitives.UvSphere(10, 24, 16).Triangulated(),
+        };
+        var options = BoundedFixture(source);
+
+        var baseline = Remesher.Remesh(source, options);
+        var bounded = Remesher.Remesh(source, options with { PreventLongEdgeFlips = true });
+
+        double baselineMax = EdgeLengths(baseline.Mesh).Max;
+        double boundedMax = EdgeLengths(bounded.Mesh).Max;
+
+        // The claim is a bound approached under the sweep, not a hard cap at every pass: the
+        // smoothing and projection stages run AFTER the sweep and move vertices by their own
+        // damped step, so the end-of-pass maximum sits a little over the threshold. Measured
+        // 1.31-1.34 L against a baseline of 1.83-2.65 L.
+        Assert.True(boundedMax <= 1.05 * options.MaxEdgeLength,
+            $"bounded maximum {boundedMax / options.TargetEdgeLength:F2} L should reach the threshold");
+        Assert.True(boundedMax < baselineMax,
+            $"bounded {boundedMax:F3} should beat the baseline {baselineMax:F3}");
+
+        // And it is not bought from the distribution — the in-band share improves too.
+        Assert.True(FractionOutsideBand(bounded.Mesh, options) <=
+                    FractionOutsideBand(baseline.Mesh, options));
+        bounded.Mesh.Validate();
+        AssertAllTriangles(bounded.Mesh);
+    }
+
+    /// <summary>
+    /// The monotone clause earns its keep here. Refusing EVERY flip that would leave an
+    /// out-of-band edge — the obvious form of the guard — strands the sliver whose only
+    /// remedy was a flip from (say) 2.5 L to 1.5 L; measured on a box, that form reaches
+    /// 99.7% of edges in band with a worst triangle angle of <b>0.02°</b>, which is what a
+    /// length-only measure cannot see. Permitting a flip that strictly shortens the edge it
+    /// replaces gives <b>31.7°</b> on this fixture, against the unguarded baseline's 0.14°.
+    /// </summary>
+    [Fact]
+    public void PreventLongEdgeFlips_DoesNotStrandSlivers()
+    {
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (20, 20, 20))).Triangulated();
+        var options = BoundedFixture(box);
+
+        var bounded = Remesher.Remesh(box, options with { PreventLongEdgeFlips = true });
+
+        double worst = WorstAngleDegrees(bounded.Mesh);
+        Assert.True(worst > 10, $"worst triangle angle {worst:F2} degrees — the guard stranded slivers");
+        // It still flips: a guard that refused everything would trivially pass the line above.
+        Assert.True(bounded.Flips > 0);
+    }
+
+    [Fact]
+    public void PreventLongEdgeFlips_IsDeterministic()
+    {
+        var sphere = MeshPrimitives.UvSphere(1.0, 14, 9).Triangulated();
+        var options = new RemeshOptions(0.3)
+        {
+            Iterations = 6,
+            PreventLongEdgeFlips = true,
+            ProjectionTarget = new MeshProjectionTarget(sphere),
+        };
+
+        var first = Remesher.Remesh(sphere, options);
+        var second = Remesher.Remesh(sphere, options);
+
+        Assert.Equal(first.Flips, second.Flips);
+        Assert.Equal(first.Mesh.VertexCount, second.Mesh.VertexCount);
+        for (int v = 0; v < first.Mesh.VertexCount; v++)
+        {
+            var a = first.Mesh.GetPosition(v);
+            var b = second.Mesh.GetPosition(v);
+            Assert.True(BitConverter.DoubleToInt64Bits(a.X) == BitConverter.DoubleToInt64Bits(b.X) &&
+                        BitConverter.DoubleToInt64Bits(a.Y) == BitConverter.DoubleToInt64Bits(b.Y) &&
+                        BitConverter.DoubleToInt64Bits(a.Z) == BitConverter.DoubleToInt64Bits(b.Z),
+                $"vertex {v}: {a} != {b}");
+        }
+    }
+
+    /// <summary>Off by default — the whole existing suite is the bit-identity oracle.</summary>
+    [Fact]
+    public void PreventLongEdgeFlips_IsOffByDefault() =>
+        Assert.False(new RemeshOptions(1.0).PreventLongEdgeFlips);
+
     // ---------------------------------------------------------------- face-aligned projection
 
     /// <summary>A target that deliberately does NOT override the oriented overload, so it
