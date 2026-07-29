@@ -48,11 +48,13 @@ This is a library entry point, not a generic host.
 | `list_tabs` | Tabs with part/assembly/instance counts. | free |
 | `list_parts` | Every distinct part: name, tab, geometry kind, occurrence paths, display mode, colour, annotation count, whether it has an exact B-Rep route. | free |
 | `describe_part` | One part in full: faces, vertices, closed, volume, surface area, local and world bounds, placement, annotations, and the **construction tree** (`Part.ConstructionTree()` — how the part was built, step by step). | meshes that one part |
-| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom) **or an explicit camera** (`cameraYaw`/`cameraPitch` in degrees + `cameraDistance`/`cameraTarget`, or `cameraEye` — the orbit camera is Z-up, no roll), display styles (shaded-edges/shaded/wireframe/points), one axis section plane (`sectionAxis` + `sectionOffset`) **or up to 4 general planes** (`sectionPlanes` as `[nx, ny, nz, offset]` rows + `sectionCombine` intersection/union — two perpendicular planes are the classic quarter cutaway), size, and an optional tab/part filter. | meshes what it renders |
+| `screenshot` | Renders and returns a **PNG image block**. Standard views (iso/front/back/left/right/top/bottom) **or an explicit camera** (`cameraYaw`/`cameraPitch` in degrees + `cameraDistance`/`cameraTarget`, or `cameraEye` — the orbit camera is Z-up, no roll), display styles (shaded-edges/shaded/wireframe/points), one axis section plane (`sectionAxis` + `sectionOffset`) **or up to 4 general planes** (`sectionPlanes` as `[nx, ny, nz, offset]` rows + `sectionCombine` intersection/union — two perpendicular planes are the classic quarter cutaway), size, an optional tab/part filter, and **`t`** — a timeline position in [0, 1] of the program's animation, so an assistant can ask for "the mechanism at t = 0.3". | meshes what it renders |
 | `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png` (`width`/`height` set the image size). | meshes what it writes |
 | `set_param` | Edits one `[Param]` value on a feature of a history-backed part and **regenerates**. The result is the regeneration report (per-feature applied/cached/suppressed/failed/skipped with timings). A failed regeneration keeps the part's previous geometry and names the failing feature; the edit stays applied so it can be corrected — `FeatureHistory`'s own validation-first / failure-keeps-prefix semantics, surfaced verbatim. | regenerates (no meshing) |
 | `suppress_feature` / `unsuppress_feature` | Toggles a feature's suppression (a suppressed feature passes the body through untouched — a hole feature's bores disappear) and regenerates. Same result shape as `set_param`. | regenerates (no meshing) |
-| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits**: the program's source is the truth. | free |
+| `save_document` | Writes the whole model — tabs, parts with their feature histories, assemblies, mates, annotations, results — as one `Document.Save` JSON file. **This is how session edits survive the session.** Reports which parts had no construction recipe and so went out as mesh snapshots. | meshes parts with no recipe |
+| `load_document` | Reads one back and makes it the session's model (history-backed parts regenerate, so it is parametric again); `adopt: false` reads and reports without changing anything. Records this build cannot rebuild come back as warnings, never as a failure. | regenerates |
+| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits AND any loaded document**: the program's source is the truth. | free |
 
 Plus one resource, `engrcad://scene`: the whole document as JSON (tabs, parts,
 geometry kinds), cheap enough to read on every turn.
@@ -108,6 +110,19 @@ deliberately prints while building, drives a full JSON-RPC session over its
 stdin/stdout, and asserts that **every** stdout line parses as a JSON-RPC frame and
 that the noise turned up on stderr.
 
+## Sampling an animation
+
+A model that declares a timeline (`EngrCad.Configure().WithAnimation(scene => …)`)
+makes `screenshot`'s `t` parameter live: `screenshot(t: 0.3, view: "front")` renders the
+model **posed at that instant**. The posing goes through `EngrCad.PoseAt`, the same seam
+the desktop still overload and every export use, so an assistant's screenshot, a scrubbed
+viewport and frame ⌊t·N⌋ of an APNG cannot disagree. A named view or explicit camera
+still wins over the animation's own camera track, and a tab/part scope narrows the posed
+list by part reference afterwards. The animation is built **lazily** (track construction
+can mesh for bounds) and discarded on `reload`, so the timeline follows the model. A
+model with no animation gets an `isError` naming `WithAnimation` rather than a silently
+un-posed picture.
+
 ## Laziness
 
 Meshing a busy scene costs tens of seconds and most tools need no geometry at all, so
@@ -154,6 +169,23 @@ session `generation`, telling clients their earlier reads are stale; `Part.Regen
 then clears the part's cached mesh/solid/edges/annotations so every later tool sees
 the edited model. Edits live in the running session only — `reload` re-runs the
 program's source and discards them.
+
+**`save_document` is how they get out.** An assistant that has tuned a model to what
+the user asked for writes the whole thing — every tab, part, history, assembly, mate,
+annotation and result — as one JSON file the user can reopen, and `load_document`
+brings it back *parametric*, so the write tools keep working on it. That the pair is
+worth having at all is a consequence of `Document`'s design decision that **a document
+is its construction history, not its geometry**; the corollary is stated rather than
+hidden, because it is the thing a client must know: a part with no recipe (a raw mesh,
+an imported STL, an `Sdf`, a `Shape` graph built in code) goes out as a binary-exact
+mesh *snapshot*, and both tools name those parts, so nothing discovers later that
+editing one changes nothing.
+
+A loaded document is a **session-lifetime overlay**, not a new truth: `reload` still
+re-runs the program's own source and discards it. That keeps one rule for the whole
+server rather than two ideas of where the model comes from. `adopt: false` reads and
+reports without changing anything — the dry run to run first on a file the assistant
+did not write itself.
 
 One protocol fact the round-trip test paid to learn: **the server dispatches
 requests concurrently**, as MCP allows. A client that edits and then reads must

@@ -178,6 +178,71 @@ public static class EngrCad
             sectionPlanes, sectionCombine, segments, world, fields);
     }
 
+    /// <summary>
+    /// Renders ONE evaluated instant of <paramref name="animation"/> over
+    /// <paramref name="scene"/> as a still — "the mechanism at t = 0.3". The frame comes
+    /// from the same pure <c>Animation.At(t)</c> the window scrubs and every export
+    /// samples, so a still, a scrubbed viewport and frame ⌊t·N⌋ of an APNG agree by
+    /// construction.
+    /// <para>The animation's own camera track wins; failing that
+    /// <paramref name="camera"/>, failing that the auto-framing over the union of the
+    /// first and last frames' bounds — the SAME framing the clip exports would use, so
+    /// a still taken of a clip is croppped exactly as the clip is (framing per t would
+    /// make a sequence of stills jump).</para>
+    /// <para><paramref name="t"/> is the timeline fraction in [0, 1] (clamped, like
+    /// <c>Animation.At</c>); use <c>animation.Duration</c> to convert from seconds.</para>
+    /// </summary>
+    public static void RenderToImage(
+        Scene scene, Animation animation, double t, string path, int width = 1280, int height = 800,
+        CameraState? camera = null,
+        ViewStyle style = ViewStyle.ShadedWithEdges,
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        bool fields = true)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(animation);
+        scene.PreMesh();
+        var instances = PoseAt(scene, animation, t);
+        var resolved = animation.At(t).Camera ?? camera;
+        if (resolved is null)
+        {
+            // Framed over first ∪ last, exactly as AnimationExport does: an explode grows
+            // past its assembled bounds, so framing t alone would crop a later frame and
+            // make a sequence of stills jump.
+            var bounds = Aabb.Empty;
+            var defaults = scene.Instances().ToList();
+            foreach (var instance in animation.At(0).Instances ?? defaults)
+                bounds = bounds.Union(instance.Bounds());
+            foreach (var instance in animation.At(1).Instances ?? defaults)
+                bounds = bounds.Union(instance.Bounds());
+            resolved = CameraMath.DefaultCamera(bounds);
+        }
+        OffscreenRenderer.RenderToImage(instances, path, width, height, resolved,
+            furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
+            sectionPlanes, sectionCombine, preview: null, previewWorld: null, fields);
+    }
+
+    /// <summary>
+    /// The posed, debug-filtered instances of <paramref name="scene"/> at timeline
+    /// <paramref name="t"/> — the one seam every "the model at t" consumer goes through
+    /// (the still overload above, the MCP <c>screenshot</c> tool's <c>t</c> parameter),
+    /// so none of them can disagree about what an instant looks like. An animation with
+    /// no pose track returns the scene's own instances, which is the correct answer for
+    /// a camera-only clip.
+    /// <para>Evaluates no geometry beyond what the scene already has: posing is matrices
+    /// (<see cref="Animation"/>'s load-bearing rule), so a caller keeps whatever
+    /// meshing policy it had.</para>
+    /// </summary>
+    public static IReadOnlyList<PartInstance> PoseAt(Scene scene, Animation animation, double t)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        ArgumentNullException.ThrowIfNull(animation);
+        return DebugFilter.Shown([.. animation.At(t).Instances ?? scene.Instances()]);
+    }
+
     /// <summary>Whether <see cref="RenderToImage"/> can run on this machine (a GL/EGL
     /// context is obtainable). False on machines with no GPU/ANGLE, with the reason in
     /// <see cref="OffscreenRenderer.UnavailableReason"/>.</summary>

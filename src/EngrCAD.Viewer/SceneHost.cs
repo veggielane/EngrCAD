@@ -1773,32 +1773,153 @@ internal sealed class SceneHost
                 ? $"{parameter.Name} ({units})"
                 : parameter.Name;
             _properties.Children.Add(new TextBlock { Text = caption, Foreground = DimText, FontSize = 10 });
-            var box = new TextBox
-            {
-                Text = EditableValue(parameter),
-                FontSize = 12,
-                Padding = new Thickness(4, 2),
-                Margin = new Thickness(0, 0, 0, 4),
-            };
-            if (parameter.Description is { Length: > 0 } description)
-                ToolTip.SetTip(box, description);
-            var name = parameter.Name;
-            box.KeyDown += (_, e) =>
-            {
-                if (e.Key == Avalonia.Input.Key.Enter)
-                    ApplyParameter(part, feature, name, box.Text ?? "");
-            };
-            _properties.Children.Add(box);
+            _properties.Children.Add(ParameterEditor(part, feature, parameter));
         }
         _properties.Children.Add(new TextBlock
         {
-            Text = "Enter applies a value and regenerates.",
+            Text = "Enter applies a typed value; sliders, dropdowns and checkboxes apply on change.",
             Foreground = DimText,
             FontSize = 10,
             TextWrapping = TextWrapping.Wrap,
             Margin = new Thickness(0, 4, 0, 0),
         });
     }
+
+    /// <summary>
+    /// The editor for one <c>[Param]</c>, chosen from what its METADATA already knows.
+    /// The registry has carried the type and the <c>Min</c>/<c>Max</c> range since
+    /// features landed; free text was the placeholder, not the design.
+    /// <list type="bullet">
+    /// <item><b>bool</b> → a checkbox.</item>
+    /// <item><b>enum</b> → a dropdown of its members (no more typing a member name and
+    /// discovering the spelling from a status message).</item>
+    /// <item><b>a numeric with a FINITE range</b> → a slider beside a text box, both
+    /// bound to the same value. The slider is the affordance a bounded parameter was
+    /// always asking for; the box stays because a slider cannot express a precise
+    /// number, and a designer who wants 12.7 should not have to chase it.</item>
+    /// <item><b>anything else</b> → the text box, exactly as before.</item>
+    /// </list>
+    /// <para><b>Every editor writes through the SAME JSON seam</b>
+    /// (<see cref="ApplyParameter"/> → <c>DocumentEdits.SetParameters</c>), so a slider,
+    /// a dropdown, the parameter file and the MCP <c>set_param</c> tool cannot disagree
+    /// about what a value means — and each edit is one undo step. A typed editor is a
+    /// better way to SAY a value, never a second way to apply one.</para>
+    /// <para>The slider commits on <b>release</b>, not on every pixel of the drag: an
+    /// applied value regenerates the part, so a live drag would queue dozens of
+    /// regenerations and each one is an undo step. The label tracks the drag so the
+    /// number is still live under the cursor.</para>
+    /// </summary>
+    private Control ParameterEditor(Part part, Feature feature, ParamInfo parameter)
+    {
+        string name = parameter.Name;
+        var type = Nullable.GetUnderlyingType(parameter.Type) ?? parameter.Type;
+        // WHICH editor is ParamEditors.KindFor in Viewer.Core: a pure rule, so it is
+        // asserted as a value and a browser properties panel cannot grow a second
+        // opinion about what a bounded parameter looks like.
+        var kind = ParamEditors.KindFor(parameter);
+
+        if (kind == ParamEditorKind.Toggle)
+        {
+            var check = new CheckBox
+            {
+                IsChecked = parameter.Value as bool? ?? false,
+                Content = null,
+                FontSize = 12,
+                Margin = new Thickness(0, 0, 0, 4),
+            };
+            Describe(check, parameter);
+            check.IsCheckedChanged += (_, _) =>
+                ApplyParameter(part, feature, name, check.IsChecked == true ? "true" : "false");
+            return check;
+        }
+
+        if (kind == ParamEditorKind.Choice)
+        {
+            var combo = new ComboBox
+            {
+                ItemsSource = Enum.GetNames(type),
+                SelectedItem = parameter.Value?.ToString(),
+                FontSize = 12,
+                Padding = new Thickness(4, 2),
+                Margin = new Thickness(0, 0, 0, 4),
+                HorizontalAlignment = Avalonia.Layout.HorizontalAlignment.Stretch,
+            };
+            Describe(combo, parameter);
+            combo.SelectionChanged += (_, _) =>
+            {
+                if (combo.SelectedItem is string member)
+                    ApplyParameter(part, feature, name, member);
+            };
+            return combo;
+        }
+
+        var box = new TextBox
+        {
+            Text = EditableValue(parameter),
+            FontSize = 12,
+            Padding = new Thickness(4, 2),
+            Margin = new Thickness(0, 0, 0, 4),
+        };
+        Describe(box, parameter);
+        box.KeyDown += (_, e) =>
+        {
+            if (e.Key == Avalonia.Input.Key.Enter)
+                ApplyParameter(part, feature, name, box.Text ?? "");
+        };
+
+        if (kind != ParamEditorKind.Slider)
+            return box;
+
+        bool whole = ParamEditors.IsWhole(parameter);
+        double current = ParamEditors.Position(parameter);
+        var slider = new Slider
+        {
+            Minimum = parameter.Min,
+            Maximum = parameter.Max,
+            Value = current,
+            TickFrequency = whole ? 1 : 0,
+            IsSnapToTickEnabled = whole,
+            Margin = new Thickness(0, 0, 6, 0),
+            VerticalAlignment = Avalonia.Layout.VerticalAlignment.Center,
+        };
+        Describe(slider, parameter);
+        // Track the drag in the BOX (cheap, no regeneration) and commit on release.
+        slider.PropertyChanged += (_, e) =>
+        {
+            if (e.Property == Slider.ValueProperty)
+                box.Text = Format(slider.Value, whole);
+        };
+        slider.PointerCaptureLost += (_, _) => ApplyParameter(part, feature, name, box.Text ?? "");
+        slider.KeyUp += (_, _) => ApplyParameter(part, feature, name, box.Text ?? "");
+
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
+        row.ColumnDefinitions.Add(new ColumnDefinition(1, GridUnitType.Star));
+        row.ColumnDefinitions.Add(new ColumnDefinition(GridLength.Auto));
+        box.Margin = default;
+        box.MinWidth = 64;
+        Grid.SetColumn(slider, 0);
+        Grid.SetColumn(box, 1);
+        row.Children.Add(slider);
+        row.Children.Add(box);
+        return row;
+    }
+
+    private static void Describe(Control control, ParamInfo parameter)
+    {
+        string? tip = parameter.Description;
+        if (double.IsFinite(parameter.Min) && double.IsFinite(parameter.Max))
+        {
+            string range = FormattableString.Invariant($"{parameter.Min:g6} to {parameter.Max:g6}");
+            tip = tip is { Length: > 0 } ? $"{tip}  ({range})" : range;
+        }
+        if (tip is { Length: > 0 })
+            ToolTip.SetTip(control, tip);
+    }
+
+    private static string Format(double value, bool whole) =>
+        whole
+            ? ((long)Math.Round(value)).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : value.ToString("G6", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>A parameter value as editable text that round-trips through the JSON
     /// seam: numbers/bools as JSON literals, vectors as [x, y] / [x, y, z] arrays,

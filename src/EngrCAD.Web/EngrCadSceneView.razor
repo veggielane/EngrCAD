@@ -1,3 +1,4 @@
+@implements IDisposable
 <div class="engrcad-scene @Class" style="@Frame">
     @if (ShowToolbar)
     {
@@ -26,10 +27,39 @@
             }
             <button type="button" style="@ButtonStyle(EffectiveAnnotations)" title="Show 3D annotations (PMI)"
                     @onclick="() => _annotationsOverride = !EffectiveAnnotations">Annot</button>
+            <button type="button" style="@ButtonStyle(_measure)" title="Measure between two picked points"
+                    @onclick="ToggleMeasureAsync">Measure</button>
+            @if (HasExplodableAssemblies)
+            {
+                <button type="button" style="@ButtonStyle(_explode > 0)" title="Exploded view"
+                        @onclick="ToggleExplodeAsync">Explode</button>
+                @if (_explode > 0)
+                {
+                    <input type="range" min="0" max="1" step="0.02" value="@_explode"
+                           title="Explode factor" style="width:80px"
+                           @onchange="OnExplodeChanged" />
+                }
+            }
             <button type="button" style="@ButtonStyle(_propertiesVisible)" title="Properties of the selection"
                     @onclick="() => _propertiesVisible = !_propertiesVisible">Props</button>
             <button type="button" style="@ButtonStyle(_bomVisible)" title="Bill of materials"
                     @onclick="ToggleBom">BOM</button>
+        </div>
+    }
+    @if (Animation is not null)
+    {
+        <div style="display:flex; gap:6px; align-items:center; padding:4px 8px; background:#191b1f;
+                    border-bottom:1px solid #2a2d33; font:12px/1.4 'Segoe UI', system-ui, sans-serif">
+            <button type="button" style="@ButtonStyle(_playback?.Playing == true)"
+                    title="Play / pause" @onclick="TogglePlayAsync">@(_playback?.Playing == true ? "Pause" : "Play")</button>
+            <button type="button" style="@ButtonStyle(_playback?.Loop == true)" title="Loop"
+                    @onclick="() => { if (_playback is not null) _playback.Loop = !_playback.Loop; }">Loop</button>
+            <input type="range" min="0" max="1" step="0.005" value="@AnimationT"
+                   title="Scrub the timeline" style="flex:1 1 auto"
+                   @oninput="OnScrubAsync" />
+            <span style="flex:0 0 auto; color:#8d939d; min-width:56px; text-align:right">
+                @($"{AnimationT * Animation.Duration:F2} s")
+            </span>
         </div>
     }
     @if (Tabs.Count > 1)
@@ -94,6 +124,8 @@
                              SectionEnabled="_section" SectionAxis="_sectionAxis"
                              SectionOffset="_sectionOffset" ShowAnnotations="EffectiveAnnotations"
                              ShowViewCube="ShowViewCube"
+                             MeasureMode="_measure" Explode="_explode"
+                             Animation="Animation" AnimationTime="AnimationT"
                              Width="100%" Height="100%"
                              SelectionChanged="OnViewportSelectionChanged"
                              PartFailed="OnPartFailed"
@@ -159,6 +191,15 @@
     /// <summary>The view cube, passed through to the viewport.</summary>
     [Parameter] public bool ShowViewCube { get; set; } = true;
 
+    /// <summary>
+    /// An animation to play. Supplying one grows a transport row (Play/Pause, Loop, a
+    /// scrubber and the time). The state machine is <c>AnimationPlayback</c> from
+    /// <c>EngrCAD.Viewer.Core</c> — the same one the desktop toolbar drives — so this
+    /// front end owns a clock and three widgets and nothing about what "play" means, and
+    /// a browser frame at t is the frame the desktop scrubs and the exports render.
+    /// </summary>
+    [Parameter] public Animation? Animation { get; set; }
+
     /// <summary>3D annotations, the host-supplied initial state; the toolbar's Annot
     /// toggle then owns it (the same override pattern the style dropdown uses).</summary>
     [Parameter] public bool ShowAnnotations { get; set; } = true;
@@ -219,6 +260,19 @@
     private bool _propertiesVisible;
     private bool _bomVisible;
     private ViewStyle? _styleOverride;
+    private bool _measure;
+    private double _explode;
+
+    // Animation playback. The state machine is AnimationPlayback in EngrCAD.Viewer.Core
+    // -- the same one the desktop toolbar drives -- so what lives here is a clock and
+    // three widgets. The clock is a JS interval rather than a render loop for the reason
+    // the desktop uses a DispatcherTimer: playback advances by REAL elapsed time, and
+    // the timer's tick quantum must not change the speed (AnimationPlayback.Advance
+    // wraps the overshoot on loop, which is what makes that true).
+    private AnimationPlayback? _playback;
+    private Animation? _playbackFor;
+    private System.Threading.Timer? _clock;
+    private long _lastTick;
 
     private ViewStyle EffectiveStyle => _styleOverride ?? ViewStyle;
 
@@ -246,6 +300,7 @@
 
     protected override void OnParametersSet()
     {
+        SyncPlayback();
         // A rebuilt scene (a slider moved, a live edit) is a new object, so the tree is
         // rebuilt from it. The hidden set survives by KEY, which is why it is keyed on
         // the occurrence path rather than on a row index.
@@ -329,6 +384,125 @@
         SelectionChanged.HasDelegate ? SelectionChanged.InvokeAsync(Selection) : Task.CompletedTask;
 
     // ---- viewport events ----
+
+    // ---- measure, explode, playback ----
+
+    /// <summary>True when the current tab holds an assembly with something to explode —
+    /// what gates the toolbar's Explode affordance, so a scene of loose parts does not
+    /// grow a control that would do nothing.</summary>
+    private bool HasExplodableAssemblies =>
+        Scene is not null && _tabIndex < Tabs.Count && Tabs[_tabIndex].Assemblies.Count > 0;
+
+    private async Task ToggleMeasureAsync()
+    {
+        _measure = !_measure;
+        if (_viewport is { } viewport)
+        {
+            if (!_measure)
+                await viewport.ClearMeasurementAsync();
+            else
+                _status = "measure: click the first point";
+        }
+    }
+
+    private async Task ToggleExplodeAsync()
+    {
+        _explode = _explode > 0 ? 0 : 1;
+        if (_viewport is { } viewport)
+            await viewport.SetExplodeAsync(_explode);
+    }
+
+    private async Task OnExplodeChanged(ChangeEventArgs e)
+    {
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double factor))
+        {
+            _explode = Math.Clamp(factor, 0, 1);
+            if (_viewport is { } viewport)
+                await viewport.SetExplodeAsync(_explode);
+        }
+    }
+
+    private double AnimationT => _playback?.T ?? 0;
+
+    /// <summary>Rebuilds the playback machine when the host hands over a different
+    /// animation (a live reload builds a new one), keeping nothing from the old.</summary>
+    private void SyncPlayback()
+    {
+        if (ReferenceEquals(Animation, _playbackFor))
+            return;
+        _playbackFor = Animation;
+        StopClock();
+        _playback = Animation is null ? null : new AnimationPlayback(Animation);
+    }
+
+    private async Task TogglePlayAsync()
+    {
+        if (_playback is not { } playback)
+            return;
+        if (playback.Playing)
+        {
+            playback.Pause();
+            StopClock();
+        }
+        else
+        {
+            playback.Play();
+            _lastTick = Environment.TickCount64;
+            // ~50 fps. The interval is a REQUEST, not the clock: every tick advances by
+            // the real elapsed time, so a throttled background tab resumes at the right
+            // position instead of running slow.
+            _clock = new System.Threading.Timer(_ => _ = TickAsync(), null, 20, 20);
+        }
+        await ApplyTimeAsync();
+    }
+
+    private void StopClock()
+    {
+        _clock?.Dispose();
+        _clock = null;
+    }
+
+    private async Task TickAsync()
+    {
+        if (_playback is not { } playback || !playback.Playing)
+            return;
+        long now = Environment.TickCount64;
+        double elapsed = (now - _lastTick) / 1000.0;
+        _lastTick = now;
+        if (!playback.Advance(elapsed))
+            return;
+        // Back onto the renderer's own loop: Blazor WASM is single-threaded, so the
+        // timer callback already runs there, but InvokeAsync is what makes the render
+        // tree see the change.
+        await InvokeAsync(async () =>
+        {
+            await ApplyTimeAsync();
+            StateHasChanged();
+        });
+    }
+
+    private async Task OnScrubAsync(ChangeEventArgs e)
+    {
+        if (_playback is not { } playback)
+            return;
+        if (double.TryParse(e.Value?.ToString(), System.Globalization.NumberStyles.Float,
+                System.Globalization.CultureInfo.InvariantCulture, out double t))
+        {
+            // Scrubbing while playing just moves the clock — the transport's own rule.
+            playback.Seek(t);
+            await ApplyTimeAsync();
+        }
+    }
+
+    private Task ApplyTimeAsync() =>
+        _viewport is { } viewport && _playback is { } playback
+            ? viewport.SetAnimationTimeAsync(playback.T)
+            : Task.CompletedTask;
+
+    /// <summary>Stops the playback clock; a timer outliving its component would tick
+    /// into a disposed render tree.</summary>
+    public void Dispose() => StopClock();
 
     private void OnViewportStatus(string message) => _status = message;
 

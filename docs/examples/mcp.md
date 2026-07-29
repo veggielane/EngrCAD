@@ -72,15 +72,34 @@ instead:
 | `list_tabs` | What tabs exist, and how much is in each. |
 | `list_parts` | Every part: name, tab, geometry kind (Shape / B-Rep / mesh / SDF), how many times it is placed and where, colour, display mode, whether it has an exact B-Rep route. |
 | `describe_part` | Faces, vertices, closed, volume, surface area, local and world bounding boxes, placement, annotations — and the **construction tree**, the ordered record of how the part was built (booleans, drills, fillets, sketches; or the parametric feature list with its `[Param]` values). |
-| `screenshot` | A rendered PNG. Standard views (`iso`, `front`, `back`, `left`, `right`, `top`, `bottom`), display styles (`shaded-edges`, `shaded`, `wireframe`, `points`), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open to show bores and wall thickness, image size, and an optional `tab`/`part` filter. |
+| `screenshot` | A rendered PNG. Standard views (`iso`, `front`, `back`, `left`, `right`, `top`, `bottom`), display styles (`shaded-edges`, `shaded`, `wireframe`, `points`), a section plane (`sectionAxis` + `sectionOffset`) that cuts the model open to show bores and wall thickness, image size, an optional `tab`/`part` filter, and `t` — a position on the program's [animation](animation.md) timeline, so an assistant can ask for the mechanism at half stroke. |
 | `export` | Writes `.step` (exact B-Rep, one file per part), `.stl` or `.obj` (meshes merged with instance transforms), or `.png`. |
+| `set_param`, `suppress_feature`, `unsuppress_feature` | Edit a `[Param]` value or toggle a feature's suppression on a history-backed part and regenerate. The result is the regeneration report; a failure keeps the previous geometry and names the feature. |
+| `save_document`, `load_document` | Write the whole model — tabs, parts with their histories, assemblies, mates, annotations, results — as one [document](documents.md) file, and read one back. |
 | `reload` | Re-runs the scene factory after the model's source changed — the headless equivalent of hot reload. A model that throws leaves the previous scene in place and reports the error. |
 
 There is also a resource, `engrcad://scene`: the whole document as JSON, cheap enough
 to read on every turn.
 
-The server is **read-only** on the design: to change the model, edit its source and
-call `reload`.
+## Editing, and getting the edits back out
+
+`set_param` changes the *running* model; the program's source stays the truth, so
+`reload` discards session edits by design. That is the right default and it leaves one
+obvious gap — how does the tuning an assistant just found reach the user? Through
+`save_document`:
+
+```text
+set_param(part: "bracket", feature: "Base", param: "Height", value: 14)
+save_document(path: "bracket-tuned.json")
+```
+
+The file is the same envelope [documents](documents.md) describes, so it reopens
+**parametric**: `load_document` regenerates the histories and the write tools keep
+working on the result. The corollary is reported rather than hidden — a part with no
+construction recipe (a raw mesh, an imported STL, an `Sdf`) travels as a mesh snapshot,
+and both tools list those parts by name. A loaded document is a session-lifetime
+overlay: `reload` still re-runs the program's own source and discards it, so there is
+one answer to where the model comes from rather than two.
 
 ## Two things worth knowing
 

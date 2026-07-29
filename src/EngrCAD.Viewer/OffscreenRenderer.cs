@@ -106,10 +106,56 @@ public static class OffscreenRenderer
         using var egl = EglContext.TryCreate(width * supersample, height * supersample, out var error)
             ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
-        var oversized = Draw(gl, instances, width * supersample, height * supersample, camera, furniture,
+        var cache = new PassCache(gl);
+        var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
             preview, previewWorld, fields);
         return Downsample(oversized, width, height, supersample);
+    }
+
+    /// <summary>
+    /// Renders a SEQUENCE of frames — an animation export — through <b>one</b> EGL
+    /// context, one set of linked programs and <b>one</b> set of uploaded per-part
+    /// buffers. Only the per-instance matrices and the camera change between frames,
+    /// which is the offscreen restatement of the insight that lets the window animate
+    /// through <c>SetInstancePoses</c> without touching a GPU buffer.
+    /// <para>Every frame must carry the SAME parts (an animation moves poses, never
+    /// geometry — <see cref="Animation"/>'s load-bearing rule), so the upload cache is
+    /// keyed by <see cref="Part"/> reference and hits from the second frame on. Output
+    /// is byte-identical to calling <see cref="Render(IReadOnlyList{PartInstance}, int, int, CameraState?, bool, ViewStyle, SectionAxis, double?, bool, IReadOnlyList{SectionPlane}?, SectionCombine, IReadOnlyList{ValueTuple{Vector3d, Vector3d}}?, Matrix4d?, bool)"/>
+    /// once per frame; a test asserts exactly that.</para>
+    /// </summary>
+    /// <param name="frames">Per frame: the posed instances and the camera to draw them with.</param>
+    public static IReadOnlyList<byte[]> RenderSequence(
+        IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera)> frames,
+        int width, int height, bool furniture = true,
+        ViewStyle style = ViewStyle.ShadedWithEdges,
+        SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
+        bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
+        IReadOnlyList<SectionPlane>? sectionPlanes = null,
+        SectionCombine sectionCombine = SectionCombine.Intersection,
+        bool fields = true)
+    {
+        ArgumentNullException.ThrowIfNull(frames);
+        ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
+        if (frames.Count == 0)
+            return [];
+
+        const int supersample = 2;
+        using var egl = EglContext.TryCreate(width * supersample, height * supersample, out var error)
+            ?? throw new InvalidOperationException($"Offscreen rendering is not available: {error}");
+        using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
+        var cache = new PassCache(gl);
+        var pixels = new List<byte[]>(frames.Count);
+        foreach (var (instances, camera) in frames)
+        {
+            var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
+                furniture, style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine,
+                supersample, preview: null, previewWorld: null, fields);
+            pixels.Add(Downsample(oversized, width, height, supersample));
+        }
+        return pixels;
     }
 
     /// <summary>Box-filter downsample of RGBA8 pixels by an integer factor.</summary>
@@ -191,22 +237,57 @@ public static class OffscreenRenderer
         uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
         bool SectionClipped, bool FieldColored, uint GhostVao, int GhostIndexCount);
 
+    /// <summary>The per-part GL buffers a draw needs, shared by every instance of that part.</summary>
+    private readonly record struct PartUpload(
+        uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
+        uint WireVao, int WireVertexCount, bool FieldColored, uint GhostVao, int GhostIndexCount);
+
+    /// <summary>
+    /// What survives between frames of one context: the four linked programs and the
+    /// per-part uploads. A single <see cref="Render"/> call builds one and throws it
+    /// away with the context; <see cref="RenderSequence"/> reuses one across every
+    /// frame, which is where an animation export's saving comes from (programs link
+    /// once, meshes upload once, and the CPU-side <c>RenderMesh.CreateFlat</c> /
+    /// occlusion / feature-edge work behind each upload happens once too).
+    /// </summary>
+    private sealed class PassCache
+    {
+        public PassCache(GL gl)
+        {
+            // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
+            string header = ViewerShaders.Header(es: true);
+            MeshProgram = ViewerPrograms.LinkProgram(
+                gl, header + ViewerShaders.MeshVertex, header + ViewerShaders.MeshFragment, bindAttributes: true);
+            LineProgram = ViewerPrograms.LinkProgram(
+                gl, header + ViewerShaders.LineVertex, header + ViewerShaders.LineFragment, bindAttributes: true);
+            PointProgram = ViewerPrograms.LinkProgram(
+                gl, header + ViewerShaders.PointVertex, header + ViewerShaders.PointFragment, bindAttributes: true);
+            BackgroundProgram = ViewerPrograms.LinkProgram(
+                gl, header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment,
+                bindAttributes: false);
+        }
+
+        public uint MeshProgram { get; }
+        public uint LineProgram { get; }
+        public uint PointProgram { get; }
+        public uint BackgroundProgram { get; }
+
+        /// <summary>Uploads keyed by <see cref="Part"/> REFERENCE — the same identity
+        /// <c>Scene.AllParts</c> dedupes by, so N instances of one part share one set.</summary>
+        public Dictionary<Part, PartUpload> Uploaded { get; } = [];
+    }
+
     private static unsafe byte[] Draw(
-        GL gl, IReadOnlyList<PartInstance> instances, int width, int height, CameraState? camera, bool furniture,
+        GL gl, PassCache cache, IReadOnlyList<PartInstance> instances, int width, int height,
+        CameraState? camera, bool furniture,
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields)
     {
-        // The pbuffer context is always GLES3 (ANGLE), hence the ES header.
-        string header = ViewerShaders.Header(es: true);
-        uint meshProgram = ViewerPrograms.LinkProgram(
-            gl, header + ViewerShaders.MeshVertex, header + ViewerShaders.MeshFragment, bindAttributes: true);
-        uint lineProgram = ViewerPrograms.LinkProgram(
-            gl, header + ViewerShaders.LineVertex, header + ViewerShaders.LineFragment, bindAttributes: true);
-        uint pointProgram = ViewerPrograms.LinkProgram(
-            gl, header + ViewerShaders.PointVertex, header + ViewerShaders.PointFragment, bindAttributes: true);
-        uint bgProgram = ViewerPrograms.LinkProgram(
-            gl, header + ViewerShaders.BackgroundVertex, header + ViewerShaders.BackgroundFragment, bindAttributes: false);
+        uint meshProgram = cache.MeshProgram;
+        uint lineProgram = cache.LineProgram;
+        uint pointProgram = cache.PointProgram;
+        uint bgProgram = cache.BackgroundProgram;
 
         var bounds = Aabb.Empty;
         foreach (var instance in instances)
@@ -285,8 +366,7 @@ public static class OffscreenRenderer
         // the shared RenderModes.Resolve), so only the buffers that mode needs are
         // uploaded: mesh VAO for fills/points/translucency, feature edges for the
         // shaded-with-edges look and translucent silhouettes, wire edges for wireframe.
-        var uploaded = new Dictionary<Part, (uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-            uint WireVao, int WireVertexCount, bool FieldColored, uint GhostVao, int GhostIndexCount)>();
+        var uploaded = cache.Uploaded;
         var draws = new List<InstanceDraw>(instances.Count);
         foreach (var instance in instances)
         {
@@ -355,7 +435,7 @@ public static class OffscreenRenderer
                         wireVertexCount = wireEdges.Count * 2;
                     }
                 }
-                shared = (vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
+                shared = new PartUpload(vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
                     field is not null, ghostVao, ghostIndexCount);
                 uploaded[part] = shared;
             }

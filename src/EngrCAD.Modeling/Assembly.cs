@@ -51,6 +51,70 @@ public sealed class Occurrence
     /// </summary>
     public Vector3d? ExplodeOffset { get; set; }
 
+    /// <summary>
+    /// The DOGLEG path this occurrence takes to <see cref="ExplodeOffset"/>: intermediate
+    /// waypoints in the parent's coordinates, from the assembled position (an implicit
+    /// zero) to the offset (an implicit last point). Empty — the default — is the
+    /// straight line, so nothing changes for an assembly that never sets one.
+    /// <para>Assembly instructions want this: a screw comes straight OUT of its bore
+    /// before it moves aside, because a diagonal path reads as "insert it at an angle"
+    /// and a fitter will try. <c>ExplodePath = [(0, 0, 25)]</c> on a part whose offset is
+    /// <c>(40, 0, 25)</c> says "up, then over".</para>
+    /// <para>The factor maps to <b>arc length</b> along the polyline, not to segment
+    /// index, so the part moves at a constant speed through the corner instead of
+    /// lingering on the shorter leg — the whole point of a path being a path.</para>
+    /// </summary>
+    public IList<Vector3d> ExplodePath { get; } = new List<Vector3d>();
+
+    /// <summary>
+    /// This occurrence's explode displacement at <paramref name="factor"/>, in the
+    /// parent's coordinates — the ONE rule, so the flatten walk, an
+    /// <c>ExplodeTrack</c> and any future explode-path renderer cannot disagree about
+    /// where a part is halfway out.
+    /// <para>Exactly <see cref="Vector3d.Zero"/> at factor 0 and exactly
+    /// <see cref="ExplodeOffset"/> at 1, both by exact tests rather than by arithmetic
+    /// that happens to land there — an un-exploded flatten must be bit-for-bit what it
+    /// always was.</para>
+    /// </summary>
+    public Vector3d ExplodeDisplacement(double factor)
+    {
+        // Exact-zero/one semantic tests: "not exploded" and "fully exploded" are
+        // decisions, not measurements.
+        if (ExplodeOffset is not { } offset || factor == 0)
+            return Vector3d.Zero;
+        if (factor == 1)
+            return offset;
+        if (ExplodePath.Count == 0)
+            return offset * factor;
+
+        // Arc-length parameterization over 0 -> waypoints... -> offset.
+        Span<Vector3d> points = ExplodePath.Count <= 6
+            ? stackalloc Vector3d[ExplodePath.Count + 2]
+            : new Vector3d[ExplodePath.Count + 2];
+        points[0] = Vector3d.Zero;
+        for (int i = 0; i < ExplodePath.Count; i++)
+            points[i + 1] = ExplodePath[i];
+        points[^1] = offset;
+
+        double total = 0;
+        for (int i = 1; i < points.Length; i++)
+            total += (points[i] - points[i - 1]).Length;
+        // A path of coincident points has no length to divide by; the straight line is
+        // the honest answer rather than a NaN.
+        if (!(total > 0))
+            return offset * factor;
+
+        double travelled = Math.Clamp(factor, 0, 1) * total;
+        for (int i = 1; i < points.Length; i++)
+        {
+            double leg = (points[i] - points[i - 1]).Length;
+            if (travelled <= leg || i == points.Length - 1)
+                return points[i - 1] + (points[i] - points[i - 1]) * (leg > 0 ? travelled / leg : 0);
+            travelled -= leg;
+        }
+        return offset;
+    }
+
     /// <summary>True when this occurrence places a nested assembly.</summary>
     public bool IsAssembly => SubAssembly is not null;
 
@@ -359,17 +423,19 @@ public sealed class Assembly
     }
 
     /// <summary>An occurrence's pose with the explode displacement applied: the same
-    /// frame, its origin moved by <c>explode × ExplodeOffset</c> in the parent's
-    /// coordinates. Exactly the identity frame at factor 0 or with no offset — an
-    /// un-exploded flatten is bit-for-bit what it always was.</summary>
+    /// frame, its origin moved by <see cref="Occurrence.ExplodeDisplacement"/> in the
+    /// parent's coordinates (a straight line by default, the dogleg path when one is
+    /// set). Exactly the original frame at factor 0 or with no offset — an un-exploded
+    /// flatten is bit-for-bit what it always was.</summary>
     private static Frame3d Posed(Occurrence occurrence, double explode)
     {
         // Exact-zero semantic tests: "no offset set" and "not exploded" are decisions,
         // not measurements, and both must return the ORIGINAL frame untouched.
-        if (occurrence.ExplodeOffset is not { } offset || explode == 0)
+        if (occurrence.ExplodeOffset is null || explode == 0)
             return occurrence.Frame;
         var frame = occurrence.Frame;
-        return Frame3d.FromOrthonormal(frame.Origin + offset * explode, frame.X, frame.Y);
+        return Frame3d.FromOrthonormal(
+            frame.Origin + occurrence.ExplodeDisplacement(explode), frame.X, frame.Y);
     }
 
     /// <summary>World-space bounds of the flattened instances.</summary>

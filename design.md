@@ -1597,6 +1597,46 @@ Design decisions:
   graph NODE* (`Shape.SweptOver`), not a union of transformed shapes, so `Explain`
   can say implicit-Native (child field lowered once, placed per pose) and B-Rep
   honestly Impossible instead of attempting N-way B-Rep booleans of rotated copies.
+  *A swept volume's SAMPLING is a tolerance, not an inherited number*: unioning at the
+  study's own frames means the scallop is whatever frame count the sweep happened to
+  use, so `SweptVolume(path, maxTravel)` rigidly interpolates extra placements until no
+  point of the part moves further than a stated length between consecutive ones — and
+  travel is measured EXACTLY, as the largest displacement of the part's own
+  bounding-box corners, rather than as a rotation angle times an assumed radius, so a
+  body spinning about its centre costs few extra poses and one on the end of a long arm
+  costs many. The recorded frames are all kept, so refinement can only add material.
+  The interpolation itself is `MotionStudy.InterpolatePose`, shared with the animation
+  layer's `MechanismTrack` across an assembly boundary, because two copies would be two
+  answers to "where was the body halfway between these frames" and one of them would be
+  the one users watch.
+  *Several drivers at once is the general form, and the single-driver call is sugar over
+  it*: a 2-DOF mechanism has no answer under one driver — the pose, and more obviously
+  the RATES, are a family the solver would be picking a member of — so `SolveAt`,
+  `Sweep` and `RatesAt` take lists, each driver contributing its own rows exactly as one
+  does. Two calls worth recording. The same joint VARIABLE driven twice is refused by
+  name: two rows demanding different values of one coordinate make the system
+  inconsistent, and LM would report a residual rather than the modelling mistake it is
+  (two drivers on the same JOINT driving different variables is the case the feature
+  exists for and is fine). And a multi-driver sweep is a **straight line through driver
+  space** — every driver runs its own From→To over one shared s — rather than a grid:
+  one parameter means one step to halve, so the continuation, the dead-centre probe and
+  the leave-the-last-good-pose contract are the single-driver ones unchanged instead of
+  a second scheme.
+  *A rack and pinion is a cam pair with a straight law*, not a fourth constraint class:
+  `CamCoupling` already ties a slide to an UNWRAPPED spin through a law's exact slope
+  and curvature, which is precisely Δz = r·Δθ with a constant slope — so a rack driven
+  through three turns keeps advancing instead of resetting at every seam, for free. The
+  dwell-rise-dwell law catalogue is where the engineering lives rather than the
+  mathematics: the members differ in what happens where a rise meets a dwell (cycloidal
+  and modified trapezoid end at zero acceleration and join C2; harmonic steps, the
+  classic cam-noise source, and buys the lowest peak velocity), and the peak
+  acceleration factors 2π / π²/2 / **8π/(2+π) = 4.8881** are asserted because ~22% under
+  the cycloidal is the entire reason the compromise exists — the constant DERIVED by
+  integrating the five-piece acceleration profile twice and requiring h(1) = 1, not
+  transcribed. A rise **clamps outside its own span**, which is what lets `Segments`
+  chain laws without knowing anything about them, and continuity across a joint stays
+  the segments' business: smoothing it in the composer would hide the property the
+  catalogue exists to let a designer choose.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;
@@ -1953,6 +1993,29 @@ for `in`-parameters being illegal in expression trees.
     carries (both matrices share it), its rotation slerps from identity
     (`Quaterniond.FromRotationMatrix`, Shepperd), and the origin travels the straight
     chord — M(s) = T(lerp(p_a, p_b, s))·R_s·T(−p_a)·a, exact at both ends.
+  - **The purity is what made batching an export sound, not merely convenient.**
+    `OffscreenRenderer.RenderSequence` holds ONE EGL context, one set of linked
+    programs and one set of uploaded per-part buffers for a whole clip; only the
+    per-instance matrices and the camera change between frames. That is legal for
+    exactly the reason above — an animation moves poses, never geometry, so every
+    frame draws the same parts and the upload cache keys on `Part` reference — and it
+    is the offscreen restatement of what lets the window animate through
+    `SetInstancePoses`. Measured on a 24-frame 480×360 export of a four-occurrence
+    exploding assembly (win-x64): **1069 ms → 165 ms, 6.5×**, the saving being the
+    context *plus* the per-part `RenderMesh.CreateFlat`, occlusion lookup and
+    feature-edge/wireframe extraction that used to repeat per frame. The claim is
+    pinned by an oracle rather than a stopwatch: the batched pixels are asserted
+    **byte-identical** to one `Render` call per frame, because a speed claim about a
+    render path is worth nothing without the picture beside it.
+  - **"The model at t" has exactly one seam.** `EngrCad.PoseAt(scene, animation, t)`
+    is it — used by the still overload `RenderToImage(scene, animation, t, …)`, by the
+    MCP `screenshot` tool's `t` parameter, and (as `ViewportFrame.PoseByPath`, its
+    browser-side matching half) by the web viewport's transport. The alternative,
+    each consumer calling `At(t)` and posing for itself, is how a still and a scrub
+    come to disagree about a frame nobody can tell apart from memory. Camera
+    precedence is the clip's: the animation's own track, then an explicit camera, then
+    the framing over first ∪ last bounds — never per-t framing, which would make a
+    series of stills jump.
   - **Camera tracks reuse the view cube's primitives** (`ViewCubeMath.Ease`,
     `ShortestYawTarget` — naive yaw lerp sends the camera the long way round) rather
     than re-deriving easing; the turntable loops seamlessly under LINEAR easing with

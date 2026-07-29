@@ -192,6 +192,45 @@ below the plane that keeps the fragment discard from eating the lines, the same
 section/visibility/load change, never per frame, and drawn signed-families-first so the
 gold d = 0 cross-section wins overdraw.
 
+## Poses: exploded views, animation playback, and the measure tool
+
+Three affordances, one mechanism. `Explode` (0..1), `Animation` + `AnimationTime`, and
+the SceneView's transport row all end at the same place: **new matrices over buffers
+that are already on the GPU**. That works because of the one rule the exploded view and
+the animation both keep — the instance COUNT and ORDER never depend on the factor or on
+t — so this is the browser's `SetInstancePoses`, and picking follows for free because
+the pick instances take the same matrices.
+
+The matching rule is `ViewportFrame.PoseByPath`, a **pure function** and the whole of
+the content: poses are matched by occurrence PATH, not by index, so a whole-scene pose
+track carrying instances this tab does not draw is ignored and an instance the track
+says nothing about keeps its DOCUMENT pose. Index matching gets both wrong the moment a
+tab shows a subset, and the symptom — a part wearing its neighbour's transform — looks
+like a modelling error rather than a viewer bug. It is asserted as values
+(`PoseFrameTests`), including that the explode SLIDER and an `ExplodeTrack` produce
+identical matrices at factor 1, which is what stops the transport and the slider being
+two different exploded views.
+
+Playback itself is not implemented here at all: `AnimationPlayback` from
+`EngrCAD.Viewer.Core` is the state machine (play/pause/loop/seek, `Advance` wrapping the
+overshoot so speed is independent of the tick quantum), and this project supplies a
+timer and three widgets. The timer advances by REAL elapsed time rather than by a fixed
+step, so a throttled background tab resumes at the right position instead of running
+slow. An animation with a camera track drives the camera too, through the sample's own
+`CameraState`.
+
+The **measure tool** is the pick raycast plus two fields: two clicks in measure mode
+make a `LinearDimension` between the picked world points, resolved and drawn through the
+shared `AnnotationGeometry`. It shows **whatever the Annot toggle says**, because it is
+the answer to a question the user just asked rather than documentation attached to a
+part — the desktop's rule, restated because the two front ends decide it separately.
+
+Debug modifiers reach this client now too: `ResolveInstances` goes through
+`DebugFilter.Shown`, so `Part.Hidden` never renders (and cannot influence framing), an
+active `Part.Isolated` shows only isolated parts, and `Ghost` renders translucent via
+`Part.EffectiveDisplayMode` as it already did. With no flags set the filter is the
+identity, which is why adding it moved no pixels.
+
 ## The view cube, and annotations
 
 Both rungs are thin: their pure halves live in `EngrCAD.Viewer.Core` and this project
@@ -496,8 +535,9 @@ camera, feature edges, per-part display modes, the global view style, the tab st
 model tree with subtree visibility, client-side picking, two-way selection sync, the
 hover highlight, **section planes with picking parity and SDF isolines on the cut, the
 view cube, 3D annotations, the toolbar, the properties panel and the BOM button** are in
-place. Still to build: construction-tree rows and their rollback previews, the measure
-tool, and exploded views. The parity ladder is in `todo.md`.
+place, and so are **the measure tool, exploded views, animation playback, the
+multi-plane section surface and debug-modifier parity**. Still to build:
+construction-tree rows and their rollback previews. The parity ladder is in `todo.md`.
 
 The `?report` self-check covers the new rungs as pixel relationships (cube and
 annotations start OFF under `?report`, like the furniture, because their near-white
@@ -516,12 +556,12 @@ Notes for whoever takes the next rung:
 - There is no ambient-occlusion bake in the browser. `uAmbientOcclusion` is 0, which
   makes the factor exactly 1.0 and *is* the AO-off shading rather than an approximation
   of it — the same property that lets the desktop stream bakes in behind a live scene.
-- The section UI is single-plane (the desktop toolbar's scope). Quarter/octant cuts are
-  already supported one layer down — `ViewportFrame.Build` takes the plane list and
-  `SectionCombine`, clamped to `ViewerShaders.MaxSectionPlanes` — so a multi-plane UI
-  is a component change, not a frame change. Multi-plane isolines would also want
-  `SectionClip.Siblings` per plane (the single-plane case has no siblings, so contour
-  draws currently opt out of the clip entirely).
+- `EngrCadViewport.SectionPlanes` + `SectionCombine` now carry quarter and octant cuts
+  through to the shaders AND to picking (`ScenePick` takes the same combine), clamped to
+  `ViewerShaders.MaxSectionPlanes`; the *toolbar* still drives the one-plane
+  axis/offset spelling, which is the desktop's scope too. Multi-plane isolines still
+  want `SectionClip.Siblings` per plane (the single-plane case has no siblings, so
+  contour draws opt out of the clip entirely).
 - Frame-constant uniforms ride on `FrameDescription.Shared` so they travel once instead
   of once per instance. For a scene of any size that is most of the interop payload, and
   it is the first place to look if a large assembly feels heavy during a drag.

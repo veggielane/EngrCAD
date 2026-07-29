@@ -52,10 +52,55 @@ public sealed class MechanismDriver
     public override string ToString() => Constraint.Name;
 }
 
+/// <summary>One driver pinned at one value — the unit a multi-driver solve takes.</summary>
+/// <param name="Driver">Which joint variable is pinned.</param>
+/// <param name="Value">Its target, from the joint's construction zero.</param>
+public readonly record struct DriverTarget(MechanismDriver Driver, double Value)
+{
+    /// <summary>Sugar so a call site can write <c>(driver, 1.2)</c>.</summary>
+    public static implicit operator DriverTarget((MechanismDriver Driver, double Value) pair) =>
+        new(pair.Driver, pair.Value);
+}
+
+/// <summary>One driver's range for a multi-driver sweep. Every driver runs its own
+/// From→To over the SAME normalized parameter, so a sweep traces a straight line
+/// through driver space — a coordinated motion, not a grid.</summary>
+public readonly record struct DriverRange(MechanismDriver Driver, double From, double To)
+{
+    /// <summary>Sugar so a call site can write <c>(driver, 0, Math.Tau)</c>.</summary>
+    public static implicit operator DriverRange((MechanismDriver Driver, double From, double To) triple) =>
+        new(triple.Driver, triple.From, triple.To);
+
+    /// <summary>This driver's target at normalized sweep position <paramref name="s"/> ∈ [0, 1].</summary>
+    public DriverTarget At(double s) => new(Driver, From + (To - From) * s);
+}
+
+/// <summary>One driver's motion for a rates query: where it is, how fast it is moving,
+/// and how fast that is changing.</summary>
+public readonly record struct DriverMotion(
+    MechanismDriver Driver, double Value, double Rate = 1, double Acceleration = 0)
+{
+    /// <summary>Sugar for the common (driver, value, rate) spelling.</summary>
+    public static implicit operator DriverMotion((MechanismDriver Driver, double Value, double Rate) triple) =>
+        new(triple.Driver, triple.Value, triple.Rate);
+}
+
 /// <summary>One sampled pose of a driven mechanism: the driver value and the flattened
 /// part instances at that pose — pure poses, no geometry, which is what lets a viewer
 /// animate a study with matrices only.</summary>
-public sealed record MotionFrame(double Value, IReadOnlyList<PartInstance> Instances);
+public sealed record MotionFrame(double Value, IReadOnlyList<PartInstance> Instances)
+{
+    private readonly IReadOnlyList<double>? _values;
+
+    /// <summary>Every driver's value at this frame, in the sweep's driver order. A
+    /// single-driver sweep reports <c>[Value]</c>, so a consumer written against
+    /// <see cref="Value"/> keeps working and one written against this is general.</summary>
+    public IReadOnlyList<double> Values
+    {
+        get => _values ?? [Value];
+        init => _values = value;
+    }
+}
 
 /// <summary>
 /// The result of sweeping a driver across a range: poses per sampled frame, and an
@@ -67,11 +112,11 @@ public sealed record MotionFrame(double Value, IReadOnlyList<PartInstance> Insta
 public sealed partial class MotionStudy
 {
     internal MotionStudy(
-        Mechanism mechanism, MechanismDriver driver, IReadOnlyList<MotionFrame> frames,
+        Mechanism mechanism, IReadOnlyList<MechanismDriver> drivers, IReadOnlyList<MotionFrame> frames,
         bool completed, double? failedAt, bool singular, IReadOnlyList<string> diagnostics)
     {
         Mechanism = mechanism;
-        Driver = driver;
+        Drivers = drivers;
         Frames = frames;
         Completed = completed;
         FailedAt = failedAt;
@@ -82,8 +127,13 @@ public sealed partial class MotionStudy
     /// <summary>The mechanism the study swept.</summary>
     public Mechanism Mechanism { get; }
 
-    /// <summary>The driver that was swept.</summary>
-    public MechanismDriver Driver { get; }
+    /// <summary>Every driver the sweep moved, in the order their values appear in
+    /// <see cref="MotionFrame.Values"/>.</summary>
+    public IReadOnlyList<MechanismDriver> Drivers { get; }
+
+    /// <summary>The first driver — the whole story for a one-driver sweep, which is
+    /// what <see cref="MotionFrame.Value"/> and <see cref="FailedAt"/> report against.</summary>
+    public MechanismDriver Driver => Drivers[0];
 
     /// <summary>The sampled frames, in sweep order. A failed sweep keeps every frame
     /// up to the failure.</summary>
@@ -359,23 +409,74 @@ public sealed class Mechanism
     /// repeated calls must step below a half turn per call, or the angle encoding may
     /// pick the nearer branch — <see cref="Sweep"/> handles that for you.
     /// </summary>
-    public MateSolveResult SolveAt(MechanismDriver driver, double value, MateSolverSettings? settings = null)
+    public MateSolveResult SolveAt(MechanismDriver driver, double value, MateSolverSettings? settings = null) =>
+        SolveAt([new DriverTarget(driver, value)], settings);
+
+    /// <summary><see cref="SolveAt(MechanismDriver, double, MateSolverSettings?)"/>
+    /// without the exception.</summary>
+    public MateSolveResult TrySolveAt(MechanismDriver driver, double value, MateSolverSettings? settings = null) =>
+        TrySolveAt([new DriverTarget(driver, value)], settings);
+
+    /// <summary>
+    /// Solves with SEVERAL drivers pinned at once — a 2-DOF mechanism (a cylindrical
+    /// joint driven in both spin and slide, a two-actuator arm) needs a target per
+    /// actuated variable, and one driver would leave the pose a family rather than an
+    /// answer. Each driver contributes its own constraint rows exactly as the single
+    /// driver does, so this is the general form and the one-driver overload is sugar
+    /// over it, not a second implementation. Throws on failure (frames unchanged).
+    /// </summary>
+    public MateSolveResult SolveAt(IReadOnlyList<DriverTarget> targets, MateSolverSettings? settings = null)
     {
-        var result = TrySolveAt(driver, value, settings);
+        var result = TrySolveAt(targets, settings);
         if (!result.Converged)
             throw new MateSolveException(result);
         return result;
     }
 
-    /// <summary><see cref="SolveAt"/> without the exception.</summary>
-    public MateSolveResult TrySolveAt(MechanismDriver driver, double value, MateSolverSettings? settings = null)
+    /// <summary><see cref="SolveAt(IReadOnlyList{DriverTarget}, MateSolverSettings?)"/>
+    /// without the exception.</summary>
+    public MateSolveResult TrySolveAt(
+        IReadOnlyList<DriverTarget> targets, MateSolverSettings? settings = null)
     {
-        ArgumentNullException.ThrowIfNull(driver);
-        driver.Constraint.Target = value;
-        var extras = new List<AuxiliaryConstraint>(_couplings.Count + 1);
-        extras.AddRange(_couplings);
-        extras.Add(driver.Constraint);
+        var extras = DriverExtras(targets, out _);
         return Solved(() => Mates.TrySolve(settings ?? new MateSolverSettings(), extras));
+    }
+
+    /// <summary>
+    /// Validates a driver set and builds the solver's extra-constraint list: the
+    /// couplings, then one row group per driver with its target written in.
+    /// <para>The one thing worth refusing here is the SAME joint variable driven twice:
+    /// two rows demanding different values of one coordinate make the system
+    /// inconsistent, and LM would report a residual rather than the modelling mistake it
+    /// is. Two drivers on the same JOINT are fine when they drive different variables (a
+    /// cylindrical joint's spin and slide — exactly the 2-DOF case this exists for).</para>
+    /// </summary>
+    private List<AuxiliaryConstraint> DriverExtras(
+        IReadOnlyList<DriverTarget> targets, out List<MechanismDriver> drivers)
+    {
+        ArgumentNullException.ThrowIfNull(targets);
+        if (targets.Count == 0)
+            throw new ArgumentException("A driven solve needs at least one driver.", nameof(targets));
+
+        drivers = new List<MechanismDriver>(targets.Count);
+        var extras = new List<AuxiliaryConstraint>(_couplings.Count + targets.Count);
+        extras.AddRange(_couplings);
+        foreach (var (driver, value) in targets)
+        {
+            ArgumentNullException.ThrowIfNull(driver);
+            foreach (var already in drivers)
+            {
+                if (ReferenceEquals(already.Joint, driver.Joint) && already.DrivesAngle == driver.DrivesAngle)
+                    throw new ArgumentException(
+                        $"Joint '{driver.Joint.Name}' is driven twice in the same solve " +
+                        $"({(driver.DrivesAngle ? "angle" : "slide")}). One coordinate cannot hold two " +
+                        "targets; drive it once, or drive the joint's other variable.", nameof(targets));
+            }
+            drivers.Add(driver);
+            driver.Constraint.Target = value;
+            extras.Add(driver.Constraint);
+        }
+        return extras;
     }
 
     /// <summary>
@@ -390,22 +491,44 @@ public sealed class Mechanism
     /// </summary>
     public MechanismRates RatesAt(
         MechanismDriver driver, double value, double rate = 1, double acceleration = 0,
-        MateSolverSettings? settings = null)
+        MateSolverSettings? settings = null) =>
+        RatesAt([new DriverMotion(driver, value, rate, acceleration)], settings);
+
+    /// <summary>
+    /// <see cref="RatesAt(MechanismDriver, double, double, double, MateSolverSettings?)"/>
+    /// with several drivers moving at once — the rates counterpart of the multi-driver
+    /// solve, and the only honest way to ask a 2-DOF mechanism how fast anything is
+    /// going (with one actuator pinned and the other free the answer is a family, which
+    /// the solver refuses to call an answer).
+    /// </summary>
+    public MechanismRates RatesAt(
+        IReadOnlyList<DriverMotion> motions, MateSolverSettings? settings = null)
     {
-        SolveAt(driver, value, settings);
-        driver.Constraint.TargetRate = rate;
-        driver.Constraint.TargetAcceleration = acceleration;
+        ArgumentNullException.ThrowIfNull(motions);
+        var targets = new DriverTarget[motions.Count];
+        for (int i = 0; i < motions.Count; i++)
+            targets[i] = new DriverTarget(motions[i].Driver, motions[i].Value);
+        SolveAt(targets, settings);
+
+        var extras = DriverExtras(targets, out _);
+        foreach (var motion in motions)
+        {
+            motion.Driver.Constraint.TargetRate = motion.Rate;
+            motion.Driver.Constraint.TargetAcceleration = motion.Acceleration;
+        }
         try
         {
-            var extras = new List<AuxiliaryConstraint>(_couplings.Count + 1);
-            extras.AddRange(_couplings);
-            extras.Add(driver.Constraint);
             return Mates.Rates(settings ?? new MateSolverSettings(), extras);
         }
         finally
         {
-            driver.Constraint.TargetRate = 0;
-            driver.Constraint.TargetAcceleration = 0;
+            // Rates are a per-query input, not driver state: leaving them set would make
+            // the NEXT plain solve carry a velocity nobody asked for.
+            foreach (var motion in motions)
+            {
+                motion.Driver.Constraint.TargetRate = 0;
+                motion.Driver.Constraint.TargetAcceleration = 0;
+            }
         }
     }
 
@@ -418,57 +541,83 @@ public sealed class Mechanism
     /// last good pose, and a rank loss is called out as a singular configuration.
     /// </summary>
     public MotionStudy Sweep(
-        MechanismDriver driver, double from, double to, int frames = 61, MateSolverSettings? settings = null)
+        MechanismDriver driver, double from, double to, int frames = 61,
+        MateSolverSettings? settings = null) =>
+        Sweep([new DriverRange(driver, from, to)], frames, settings);
+
+    /// <summary>
+    /// Sweeps SEVERAL drivers together: every driver runs its own From→To over the same
+    /// normalized position s ∈ [0, 1], so the study traces a straight line through
+    /// driver space — a coordinated motion (both actuators of a 2-DOF arm moving to a
+    /// pose), not a grid of every combination. That choice matters for continuation:
+    /// one parameter means one step to halve, so the retry logic, the dead-centre probe
+    /// and the "leave the assembly at the last good pose" contract are the single-driver
+    /// ones unchanged rather than a second scheme.
+    /// <para>Each frame records every driver's value in <see cref="MotionFrame.Values"/>,
+    /// with <see cref="MotionFrame.Value"/> (and <see cref="MotionStudy.FailedAt"/>)
+    /// staying the FIRST driver's, so existing consumers read the same numbers.</para>
+    /// </summary>
+    public MotionStudy Sweep(
+        IReadOnlyList<DriverRange> ranges, int frames = 61, MateSolverSettings? settings = null)
     {
-        ArgumentNullException.ThrowIfNull(driver);
+        ArgumentNullException.ThrowIfNull(ranges);
+        if (ranges.Count == 0)
+            throw new ArgumentException("A sweep needs at least one driver range.", nameof(ranges));
         if (frames < 2)
             throw new ArgumentOutOfRangeException(nameof(frames), "A sweep needs at least two frames.");
-        if (from == to)   // exact-zero semantic test: an empty range is a request error
-            throw new ArgumentException("A sweep needs a non-empty driver range.", nameof(to));
+        // Exact-zero semantic test: a range that moves nothing at all is a request error.
+        if (ranges.All(r => r.From == r.To))
+            throw new ArgumentException("A sweep needs a non-empty driver range.", nameof(ranges));
+
+        // Validate the driver set once, up front — a duplicate coordinate must fail
+        // before the first frame is recorded, not halfway through a study.
+        DriverExtras([.. ranges.Select(r => r.At(0))], out var drivers);
 
         var recorded = new List<MotionFrame>(frames);
         var diagnostics = new List<string>();
-        double span = to - from;
-        double nominalStep = span / (frames - 1);
-        double minStep = Math.Abs(span) / 4096;
+        double nominalStep = 1.0 / (frames - 1);
+        const double minStep = 1.0 / 4096;
+        // FailedAt and MotionFrame.Value stay the FIRST driver's coordinate, so a
+        // single-driver sweep reports exactly what it always did.
+        double Report(double s) => ranges[0].From + (ranges[0].To - ranges[0].From) * s;
 
-        var first = TrySolveAt(driver, from, settings);
+        var first = TrySolveAt([.. ranges.Select(r => r.At(0))], settings);
         if (!first.Converged)
         {
-            diagnostics.Add($"the sweep could not start: driving to {from:g6} does not solve");
+            diagnostics.Add($"the sweep could not start: driving to {Report(0):g6} does not solve");
             diagnostics.AddRange(first.Diagnostics);
-            return new MotionStudy(this, driver, recorded, completed: false, failedAt: null,
+            return new MotionStudy(this, drivers, recorded, completed: false, failedAt: null,
                 singular: false, diagnostics);
         }
-        recorded.Add(Snapshot(from));
+        recorded.Add(Snapshot(ranges, 0));
         int baselineRank = first.ConstrainedDegreesOfFreedom;
         // The dead-centre detector's yardstick: the driven system's WIDE-threshold
         // rank at a healthy pose. Compared against the same probe at a stall, so a
         // direction that is merely weak throughout the sweep never trips it.
-        var looseBaseline = RankProbe(driver, from, settings);
+        var looseBaseline = RankProbe(ranges, 0, settings);
 
-        double current = from;
-        double stepLimit = Math.Abs(nominalStep);
+        double current = 0;
+        double stepLimit = nominalStep;
         for (int i = 1; i < frames; i++)
         {
-            double target = from + span * i / (frames - 1);
+            double target = i / (double)(frames - 1);
             while (Math.Abs(target - current) > 0)
             {
                 double remaining = target - current;
                 double attempt = Math.Abs(remaining) <= stepLimit
                     ? target
                     : current + Math.Sign(remaining) * stepLimit;
-                var result = TrySolveAt(driver, attempt, settings);
+                var result = TrySolveAt([.. ranges.Select(r => r.At(attempt))], settings);
                 if (result.Converged)
                 {
                     if (result.ConstrainedDegreesOfFreedom < baselineRank)
                     {
-                        Singularity(driver, attempt, result, baselineRank, first, diagnostics);
-                        return new MotionStudy(this, driver, recorded, completed: false,
-                            failedAt: attempt, singular: true, diagnostics);
+                        Singularity(Report(attempt), result, baselineRank, first, diagnostics);
+                        return new MotionStudy(this, drivers, recorded, completed: false,
+                            failedAt: Report(attempt), singular: true, diagnostics);
                     }
                     current = attempt;
-                    stepLimit = Math.Min(stepLimit * 2, Math.Abs(nominalStep));
+                    stepLimit = Math.Min(stepLimit * 2, nominalStep);
                 }
                 else
                 {
@@ -476,26 +625,33 @@ public sealed class Mechanism
                     if (stepLimit < minStep)
                     {
                         bool singular = Failure(
-                            driver, current, target, result, looseBaseline, settings, diagnostics);
-                        return new MotionStudy(this, driver, recorded, completed: false,
-                            failedAt: current, singular, diagnostics);
+                            ranges, drivers, current, Report(current), Report(target), result,
+                            looseBaseline, settings, diagnostics);
+                        return new MotionStudy(this, drivers, recorded, completed: false,
+                            failedAt: Report(current), singular, diagnostics);
                     }
                 }
             }
-            recorded.Add(Snapshot(target));
+            recorded.Add(Snapshot(ranges, target));
         }
-        return new MotionStudy(this, driver, recorded, completed: true, failedAt: null,
+        return new MotionStudy(this, drivers, recorded, completed: true, failedAt: null,
             singular: false, diagnostics);
     }
 
-    private MotionFrame Snapshot(double value) => new(value, Assembly.Flatten());
+    private MotionFrame Snapshot(IReadOnlyList<DriverRange> ranges, double s)
+    {
+        var values = new double[ranges.Count];
+        for (int i = 0; i < ranges.Count; i++)
+            values[i] = ranges[i].At(s).Value;
+        return new MotionFrame(values[0], Assembly.Flatten()) { Values = values };
+    }
 
     /// <summary>A converged step whose Jacobian rank DROPPED below the sweep's
     /// baseline: the mechanism is at (or crossing) a singular configuration. Name the
     /// joints whose bodies lost constrained directions and refuse to continue —
     /// beyond a toggle point the branch is a modeling decision, not a solver's guess.</summary>
     private void Singularity(
-        MechanismDriver driver, double at, MateSolveResult result, int baselineRank,
+        double at, MateSolveResult result, int baselineRank,
         MateSolveResult baseline, List<string> diagnostics)
     {
         diagnostics.Add(
@@ -520,12 +676,10 @@ public sealed class Mechanism
 
     /// <summary>The wide-threshold rank of the DRIVEN system at the current
     /// (converged) pose — zero iterations, nothing moves, nothing commits.</summary>
-    private MateSolveResult RankProbe(MechanismDriver driver, double at, MateSolverSettings? settings)
+    private MateSolveResult RankProbe(
+        IReadOnlyList<DriverRange> ranges, double s, MateSolverSettings? settings)
     {
-        driver.Constraint.Target = at;
-        var extras = new List<AuxiliaryConstraint>(_couplings.Count + 1);
-        extras.AddRange(_couplings);
-        extras.Add(driver.Constraint);
+        var extras = DriverExtras([.. ranges.Select(r => r.At(s))], out _);
         var probe = new MateSolverSettings
         {
             MaxIterations = 0,
@@ -540,7 +694,8 @@ public sealed class Mechanism
     /// target genuinely outside the linkage's reach. Returns whether the stop was
     /// singular.</summary>
     private bool Failure(
-        MechanismDriver driver, double current, double target, MateSolveResult result,
+        IReadOnlyList<DriverRange> ranges, IReadOnlyList<MechanismDriver> drivers,
+        double s, double current, double target, MateSolveResult result,
         MateSolveResult looseBaseline, MateSolverSettings? settings, List<string> diagnostics)
     {
         // A joint stop is its own story: the sweep walked up to the stop (step
@@ -556,16 +711,17 @@ public sealed class Mechanism
         }
 
         bool stationary = result.Diagnostics.Any(d => d.Contains("stationary", StringComparison.Ordinal));
-        var atStall = RankProbe(driver, current, settings);
+        var atStall = RankProbe(ranges, s, settings);
         bool nearSingular =
             atStall.ConstrainedDegreesOfFreedom < looseBaseline.ConstrainedDegreesOfFreedom;
         bool singular = stationary || nearSingular;
+        string driven = string.Join("', '", drivers.Select(d => d.Joint.Name).Distinct());
 
         diagnostics.Add(
             $"the sweep stopped at driver value {current:g6}: stepping toward {target:g6} stopped " +
             "converging even at 1/4096 of the range" +
             (singular
-                ? $" — a dead centre for joint '{driver.Joint.Name}': the driven variable is " +
+                ? $" — a dead centre for joint '{driven}': the driven variable is " +
                   "first-order stationary along the mechanism's remaining motion, so the linkage can " +
                   "toggle or lock here. Refusing to guess a branch; drive a different joint through " +
                   "this region, or approach from the other end."

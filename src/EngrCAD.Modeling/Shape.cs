@@ -703,6 +703,70 @@ public abstract class Shape
     public Shape ChamferEdges(double setback, Func<BrepSolid, IEnumerable<BrepEdge>> edges) =>
         ChamferEdges(setback, setback, edges);
 
+    // ---- the same operations, addressed through the typed selection vocabulary ----
+    //
+    // A design OUTSIDE a feature history had to hand-write a Func over the lowered
+    // solid, while a Feature declared a FaceSetRef and got cardinality, a readable
+    // Subject in every failure, and a serializable descriptor. That was a difference in
+    // spelling, not in kind: these overloads bridge them through AsSelector, so
+    //   Shape.Box(...).Fillet(2, FaceSetRef.PlanarWithNormal(Vector3d.UnitZ))
+    // is the same call the feature makes. The input name passed down is the parameter's
+    // own, so a failed query reads "faces: expected at least one planar face ...".
+
+    /// <inheritdoc cref="Chamfer(double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape Chamfer(double setback, FaceSetRef faces) =>
+        Chamfer(setback, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="Chamfer(double, double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape Chamfer(double topSetback, double sideSetback, FaceSetRef faces) =>
+        Chamfer(topSetback, sideSetback, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="Fillet(double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape Fillet(double radius, FaceSetRef faces) =>
+        Fillet(radius, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="ChamferAtAngle(double, double, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape ChamferAtAngle(double setback, double angleDegrees, FaceSetRef faces) =>
+        ChamferAtAngle(setback, angleDegrees, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="Fillet(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape Fillet(Func<Vector3d, double> radiusAt, FaceSetRef faces) =>
+        Fillet(radiusAt, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="Chamfer(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepFace}})"/>
+    public Shape Chamfer(Func<Vector3d, double> setbackAt, FaceSetRef faces) =>
+        Chamfer(setbackAt, Selector(faces, nameof(faces)));
+
+    /// <inheritdoc cref="FilletEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
+    public Shape FilletEdges(double radius, EdgeSetRef edges) =>
+        FilletEdges(radius, Selector(edges, nameof(edges)));
+
+    /// <inheritdoc cref="ChamferEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
+    public Shape ChamferEdges(double setback, EdgeSetRef edges) =>
+        ChamferEdges(setback, Selector(edges, nameof(edges)));
+
+    /// <inheritdoc cref="ChamferEdges(double, double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
+    public Shape ChamferEdges(double topSetback, double sideSetback, EdgeSetRef edges) =>
+        ChamferEdges(topSetback, sideSetback, Selector(edges, nameof(edges)));
+
+    // Shell deliberately gets NO FaceSetRef overload. Its existing openings parameter is
+    // a NULLABLE Func (no openings = a sealed void), so a second reference-typed overload
+    // would make the existing, correct call `Shell(t, null)` ambiguous at every site — a
+    // source break to save one `.AsSelector(...)`. Write
+    // `Shell(t, openings.AsSelector("openings"))` where the typed vocabulary is wanted.
+
+    private static Func<BrepSolid, IEnumerable<BrepFace>> Selector(FaceSetRef faces, string name)
+    {
+        ArgumentNullException.ThrowIfNull(faces);
+        return faces.AsSelector(name);
+    }
+
+    private static Func<BrepSolid, IEnumerable<BrepEdge>> Selector(EdgeSetRef edges, string name)
+    {
+        ArgumentNullException.ThrowIfNull(edges);
+        return edges.AsSelector(name);
+    }
+
     /// <inheritdoc cref="ChamferEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>
     public Shape ChamferEdges(
         double topSetback, double sideSetback, Func<BrepSolid, IEnumerable<BrepEdge>> edges)

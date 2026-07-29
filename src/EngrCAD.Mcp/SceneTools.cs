@@ -222,6 +222,10 @@ public sealed class SceneTools(SceneSession session)
     /// <param name="width">Image width in pixels (default 1280).</param>
     /// <param name="height">Image height in pixels (default 800).</param>
     /// <param name="ambientOcclusion">Baked ambient occlusion (default on).</param>
+    /// <param name="t">Timeline position in [0, 1] of the program's animation — "the
+    /// mechanism at t = 0.3". Requires the model to declare one
+    /// (<c>EngrCad.Configure().WithAnimation(...)</c>); the frame comes from the same
+    /// pure <c>Animation.At(t)</c> the window scrubs and every export samples.</param>
     public CallToolResult Screenshot(
         [Description("Standard view: iso (default), front, back, left, right, top, bottom.")]
         string? view = null,
@@ -254,7 +258,10 @@ public sealed class SceneTools(SceneSession session)
         [Description("Image width in pixels, 16-4096 (default 1280).")] int width = 1280,
         [Description("Image height in pixels, 16-4096 (default 800).")] int height = 800,
         [Description("Baked ambient occlusion — depth shading in pockets and bores (default true).")]
-        bool ambientOcclusion = true)
+        bool ambientOcclusion = true,
+        [Description("Animation timeline position in [0, 1] — renders the model posed at that instant. "
+                   + "Only for models that declare an animation (WithAnimation).")]
+        double? t = null)
     {
         // Arguments are validated before the GL check so a typo is reported as a typo
         // even on a machine with no GPU (and so the validation is testable there).
@@ -280,6 +287,14 @@ public sealed class SceneTools(SceneSession session)
             return Error(planesError);
         if (planes is not null && offset is not null)
             return Error("Pass either sectionPlanes or sectionAxis/sectionOffset, not both.");
+        if (t is { } time && (!double.IsFinite(time) || time is < 0 or > 1))
+            return Error("t must be a timeline fraction between 0 and 1.");
+        var animation = t is null ? null : Session.Animation;
+        if (t is not null && animation is null)
+            return Error(
+                "This model declares no animation, so there is no timeline to sample. "
+                + "A program adds one with EngrCad.Configure().WithAnimation(scene => ...); "
+                + "omit t to render the model as built.");
         if (!TryResolveInstances(tab, part, out var instances, out string? scopeError))
             return Error(scopeError);
         // Debug modifiers: Hidden parts (and non-isolated parts under an active
@@ -287,6 +302,19 @@ public sealed class SceneTools(SceneSession session)
         instances = DebugFilter.Shown(instances);
         if (instances.Count == 0)
             return Error("Nothing to render: the scene (or the requested tab/part) has no parts.");
+
+        // The animation poses the WHOLE document (a pose track produces the scene's
+        // instance list), so a tab/part scope is applied afterwards by part reference —
+        // the same identity Scene.AllParts dedupes by.
+        if (animation is not null)
+        {
+            var scoped = instances.Select(i => i.Part).ToHashSet();
+            instances = [.. EngrCad.PoseAt(Session.Scene, animation, t!.Value)
+                .Where(i => scoped.Contains(i.Part))];
+            if (instances.Count == 0)
+                return Error($"Nothing to render at t = {t:g6}: the animation posed no instance of "
+                           + "the requested tab/part.");
+        }
 
         if (!EngrCad.CanRenderToImage)
             return Error(
@@ -298,9 +326,13 @@ public sealed class SceneTools(SceneSession session)
         try
         {
             PrepareGeometry(tab, part, instances);
+            // An animation's own camera track wins unless the caller asked for a
+            // specific pose — the same precedence the window and the exports use.
             camera = explicitCamera
                 ? ExplicitCamera(cameraYaw, cameraPitch, cameraDistance, cameraTarget, cameraEye, instances)
-                : NamedViews.For(view ?? "iso", instances, Session.Quality);
+                : view is null && animation?.At(t!.Value).Camera is { } tracked
+                    ? tracked
+                    : NamedViews.For(view ?? "iso", instances, Session.Quality);
         }
         catch (ArgumentException e)
         {
@@ -1100,6 +1132,124 @@ public sealed class SceneTools(SceneSession session)
     /// structured content (for clients that consume the declared output schema) AND as
     /// the pretty-printed text block (for clients that predate structured content).
     /// One JsonObject feeds both, so they cannot disagree.</summary>
+    // ---- document persistence ----
+
+    /// <summary>
+    /// Writes the session's whole document — tabs, parts with their feature histories,
+    /// assemblies and occurrences, mates, annotations and results — as one versioned
+    /// JSON envelope (<see cref="Document.Save"/>).
+    /// <para>This is how a session's edits <b>survive it</b>. <c>set_param</c> and the
+    /// suppression tools change the running model only, by design; saving hands that
+    /// tuning back to the user as one file. A document is its CONSTRUCTION HISTORY, so a
+    /// history-backed part reloads parametric; parts with no recipe (a raw mesh, an
+    /// imported STL, an `Sdf`, a `Shape` graph built in code) embed a binary-exact mesh
+    /// snapshot and are NAMED in the result, so nothing discovers later that a parameter
+    /// changes nothing.</para>
+    /// </summary>
+    /// <param name="path">Destination file path (<c>.json</c> by convention).</param>
+    /// <param name="embedGeometry">Embed mesh snapshots for parts with no construction
+    /// recipe (default true). False writes a recipe-only file in which those parts
+    /// become an explicit "no geometry" record naming the reason.</param>
+    public CallToolResult SaveDocument(
+        [Description("Destination file path for the document JSON.")] string path,
+        [Description("Embed mesh snapshots for parts that have no construction recipe (default "
+                   + "true). False writes a recipe-only file, smaller but not reopenable for "
+                   + "those parts.")]
+        bool embedGeometry = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return Error("save_document needs a file path.");
+
+        var scene = Session.Scene;
+        try
+        {
+            var document = new Document(scene);
+            string json = document.Save(new DocumentSaveOptions { EmbedGeometry = embedGeometry });
+            File.WriteAllText(path, json);
+
+            // Which parts would NOT come back parametric: read straight off a load of
+            // what was just written, so the answer is the file's, not a guess about it.
+            var snapshots = new JsonArray();
+            foreach (string name in Document.Load(json, new DocumentLoadOptions { Regenerate = false }).Snapshots)
+                snapshots.Add(name);
+            return Ok(new JsonObject
+            {
+                ["wrote"] = Path.GetFullPath(path),
+                ["generation"] = Session.Generation,
+                ["tabs"] = scene.Tabs.Count,
+                ["parts"] = scene.AllParts.Count(),
+                ["bytes"] = json.Length,
+                ["snapshots"] = snapshots,
+            });
+        }
+        catch (Exception e)
+        {
+            return Error($"Saving the document failed: {e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Reads a document written by <see cref="SaveDocument"/> and makes it the session's
+    /// model. History-backed parts regenerate on load, so the result is parametric again
+    /// and every other tool (including the write tools) works on it.
+    /// <para><c>reload</c> still re-runs the design program's own source and discards
+    /// this — a loaded document is a session-lifetime overlay, not a new truth. Loading
+    /// never throws on a record it cannot rebuild: those come back as warnings.</para>
+    /// </summary>
+    /// <param name="path">The document JSON to read.</param>
+    /// <param name="adopt">Replace the session's scene with the loaded document
+    /// (default true). False reads and reports without changing the model — the dry run
+    /// an assistant wants before committing to a file it did not write.</param>
+    public CallToolResult LoadDocument(
+        [Description("Path of the document JSON to read.")] string path,
+        [Description("Make the loaded document the session's model (default true). False reads "
+                   + "and reports without changing anything.")]
+        bool adopt = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return Error("load_document needs a file path.");
+        if (!File.Exists(path))
+            return Error($"No document at '{Path.GetFullPath(path)}'.");
+
+        DocumentLoadResult loaded;
+        try
+        {
+            loaded = Document.LoadFile(path);
+        }
+        catch (FormatException e)
+        {
+            // A bad envelope or an unknown version is the ONE thing Load throws for:
+            // everything it could partially rebuild is a warning instead.
+            return Error($"'{Path.GetFullPath(path)}' is not a document this build reads: {e.Message}");
+        }
+        catch (Exception e)
+        {
+            return Error($"Reading the document failed: {e.GetType().Name}: {e.Message}");
+        }
+
+        var scene = loaded.Scene;
+        if (adopt)
+            Session.Adopt(scene);
+
+        var warnings = new JsonArray();
+        foreach (string warning in loaded.Warnings)
+            warnings.Add(warning);
+        var snapshots = new JsonArray();
+        foreach (string name in loaded.Snapshots)
+            snapshots.Add(name);
+        return Ok(new JsonObject
+        {
+            ["read"] = Path.GetFullPath(path),
+            ["generation"] = Session.Generation,
+            ["adopted"] = adopt,
+            ["complete"] = loaded.Complete,
+            ["tabs"] = scene.Tabs.Count,
+            ["parts"] = scene.AllParts.Count(),
+            ["warnings"] = warnings,
+            ["snapshots"] = snapshots,
+        });
+    }
+
     private static CallToolResult Ok(JsonObject payload) => new()
     {
         Content = [new TextContentBlock { Text = payload.ToJsonString(Json) }],

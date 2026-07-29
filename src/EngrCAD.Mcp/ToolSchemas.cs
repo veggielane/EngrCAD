@@ -158,6 +158,43 @@ internal static class ToolSchemas
         }
         """);
 
+    /// <summary>save_document: where it went and what will not come back parametric.</summary>
+    internal static readonly JsonElement SaveDocument = Parse("""
+        {
+          "type": "object",
+          "required": ["wrote", "generation", "tabs", "parts", "bytes", "snapshots"],
+          "properties": {
+            "wrote": { "type": "string" },
+            "generation": { "type": "integer" },
+            "tabs": { "type": "integer" },
+            "parts": { "type": "integer" },
+            "bytes": { "type": "integer" },
+            "snapshots": {
+              "type": "array", "items": { "type": "string" },
+              "description": "Parts ('tab/part') stored as a geometry SNAPSHOT rather than a construction history - present and correct, but not parametric."
+            }
+          }
+        }
+        """);
+
+    /// <summary>load_document: what came back, and what did not.</summary>
+    internal static readonly JsonElement LoadDocument = Parse("""
+        {
+          "type": "object",
+          "required": ["read", "generation", "adopted", "complete", "tabs", "parts", "warnings", "snapshots"],
+          "properties": {
+            "read": { "type": "string" },
+            "generation": { "type": "integer" },
+            "adopted": { "type": "boolean", "description": "Whether the loaded document replaced the session's model." },
+            "complete": { "type": "boolean", "description": "Every record in the file was restored (snapshots count as restored)." },
+            "tabs": { "type": "integer" },
+            "parts": { "type": "integer" },
+            "warnings": { "type": "array", "items": { "type": "string" } },
+            "snapshots": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+        """);
+
     /// <summary>reload: the fresh scene's headline counts.</summary>
     internal static readonly JsonElement Reload = Parse("""
         {

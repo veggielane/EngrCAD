@@ -147,8 +147,10 @@ public sealed class DocumentLoadOptions
 /// </summary>
 /// <param name="Document">The rebuilt document.</param>
 /// <param name="Warnings">One message per record that could not be fully restored.</param>
-/// <param name="Snapshots">Paths ("tab/part") of parts loaded from an embedded mesh —
-/// present and correct, but not parametric.</param>
+/// <param name="Snapshots">Names of parts loaded from an embedded mesh — present and
+/// correct, but not parametric. (Bare part names, not "tab/part" paths: names are
+/// unique per TAB, so this is ambiguous for a document whose tabs share a part name —
+/// filed in todo.md rather than changed silently, since the spelling is asserted.)</param>
 public sealed record DocumentLoadResult(
     Document Document, IReadOnlyList<string> Warnings, IReadOnlyList<string> Snapshots)
 {
@@ -561,6 +563,15 @@ internal static class DocumentWriter
             }
             if (occurrence.ExplodeOffset is { } offset)
                 record["explode"] = SaveVector(offset);
+            // Written only when a dogleg was actually designed, so every existing file
+            // stays byte-identical and the fixed point is untouched.
+            if (occurrence.ExplodePath.Count > 0)
+            {
+                var waypoints = new JsonArray();
+                foreach (var waypoint in occurrence.ExplodePath)
+                    waypoints.Add(SaveVector(waypoint));
+                record["explodePath"] = waypoints;
+            }
             occurrences.Add(record);
         }
         return new JsonObject
@@ -923,6 +934,11 @@ internal static class DocumentReader
             }
             if (occurrence is not null && record.TryGetProperty("explode", out var explode))
                 occurrence.ExplodeOffset = LoadVector(explode);
+            if (occurrence is not null && record.TryGetProperty("explodePath", out var path))
+            {
+                foreach (var waypoint in path.EnumerateArray())
+                    occurrence.ExplodePath.Add(LoadVector(waypoint));
+            }
         }
     }
 

@@ -68,14 +68,15 @@ public class McpProtocolTests
         {
             var tools = await client.ListToolsAsync();
             Assert.Equal(
-                ["describe_part", "export", "list_parts", "list_tabs", "reload", "screenshot",
-                 "set_param", "suppress_feature", "unsuppress_feature"],
+                ["describe_part", "export", "list_parts", "list_tabs", "load_document", "reload",
+                 "save_document", "screenshot", "set_param", "suppress_feature", "unsuppress_feature"],
                 tools.Select(t => t.Name).Order());
 
             var screenshot = tools.Single(t => t.Name == "screenshot");
             var properties = screenshot.ProtocolTool.InputSchema.GetProperty("properties");
             foreach (string expected in (string[])["view", "style", "tab", "part", "sectionAxis",
-                                                   "sectionOffset", "width", "height", "ambientOcclusion"])
+                                                   "sectionOffset", "width", "height", "ambientOcclusion",
+                                                   "t"])
             {
                 Assert.True(properties.TryGetProperty(expected, out _), $"missing '{expected}' in the schema");
             }

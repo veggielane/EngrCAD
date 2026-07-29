@@ -118,9 +118,23 @@ public sealed partial class MotionStudy
     /// <see cref="Shape"/>: implicit-native (the part's field lowered once, placed at
     /// every sampled pose, unioned — fidelity is the sweep's own sampling density),
     /// mesh via Surface Nets, B-Rep honestly impossible.
+    /// <para><paramref name="maxTravel"/> makes the sampling <b>adaptive</b>: extra
+    /// poses are rigidly interpolated between recorded frames until no point of the part
+    /// moves further than that between consecutive placements, so the scallop between
+    /// placements is bounded by a number in MODEL UNITS rather than inherited from
+    /// whatever frame count the sweep happened to use. Travel is measured exactly, as
+    /// the largest displacement of the part's own bounding-box corners — no rotation
+    /// angle times an assumed radius — so a body that mostly spins about its centre
+    /// costs few extra poses and one on the end of a long arm costs many, which is the
+    /// right way round. Null keeps the recorded frames verbatim (bit-identical to
+    /// before).</para>
     /// </summary>
-    public Shape SweptVolume(string occurrencePath)
+    public Shape SweptVolume(string occurrencePath, double? maxTravel = null)
     {
+        if (maxTravel is { } bound && (!(bound > 0) || !double.IsFinite(bound)))
+            throw new ArgumentOutOfRangeException(nameof(maxTravel),
+                "The travel bound between swept placements must be a positive length.");
+
         var poses = new List<Matrix4d>(Frames.Count);
         Part? part = null;
         foreach (var frame in Frames)
@@ -149,7 +163,81 @@ public sealed partial class MotionStudy
                 $"Part '{part.Name}' carries geometry of type {part.Geometry.GetType().Name}, which " +
                 "cannot re-enter the Shape graph."),
         };
+        if (maxTravel is { } limit)
+            poses = Refined(poses, part, limit);
         return source.SweptOver(poses);
+    }
+
+    /// <summary>
+    /// Inserts rigidly interpolated poses between recorded ones until no corner of the
+    /// part's local bounding box travels further than <paramref name="maxTravel"/>
+    /// between consecutive placements. The recorded poses are all KEPT and are hit
+    /// exactly — the study's frames stay the truth, as they are for
+    /// <c>MechanismTrack</c>; what is added is the intermediate coverage a union of
+    /// discrete placements otherwise leaves to luck.
+    /// </summary>
+    private static List<Matrix4d> Refined(List<Matrix4d> poses, Part part, double maxTravel)
+    {
+        var box = part.GetMesh().ComputeBounds();
+        if (box.IsEmpty || poses.Count < 2)
+            return poses;
+        var corners = new Vector3d[8];
+        for (int i = 0; i < 8; i++)
+        {
+            corners[i] = new Vector3d(
+                (i & 1) == 0 ? box.Min.X : box.Max.X,
+                (i & 2) == 0 ? box.Min.Y : box.Max.Y,
+                (i & 4) == 0 ? box.Min.Z : box.Max.Z);
+        }
+
+        var refined = new List<Matrix4d> { poses[0] };
+        for (int i = 1; i < poses.Count; i++)
+        {
+            var a = poses[i - 1];
+            var b = poses[i];
+            double travel = 0;
+            foreach (var corner in corners)
+                travel = Math.Max(travel, (b.TransformPoint(corner) - a.TransformPoint(corner)).Length);
+            int steps = (int)Math.Ceiling(travel / maxTravel);
+            for (int k = 1; k < steps; k++)
+                refined.Add(InterpolatePose(a, b, k / (double)steps));
+            refined.Add(b);
+        }
+        return refined;
+    }
+
+    /// <summary>
+    /// Chordal rigid interpolation between two poses of the SAME body. Both matrices
+    /// are frame-chain (rigid) × part transform (arbitrary but constant), so the delta
+    /// b·a⁻¹ is rigid whatever the part transform carries: its rotation slerps from
+    /// identity and the body origin travels the straight chord between the two
+    /// translation columns — exactly <paramref name="a"/> at s = 0 and exactly
+    /// <paramref name="b"/> at s = 1 (up to the quaternion round trip).
+    /// <para>Public and here, in the document model, because two consumers need it and
+    /// they sit on opposite sides of an assembly boundary: the animation layer's
+    /// <c>MechanismTrack</c> (in EngrCAD.Viewer.Core) plays a study back, and
+    /// <see cref="SweptVolume"/> subdivides one. Two copies would be two answers to
+    /// "where was the body halfway between these frames".</para>
+    /// </summary>
+    public static Matrix4d InterpolatePose(in Matrix4d a, in Matrix4d b, double s)
+    {
+        // A body that did not move between the frames (the ground link, fixtures) has
+        // bit-identical matrices — skip the inverse, and the answer is exact.
+        if (a.Equals(b))
+            return a;
+
+        var delta = b * a.Inverse();
+        var rotation = Quaterniond.FromRotationMatrix(delta);
+        var eased = Quaterniond.Slerp(Quaterniond.Identity, rotation, s);
+
+        var pa = new Vector3d(a.M14, a.M24, a.M34);
+        var pb = new Vector3d(b.M14, b.M24, b.M34);
+        var p = pa + (pb - pa) * s;
+
+        return Matrix4d.CreateTranslation(p)
+            * eased.ToMatrix()
+            * Matrix4d.CreateTranslation(-pa)
+            * a;
     }
 
     private InterferenceRange Range((string A, string B) key, int firstFrame, int lastFrame, InterferenceOptions options)

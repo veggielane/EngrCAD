@@ -484,34 +484,64 @@ Mechanisms v1 landed (`Joints.cs`/`Mechanism.cs`/`Couplings.cs`/`HigherPairs.cs`
 a vocabulary over mates with DOF asserted against the solver's rank, drivers +
 continuation sweeps, named dead centres, analytic velocities/accelerations,
 gears/belts/cams, joint limits, interference over the sweep, swept volumes as Shape
-nodes, and Grübler/Kutzbach as a cross-check. Remaining follow-ups:
+nodes, and Grübler/Kutzbach as a cross-check. **Since then**: multiple simultaneous
+drivers (`SolveAt`/`Sweep`/`RatesAt` take lists; the multi form IS the implementation
+and the single-driver overload is sugar over it; a sweep is a straight line through
+driver space so the continuation logic is unchanged; the same coordinate driven twice
+is refused by name), `Coupling.RackAndPinion` (a cam pair with a straight law, so it
+reads the unwrapped angle and a rack driven through three turns keeps advancing), the
+dwell-rise-dwell `CamLaw` catalogue with `Segments`, and adaptive `SweptVolume(path,
+maxTravel)` (rigidly interpolated placements bounded by exact bounding-box-corner
+travel; 97%+ of the analytic disk from a 9-frame full-turn sweep). Remaining
+follow-ups:
 
-- [ ] **Multiple simultaneous drivers** — `SolveAt` takes one driver; a 2-DOF mechanism
-  (a cylindrical joint, a robot with two actuated hinges) wants a set of
-  (driver, value) pairs per step. The residual machinery already supports N driver
-  rows; the missing part is the API and the sweep over a parameter vector.
 - [ ] **Joint/coupling persistence** — `MateSet.SaveMates` covers the mates but a
   reloaded file loses the joint layer (coordinates, limits, couplings, derived
   perpendicular references). Follow the FeatureHistory/mate conventions: a joints
   section referencing joints' ends by the same descriptors mates use.
-- [ ] **Rack-and-pinion coupling** — z of one joint against θ of another
-  (Δz = r·Δθ): the screw row generalized across joints; ten lines in
-  `HigherPairs.cs` once someone needs it.
-- [ ] **Cam refinements** — roller-follower radius compensation (offset the law by the
-  roller radius along the profile normal), offset followers, and the classic
-  dwell-rise-dwell laws (cycloidal, modified trapezoid) as `CamLaw` factories
-  (trivial via `FromFunction`; the value is the catalogue, not the math).
+  **Assessed while the multi-driver work was in the file; the shape of it:** a
+  `Mechanism` is (a) a joint list, each a NAMED combination of mates over two
+  `MateRef`s plus derived perpendicular references, (b) the axis joints' *unwrapped
+  coordinates* and limits, and (c) the couplings. (a) and (c) are pure declaration and
+  round-trip the way mates do — `MateRef` already serializes, the joint kind is an enum,
+  a coupling is a kind plus two joint indices plus its scalars. What does NOT round-trip
+  by declaration is (b): `JointSweepState.AccumulatedAngle` is a HISTORY (how many turns
+  the crank has taken), and a `CamLaw` may be code (`FromFunction`) or a spline sampled
+  from a sketch. So the file writes the coordinates as data and the laws follow the
+  `Feature.SaveInputs` precedent — `FromSketch` and the catalogue laws serialize, a
+  lambda law saves a marker and loads as a warning. The one genuinely new decision is
+  whether a reloaded mechanism should re-`Add` its joints (which re-asserts each joint's
+  DOF against the solver's measured rank — the check that makes a wrong definition fail
+  by name) or trust the file; re-asserting is right, and it means a load can legitimately
+  FAIL on a file that was valid when written, which is a load-result warning rather than
+  an exception. Roughly a day, mostly test.
+- [ ] **Cam refinements: roller-follower radius compensation and offset followers.**
+  The dwell-rise-dwell catalogue landed (`CamLaw.Cycloidal`/`HarmonicRise`/
+  `ModifiedTrapezoid`/`Dwell`/`Linear` + `CamLaw.Segments`, peak-acceleration factors
+  2π / π²/2 / 8π/(2+π) asserted). These two did NOT, and the reason is that neither is a
+  law factory — **both are curve problems wearing a law's clothes**:
+  - A translating **roller** follower's centre traces the cam profile's PLANAR OFFSET at
+    the roller radius, and a planar offset is not a radial one. For a profile in polar
+    form r(θ) the offset point is p + R·n with
+    n = (r·cosθ + r′·sinθ, r·sinθ − r′·cosθ)/√(r² + r′²), whose polar ANGLE is not θ — so
+    the follower's lift at cam angle ψ needs the θ with arg(q(θ)) = ψ, a root find per
+    query, and the law's slope/curvature then need the implicit-function derivatives of
+    that root. Doable and exact; it is a small solver, not a formula, and it wants the
+    same care `FromSketch`'s bisection already got.
+  - An **offset** (non-radial) translating follower is the same shape of problem with
+    the contact condition moved off the centre line; it also changes the pressure angle,
+    which is the number the offset exists to improve, so the useful version reports that
+    too rather than only moving the lift.
+  Filed rather than approximated: r(θ) + R is wrong by O(R·r′²/r²), which is exactly
+  where a cam is steepest and the answer matters most.
 - [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
   the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts
   a `BrepBoolean.Intersection` of the posed solids would report the exact volume, at
   the cost of a boolean between arbitrarily-rotated solids per range.
-- [ ] **Adaptive swept-volume sampling** — `SweptVolume` unions the sweep's uniform
-  frames; sampling by pose DELTA (bounded rotation × extent per step) would bound the
-  scallop error instead of inheriting the study's frame count.
 - [ ] **Flexible sub-assemblies in mechanisms** — inherited from the mates layer: a
   deep occurrence whose owning sub-assembly is placed more than once is refused (one
   shared frame). A mechanism inside a twice-placed sub-assembly needs per-placement
-  frame overlays first.
+  frame overlays first. See the assessment under "Assemblies follow-ups".
 - [ ] **Deliberately out of scope**: forces, masses, friction, contact dynamics.
   That is multibody *dynamics* and belongs with Simulation below — mechanisms answer
   "where does it go", not "what does it take". Mass properties already exist
@@ -524,7 +554,12 @@ The v1 landed (`Animation`/tracks/`AnimationPlayback` in Viewer.Core, APNG + GIF
 frame-sequence export in Viewer, the SceneHost transport, DocsGen `animate:` fences +
 `docs/examples/animation.md`) — the load-bearing rule held: an animation moves poses
 and the camera only, `Animation.At(t)` is pure, and one evaluation path serves
-scrubbing, playback, export and docs. What remains:
+scrubbing, playback, export and docs. **Batched export + stills landed** since:
+`OffscreenRenderer.RenderSequence` holds ONE EGL context, one set of programs and one
+set of uploaded buffers for a whole clip (24 frames at 480x360, win-x64: **1069 ms ->
+165 ms, 6.5x**, with the batched pixels asserted byte-identical to one `Render` per
+frame), and `EngrCad.RenderToImage(scene, animation, t, ...)` + the MCP `screenshot`
+`t` parameter both pose through the one `EngrCad.PoseAt` seam. What remains:
 
 - [ ] **Web viewport transport** — the whole machine (`Animation`, `AnimationPlayback`)
   is UI-free in `Viewer.Core` precisely so the Blazor viewport can reuse it: a
@@ -535,20 +570,29 @@ scrubbing, playback, export and docs. What remains:
   track (two full-instance-list producers cannot compose; whose matrices win?).
   Composing *relative displacement* tracks (mechanism pose ∘ explode displacement on
   top) is the principled extension — displacements compose where absolute pose lists do
-  not.
-- [ ] **Explode motion along the explode PATH** — `ExplodeTrack` lerps straight along
-  `ExplodeOffset`; assembly instructions sometimes want dogleg paths (out, then over).
-  Ties into the explode-path renderer item under Assemblies follow-ups.
-- [ ] **Reuse one EGL context across an animation's frames** — `OffscreenRenderer.Render`
-  creates and destroys a context per call, so a 36-frame export pays 36 context
-  creations plus 36 mesh uploads. A batch render entry holding one context and one set
-  of uploaded buffers (poses change per frame, buffers do not — the SetInstancePoses
-  insight applied offscreen) should make exports several times faster.
-- [ ] **`EngrCad.RenderToImage(scene, animation, t, ...)` sugar + an MCP `screenshot`
-  `t` parameter** — a single evaluated frame as a still, so an AI assistant can ask for
-  "the mechanism at t = 0.3". Both are thin: evaluate `At(t)`, pass the sample's
-  instances/camera to the existing render; the MCP side wants a schema addition and a
-  session test.
+  not. **Assessed while the explode PATH landed; the shape and the one hard part.** The
+  extension is a `DisplacementTrack` returning a per-instance DELTA (matched by
+  occurrence path, like everything else here) that `Animation.At` post-multiplies onto
+  whatever the pose track produced, with N of them allowed because deltas compose. Two
+  of the three current tracks convert cleanly — `ExplodeTrack` already computes a
+  displacement per occurrence (`Occurrence.ExplodeDisplacement`) and merely adds it to a
+  frame, so it *is* a displacement track wearing an absolute-pose interface. The hard
+  one is `MechanismTrack`: its "delta" is only meaningful against the assembled pose it
+  was swept from, so composing an explode on top of a running mechanism displaces parts
+  along axes the mechanism has already rotated — which is either exactly right (the
+  exploded view of a posed mechanism) or exactly wrong (the offsets were designed in the
+  assembled configuration), and the answer is a product decision, not a derivation. Do
+  not build it until a concrete clip needs it and can settle that question; the honest
+  interim is that `ExplodeTrack.Stagger` already sequences within one track, which is
+  what most assembly animations actually want.
+- [x] **Explode motion along the explode PATH** — `Occurrence.ExplodePath` carries dogleg
+  waypoints (out, then over), with the factor mapped to ARC LENGTH so a part crosses the
+  corner at constant speed; `ExplodeDisplacement(factor)` is the one rule the flatten
+  walk, `ExplodeTrack` and a future explode-path renderer all read. Paths persist in the
+  document format and are written only when set, so existing files stay byte-identical.
+  The renderer half (the dashed leader lines drafting standards draw between an exploded
+  part and its seat) is still open under Assemblies follow-ups — and now has a path to
+  draw rather than a straight line to assume.
 - [ ] **WebP animation** needs a VP8/VP8L encoder — not something to hand-roll; it
   means taking a dependency (libwebp or a managed port). Worth it only if the payload
   difference matters for the docs site (the committed APNGs are the size pressure to
@@ -869,6 +913,35 @@ export — is recorded in CLAUDE.md):
   angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
   the follow-on is re-resolving against the on-screen pixel size of a radius when the
   camera zooms, which needs re-tessellation plumbing in the viewer.
+  **Assessed; the criterion is the easy half and the PLUMBING is the item.** Deriving
+  the target is one line — a chord deviation of half a device pixel at the current
+  camera, i.e. `deviation = 0.5 * worldPerPixel(distance, fov, viewportHeight)` fed to
+  the existing `TessellationQuality.MaxChordDeviation` — and `Part.GetMesh(quality)`
+  already re-tessellates for a different criterion. What is missing, and what makes this
+  a real piece of work rather than a knob:
+  (a) **A re-tessellation must not run on the render thread and must not run per frame.**
+  It needs `TabMeshLoader`'s generation-token discipline (a zoom that supersedes an
+  in-flight re-mesh must not land) plus hysteresis — re-mesh on a factor-of-two change in
+  the criterion, not on every wheel notch, or a drag queues dozens of tessellations.
+  (b) **Every derived cache keys off the mesh**: feature edges, the pick BVH and the
+  ambient-occlusion bake are all per-mesh, so a re-tessellation invalidates three
+  expensive things. The AO bake is 12.3 s on the demo scene, which alone rules out
+  re-baking per zoom level — the honest v1 keeps the coarse bake and accepts that
+  occlusion is one level behind, or caps adaptivity to parts under the AO opt-out
+  threshold.
+  (c) **`Part.TryGetSolid` is the saving grace**: the B-Rep lowering is cached and
+  criterion-independent, so a re-tessellation is the tessellate half only — which is
+  what makes this affordable at all (measured elsewhere: lowering dominates a Shape
+  part's meshing).
+  (d) **The oracle is awkward**: the docs-PNG byte comparison cannot see this (renders
+  are one-shot at a fixed camera), so it needs its own test — mesh a large-radius part
+  at two camera distances and assert the segment counts differ in the direction the
+  criterion predicts, plus that a zoom back out does not *coarsen* below the quality
+  floor mid-session (a part that visibly loses detail when you pull back reads as a bug
+  even when it is the criterion working).
+  Worth about a day and a half. Not blocked on anything; deliberately not started in a
+  sweep, because a background re-mesh triggered by camera motion is exactly the kind of
+  feature that is fine in every test and janky in the hand.
 - [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
   + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
   stays the selection mechanism): web viewport honors Ghost (EffectiveDisplayMode)
@@ -1329,11 +1402,15 @@ honest no) is recorded in design.md §6b with the comparison committed as
   - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
     STEP AP242 PMI export (far future).
 - [ ] **Construction-tree residuals** (rollback marker + suppress-from-tree +
-  `[Param]` properties-panel editing + preview-restore-by-path ✅ landed): the rollback
-  marker is click-to-place rather than a literal drag (drag-and-drop in the tree panel
-  would need Avalonia pointer capture plumbing for marginal gain); parameter fields are
-  free-text through the JSON seam — typed editors (sliders for `Min`/`Max` ranges,
-  enum dropdowns) would be the polish pass.
+  `[Param]` properties-panel editing + preview-restore-by-path + **typed editors**
+  ✅ landed — `ParamEditors.KindFor` in Viewer.Core decides checkbox / enum dropdown /
+  bounded slider / text from metadata the registry already carried, every editor still
+  writing through the one JSON seam, the slider committing on release because each
+  application regenerates and is an undo step): the rollback marker is click-to-place
+  rather than a literal drag (drag-and-drop in the tree panel would need Avalonia
+  pointer capture plumbing for marginal gain). Residual: the browser properties panel is
+  read-only, so `ParamEditors` has one consumer — the rule is shared the moment the
+  second one wants it.
 - [ ] **Ambient-occlusion bake cost — three levers examined, two declined, don't redo
   them.** The bake was 12.3 s on the demo scene and already saturates every core.
   (a) **An any-hit early-out does not exist here**: occlusion accumulates as `1 − t`, so
@@ -1374,6 +1451,17 @@ honest no) is recorded in design.md §6b with the comparison committed as
   toggle (or per-part `DisplayMode` addition) with 2–3 built-in analytic matcaps;
   texture-based custom matcaps only if a color image reader lands for other reasons.
   Verify with the docs-PNG byte-compare discipline (default look must not move).
+  **Re-assessed this sweep and still not started, with the reason sharpened.** The
+  analytic form is genuinely small — two or three Gaussian lobes over the view-space
+  normal, ~15 lines in `ViewerShaders.MeshFragment` behind a `uMatcap` selector — but
+  it lands in the ONE file all three front ends compile, so the risk is not the shader,
+  it is that a mistake there is invisible until 100 docs PNGs move. The safe order is:
+  add the selector defaulting to 0 (the current lighting) and prove the byte comparison
+  is untouched FIRST, as its own commit; then add lobes behind non-zero values in a
+  second. That also settles where the toggle lives: not in `ViewStyle` (which is about
+  what is drawn — points, lines, fills — while a matcap is about how a fill is *lit*),
+  so a separate `EngrCadOptions.Shading` + a toolbar dropdown, with per-part override
+  deliberately NOT offered in v1 (a scene lit two ways reads as a rendering bug).
 
 ## Blazor web viewer
 
@@ -1458,6 +1546,22 @@ UI dependencies, which makes this unusually feasible.
   The honest next step is smaller: extract the *pure* per-part upload description
   (mesh + feature edges + wire edges + pick BVH, keyed by part reference) that all
   three build today by hand, and leave scheduling to each front end.
+  **Re-assessed while the pose/measure rungs landed, and the shape is now clearer.**
+  The three passes build the same five things per part — `RenderMesh.CreateFlat(mesh)`,
+  the `FieldRendering.TryBuild` result and whether the ghost pass applies, the occlusion
+  array (window/offscreen only), `Part.GetFeatureEdges()` segments, `WireframeEdges`
+  segments, and a `PickMesh` — and every one is a pure function of `(Part, quality,
+  fields, ambientOcclusion)`. So the extractable piece is a `PartUpload` VALUE plus a
+  `PartUploads.Build(part, ...)` in `Viewer.Core`, with each front end keeping its own
+  dictionary, its own GL calls and its own scheduling. Two things it must NOT do: decide
+  WHICH of the five to build (the offscreen pass deliberately skips what its one-shot
+  mode cannot use, the other two deliberately build all of them so a dropdown never
+  re-uploads — a shared "what to build" rule would silently make one of those wrong),
+  and own the cache (the browser's release-on-tab-switch and the window's
+  release-on-deinit are different lifetimes). Worth about a day; the payoff is that the
+  ~40 lines each pass repeats — including the "a deformed part gets NO edge overlay"
+  rule, currently stated three times — become one. Nothing is blocked on it, which is
+  why it is still filed rather than done.
 - [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
   written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
   shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —
@@ -1468,19 +1572,51 @@ UI dependencies, which makes this unusually feasible.
   their SDF isolines~~ ✅ → ~~view cube~~ ✅ → ~~annotations~~ ✅ → ~~properties panel +
   BOM~~ ✅ (the int-uniform prerequisite landed as the `IntUniform`/`Vec4ArrayUniform`
   typed markers in `engrcad-gl.js` — the JS dispatches on marker shape, C# decides
-  which uniforms are which). **Remaining rungs**: construction-tree rows + rollback
-  previews (needs `ConstructionPreviewCache`'s background-lowering story rethought for
-  one thread), the measure tool (two picks → a transient dimension — `PickResult`
-  already carries the world point), exploded views (`Scene.Instances(factor)` is
-  front-end-free already), and a multi-plane section UI (the frame already takes
-  `SectionPlane[]` + `SectionCombine`; isolines would then want `SectionClip.Siblings`
-  per plane).
+  which uniforms are which) → ~~the measure tool~~ ✅ → ~~exploded views + animation
+  playback~~ ✅ (both are `ViewportFrame.PoseByPath`, a pure function matching by
+  occurrence path; the transport is `AnimationPlayback` from Viewer.Core with a timer
+  and three widgets here) → ~~multi-plane section planes + combine, through to picking~~
+  ✅ → ~~debug-modifier parity (`DebugFilter.Shown` in `ResolveInstances`)~~ ✅.
+  **Remaining rungs**: construction-tree rows + rollback previews (needs
+  `ConstructionPreviewCache`'s background-lowering story rethought for one thread);
+  a multi-plane section **UI** (the plane list and combine are plumbed end to end now —
+  what is missing is a toolbar affordance for building the set, which the desktop does
+  not have either); multi-plane isolines want `SectionClip.Siblings` per plane; and the
+  `?report` self-check should grow pose/measure relationships (the pose seam is unit
+  tested, but "the canvas changed when the slider moved" is the check this front end's
+  culture asks for).
 - [ ] **Docs-site embedding, the general form** — one page embeds the demo today
   (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
   viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
   documentation, all statically hosted on the existing GitHub Pages deployment. Needs the
-  scene-to-frame layer first, plus a way to ship one runtime shared by every embed rather
-  than a 1.9 MB payload per page.
+  scene-to-frame layer first (✅ landed), plus a way to ship one runtime shared by every
+  embed rather than a 1.9 MB payload per page.
+  **Assessed; the shape, and why it is bigger than it looks.** The runtime sharing is
+  the easy half and is already solved by the deployment: `_site/live/` holds ONE published
+  app, so every page iframes the same origin and the browser caches the 1.9 MB once —
+  what is missing is a way for a page to say WHICH scene that one app should build.
+  Three options, in increasing order of what they buy:
+  (a) **A snippet id in the query string** (`/live/?example=fillet-corners`), with the
+  demo app carrying a switch over the docs' snippet ids. Cheapest, and wrong for the same
+  reason a second copy of a shader is: the snippet's source would live in the markdown
+  AND in the app, and they would drift.
+  (b) **Ship the compiled snippets as a data file.** DocsGen already compiles and runs
+  every fence through Roslyn; it could emit the snippet SOURCES into `_site/live/` and the
+  app could compile one in the browser — but that means shipping Roslyn to WASM, which is
+  several times the payload of the kernel and defeats the shared-runtime argument.
+  (c) **Emit each scene as data, not as code.** The document format now exists
+  (`Document.Save`), so DocsGen could save each `render:` snippet's scene as a `.json`
+  document beside its PNG and the demo app could `Document.Load` one by id. Payload is a
+  few KB per example, the app needs no compiler, and the scene is provably the one the
+  PNG was rendered from because both come from one evaluation. The cost is that a
+  document is geometry-or-history rather than the snippet's own code, so a page's
+  interactive block and its code fence are two representations of one model rather than
+  one — acceptable, and honest, if the page says so.
+  Recommendation: **(c)**, once someone wants it; it is a DocsGen change plus a load-by-id
+  route in the demo, not a viewer change. Filed rather than built because it is a docs
+  *infrastructure* project with its own deployment questions (cache busting per docs
+  build, and what an embed does when a document names geometry this build cannot
+  rebuild), and nothing depends on it.
 - [ ] **Out of scope until later**: editing/sketching in the browser, collaboration,
   server-side model storage. This is a *viewer* first.
 
@@ -1499,7 +1635,11 @@ through `ViewCubeMath`/`CameraMath`; `NamedViews` is only the name table), the
 `WithRemoteControl`/`--rpc`, token optional; `--mcp --viewer <port>` bridges
 set_view/fit/set_section/set_display_mode/set_view_style/select_part/get_selection/
 measure/viewer_screenshot; every mutation marshals through `Dispatcher.UIThread`, GL
-only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
+only via `SaveScreenshot`'s capture-on-next-frame), **document persistence**
+(`save_document`/`load_document` over the `Document` envelope — a session's edits now
+survive it, reopening parametric, with snapshot parts named rather than silently
+flattened; a loaded document is an overlay `reload` still discards) and the
+**`screenshot` `t` parameter** (posed through the shared `EngrCad.PoseAt`). Remaining:
 
 - [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting —
   the protocol was driven by hand and via the SDK's own client.
@@ -1513,16 +1653,43 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   via the window's next frame. Returning the PNG as an MCP image block needs a
   completion signal from the render pass back to the RPC thread (the status callback
   carries the path today); worth it if assistants use the tool blind.
+  **Assessed; the shape, and why it is more than plumbing.** `ViewportControl.SaveScreenshot`
+  arms a capture and the render pass performs it on its NEXT frame, so the RPC thread has
+  no edge to wait on — it currently returns as soon as the request is armed and the path
+  is a promise, not a fact. The fix is a `TaskCompletionSource` (or a
+  `ManualResetEventSlim`) completed from the render pass after `glReadPixels`, awaited by
+  the RPC handler with a timeout; the bridge then reads the file and returns an image
+  block exactly as headless `screenshot` does. Three details decide whether it is
+  correct: the completion must fire from inside the render pass and NOT from the status
+  callback (which reports the path and is posted separately, so it can run before the
+  bytes are on disk); the wait must have a deadline, because a minimised or occluded
+  window may not render for a long time and a hung RPC connection is worse than a path;
+  and a window that never renders should return the honest "no frame was produced"
+  rather than a stale file. Small — perhaps 40 lines across `ViewportControl`,
+  `ViewportRemoteViewer` and `ViewerTools` — but it is genuinely render-thread work, and
+  it cannot be tested by the headless socket harness that covers the rest of the bridge
+  (the stub viewer has no render pass), so it lands with the windowed manual pass above
+  or not at all.
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
-- [ ] **Persisting session edits**: `set_param` edits die with the session by design
-  (source is the truth). A `save_document` tool writing `Document.Save` JSON next to the
-  model would let an assistant hand its tuning back to the user as one file — the whole
-  envelope now exists, so this is a tool signature plus a path policy rather than a
-  serialization project. (A narrower `save_parameters` writing only
-  `FeatureHistory.SaveParameters` is the smaller version of the same idea.)
+- [ ] **`screenshot`'s `t` covers the animation; the RPC bridge's `viewer_screenshot`
+  does not** — a running window has its own playback position, so "capture what is on
+  screen at t" would mean driving the transport over RPC (a `set_animation_time` verb)
+  rather than re-evaluating headlessly. Small, but it needs the windowed manual pass
+  above to be worth anything.
+- [ ] **A narrower `save_parameters` tool** (writing only
+  `FeatureHistory.SaveParameters` for one part) is the smaller sibling of the
+  `save_document`/`load_document` pair that landed. Worth adding only if a client turns
+  up that wants to diff one part's numbers rather than reopen a model; the document pair
+  covers the "hand the tuning back" case that motivated it.
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
+- [ ] **`DocumentLoadResult.Snapshots` names parts by BARE name, not "tab/part"** — the
+  doc comment claimed the path form and the code has always written the name; the
+  comment is now honest. Names are unique per TAB, so the report is ambiguous for a
+  document whose tabs share a part name. Changing it is one line plus the two assertions
+  that pin the spelling (`DocumentPersistenceTests`, `DocumentToolsTests`), left out of
+  the sweep that found it because a reporting-format change deserves its own commit.
 
 ## App layer / infrastructure
 
@@ -1541,30 +1708,73 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   catalogue-designation lookup could rebuild `ComponentFeature`). Persistent topological
   IDs are no longer open in the abstract: `Shape.Tag` + `BrepFace.Provenance` landed, and
   what remains is the per-algorithm inheritance filed under "Topological naming residuals".
-- [ ] **Geometry-reference vocabulary follow-ups** — the named queries cover what the
-  standard features need and no more. Wanted next: `PlaneRef.Offset(distance)` and
-  `PlaneRef.Rotated` (an offset construction plane is the commonest missing one);
-  `FaceSetRef.Largest` / `SmallestArea` (needs a face-area query — `BrepQueries` has
-  none, and a curved trimmed face's area is not free); `FaceSetRef.Touching(point)` and
-  `.AdjacentTo(faceRef)`; radius/length *ranges* rather than exact values (today
-  `Cylindrical(r)` and `Circular(r)` compare at the weld tier, which is right for
-  exactly-constructed geometry and useless as a filter); a `VertexRef`. Also: the
-  `Shape` API's own selector overloads still take raw `Func`s — `FaceSetRef.AsSelector`
-  bridges them, but `Shape.Fillet(radius, FaceSetRef)` overloads would let a design
-  outside a feature history use the same vocabulary, and `Draft`/`Shelling`'s per-face
-  predicates could take one too.
+- [ ] **Geometry-reference vocabulary follow-ups.** Landed: `PlaneRef.Offset(distance)`
+  and `PlaneRef.Rotated(degrees, inPlaneAxis)` (resolve the base, then move — so a
+  derived plane re-finds its base per regeneration; axes carried verbatim, rotation axis
+  in the base's own coordinates, exact-zero returns the base itself),
+  `FaceSetRef.LargestByArea`/`SmallestByArea` over `BrepSelection.Area`,
+  `Touching(point)` (carrier projection THEN the face's trim test, so a point over a bore
+  matches nothing), `AdjacentTo(set)`, `CylindricalBetween(min, max)`, and the `Shape`
+  overloads (`Fillet`/`Chamfer`/`ChamferAtAngle`/`FilletEdges`/`ChamferEdges` in constant
+  and variable-law forms take `FaceSetRef`/`EdgeSetRef`). Remaining:
+  - **`Shell` cannot take one without a source break** — its `openings` parameter is a
+    *nullable* `Func`, so a reference-typed overload makes the existing `Shell(t, null)`
+    ambiguous at every call site. Either rename the reference-typed entry
+    (`ShellOpening(...)`) or leave callers on `openings.AsSelector("openings")`, which is
+    what the doc comment now says. `Draft`'s per-face predicate has the same shape.
+  - **Edge-length and circular-radius RANGES** — `CylindricalBetween` covers faces;
+    `EdgeSetRef.Circular(r)` and edge length still compare exactly. Same pattern, ten
+    lines, wanted the first time someone selects "every fillet edge under 2".
+  - **A `VertexRef`** — assessed, and it is not the trivial fifth member it looks like.
+    The other four resolve to things the kernel already treats as objects (a face, an
+    edge, a frame); a vertex's USES are a *point* (anchor a dimension, seed
+    `Touching`, place a pattern) and the natural spellings — "the corner between these
+    three faces", "the highest vertex of this face", "the ends of this edge" — are all
+    derived rather than stored, so the type's real content is the query set, not the
+    resolution. It also needs a cardinality decision the others did not: "the corner
+    where these faces meet" is exactly-one while "this face's corners" is a set, so it
+    wants BOTH a `VertexRef` and a `VertexSetRef` or an honest reason it does not.
+    Worth doing when a consumer exists (a vertex-anchored dimension is the likeliest);
+    inventing it before then would fix the query set by guesswork.
 - [ ] **Assemblies follow-ups** (v2 landed: BOM, exploded views, mates — now ACROSS
   assembly levels with typed `FaceRef`/`AxisRef` references and
   `SaveMates`/`LoadMates` persistence — STEP assembly export + import, tree
   expand/collapse, retro-assigned palette colors) — true GPU instanced drawing (matrix
   buffer, one draw per part), per-instance color/display-mode overrides, an
   **explode-path renderer** (the dashed leader lines drafting standards draw between an
-  exploded part and its seat), and **flexible sub-assemblies**: a deep mate target
-  inside a multiply-placed sub-assembly is refused today because its internal frame is
-  one shared object — per-instance internal DOF (Onshape's "flexible" instances) needs
-  instance-specific frame overlays on the flatten seam, a real design task. Mechanisms
-  (above) can now assume cross-level mates exist: a linkage whose members are
-  sub-assemblies is jointable via occurrence paths.
+  exploded part and its seat — and `Occurrence.ExplodePath` now gives it a real path to
+  draw rather than a straight line to assume), and **flexible sub-assemblies**: a deep
+  mate target inside a multiply-placed sub-assembly is refused today because its
+  internal frame is one shared object. Mechanisms (above) can now assume cross-level
+  mates exist: a linkage whose members are sub-assemblies is jointable via occurrence
+  paths.
+  **Flexible sub-assemblies, assessed — this is the big one, and it is a DOCUMENT-MODEL
+  change rather than a solver change.** The refusal is honest and structural:
+  `Occurrence.SubAssembly` points at a shared `Assembly` object, and that assembly's own
+  occurrences carry `Frame3d`s, so two placements of one sub-assembly necessarily agree
+  about every internal pose. Onshape's answer is per-instance internal state, and the
+  seam it has to attach to here is `Assembly.Flatten` — the ONE walk every consumer sees
+  (viewers, exporters, BOM, mates, mechanisms, animation). Three candidate shapes, with
+  what each costs:
+  (a) **Deep-copy on flexibility** — mark an occurrence flexible and clone its
+  sub-assembly. Simplest, and wrong: it breaks part IDENTITY (`Scene.AllParts` dedupes by
+  reference, so a cloned subtree would mesh and upload twice) and the BOM would
+  double-count.
+  (b) **A per-occurrence frame OVERLAY** — `Occurrence.Overrides: Dictionary<string,
+  Frame3d>` keyed by the relative occurrence path, consulted by `FlattenInto` as it
+  descends. Preserves identity, is additive to the format, and is a few lines in the
+  walk. The cost lands on everything that WRITES a frame: the mate solver's variables are
+  occurrence frames, so solving inside a flexible instance must write to the overlay
+  rather than to the shared occurrence, which means `MateSolver` needs to address "the
+  frame of THIS placement of that occurrence" — a path, not an object. That is the real
+  work, and it is the same change `MateRef` would need.
+  (c) **Instance-level document objects** (a first-class `AssemblyInstance` with its own
+  occurrence list) — the most general and the most disruptive; it changes what an
+  assembly IS.
+  Recommendation: **(b)**, and only when a real model needs it. Roughly two to three days
+  with the mate-solver addressing change, and the test that matters is not "it moves" but
+  that two placements of one sub-assembly can hold DIFFERENT internal poses while still
+  sharing one `Part`, one mesh and one BOM line.
 - [ ] **Standard component library — remaining fidelity** (breadth landed: ISO 7380
   button, ISO 10642 csk, ISO 4032 nuts, ISO 7089 washers, 60x deep groove bearings,
   the opt-in exact hex socket on `CapScrew`, and `PlaceThrough(..., anchorInto:)`

@@ -813,6 +813,42 @@ public static class ViewportFrame
     /// third re-typing of yaw 0.7 / pitch 0.45, exactly the fork it exists to end).</summary>
     public static CameraState DefaultCamera(in Aabb bounds) => CameraMath.DefaultCamera(bounds);
 
+    /// <summary>
+    /// The world matrices to draw <paramref name="drawn"/> with when
+    /// <paramref name="posed"/> supplies new poses — exploded views and animation
+    /// playback, which are the same operation seen twice.
+    ///
+    /// <para>Matching is by occurrence PATH, not by index, and that is the whole content
+    /// of this function. A whole-scene pose track legitimately carries instances the
+    /// current tab does not draw, and an instance the track says nothing about must keep
+    /// its DOCUMENT pose rather than take a neighbour's — index matching gets both wrong
+    /// the moment a tab shows a subset. It is the desktop's rule (<c>MechanismTrack</c>'s
+    /// scene overload grafts by path for the same reason), pulled out here as a pure
+    /// function so it is asserted as values rather than looked at.</para>
+    ///
+    /// <para>A null <paramref name="posed"/> returns the document poses, so "stop
+    /// exploding" and "no animation" are the same code path and land back exactly where
+    /// the scene was.</para>
+    /// </summary>
+    public static Matrix4d[] PoseByPath(
+        IReadOnlyList<PartInstance> drawn, IReadOnlyList<PartInstance>? posed)
+    {
+        ArgumentNullException.ThrowIfNull(drawn);
+        var world = new Matrix4d[drawn.Count];
+        if (posed is null)
+        {
+            for (int i = 0; i < drawn.Count; i++)
+                world[i] = drawn[i].World;
+            return world;
+        }
+        var byPath = new Dictionary<string, Matrix4d>(posed.Count, StringComparer.Ordinal);
+        foreach (var instance in posed)
+            byPath[instance.Path] = instance.World;
+        for (int i = 0; i < drawn.Count; i++)
+            world[i] = byPath.TryGetValue(drawn[i].Path, out var moved) ? moved : drawn[i].World;
+        return world;
+    }
+
     private static DrawCall Line(
         string key, float[] model, float[] color, int first, int count, bool unclip = false)
     {
