@@ -853,15 +853,37 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   `RemeshResult` minimum-angle item, here with a fixture that motivates it. Note this is an
   `EngrCAD.Mesh` item, not an Fea one; it surfaced because the tet mesher is the first consumer
   that cannot tolerate it.
-- [ ] **Sliver removal (the second named gap in tet meshing).** Radius-edge bounds provably
-  cannot exclude slivers, and the measurements say so: a refined `box 20³` is
-  0.7–1.6% slivers below 10°, and elements with a *negative* floating-point volume
-  exist even where the exact predicate says strictly positive. The standard answers
-  are **sliver exudation** (Cheng et al.'s weighted-Delaunay perturbation) and
-  optimization-based smoothing (Klingner–Shewchuk's `Stellar`: smoothing + topological
-  transformations driven by a quality objective). Either would run as a post-pass over
-  a finished `TetMesh`, which is why the mesher reports quality rather than claiming
-  it. Until then, `TetQualityReport.SliverCount` is the honest interface.
+- [x] ~~**Sliver removal (the second named gap in tet meshing).**~~ ✅ **done** —
+  `TetSmoothing.Smooth` is the optimization-based half (interior-vertex smoothing against a
+  worst-incident-dihedral objective, boundary and deliberate anisotropy frozen, exact
+  orientation predicate on every candidate). Measured on a 20³ box: **every sliver removed** at
+  three sizes (190 → 0, 399 → 0, 1 149 → 0), worst dihedral 0.00° → 10–17°, volume drift
+  7.8e-15 … 2.1e-14 — with the residual **coordinate-sensitive** (the same box translated to
+  the origin leaves 2 of 190), so the guarantee is determinism rather than sliver-freeness.
+  Residuals filed below.
+- [ ] **Sliver exudation, and the topological half of `Stellar`.** `TetSmoothing` moves points
+  only, which is what lets it keep the boundary, the volume identity, the connectivity and the
+  orientation invariant by construction. The stronger techniques change TOPOLOGY — Cheng et
+  al.'s weighted-Delaunay perturbation, and Klingner–Shewchuk's edge/face removal and 2-3/3-2
+  flips — and would need the boundary contract, the classification and the region ids
+  re-established afterwards rather than inherited. Worth it if a fixture ever appears that
+  smoothing cannot clear; nothing in the suite currently is (every fixture reaches zero
+  slivers), which is the honest reason not to build it yet.
+- [ ] **`TetSmoothing` costs ~10x the meshing it follows** — 4.9 s against 504 ms on the
+  40 593-element box, 12.9 s at 103 103. The profile is not measured yet, but the shape is
+  obvious: 10 search directions × 8 stride halvings × every incident element's six dihedrals,
+  per vertex per pass. Cheap levers in likely order: stop a vertex's search as soon as a pass
+  finds no improving direction at the FIRST stride (most vertices after pass 1), cache each
+  element's dihedrals and invalidate only the incident ones, and hoist the `TargetDihedralDegrees`
+  gate to skip whole passes once the mesh is clean. A parallel pass is NOT free here — vertices
+  share elements, so a block decomposition would change the visit order and with it the answer,
+  and bit-identical output is asserted.
+- [ ] **`TetSmoothing` lowers the MEAN minimum dihedral by 2–4° while raising the worst.** The
+  objective is the worst incident angle, so lifting it moves a vertex away from what its other
+  elements would have preferred (measured 42.4° → 39.5°, 44.4° → 41.2°, 43.6° → 39.9°). That is
+  the right trade for conditioning and it is reported rather than buried, but a combined
+  objective — maximize the worst, break ties on the mean — would plausibly keep both. Needs a
+  measurement before it is worth the extra knob.
 - [ ] **Tet meshing performance.** Measured 31k–80k tets/s (win-x64, Release), which is
   usable but well off TetGen. The profile is Delaunay build + per-pass classification;
   the obvious lever is replacing the winding-number classification inside the

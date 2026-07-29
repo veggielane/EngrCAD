@@ -320,10 +320,45 @@ failure rather than by design.
 
 **What is guaranteed and what is not.** Guaranteed: the boundary is the input surface, the
 volume identity holds to round-off, every element is positively oriented (checked exactly),
-output is deterministic, and every refusal names what failed. *Not* guaranteed: sliver-free
-elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityReport` reports
-minimum dihedral beside radius-edge and counts what the first measure cannot see. Sliver
-exudation is the named next step (todo.md).
+output is deterministic, and every refusal names what failed. *Not* guaranteed by the MESHER:
+sliver-free elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityReport`
+reports minimum dihedral beside radius-edge and counts what the first measure cannot see.
+
+**`TetSmoothing` is the post-pass that acts on it, and the choice of technique is the design
+decision.** The two standard answers are sliver *exudation* (a weighted-Delaunay perturbation,
+which changes the topology) and *optimization-based smoothing* (which moves points only). Only
+the second keeps every guarantee above without re-deriving any of them: the boundary is
+untouched, so the surface-fidelity contract and the volume identity hold **by construction**
+rather than by measurement (measured drift 7.8e-15 … 2.1e-14, pure round-off — mathematically
+the elements go on tiling the same region); the connectivity is untouched, so nothing has to be
+re-classified or re-recovered; and every candidate position is accepted only if it leaves all
+incident elements strictly positively oriented **by the exact predicate**, so `TetMesh`'s
+invariant is preserved rather than re-checked. Exudation is stronger and remains the filed next
+step; it is also the one operation that can invalidate all of that at once, which is why the
+weaker technique went first. Measured on a 20³ box: **every sliver removed** at three sizes
+(190 → 0, 399 → 0, 1 149 → 0) with the worst dihedral going 0.00° → 10–17°.
+
+**But the residual is INPUT-DEPENDENT, and that is the caveat to keep.** The same 20³ box with
+its faces triangulated by the B-Rep tessellator instead of by `MeshPrimitives.Box` starts from
+the identical 190 slivers and finishes with **2** rather than 0. A pattern search is a heuristic
+local optimizer: a small difference in the input changes which candidate wins a near-tie, and
+with it the whole path. Two candidate causes were guessed before measuring and both are wrong —
+it is not translation (the same primitive anchored at a corner and centred on the origin both
+reach 0) and not the build (Release and Debug agree bit for bit), and both negatives are pinned
+by test so the next reader does not re-guess them. So the guarantee on offer is *determinism for
+a given input on a given build*, not sliver-freeness, and the tests assert a strict decrease
+rather than zero because a fixture-specific zero is exactly the kind of claim that rots.
+
+Two further things about it are worth keeping. **The mean minimum dihedral FALLS by 2–4° while the
+worst rises**, because the objective is the worst incident angle and lifting it moves a vertex
+away from what its other elements would have preferred — a real trade, reported rather than
+buried, and the right one when the worst element is what conditions the matrix. And **a
+deliberate boundary layer is frozen, not repaired**: every vertex touching an element stretched
+past `TetQualityOptions.AnisotropyThreshold` is left alone, because a smoother that returns a
+layer to isotropy destroys exactly the resolution it exists to provide. That inherits the
+partition's honest limit unchanged — a layer element and an accidental sliver are affinely
+equivalent, so freezing by measured stretch necessarily freezes accidental stretched slivers
+too, and the count is reported instead of the ambiguity being wished away.
 
 **What recovery actually wants of its input — the filed limitation was wrong in two
 directions.** It read "recovery is not happy with an isotropic remesh, because near-uniform

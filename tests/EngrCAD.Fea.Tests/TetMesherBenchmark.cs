@@ -104,4 +104,37 @@ public class TetMesherBenchmark(ITestOutputHelper output)
             $"mean {quality.MeanAspectRatio:F3} | min vol {quality.MinVolume:E2} | " +
             $"slivers<10deg {quality.SliverCount} ({100.0 * quality.SliverCount / quality.TetCount:F1}%)");
     }
+
+    /// <summary>
+    /// What the sliver-removal post-pass costs and buys. The interesting column is the sliver
+    /// count, because that is the defect radius-edge refinement provably cannot bound.
+    /// </summary>
+    [Fact]
+    public void SmoothingCost_AndWhatItBuys()
+    {
+        if (!Enabled)
+            return;
+
+        output.WriteLine("case            | tets   | ms    | min dihedral    | mean-min      | slivers      | drift");
+        output.WriteLine("----------------|--------|-------|-----------------|---------------|--------------|-------");
+
+        foreach (double target in new[] { 3.0, 2.0, 1.5 })
+        {
+            var surface = MeshPrimitives.Box(new Aabb(Vector3d.Zero, new Vector3d(20, 20, 20)));
+            var mesh = TetMesher.Mesh(surface,
+                new TetMeshOptions { RefineQuality = true, MaxElementSize = target });
+            var before = TetQuality.Analyze(mesh);
+
+            var watch = Stopwatch.StartNew();
+            var smoothed = TetSmoothing.Smooth(mesh, null, out var report);
+            watch.Stop();
+            var after = TetQuality.Analyze(smoothed);
+
+            output.WriteLine(
+                $"box 20^3 h={target,-5} | {mesh.TetCount,6} | {watch.Elapsed.TotalMilliseconds,5:F0} | " +
+                $"{before.MinDihedralDegrees,6:F2} -> {after.MinDihedralDegrees,5:F2} | " +
+                $"{before.MeanMinDihedralDegrees,5:F1} -> {after.MeanMinDihedralDegrees,5:F1} | " +
+                $"{before.SliverCount,5} -> {after.SliverCount,-5} | {report.VolumeChangeRelative:E1}");
+        }
+    }
 }

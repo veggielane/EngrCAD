@@ -264,6 +264,77 @@ something for it:
 
 A mesh with nothing stretched in it reports exactly what it always did, number for number.
 
+### Removing the slivers
+
+Bounding the radius-edge ratio is what Delaunay refinement can do, and it **provably** cannot
+exclude the sliver. `TetSmoothing.Smooth` is the post-pass that acts on what the dihedral
+measure sees: it moves **interior** vertices to raise the worst dihedral angle, leaving the
+topology and the boundary exactly as they were.
+
+```csharp run:fea-smoothing
+var surface = Shape.Box(20, 20, 20).ToMesh();
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 3.0,
+});
+
+var smoothed = TetSmoothing.Smooth(tets, null, out var report);
+Console.WriteLine(report);
+
+var before = TetQuality.Analyze(tets);
+var after = TetQuality.Analyze(smoothed);
+Console.WriteLine($"slivers {before.SliverCount} -> {after.SliverCount}, " +
+                  $"worst dihedral {before.MinDihedralDegrees:F2} -> {after.MinDihedralDegrees:F2} deg");
+
+// The worst element must improve and the sliver count must fall — and the volume must not
+// move, because the boundary never did.
+if (after.MinDihedralDegrees <= before.MinDihedralDegrees || after.SliverCount >= before.SliverCount)
+    throw new Exception("smoothing should raise the worst dihedral and remove slivers");
+if (report.VolumeChangeRelative > 1e-12)
+    throw new Exception("smoothing must not move the volume");
+```
+
+Measured on a 20³ box (win-x64, Release):
+
+| target size | elements | ms | min dihedral | mean min-dihedral | slivers < 10° | volume drift |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3.0 | 15 834 | 3 947 | 0.00° → **13.86°** | 42.4° → 39.5° | 190 → **0** | 1.3e-14 |
+| 2.0 | 40 593 | 4 924 | 0.00° → **17.00°** | 44.4° → 41.2° | 399 → **0** | 7.8e-15 |
+| 1.5 | 103 103 | 12 865 | 0.01° → **10.07°** | 43.6° → 39.9° | 1 149 → **0** | 2.1e-14 |
+
+Every sliver goes at every size on that fixture — but **the residual is input-dependent**, and
+the snippet above is the demonstration: it is the same 20³ box with its faces triangulated by
+the B-Rep tessellator rather than by `MeshPrimitives.Box`, it starts from the identical 190
+slivers, and it ends with **2** rather than 0. A pattern search is a heuristic local optimizer,
+so a small difference in the input changes which candidate wins a near-tie and with it the whole
+path. (Two things that are *not* the cause, both guessed first and both wrong: translation — the
+same primitive at a corner and at the origin both reach 0 — and the build, since Release and
+Debug agree bit for bit.) Read the table as "essentially all" rather than as a guarantee: what
+the pass promises is a *deterministic* answer for a given input on a given build, not a
+sliver-free one.
+
+Two further counterweights belong beside that. The **mean**
+minimum dihedral falls by 2–4°, because the objective is the *worst* incident angle and lifting
+it moves a vertex slightly away from what its other elements would have preferred; that is the
+right trade when the worst element is what conditions the matrix, but it is a trade. And it is
+**expensive**: 4.9 s against 504 ms to build the 40 593-element mesh, which is why it is
+something you ask for rather than something the mesher does.
+
+The volume drift column is pure round-off, and that is structural rather than lucky: the
+boundary never moves, so the elements go on tiling the same region and the volume identity holds
+by construction. Every candidate position is also checked with the **exact** orientation
+predicate before it is accepted, so the mesh's positive-orientation invariant is preserved
+rather than re-checked and hoped for.
+
+> [!IMPORTANT]
+> **A deliberate boundary layer is never "repaired".** Every vertex touching an element
+> stretched past `TetQualityOptions.AnisotropyThreshold` is frozen, and
+> `TetSmoothReport.FrozenAnisotropicVertices` counts them. Smoothing a layer back towards
+> isotropy would destroy exactly the resolution it exists to provide. This inherits the
+> partition's honest limit: a layer element and an accidental sliver are affinely equivalent,
+> so freezing by measured stretch necessarily freezes accidental stretched slivers too.
+
 > [!NOTE]
 > A legitimate layer element and an accidental sliver are **affinely equivalent** — the stack
 > element is four nearly-coplanar points too — so no purely local geometric measure separates

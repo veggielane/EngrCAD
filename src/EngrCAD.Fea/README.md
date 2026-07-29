@@ -33,6 +33,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `TetMeshOptions` | Quality target, sizing field, budgets, facet tags |
 | `TetMeshDiagnostics` | What the mesher did — Steiner counts, recovery rounds, volume residual |
 | `TetQuality` / `TetQualityReport` | Dihedral angles, radius-edge, aspect, sliver counts, histograms |
+| `TetSmoothing` / `TetSmoothOptions` / `TetSmoothReport` | Sliver removal: interior-vertex optimization-based smoothing, boundary and anisotropy frozen |
 | `TetGeometry` | Per-element measures: circumsphere, dihedrals, aspect, edge lengths |
 | `QuadraticTetMesh` | The 10-node (quadratic) layer, a pure function of the linear mesh |
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
@@ -281,6 +282,76 @@ is what governs the stiffness matrix's conditioning and is the number that sees 
 `RadiusEdgeRatio` defaults to exactly **2.0** because that is the bound below which Delaunay
 refinement is not guaranteed to terminate; smaller values are allowed, and the Steiner budget
 is what catches them.
+
+### Removing the slivers: `TetSmoothing`
+
+`TetSmoothing.Smooth(mesh)` is the post-pass that acts on what the second measure sees. It
+moves **interior** vertices to raise the worst dihedral angle, leaving the topology and the
+boundary exactly as they were.
+
+```csharp
+var tets     = TetMesher.Mesh(surface, new TetMeshOptions { RefineQuality = true, MaxElementSize = 2 });
+var smoothed = TetSmoothing.Smooth(tets, null, out var report);
+Console.WriteLine(report);   // min dihedral 0.00 -> 17.00 deg, slivers 399 -> 0, drift 7.8e-15
+```
+
+Measured on a 20³ box (win-x64, i9-9900K, Release):
+
+| target size | elements | ms | min dihedral | mean min-dihedral | slivers < 10° | volume drift |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3.0 | 15 834 | 3 947 | 0.00° → **13.86°** | 42.4° → 39.5° | 190 → **0** | 1.3e-14 |
+| 2.0 | 40 593 | 4 924 | 0.00° → **17.00°** | 44.4° → 41.2° | 399 → **0** | 7.8e-15 |
+| 1.5 | 103 103 | 12 865 | 0.01° → **10.07°** | 43.6° → 39.9° | 1 149 → **0** | 2.1e-14 |
+
+**Every sliver goes, at every size — on this fixture, and the residual is INPUT-DEPENDENT.**
+A 20³ box whose faces are triangulated by the B-Rep tessellator instead
+(`Shape.Box(20, 20, 20).ToMesh()`, which is what the docs page measures) starts from the
+identical 190 slivers and ends with **2** rather than 0. A pattern search is a heuristic local
+optimizer, so a small difference in the input changes which candidate wins a near-tie and with
+it the whole path. Two things are worth naming as *not* the cause, because both were guessed
+first and both are wrong: it is not translation (the same primitive anchored at a corner and
+centred on the origin both reach 0) and not the build (Release and Debug agree bit for bit).
+Read the table as "essentially all" rather than as a guarantee — the pass promises a
+*deterministic* answer for a given input on a given build, not a sliver-free one, and the tests
+assert a strict decrease rather than zero for exactly that reason.
+
+Two further counterweights sit beside it. The **mean**
+minimum dihedral falls by 2–4°, because the objective is the worst incident angle and lifting
+it moves a vertex slightly away from what its other elements would have preferred — a real
+trade, and the right one when the worst element is what conditions the matrix. And it is
+**expensive**: on the 40 593-element box it costs 4.9 s against 504 ms to build the mesh, which
+is why it is a post-pass a caller asks for rather than something the mesher does.
+
+**Why smoothing rather than exudation.** The two standard answers are sliver exudation (a
+weighted-Delaunay perturbation, which changes the topology) and optimization-based smoothing
+(which moves points only). Only the second keeps every guarantee the mesher already makes
+without re-deriving any of them: the boundary is untouched so the surface-fidelity contract and
+the volume identity hold **by construction** (the drift column is pure round-off — mathematically
+the elements go on tiling the same region), the connectivity is untouched so nothing has to be
+re-classified or re-recovered, and every candidate position is accepted only if it leaves all
+incident elements strictly positively oriented **by the exact predicate**, so `TetMesh`'s
+orientation invariant is preserved rather than re-checked and hoped for. Exudation is the
+stronger technique and is still the filed next step; it is also the one that can invalidate all
+of that at once.
+
+**Three rules make it safe**, and the second is the one to know about:
+
+1. **Boundary vertices never move** — which is what makes the volume identity exact.
+2. **Vertices touching a deliberately anisotropic element never move.** A smoother that
+   "repairs" a boundary layer into isotropy would destroy the resolution the layer exists to
+   provide, so every vertex of an element stretched past
+   `TetQualityOptions.AnisotropyThreshold` is frozen and the report says how many. This
+   inherits the partition's honest limit: a layer element and an accidental sliver are
+   *affinely equivalent*, so freezing by measured stretch necessarily freezes accidental
+   stretched slivers too. Intent is not recoverable from geometry — the number is reported
+   instead of the problem being wished away.
+3. **A move must strictly improve, by a floor** — a monotone-increase rule, so the sweep
+   terminates and cannot oscillate.
+
+Deterministic throughout: ascending vertex order, a fixed direction table, a fixed halving
+stride schedule, no RNG and no parallelism, so two runs give bit-identical positions (asserted).
+The structural patch test still reproduces a constant-strain state to **3.9e-15** relative
+through a smoothed mesh, which is the check that nothing inverted or tore.
 
 **Refinement is not a quality option on curved bodies — it is what makes the mesh usable at
 all.** A tessellated sphere's vertices are *all exactly cospherical*, so a tetrahedralization
