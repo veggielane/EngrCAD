@@ -324,18 +324,48 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     segments-per-circle against the unchamfered rod's 246.56 / 247.76 / 248.06 — a stable
     0.83 difference at every density, which is the chamfer.
 
-    **Why it is not landed: clipping is incompatible with the one-curve-at-a-time splitter.**
-    `BrepBoolean.SplitAll` applies each curve to the fragments separately, and every
-    `SplitByCurve` call needs ITS OWN arrangement to close. A clipped curve stops where the
-    other face's boundary crosses this face's INTERIOR, and the arrangement only closes once
-    the neighbouring face's curve is added too. The minimal counterexample is two offset
-    boxes: the clipped line stops at (1, 1, 2), the corner where the tool's edge pierces the
-    host face — 32 tests fail this way (offset boxes, sphere piercings, the notched block,
-    the drilled-sphere corpus member). Landing the clip therefore requires
-    `FaceSplitter.SplitByCurves(face, curves)` — one simultaneous arrangement over all of a
-    face's curves, which also needs curve–curve crossings inside the face, since sequential
-    splitting is what finds those today. That is the real remaining work, and it is a
-    boolean-core feature rather than a residual.
+    **The splitter half is now LANDED.** ~~Clipping is incompatible with the
+    one-curve-at-a-time splitter~~ — it was, and is not any more.
+    `FaceSplitter.SplitByCurves(face, curves)` ✅ takes a face's whole curve list, and
+    `BrepBoolean.SplitAll` ✅ hands it over, so the routing decision lives in one place: the
+    curve-at-a-time CASCADE (bit-for-bit what every existing boolean gets) when each curve
+    can close its own arrangement, and ONE SIMULTANEOUS ARRANGEMENT when a curve TERMINATES
+    inside the face — nodes against the boundary, against every other curve, and at
+    coincident ENDPOINTS, then one `TraceFaces` walk. See the BRep README. **The gate needs
+    a PARTNER at the terminus**, which is the finding worth keeping: "a curve stops inside
+    the face" alone also describes a TRACER-TRUNCATED curve, whose end is an artefact with
+    nothing to meet, and routing those to the arrangement only trades one refusal for
+    another (measured on `Torus(12,4) − plane − Ø3 bore`, a documented refusal either way:
+    it failed one stage earlier and less informatively).
+
+    **What remains is the CLIP itself, and it has been measured.** Turning it on
+    (`ClipToFaces` — the stretches of the carrier curve inside BOTH faces' trims, both
+    faces handed the same piece, a curve surviving whole handed back as ITSELF so a closed
+    curve stays closed) leaves **22 of 443 Interop tests failing**, and **13 of those 22 have
+    one named cause**: `FaceGeometry.Contains`' upward-v ray cannot see a rim below the
+    probe, so it calls every point on a POLE-BOUNDED single-wrapping-loop face outside; the
+    clip then drops the whole seam curve and the boolean returns two touching shells (a
+    sphere-through-a-box union measured Euler 4 instead of 2). The clip's containment test
+    must err toward KEEPING — a stretch wrongly kept only reproduces today's behaviour,
+    one wrongly dropped loses a seam silently — so it needs the same pole-bounded exception
+    `ProbePoint` already documents. With that, **22 → 9**.
+
+    **The nine that remain are dominated by ONE error**, and it is not a new one:
+    `An edge's two uses must have opposite sense` out of `BrepSolid.Validate`, on
+    `WholeSolidFilletBooleanTests.BandCrossingTool_*` (4), `TrimmedFaceTests.
+    Difference_SlotThroughBore_TrimmedBoreWallFragments`, and
+    `NearMissCarrierTests.BoreSwallowingTheCornerItself_IsExact` — **the same message the
+    second-chamfer blocker below reports**, so that blocker is NOT chamfer-specific: it is a
+    sense/seam-sealing defect that clipped seams expose, and fixing it once fixes both. The
+    other three are `CoplanarBooleanTests.IntersectionSharingTopAndBottom_KeepsOneCopy`
+    ("Arrangement tracing did not close" — a clipped piece with no partner reaching the
+    cascade), `TrimmedFaceRefusalTests` "cap cut low with bore", and
+    `TessellationCorpusQualityTests.SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`.
+    **The clip was therefore not landed**: a boolean core that is 95% right is worse than one
+    that refuses, and none of the nine is a test that merely needs its expectation updated.
+    Note also that clipping legitimately CHANGES face counts on existing models (four wall
+    lines clipped to a tool's footprint split a host face into 2 rather than 9), so the
+    docs-render byte-identity oracle has to be re-argued when it does land.
 
     **Three follow-on fixes the prototype needed** (each correct in itself, none reachable
     without the clip, all re-derivable from this entry):
@@ -366,8 +396,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
       So flipping the `Explain` classification needs the tangent case too, or the API needs
       to admit sub-depth chamfers as the Native subset.
     - Applying the SECOND chamfer (the other end) to boolean output produced
-      "An edge's two uses must have opposite sense" — a sense bug in cascaded chamfer
-      surgery, not yet diagnosed.
+      "An edge's two uses must have opposite sense". **Now known NOT to be chamfer-specific**:
+      the identical message is what six of the nine remaining clip failures above throw, on
+      fillet bands, a slot through a bore and a bore swallowing a corner — none of which
+      involves a chamfer. It is a sense/seam-sealing defect that any clipped seam exposes, so
+      it should be diagnosed once, on the smallest of those cases
+      (`NearMissCarrierTests.BoreSwallowingTheCornerItself_IsExact`), rather than inside the
+      thread work.
   - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
     needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
     it keeps each carrier in its own family and has no `HelicalSurface` case, and a
