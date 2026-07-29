@@ -505,7 +505,9 @@ Queries nest and are named: `FaceSetRef.PlanarWithNormal(n)` / `Cylindrical(r?)`
 `GroupAlong(set, direction, n)`, `FaceRef.One(set)` / `Extreme(set, direction)` /
 `Top` / `Bottom` / `LargestByArea(set)` / `Largest`, `PlaneRef.TopPlane` / `OnTopFace`
 / `On(faceRef)` / `At(plane)`, `EdgeSetRef.RimOf(faces)` / `Convex` / `Circular(r?)` /
-`NthByRadius(n)`, `AxisRef.OfCylindrical(face)` / `Of(origin, direction)`. The
+`CircularBetween(min, max)` / `LongerThan(min)` / `ShorterThan(max)` /
+`Between(min, max)` / `NthByRadius(n)`, `AxisRef.OfCylindrical(face)` /
+`Of(origin, direction)`. The
 ordering/grouping ones are the serializable spellings of `BrepSelection` in
 EngrCAD.BRep (`SortAlong`/`Extreme`/`GroupAlong`/`GroupByCoplanar`/`FilterBy`/
 `Area`/`NthByRadius` — the build123d `sort_by`/`group_by`/`filter_by` capability as
@@ -536,6 +538,15 @@ in solid face order so it is stable across regenerations; and
 `CylindricalBetween(min, max)`, the FILTER that an exact radius deliberately is not (an
 exact radius compares at the weld tier, which is right for exactly-constructed geometry
 and useless for "every bore under 3 mm").
+
+Edges carry both range shapes: `EdgeSetRef.CircularBetween(min, max)` is the radius one
+(`Circular(r)` is likewise weld-tier exact), and `LongerThan`/`ShorterThan`/`Between`
+filter on `BrepQueries.Length` — exact for lines and circular arcs, a 64-chord polyline
+otherwise, so it is honestly a filter on a MEASURED length and there is deliberately no
+exact-length query beside it to be mistaken for the same thing. An open-ended range
+gets its own descriptor term (`lengthAtLeast(2)`) rather than an infinite bound: the
+grammar's numbers are a digit/sign/exponent scan, and widening them to read `Infinity`
+would touch every reference type's parser to spell one range.
 
 **The `Shape` API speaks the same vocabulary.** `Fillet`/`Chamfer`/`ChamferAtAngle`/
 `FilletEdges`/`ChamferEdges`, in their constant and variable-law forms, all take a
