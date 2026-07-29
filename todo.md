@@ -48,11 +48,20 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     angle of 5.57°, and the strict form of the flip guard reached 99.7% in band at **0.02°**.
     A minimum-angle or radius-ratio figure on `RemeshResult` would have made that visible
     without a bespoke test helper (`TetQuality` is the precedent, one project over).
-- [ ] **Face-aligned projection accumulates over the whole mesh even under queue
-  scheduling** — a vertex's position there is a function of its incident triangles, so a
-  partial accumulation would weight it against a subset. Restricting the face loop to the
-  faces incident to the active set (and clearing only those accumulators) would make the two
-  features compose; today `FaceAligned` costs O(faces) per pass regardless.
+- ~~**Face-aligned projection accumulates over the whole mesh even under queue
+  scheduling**~~ ✅ **done** — the accumulation now skips every face with no vertex in the
+  active set, which is sound because a face contributes only to its own vertices. Measured
+  (`UvSphere(1, 48, 32)`, target 0.08), queue scheduling whole-mesh → restricted: 124 → 123 ms
+  at 12 passes, 322 → 285 at 40, **623 → 302 at 100** (2.06×, and 3.07× against the plain
+  sweep). The shape matters more than the ratio: the whole-mesh figure keeps growing with the
+  pass count while the restricted one nearly flattens, so a converged mesh finally costs
+  almost nothing per extra pass. Bit-identical, because the walk keeps its **ascending face
+  scan** and skips only the projection query — no sort needed, where gathering the incident
+  faces into a list would have needed one (built, measured no faster, dropped). Residual:
+  - [ ] **Sweep scheduling still walks every face**, deliberately: with every vertex active
+    the restriction could only add a membership test per face. If a future caller wants
+    face-aligned projection over a large mesh with an explicit small `FixedVertices` set, the
+    same skip would apply — but nothing asks for it today.
 - [ ] **`Part`-level display remesh** — `Shape.Remeshed` is a graph node, so a remesh is a
   modelling decision baked into the design. A viewer-only "give this part uniform triangles
   for display/FEA export" switch on `Part` (a post-tessellation pass inside `GetMesh`) is a

@@ -91,6 +91,94 @@ public class RemesherSchedulingBenchmark(ITestOutputHelper output)
         return total == 0 ? 0 : (double)outside / total;
     }
 
+    /// <summary>
+    /// What restricting <see cref="RemeshProjection.FaceAligned"/>'s accumulation to the faces
+    /// incident to the active set is worth. Face-aligned projection used to walk every face
+    /// every pass whatever the scheduler had decided, so it was the one stage that did not
+    /// compose with <see cref="RemeshScheduling.Queue"/>.
+    /// <para>
+    /// Reference machine (win-x64, .NET 10.0.302, Release, otherwise idle), input
+    /// <c>UvSphere(1, 48, 32)</c> triangulated — 2 976 faces — face-aligned onto a
+    /// <see cref="MeshProjectionTarget"/> of itself at a 0.08 target:
+    /// </para>
+    /// <code>
+    /// passes | scheduling | accumulation |    ms
+    ///     12 | sweep      | whole mesh   |   113
+    ///     12 | queue      | whole mesh   |   124
+    ///     12 | queue      | incident     |   123
+    ///     40 | sweep      | whole mesh   |   364
+    ///     40 | queue      | whole mesh   |   322
+    ///     40 | queue      | incident     |   285
+    ///    100 | sweep      | whole mesh   |   873
+    ///    100 | queue      | whole mesh   |   623
+    ///    100 | queue      | incident     |   302
+    /// </code>
+    /// <para>
+    /// <b>The shape matters more than any single ratio.</b> Restricting the accumulation is a
+    /// wash at 12 passes (123 against 124 — nothing has gone quiet yet, the same result queue
+    /// scheduling itself gives), 1.13× at 40 and <b>2.06× at 100</b>. What the last column
+    /// really shows is that the whole-mesh accumulation keeps growing with the pass count
+    /// (124 → 322 → 623) while the restricted one nearly <b>flattens</b> (123 → 285 → 302):
+    /// before this, face-aligned projection paid O(faces) every pass forever, so a converged
+    /// mesh cost exactly as much per extra pass as an unconverged one. It is the only stage
+    /// that did not compose with the scheduler, and now it does. Against the plain sweep the
+    /// end-to-end figure at 100 passes is 3.07×.
+    /// </para>
+    /// <para>
+    /// The restriction is <b>bit-identical</b>, not approximate, and is asserted so in
+    /// <c>RemesherTests</c>: the accumulation keeps its ascending face scan and skips only the
+    /// projection query, so every surviving vertex sums its own incident faces in exactly the
+    /// order the whole-mesh walk gave it. Gathering the incident faces into a list instead
+    /// needs a sort to restore that order and measured no faster.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void FaceAlignedAccumulationCost()
+    {
+        if (!Enabled)
+            return;
+
+        var mesh = MeshPrimitives.UvSphere(1.0, 48, 32).Triangulated();
+        var target = new MeshProjectionTarget(mesh);
+        double edge = 0.08;
+
+        RemeshOptions FaceAligned(int passes) => new(edge)
+        {
+            Iterations = passes,
+            FeatureAngleDegrees = 0,
+            Projection = RemeshProjection.FaceAligned,
+            ProjectionTarget = target,
+        };
+
+        var warm = Stopwatch.StartNew();
+        do
+        {
+            Remesher.Remesh(mesh, FaceAligned(2));
+        }
+        while (warm.ElapsedMilliseconds < 1500);
+
+        output.WriteLine($"input: {mesh.FaceCount} faces, target edge {edge}");
+        output.WriteLine("passes | scheduling | accumulation |    ms | faces");
+
+        foreach (int passes in new[] { 12, 40, 100 })
+        {
+            foreach (var (scheduling, accumulation, options) in new (string, string, RemeshOptions)[]
+            {
+                ("sweep", "whole mesh", FaceAligned(passes)),
+                ("queue", "whole mesh", FaceAligned(passes) with
+                {
+                    Scheduling = RemeshScheduling.Queue, AccumulateOverEveryFace = true,
+                }),
+                ("queue", "incident", FaceAligned(passes) with { Scheduling = RemeshScheduling.Queue }),
+            })
+            {
+                double ms = BestOf(() => Remesher.Remesh(mesh, options), 5, out var result);
+                output.WriteLine(
+                    $"{passes,6} | {scheduling,-10} | {accumulation,-12} | {ms,5:F0} | {result.Mesh.FaceCount,5}");
+            }
+        }
+    }
+
     [Fact]
     public void SchedulingCostAndConvergence()
     {

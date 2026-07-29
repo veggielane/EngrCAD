@@ -590,6 +590,97 @@ public class RemesherTests
             () => Remesher.Remesh(GridPatch(3), new RemeshOptions(0.1) { FastSplitPasses = -1 }));
     }
 
+    // ------------------------------------------- face-aligned projection under queue scheduling
+
+    /// <summary>
+    /// The mesh must be fine enough relative to its target that regions actually settle: on a
+    /// COARSE fixture (a 20 × 13 sphere at a 0.22 target) the whole mesh stays awake every
+    /// pass even at 60 passes — measured, 42 996 faces accumulated of a possible 42 996 — so
+    /// the restriction never fires and any comparison against the unrestricted path is
+    /// vacuous. This is the same fixture family as <c>RemesherSchedulingBenchmark</c>'s.
+    /// </summary>
+    private static HalfEdgeMesh FaceAlignedQueueSphere() =>
+        MeshPrimitives.UvSphere(1.0, 48, 32).Triangulated();
+
+    private static RemeshOptions FaceAlignedQueueFixture(HalfEdgeMesh source) => new(0.08)
+    {
+        Iterations = 40,
+        FeatureAngleDegrees = 0,
+        Scheduling = RemeshScheduling.Queue,
+        Projection = RemeshProjection.FaceAligned,
+        ProjectionTarget = new MeshProjectionTarget(source),
+    };
+
+    /// <summary>
+    /// The restriction's correctness bar is not "it visits fewer faces" but "the accumulator
+    /// state comes out the same for the vertices it actually moves" — so this asserts
+    /// <b>bit-for-bit</b> equal positions against the unrestricted walk, on a run whose active
+    /// set is a proper subset of the mesh. If they differ, the restriction is wrong, not
+    /// merely faster.
+    /// <para>
+    /// Two things could break it and neither is visible in a tolerance comparison: dropping a
+    /// face that does contribute to a moved vertex, and visiting the contributing faces in a
+    /// different order (floating-point addition is not associative, which is why the
+    /// accumulation keeps its ascending face scan rather than gathering a list). Both were
+    /// checked by deliberately introducing them; the order break shows up in the last bits
+    /// only, as <c>…4258002</c> against <c>…42581595</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void FaceAlignedProjection_RestrictedAccumulationIsBitIdenticalUnderQueueScheduling()
+    {
+        var sphere = FaceAlignedQueueSphere();
+        var options = FaceAlignedQueueFixture(sphere);
+
+        var restricted = Remesher.Remesh(sphere, options);
+        var whole = Remesher.Remesh(sphere, options with { AccumulateOverEveryFace = true });
+
+        // FIRST: prove the restriction actually fires, or everything below is vacuous. A
+        // bit-identity assertion between two paths that turn out to be the same walk agrees
+        // with a broken restriction as happily as with a correct one — measured, it did:
+        // truncating the membership test to one of the triangle's three vertices (which drops
+        // faces that genuinely contribute) passed on the first fixture tried, because that
+        // fixture never let a single face be skipped. See FaceAlignedQueueSphere.
+        Assert.True(restricted.FacesAccumulated < whole.FacesAccumulated,
+            $"the restriction never skipped a face ({restricted.FacesAccumulated} of " +
+            $"{whole.FacesAccumulated}) — this fixture cannot tell a correct restriction from a broken one");
+
+        // THEN: the answer is bit-for-bit the whole-mesh answer. Not "close": dropping a face
+        // that does contribute, or visiting the contributors in a different order (float
+        // addition is not associative), both show up here and in no other assertion.
+        Assert.Equal(whole.Splits, restricted.Splits);
+        Assert.Equal(whole.Collapses, restricted.Collapses);
+        Assert.Equal(whole.Flips, restricted.Flips);
+        Assert.Equal(whole.Mesh.VertexCount, restricted.Mesh.VertexCount);
+        Assert.Equal(whole.Mesh.FaceCount, restricted.Mesh.FaceCount);
+        for (int v = 0; v < whole.Mesh.VertexCount; v++)
+        {
+            var a = restricted.Mesh.GetPosition(v);
+            var b = whole.Mesh.GetPosition(v);
+            Assert.True(BitConverter.DoubleToInt64Bits(a.X) == BitConverter.DoubleToInt64Bits(b.X) &&
+                        BitConverter.DoubleToInt64Bits(a.Y) == BitConverter.DoubleToInt64Bits(b.Y) &&
+                        BitConverter.DoubleToInt64Bits(a.Z) == BitConverter.DoubleToInt64Bits(b.Z),
+                $"vertex {v}: restricted {a} != whole-mesh {b}");
+        }
+    }
+
+    /// <summary>
+    /// Sweep scheduling keeps the whole-mesh walk deliberately: with every vertex active the
+    /// restriction could only add a membership test per face, and the plain loop is then both
+    /// faster and unchanged bit-for-bit from before the feature existed.
+    /// </summary>
+    [Fact]
+    public void FaceAlignedProjection_SweepSchedulingStillAccumulatesOverEveryFace()
+    {
+        var sphere = FaceAlignedQueueSphere();
+        var options = FaceAlignedQueueFixture(sphere) with { Scheduling = RemeshScheduling.Sweep };
+
+        var swept = Remesher.Remesh(sphere, options);
+        var forced = Remesher.Remesh(sphere, options with { AccumulateOverEveryFace = true });
+
+        Assert.Equal(forced.FacesAccumulated, swept.FacesAccumulated);
+    }
+
     // ---------------------------------------------------------------- bounded maximum
 
     /// <summary>Smallest angle of any triangle, in degrees — the shape-quality counterweight

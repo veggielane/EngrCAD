@@ -54,6 +54,13 @@ public enum RemeshProjection
     /// to plain closest-point projection, so an unoriented target degrades to
     /// <see cref="Vertex"/> rather than failing.
     /// </para>
+    /// <para>
+    /// It <b>composes with <see cref="RemeshScheduling.Queue"/></b>: the accumulation walks
+    /// only the faces incident to the active set, which is exactly the set that can
+    /// contribute to a vertex the pass writes, visited in ascending face index so every sum
+    /// lands in the same order and the restriction is bit-identical rather than merely
+    /// equivalent.
+    /// </para>
     /// </summary>
     FaceAligned,
 }
@@ -251,6 +258,14 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// </summary>
     public bool PreventNormalFlips { get; init; } = true;
 
+    /// <summary>
+    /// Test seam: forces <see cref="RemeshProjection.FaceAligned"/> to accumulate over every
+    /// face even under <see cref="RemeshScheduling.Queue"/>, so the restricted path can be
+    /// held to bit-for-bit equality against the unrestricted one. A per-instance option
+    /// rather than a mutable static, so it cannot leak between parallel tests.
+    /// </summary>
+    internal bool AccumulateOverEveryFace { get; init; }
+
     /// <summary>Edges longer than this are split. <see cref="MaxLengthFactor"/> × <see cref="TargetEdgeLength"/>.</summary>
     public double MaxEdgeLength => TargetEdgeLength * MaxLengthFactor;
 
@@ -264,7 +279,17 @@ public sealed record RemeshOptions(double TargetEdgeLength)
 /// <param name="Collapses">Edges collapsed across all passes.</param>
 /// <param name="Flips">Edges flipped across all passes.</param>
 /// <param name="Iterations">Passes actually run.</param>
-public sealed record RemeshResult(HalfEdgeMesh Mesh, int Splits, int Collapses, int Flips, int Iterations);
+public sealed record RemeshResult(HalfEdgeMesh Mesh, int Splits, int Collapses, int Flips, int Iterations)
+{
+    /// <summary>
+    /// Faces the face-aligned projection actually accumulated, summed over every pass — the
+    /// diagnostic that makes the restricted accumulation's skipping OBSERVABLE. Without it a
+    /// bit-identity test between the restricted and unrestricted paths passes vacuously
+    /// whenever the active set happens to be the whole mesh, which is exactly what it did on
+    /// the first fixture tried. Zero for any other projection mode.
+    /// </summary>
+    internal int FacesAccumulated { get; init; }
+}
 
 /// <summary>
 /// Isotropic remeshing: drives a triangle mesh toward a uniform target edge length while
@@ -381,7 +406,10 @@ public static class Remesher
         }
         progress?.ThrowIfCancelled();
 
-        return new RemeshResult(editable.ToMesh(), state.Splits, state.Collapses, state.Flips, options.Iterations);
+        return new RemeshResult(editable.ToMesh(), state.Splits, state.Collapses, state.Flips, options.Iterations)
+        {
+            FacesAccumulated = state.FacesAccumulated,
+        };
     }
 
     // The stride must be coprime with the half-edge capacity or the sweep would revisit a
@@ -446,6 +474,7 @@ public static class Remesher
         public int Splits { get; private set; }
         public int Collapses { get; private set; }
         public int Flips { get; private set; }
+        public int FacesAccumulated { get; private set; }
 
         public void Pass()
         {
@@ -1012,13 +1041,32 @@ public static class Remesher
             EnsureVertexCapacity();
             EnsureAccumulators();
             ClearModified(candidates);
-            Array.Clear(_accumulated, 0, _mesh.VertexCapacity);
-            Array.Clear(_accumulatedWeight, 0, _mesh.VertexCapacity);
 
-            // The accumulation is over the WHOLE mesh even under queue scheduling: a vertex's
-            // position here is a function of its incident triangles, so a partial accumulation
-            // would weight it against a subset and move it for no geometric reason. Only the
-            // write set is restricted.
+            // A vertex's position here is a function of its INCIDENT triangles, so the faces
+            // that can contribute to anything this pass writes are exactly those incident to
+            // the active set. Under sweep scheduling that is every face, so nothing is gained
+            // by testing; under queue scheduling, skipping the rest is what makes face-aligned
+            // projection compose with the scheduler instead of costing O(faces) regardless.
+            bool restricted = _options.Scheduling == RemeshScheduling.Queue &&
+                              !_options.AccumulateOverEveryFace;
+            if (restricted)
+            {
+                // Only the vertices the pass WRITES need a zeroed accumulator, and it writes
+                // exactly the candidates. A non-candidate vertex of a visited face is
+                // accumulated onto too, and that value is never read — it is zeroed again the
+                // moment the vertex is itself a candidate, which is the only way it is read.
+                foreach (int v in candidates)
+                {
+                    _accumulated[v] = Vector3d.Zero;
+                    _accumulatedWeight[v] = 0;
+                }
+            }
+            else
+            {
+                Array.Clear(_accumulated, 0, _mesh.VertexCapacity);
+                Array.Clear(_accumulatedWeight, 0, _mesh.VertexCapacity);
+            }
+
             for (int f = 0; f < _mesh.FaceCapacity; f++)
             {
                 if (!_mesh.IsFace(f))
@@ -1027,6 +1075,18 @@ public static class Remesher
                 int h1 = _mesh.Next(h0);
                 int h2 = _mesh.Next(h1);
                 int v0 = _mesh.Origin(h0), v1 = _mesh.Origin(h1), v2 = _mesh.Origin(h2);
+
+                // The whole cost of this stage is the projection below — a nearest-point query
+                // against the target — so the restriction skips THAT, not the cheap walk.
+                // Keeping the ascending face scan is what makes the restriction bit-identical
+                // for FREE: every surviving vertex sees its own incident faces in the same
+                // order the whole-mesh walk gave them, and floating-point addition is not
+                // associative. (Gathering the incident faces into a list instead needs an
+                // explicit sort to restore that order; it was built and measured no faster.)
+                if (restricted && !_vertexActive[v0] && !_vertexActive[v1] && !_vertexActive[v2])
+                    continue;
+                FacesAccumulated++;
+
                 var p0 = _mesh.GetPosition(v0);
                 var p1 = _mesh.GetPosition(v1);
                 var p2 = _mesh.GetPosition(v2);

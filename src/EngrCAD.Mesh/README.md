@@ -589,6 +589,38 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     erosion 9.7% → 3.8%. It needs an *oriented* target; triangles whose projection comes back
     unoriented fall back to closest-point placement, so an unoriented target degrades to
     `Vertex` rather than failing.
+  - **It composes with queue scheduling** — it used to be the one stage that did not, walking
+    every face every pass whatever the scheduler had decided. A vertex's position here is a
+    function of its *incident* triangles, so the faces that can contribute to anything a pass
+    writes are exactly those incident to the active set; the accumulation now skips the rest.
+    Measured (Release, win-x64, `UvSphere(1, 48, 32)` = 2 976 faces → target 0.08), queue
+    scheduling with the whole-mesh accumulation against the restricted one: **124 → 123 ms**
+    at 12 passes, **322 → 285** at 40, **623 → 302** at 100 (2.06×; 3.07× against the plain
+    sweep's 873). The ratio is not the finding — **the shape is**: the whole-mesh figure keeps
+    growing with the pass count while the restricted one nearly *flattens*, because a
+    converged mesh now costs almost nothing per extra pass. It is a wash at 12 passes for the
+    same reason queue scheduling itself is: nothing has gone quiet yet.
+  - **The restriction is bit-identical, and two things had to be true for that** — it is not
+    enough to visit fewer faces, the accumulator state has to come out the same for the
+    vertices actually moved. *Completeness*: a face contributes only to its own vertices, so
+    the incident set is complete for every candidate (non-candidate vertices of a visited face
+    accumulate too and are never read — they are re-zeroed whenever they are themselves
+    candidates, which is the only way they are read). *Order*: floating-point addition is not
+    associative, so the walk keeps its **ascending face scan** and skips only the projection
+    query, which is where all the cost is — that way each surviving vertex sums its own faces
+    in exactly the order the whole-mesh walk gave it, with no sort. (Gathering the incident
+    faces into a list instead needs an explicit sort to restore that order, and measured no
+    faster; it was built, compared and dropped.)
+  - **The bit-identity test needed a counter to stop being vacuous**, which is the lesson
+    worth keeping. `RemeshResult.FacesAccumulated` (internal) reports how many faces the
+    accumulation actually visited, and the test asserts the restricted run visited *fewer*
+    before asserting the positions match. Without that first assertion the comparison passes
+    whenever the active set happens to be the whole mesh — and on the first fixture tried (a
+    coarse 20 × 13 sphere at a 0.22 target) it did exactly that even at 60 passes, **42 996
+    faces of a possible 42 996**, so a deliberately broken restriction passed the test. Both
+    failure modes are now caught: dropping a contributing face, and visiting the contributors
+    in a different order (which shows up only in the last bits — `…4258002` against
+    `…42581595` — and would sail through any tolerance comparison).
 - **`RegionRemesher`** — isotropic remeshing of one face selection, in place (g3's
   `RegionRemesher`): `MeshRegionOperator.Extract` → remesh the patch with its seam pinned →
   `Reinsert`. The rest of the model is untouched, which is what makes remeshing usable on a

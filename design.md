@@ -3215,6 +3215,26 @@ for `in`-parameters being illegal in expression trees.
   wired into `Shape.Remeshed` and changing the default moves committed output; the one
   measure that is genuinely mixed is the cylinder's worst triangle angle (0.58° against
   0.89°), since a refused flip is a valence left irregular.
+- **A restriction's correctness bar is the STATE it leaves, not the work it skips — and
+  the test for it is vacuous until a counter proves it fired.** Face-aligned reprojection
+  accumulated over every face even under queue scheduling, which was sound but made it the
+  one stage that did not compose with the scheduler. Restricting it to the faces incident
+  to the active set is legal because a face contributes only to its own vertices, and it is
+  *bit-identical* rather than merely equivalent for two separate reasons that both had to
+  be arranged: completeness (a candidate's incident faces are all visited, and the
+  non-candidate vertices that get accumulated on the way are never read and are re-zeroed
+  before they are) and **order**, since floating-point addition is not associative. The
+  order requirement is what chose the implementation: keeping the ascending face scan and
+  skipping only the expensive projection query gives the right order for free, where
+  gathering the incident faces into a list needs an explicit sort to restore it — that
+  version was built, measured no faster, and dropped. The lesson with the longest reach is
+  the testing one: the bit-identity test **passed with the restriction deliberately
+  broken**, because the fixture chosen never let a single face be skipped (42 996 of 42 996
+  at 60 passes), so the two runs were the same walk. A proxy for "the active set shrank" —
+  comparing queue output against sweep output — is not evidence either, since those differ
+  for unrelated reasons. An internal counter asserted strictly smaller *before* the
+  positions are compared is what gives the test teeth, and it then catches both a dropped
+  face and a changed visit order, the latter differing only in the last bits.
 - **Prefer the standard algorithm to the reference library's heuristic.** g3's
   `MinimalHoleFill` is four iterative edge-flip passes; its own comments describe strong
   ordering effects, non-convergence, a hard pass cap to stop oscillation, and a forced
