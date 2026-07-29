@@ -36,17 +36,17 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Extrude(Sketch)` | ✅ native | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Revolve(Sketch)` full turn | ✅ native (axis-touching OK: on-axis stretches become poles) | ✅ **native** (exact 2D SDF) | ✅ native |
 | `Extrude` (profile, holes, shear) | ✅ native | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
-| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; ❌ with holes) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
+| `Extrude(Sketch, twist, scale)` (OpenSCAD `linear_extrude`) | taper only: ✅ native (ruled loft — straight sides sweep exact planes through the scaling centre; mirrored included, since it IS a two-section loft; ❌ with holes) · twist: ❌ (no analytic twisted surface) | 🔶 bridged (section-sweep mesh → mesh SDF) | ✅ native (direct section sweep, `slices` rings) |
 | `Revolve` (partial/full, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
 | `Sweep` (RMF path, holes) | ✅ native (rigid) · ❌ sheared | 🔶 bridged | ✅ / 🔶 |
-| `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (rigid + uniform scale; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Loft` (sections) / `LoftAlong` (evolution law) | ✅ native (any similarity, MIRRORED included; `SolidFactory.Loft`) · ❌ sheared (chord parameterization is metric) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
 | `Union` / `Intersect` / `Subtract` | ✅ native (`BrepBoolean`) | ✅ native | ✅ (from B-Rep, else `MeshBoolean`) |
 | `SmoothUnion` / `SmoothIntersect` / `SmoothSubtract` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Offset` / `Shell(t)` (SDF skin) | ❌ no B-Rep form (`Shell(t)`'s message names the exact overload) | ✅ native | 🔶 polygonized |
-| `Shell(t, openings)` (exact inward hollow) | ✅ native (rigid + uniform scale; planar OR curved carriers — `Shelling.Shell`) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
-| `Draft(angle, neutral, pull, faces?)` | ✅ native (rigid + uniform scale; planar prisms, plus faces of revolution about the pull axis — `Draft.Apply`) | 🔶 bridged | ✅ native |
+| `Shell(t, openings)` (exact inward hollow) | ✅ native (any similarity, MIRRORED included; planar OR curved carriers — `Shelling.Shell`) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Draft(angle, neutral, pull, faces?)` | ✅ native (any similarity, MIRRORED included — the pull direction takes its linear image; planar prisms, plus faces of revolution about the pull axis — `Draft.Apply`) | 🔶 bridged | ✅ native |
 | `SheetMetalBody` (base flange + edge flanges) | ✅ native (rigid + uniform scale; bends welded in as topology — `SheetMetalSurgery`) · ❌ sheared (thickness and bend radius are lengths) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
-| `RoundEdges(r)` (whole-solid rounding) | ✅ native (rigid + uniform scale; convex planar solids — `Filleting.FilletAllEdges`) | 🔶 bridged | ✅ native |
+| `RoundEdges(r)` (whole-solid rounding) | ✅ native (any similarity, MIRRORED included — the opening's structuring element is a BALL, which every reflection maps to itself; convex planar solids — `Filleting.FilletAllEdges`) | 🔶 bridged | ✅ native |
 | `Lattice` (gyroid & co.) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Chamfer` (planar-face rims) | ✅ native (miters; cone bands on circles) | 🔶 bridged | ✅ native |
 | `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
@@ -57,7 +57,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
-| `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
+| `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) + draft/shell/round-edges/loft/taper (each defined by LENGTHS and ANGLES alone, which every isometry preserves; draft takes the pull direction's linear image, un-negated — a pull is transported, not conjugated like a revolve's axis) · ❌ `SheetMetalBody` (a flange tree is ordered and edge-quoted, so a reflection would need it rebuilt the other way round, not re-placed) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
 | General affine (shear, non-uniform scale) | ✅ box/cylinder/extrude · ❌ others | 🔶 bridged | ✅ / 🔶 |
 | `ExternalThread` (no chamfer, no clearance) | ✅ **native** (boolean-free helical sweep, rigid + uniform scale; not STEP-exportable) | ✅ native (exact-sign thread SDF) | ✅ native (B-Rep tessellation) |
 | `ThreadedHole` (no clearance) | ✅ **native** (pilot + thread as ONE clipped-profile helical tool; spiral-arc chains split the drilled faces) | ✅ native | ✅ native (B-Rep tessellation) |

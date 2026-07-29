@@ -1060,12 +1060,22 @@ export — is recorded in CLAUDE.md):
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)
-- [ ] mirror B-Rep completion, remaining nodes — revolve/sweep/rim/drill ✅ landed
-  (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF for sweeps,
-  isometry-commuting surgery for rims/drills); still rigid-proper-only:
-  `Draft` (pull direction needs the linear image under the reflection),
-  `Shell(t, openings)`, `RoundEdges`, `Loft` — all isometry-commuting, each a small
-  DecomposeSimilarity change plus tests when wanted
+- [x] ~~mirror B-Rep completion, remaining nodes~~ ✅ **landed in full** — revolve/sweep/
+  rim/drill earlier (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF
+  for sweeps, isometry-commuting surgery for rims/drills), and now `Draft` /
+  `Shell(t, openings)` / `RoundEdges` / `Loft` plus the pure taper (which lowers AS a
+  two-section loft, so leaving it refused would have been one operation disagreeing with
+  itself). Those five needed no identity — each is defined by lengths and angles alone —
+  and Draft's pull direction takes its linear image un-negated. Remaining refusal in the
+  family, with a real reason: `SheetMetalBody` (an ordered, edge-quoted flange tree would
+  need rebuilding the other way round, not re-placing).
+- [ ] **`ThreadedHole` still refuses a mirror with the rationale `ExternalThread` retired**
+  ("a mirrored thread is left-handed" — which is now Native via `TryDecomposeThreadPlacement`'s
+  FlipY branch). A threaded hole's tool is the same helical rod clipped at the pilot
+  radius, so the same decomposition should apply, with the handedness XOR'd exactly as
+  `ThreadShape` does. Not folded into the mirror-completion work because it also has to
+  carry the per-point placement and the depth validation through the reflection, which is
+  a different (and testable) job from a gate change.
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
   chamfer joins, erosion as complement dilation; **open-path stroking ✅ landed** —
   `Region2dOffset.Stroke(path, width, cap, join)`, butt/round/square caps, both-side

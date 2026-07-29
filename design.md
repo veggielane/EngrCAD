@@ -1712,6 +1712,39 @@ Design decisions:
   both alone; any two reflections differ by a rotation, so choosing the convenient one is
   free. The refusal that remains is a genuinely different one — a sheared or
   non-uniformly scaled placement cannot re-place a helix at all.
+- **Most of the mirror work was an identity; the last five nodes needed none.** Revolves
+  conjugate (`F∘Rot(d, φ)∘F = Rot(−F·d, φ)`), threads negate a rate, sweeps rely on RMF
+  transport being intrinsic. `Draft`, `Shell(t, openings)`, `RoundEdges`, `Loft` and the
+  pure taper have no such structure to fix, because each is defined by **lengths and
+  angles alone** — an offset by a distance, a rounding by a ball, a skin whose
+  parameterization and alignment are metric, a taper by an angle — and every isometry
+  preserves all of those. So the operation applied to the mirrored child simply IS the
+  mirrored operation, and the change is a gate: `Decompose` (proper only) becomes
+  `DecomposeSimilarity`. Three points worth keeping.
+
+  **A pull direction is transported; a revolve axis is conjugated.** `Draft` is the only
+  one of the five with a direction to carry, and it takes `m.TransformVector(pull)` with
+  **no negation** — the negation in the revolve case comes from conjugating a rotation,
+  which a plain vector does not undergo. Proper placements keep their original spelling
+  (`rotation.Rotate(pull)`) so existing geometry stays bit-identical; only the reflected
+  branch is new, exactly the asymmetry the reflected revolve branch already had.
+
+  **What makes the draft claim true rather than merely plausible is that `Draft.Apply`
+  chooses its rotation SENSE by measurement** (build both candidates, keep the one leaning
+  further toward the pull direction) instead of from a cross-product convention. A
+  handedness convention anywhere in there would have flipped under the reflection.
+
+  **The oracle has to be an analytic volume, not a mirrored twin.** A reflection is an
+  isometry, so a wrongly-signed pull still yields a closed, valid solid of a plausible
+  size — and comparing mirrored against unmirrored would pass it, since both would be
+  wrong the same way. Drafting a 20×12×6 block 5° about its BASE separates the cases by
+  construction: narrowing gives `abh − (a+b)t h² + (4/3)t²h³` = 1341.42 and widening
+  1542.99. (The taper is folded in for a different reason: it *lowers as* a two-section
+  loft, so leaving it refused while `Loft` was Native would have been one operation
+  disagreeing with itself.) `SheetMetalBody` stays refused and is not an oversight: a
+  flange tree is ORDERED and quoted on named edges, so a reflection reverses the sense of
+  every bend and the body would have to be rebuilt the other way round rather than
+  re-placed — which is what its refusal message has always said.
 - **Queries and rim features**: `BrepQueries` gives B-Rep topology the LINQ vocabulary
   (classification, adjacency, convexity, normal-directed face selection); `Shape.Chamfer/
   Fillet(amount, faceSelector)` run `Filleting.ChamferRim/FilletRim` topology surgery

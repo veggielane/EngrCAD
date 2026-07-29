@@ -122,7 +122,9 @@ internal static class ShapeCompiler
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a tapered extrusion of a sketch with holes needs loft sections with holes (a documented follow-up); cut the hole after the taper, or use ToMesh/ToImplicit"));
                 else
-                    entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    // Mirrored similarities included: this case IS a two-section loft, so
+                    // it inherits the loft's isometry argument verbatim.
+                    entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                         ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                             "ruled loft between the base section and the scaled top (SolidFactory.Loft)")
                         : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -145,10 +147,12 @@ internal static class ShapeCompiler
                         + "shell)"));
                 break;
             case LoftShape:
-                // Rigid + uniform only: the loft's chord-length parameterization and
-                // least-twist alignment are metric, so a shear would skin DIFFERENT
-                // in-between geometry than shearing the skin.
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                // Similarities only (mirrored included): the loft's chord-length
+                // parameterization and least-twist alignment are METRIC, so a shear would
+                // skin DIFFERENT in-between geometry than shearing the skin — while an
+                // isometry preserves every length and angle those two rules read, so
+                // skinning the reflected sections IS the reflected skin.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "skinned through the placed sections (SolidFactory.Loft); section compatibility validates at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -182,8 +186,14 @@ internal static class ShapeCompiler
                 break;
 
             case DraftShape draft:
+                // Mirrored similarities included: an angle is preserved by every isometry
+                // and "narrows along the pull direction" is a metric statement, so the
+                // reflected draft is the draft along the pull direction's linear image.
+                // (Draft.Apply chooses the rotation SENSE by measurement rather than from
+                // a handedness convention, which is what makes that true rather than
+                // merely plausible.)
                 ClassifyBrep(draft.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "exact plane rotation about each face's neutral line (Draft.Apply); prism-shape constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -191,8 +201,10 @@ internal static class ShapeCompiler
                 break;
 
             case BrepShellShape brepShell:
+                // Mirrored similarities included: an inward offset by a distance is defined
+                // by distance alone, and an isometry preserves distance.
                 ClassifyBrep(brepShell.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "exact inward polyhedral shelling (Shelling.Shell); polyhedron constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -200,8 +212,11 @@ internal static class ShapeCompiler
                 break;
 
             case RoundEdgesShape roundEdges:
+                // Mirrored similarities included: the operation is the morphological
+                // opening (K erode B_r) dilate B_r, and a reflection maps a ball to the
+                // same ball, so it commutes with the whole construction.
                 ClassifyBrep(roundEdges.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "exact morphological rounding (Filleting.FilletAllEdges); convex-edge and corner constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -549,7 +564,7 @@ internal static class ShapeCompiler
                 if (twisted.Sketch.Holes.Count > 0)
                     throw new NotSupportedException(
                         "A tapered extrusion of a sketch with holes needs loft sections with holes; cut the hole after the taper, or use ToMesh/ToImplicit.");
-                Decompose(m, shape, out _, out _, out _);   // rigid + uniform only (the loft rule)
+                DecomposeSimilarity(m, shape, out _, out _, out _); // similarity only (the loft rule)
                 var effective = m * twisted.PlaneMatrix;
                 // The top section is the base scaled per axis about the plane origin and
                 // lifted by the height; a ruled loft between the two IS the linear taper
@@ -642,7 +657,9 @@ internal static class ShapeCompiler
 
             case LoftShape loft:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                // Similarity only (mirrored included) — the sections are already placed in
+                // 3D, so the decomposition is a pure GATE and `m` is applied verbatim.
+                DecomposeSimilarity(m, shape, out _, out _, out _);
                 var placed = new Profile[loft.Sections.Count];
                 for (int i = 0; i < placed.Length; i++)
                     placed[i] = TransformProfile(loft.Sections[i], m);
@@ -708,8 +725,14 @@ internal static class ShapeCompiler
             {
                 // The angle is dimensionless, so only the neutral plane and pull
                 // direction bake; uniform scale leaves the taper alone (a scaled
-                // frustum keeps its angles).
-                Decompose(m, shape, out var draftRotation, out _, out _);
+                // frustum keeps its angles). Mirrored placements take the pull
+                // direction's LINEAR IMAGE — the same asymmetry the reflected revolve
+                // branch has, and for the same reason: the decomposition's rotation is
+                // the proper part of m*FlipZ and would drop the reflection. Proper
+                // placements keep the exact spelling they always had, so their geometry
+                // stays bit-identical. No negation here (unlike a revolve's axis): a
+                // pull direction is transported by the linear map, not conjugated.
+                DecomposeSimilarity(m, shape, out var draftRotation, out _, out _, out bool draftReflected);
                 var solid = LowerBrep(draft.Child, m);
                 Func<BrepFace, bool>? selector = null;
                 if (draft.Selector is not null)
@@ -722,14 +745,19 @@ internal static class ShapeCompiler
                 }
                 return BRep.Draft.Apply(
                     solid, m.TransformPoint(draft.NeutralOrigin),
-                    draftRotation.Rotate(draft.PullDirection), draft.AngleRadians, selector);
+                    draftReflected
+                        ? m.TransformVector(draft.PullDirection)
+                        : draftRotation.Rotate(draft.PullDirection),
+                    draft.AngleRadians, selector);
             }
 
             case BrepShellShape brepShell:
             {
                 // Wall thickness is a length: it scales with the accumulated uniform
-                // factor, like the rim features' amounts.
-                Decompose(m, shape, out _, out _, out double wallScale);
+                // factor, like the rim features' amounts. Mirrored placements are fine —
+                // only the scale is consumed, and an offset by a distance commutes with
+                // any isometry.
+                DecomposeSimilarity(m, shape, out _, out _, out double wallScale);
                 var solid = LowerBrep(brepShell.Child, m);
                 Func<BrepFace, bool>? openings = null;
                 if (brepShell.Openings is not null)
@@ -745,7 +773,9 @@ internal static class ShapeCompiler
 
             case RoundEdgesShape roundEdges:
             {
-                Decompose(m, shape, out _, out _, out double radiusScale);
+                // Mirrored placements included: the opening's structuring element is a
+                // BALL, which every reflection maps to itself.
+                DecomposeSimilarity(m, shape, out _, out _, out double radiusScale);
                 return Filleting.FilletAllEdges(
                     LowerBrep(roundEdges.Child, m), roundEdges.Radius * radiusScale);
             }

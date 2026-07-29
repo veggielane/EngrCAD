@@ -205,6 +205,177 @@ public class MirrorShapeTests
             $"mirrored sweep volume {mesh.Volume()} vs {reference.Volume()}");
     }
 
+    // ---- mirrored B-Rep completion: draft / shell / round-edges / loft ---------
+    // These four needed no conjugation identity at all — each is defined purely by
+    // LENGTHS and ANGLES, which every isometry preserves, so lowering the mirrored
+    // child and running the same operation on it IS the mirrored result. Draft is the
+    // only one with a direction to carry, and it takes the pull's LINEAR IMAGE (not a
+    // negated one: a pull direction is transported, not conjugated the way a revolve's
+    // axis is).
+
+    [Fact]
+    public void MirroredDraft_IsBrepNative_WithTheExactTaperedVolume()
+    {
+        // A 20 x 12 x 6 block drafted 5 degrees about its BASE, so the taper's SIGN is
+        // visible in the volume: narrowing gives abh - (a+b)t h^2 + (4/3)t^2 h^3 while
+        // widening gives + on the middle term - 1341.4 against 1543.0, two hundred units
+        // apart. That is what makes this an oracle for the pull direction rather than a
+        // check that some solid came out: a mirror is an isometry, so a WRONGLY signed
+        // pull still produces a closed, valid solid of a perfectly plausible size.
+        const double angle = 5.0;
+        double t = Math.Tan(angle * Math.PI / 180);
+        double exact = 20 * 12 * 6 - (20 + 12) * t * 36 + 4.0 / 3.0 * t * t * 216;
+        double widened = 20 * 12 * 6 + (20 + 12) * t * 36 + 4.0 / 3.0 * t * t * 216;
+
+        var drafted = Shape.Box(20, 12, 6).Draft(angle, (0, 0, -3), Vector3d.UnitZ);
+        var mirrored = drafted.Mirror((3, 0, 0), Vector3d.UnitX);
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 64, 24);
+        Assert.True(mesh.IsClosed);
+
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 1e-9,
+            $"mirrored drafted volume {mesh.Volume()} vs {exact} (a flipped pull would give {widened})");
+    }
+
+    [Fact]
+    public void MirroredDraft_AcrossThePullDirection_StillTapersTheSameWay()
+    {
+        // Mirroring across a plane PERPENDICULAR to the pull direction turns the block
+        // upside down, so "narrows going +Z" becomes "narrows going -Z" in world terms —
+        // the reflected pull is -Z and the solid is the reflection of the original. The
+        // volume is unchanged (isometry) and the top face is now the WIDE one.
+        var drafted = Shape.Box(20, 12, 6).Draft(5, (0, 0, -3), Vector3d.UnitZ);
+        var mirrored = drafted.Mirror((0, 0, 0), Vector3d.UnitZ);
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var mesh = BRepTessellator.Tessellate(mirrored.ToBrep(), 64, 24);
+        var reference = BRepTessellator.Tessellate(drafted.ToBrep(), 64, 24);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - reference.Volume()) < 1e-9,
+            $"mirrored drafted volume {mesh.Volume()} vs {reference.Volume()}");
+
+        // The neutral plane was the base at z = -3, which reflects to z = +3, so the
+        // mirrored block is WIDE at the top and narrow at the bottom. Half-widths in x
+        // are 10 - (z' + 3)tan(5 deg) at the original height z' = -z: 9.956 at z = +2.5
+        // and 9.519 at z = -2.5, so x = 9.7 straddles them. Sample the field rather than
+        // inferring the direction from a volume, which a flipped pull would match.
+        var sdf = mirrored.ToImplicit();
+        Assert.True(sdf.Evaluate((9.7, 0, 2.5)) < 0, "x = 9.7 is inside the wide end");
+        Assert.True(sdf.Evaluate((9.7, 0, -2.5)) > 0, "x = 9.7 must be outside the narrow end");
+    }
+
+    [Fact]
+    public void MirroredShell_IsBrepNative_WithTheExactWallVolume()
+    {
+        // A sealed 1.5 mm shell of a 20 x 12 x 6 block: the void is 17 x 9 x 3, so the
+        // closed mesh measures 1440 - 459 = 981. An offset is defined by DISTANCE alone,
+        // which every reflection preserves.
+        var shelled = Shape.Box(20, 12, 6).Shell(1.5, null);
+        var mirrored = shelled.Mirror((1, -2, 0.5), (0.6, 1, 0.3));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 64, 24);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - 981.0) < 1e-9,
+            $"mirrored shelled volume {mesh.Volume()} vs 981");
+    }
+
+    [Fact]
+    public void MirroredRoundEdges_IsBrepNative_AndMatchesSteiner()
+    {
+        // The morphological opening's structuring element is a BALL, which every
+        // reflection maps to itself, so the mirrored rounding is the rounding of the
+        // mirrored solid. Steiner on the ERODED body (16 x 8 x 2) is the analytic
+        // target; a tessellation converges onto it from inside, so compare at a
+        // discretization-honest tolerance and pin the mirror against its own twin
+        // exactly.
+        const double r = 2;
+        double steiner = 16 * 8 * 2                                  // eroded volume
+            + 2 * (16 * 8 + 16 * 2 + 8 * 2) * r                      // eroded area * r
+            + r * r / 2 * (4 * (16 + 8 + 2)) * (Math.PI / 2)         // edges, each a quarter turn
+            + 4 * Math.PI / 3 * r * r * r;                           // corners
+
+        var rounded = Shape.Box(20, 12, 6).RoundEdges(r);
+        var mirrored = rounded.Mirror((0.5, 0, 0.2), (1, 0.3, 0.8));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 96, 32);
+        var reference = BRepTessellator.Tessellate(rounded.ToBrep(), 96, 32);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - reference.Volume()) < 1e-9,
+            $"mirrored rounded volume {mesh.Volume()} vs {reference.Volume()}");
+        Assert.True(Math.Abs(mesh.Volume() - steiner) / steiner < 2e-3,
+            $"mirrored rounded volume {mesh.Volume()} vs Steiner {steiner}");
+    }
+
+    [Fact]
+    public void MirroredLoft_IsBrepNative_WithTheExactPrismatoidVolume()
+    {
+        // A ruled loft between a 10 x 10 square and a 4 x 4 square 8 apart is a
+        // frustum: the prismatoid formula h/6 (A0 + 4Am + A1) is exact for it, with the
+        // mid-section 7 x 7. The loft's chord-length parameterization and least-twist
+        // alignment are metric, so an isometry commutes with both.
+        double exact = 8.0 / 6.0 * (100 + 4 * 49 + 16);
+
+        var loft = Shape.Loft(
+        [
+            (Sketch.Rectangle(10, 10), SketchPlane.At((0, 0, 0), Vector3d.UnitX, Vector3d.UnitY)),
+            (Sketch.Rectangle(4, 4), SketchPlane.At((0, 0, 8), Vector3d.UnitX, Vector3d.UnitY)),
+        ], LoftStyle.Ruled);
+        var mirrored = loft.Mirror((2, -1, 0), (1, 0.4, 0.2));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 64, 24);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 1e-9,
+            $"mirrored loft volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void MirroredTaperedExtrude_IsBrepNative()
+    {
+        // A pure taper LOWERS as a two-section ruled loft, so it inherits the loft's
+        // isometry argument verbatim — leaving it refused with the loft Native would be
+        // one operation disagreeing with itself. Same prismatoid oracle: 10 x 10 scaled
+        // to 0.4 over a height of 8, mid-section 7 x 7.
+        double exact = 8.0 / 6.0 * (100 + 4 * 49 + 16);
+
+        var tapered = Shape.Extrude(Sketch.Rectangle(10, 10), height: 8, twist: 0, scale: 0.4);
+        var mirrored = tapered.Mirror((0, 3, 1), (0.3, 1, 0));
+
+        Assert.All(mirrored.Explain(TargetRep.Brep).Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+        var mesh = BRepTessellator.Tessellate(mirrored.ToBrep(), 64, 24);
+        Assert.True(mesh.IsClosed);
+        Assert.True(Math.Abs(mesh.Volume() - exact) / exact < 1e-9,
+            $"mirrored tapered volume {mesh.Volume()} vs {exact}");
+    }
+
+    [Fact]
+    public void MirroredSheetMetal_StaysRefusedByName()
+    {
+        // The one node in this family that is NOT isometry-commuting, and it is refused
+        // for a stated reason rather than by omission: a flange tree is an ORDERED tree
+        // of bends quoted on named edges, and a reflection reverses the sense of every
+        // one of them, so the body would have to be rebuilt the other way round rather
+        // than re-placed.
+        var body = SheetMetalBody.Base(Sketch.Rectangle(80, 50), new SheetMetalSpec(1.5, 2));
+        var sheet = body.Solid.Mirror((0, 0, 0), Vector3d.UnitX);
+
+        var report = sheet.Explain(TargetRep.Brep);
+        Assert.False(report.IsConvertible);
+        Assert.Contains(report.Entries, e => e.Support == NodeSupport.Impossible &&
+            e.Detail is not null && e.Detail.Contains("MIRROR"));
+    }
+
     [Fact]
     public void MirroredChamfer_IsBrepNative_AndCutsTheMirroredRim()
     {

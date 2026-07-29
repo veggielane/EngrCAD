@@ -234,9 +234,12 @@ public abstract class Shape
     /// must have matching segment counts (they correspond by segment index); winding
     /// and starting segment are aligned automatically to the least-twist match, and the
     /// first and last sections are capped, so the result is always a closed solid.
-    /// <para>Representation support: <b>B-Rep-Native</b> under rigid placements and
-    /// uniform scaling — the skin interpolates the placed sections exactly, and the
-    /// accumulated transform bakes into the section curves. Implicit lowering bridges
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
+    /// placements included — the skin interpolates the placed sections exactly, and the
+    /// accumulated transform bakes into the section curves. (The chord-length
+    /// parameterization and least-twist alignment are METRIC, which is exactly why a
+    /// shear is refused and a reflection is not: an isometry preserves every length and
+    /// angle those two rules read.) Implicit lowering bridges
     /// through the tessellation (the loft blend is defined on the B-Rep surface, not as
     /// a field), and mesh comes from the exact B-Rep. A sheared placement is
     /// B-Rep-Impossible: the loft's chord-length parameterization and least-twist
@@ -859,8 +862,11 @@ public abstract class Shape
     /// null drafts every side face. Per-face angles come from CHAINING drafts — the
     /// operation is exact and composable, so
     /// <c>shape.Draft(2, o, pull, left).Draft(5, o, pull, right)</c> is exact too.</para>
-    /// <para>Representation support: <b>B-Rep-Native</b> under rigid + uniform-scale
-    /// placements (exact plane rotation about each face's neutral line; the solid must
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
+    /// placements included — a mirrored draft takes the pull direction's LINEAR IMAGE,
+    /// un-negated (a pull direction is transported by the map, not conjugated the way a
+    /// revolve's axis is), and the angle survives because every isometry preserves
+    /// angles (exact plane rotation about each face's neutral line; the solid must
     /// be a planar-faced prism about the pull direction — anything else is refused by
     /// name at lowering). Implicit bridges through the tessellation; mesh comes from the
     /// exact B-Rep.</para>
@@ -1198,7 +1204,8 @@ public abstract class Shape
     /// <para>Unlike <see cref="Shell(double)"/> — the SDF skin <c>|d| − t/2</c>, centred
     /// on the surface — this overload does not grow the part: the outer boundary stays
     /// put. That difference is representation-independent by design: this call is
-    /// B-Rep-Native (rigid + uniform-scale placements; the child must lower to a
+    /// B-Rep-Native (any similarity, MIRRORED included — an offset is defined by
+    /// DISTANCE alone and every isometry preserves it; the child must lower to a
     /// polyhedral solid — planar faces, straight edges, 3-valent corners — anything else
     /// refused by name at lowering) and bridges implicit/mesh through the exact shelled
     /// B-Rep, so every representation shows the SAME walls.</para>
@@ -1217,8 +1224,9 @@ public abstract class Shape
     /// shrunk boundary, each edge becomes an exact cylindrical band, each corner an
     /// exact spherical patch (a box becomes 26 faces), boolean-free with nothing to
     /// seal.
-    /// <para>Representation support: <b>B-Rep-Native</b> under rigid + uniform-scale
-    /// placements (the radius scales with the part). The child must lower to a solid
+    /// <para>Representation support: <b>B-Rep-Native</b> under any similarity, MIRRORED
+    /// placements included (the radius scales with the part; the opening's structuring
+    /// element is a BALL, which every reflection maps to itself). The child must lower to a solid
     /// with planar faces, straight convex edges and 3-valent corners with one incident
     /// face perpendicular to the other two — boxes, convex prisms, sheared boxes;
     /// concave edges and general trihedral corners are refused by name at lowering
@@ -1350,8 +1358,14 @@ public abstract class Shape
     /// F·Rot(d, φ)·F = Rot(−F·d, φ) — the identity that also makes mirrored threads
     /// left-handed); sweeps need no fix at all (rotation-minimizing transport is
     /// intrinsic); and rim features / drills follow, since chamfers, fillets and
-    /// revolved tools commute with isometries. See <see cref="Explain"/> for the
-    /// per-node verdicts.
+    /// revolved tools commute with isometries. Draft, <c>Shell(t, openings)</c>,
+    /// <c>RoundEdges</c>, <c>Loft</c> and the pure taper need no identity at all — each
+    /// is defined by LENGTHS and ANGLES, which every isometry preserves, so the
+    /// operation on the mirrored child IS the mirrored operation (draft carries the pull
+    /// direction's linear image; a rounding's structuring element is a ball). The one
+    /// refusal left in this family is <c>SheetMetalBody</c>, whose flange tree is
+    /// ordered and quoted on named edges and would have to be rebuilt the other way
+    /// round rather than re-placed. See <see cref="Explain"/> for the per-node verdicts.
     /// </summary>
     public Shape Mirror(in Vector3d point, in Vector3d normal)
     {
