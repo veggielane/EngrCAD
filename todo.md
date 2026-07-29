@@ -507,9 +507,11 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   unflattened, wired up through `Curve2d.TryToCurvedEdge`, `Profile.FromCurvedRegion`
   and `Sketch.ToCurvedRegions`/`FromCurvedRegion`/`UnionExact`/`OffsetExact`):
   `PolySimplification2`-style Douglas–Peucker simplification (only the exact-collinear
-  pass landed), and `Region2d` self-intersection validation (a loop is checked against
-  other loops but not against itself, so a self-intersecting outer loop produces garbage
-  silently).
+  pass landed). ~~`Region2d` self-intersection validation~~ ✅ **done at `798622a`** —
+  `Region2dValidation` finds a PROPER crossing within one loop or between two, exactly via
+  `Orient2dSign`, over a `Bvh` above 24 segments, and `Region2d`'s constructors refuse
+  rather than producing garbage; `CurvedRegion2d` carries the curved twin over its own
+  x-sweep broad phase.
 - [ ] **Curved-2D-tier follow-ups** (the lines-and-arcs tier ✅ landed and is
   complete in the sense that matters — its tangent+curvature tie-break is decidable
   for exactly those two shapes; see design.md §5):
@@ -521,10 +523,32 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     derivative. A jet comparison of bounded order is not sound in general; the honest
     v2 is probably to compare a small parametric offset off the node and refuse when
     even that ties.
-  - [ ] **`CurvedRegion2dOffset.Stroke`** — the open-path stroke of a curved chain
-    (the polygonal `Region2dOffset.Stroke` takes a polyline). All the primitives
-    already exist (annular-sector slabs, exact sector joins and caps); it is the
-    both-side join bookkeeping that has to be redone for arcs.
+  - ~~**`CurvedRegion2dOffset.Stroke`**~~ ✅ **done** — the open-path stroke of a curved
+    chain. The filed framing was right that the primitives existed and slightly wrong about
+    where the work was: the both-side join bookkeeping ported verbatim from the polygonal
+    twin (the existing `AddCornerJoin` took the two outward normals already, and a stroke
+    just calls it twice with them negated), and the real content was the arc SLAB — the
+    annular sector between r ± w/2, whose area `sweep·r·w` makes every test an equality
+    because the squares cancel, plus its `w/2 ≥ r` degeneration to a pie sector. **One
+    contract deliberately differs from the polygonal twin**: a chain that returns to its
+    start is stroked as a CIRCUIT (closing joint gets its joins, no caps), because a chain of
+    EDGES makes closure structural where a list of POINTS can only spell it by repeating the
+    first — read at the same weld tier the chain's own continuity check uses. It is invisible
+    under round joins + round caps and is what stops a butt-capped circuit carrying a notch:
+    measured, a 10×10 square at width 2 with miter joins comes back 79 through the points
+    spelling against 80 through the edge one. The oracle worth keeping is not an area formula
+    — stroking a simple closed loop by w is the same SET as `Grow(R, w/2) \ Shrink(R, w/2)`,
+    which `Stroke` and `Offset` reach by different primitives. Against the polygonal twin on
+    a quarter arc (r 8, w 3): flattening to 4/8/16/32 chords approaches the exact answer
+    strictly from below and is still 1e-3 short at 32 — a floor, not a tolerance.
+    - [ ] Residual, filed rather than done: a `Sketch`-level wrapper (`Sketch.StrokeExact`,
+      beside the existing `OffsetExact`) so a designer reaches it without dropping to Core.
+      That is Modeling work, not Core.
+    - [ ] Residual: the POLYGONAL `Region2dOffset.Stroke` still cannot recognize a circuit
+      (its input genuinely cannot express one unambiguously), so a butt-capped closed
+      polyline keeps the notch measured above. Left alone deliberately — it is pinned
+      bit-for-bit by `Region2dGoldenTests` and the fix belongs with an explicit `closed:`
+      flag, not with a first-point-equals-last-point guess.
   - [ ] **Curved `Shape.Section`/`Silhouette`.** A section of a B-Rep could return a
     `CurvedRegion2d` for the analytic pairs (`PlanarSection` already gets exact circles
     and lines from `SurfaceIntersection`) instead of flattening them; the silhouette
@@ -571,25 +595,33 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     ceiling it would buy is the ~1.2× the vectorized scan already demonstrates, on the one
     segment kind that is rarest in real sketches. Filed so the next reader does not
     re-derive the arithmetic — the barrier is exactness, not effort.
-- [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
-  but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
-  polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`
-  emitting fitted arcs instead of degree-1 sampled polylines for
-  `TransformedCurve(NurbsCurve)`, and lighter B-Rep seam edges. Each needs a policy
-  decision about *who* owns the tolerance.
-- [ ] **`ExtrudedSurface`/`RevolvedSurface` inverse evaluation refines from a single best
-  seed** — the same defect `SweptSurface` just fixed. A generator whose projection into
-  the reduced plane is near-degenerate hides two branches inside one seed interval and 1D
-  Newton returns the *mirrored* parameter: on-surface, structurally valid, geometrically
-  wrong. `SweptSurface.SolveGeneratorParameter`'s rule (refine from every local minimum
-  *and its two neighbours*) ports directly. Deliberately not done with the fix, because
-  these two carry the whole boolean regression surface.
-- [ ] **`Curve3d.ArcLength`/`ParameterAtLength`** — the 2D family has adaptive-Simpson arc
-  length with a bracketed-Newton inverse and a caching `ArcLengthTable2d`; the 3D side
-  still has only per-type `Length()` on the conics and the helix.
-- [ ] **2D curve ↔ `Sketch` bridge** — `Sketch` builds its own segment types and `Curve2d`
-  is a parallel vocabulary. They should meet (a sketch segment exposing a `Curve2d`, or
-  `Profile` accepting `Curve2d` chains) before either grows further.
+- ~~**Adopt biarc fits somewhere**~~ ✅ **two of the three doors done at `ffbade2`** —
+  `SurfaceIntersection.FitAnalytic(curves, tolerance)` (opt-in post-pass: a tracer polyline
+  becomes an arc chain only when the measured deviation clears the caller's tolerance, and
+  `AnalyticFit` reports `Fitted` + the deviation either way) and `StepWriter`'s
+  `options.ArcFitTolerance`. The filed policy question — *who owns the tolerance* — is
+  settled the same way at both doors: the CALLER does, nothing fits implicitly, and the cost
+  is always a return value.
+  - [ ] What remains of the item is the third candidate, **lighter B-Rep seam edges**, which
+    is a different question rather than a third application: a seam edge is shared geometry
+    that must WELD, so replacing it with a fit moves both adjacent faces' boundaries and the
+    tolerance stops being the caller's to choose.
+- ~~**`ExtrudedSurface`/`RevolvedSurface` inverse evaluation refines from a single best
+  seed**~~ ✅ **done at `8dc573d`** — `SweptSurface.SolveGeneratorParameter`'s rule was
+  extracted as `SeedSelection.MarkCandidates` (BRep, internal) and all THREE swept surfaces
+  plus the generic 17×17 base grid now refine from every local minimum and its two
+  neighbours. The overrides still defer to the base on failure, so "the override is never
+  worse than the base" holds by construction.
+- ~~**`Curve3d.ArcLength`/`ParameterAtLength`**~~ ✅ **done at `c28ec5f`** — virtual
+  `ArcLength(from, to, relativeTolerance)` with exact closed-form overrides on the conics,
+  the helix and both wrappers, a bracketed-Newton `ParameterAtLength`, and a caching
+  `ArcLengthTable3d` beside `ArcLengthTable2d`.
+- ~~**2D curve ↔ `Sketch` bridge**~~ ✅ **done at `ddd9f06`** — `SketchSegment.ToCurve2d` /
+  `Sketch.ToCurves` out, `Sketch.FromCurves` back in (refusing what a sketch cannot hold,
+  by name, and handing the result to the ordinary constructor so closure/winding/degeneracy
+  stay validated in ONE place), and `Curve2d.ToCurve3d` / `Profile.FromCurves` into
+  topology. Written up in design.md §5, "Where the 2D curve family meets the sketch and the
+  profile".
 - [ ] **Drill follow-ups** (drill-tip angles ✅ landed — `HoleSpec.WithTipAngle`, exact
   as an identity, depth measured to the shoulder; **cross-PLANE hole validation** ✅
   landed — bounding-cylinder separation plus a separating axis, since collinear tools

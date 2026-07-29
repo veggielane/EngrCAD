@@ -191,6 +191,45 @@ tier carries **lines and circular arcs through the arrangement unflattened**.
 - **`Geometry2.CurvedArrangement2d`** + **`CurvedRegion2dBoolean`** + **`CurvedRegion2dOffset`**
   — the same three algorithms as the polygonal path, with arcs surviving.
 
+**`CurvedRegion2dOffset.Stroke(path, width, cap, join)`** is the curved twin of the polygonal
+`Stroke` above, and it is where the tier's exactness becomes an *equality* rather than a
+bound. Same construction — one FULL-WIDTH slab per edge, corner joins offered on both sides
+of every interior joint, end caps — with both new primitives closed-form:
+
+- a straight edge's slab is still a rectangle; an **arc's is the ANNULAR SECTOR** between
+  radii r ± w/2 over the arc's own angular span, which is exactly the set of points whose
+  nearest path point is interior to that arc. Its area is `(sweep/2)((r+w/2)² − (r−w/2)²)`
+  = **`sweep·r·w`** — the squares cancel, which is why every test here asserts an equality;
+- when **w/2 ≥ r the band swallows the centre**, the inner rim is gone, and the slab becomes
+  the pie SECTOR of radius r + w/2. Still exact: every point of that sector sits at radius
+  between 0 and r + w/2, so its distance to the circle is at most max(r, w/2) = w/2;
+- a round cap is an exact **half-disc** and a round join an exact sector, so with
+  `StrokeCap.Round` + `OffsetJoin.Round` the stroke **IS** the path's Minkowski sum with a
+  disc of radius w/2 — not "short of it by the inscribed-arc sagitta", the qualification the
+  polygonal twin has to carry. Measured on a quarter arc (r 8, w 3): a polygonal stroke of
+  the same arc flattened to 4/8/16/32 chords approaches the curved answer strictly from
+  below and is still 1e-3 short at 32, because the deficit is the inscribed geometry rather
+  than a tolerance.
+
+**A chain that returns to its start is stroked as a CIRCUIT** — the closing joint gets its
+joins and no caps are added — and this is the one place the two twins' contracts differ. The
+reason is the input vocabulary, not a change of mind: the polygonal `Stroke` takes POINTS,
+where closure can only be spelled by repeating the first one, while a chain of edges makes
+closure structural, so it is read off the same weld tier the chain's own continuity is
+checked at. It changes nothing under round joins + round caps (a full disc at the closing
+vertex contains the join wedge, so the two readings agree as sets) and it is what stops a
+butt-capped circuit carrying a notch or a mitered one losing its last corner — measured on a
+10×10 square at width 2 with miter joins, the polygonal twin returns 79 against 80, short by
+exactly the 1×1 outer corner its repeated start point cannot claim a join for. A gap in the
+chain is refused BY NAME with both endpoints and the gap printed; zero-length edges are
+dropped, which cannot break the chain because their two endpoints are the same point.
+
+The strongest test is not an area formula at all: **stroking a simple closed loop by w is the
+same set as growing the region it bounds by w/2 and taking away the region shrunk by w/2**,
+and `Stroke` and `Offset` reach it through different primitives (two-sided full-width slabs
+against one-sided ones, plus the complement trick for the shrink), so agreement is two
+constructions checking each other.
+
 **Why a parallel type, and not an extension of `Arrangement2d`.** The straight arrangement
 is boolean-critical: `Region2dBoolean`, `Region2dOffset`, every planar section and
 silhouette and every rendered docs image sit on it, and its output is pinned bit for bit.
