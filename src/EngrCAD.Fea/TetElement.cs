@@ -149,6 +149,25 @@ internal readonly struct TetQuadrature
     /// <summary>The rule an element of this order needs — the cheapest one that is exact.</summary>
     public static TetQuadrature For(ElementOrder order) =>
         order == ElementOrder.Linear ? Degree1 : Degree2;
+
+    /// <summary>
+    /// The rule a MASS or CAPACITY matrix of this order needs: degree <c>2p</c>, which is
+    /// <b>two degrees above</b> <see cref="For"/>'s <c>2(p-1)</c>. Degree 2 for 4-node
+    /// elements, degree 5 (the cheapest rule available above 4) for 10-node ones.
+    ///
+    /// <para><b>Why it is a separate selector and not a comment on <see cref="For"/>.</b>
+    /// A stiffness or conductivity integrates <c>grad N · grad N</c> and a mass or capacity
+    /// integrates <c>N · N</c>, so the two differ by exactly two degrees — and using the
+    /// cheaper rule for the heavier integrand is a SILENT error, not a loud one. Integrate a
+    /// 4-node mass with the one-point centroid rule and every one of its sixteen entries
+    /// comes out <c>rho·V/16</c>: a rank-one matrix that cannot be factored, whose entries
+    /// nevertheless sum to exactly <c>rho·V</c>, the body's true mass. The obvious sanity
+    /// check — "does the mass matrix add up to the mass" — passes it. Both
+    /// <c>ThermalElementTests</c> and <c>MassMatrixTests</c> pin that with a negative
+    /// control.</para>
+    /// </summary>
+    public static TetQuadrature ForMass(ElementOrder order) =>
+        order == ElementOrder.Linear ? Degree2 : Degree5;
 }
 
 /// <summary>
@@ -366,6 +385,62 @@ internal static class TetElement
                         ke[row + a] += dot;
                     }
                 }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The element CONSISTENT mass matrix <c>M_ij = integral(rho · N_i · N_j dV)</c>,
+    /// row-major, n-by-n for an n-node element. Cleared on entry.
+    ///
+    /// <para><b>A structural mass matrix and a thermal capacity matrix are the SAME
+    /// integral</b> — <c>N_i·N_j</c> against a volumetric constant — and this is the one
+    /// implementation of it. <see cref="ThermalElement.Capacity"/> asks it with
+    /// <c>rho·c</c>; <see cref="ModalSolver"/> asks it with <c>rho</c> and then replicates
+    /// each scalar entry onto the 3x3 identity block, because an isotropic inertia couples
+    /// no two axes. Writing it twice would be two chances to pick the quadrature rule wrong
+    /// in the one place where getting it wrong is silent (see
+    /// <see cref="TetQuadrature.ForMass"/>).</para>
+    ///
+    /// <para>Two properties are worth knowing because they are what the tests check: every
+    /// row sums to <c>rho · integral(N_i dV)</c> — the shape functions are a partition of
+    /// unity — which for a 10-node element is <b>negative at the corners</b>, the same
+    /// <c>-V/20</c> that already surprises people about <see cref="BodyLoadWeights"/>; and
+    /// the whole matrix sums to <c>rho·V</c>, the element's actual mass.</para>
+    /// </summary>
+    /// <param name="order">Element order.</param>
+    /// <param name="nodePositions">The element's node positions.</param>
+    /// <param name="volumetricConstant">Mass density for a mass matrix, <c>rho·c</c> for a
+    /// heat capacity — the only thing the two uses differ in.</param>
+    /// <param name="rule">The quadrature rule, which must be <see cref="TetQuadrature.ForMass"/>
+    /// or better; the parameter exists so a test can pass a deliberately wrong one.</param>
+    /// <param name="me">Output, at least <c>n*n</c> long.</param>
+    public static void ConsistentMass(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        double volumetricConstant,
+        in TetQuadrature rule,
+        Span<double> me)
+    {
+        int n = nodePositions.Length;
+        me[..(n * n)].Clear();
+        Span<double> shape = stackalloc double[10];
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+
+        for (int q = 0; q < rule.Count; q++)
+        {
+            var (r, s, t) = rule.Point(q);
+            if (!ShapeGradients(order, nodePositions, r, s, t, grad, out double detJ))
+                continue;
+            ShapeValues(order, r, s, t, shape);
+            double weight = rule.Weight(q) * detJ * volumetricConstant;
+
+            for (int i = 0; i < n; i++)
+            {
+                double wi = weight * shape[i];
+                int row = i * n;
+                for (int j = 0; j < n; j++)
+                    me[row + j] += wi * shape[j];
             }
         }
     }
