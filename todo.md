@@ -823,8 +823,30 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
   and is the natural seed for the BOM and for Simulation.
-- [ ] Topological naming / modification history (which output face came from which
-  input face) — the foundation of parametric rebuilds surviving edits
+- [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
+  `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
+  pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,
+  so a lost tag means fewer faces and never a wrong one — see design.md §6b). What remains,
+  each with a known parent to inherit from, so all four are mechanical rather than research:
+  - [ ] **`Draft.ApplyCore`** rebuilds the whole solid via `BuildPrism`; side face *i*
+    corresponds to `prism.SideFaces[i]` and the caps to `BaseCap`/`TopCap`. An index map
+    threaded through `BuildPrism` is the whole fix.
+  - [ ] **`Shelling.Offset`/`Shell`** already keeps a `Dictionary<BrepFace,int>` face index;
+    note one parent maps to TWO children (an outer wall and its inward twin), which
+    provenance already allows since it is a list.
+  - [ ] **`Filleting.FilletAllEdges`** re-emits every original face with a shrunk boundary
+    (a direct 1:1 parent) and adds genuinely new bands and corner patches, which correctly
+    stay untagged. **Rim surgery** (`FilletRim`/`ChamferRim`, the partial-run variants, and
+    `TrimNeighborBand`) likewise has the parent in hand at each site.
+  - [ ] **`ShapeHealing`** rebuilds through `WorkFace`; provenance would ride on that.
+  - [ ] **EDGE provenance.** Only faces carry tags today. An edge could report the tags of
+    its two faces, which is enough for "fillet the edges of the boss" without a new store —
+    but the sense in which an edge *belongs* to a step when its two faces disagree wants a
+    decision (both? either?) before it is API.
+  - [ ] **A tag cannot be attached to an existing `Part`'s geometry after the fact**, only
+    written into the graph. A UI that lets a user click a face and name it would need a
+    tag-by-selection form, which is a different (and much weaker) guarantee — the tag would
+    then be pinned to whatever the query matched at that moment.
 - [ ] STEP follow-up residuals (unit scaling, CONICAL/TOROIDAL_SURFACE synthesis, exact
   `TransformedCurve(NurbsCurve)` export, PARABOLA/HYPERBOLA/OFFSET_CURVE_3D mappings and
   `Parabola3d.ToNurbs()` all ✅ landed): import bisections run a fixed 100 iterations

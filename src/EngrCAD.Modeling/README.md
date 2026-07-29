@@ -529,6 +529,43 @@ B-Rep-native (implicit lowering bridges through the tessellation); selectors run
 the *lowered* solid, so upstream transforms are visible and feature sizes scale with
 uniform scaling.
 
+### Naming a construction step: `Shape.Tag` and face provenance
+
+Selectors say what a face **is**; `Shape.Tag(name)` lets the design say where a face
+**came from** — the persistent half of topological naming, and the only way to tell two
+identical bosses apart.
+
+```csharp
+var body = plate | Shape.Cylinder(6, 20).Translate(-24, 0, 6).Tag("left")
+                 | Shape.Cylinder(6, 20).Translate(24, 0, 6).Tag("right");
+
+// "the top of the LEFT boss" - impossible for any purely semantic query
+var top = FaceRef.Extreme(
+    FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).Within(FaceSetRef.Tagged("left")),
+    Vector3d.UnitZ);
+```
+
+`Tag` is geometrically transparent in all three representations and adds no `Explain` row.
+The B-Rep lowering stamps the name onto every face of its child's solid (`BrepFace.Provenance`)
+and faces carry it forward: a boolean passes untouched faces through by reference and gives
+every split fragment its parent's tags (`BrepFace.DescendsFrom`).
+
+**A tag names a SET, never "the" face** — a boolean can split one face into several, and a
+boss contributes a cylinder as well as a plane — so `FaceSetRef.Tagged` is set-valued by
+construction, `Within` narrows it against the semantic vocabulary, and `FaceRef.One`/`Extreme`
+make the exactly-one claim deliberately. The descriptor round-trips (`within(planar([0,0,1]),tagged(left))`),
+so a tagged selector persists with a feature's other parameters.
+
+**Where the guarantee stops**, stated precisely and pinned by tests: tags survive
+union/intersection/difference, `Drill`, transforms, patterns and `Shape.From(solid)`'s
+clone; they are dropped by the operations that rebuild a face on fresh geometry —
+`Draft`, `Shell`, `RoundEdges`, and the faces a rim `Fillet`/`Chamfer` rewrites (untouched
+faces keep theirs) — and by a STEP round trip. **The failure is one-sided**: fewer faces,
+never a face from somewhere else, so an over-narrow selection breaks its cardinality
+contract loudly instead of quietly blending the wrong edge. Tags are restricted to the
+descriptor grammar's identifier alphabet and a tag it cannot spell is refused with a
+suggestion rather than sanitized — a mangled tag would resolve to nothing.
+
 ## Loft
 
 `Shape.Loft(sections, style)` skins a closed solid through two or more planar

@@ -1274,6 +1274,52 @@ public abstract class Shape
     /// <summary>Mirror across the plane through the origin with <paramref name="normal"/>.</summary>
     public Shape Mirror(in Vector3d normal) => Mirror(Vector3d.Zero, normal);
 
+    // ---- Provenance (topological naming) ----
+
+    /// <summary>
+    /// Names this construction step. The shape is unchanged — <c>Tag</c> is geometrically
+    /// transparent in all three representations — but the B-Rep lowering stamps
+    /// <paramref name="tag"/> onto every face it produces, and the faces carry it forward,
+    /// so <see cref="FaceSetRef.Tagged"/> can select them later by the name the DESIGN
+    /// gave them rather than by what they happen to look like.
+    ///
+    /// <code>
+    /// var body = plate | Shape.Cylinder(8, 12).Translate(20, 0, 6).Tag("boss");
+    /// var top  = FaceRef.Extreme(FaceSetRef.Tagged("boss"), Vector3d.UnitZ);
+    /// </code>
+    ///
+    /// <para>This is the persistent half of topological naming, and it complements rather
+    /// than replaces the semantic <c>BrepQueries</c> selectors: a semantic query says what
+    /// a face IS ("the upward planar one"), a tag says where it CAME FROM. Two identical
+    /// bosses are indistinguishable to a query and trivially distinguishable by tag.</para>
+    ///
+    /// <para><b>The guarantee, and exactly where it stops.</b> A tag is inherited wherever
+    /// a face is derived from another, which covers everything the boolean pipeline does:
+    /// faces it does not touch are passed through by reference, and every fragment its face
+    /// splitting produces takes its parent's tags. So tags survive unions, differences,
+    /// intersections, <c>Drill</c>, patterns and transforms. They do <b>not</b> survive the
+    /// operations that rebuild a face on fresh geometry — <see cref="Draft"/>,
+    /// <see cref="Shell(double, System.Collections.Generic.IEnumerable{int}?)"/>,
+    /// <see cref="RoundEdges"/>, and the faces a rim <see cref="Fillet(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/>
+    /// or <see cref="Chamfer(double, Func{BrepSolid, IEnumerable{BrepFace}}?)"/> rewrites
+    /// (the blend bands themselves are new material and are correctly untagged; the shrunk
+    /// top face and trimmed neighbours lose their tags today). A STEP round trip drops
+    /// provenance entirely — there is no AP214 entity for it.</para>
+    ///
+    /// <para><b>Two consequences worth internalizing.</b> A tag names a <em>set</em>, never
+    /// "the" face: one face can split into several, so <see cref="FaceSetRef.Tagged"/> is
+    /// set-valued by construction and <c>FaceRef.One(...)</c> over it is a claim the author
+    /// makes deliberately. And the failure is <em>one-sided</em>: a lost tag yields FEWER
+    /// faces, never a face from somewhere else — so an over-narrow selection fails its
+    /// cardinality contract loudly instead of quietly blending the wrong edge.</para>
+    /// </summary>
+    /// <param name="tag">A name meaningful to the design. It is stored in the
+    /// geometry-reference descriptor grammar (so a tagged selector serializes with the
+    /// rest of a feature's parameters), which restricts it to ASCII letters, digits and
+    /// underscores — refused by name rather than quietly mangled, since a mangled tag
+    /// would resolve to nothing.</param>
+    public Shape Tag(string tag) => new TagShape(this, RefSyntax.RequireIdentifier(tag, nameof(tag)));
+
     // ---- Lowering ----
 
     /// <summary>Lowers to an exact B-Rep solid. Throws <see cref="ShapeConversionException"/>

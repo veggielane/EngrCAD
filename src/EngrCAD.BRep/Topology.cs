@@ -104,6 +104,25 @@ public sealed class BrepFace
     public BrepLoop OuterLoop => Loops[0];
     public BrepShell Shell { get; internal set; } = null!;
 
+    /// <summary>
+    /// Which named construction steps this face descends from — the persistent half of
+    /// topological naming, beside the semantic <c>BrepQueries</c> selectors.
+    ///
+    /// <para>A tag is stamped by the modelling layer (<c>Shape.Tag(name)</c> stamps every
+    /// face of its child's lowering) and then <b>inherited</b> wherever a face is DERIVED
+    /// from another — every fragment a boolean's face splitting produces, and the reversed
+    /// copies a subtracted tool contributes. Faces built from scratch carry nothing, which
+    /// is the honest answer: a bore wall did not descend from the plate it was cut into.</para>
+    ///
+    /// <para><b>The guarantee is set-valued and one-sided</b>, and both halves matter. A
+    /// face can split into SEVERAL, so a tag names a set of faces and never "the" face;
+    /// and an operation that rebuilds a face on fresh geometry (rim filleting, shelling,
+    /// drafting) drops the tag rather than guessing, so a query can come back with fewer
+    /// faces than the author expected but never with a face from somewhere else. See
+    /// <c>Shape.Tag</c> for exactly where the guarantee stops.</para>
+    /// </summary>
+    public IReadOnlyList<string> Provenance { get; private set; } = [];
+
     public BrepFace(Surface surface, IReadOnlyList<BrepLoop> loops, bool isReversed = false)
     {
         if (loops.Count == 0)
@@ -113,6 +132,28 @@ public sealed class BrepFace
         IsReversed = isReversed;
         foreach (var loop in loops)
             loop.Face = this;
+    }
+
+    /// <summary>
+    /// Marks this face as descending from <paramref name="parent"/> (chainable, so a
+    /// derive site reads <c>new BrepFace(...).DescendsFrom(face)</c>). Provenance is a
+    /// list of tag strings, so inheriting is a reference copy — the list is never
+    /// mutated in place.
+    /// </summary>
+    public BrepFace DescendsFrom(BrepFace parent)
+    {
+        Provenance = parent.Provenance;
+        return this;
+    }
+
+    /// <summary>Adds a construction-step tag (idempotent; order of first appearance is
+    /// kept, so a nested <c>Shape.Tag</c> reads outermost-last).</summary>
+    public BrepFace AddProvenance(string tag)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag);
+        if (!Provenance.Contains(tag, StringComparer.Ordinal))
+            Provenance = [.. Provenance, tag];
+        return this;
     }
 }
 
@@ -207,7 +248,7 @@ public sealed class BrepSolid
                 var loops = new List<BrepLoop>(face.Loops.Count);
                 foreach (var loop in face.Loops)
                     loops.Add(new BrepLoop([.. loop.Coedges.Select(c => new BrepCoedge(CloneEdge(c.Edge), c.SameSense))]));
-                faces.Add(new BrepFace(face.Surface, loops, face.IsReversed));
+                faces.Add(new BrepFace(face.Surface, loops, face.IsReversed).DescendsFrom(face));
             }
             shells.Add(new BrepShell(faces));
         }

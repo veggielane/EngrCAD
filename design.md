@@ -914,6 +914,43 @@ Design decisions:
   documents that then diverge. An edit is a handful of captured doubles. Hot reload keeps
   its whole-scene swap because it genuinely rebuilds everything from source; interactive
   editing does not.
+- **Topological naming: a tag names a SET, and the failure must be one-sided.** The
+  selector story ("re-run the semantic query against the regenerated body") is the working
+  answer and stays the default, but it has one structural blind spot: it can only say what
+  a face *is*, so two identical bosses are indistinguishable to every query in the
+  vocabulary. `Shape.Tag(name)` fills exactly that gap by saying where a face *came from* —
+  the B-Rep lowering stamps the name onto every face of its child's solid
+  (`BrepFace.Provenance`) and faces inherit it wherever one is derived from another
+  (`BrepFace.DescendsFrom`). Three decisions carry the design.
+  **(a) Set-valued, by construction.** A boolean can split one face into several, so "the
+  face this step made" is not a well-formed request; `FaceSetRef.Tagged` therefore returns
+  a set, and narrowing to one is an explicit claim (`FaceRef.One`/`Extreme`) that fails its
+  cardinality contract loudly. A scheme that promised "the" face would have to guess which
+  fragment, which is precisely how naming schemes come to misresolve silently.
+  **(b) The failure direction is the whole safety argument.** Inheritance is implemented at
+  the sites that derive a face from a parent; a site that builds a face from scratch, or an
+  algorithm that rebuilds the solid wholesale, simply does not tag — so a query returns
+  FEWER faces than the author expected, never a face from somewhere else. Landed: the
+  boolean pipeline (untouched faces pass through by reference; every `FaceSplitter`
+  fragment and every re-wound tool face inherits), `BrepSolid.Clone`, and therefore
+  `Drill`, patterns, transforms and `Shape.From(solid)`. Not landed, and stated rather than
+  hidden: `Draft`, `Shelling` and `FilletAllEdges` rebuild every face from scratch, and rim
+  surgery rewrites the blended face and its trimmed neighbours — all four have a
+  positional parent (`Shelling` already keeps a `Dictionary<BrepFace,int>` for exactly this
+  reason), so threading provenance is mechanical rather than hard, and it is filed instead
+  of done because the tests that pin the boundary are cheap and a half-propagated tag is
+  worth less than a documented one. STEP carries no provenance either, which is a format
+  limit rather than a choice.
+  **(c) A tag is REFUSED, not sanitized, when the descriptor grammar cannot spell it.** The
+  descriptor is the cache key and the serialized form, and it is parsed back through
+  `RefLexer.ReadIdentifier` — so a tag containing a space or a comma cannot survive its own
+  round trip. Sanitizing it (the rule an *opaque label* follows, where the marker is only
+  ever read by a human) would turn `"boss top"` into a descriptor that resolves to nothing:
+  a silent misresolve, which is the one outcome a naming scheme must not have. Refusing at
+  the call site with a suggested spelling is the only version that cannot lie. The
+  combinator `FaceSetRef.Within(scope)` was forced out by the first real use: a tag names a
+  boss's cylinder AND its plane, while rim surgery wants a planar face, so composing the
+  provenance query with a semantic one is the normal case rather than an advanced one.
 - **A smart component's local origin is its SEATING DATUM, not the host face.** That one
   choice is what makes the hardware library composable: `SeatDepth` says how far below
   the host's face the datum sits and `InsertedLength` how far the body reaches below it,
