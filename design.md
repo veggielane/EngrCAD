@@ -361,6 +361,119 @@ zero), and an order measured against a *different model's* answer stalls at the 
 difference (the cantilever's clamped-edge singularity caps it at 1.86, which is why the
 order table comes from a manufactured solution instead).
 
+## 3d. Thermal analysis (`EngrCAD.Fea`)
+
+Heat conduction on the same tetrahedral meshes, `q = -k·grad T`, with **one temperature
+degree of freedom per node** where the structural solve has three displacements.
+
+**It is deliberately the same three types with the physics swapped** — `ThermalModel` →
+`ThermalSolver` → `ThermalResults`, over the same `AnalysisMesh`, the same `Facets`
+selectors, the same builder shape, the same refuse-an-empty-selection-at-the-call rule, the
+same `MeshField`/`.vtu` publishing. `Fix` becomes `Temperature`, `Pressure` becomes
+`HeatFlux`, `Force` becomes `HeatLoad`, `Gravity`/`BodyForce` become `Generation`. The point
+is not symmetry for its own sake: an engineer who has written one model can write the other
+without learning a second vocabulary, and every lesson already baked into the structural
+side (loads reduced at the call so the reported resultant is the true one; a selector that
+matches nothing refused where the mistake was made) is inherited rather than re-derived.
+
+What is genuinely different is **three things, and only three**.
+
+**Convection lands in the MATRIX as well as the load vector.** `q = h(T - Tinf)` has a term
+proportional to the unknown, so `Convection` is the one condition not pre-reduced to nodal
+heat — its two halves are meaningless apart, and keeping them as one stored condition makes
+applying one without the other structurally impossible. Two films on one facet accumulate
+(h adds, and so does h·Tinf), which is the physically correct composition of parallel paths
+and makes the call order irrelevant.
+
+**The capacity matrix needs a quadrature rule two degrees above the conductivity's**, and
+this is the kind of error that hides. Conductivity integrates `grad N · grad N`, degree
+2(p−1); capacity integrates `N·N`, degree 2p. Reusing the conductivity's rule on a 4-node
+capacity gives every entry `rho·c·V/16` — a **rank-one, singular** matrix — while its total
+is still exactly `rho·c·V`. See CLAUDE.md's numerical notes: the total is the check everyone
+reaches for, and it passes.
+
+**The undriven refusal is a boolean, where the structural one is an eigen-solve.**
+Conduction's null space on a connected body is *exactly* the constants: add any constant to
+T and every gradient, hence every flux and every boundary condition, is unchanged. So the
+check per connected body is "is there a prescribed temperature or a convective facet
+anywhere?" — a prescribed node kills the constant by elimination, a convective facet kills
+it because its surface matrix is strictly positive on constants, and a pure heat flux does
+not, being Neumann. The structural analogue needs a Jacobi decomposition of a 6×6 Gram
+because six rigid modes can *partly* survive; one mode cannot. A transient of an insulated
+body is deliberately NOT refused — the capacity term is positive definite on its own.
+
+**Time integration is a theta scheme at a constant step**, and the constancy is a design
+decision rather than a simplification: the stepping matrix `C/dt + theta·K` depends on the
+step and nothing else, so it is factored **once** and every step is a back-substitution.
+That is the "factor once, solve many right-hand sides" argument `FeaSolveMethod.Direct`
+explicitly records as *not* yet applying to the structural solver; here it does, so the
+exact default is also the fast one. Adaptive stepping would refactor at every change and is
+filed rather than half-built.
+
+**Backward Euler is the default for L-stability, and the counterweight is recorded beside
+the claim** — which is the part worth keeping, because "backward Euler is monotone" is the
+sort of thing that gets written down and is only true of a *lumped* capacity. Measured on a
+quenched bar (h²/alpha = 0.1 s): at long steps backward Euler makes zero backward moves
+while Crank–Nicolson swings back by up to 106% of the temperature step, but at short steps
+both undershoot (5.8% and 7.1%) because that is the consistent capacity matrix, not the
+scheme.
+
+**The capacity is consistent, and the reason lumping is filed rather than offered is
+concrete**: row-sum lumping gives a 10-node tetrahedron `-V/20` at every corner node — a
+negative heat capacity — which is the same integral that already makes a quadratic element's
+gravity load negative at the corners. Any quadratic lumping has to be a scaled-diagonal
+scheme, a different approximation with its own error, so it does not belong under the same
+name.
+
+**A boundary condition wins over the initial condition at t = 0.** "The surface is suddenly
+held at Ts" means Ts for every t > 0, and the erfc solution is derived under exactly that
+reading. The alternative — letting the initial value stand and transitioning inside the
+first step — was built and measured: it charges the surface node's entire heat-up to that
+step, and because the consistent capacity couples it to its neighbours they are dragged down
+with it (49% undershoot against 5.8%). Doing the snap where the initial state is BUILT, not
+only inside the stepping, is what keeps the stored t = 0 state and the arithmetic that steps
+away from it consistent — the whole-run first law closed at 1.1e-2 until it did.
+
+### Coupling, and the half that is invisible when it is missing
+
+`StructuralModel.ThermalLoad` applies `eps0 = alpha·dT` as an initial strain. The load is
+`integral(B'·D·eps0)`, which for an isotropic material collapses to a pure hydrostatic
+`E/(1-2·nu)·alpha·dT` against a shape-function gradient — three lines, no matrix product.
+
+The half that gets forgotten is that **stress is then `D(eps - eps0)`, not `D·eps`**. A bar
+free to expand develops the full thermal strain and carries *zero* stress; without the
+subtraction the recovery reports `E·alpha·dT` — 126 MPa for steel at 50 K — on a body under
+no load at all, a number that looks entirely reasonable. Both halves read one stored field,
+so applying the load is what arms the subtraction and there is no second call to forget.
+`ComputeNodalStress` inlines its own strain pass for speed and therefore has to *ask* for the
+correction explicitly; it asks rather than restating it, which is what keeps nodal and
+element stress from disagreeing under a thermal load.
+
+Two properties make the coupling safe to compose. The load is **self-equilibrated by
+construction** — the shape functions are a partition of unity, so their gradients sum to
+exactly zero — so a thermal load adds nothing to the applied resultant and the equilibrium
+check keeps its meaning. And the two models must share the same `AnalysisMesh` **instance**,
+checked rather than assumed: a temperature field crosses by node index, and two meshes of the
+same body can number their nodes differently, so the alternative is applying each node's
+temperature to some other node.
+
+### Shared rather than parallel-built
+
+Three things moved out rather than being written twice, and each has a reason beyond tidiness.
+`FeaGuards` holds the element-Jacobian guard because its whole point is that it asks the
+ASSEMBLY's own arithmetic — a second copy would be the same defect waiting for a third
+occurrence. `SurfaceSampler` holds the display-mesh correspondence because the mapping has
+nothing to do with the physics, and two copies would be two chances for a structural plot and
+a thermal plot of the same part to disagree about which node a display vertex is. And the
+direct-vs-CG advisory is `StructuralSolver.AdvisoryFor`, asked rather than restated, because
+a heuristic stated twice is a heuristic that will drift.
+
+**Verification is the deliverable**, on the same structured fixtures for the same reason; the
+tables are in `src/EngrCAD.Fea/README.md` and `docs/examples/fea-thermal.md`. Four of the
+traps it found were in the TESTS rather than the solver, and all four are the same shape —
+a fixture or a manufactured field that quietly makes the measurement exact — which is why
+they are recorded in CLAUDE.md's numerical notes beside the geometry ones.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

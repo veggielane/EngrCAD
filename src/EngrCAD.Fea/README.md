@@ -1,9 +1,10 @@
 # EngrCAD.Fea
 
-Simulation: **tetrahedral meshing** and **linear-static structural analysis**. Takes a
-closed manifold surface mesh (which every EngrCAD representation reaches —
+Simulation: **tetrahedral meshing**, **linear-static structural analysis** and **heat
+conduction** (steady and transient, with thermal-expansion coupling back into the structural
+solve). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
 `Shape.ToMesh()`, `BRepTessellator`, Surface Nets, an imported STL), fills it with
-tetrahedra, and solves small-strain isotropic elasticity on them.
+tetrahedra, and solves on them.
 
 Kernel-clean: references only `EngrCAD.Core` and `EngrCAD.Mesh`, no UI and no rendering.
 Results leave as `MeshField`s, which is what lets the viewer colour-map them without ever
@@ -34,11 +35,18 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
 | `SurfacePatch` / `SurfacePatches` | Internal: coplanar same-tag triangle groups, the unit recovery works in |
 | `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, linear or quadratic |
-| `Material` / `Materials` | Isotropic linear elasticity (E, nu, density) + a nominal catalogue |
+| `Material` / `Materials` | Isotropic elasticity (E, nu, density) + conductivity, specific heat, expansion, and a nominal catalogue |
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
 | `StructuralResults` / `NodalAveraging` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
+| `ThermalModel` | Conduction: held temperatures, flux, generation and convection over the SAME facet selectors |
+| `ThermalSolver` / `ThermalSolveOptions` / `ThermalSolveReport` | Steady and theta-scheme transient solves, and the energy balance |
+| `ThermalTransientOptions` / `ThermalTimeScheme` / `ThermalTransientReport` | Step, count, scheme, initial condition; one factorization per run |
+| `ThermalResults` / `ThermalTransientResults` | Temperature, heat flux, per-state publishing and `.vtu` |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent loads, quadrature |
+| `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
+| `FeaGuards` | Internal: the element-Jacobian guard BOTH solvers ask, rather than each restating |
+| `SurfaceSampler` | Internal: the display-mesh correspondence both results types publish through |
 
 ```csharp
 var surface = Shape.Box(40, 30, 6)
@@ -518,17 +526,193 @@ reported rather than tuned away.
 Run the throughput and ordering tables yourself with `ENGRCAD_BENCH=1` and
 `--filter FullyQualifiedName~FeaBenchmark` in Release.
 
+---
+
+# Thermal analysis (conduction)
+
+Fourier conduction `q = -k·grad T` on the same meshes, steady or transient, with **one
+temperature degree of freedom per node** instead of three displacements. Docs page:
+[`docs/examples/fea-thermal.md`](../../docs/examples/fea-thermal.md).
+
+`ThermalModel` → `ThermalSolver.Solve` / `SolveTransient` → `ThermalResults` /
+`ThermalTransientResults`, mirroring the structural triple deliberately: the same
+`AnalysisMesh`, the same `Facets` selectors, the same builder shape, the same
+refuse-an-empty-selection-at-the-call rule, the same `MeshField` and `.vtu` publishing.
+
+| Structural | Thermal |
+| --- | --- |
+| `Fix` / `Prescribe` | `Temperature(selector, T)` |
+| `Pressure` | `HeatFlux(selector, q)` — positive flows IN |
+| `Force` | `HeatLoad(selector, Q)` — exact resultant |
+| `Gravity` / `BodyForce` | `Generation(rate)` / `Generation(p => rate)` |
+| `NodalForce` | `NodalHeat(node, Q)` |
+| — | `Convection(selector, h, Tinf)` |
+
+## What is genuinely different, and it is only three things
+
+**Convection contributes to the MATRIX as well as the load vector.** `q = h(T - Tinf)` has a
+term proportional to the unknown, so it is the one condition not pre-reduced to nodal heat
+when it is added — its two halves are meaningless apart, and keeping them as one stored
+condition makes applying one without the other impossible. It is also what lets a model with
+no held temperature be solvable, because the surface matrix is strictly positive on
+constants.
+
+**The capacity matrix needs a quadrature rule two degrees ABOVE the conductivity's**, and
+getting that wrong is silent. A conductivity integrates `grad N · grad N`, degree `2(p-1)`,
+the same as a stiffness; a capacity integrates `N·N`, degree `2p`. Use the conductivity's
+one-point rule for a 4-node capacity and every entry comes out `rho·c·V/16` — a **rank-one,
+singular** matrix whose **total is still exactly `rho·c·V`**, so the obvious sanity check
+passes it. `ThermalElementTests` measures precisely that (spread exactly 0), which is what
+makes the negative control worth having.
+
+**The undriven refusal is simpler and sharper than the structural one.** Conduction's null
+space on a connected body is *exactly* the constants — add any constant to T and every
+gradient, hence every flux and every boundary condition, is unchanged — so the check is a
+boolean per connected body (a prescribed temperature or a convective facet anywhere?) where
+the structural check needs a Jacobi eigen-decomposition to find which of six rigid modes
+partly survive. A pure heat flux does not count; it is Neumann and says nothing about the
+level. A transient of an insulated body is *not* refused, because the capacity term is
+positive definite on its own.
+
+## Time integration
+
+A theta scheme, `(C/dt + theta·K)·T_next = (C/dt - (1-theta)·K)·T_now + f`, at a **constant**
+step — which is what lets **one factorization serve the whole run**. That is the "factor
+once, solve many right-hand sides" case `FeaSolveMethod.Direct` records as not yet arising
+structurally; here it does, so the exact default is also the fast one.
+
+**Backward Euler is the default, for L-stability rather than accuracy.** Both schemes are
+A-stable, but a conduction system's fastest mode is roughly `alpha/h²` and Crank–Nicolson's
+amplification factor for it approaches **−1**: those modes alternate in sign instead of
+decaying. Measured on a quenched 40 mm bar with 1 mm elements, where `h²/alpha = 0.1 s` and a
+backward step in temperature is numerical by definition:
+
+| `dt` | `lambda·dt` | Backward Euler | Crank–Nicolson |
+| ---: | ---: | --- | --- |
+| 2.0 s | 20 | **0 backward moves** | 190 moves, worst **105.9%** of the step (64.8% after step 5) |
+| 1.0 s | 10 | 0 backward moves | 143 moves, worst 81.5% (42.6% after step 5) |
+| 0.5 s | 5 | 0 backward moves | 242 moves, worst 56.3% (24.0% after step 5) |
+
+**And the honest counterweight, because this is easy to over-claim**: at a *short* step both
+schemes move backwards, and that is the **consistent capacity matrix**, not the time
+integration. At `dt = 0.005 s` backward Euler undershoots by 5.8% and Crank–Nicolson by 7.1%.
+"Backward Euler is monotone" is a statement about a *lumped* capacity.
+
+**The capacity is consistent, and lumping is filed rather than half-built.** A lumped
+capacity would buy monotonicity under backward Euler and the possibility of explicit
+stepping, and would cost accuracy. But the obvious way to get one is unavailable: row-sum
+lumping sets `C_ii = rho·c·integral(N_i dV)`, which for a 10-node tetrahedron is **−V/20 at
+every corner** — a negative heat capacity, the same surprising integral that already governs
+a quadratic element's gravity load. Any quadratic lumping has to be a scaled-diagonal scheme,
+which is a different approximation with its own error.
+
+**A boundary condition wins over the initial condition at t = 0.** "The surface is suddenly
+held at Ts" means Ts for every t > 0, and the value at the single instant t = 0 is what the
+erfc solution is derived under. The alternative — letting the initial value stand and
+transitioning inside the first step — was built and measured: it charges the surface node's
+whole heat-up to that step, and the consistent capacity drags its neighbours down with it, so
+a quenched bar undershot its own initial temperature by **49% of the step** against 5.8%.
+
+## Thermal stress
+
+`StructuralModel.ThermalLoad(nodalTemperature | ThermalResults, reference)` applies
+`eps0 = alpha·dT` as an initial strain. **Two halves, and forgetting the second is the
+classic error**: the load is `integral(B'·D·eps0)`, which for an isotropic material collapses
+to `E/(1-2·nu)·alpha·dT` times a shape-function gradient; and the stress recovery must then
+use `sigma = D(eps - eps0)`. Without the subtraction a freely expanding bar reports
+`E·alpha·dT` — 126 MPa for steel at 50 K — under no load at all. Both come from one stored
+field, so applying the load is what arms the subtraction.
+
+The load is **self-equilibrated by construction** (the shape functions are a partition of
+unity, so their gradients sum to exactly zero), which is why a thermal load adds nothing to
+the applied resultant and the equilibrium check survives a coupled solve. The two models must
+share the same `AnalysisMesh` **instance**, checked rather than assumed, because a temperature
+field crosses by node index.
+
+## Verification
+
+Full tables are on the [docs page](../../docs/examples/fea-thermal.md). The headline numbers:
+
+- **Patch test** exact to 2.4e-16 (linear) and 7.3e-16 (quadratic), flux to 2.3e-15/8.0e-15.
+- **1D slab** vs the linear profile 1.4e-15/3.8e-15; **with generation** nodally exact for
+  both orders with a measured interior ratio of **4.00**; **convective boundary** vs the
+  mixed-BC solution 9.0e-14/3.9e-13 and the convected heat to 2.6e-15.
+- **Hollow cylinder** vs the logarithmic profile: 1.0e-3 (linear) and 5.8e-4 (quadratic)
+  relative at nRadial 8.
+- **Convergence order** (manufactured, quartic): **2.01 / 1.00** linear and **3.05 / 2.02**
+  quadratic in L2 / energy, against theory 2/1 and 3/2.
+- **Transient**: lumped capacitance to 3.0e-4 of the initial excess at Bi = 2.1e-3;
+  semi-infinite erfc to 0.184 K on an 80 K step (2.3e-3); time order **1.05** and **2.00**;
+  the whole-run first law at 1.3e-14 … 8.5e-13.
+- **Coupling**: free bar expands to 6.9e-15 with stress at 8.5e-15 of `E·alpha·dT`;
+  constrained bar carries `−E·alpha·dT` to 2.0e-15 with the lateral stresses vanishing.
+
+### Four traps the verification found, all in the tests rather than the solver
+
+**A fixture can make a convergence test measure nothing.** Spacing the hollow cylinder's
+rings *geometrically* puts the nodes at equal intervals of `ln r` **and** makes every
+ring-to-ring conductance equal, so the exact nodal values satisfy the discrete equations
+identically — 4.3e-14 on a 120 K drop at every refinement. The study duly reported convergence
+orders of **−2.50 and −1.27**, which is what a ratio of two round-off figures looks like when
+mistaken for a signal. Uniform spacing restores a genuine error.
+
+**A cubic manufactured solution is nodally exact on a uniform mesh.** The finite-element
+stencil's truncation error is proportional to a fourth derivative, which a cubic does not
+have, so both element orders reproduce it at the nodes to round-off (2.2e-13 on a field of
+scale 113) and report no order at all. The field is quartic now.
+
+**One-dimensional nodal superconvergence hides in the slab-with-generation case.** Both
+orders are exact at the nodes, for two different reasons — a parabola is *in* the quadratic
+space, and the linear discrete equations reduce to a central difference a quadratic satisfies
+exactly. The first version asserted a refinement ratio of 4 and measured 0.72. The genuine
+O(h²) is inside the elements.
+
+**A radial fixture's measured order is capped by its own polygonal domain**, and that is
+measured rather than assumed: refining the angular direction as `n²` instead of `n` lifts the
+quadratic order from 2.00 to 2.28 and its finest error from 5.8e-4 to 1.1e-4, while leaving
+the linear sequence unchanged at 1.28. The two orders are limited by different things. It is
+the cantilever's clamped-end lesson in a new shape, and it is why the convergence ORDER is
+measured against a manufactured solution on a box.
+
+### And three the solver was wrong about
+
+**The energy balance must include the capacity term at prescribed nodes.** The residual
+`r = C·dT/dt + K·T - f` is what the equations say a boundary injects; a first version summed
+only `K·T - f`, right for a steady solve and wrong for a transient, and the whole-run first
+law came out **4.4e-2** while every temperature in the field was correct.
+
+**The transient right-hand side cannot assume the previous step's prescribed values.**
+Collapsing `(B_fc - A_fc)·T_c` to `-K_fc·T_c` is valid only when the prescribed values never
+change, which is false on the first step of a step change. Carrying the previous state whole
+costs one extra matvec per step and makes time-varying boundary values a one-line change.
+
+**A linear temperature field's stress-free displacement is QUADRATIC.** `u_x` needs a
+`-(b/2)(y² + z²)` term to cancel a shear that `u_y = (a + b·x)y` otherwise introduces — so
+holding whole symmetry planes over-constrains free expansion and the model carries stress from
+the restraints alone (measured 67 MPa, a quarter of `E·alpha·dT`). A 3-2-1 restraint gives
+1e-10.
+
 ## Limitations
 
 - **Sliver elements** (above) — the mesher's top quality gap, and the reason long thin
-  bodies do not yet solve. Compact ones do.
+  bodies do not yet solve. Compact ones do. The same shared guard (`FeaGuards`) refuses them
+  for both physics, asking the assembly's own Jacobian in both cases.
 - **Element-associated results have nowhere to go**: `MeshField` is vertex-only in v1, so
-  a per-element stress cannot be exported or displayed, only read in code.
+  a per-element stress or flux cannot be exported or displayed, only read in code.
 - Quadratic stress is evaluated at the nodes rather than recovered from the
   superconvergent integration points.
-- Materials are **isotropic** only. Orthotropic and anisotropic laws need a full 6×6
-  constitutive matrix with a material frame; the assembly is already written against
-  `Lambda`/`Mu` and would need the general form.
+- Materials are **isotropic** only, thermally as well as structurally: one `k`, not a
+  conductivity tensor. Orthotropic and anisotropic laws need a full 6×6 constitutive matrix
+  with a material frame; the assembly is already written against `Lambda`/`Mu` and would
+  need the general form.
+- **Material properties are constant**, so conduction stays linear and the solve is one
+  factorization. Temperature-dependent `k` or `c`, and radiation
+  (`sigma·epsilon·(T⁴ - Tsurr⁴)`), are both nonlinear in the unknown and need an outer
+  iteration wrapping this solver.
+- **Time-varying boundary conditions are not exposed**, though the stepping is written for
+  them. The step is constant, deliberately.
+- Coupling is **one-way**: temperature drives stress, and deformation does not feed back into
+  conduction. Two-way coupling is a different (staggered or monolithic) solver.
 - No contact, plasticity, large deformation, or modal analysis. Modal is the nearest —
   the same assembly plus a mass matrix and a generalized eigen-solver — and is filed
   rather than started, because a static solver that is verified is worth more than two

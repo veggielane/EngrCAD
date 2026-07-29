@@ -149,6 +149,163 @@ internal static class StructuredTetMesh
     /// <summary>Tag of the hole's cylindrical surface in <see cref="PlateWithHole"/>.</summary>
     public const int Hole = 6;
 
+    /// <summary>Tag of the inner (bore) surface in <see cref="HollowCylinder"/>.</summary>
+    public const int InnerSurface = 7;
+
+    /// <summary>Tag of the outer surface in <see cref="HollowCylinder"/>.</summary>
+    public const int OuterSurface = 8;
+
+    /// <summary>
+    /// A hollow cylinder (a tube) about the z axis, spanning [0, height] — the fixture for
+    /// the LOGARITHMIC radial conduction profile, which is the standard analytic check
+    /// with genuine curvature in it.
+    ///
+    /// <para>An O-grid on the same Kuhn subdivision as <see cref="Box"/>: every node sits
+    /// on a ray from the axis, so the inner and outer surfaces are exact concentric
+    /// polygons and both are named by their own tags. The flat ends carry
+    /// <see cref="ZMin"/>/<see cref="ZMax"/> and, left unmentioned by a boundary condition,
+    /// are adiabatic — which makes the exact 3D solution the 2D radial one, independent of
+    /// z.</para>
+    ///
+    /// <para><b>Radii are those of the POLYGON's vertices, not of the smooth cylinder.</b>
+    /// A comparison against the analytic log profile must therefore either use enough
+    /// angular divisions that the difference is below the discretization error it is
+    /// measuring, or compare at the nodes' own radii — the tests here do the latter, so
+    /// the faceting is not folded into the reported error.</para>
+    /// </summary>
+    /// <param name="innerRadius">Bore radius.</param>
+    /// <param name="outerRadius">Outer radius.</param>
+    /// <param name="height">Axial extent, from z = 0.</param>
+    /// <param name="nTheta">Divisions around.</param>
+    /// <param name="nRadial">Divisions through the wall.</param>
+    /// <param name="nZ">Divisions along the axis.</param>
+    /// <param name="geometricGrading">
+    /// True spaces the rings GEOMETRICALLY (equal ratios), false spaces them UNIFORMLY.
+    ///
+    /// <para><b>The choice decides whether a radial conduction test measures anything</b>,
+    /// which is worth stating where the fixture is built rather than where it bites.
+    /// Geometric spacing puts the nodes at equal intervals of <c>ln r</c>, and since the
+    /// exact profile is linear in <c>ln r</c> AND every ring-to-ring conductance is then
+    /// equal (each annular ring is a radially scaled copy of the last, and a 2D conductance
+    /// is scale-invariant), the discrete equations are satisfied by the exact nodal values
+    /// EXACTLY. Measured: 4.3e-14 K on a 120 K drop at every refinement, so the "error"
+    /// ratio between levels is the ratio of two round-off figures — the first run of that
+    /// test reported a convergence order of -2.50. Uniform spacing breaks the equal-ratio
+    /// property and leaves the genuine O(h²) discretization error.</para>
+    /// </param>
+    public static TetMesh HollowCylinder(
+        double innerRadius, double outerRadius, double height,
+        int nTheta, int nRadial, int nZ, bool geometricGrading = true)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(nTheta, 8);
+        ArgumentOutOfRangeException.ThrowIfLessThan(nRadial, 1);
+        ArgumentOutOfRangeException.ThrowIfLessThan(nZ, 1);
+        if (!(innerRadius > 0 && innerRadius < outerRadius))
+            throw new ArgumentOutOfRangeException(nameof(innerRadius));
+
+        int ringStride = nTheta;
+        int layerStride = nTheta * (nRadial + 1);
+        var positions = new Vector3d[layerStride * (nZ + 1)];
+        for (int k = 0; k <= nZ; k++)
+        {
+            double z = height * k / nZ;
+            for (int j = 0; j <= nRadial; j++)
+            {
+                double fraction = (double)j / nRadial;
+                double r = geometricGrading
+                    ? innerRadius * Math.Pow(outerRadius / innerRadius, fraction)
+                    : innerRadius + (outerRadius - innerRadius) * fraction;
+                for (int i = 0; i < nTheta; i++)
+                {
+                    double angle = 2.0 * Math.PI * i / nTheta;
+                    positions[i + j * ringStride + k * layerStride] =
+                        new Vector3d(r * Math.Cos(angle), r * Math.Sin(angle), z);
+                }
+            }
+        }
+
+        var tets = new List<int>(nTheta * nRadial * nZ * 24);
+        Span<int> corner = stackalloc int[8];
+        for (int k = 0; k < nZ; k++)
+        {
+            for (int j = 0; j < nRadial; j++)
+            {
+                for (int i = 0; i < nTheta; i++)
+                {
+                    int iNext = (i + 1) % nTheta;
+                    for (int c = 0; c < 8; c++)
+                    {
+                        int ii = (c & 1) == 0 ? i : iNext;
+                        int jj = j + ((c >> 1) & 1);
+                        int kk = k + ((c >> 2) & 1);
+                        corner[c] = ii + jj * ringStride + kk * layerStride;
+                    }
+                    foreach (var kuhn in KuhnTets)
+                    {
+                        int a = corner[kuhn[0]], b = corner[kuhn[1]];
+                        int c2 = corner[kuhn[2]], d = corner[kuhn[3]];
+                        if (Predicates3d.SignedVolume6Sign(
+                                positions[a], positions[b], positions[c2], positions[d]) < 0)
+                            (c2, d) = (d, c2);
+                        tets.Add(a);
+                        tets.Add(b);
+                        tets.Add(c2);
+                        tets.Add(d);
+                    }
+                }
+            }
+        }
+
+        var boundary = CylinderBoundary(positions, tets, innerRadius, outerRadius, height, nTheta);
+        return new TetMesh([.. positions], [.. tets], new int[tets.Count / 4], boundary);
+    }
+
+    private static TetFacet[] CylinderBoundary(
+        Vector3d[] positions, List<int> tets,
+        double innerRadius, double outerRadius, double height, int nTheta)
+    {
+        int count = tets.Count / 4;
+        var uses = new Dictionary<(int, int, int), int>();
+        for (int t = 0; t < count; t++)
+        {
+            for (int f = 0; f < 4; f++)
+            {
+                var key = SortedKey(
+                    tets[4 * t + FaceTable[f][0]],
+                    tets[4 * t + FaceTable[f][1]],
+                    tets[4 * t + FaceTable[f][2]]);
+                uses[key] = uses.GetValueOrDefault(key) + 1;
+            }
+        }
+
+        // The inner and outer surfaces are POLYGONS, so a facet's centroid sits inside its
+        // ring's circumradius by the sagitta; the classification band is therefore half the
+        // wall rather than a weld-tier tolerance. It only has to separate two surfaces that
+        // are a whole wall apart.
+        double axialTolerance = height * 1e-9;
+        double midRadius = Math.Sqrt(innerRadius * outerRadius);
+        var facets = new List<TetFacet>();
+        for (int t = 0; t < count; t++)
+        {
+            for (int f = 0; f < 4; f++)
+            {
+                int v0 = tets[4 * t + FaceTable[f][0]];
+                int v1 = tets[4 * t + FaceTable[f][1]];
+                int v2 = tets[4 * t + FaceTable[f][2]];
+                if (uses[SortedKey(v0, v1, v2)] != 1)
+                    continue;
+                var p = (positions[v0] + positions[v1] + positions[v2]) / 3.0;
+                int tag;
+                if (Math.Abs(p.Z) <= axialTolerance) tag = ZMin;
+                else if (Math.Abs(p.Z - height) <= axialTolerance) tag = ZMax;
+                else tag = Math.Sqrt(p.X * p.X + p.Y * p.Y) < midRadius ? InnerSurface : OuterSurface;
+                facets.Add(new TetFacet(v0, v1, v2, t, tag));
+            }
+        }
+        _ = nTheta;
+        return [.. facets];
+    }
+
     /// <summary>A one-element mesh from four corners, each face its own tag — the fixture
     /// for element-level refusals.</summary>
     public static TetMesh SingleTet(Vector3d[] corners)

@@ -154,6 +154,7 @@ public sealed class StructuralModel
     private readonly Vector3d[] _force;
     private readonly Dictionary<int, Material> _materials = [];
     private readonly List<string> _conditions = [];
+    private double[]? _deltaT;
 
     /// <summary>A model over an analysis mesh with one material everywhere.</summary>
     public StructuralModel(AnalysisMesh mesh, Material material)
@@ -466,13 +467,159 @@ public sealed class StructuralModel
         return this;
     }
 
-    /// <summary>Clears every applied load, keeping supports and materials — how a second
-    /// load case is built on one model.</summary>
+    /// <summary>Clears every applied load — including any thermal field — keeping supports
+    /// and materials, which is how a second load case is built on one model.</summary>
     public StructuralModel ClearLoads()
     {
         Array.Clear(_force);
+        _deltaT = null;
         _conditions.Add("loads cleared");
         return this;
+    }
+
+    // ---- thermal coupling ------------------------------------------------------------
+
+    /// <summary>
+    /// The temperature RISE at every node relative to the stress-free reference, or null
+    /// when no thermal load has been applied. Read by the stress recovery, which must
+    /// subtract the thermal strain — see <see cref="ThermalLoad(IReadOnlyList{double}, double)"/>.
+    /// </summary>
+    public IReadOnlyList<double>? ThermalDeltaT => _deltaT;
+
+    /// <summary>
+    /// A thermal-expansion load from a nodal temperature field: an initial strain
+    /// <c>eps0 = alpha·(T - T_ref)</c> on the diagonal, reduced to consistent nodal forces
+    /// exactly as every other load here is.
+    ///
+    /// <para><b>Two halves, and leaving out the second is the classic way to get this
+    /// wrong.</b> The load is <c>integral(B'·D·eps0 dV)</c>, which for an isotropic
+    /// material is <c>E/(1-2·nu)·alpha·dT</c> times the shape-function gradient — that is
+    /// the half a solve needs. The other half is that the STRESS is
+    /// <c>sigma = D·(eps - eps0)</c>, not <c>D·eps</c>: a bar free to expand develops the
+    /// full thermal strain and <b>zero</b> stress, and a recovery that forgot the
+    /// subtraction would report <c>E·alpha·dT</c> of stress in a bar that is under no load
+    /// at all. Both halves live here, so applying the load is what makes the recovery
+    /// correct; there is no second call to forget.</para>
+    ///
+    /// <para><b>The load is self-equilibrated by construction</b> (the shape functions are
+    /// a partition of unity, so their gradients sum to exactly zero), which means a uniform
+    /// temperature rise adds nothing to <see cref="AppliedForce"/> and the solver's
+    /// equilibrium check keeps its meaning through a coupled solve.</para>
+    ///
+    /// <para>Repeated calls ACCUMULATE the temperature rise, because thermal loads
+    /// superpose linearly like every other load in this model; <see cref="ClearLoads"/>
+    /// clears the field along with the forces.</para>
+    /// </summary>
+    /// <param name="nodalTemperature">Temperature at every node of the analysis mesh.</param>
+    /// <param name="referenceTemperature">The stress-free temperature.</param>
+    public StructuralModel ThermalLoad(
+        IReadOnlyList<double> nodalTemperature, double referenceTemperature)
+    {
+        ArgumentNullException.ThrowIfNull(nodalTemperature);
+        if (nodalTemperature.Count != Mesh.NodeCount)
+            throw new FeaException(
+                $"The temperature field has {nodalTemperature.Count:N0} values but the analysis "
+                + $"mesh has {Mesh.NodeCount:N0} nodes. A thermal load is per NODE of the "
+                + "analysis mesh, which for quadratic elements includes the mid-edge nodes — so "
+                + "a thermal solve on a LINEAR mesh cannot drive a QUADRATIC structural one "
+                + "without resampling.");
+
+        _deltaT ??= new double[Mesh.NodeCount];
+        double lowest = double.MaxValue, highest = double.MinValue;
+        for (int v = 0; v < _deltaT.Length; v++)
+        {
+            double rise = nodalTemperature[v] - referenceTemperature;
+            _deltaT[v] += rise;
+            lowest = Math.Min(lowest, rise);
+            highest = Math.Max(highest, rise);
+        }
+
+        var order = Mesh.Order;
+        int perElement = Mesh.NodesPerElement;
+        // Degree 3, not the element's own rule. The integrand is dT (degree p) times a
+        // shape-function gradient (degree p-1), i.e. degree 2p-1 = 3 for quadratic
+        // elements; a degree-2 rule would under-integrate the very load a convergence study
+        // is measuring. It is exact for linear elements several times over, and this pass
+        // runs once, so there is nothing to gain by selecting per order.
+        var rule = TetQuadrature.Degree3;
+        var positions = new Vector3d[perElement];
+        var values = new double[perElement];
+        var loads = new Vector3d[perElement];
+        bool anyExpansion = false;
+
+        for (int e = 0; e < Mesh.ElementCount; e++)
+        {
+            var material = MaterialOf(e);
+            double expansion = material.ThermalExpansion;
+            // Exact-zero semantic test: a material with no stated expansion produces no
+            // thermal load, whatever the temperature.
+            if (expansion == 0)
+                continue;
+            anyExpansion = true;
+
+            var nodes = Mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+            {
+                positions[i] = Mesh.Position(nodes[i]);
+                values[i] = nodalTemperature[nodes[i]] - referenceTemperature;
+            }
+            // E/(1-2nu) = 3K = 3·lambda + 2·mu, the hydrostatic stress a unit dilatation
+            // produces. Taken from the material's own Lame parameters rather than
+            // recomputed from E and nu, so the two cannot disagree.
+            double modulus = 3.0 * material.Lambda + 2.0 * material.Mu;
+            ThermalElement.ThermalExpansionLoad(
+                order, positions, values, modulus, expansion, rule, loads);
+            for (int i = 0; i < perElement; i++)
+                _force[nodes[i]] += loads[i];
+        }
+
+        if (!anyExpansion)
+        {
+            throw new FeaException(
+                "A thermal load was applied but no material in the model states a thermal "
+                + "expansion coefficient, so the load is identically zero and the stress "
+                + "recovery would have nothing to subtract. Build the material with its "
+                + "thermalExpansion, or call Material.WithThermalExpansion(alpha).");
+        }
+
+        _conditions.Add(
+            $"thermal load, dT {lowest:G6} to {highest:G6} about reference "
+            + $"{referenceTemperature:G6}");
+        return this;
+    }
+
+    /// <summary>
+    /// A thermal-expansion load straight from a conduction solve — the coupled pipeline in
+    /// one call.
+    /// <para>The two models must share the SAME <see cref="AnalysisMesh"/> instance, and
+    /// that is checked rather than assumed: node indices are what carries the temperature
+    /// across, and two meshes of the same body with the same node COUNT can still number
+    /// their nodes differently, which would silently apply each node's temperature to some
+    /// other node.</para>
+    /// </summary>
+    /// <param name="thermal">The conduction solution.</param>
+    /// <param name="referenceTemperature">The stress-free temperature.</param>
+    public StructuralModel ThermalLoad(ThermalResults thermal, double referenceTemperature)
+    {
+        ArgumentNullException.ThrowIfNull(thermal);
+        if (!ReferenceEquals(thermal.Mesh, Mesh))
+            throw new FeaException(
+                "The thermal results were computed on a different AnalysisMesh instance than "
+                + "this structural model uses. A temperature field crosses by NODE INDEX, and "
+                + "two meshes of the same body can number their nodes differently, so this "
+                + "would apply each node's temperature to some other node and produce a "
+                + "plausible wrong answer. Build both models over one AnalysisMesh, or pass "
+                + "the nodal values explicitly through the IReadOnlyList overload.");
+        return ThermalLoad(thermal.Temperature, referenceTemperature);
+    }
+
+    /// <summary>A uniform temperature rise over the whole model — the case a hand
+    /// calculation checks, and a legitimate load on its own.</summary>
+    public StructuralModel UniformThermalLoad(double deltaT)
+    {
+        var field = new double[Mesh.NodeCount];
+        Array.Fill(field, deltaT);
+        return ThermalLoad(field, 0);
     }
 
     // ---- selection ------------------------------------------------------------------
