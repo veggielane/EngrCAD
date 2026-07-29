@@ -2164,6 +2164,49 @@ Design decisions:
   smaller the *second* time by exactly the records the load already warned about — then a
   fixed point from there. "A record was reported and dropped" and "the file is drifting"
   are different things, and the tests assert them separately.
+- **A writer whose default arm THROWS needs a coverage test, not a convention — and the
+  round-trip test it already had could not see the gap.** `InputJson`'s sketch writer maps
+  the `Curve2d` vocabulary case by case and throws on anything else. Elliptical arcs became
+  first-class after the envelope landed; `Sketch.FromCurves` learned the `Ellipse2d` case
+  and the writer did not, and because `Document.Save` has no catch around `SaveHistory`,
+  **any document holding an elliptical sketch feature could not be saved at all** — not one
+  feature degraded to a snapshot, the whole file. The existing round-trip test passed
+  happily throughout, because it was a *fixture* (a line, an arc, a Bézier, a hole) and a
+  fixture only ever tests what someone thought to put in it. The replacement is a COVERAGE
+  claim: enumerate the concrete segment types from the assembly, assert one fixture sketch
+  uses every one of them, then round-trip it. A new segment kind now fails a test in
+  Modeling instead of failing `Document.Save` in a user's session. The same shape of check
+  guards the catalogue-component writer, whose default arm returns null rather than
+  throwing — the two arms differ because a component outside the catalogue is a legitimate
+  thing to hold (a user's own `HardwareComponent`) while a curve kind the sketch builder
+  can produce is not.
+- **A catalogue item is keyed by its ARGUMENTS, never by its designation.** `ComponentFeature`
+  serializes its `HardwareComponent` as a kind plus the factory arguments, the way
+  `HoleSpec` already serializes: the geometry is derived from a standards table, so the
+  arguments *are* the component and storing anything else stores a copy of the table. The
+  designation is the tempting key and is precisely wrong — "ISO 4762 M6×20" says nothing
+  about the clearance fit, the seating or whether the hex socket is modelled, so a
+  designation-keyed reload comes back as a plausible *different* screw wearing the right
+  name, which is the silent-misresolve failure the topological-naming work exists to
+  prevent, in another guise.
+- **An optional parameter's SPELLING is decided by its editor, not by the serializer.** A
+  nullable `[Param]` (`double?`, `int?`, `bool?`, `enum?`) round-trips: null is a value JSON
+  has, the cache key renders it `"null"`, and a range does not fire on a value that is not
+  there. That closes the gap todo.md named — `FeatureHistory.Convert` threw on
+  `Nullable`1` and `ApplyParameters` swallowed it into a warning, so an optional value was
+  silently dropped on load. But the backlog's conclusion, that the sentinel `0` in
+  `EdgeFlangeFeature` was therefore a serializer workaround, is only half true. The
+  properties panel offers a SLIDER exactly when `[Param(Min=, Max=)]` is finite at both
+  ends, and a slider is a total function onto its range with no way to say "unset" — so an
+  optional parameter behind one can be moved off "inherit" and never back, while its text
+  box shows an unset value as empty and takes `null` back. The rule: **a parameter whose
+  editor can express absence takes the nullable type; one whose editor cannot keeps a
+  sentinel outside its own legal range.** `Width` and `BendRadius` are unbounded above and
+  became `double?`; `KFactor` keeps its 0, which `SheetMetalSpec` refuses as a K-factor
+  anyway (so it costs no legal value) and which sits at the slider's own minimum (so
+  "inherit" stays one drag away). The general form is worth keeping: an API shape that
+  looks like a workaround may be carrying a constraint from a layer that does not appear in
+  its signature.
 - **Undo journals values, and the SERIALIZER is its test oracle.** `DocumentEdit` is
   `MeshChange` at document granularity: an edit captures whatever it is about to overwrite
   and restores that on revert, rather than recomputing what the previous state must have

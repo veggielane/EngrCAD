@@ -2315,32 +2315,61 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   per-`Apply` resolution, and `ValidateInputs` naming the failing property; feature
   registry + whole-history JSON landed — `FeatureRegistry` with instance-free
   `[Param]` metadata and honest `CanCreate`/`Reason`, `SaveHistory`/`LoadHistory`
-  with exact sketch/hole-spec constructor-input serialization via `Feature.SaveInputs`)
+  with exact sketch/hole-spec/component constructor-input serialization via
+  `Feature.SaveInputs`, nullable `[Param]` values, and a coverage test enumerating the
+  sketch segment types so the writer cannot fall behind the reader again)
   — property-panel UI editing of `[Param]`s driven by the registry's metadata (free-text
   through the JSON seam landed; typed editors are the polish pass), feature list in the
   viewer model tree with registry-backed INSERTION (`DocumentEdits.AddFeature` is the
-  undoable half; the catalogue dialog is not built), serialized forms for the remaining
-  code inputs (a `Shape`-graph serialization would unlock `BooleanFeature`; a
-  catalogue-designation lookup could rebuild `ComponentFeature`). Persistent topological
+  undoable half; the catalogue dialog is not built), and **a `Shape`-graph serialization,
+  which is what remains of the "code inputs" item** — it would unlock `BooleanFeature`,
+  and by extension `ComponentAssembly(name, shape)`, whose base body is a lambda over an
+  arbitrary `Shape` and therefore the one opaque record a fastener-bearing host still
+  carries. (`ComponentFeature` itself now round-trips, by KIND plus factory arguments —
+  the designation was assessed and rejected as the key, being lossy in exactly the fields
+  a reload would get wrong.) Persistent topological
   IDs are no longer open in the abstract: `Shape.Tag` + `BrepFace.Provenance` landed, and
   what remains is the per-algorithm inheritance filed under "Topological naming residuals".
+- [ ] **An OPTIONAL-numeric parameter editor** (Viewer / Viewer.Core, small). Nullable
+  `[Param]` values landed and the rule that follows them is that a parameter whose editor
+  cannot express absence keeps a sentinel instead — because `ParamEditors.KindFor` offers a
+  slider exactly when the range is finite at both ends, and a slider is a total function
+  onto its range. `EdgeFlangeFeature.KFactor` is the case: it stays `double` with 0 meaning
+  "inherit" purely because its editor cannot say "unset". A third `ParamEditorKind`
+  (a clear/inherit affordance beside the slider — a checkbox, or a "—" button that writes
+  `null` through the same JSON seam) would let it become `double?` like its two neighbours
+  and would remove the only asymmetry in that feature's API. `ParamEditors.Position`
+  already returns 0 for a null value, so the panel does not crash today; it simply reads
+  the minimum, which is the misleading part.
 - [ ] **Geometry-reference vocabulary follow-ups.** Landed: `PlaneRef.Offset(distance)`
   and `PlaneRef.Rotated(degrees, inPlaneAxis)` (resolve the base, then move — so a
   derived plane re-finds its base per regeneration; axes carried verbatim, rotation axis
   in the base's own coordinates, exact-zero returns the base itself),
   `FaceSetRef.LargestByArea`/`SmallestByArea` over `BrepSelection.Area`,
   `Touching(point)` (carrier projection THEN the face's trim test, so a point over a bore
-  matches nothing), `AdjacentTo(set)`, `CylindricalBetween(min, max)`, and the `Shape`
+  matches nothing), `AdjacentTo(set)`, `CylindricalBetween(min, max)`, the edge RANGES
+  (`EdgeSetRef.CircularBetween(min, max)` and `LongerThan`/`ShorterThan`/`Between` over
+  `BrepQueries.Length`, with an open-ended range taking its own `lengthAtLeast(n)` term
+  rather than an infinite bound the shared number lexer cannot read), and the `Shape`
   overloads (`Fillet`/`Chamfer`/`ChamferAtAngle`/`FilletEdges`/`ChamferEdges` in constant
   and variable-law forms take `FaceSetRef`/`EdgeSetRef`). Remaining:
   - **`Shell` cannot take one without a source break** — its `openings` parameter is a
     *nullable* `Func`, so a reference-typed overload makes the existing `Shell(t, null)`
-    ambiguous at every call site. Either rename the reference-typed entry
-    (`ShellOpening(...)`) or leave callers on `openings.AsSelector("openings")`, which is
-    what the doc comment now says. `Draft`'s per-face predicate has the same shape.
-  - **Edge-length and circular-radius RANGES** — `CylindricalBetween` covers faces;
-    `EdgeSetRef.Circular(r)` and edge length still compare exactly. Same pattern, ten
-    lines, wanted the first time someone selects "every fillet edge under 2".
+    ambiguous at every call site (seven sites in the repo, four of them writing
+    `openings: null`, which a named argument does NOT disambiguate when both overloads
+    name the parameter the same). Three routes, none free: rename the reference-typed
+    entry (`ShellOpening(...)`); leave callers on `openings.AsSelector("openings")`, which
+    is what the doc comment now says; or give `FaceSetRef` an implicit conversion to
+    `Func<BrepSolid, IEnumerable<BrepFace>>` — which would need no new overload anywhere,
+    would not disturb the existing `FaceSetRef` overloads (an identity conversion still
+    wins overload resolution), and costs the input NAME in the failure message, which is
+    the whole reason `AsSelector` takes one. Worth a decision the next time someone writes
+    the awkward call. `Draft`'s per-face predicate has the same shape.
+  - **An exact-LENGTH edge query is deliberately absent** and should stay absent unless the
+    measure improves: `BrepQueries.Length` is exact for lines and circular arcs and a
+    64-chord polyline otherwise, so a value comparison at the weld tier would be a
+    correct-looking question with a wrong answer on any traced or NURBS edge. The range
+    filters are honest about being filters; an exact query would not be.
   - **A `VertexRef`** — assessed, and it is not the trivial fifth member it looks like.
     The other four resolve to things the kernel already treats as objects (a face, an
     edge, a frame); a vertex's USES are a *point* (anchor a dimension, seed
@@ -2495,12 +2524,15 @@ flattened; a loaded document is an overlay `reload` still discards) and the
     (d) **`Distance3d.ClosestPointOnSegment`** — the repo now has four private segment
     routines (`Region2dBoolean`, `ThreadSdf`, `ShapeNodes`, `SheetMetalSurgery`), which is
     the exact count that triggered the `ClosestPointOnTriangle` promotion.
-    (e) **Nullable `[Param]` values.** `FeatureHistory.Convert` throws for anything
-    outside its type list, so a `double?` parameter breaks `LoadParameters`. That forces
-    `0` to mean "inherit" in `EdgeFlangeFeature` (and `HoleSpec.TipAngleDegrees` before
-    it) while the underlying record uses `double?` — two spellings of one option, with a
-    translation between them. ~4 lines in the shared seam (`Nullable.GetUnderlyingType`);
-    `SerializeValue` already passes null through.
+    (e) ~~Nullable `[Param]` values~~ — **landed**, and the diagnosis was half right.
+    `FeatureHistory.Convert` did throw on `Nullable`1` (swallowed into a warning, so the
+    value was silently dropped on load), and four lines in the shared seam fixed it. But
+    the conclusion — that the serializer is what forced `0` to mean "inherit" in
+    `EdgeFlangeFeature` — is not the whole reason: `ParamEditors.KindFor` offers a SLIDER
+    whenever `[Param(Min=, Max=)]` is finite at both ends, and a slider cannot say
+    "unset". So `Width` and `BendRadius` became `double?` (unbounded above, hence text
+    boxes) while `KFactor` keeps its sentinel, and the residual is filed above as an
+    optional-numeric editor.
   - One correction the v1 work made to the original assessment, worth keeping: it
     claimed "folded and unfolded volumes must agree exactly, a strong built-in test
     oracle". They agree exactly only at **K = 0.5** — a constant-thickness bend holds
