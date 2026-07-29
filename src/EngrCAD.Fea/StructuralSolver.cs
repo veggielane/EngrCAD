@@ -206,7 +206,13 @@ public static class StructuralSolver
         options ??= new StructuralSolveOptions();
         var mesh = model.Mesh;
 
-        RequireUsableElements(mesh, SelectRule(mesh.Order, options.QuadratureDegree));
+        // ONE rule for the whole solve: the degeneracy guard, the assembly, the reaction
+        // pass and the stress recovery all integrate at the same points. Selecting it
+        // twice would be two chances for them to disagree, which is exactly the defect the
+        // guard exists to catch.
+        var rule = SelectRule(mesh.Order, options.QuadratureDegree);
+
+        RequireUsableElements(mesh, rule);
         RequireRestraint(model);
 
         int totalDofs = 3 * mesh.NodeCount;
@@ -224,8 +230,6 @@ public static class StructuralSolver
         if (freeCount == 0)
             throw new FeaException(
                 "Every degree of freedom is restrained; there is nothing to solve for.");
-
-        var rule = SelectRule(mesh.Order, options.QuadratureDegree);
 
         var stopwatch = Stopwatch.StartNew();
         var (matrix, rhs) = Assemble(model, reduced, freeCount, rule);
