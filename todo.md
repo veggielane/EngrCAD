@@ -919,8 +919,30 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
   and is the natural seed for the BOM and for Simulation.
-- [ ] Topological naming / modification history (which output face came from which
-  input face) — the foundation of parametric rebuilds surviving edits
+- [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
+  `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
+  pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,
+  so a lost tag means fewer faces and never a wrong one — see design.md §6b). What remains,
+  each with a known parent to inherit from, so all four are mechanical rather than research:
+  - [ ] **`Draft.ApplyCore`** rebuilds the whole solid via `BuildPrism`; side face *i*
+    corresponds to `prism.SideFaces[i]` and the caps to `BaseCap`/`TopCap`. An index map
+    threaded through `BuildPrism` is the whole fix.
+  - [ ] **`Shelling.Offset`/`Shell`** already keeps a `Dictionary<BrepFace,int>` face index;
+    note one parent maps to TWO children (an outer wall and its inward twin), which
+    provenance already allows since it is a list.
+  - [ ] **`Filleting.FilletAllEdges`** re-emits every original face with a shrunk boundary
+    (a direct 1:1 parent) and adds genuinely new bands and corner patches, which correctly
+    stay untagged. **Rim surgery** (`FilletRim`/`ChamferRim`, the partial-run variants, and
+    `TrimNeighborBand`) likewise has the parent in hand at each site.
+  - [ ] **`ShapeHealing`** rebuilds through `WorkFace`; provenance would ride on that.
+  - [ ] **EDGE provenance.** Only faces carry tags today. An edge could report the tags of
+    its two faces, which is enough for "fillet the edges of the boss" without a new store —
+    but the sense in which an edge *belongs* to a step when its two faces disagree wants a
+    decision (both? either?) before it is API.
+  - [ ] **A tag cannot be attached to an existing `Part`'s geometry after the fact**, only
+    written into the graph. A UI that lets a user click a face and name it would need a
+    tag-by-selection form, which is a different (and much weaker) guarantee — the tag would
+    then be pinned to whatever the query matched at that moment.
 - [ ] STEP follow-up residuals (unit scaling, CONICAL/TOROIDAL_SURFACE synthesis, exact
   `TransformedCurve(NurbsCurve)` export, PARABOLA/HYPERBOLA/OFFSET_CURVE_3D mappings and
   `Parabola3d.ToNurbs()` all ✅ landed): import bisections run a fixed 100 iterations
@@ -980,17 +1002,54 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     corner (measured: three junctions on a box cost 0.037 of an analytic 57.155, i.e.
     one bias each). Absorbed by the minimum-run rule and far below drawing resolution,
     but an exact HLR would not have it at all.
-- [ ] OCAF-style document framework: undo/redo, attributes, persistence. Design
-  assessment (task #11): do NOT port OCAF's label-tree/attribute model — this
-  codebase's document model is `Scene`/`Tab`/`Part` with `FeatureHistory` as the
-  parametric core, and its natural persistence is what already half-exists
-  (`SaveParameters`/`LoadParameters`, `MatePersistence`): the missing piece is one
-  serialized DOCUMENT envelope (scene structure + per-part feature history + mates +
-  materials) with a version field. Undo/redo should ride the same seam as hot reload:
-  a document snapshot is a value, an edit produces a new one, and the viewer swaps
-  scenes — the `MeshChangeSet` journaling lesson (complete state, bit-identical
-  restore) applies at document granularity rather than OCAF-style per-attribute
-  deltas.
+- [ ] **Document framework residuals** (the OCAF assessment's verdict held: do NOT port
+  OCAF's label-tree/attribute model; `Scene`/`Tab`/`Part` with `FeatureHistory` as the
+  parametric core is the document, and one versioned envelope is the persistence. Landed:
+  `Document`/`DocumentFile.cs` — scene structure + per-part feature history + assemblies
+  and poses + mates + annotations + results, with snapshots for geometry that has no
+  recipe, warnings-not-exceptions on load, and a byte-identical save→load→save fixed
+  point; and `DocumentEdits.cs`/`UndoStack.cs` — reversible edits with grouping, the
+  serializer as the undo test oracle, and refused edits leaving the document untouched.
+  Note the one place the assessment was overruled by building it: undo stores EDITS, not
+  document snapshots, because a `Scene` snapshot is not a cheap value — design.md §6b).
+  Open:
+  - [ ] **Materials.** The envelope has no material because `Part` has no material — see
+    the per-part-material item above; when it lands it is one more part record field.
+  - [ ] **`Shape`-graph serialization** would let a code-built `Shape` part save as a
+    recipe instead of a snapshot, and would make `BooleanFeature` and `ComponentFeature`
+    round-trip through `FeatureHistory` as well. It is the single biggest remaining gap in
+    what a document can carry, and it is a real project: the graph has ~40 node types,
+    several carrying sketches, fonts, hole specs, catalogue objects and lambdas.
+  - [ ] **External geometry references.** Snapshots are embedded on purpose (design.md
+    §6b). The case that would justify a `{"kind": "external", "path": ...}` record is a
+    scan mesh too large to inline; it needs a resolver hook, path resolution relative to
+    the document, and a missing-file policy, so it waits for a real need.
+  - [ ] **Selector-backed annotations do not round-trip.** `LinearDimension.BetweenFaces`
+    and `RadialDimension.OnEdge` take `Func<BrepSolid, …>` lambdas, so they save as opaque
+    markers. The fix is not more serialization machinery but the vocabulary that already
+    exists: overloads taking `FaceRef`/`EdgeSetRef`, whose `Descriptor` is the serialized
+    form. Small, and it would make dimensions as persistent as features already are.
+  - [ ] **Joint/coupling persistence** (also filed under mechanisms) is the other layer a
+    document silently loses today: `Document` saves the `MateSet`s but not the `Joint`s
+    built on top of them.
+  - [ ] **The viewer's undo wiring wants a manual pass.** The stack, the edits and the
+    grouping are covered headlessly, and the two edit paths the window offers (the tree's
+    suppress toggle, the properties panel's `[Param]` fields) are routed through it — but
+    the Ctrl+Z/Ctrl+Y handler and the toolbar buttons themselves are only exercised by
+    running the app, since synthetic input does not reach Avalonia's keyboard stack the way
+    `SendInput` reaches its pointer stack. Same caveat the RPC window wiring carries.
+  - [ ] **The rollback bar is not undoable.** It suppresses a run of features and keeps its
+    own per-part bookkeeping of which ones IT suppressed, so folding it into the stack means
+    an edit that captures that bookkeeping too — a `CompoundEdit` of `Suppress` edits plus
+    the marker state. Worth doing when the bar next gets attention.
+  - [ ] **Undo does not reach every mutation yet.** The `DocumentEdits` vocabulary covers
+    what a UI performs today; the gaps are deliberate rather than forgotten —
+    add/remove a whole `Part` or `Tab` (needs `Tab.Remove`/`Scene.RemoveTab`, and a removed
+    part may still be placed by occurrences, so the edit has to decide whether it takes
+    them with it), committing a `MateSet.Solve` as one undoable repose of every occurrence
+    it moved (mechanically easy — one `CompoundEdit` of `Repose`s — but it wants the solver
+    to report which frames it wrote), and `Part.Results`/`FieldDisplay`. None is hard; each
+    is a decision about scope rather than about mechanism.
 
 ## build123d / CadQuery parity (open items)
 
@@ -1240,9 +1299,11 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
 - [ ] **Persisting session edits**: `set_param` edits die with the session by design
-  (source is the truth). A `save_parameters` tool writing
-  `FeatureHistory.SaveParameters` JSON next to the model would let an assistant hand
-  its tuning back to the user as a file.
+  (source is the truth). A `save_document` tool writing `Document.Save` JSON next to the
+  model would let an assistant hand its tuning back to the user as one file — the whole
+  envelope now exists, so this is a tool signature plus a path policy rather than a
+  serialization project. (A narrower `save_parameters` writing only
+  `FeatureHistory.SaveParameters` is the smaller version of the same idea.)
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
 
@@ -1255,11 +1316,14 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   registry + whole-history JSON landed — `FeatureRegistry` with instance-free
   `[Param]` metadata and honest `CanCreate`/`Reason`, `SaveHistory`/`LoadHistory`
   with exact sketch/hole-spec constructor-input serialization via `Feature.SaveInputs`)
-  — persistent topological IDs (selectors are the naming story today), property-panel
-  UI editing of `[Param]`s driven by the registry's metadata, feature list in the
-  viewer model tree with registry-backed insertion, serialized forms for the remaining
+  — property-panel UI editing of `[Param]`s driven by the registry's metadata (free-text
+  through the JSON seam landed; typed editors are the polish pass), feature list in the
+  viewer model tree with registry-backed INSERTION (`DocumentEdits.AddFeature` is the
+  undoable half; the catalogue dialog is not built), serialized forms for the remaining
   code inputs (a `Shape`-graph serialization would unlock `BooleanFeature`; a
-  catalogue-designation lookup could rebuild `ComponentFeature`).
+  catalogue-designation lookup could rebuild `ComponentFeature`). Persistent topological
+  IDs are no longer open in the abstract: `Shape.Tag` + `BrepFace.Provenance` landed, and
+  what remains is the per-algorithm inheritance filed under "Topological naming residuals".
 - [ ] **Geometry-reference vocabulary follow-ups** — the named queries cover what the
   standard features need and no more. Wanted next: `PlaneRef.Offset(distance)` and
   `PlaneRef.Rotated` (an offset construction plane is the commonest missing one);

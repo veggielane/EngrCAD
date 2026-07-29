@@ -953,6 +953,105 @@ Design decisions:
   onto its plane, or a sub-shape's feature edges) — never meshes — built on a
   background task, because the one rule the viewer cannot break is that lowering never
   runs on the UI or render thread.
+- **A document is its construction history; geometry with no recipe is a SNAPSHOT, named.**
+  The saved-document envelope (`Document`, `DocumentFile.cs`) stores no exact geometry at
+  all: a part backed by a `FeatureHistory` saves that history and regenerates on load, so
+  the reloaded part is still parametric. The interesting decision is what to do with the
+  parts that have no history — a raw `HalfEdgeMesh`, an imported `.stl`, an `Sdf`, a
+  `Shape` graph built in code. Three options were on the table and only one is honest:
+  drop them (silently loses bodies), pretend they are parametric (a lie the first edit
+  exposes), or **embed the display mesh as an explicitly-labelled snapshot** —
+  binary-exact base64, and `DocumentLoadResult.Snapshots` names every part that came back
+  that way, so a host can say "these parts are not parametric" instead of a UI discovering
+  it when a parameter refuses to change anything. Embedded rather than an external file
+  reference, deliberately: a document that points at its neighbours is a *manifest*, and
+  the reference breaks the first time the file is moved, renamed or emailed — with the
+  failure surfacing as missing geometry rather than as a missing file. One file that
+  reloads the model is the whole value of an envelope. (The case an external reference
+  genuinely wins — a scan mesh large enough that inlining it is absurd — is filed rather
+  than built; nothing in the repo produces such a part, and the resolver it needs is real
+  design work that should follow a real need.)
+- **The fixed point is the test that earns its keep.** `save → load → save` being
+  byte-identical is not a tidiness property: it is the only check that catches a field
+  written but never read, a default that reloads as a *different* default, or an ordering
+  that is not purely a function of the model — all of which pass a volumes-and-poses
+  comparison. It caught one such field immediately. A snapshot record wanted a `"source"`
+  naming the geometry type it came from (`BoxShape`), which is genuinely useful to a human
+  reading the file — and which *cannot* survive its own round trip, because a `BoxShape`
+  snapshot reloads as a `HalfEdgeMesh` and the second save writes a different name. The
+  rule that follows: **an informational field either round-trips or does not belong in the
+  file.** The actionable half of that information lives in `DocumentLoadResult.Snapshots`,
+  which is computed at load rather than stored. The honest scope of the claim is also
+  worth stating: the fixed point holds for everything that round-trips, and a file
+  carrying opaque records (a lambda-backed dimension, a `Shape`-graph boolean tool) is
+  smaller the *second* time by exactly the records the load already warned about — then a
+  fixed point from there. "A record was reported and dropped" and "the file is drifting"
+  are different things, and the tests assert them separately.
+- **Undo journals values, and the SERIALIZER is its test oracle.** `DocumentEdit` is
+  `MeshChange` at document granularity: an edit captures whatever it is about to overwrite
+  and restores that on revert, rather than recomputing what the previous state must have
+  been. Two decisions are worth recording. First, **the oracle**: every undo test asserts
+  that `Document.Save()` after the undo is byte-identical to the save before the edit,
+  because a hand-written state comparison agrees with a broken revert exactly as happily as
+  with a correct one — and the serializer covers list positions, occurrence names and the
+  parameter values inside a feature history, which is precisely the surface a hand-written
+  check forgets. That is what forced `Assembly.Insert` / `MateSet.Insert` /
+  `Part.InsertAnnotation` to exist beside the `Remove`s: re-adding appends AND re-derives
+  the occurrence name, so an undone removal would silently come back last and possibly
+  renamed, which every field-by-field check would have passed. Second, **a refused edit is
+  not history**: `Part.Regenerate` already keeps the previous complete body when a rebuild
+  fails, but the bad parameter is still set, so an edit whose regeneration fails takes its
+  own value back and rebuilds before throwing — and is neither pushed onto the stack nor
+  allowed to discard the redo history, since the whole claim is that nothing happened.
+  Regeneration caching then survives undo *by construction* rather than by extra
+  machinery: the cache key is the parameter snapshot, so restoring the old value restores
+  the old key and re-runs exactly the prefix a forward edit would.
+- **The undo stack is session state, and that is why it stores edits rather than
+  snapshots.** todo.md's OCAF assessment proposed "a document snapshot is a value, an edit
+  produces a new one, and the viewer swaps scenes" — the hot-reload seam. Built out, that
+  is the wrong granularity here: a `Scene` snapshot is not a value in any cheap sense (its
+  parts cache display meshes, B-Rep lowerings, SDFs, feature edges, occlusion), so
+  snapshotting per keystroke would either throw those caches away or share them into two
+  documents that then diverge. An edit is a handful of captured doubles. Hot reload keeps
+  its whole-scene swap because it genuinely rebuilds everything from source; interactive
+  editing does not.
+- **Topological naming: a tag names a SET, and the failure must be one-sided.** The
+  selector story ("re-run the semantic query against the regenerated body") is the working
+  answer and stays the default, but it has one structural blind spot: it can only say what
+  a face *is*, so two identical bosses are indistinguishable to every query in the
+  vocabulary. `Shape.Tag(name)` fills exactly that gap by saying where a face *came from* —
+  the B-Rep lowering stamps the name onto every face of its child's solid
+  (`BrepFace.Provenance`) and faces inherit it wherever one is derived from another
+  (`BrepFace.DescendsFrom`). Three decisions carry the design.
+  **(a) Set-valued, by construction.** A boolean can split one face into several, so "the
+  face this step made" is not a well-formed request; `FaceSetRef.Tagged` therefore returns
+  a set, and narrowing to one is an explicit claim (`FaceRef.One`/`Extreme`) that fails its
+  cardinality contract loudly. A scheme that promised "the" face would have to guess which
+  fragment, which is precisely how naming schemes come to misresolve silently.
+  **(b) The failure direction is the whole safety argument.** Inheritance is implemented at
+  the sites that derive a face from a parent; a site that builds a face from scratch, or an
+  algorithm that rebuilds the solid wholesale, simply does not tag — so a query returns
+  FEWER faces than the author expected, never a face from somewhere else. Landed: the
+  boolean pipeline (untouched faces pass through by reference; every `FaceSplitter`
+  fragment and every re-wound tool face inherits), `BrepSolid.Clone`, and therefore
+  `Drill`, patterns, transforms and `Shape.From(solid)`. Not landed, and stated rather than
+  hidden: `Draft`, `Shelling` and `FilletAllEdges` rebuild every face from scratch, and rim
+  surgery rewrites the blended face and its trimmed neighbours — all four have a
+  positional parent (`Shelling` already keeps a `Dictionary<BrepFace,int>` for exactly this
+  reason), so threading provenance is mechanical rather than hard, and it is filed instead
+  of done because the tests that pin the boundary are cheap and a half-propagated tag is
+  worth less than a documented one. STEP carries no provenance either, which is a format
+  limit rather than a choice.
+  **(c) A tag is REFUSED, not sanitized, when the descriptor grammar cannot spell it.** The
+  descriptor is the cache key and the serialized form, and it is parsed back through
+  `RefLexer.ReadIdentifier` — so a tag containing a space or a comma cannot survive its own
+  round trip. Sanitizing it (the rule an *opaque label* follows, where the marker is only
+  ever read by a human) would turn `"boss top"` into a descriptor that resolves to nothing:
+  a silent misresolve, which is the one outcome a naming scheme must not have. Refusing at
+  the call site with a suggested spelling is the only version that cannot lie. The
+  combinator `FaceSetRef.Within(scope)` was forced out by the first real use: a tag names a
+  boss's cylinder AND its plane, while rim surgery wants a planar face, so composing the
+  provenance query with a semantic one is the normal case rather than an advanced one.
 - **A smart component's local origin is its SEATING DATUM, not the host face.** That one
   choice is what makes the hardware library composable: `SeatDepth` says how far below
   the host's face the datum sits and `InsertedLength` how far the body reaches below it,

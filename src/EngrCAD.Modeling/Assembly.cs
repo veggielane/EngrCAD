@@ -117,6 +117,36 @@ public sealed class Assembly
         return occurrence;
     }
 
+    /// <summary>Removes an occurrence; false when it is not in this assembly.</summary>
+    public bool Remove(Occurrence occurrence)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+        return _occurrences.Remove(occurrence);
+    }
+
+    /// <summary>The position of an occurrence in this assembly, or −1.</summary>
+    public int IndexOf(Occurrence occurrence) => _occurrences.IndexOf(occurrence);
+
+    /// <summary>
+    /// Re-inserts an occurrence AT A GIVEN POSITION — the undo counterpart of
+    /// <see cref="Remove"/>, and the reason it exists rather than a plain re-`Add`:
+    /// occurrence order decides instance order in every flattening, and `Add` would both
+    /// append and re-derive the name (a re-added "bolt.2" could come back as "bolt"). An
+    /// undone removal must restore the list exactly.
+    /// </summary>
+    internal void Insert(int index, Occurrence occurrence)
+    {
+        if (_occurrences.Any(o => o.Name == occurrence.Name))
+            throw new ArgumentException(
+                $"Assembly '{Name}' already contains an occurrence named '{occurrence.Name}'.",
+                nameof(occurrence));
+        if (occurrence.SubAssembly is { } sub && (ReferenceEquals(sub, this) || sub.Contains(this)))
+            throw new ArgumentException(
+                $"Re-inserting '{occurrence.Name}' into '{Name}' would create an assembly cycle.",
+                nameof(occurrence));
+        _occurrences.Insert(index, occurrence);
+    }
+
     private string ResolveName(string? explicitName, string baseName)
     {
         if (explicitName is not null)

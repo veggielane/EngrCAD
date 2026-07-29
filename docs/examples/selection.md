@@ -82,6 +82,66 @@ parameter domain, good to a percent or two. That is ordering-grade — right for
 `LargestByArea` — not mass-property grade; use `BrepMassProperties` when the number
 itself matters.
 
+## Naming a construction step (`Shape.Tag`)
+
+Every query above asks what a face **is**. `Shape.Tag` lets a design say where a face
+**came from** — the persistent half of topological naming — and it answers the one question
+a semantic query structurally cannot: *which* of two identical bosses is this?
+
+```csharp run:selection-tags
+var body = Shape.Box(80, 60, 12)
+    | Shape.Cylinder(6, 20).Translate(-24, 0, 6).Tag("left")
+    | Shape.Cylinder(6, 20).Translate(24, 0, 6).Tag("right");
+var solid = body.ToBrep();
+
+// Same shape, same height, same normals: PlanarWithNormal(Z) sees two identical
+// candidates, and the tag tells them apart.
+var leftTop = FaceRef.Extreme(
+    FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).Within(FaceSetRef.Tagged("left")),
+    Vector3d.UnitZ).Resolve(solid, "top");
+
+if (Math.Abs(leftTop.Bounds().Center.X + 24) > 1e-6)
+    throw new Exception("that is not the left boss's top");
+```
+
+`Tag` changes no geometry in any representation and adds no row to `Explain` — it is a
+label, not an operation. The B-Rep lowering stamps the name onto every face the tagged
+sub-shape produced, and the faces carry it forward.
+
+**A tag names a SET, never "the" face.** A boolean can split one face into several, and a
+boss contributes both a cylinder and a plane, so `FaceSetRef.Tagged` is set-valued by
+construction. `Within` narrows it against the semantic vocabulary (as above), and
+`FaceRef.One`/`FaceRef.Extreme` make the "exactly one" claim deliberately, failing loudly
+if it breaks. The descriptor round-trips like every other term
+(`within(planar([0,0,1]),tagged(left))`), so a tagged selector persists with the rest of a
+feature's parameters.
+
+### Exactly where the guarantee stops
+
+A tag is inherited wherever a face is *derived* from another, which covers the whole
+boolean pipeline: untouched faces pass through by reference and every split fragment takes
+its parent's tags.
+
+| Operation | Tag survives? |
+| --- | --- |
+| Union / intersection / difference, `Drill` | Yes — including the subtracted tool's own walls |
+| Transforms, patterns, mirroring | Yes |
+| `Shape.From(brepSolid)` (which clones) | Yes |
+| Rim `Fillet`/`Chamfer` | On the faces it does not rewrite. The shrunk blended face and the new bands carry nothing |
+| `RoundEdges` (whole-solid), `Draft`, `Shell` | No — these rebuild every face on fresh geometry |
+| STEP export / import | No — there is no AP214 entity for provenance |
+| `ToImplicit()` / `ToMesh()` | Not applicable — a distance field and a triangle soup have no faces |
+
+The failure is deliberately **one-sided**: a lost tag yields *fewer* faces, never a face
+from somewhere else. So an over-narrow selection breaks its cardinality contract loudly
+instead of quietly blending the wrong edge — which is the whole reason to prefer a
+conservative scheme over a clever one.
+
+Tags live inside the geometry-reference descriptor grammar, so they are restricted to ASCII
+letters, digits and underscores. A tag the grammar cannot spell is **refused with a
+suggestion** rather than sanitized: silently turning `"boss top"` into a descriptor that
+resolves to nothing is precisely the failure mode a naming scheme must not have.
+
 ## The serializable spellings
 
 Every query has a [GeometryRef](geometry-inputs.md) spelling, so parametric features

@@ -254,6 +254,11 @@ internal static class ShapeCompiler
             case TransformShape t:
                 ClassifyBrep(t.Child, m * t.Matrix, entries);
                 break;
+            // A tag adds no geometry, so it adds no entry: the plan a user reads should
+            // describe the model, not the labels on it.
+            case TagShape tag:
+                ClassifyBrep(tag.Child, m, entries);
+                break;
             case SourceShape { Geometry: BrepSolid }:
                 entries.Add(IsIdentity(m)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
@@ -381,6 +386,9 @@ internal static class ShapeCompiler
             case TransformShape t:
                 ClassifyImplicit(t.Child, m * t.Matrix, entries);
                 break;
+            case TagShape tag:
+                ClassifyImplicit(tag.Child, m, entries);
+                break;
             case SourceShape { Geometry: Sdf }:
                 entries.Add(rigid
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native)
@@ -416,6 +424,7 @@ internal static class ShapeCompiler
         DrillShape d => UsesImplicitOnlyOps(d.Expanded),
         ThreadedHoleShape h => UsesImplicitOnlyOps(h.Expanded),
         TransformShape t => UsesImplicitOnlyOps(t.Child),
+        TagShape tag => UsesImplicitOnlyOps(tag.Child),
         _ => false,
     };
 
@@ -825,6 +834,20 @@ internal static class ShapeCompiler
             case TransformShape t:
                 return LowerBrep(t.Child, m * t.Matrix);
 
+            // The one place provenance is STAMPED. Every face the child's lowering
+            // produced takes the tag, and inheritance carries it from there: a boolean
+            // hands untouched faces through by reference and gives every fragment its
+            // parent's tags (BrepFace.DescendsFrom), so a tagged boss stays named after
+            // the union that swallowed half of it. Tags append rather than overwrite, so
+            // nesting reads outermost-last.
+            case TagShape tagged:
+            {
+                var solid = LowerBrep(tagged.Child, m);
+                foreach (var face in solid.Faces)
+                    face.AddProvenance(tagged.Label);
+                return solid;
+            }
+
             // CLONE at the source boundary. B-Rep booleans consume their inputs, and the
             // wrapped solid belongs to the caller and may be lowered any number of times
             // (a second representation, a re-render, two designs off one imported body).
@@ -981,6 +1004,9 @@ internal static class ShapeCompiler
             case TransformShape t:
                 return LowerImplicit(t.Child, m * t.Matrix, quality);
 
+            case TagShape tagged:
+                return LowerImplicit(tagged.Child, m, quality);
+
             case SourceShape { Geometry: Sdf sdf }:
                 return Place(sdf, rotation, translation, scale);
             case SourceShape { Geometry: HalfEdgeMesh mesh }:
@@ -1090,6 +1116,9 @@ internal static class ShapeCompiler
 
             case TransformShape t:
                 return LowerMesh(t.Child, m * t.Matrix, quality);
+
+            case TagShape tagged:
+                return LowerMesh(tagged.Child, m, quality);
 
             case SourceShape { Geometry: HalfEdgeMesh mesh }:
                 return IsIdentity(m) ? mesh : TransformMesh(mesh, m);

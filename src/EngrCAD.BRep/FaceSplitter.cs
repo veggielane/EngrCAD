@@ -166,11 +166,13 @@ public static class FaceSplitter
         // Non-reversed faces have CCW outer loops, reversed faces (boolean output) CW.
         bool holeSense = face.IsReversed ? curveCcw : !curveCcw;
         var holeCoedge = new BrepCoedge(edge, holeSense);
-        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, new BrepLoop([holeCoedge])], face.IsReversed);
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, new BrepLoop([holeCoedge])], face.IsReversed)
+            .DescendsFrom(face);
 
         BrepFace? disk = null;
         if (createDisk)
-            disk = new BrepFace(face.Surface, [new BrepLoop([new BrepCoedge(edge, !holeSense)])], face.IsReversed);
+            disk = new BrepFace(face.Surface, [new BrepLoop([new BrepCoedge(edge, !holeSense)])], face.IsReversed)
+                .DescendsFrom(face);
 
         return new ClosedSplitResult(faceWithHole, disk, edge);
     }
@@ -255,9 +257,10 @@ public static class FaceSplitter
             ? [.. Enumerable.Range(0, edges.Count).Select(k => new BrepCoedge(edges[k], ordered[k].Forward))]
             : [.. Enumerable.Range(0, edges.Count).Reverse().Select(k => new BrepCoedge(edges[k], !ordered[k].Forward))]);
 
-        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, ChainLoop(holeAlongTraversal)], face.IsReversed);
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, ChainLoop(holeAlongTraversal)], face.IsReversed)
+            .DescendsFrom(face);
         var disk = createDisk
-            ? new BrepFace(face.Surface, [ChainLoop(!holeAlongTraversal)], face.IsReversed)
+            ? new BrepFace(face.Surface, [ChainLoop(!holeAlongTraversal)], face.IsReversed).DescendsFrom(face)
             : null;
         return new ChainSplitResult(faceWithHole, disk, edges);
     }
@@ -509,8 +512,9 @@ public static class FaceSplitter
             ? [.. edges.Select(e => new BrepCoedge(e, true))]
             : [.. edges.AsEnumerable().Reverse().Select(e => new BrepCoedge(e, false))]);
 
-        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, Chain(holeSense)], face.IsReversed);
-        var disk = new BrepFace(face.Surface, [Chain(!holeSense)], face.IsReversed);
+        var faceWithHole = new BrepFace(face.Surface, [.. face.Loops, Chain(holeSense)], face.IsReversed)
+            .DescendsFrom(face);
+        var disk = new BrepFace(face.Surface, [Chain(!holeSense)], face.IsReversed).DescendsFrom(face);
         return [faceWithHole, disk];
     }
 
@@ -663,8 +667,8 @@ public static class FaceSplitter
             upperLoops.Add(topLoop);
         return
         [
-            new BrepFace(lowerSurface, lowerLoops, face.IsReversed),
-            new BrepFace(upperSurface, upperLoops, face.IsReversed),
+            new BrepFace(lowerSurface, lowerLoops, face.IsReversed).DescendsFrom(face),
+            new BrepFace(upperSurface, upperLoops, face.IsReversed).DescendsFrom(face),
         ];
     }
 
@@ -727,8 +731,8 @@ public static class FaceSplitter
             upperLoops.Add(topLoop);
         return
         [
-            new BrepFace(face.Surface, lowerLoops, face.IsReversed),
-            new BrepFace(face.Surface, upperLoops, face.IsReversed),
+            new BrepFace(face.Surface, lowerLoops, face.IsReversed).DescendsFrom(face),
+            new BrepFace(face.Surface, upperLoops, face.IsReversed).DescendsFrom(face),
         ];
     }
 
@@ -1218,13 +1222,13 @@ public static class FaceSplitter
         {
             var loops = new List<BrepLoop> { new(outer.Coedges) };
             loops.AddRange(assignedHoles[outer.Coedges].Select(h => new BrepLoop(h)));
-            faces.Add(new BrepFace(surface, loops, face.IsReversed));
+            faces.Add(new BrepFace(surface, loops, face.IsReversed).DescendsFrom(face));
         }
         for (int i = 0; i < bandRegions.Count; i++)
         {
             var loops = bandRegions[i].Loops.Select(l => new BrepLoop(l)).ToList();
             loops.AddRange(bandHoles[i].Select(h => new BrepLoop(h)));
-            faces.Add(new BrepFace(surface, loops, face.IsReversed));
+            faces.Add(new BrepFace(surface, loops, face.IsReversed).DescendsFrom(face));
         }
         return faces;
     }

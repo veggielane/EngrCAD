@@ -152,6 +152,38 @@ internal static class RefSyntax
     public static string Call(string name, params string[] arguments) =>
         arguments.Length == 0 ? name : $"{name}({string.Join(",", arguments)})";
 
+    /// <summary>
+    /// Checks a construction tag against the descriptor grammar's identifier alphabet and
+    /// returns it. Tags are RESTRICTED rather than escaped, which is the deliberate half:
+    /// a descriptor is parsed back through <see cref="RefLexer.ReadIdentifier"/>, so a tag
+    /// carrying a comma or a bracket could not survive its own round trip — and sanitizing
+    /// it instead (the rule an opaque LABEL follows, where the marker is only ever read by
+    /// a human) would silently turn "boss top" into a descriptor that resolves to nothing.
+    /// Refusing at the call site is the only spelling that cannot misresolve.
+    /// </summary>
+    public static string RequireIdentifier(string tag, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(tag, parameterName);
+        foreach (char c in tag)
+        {
+            if (!char.IsAsciiLetterOrDigit(c) && c != '_')
+                throw new ArgumentException(
+                    $"'{tag}' is not usable as a construction tag: tags are stored in the " +
+                    "geometry-reference descriptor grammar, so they may contain only ASCII " +
+                    $"letters, digits and underscores (found '{c}'). Try '{Suggest(tag)}'.",
+                    parameterName);
+        }
+        return tag;
+    }
+
+    private static string Suggest(string tag)
+    {
+        var builder = new StringBuilder();
+        foreach (char c in tag)
+            builder.Append(char.IsAsciiLetterOrDigit(c) ? c : '_');
+        return builder.ToString();
+    }
+
     /// <summary>A label for an opaque (lambda-backed) query, reduced to characters that
     /// neither break the grammar nor get escaped on the way into a parameter file —
     /// System.Text.Json's default encoder escapes quotes and angle brackets, which would
@@ -291,6 +323,23 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
     /// <summary>The same query with an empty match accepted.</summary>
     public FaceSetRef Optional() => this is OptionalFaces ? this : new OptionalFaces(this);
 
+    /// <summary>
+    /// This query restricted to the faces <paramref name="scope"/> also matches — the one
+    /// combinator the vocabulary needs, and it is <see cref="Tagged"/> that made it
+    /// necessary: a tag names every face a construction step produced, which is a mixed bag
+    /// (a boss contributes a cylinder AND a plane), while the operations that consume face
+    /// sets want a kind. <c>FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).Within(
+    /// FaceSetRef.Tagged("boss"))</c> is "the boss's top", and it is the spelling a rim
+    /// fillet takes.
+    /// <para>Membership is by face IDENTITY, not by a second geometric test, so the two
+    /// halves cannot disagree about a borderline face.</para>
+    /// </summary>
+    public FaceSetRef Within(FaceSetRef scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        return new FacesWithin(this, scope);
+    }
+
     // ---- named queries ----
 
     /// <summary>Every face of the solid.</summary>
@@ -324,6 +373,29 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
     /// "The faces on the second step" without naming its height.</summary>
     public static FaceSetRef GroupAlong(FaceSetRef faces, in Vector3d direction, int index) =>
         new GroupAlongFaces(faces, direction, index);
+
+    /// <summary>
+    /// The faces descending from a named construction step (<see cref="Shape.Tag"/>) — the
+    /// PROVENANCE half of topological naming, where every other query here is the semantic
+    /// half. A semantic query says what a face is; a tag says where it came from, which is
+    /// the only way to tell two identical bosses apart.
+    ///
+    /// <para><b>Set-valued by construction, and that is not a convenience.</b> A boolean can
+    /// split one face into several, so "the face this step made" is not a well-formed
+    /// request; narrow to one deliberately with <c>FaceRef.One(...)</c> or
+    /// <c>FaceRef.Extreme(...)</c>, both of which then fail loudly if the assumption breaks.
+    /// Composes with the semantic vocabulary the same way — <c>FaceRef.Extreme(
+    /// FaceSetRef.Tagged("boss"), Vector3d.UnitZ)</c> is "the top of the boss".</para>
+    ///
+    /// <para><b>Where the guarantee stops</b> is documented on <see cref="Shape.Tag"/>: the
+    /// tag survives everything the boolean pipeline does and is dropped by the operations
+    /// that rebuild a face on fresh geometry (draft, shell, whole-solid rounding, and a rim
+    /// blend's own rewritten faces). The failure is one-sided — fewer faces, never a face
+    /// from somewhere else — so an empty match is refused by name rather than silently
+    /// standing in for something plausible.</para>
+    /// </summary>
+    public static FaceSetRef Tagged(string tag) =>
+        new TaggedFaces(RefSyntax.RequireIdentifier(tag, nameof(tag)));
 
     /// <summary>Escape hatch: any lambda over the lowered solid. Subsumes the raw
     /// selector overloads on <see cref="Shape"/>; not serializable.</summary>
@@ -404,6 +476,22 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
                 lexer.Expect(')');
                 return GroupAlong(inner, direction, index);
             }
+            case "tagged":
+            {
+                lexer.Expect('(');
+                string tag = lexer.ReadIdentifier();
+                lexer.Expect(')');
+                return Tagged(tag);
+            }
+            case "within":
+            {
+                lexer.Expect('(');
+                var inner = ParseFrom(lexer);
+                lexer.Expect(',');
+                var scope = ParseFrom(lexer);
+                lexer.Expect(')');
+                return inner.Within(scope);
+            }
             case "optional":
             {
                 lexer.Expect('(');
@@ -426,6 +514,34 @@ public abstract class FaceSetRef : GeometryRef<IReadOnlyList<BrepFace>>
         public override string Subject => "face";
         public override bool IsSerializable => true;
         private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName) => solid.Faces;
+    }
+
+    private sealed class FacesWithin(FaceSetRef inner, FaceSetRef scope) : FaceSetRef
+    {
+        public override string Descriptor =>
+            RefSyntax.Call("within", inner.Descriptor, scope.Descriptor);
+
+        public override string Subject => $"{inner.Subject} within the {scope.Subject}s";
+        public override bool IsSerializable => inner.IsSerializable && scope.IsSerializable;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName)
+        {
+            var allowed = RawMatch(scope, solid, inputName).ToHashSet();
+            return RawMatch(inner, solid, inputName).Where(allowed.Contains);
+        }
+    }
+
+    private sealed class TaggedFaces(string tag) : FaceSetRef
+    {
+        // The tag is sanitized into the descriptor's identifier alphabet, the same rule
+        // an opaque label follows: a descriptor is parsed back by RefLexer.ReadIdentifier,
+        // so a tag with a comma or a bracket in it would not survive its own round trip.
+        public override string Descriptor => RefSyntax.Call("tagged", tag);
+        public override string Subject => $"face tagged '{tag}'";
+        public override bool IsSerializable => true;
+
+        private protected override IEnumerable<BrepFace> Select(BrepSolid solid, string inputName) =>
+            solid.Faces.Where(f => f.Provenance.Contains(tag, StringComparer.Ordinal));
     }
 
     private sealed class PlanarFaces(Vector3d normal) : FaceSetRef

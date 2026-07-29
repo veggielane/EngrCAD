@@ -216,6 +216,36 @@ public sealed partial class MateSet
         return this;
     }
 
+    /// <summary>Removes a mate; false when it is not in this set. Note that removing a
+    /// mate does not move anything — the frames it produced stay where the last solve put
+    /// them until <see cref="Solve"/> runs again.</summary>
+    public bool Remove(Mate mate)
+    {
+        ArgumentNullException.ThrowIfNull(mate);
+        return _mates.Remove(mate);
+    }
+
+    /// <summary>The position of a mate in this set, or −1.</summary>
+    public int IndexOf(Mate mate) => _mates.IndexOf(mate);
+
+    /// <summary>Re-inserts a mate at a given position — the undo counterpart of
+    /// <see cref="Remove"/>. Order is observable (it is the save order, and it is the row
+    /// order a non-converged solve reports residuals in), so restoring it exactly is what
+    /// makes an undone removal indistinguishable from never having happened.</summary>
+    internal void Insert(int index, Mate mate)
+    {
+        Validate(mate.A, mate);
+        Validate(mate.B, mate);
+        _mates.Insert(index, mate);
+    }
+
+    /// <summary>Un-pins a grounded occurrence; false when it was not grounded.</summary>
+    public bool Unground(Occurrence occurrence)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+        return _grounded.Remove(occurrence);
+    }
+
     private void Validate(in MateRef reference, Mate mate)
     {
         if (reference.Occurrence is not { } occurrence)

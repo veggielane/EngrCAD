@@ -74,6 +74,12 @@ public sealed record ToleranceSpec
         return new ToleranceSpec(plus, minus);
     }
 
+    /// <summary>The upper limit's magnitude (the serialized form's first number).</summary>
+    internal double Plus => _plus;
+
+    /// <summary>The lower limit's magnitude.</summary>
+    internal double Minus => _minus;
+
     /// <summary>The text appended to a dimension value (leading space included).
     /// &#xB1; is the plus-minus sign; source files stay pure ASCII (escapes only).
     /// The equality is exact on purpose: <see cref="Symmetric"/> stores one value
@@ -158,6 +164,20 @@ public abstract class Annotation
     /// trailing zeros trimmed ("40", "5.5", "33.333").</summary>
     internal static string Format(double value) =>
         value.ToString("0.###", CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// This annotation's IDENTITY as JSON — its kind and the anchors or text it was built
+    /// from — or null when it has no serialized form. The mirror of
+    /// <see cref="Feature.SaveInputs"/>, and it fails the same honest way: an annotation
+    /// that measures through a <b>selector lambda</b> (<see cref="LinearDimension.BetweenFaces"/>,
+    /// <see cref="RadialDimension.OnEdge"/>) cannot be rebuilt from data, so it returns
+    /// null and <see cref="Document.Save"/> writes an opaque marker that
+    /// <see cref="Document.Load"/> reports as a warning.
+    /// <para>Shared placement — <see cref="Label"/>, <see cref="Offset"/>,
+    /// <see cref="Tolerance"/> — is NOT written here: the document format owns it, so a
+    /// subclass only ever describes what makes it itself.</para>
+    /// </summary>
+    protected internal virtual System.Text.Json.Nodes.JsonNode? SaveJson() => null;
 }
 
 /// <summary>
@@ -240,6 +260,17 @@ public sealed class LinearDimension : Annotation
         return new ResolvedAnnotation(this, AnnotationKind.LinearDimension,
             anchorA, anchorB, Offset, DimensionText(value), value);
     }
+
+    /// <inheritdoc />
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
+        _faceA is not null || _faceB is not null
+            ? null   // a face-selector dimension is a lambda: only its own code can rebuild it
+            : new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = "linear",
+                ["a"] = DocumentWriter.SaveVector(_a),
+                ["b"] = DocumentWriter.SaveVector(_b),
+            };
 
     /// <summary>
     /// <b>Chain dimensioning</b>: one dimension per consecutive pair of
@@ -402,6 +433,18 @@ public sealed class AngularDimension : Annotation
         }
     }
 
+    /// <inheritdoc />
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
+        _faceA is not null || _faceB is not null
+            ? null
+            : new System.Text.Json.Nodes.JsonObject
+            {
+                ["kind"] = "angular",
+                ["vertex"] = DocumentWriter.SaveVector(_vertex),
+                ["a"] = DocumentWriter.SaveVector(_a),
+                ["b"] = DocumentWriter.SaveVector(_b),
+            };
+
     private ResolvedAnnotation ResolveFromPoints(in Vector3d vertex, in Vector3d va, in Vector3d vb)
     {
         double la = va.Length;
@@ -494,6 +537,15 @@ public sealed class LeaderNote : Annotation
     /// <inheritdoc />
     public override ResolvedAnnotation Resolve(Func<BrepSolid> solid) =>
         new(this, AnnotationKind.LeaderNote, _anchor, _anchor, Offset, Label ?? _text, 0);
+
+    /// <inheritdoc />
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
+        new System.Text.Json.Nodes.JsonObject
+        {
+            ["kind"] = "note",
+            ["anchor"] = DocumentWriter.SaveVector(_anchor),
+            ["text"] = _text,
+        };
 }
 
 /// <summary>A datum label — a boxed reference letter ("A", "B") with a leader to its
@@ -514,4 +566,13 @@ public sealed class DatumLabel : Annotation
     /// <inheritdoc />
     public override ResolvedAnnotation Resolve(Func<BrepSolid> solid) =>
         new(this, AnnotationKind.DatumLabel, _anchor, _anchor, Offset, Label ?? _letter, 0);
+
+    /// <inheritdoc />
+    protected internal override System.Text.Json.Nodes.JsonNode? SaveJson() =>
+        new System.Text.Json.Nodes.JsonObject
+        {
+            ["kind"] = "datum",
+            ["anchor"] = DocumentWriter.SaveVector(_anchor),
+            ["letter"] = _letter,
+        };
 }

@@ -168,6 +168,12 @@ internal sealed class SceneHost
         };
         toolbar.Children.Add(ToolButton("Fit", () => Viewport.Frame()));
         toolbar.Children.Add(new Border { Width = 8 });
+        _undoButton = ToolButton("Undo", Undo);
+        _redoButton = ToolButton("Redo", Redo);
+        toolbar.Children.Add(_undoButton);
+        toolbar.Children.Add(_redoButton);
+        RefreshUndoButtons();
+        toolbar.Children.Add(new Border { Width = 8 });
         // Standard views: the SAME pose source the view cube uses
         // (ViewCubeMath.PoseFor), so the toolbar and the widget can never disagree —
         // a button is just a named cube direction. Top/Bottom keep the current yaw,
@@ -504,6 +510,7 @@ internal sealed class SceneHost
         // The viewport fills what is left, with the meshing overlay drawn above it.
         root.Children.Add(new Grid { Children = { Viewport, _loadingPanel } });
         Root = root;
+        root.AttachedToVisualTree += AttachShortcuts;
 
         ShowProperties(-1);
     }
@@ -1312,11 +1319,11 @@ internal sealed class SceneHost
                 + "through untouched) and regenerate");
             suppress.Click += (_, _) =>
             {
-                feature.Suppressed = !feature.Suppressed;
                 // A manual toggle overrides any rollback bookkeeping for this feature.
                 if (_rolledBack.TryGetValue(featurePart, out var rolled))
                     rolled.Remove(feature);
-                RegenerateAndRefresh(featurePart);
+                var edit = DocumentEdits.Suppress(featurePart, feature, !feature.Suppressed);
+                RunEdit(edit.Description, () => _undo.Do(edit));
             };
             panel.Children.Add(suppress);
         }
@@ -1585,6 +1592,113 @@ internal sealed class SceneHost
         RegenerateAndRefresh(part);
     }
 
+    // ---- undo/redo ----
+
+    /// <summary>
+    /// This session's edit history. Model edits made through the tree and the properties
+    /// panel go through it as <see cref="DocumentEdit"/>s, so Ctrl+Z takes them back.
+    /// <para>Not shared with any other thread: <see cref="RunEdit"/> serializes every
+    /// touch behind <see cref="_editInFlight"/> and reports back on the UI thread, which
+    /// is what lets the stack keep its single-threaded contract while the regeneration
+    /// it triggers runs off the UI thread.</para>
+    /// </summary>
+    private readonly UndoStack _undo = new();
+
+    private Button _undoButton = null!;
+    private Button _redoButton = null!;
+    private bool _editInFlight;
+
+    /// <summary>
+    /// Runs one document edit off the UI thread and republishes the tab — the
+    /// <see cref="RegenerateAndRefresh"/> pattern with the undo stack in front of it. A
+    /// refused edit changed nothing (that is <see cref="DocumentEdit"/>'s contract), so
+    /// the only thing to do about it is say so in the status bar.
+    /// </summary>
+    private void RunEdit(string description, Action action)
+    {
+        if (_editInFlight)
+        {
+            _statusText.Text = "an edit is still running";
+            return;
+        }
+        _editInFlight = true;
+        _statusText.Text = $"{description} ...";
+        var scene = _scene;
+        Task.Run(() =>
+        {
+            string message;
+            try
+            {
+                action();
+                message = description;
+            }
+            catch (Exception exception)
+            {
+                message = $"{description} refused: {exception.Message}";
+            }
+            Avalonia.Threading.Dispatcher.UIThread.Post(() =>
+            {
+                _editInFlight = false;
+                RefreshUndoButtons();
+                if (!ReferenceEquals(_scene, scene))
+                    return;   // a live reload replaced the document while we edited
+                // Old tree nodes (and their preview cache entries) are stale now.
+                _previewCache.Clear();
+                Viewport.SetConstructionPreview(null);
+                _previewKey = null;
+                ShowTab(_currentTab, keepCamera: true);
+                _statusText.Text = message;
+            });
+        });
+    }
+
+    private void Undo()
+    {
+        if (_undo.UndoDescription is { } what)
+            RunEdit($"Undo {what}", _undo.Undo);
+    }
+
+    private void Redo()
+    {
+        if (_undo.RedoDescription is { } what)
+            RunEdit($"Redo {what}", _undo.Redo);
+    }
+
+    private void RefreshUndoButtons()
+    {
+        _undoButton.IsEnabled = _undo.CanUndo && !_editInFlight;
+        _redoButton.IsEnabled = _undo.CanRedo && !_editInFlight;
+        ToolTip.SetTip(_undoButton, _undo.UndoDescription is { } u ? $"Undo {u} (Ctrl+Z)" : "Nothing to undo");
+        ToolTip.SetTip(_redoButton, _undo.RedoDescription is { } r ? $"Redo {r} (Ctrl+Y)" : "Nothing to redo");
+    }
+
+    /// <summary>
+    /// Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) at the window level. <b>Bubbling, and NOT
+    /// handledEventsToo</b> — deliberately the opposite of the viewport's pointer
+    /// handlers, whose lesson was that nothing upstream may starve them of events. A
+    /// focused <c>TextBox</c> (the properties panel's parameter fields) has its own
+    /// undo and marks the key handled; stealing it would make typing in a field
+    /// unrecoverable, which is a worse failure than a missed shortcut.
+    /// </summary>
+    private void AttachShortcuts(object? sender, VisualTreeAttachmentEventArgs e)
+    {
+        if (TopLevel.GetTopLevel(Root) is not { } top)
+            return;
+        top.AddHandler(Avalonia.Input.InputElement.KeyDownEvent, (_, args) =>
+        {
+            if (!args.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Control))
+                return;
+            bool shift = args.KeyModifiers.HasFlag(Avalonia.Input.KeyModifiers.Shift);
+            if (args.Key == Avalonia.Input.Key.Z && !shift)
+                Undo();
+            else if (args.Key == Avalonia.Input.Key.Y || (args.Key == Avalonia.Input.Key.Z && shift))
+                Redo();
+            else
+                return;
+            args.Handled = true;
+        }, Avalonia.Interactivity.RoutingStrategies.Bubble);
+    }
+
     /// <summary>
     /// Regenerates an edited part on a background task (feature Apply bodies lower
     /// geometry — never on the UI thread) and republishes the tab: a successful
@@ -1592,6 +1706,8 @@ internal sealed class SceneHost
     /// re-meshes exactly the changed part while untouched parts republish from cache.
     /// A failure keeps the previous geometry; either way the per-feature statuses land
     /// in the status bar.
+    /// <para>Used by the edits that are not (yet) undoable — the rollback bar, which
+    /// carries its own per-part suppression bookkeeping.</para>
     /// </summary>
     private void RegenerateAndRefresh(Part part)
     {
@@ -1670,7 +1786,7 @@ internal sealed class SceneHost
             box.KeyDown += (_, e) =>
             {
                 if (e.Key == Avalonia.Input.Key.Enter)
-                    ApplyParameter(part, node.Label, name, box.Text ?? "");
+                    ApplyParameter(part, feature, name, box.Text ?? "");
             };
             _properties.Children.Add(box);
         }
@@ -1699,13 +1815,14 @@ internal sealed class SceneHost
     };
 
     /// <summary>Applies one typed value: parse the text as JSON when it is JSON (numbers,
-    /// booleans, vectors), else treat it as a string (enum names, labels), push the
-    /// single-feature override through <c>LoadParameters</c>, and regenerate. A value
-    /// that does not convert is a status message naming the parameter, not a crash.</summary>
-    private void ApplyParameter(Part part, string featureName, string parameterName, string text)
+    /// booleans, vectors), else treat it as a string (enum names, labels), and push it
+    /// through <see cref="DocumentEdits.SetParameters"/> — the SAME JSON seam
+    /// <c>SaveParameters</c>/<c>LoadParameters</c> and the MCP <c>set_param</c> tool use,
+    /// now with an undo step in front of it. A value that does not convert (or that
+    /// breaks the rebuild) leaves the model exactly as it was and becomes a status
+    /// message, not a crash.</summary>
+    private void ApplyParameter(Part part, Feature feature, string parameterName, string text)
     {
-        if (part.History is not { } history)
-            return;
         System.Text.Json.Nodes.JsonNode? value;
         try
         {
@@ -1715,17 +1832,18 @@ internal sealed class SceneHost
         {
             value = System.Text.Json.Nodes.JsonValue.Create(text);
         }
-        string json = new System.Text.Json.Nodes.JsonObject
+        string json = new System.Text.Json.Nodes.JsonObject { [parameterName] = value }.ToJsonString();
+        DocumentEdit edit;
+        try
         {
-            [featureName] = new System.Text.Json.Nodes.JsonObject { [parameterName] = value },
-        }.ToJsonString();
-        var warnings = history.LoadParameters(json);
-        if (warnings.Count > 0)
+            edit = DocumentEdits.SetParameters(part, feature, json);
+        }
+        catch (Exception exception)
         {
-            _statusText.Text = $"{featureName}.{parameterName}: {string.Join("; ", warnings)}";
+            _statusText.Text = $"{feature.Name}.{parameterName}: {exception.Message}";
             return;
         }
-        RegenerateAndRefresh(part);
+        RunEdit($"Set {feature.Name}.{parameterName}", () => _undo.Do(edit));
     }
 
     /// <summary>Effective visibility per instance: its own checkbox AND every ancestor

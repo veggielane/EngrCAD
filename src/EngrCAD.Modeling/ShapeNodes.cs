@@ -771,6 +771,24 @@ internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
     internal override string Describe() => "Transform";
 }
 
+/// <summary>
+/// A named construction step (<see cref="Shape.Tag"/>): geometrically transparent, but the
+/// B-Rep lowering stamps the tag onto every face of its child's solid so the faces can be
+/// named later (<see cref="FaceSetRef.Tagged"/>). Implicit and mesh lowerings pass straight
+/// through — provenance is a B-Rep notion, there being no face to carry it in a distance
+/// field or a triangle soup.
+/// </summary>
+internal sealed class TagShape(Shape child, string tag) : Shape
+{
+    public Shape Child => child;
+
+    /// <summary>The construction-step name (called Label rather than Tag so it does not
+    /// hide <see cref="Shape.Tag(string)"/>, the builder that produced this node).</summary>
+    public string Label => tag;
+
+    internal override string Describe() => $"Tag({tag})";
+}
+
 /// <summary>Wraps an existing BrepSolid, HalfEdgeMesh, or Sdf as a graph leaf.</summary>
 internal sealed class SourceShape(object geometry) : Shape
 {

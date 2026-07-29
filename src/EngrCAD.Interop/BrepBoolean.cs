@@ -751,7 +751,9 @@ public static class BrepBoolean
         var loops = face.Loops
             .Select(l => new BrepLoop([.. l.Coedges.Reverse().Select(c => new BrepCoedge(c.Edge, !c.SameSense))]))
             .ToList();
-        return new BrepFace(face.Surface, loops, isReversed: !face.IsReversed);
+        // Re-wound, but the same surface of the same construction step: provenance is
+        // inherited so a subtracted tool's wall still names the step that cut it.
+        return new BrepFace(face.Surface, loops, isReversed: !face.IsReversed).DescendsFrom(face);
     }
 
     /// <summary>
@@ -773,7 +775,7 @@ public static class BrepBoolean
             f.Surface,
             [.. f.Loops.Select(l => new BrepLoop(
                 [.. l.Coedges.Reverse().Select(c => new BrepCoedge(Clone(c.Edge), !c.SameSense))]))],
-            !f.IsReversed)).ToList();
+            !f.IsReversed).DescendsFrom(f)).ToList();
         return new BrepShell(faces);
     }
 

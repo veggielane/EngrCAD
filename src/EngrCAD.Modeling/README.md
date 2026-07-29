@@ -545,6 +545,43 @@ only — a varying radius across a **sharp corner**, where the two bands are con
 do not circumscribe a common sphere and meet in a quartic. A constant law reproduces
 the plain overload exactly, mesh and all.
 
+### Naming a construction step: `Shape.Tag` and face provenance
+
+Selectors say what a face **is**; `Shape.Tag(name)` lets the design say where a face
+**came from** — the persistent half of topological naming, and the only way to tell two
+identical bosses apart.
+
+```csharp
+var body = plate | Shape.Cylinder(6, 20).Translate(-24, 0, 6).Tag("left")
+                 | Shape.Cylinder(6, 20).Translate(24, 0, 6).Tag("right");
+
+// "the top of the LEFT boss" - impossible for any purely semantic query
+var top = FaceRef.Extreme(
+    FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).Within(FaceSetRef.Tagged("left")),
+    Vector3d.UnitZ);
+```
+
+`Tag` is geometrically transparent in all three representations and adds no `Explain` row.
+The B-Rep lowering stamps the name onto every face of its child's solid (`BrepFace.Provenance`)
+and faces carry it forward: a boolean passes untouched faces through by reference and gives
+every split fragment its parent's tags (`BrepFace.DescendsFrom`).
+
+**A tag names a SET, never "the" face** — a boolean can split one face into several, and a
+boss contributes a cylinder as well as a plane — so `FaceSetRef.Tagged` is set-valued by
+construction, `Within` narrows it against the semantic vocabulary, and `FaceRef.One`/`Extreme`
+make the exactly-one claim deliberately. The descriptor round-trips (`within(planar([0,0,1]),tagged(left))`),
+so a tagged selector persists with a feature's other parameters.
+
+**Where the guarantee stops**, stated precisely and pinned by tests: tags survive
+union/intersection/difference, `Drill`, transforms, patterns and `Shape.From(solid)`'s
+clone; they are dropped by the operations that rebuild a face on fresh geometry —
+`Draft`, `Shell`, `RoundEdges`, and the faces a rim `Fillet`/`Chamfer` rewrites (untouched
+faces keep theirs) — and by a STEP round trip. **The failure is one-sided**: fewer faces,
+never a face from somewhere else, so an over-narrow selection breaks its cardinality
+contract loudly instead of quietly blending the wrong edge. Tags are restricted to the
+descriptor grammar's identifier alphabet and a tag it cannot spell is refused with a
+suggestion rather than sanitized — a mangled tag would resolve to nothing.
+
 ## Loft
 
 `Shape.Loft(sections, style)` skins a closed solid through two or more planar
@@ -1355,6 +1392,102 @@ var plate = new Part("plate", plateShape)
   at each call's first hole). Deliberately explicit methods rather than a flag on
   `Drill`: annotations belong to the PART, and a graph node cannot know which part
   will carry it.
+
+## Saving a document (`DocumentFile.cs`)
+
+A `Scene` describes a model; a **`Document`** is that scene in a file — one JSON envelope
+with a version field, carrying tabs, parts (name, colour, transform, display mode,
+`ClippedBySection`, the debug modifiers), each part's `FeatureHistory`, assemblies with
+their occurrences and explode offsets, `MateSet`s, 3D annotations, results and
+`FieldDisplay`.
+
+```csharp
+var document = new Document(scene);
+document.Mates.Add(mateSet);          // a scene does not own its mates; a document does
+document.SaveFile("bracket.json");
+
+var result = Document.LoadFile("bracket.json");
+foreach (string warning in result.Warnings)
+    Console.WriteLine(warning);
+```
+
+**A document is its construction history, not its geometry.** Nothing exact is stored: a
+history-backed part saves its history and REGENERATES on load, so the reloaded part is
+still parametric. Geometry with no recipe — a raw `HalfEdgeMesh`, an imported `.stl`, an
+`Sdf`, a `Shape` graph built in code — is handled *explicitly* rather than dropped: its
+display mesh is embedded as a **snapshot** (binary-exact base64, so it reloads bit for
+bit), and `DocumentLoadResult.Snapshots` names every part that came back that way.
+`DocumentSaveOptions.EmbedGeometry = false` writes a recipe-only file where those parts
+become an explicit "no geometry" record naming the reason.
+
+Embedded rather than an external reference, deliberately: a document that points at files
+beside it is a manifest, and the reference breaks the first time the file moves. The one
+case an external reference genuinely wins — a scan mesh large enough that inlining it is
+absurd — is filed in todo.md rather than built.
+
+Loading follows `LoadParameters`' convention: **warnings, never exceptions**, for opaque
+features (a `BooleanFeature`'s `Shape` tool, a `FromFunc` lambda, a `ComponentFeature` —
+`DocumentLoadOptions.ResolveOpaqueFeature` is the hook), selector-backed annotations
+(`LinearDimension.BetweenFaces`, `RadialDimension.OnEdge` measure through lambdas), and
+catalogue parts (the geometry loads, the `HardwareComponent` cannot). Only a structurally
+invalid file — bad JSON, a missing envelope, an unknown version — throws.
+
+`save → load → save` is a **byte-identical fixed point** for everything that round-trips;
+a file carrying opaque records is smaller the second time by exactly those records and a
+fixed point from there. See `docs/examples/documents.md`.
+
+## Undo/redo (`DocumentEdits.cs`, `UndoStack.cs`)
+
+Editing goes through `DocumentEdit`s run by an `UndoStack` — the `MeshChangeSet`
+journaling pattern at document granularity: an edit captures whatever it is about to
+overwrite, so revert restores the previous state rather than recomputing it.
+
+```csharp
+var undo = new UndoStack();
+undo.Do(DocumentEdits.SetParameter(plate, history.Features[0], "Height", 16));
+undo.Undo();                                  // geometry rebuilds back
+
+using (undo.Group("Place the fasteners"))     // several edits, ONE Ctrl+Z
+{
+    foreach (var point in points)
+        undo.Do(DocumentEdits.AddOccurrence(rig, screw, seat.FrameAt(point)));
+}
+```
+
+The vocabulary is what a UI performs: `SetParameter`/`SetParameters`, `Suppress`,
+`AddFeature`/`RemoveFeature`, `Rename`/`SetColor`/`SetTransform`/`SetDisplayMode`/
+`SetClippedBySection`, `AddOccurrence`/`RemoveOccurrence`/`Repose`/`SetExplodeOffset`,
+`AddMate`/`RemoveMate`, `AddAnnotation`/`RemoveAnnotation`. Every parametric edit routes
+through the SAME JSON seam as `SaveParameters`/`LoadParameters` and the MCP server's
+`set_param`, and ends in `Part.Regenerate()`.
+
+**Two contracts, both tested against the document serializer as the oracle** (a
+hand-written state comparison agrees with a broken revert as happily as with a correct
+one):
+
+- **Revert restores a state that SERIALIZES identically** — not "equivalent", identical,
+  down to list positions and occurrence names. That is why `Assembly.Insert`,
+  `MateSet.Insert` and `Part.InsertAnnotation` exist beside the `Remove`s: re-adding would
+  append and re-derive the name, so an undone removal would come back in the wrong place
+  under a different name.
+- **A failed `Apply` leaves the document untouched.** Guards run before any mutation, and
+  a parametric edit whose regeneration fails takes its own value back and rebuilds before
+  throwing `DocumentEditException` (which carries the `RegenerationResult`). A refused edit
+  is not pushed onto the stack and does not discard the redo history either.
+
+Regeneration caching survives undo by construction: the cache is keyed on the parameter
+snapshot, so restoring the old value restores the old key and exactly the prefix a forward
+edit would invalidate re-runs — asserted, not assumed.
+
+The stack is **session state, not document state**: a `Document` is what the model IS, a
+history of how it got there belongs to the session, and that is also why the stack holds
+edits (a few captured values) rather than scene snapshots. `Limit` bounds it (200 steps,
+oldest dropped), `Record` takes an already-applied edit (the viewport-drag case), and
+`Changed` drives an Edit menu.
+
+The viewer is wired to it: the model tree's suppress toggle and the properties panel's
+`[Param]` fields both go through `DocumentEdits`, and the toolbar's Undo/Redo buttons plus
+Ctrl+Z/Ctrl+Y take them back.
 
 ## Standard components ("smart" hardware)
 
