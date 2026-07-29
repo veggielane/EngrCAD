@@ -270,7 +270,8 @@ correction matters and has to be stated**: Howland's exact strip solution in Pet
 polynomial fit (Chart 4.1), against the **net** section stress, is
 `K_tn = 2 + 0.284L - 0.600L² + 1.32L³` with `L = 1 - d/W`, which at d/W = 0.25 gives
 **2.4324** — equivalently 3.2432 against the gross section, nearly 8% above the textbook 3.
-The far-field stress is recovered to 0.03%.
+The far-field stress is recovered to 0.03% on the finest quadratic mesh and 0.37% on the
+coarsest linear one, which is the check that makes every K_t above mean anything.
 
 **Rigid-body and equilibrium** properties, all satisfied to round-off:
 

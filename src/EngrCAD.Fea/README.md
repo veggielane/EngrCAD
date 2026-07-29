@@ -431,7 +431,8 @@ Kirsch's infinite-plate K_t = 3 is the wrong number for a real plate: **the fini
 correction is Howland's exact strip solution in Peterson's polynomial fit** (Chart 4.1),
 against the NET section, `K_tn = 2 + 0.284L − 0.600L² + 1.32L³` with `L = 1 − d/W`, giving
 **2.4324** at d/W = 0.25 — equivalently 3.2432 on the gross section, nearly 8% above 3.
-Far-field stress is recovered to 0.03%.
+Far-field stress is recovered to 0.03% on the finest quadratic mesh and 0.37% on the
+coarsest linear one, which is what makes every K_t above mean anything.
 
 The "mesh spread" column is a finding worth keeping. Theory says all four peak nodes (two
 angles by two thickness layers) read identically; the y-reflection is exact to the last
