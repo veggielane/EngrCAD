@@ -1485,6 +1485,87 @@ Design decisions:
   own "no value", since dropping the array loses the result that exists and zeros show a
   fake safe region.
 
+### Sheet metal (`SheetMetal.cs`, `SheetMetalFeatures.cs`, `BRep/SheetMetalSurgery.cs`)
+
+The domain is large but its kernel demands are mostly things this kernel already had;
+the genuinely new work is a **model**, not new surface types.
+
+- **The declaration IS the model.** `SheetMetalBody` holds a base sketch, a
+  `SheetMetalSpec` and an ordered tree of `EdgeFlange`s, and BOTH the folded solid and
+  the flat pattern are derived from those same numbers. That is the whole reason the two
+  cannot drift: there is no second description of the part to keep in step. It also
+  decides where the API lives — a flange is an entry in a tree, so `EdgeFlangeFeature`
+  refuses a non-sheet body by name rather than doing surgery on arbitrary geometry and
+  leaving a part whose flat pattern is underivable.
+- **One bend model, in one place.** `BA = θ·(R + K·T)` (bend allowance, the neutral
+  axis's arc length) and `OSSB = (R + T)·tan(θ/2)` (outside setback) are static methods
+  on `SheetMetalSpec`; bend deduction is `2·OSSB − BA`, derived rather than a third
+  model. Everything else in the feature — flat lengths, tip positions, DXF bend lines —
+  is those two numbers. K is stored per FLANGE with a per-body default and a
+  `SheetMaterials` table transcribed and flagged verify-against-datasheet, exactly as
+  `StandardHoles`' Trisert rows are.
+- **The K-factor is deliberately absent from the geometry.** `SheetBendSection` — the
+  cross-section the surgery builds from — carries thickness, radius and angle and no K,
+  because K locates the neutral axis, which decides the developed LENGTH and nothing
+  whatever about the folded shape. That separation is what turns the folded-versus-flat
+  volume comparison into a real test rather than a tautology (below).
+- **Bends are topology surgery, never booleans**, and the reason is the same one the
+  hex-socket work hit: a bend meets both the parent sheet and the flange wall
+  *tangentially* — cylinder and plane share a tangent plane along the entire bend line —
+  which is precisely the coincident/tangent input the v1 boolean refuses. And there is
+  nothing to compute anyway, since every face of a bend is a closed form. So the bend's
+  two arc bands (exact `ExtrudedSurface`s over `NurbsCurve.Arc` generators, full-domain
+  so they tessellate on the natural grid) and the flange's three planes are welded
+  straight into the parent's loops, `Filleting`-style. A comment says so where a future
+  reader would otherwise reach for a union.
+- **Two rewiring cases, one cross-section.** A full-width flange REPLACES the wall's end
+  edge in each neighbouring face's loop with the flange's cross-section chain; an inset
+  one splits both rims in three (`TopologyEditor.SplitEdge` patches every using loop),
+  splits the wall into two stubs, and closes the same chain against a new vertical edge
+  as its own end cap. Both build the chain once. The full-width path has one non-obvious
+  duty: the neighbour must be **re-surfaced as a `PlaneSurface`**, because the widened
+  loop now reaches out past the flange's tip and would escape a domain-driven
+  `ExtrudedSurface`'s parameter rectangle — the trim-the-neighbour rule from rim surgery,
+  running the other way.
+- **Every refusal fires before a single coedge moves**, which the rim features learned the
+  hard way ("partial runs are rejected BEFORE any surgery — rim surgery rewrites loops in
+  place, so a late failure would leave a half-edited solid"). `Locate` therefore checks
+  more than it needs for its own job: that the wall descends exactly one sheet thickness
+  at both ends, and — for a full-width flange — that the faces at both ends of the bend
+  line are planar and square to it. Both were originally checked where they were USED, and
+  both were then downstream of a mutation: the perpendicularity test sat inside the splice,
+  which rewrites the Q0 neighbour's loop before it ever looks at Q1's, and the
+  thickness test sat after the rim splits. Same defect, twice, from the same cause — a
+  precondition written next to its consumer instead of next to the gate.
+- **The unfold is bookkeeping.** Each node carries a rigid 2D frame in the blank and a
+  3D frame on its own "top" face for the SAME local coordinates, both right-handed, and
+  the recursion places a child from its parent's frame plus the bend section. The blank
+  is then the base sketch with a detour spliced into each flanged segment — no 2D
+  boolean, for the same reason there is no 3D one: the flange rectangle is exactly
+  edge-adjacent, so the answer is known. Base-sketch holes carry through untouched
+  because the flat pattern's coordinates ARE the base sketch's.
+- **The oracle is an exact discrepancy, not an approximate agreement.** A bend's folded
+  material is an annular sector, `θ·T·(R + T/2)` per unit width, while the blank spends
+  `BA·T = θ·T·(R + K·T)`. So folded and flat volumes are **identical at K = 0.5** and
+  differ by **`Σ width·θ·T²·(0.5 − K)`** everywhere else — measured to 8e-10 relative on
+  a 6.1e3 volume, i.e. to the grade of the tessellate-then-Richardson mass properties
+  themselves. A blanket "the volumes agree" would have been satisfied by a bend model
+  with the K-factor wired to a constant.
+- **Three conventions carry every dimension**, and each was a real choice. `Length` is
+  measured from the OUTER VIRTUAL SHARP (the drawing dimension). The bend is placed
+  **bend-outside** — its tangent line IS the named edge, so the material continues
+  outboard through the bend; the alternative ("material inside", flange outer face flush
+  with the edge) would make the base sketch mean something less than the blank's base
+  region and complicate the unfold for no gain. And **a flange folds toward the face its
+  edge is quoted on**, that face becoming the inside of the bend, which makes
+  `Up`/`Down` mean one thing all the way down a chain.
+- **v1 stops where corners begin.** Non-straight bend lines, closed corners, miters,
+  bend reliefs, jogs, hems, louvres, two flanges sharing a stretch of edge, flanges on a
+  flange's SIDE edges and multi-body sheets are all refused by name. The recurring shape
+  of the refusal is instructive: a flange flush at ONE end only, and a second flange on a
+  wall an earlier flange already reshaped, are both the corner case in disguise — the
+  four-sided-wall check catches the second, and an explicit both-ends test the first.
+
 ## 6c. Drawings (hidden lines, sheets, drafting)
 
 A drawing is a *document*, not a picture, and the whole design follows from that.

@@ -1429,54 +1429,73 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   logger sees its own booleans; consider `SurfaceNets.Polygonize` and `MeshRepair`
   timing at the same standard; a `--log-kernel` switch on `EngrCad.Run` wiring the
   host console logger into the kernel seams.
-- [ ] **Sheet metal — scoped design assessment** (assessment only; implementation not
-  started). The domain is big but its kernel demands are mostly things this kernel
-  already has; the genuinely new work is a MODEL, not new surface types.
-  - **Bend allowance model.** One formula family covers industry practice: developed
-    length of a bend = θ·(R + K·t) with inside radius R, thickness t, and the
-    K-factor K ∈ (0, 1) locating the neutral axis (K = 0.5 mid-sheet; real values
-    0.3–0.5 by material/process). Bend deduction and setback are derived quantities,
-    not separate models. Design decision to make up front: store K per FEATURE with a
-    per-material default table (the `StandardHoles`-style verify-flagged table), and
-    keep the formula in ONE place so flat-pattern length can never disagree with the
-    fold. Air-bend spring-back compensation is out of scope (manufacturing, not
-    geometry).
-  - **Data model.** A sheet body is a base flat face + thickness + an ordered tree of
-    flanges: `Flange(edge, angle, height, R, K, relief)` hanging off a planar face's
-    straight rim edge — which is exactly a `Feature` with an `EdgeSetRef` input, so
-    regeneration/suppression/persistence come free from the existing feature system.
-    The folded GEOMETRY of one flange is: offset the edge, one cylindrical band
-    (partial `RevolvedSurface`/`CylinderSurface` — both exist, incl. their booleans
-    and tessellation) + one planar wall, thickened. The kernel can already BUILD this
-    as a revolve∪extrude union; what it lacks is the tangent union (flange band meets
-    both sheets tangentially — the same v1-boolean tangency refusal the hex-socket
-    work hit), so v1 should CONSTRUCT the folded solid directly as topology (the
-    faces are known in closed form — the `Filleting`-style surgery approach, no
-    boolean) rather than lean on booleans.
-  - **Unfold.** A developable-only unfold is bookkeeping, not differential geometry:
-    walk the flange tree, replace each bend band by its developed-length rectangle
-    (θ·(R + K·t) wide), and lay planar faces into the plane via `Frame3d` chains.
-    Output should be a `Sketch`/`Region2d` flat pattern (plus bend lines as
-    annotations) — the 2D-views machinery (`Shape.Section`/`PlanarSection`,
-    `Region2dOffset`) already provides the vocabulary, and DXF export of a sketch is
-    a small writer. Refuse non-developable input by name (a deformed/lofted face has
-    no exact flat pattern in this model).
-  - **Reliefs and corners.** Rectangular/obround bend reliefs are pocket subtractions
-    at known coordinates (exact — the sketch-pocket case); corner closes/miters
-    between adjacent flanges are the genuinely fiddly part, and v1 should refuse
-    overlapping corner geometry loudly rather than approximate.
-  - **What exists already**: planar faces with straight rims + `BrepQueries`
-    selectors (flange targets), partial cylinder bands + their tessellation,
-    `EdgeSetRef`/features/regeneration, `Frame3d`, exact sketch pockets, 2D regions +
-    offset, mass properties (flat-pattern check: folded and unfolded volumes must
-    agree exactly, a strong built-in test oracle). **Missing**: the flange feature
-    family, direct folded-topology construction, the unfold walker, a K-factor
-    table, DXF out.
-  - **Suggested first rung**: `SheetBody(sketch, t)` + `Flange(edge, 90°, h, R, K)`
-    folded-topology construction + `Unfold()` to a `Sketch` with the volume-agreement
-    test — one bend, no reliefs, no corner interaction — which exercises every load-
-    bearing decision (K storage, tree model, surgery construction, unfold walk) at
-    minimum surface area.
+- [ ] **Sheet metal v2 — corners, reliefs and the rest of the vocabulary.** v1 landed
+  (`Modeling/SheetMetal.cs`, `SheetMetalFeatures.cs`, `BRep/SheetMetalSurgery.cs`, docs
+  `examples/sheet-metal.md`): the K-factor bend model, base flange + edge flanges as
+  direct topology surgery, the flange tree, `Unfold()` to a `Sketch` with bend lines, DXF
+  and SVG out, and the folded-versus-flat volume identity as the oracle. What it refuses
+  BY NAME is the backlog, roughly in the order the refusals bite:
+  - **Closed corners and miters.** The genuinely fiddly part, and the one that unlocks
+    most real parts: two flanges on adjacent edges of one plate. v1 detects it (the
+    consumed wall is no longer four-sided) and refuses. The corner needs the two bends'
+    bands trimmed against each other and a corner face built — the same
+    surface–surface-re-intersection machinery that blocks curved-face shelling and
+    non-perpendicular fillet corners, so the three are worth costing together.
+  - **A flange flush at ONE end only.** Currently refused as "the corner case in
+    disguise", which it is — but the common shop case (a flange running to one end of a
+    plate) deserves the small special case: the neighbouring wall's loop is spliced at
+    one end and a cap built at the other.
+  - **Bend reliefs** (rectangular / obround / tear). Pocket subtractions at known
+    coordinates, i.e. the exact sketch-pocket case, so mostly plumbing — but they change
+    the FLAT pattern too, which is where the design work is.
+  - **Jogs, hems, curls and louvres.** Each is a different forming operation; a hem is
+    the interesting one, since folding a flange back against the sheet produces
+    coincident faces that v1's tangency argument explicitly refuses.
+  - **Bends along non-straight edges** (a developable band rather than a cylinder) —
+    needs a new swept surface, not just new bookkeeping.
+  - **Holes and cuts ON a flange, carried into the flat pattern.** Today a hole must be
+    drilled on the folded solid AFTER the sheet body is built, and the flat pattern does
+    not know about it. The unfold walker already has each flange's rigid 2D↔3D frame
+    pair, so the mapping exists; what is missing is a place to declare a flange-local
+    sketch and the decision about what to do with a hole that crosses a bend.
+  - **Multi-body sheets and welded assemblies**; **spring-back compensation** (a press
+    property, deliberately out of scope for geometry).
+  - Smaller: a `SheetMetalDrawing`-style bend TABLE beside the flat pattern (angle,
+    direction, radius, allowance per bend — `FlatBendLine` already carries the data);
+    a viewer/`--export` route that writes a part's flat pattern without a script; and
+    mirrored placements (v1 is rigid + uniform scale, as loft/draft/shell are).
+  - Five cross-cutting cleanups the sheet-metal review surfaced, each outside the
+    feature and each with callers beyond it, so all deliberately NOT folded in:
+    (a) **`TopologyEditor.Use(edge, from, to)`** — "the coedge sense that walks from→to"
+    as an assertion rather than a convention. `SheetMetalSurgery` has it privately;
+    `Filleting` hand-computes senses in ~30 places, and two of its recorded lessons
+    ("build all new rim edges in the top face's traversal direction", "don't double-flip
+    arc spans already measured from traversal-ordered points") are exactly what it would
+    have prevented. Best promotion candidate in the area.
+    (b) **`TopologyEditor.DetachFace(face)`** — dropping a discarded face's coedges from
+    the surviving edges' use lists is now written three times (`SealSeams` step 1,
+    `SheetMetalSurgery.Detach`); separating it from `SealSeams`' seam-tier vertex
+    unification would also stop new callers reaching for `UsesInternal`.
+    (c) **`BrepQueries.FacesOf` scans every face × loop × coedge** where `edge.Uses`
+    answers in O(2). `IsConvex` calls it per edge, so `solid.ConvexEdges()` — which is
+    what `EdgeSetRef.Convex` resolves to — is O(E·F) today. One line, but it changes the
+    RESULT ORDER (solid order → construction order) and `Filleting`/`BrepBoolean` read
+    `faces[0]`/`faces[1]`, so it wants its own pass with the ordering checked.
+    (d) **`Distance3d.ClosestPointOnSegment`** — the repo now has four private segment
+    routines (`Region2dBoolean`, `ThreadSdf`, `ShapeNodes`, `SheetMetalSurgery`), which is
+    the exact count that triggered the `ClosestPointOnTriangle` promotion.
+    (e) **Nullable `[Param]` values.** `FeatureHistory.Convert` throws for anything
+    outside its type list, so a `double?` parameter breaks `LoadParameters`. That forces
+    `0` to mean "inherit" in `EdgeFlangeFeature` (and `HoleSpec.TipAngleDegrees` before
+    it) while the underlying record uses `double?` — two spellings of one option, with a
+    translation between them. ~4 lines in the shared seam (`Nullable.GetUnderlyingType`);
+    `SerializeValue` already passes null through.
+  - One correction the v1 work made to the original assessment, worth keeping: it
+    claimed "folded and unfolded volumes must agree exactly, a strong built-in test
+    oracle". They agree exactly only at **K = 0.5** — a constant-thickness bend holds
+    `θ·T·(R + T/2)` per unit width while the blank spends `θ·T·(R + K·T)` — so the real
+    oracle is the exact DIFFERENCE `Σ width·θ·T²·(0.5 − K)`, which is strictly stronger
+    (a blanket agreement test passes a model with K wired to a constant).
 - [ ] nuget.org publish — pack VERIFIED solution-wide at 0.1.0 (12 packages, zero
   warnings; every src project has a Description and a packaged README;
   `RepositoryType` added). Remaining, all Chris's to confirm: the placeholder

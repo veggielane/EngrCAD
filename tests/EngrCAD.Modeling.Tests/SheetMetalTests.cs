@@ -1,0 +1,524 @@
+using EngrCAD.BRep;
+using EngrCAD.Core;
+using EngrCAD.Interop;
+using EngrCAD.Modeling;
+using Xunit;
+
+namespace EngrCAD.Modeling.Tests;
+
+/// <summary>
+/// Sheet metal v1: the K-factor bend model, folded geometry by topology surgery, and the
+/// flat pattern as bookkeeping over the flange tree.
+///
+/// <para>The load-bearing oracle is the <b>folded-versus-flat volume identity</b>. The
+/// folded body's bend is an annular sector of area <c>θ·T·(R + T/2)</c> per unit width;
+/// the flat blank spends <c>BA·T = θ·T·(R + K·T)</c> there. Those agree EXACTLY at
+/// K = 0.5 and differ by <c>θ·T²·(0.5 − K)</c> per unit width otherwise — a closed form,
+/// not a fudge, and a stronger test than "the two volumes are roughly equal" because it
+/// pins the K-factor's effect in both direction and magnitude.</para>
+/// </summary>
+public class SheetMetalTests
+{
+    private const double Thickness = 1.5;
+    private const double Radius = 2.0;
+    private const double PlateX = 80;
+    private const double PlateY = 50;
+
+    /// <summary>A rectangle in the XY plane with its lower-left corner at the origin, so
+    /// segment 1 is the +X edge and segment 2 the +Y edge.</summary>
+    private static Sketch Plate(double x = PlateX, double y = PlateY) =>
+        Sketch.Polygon([new(0, 0), new(x, 0), new(x, y), new(0, y)]);
+
+    private static SheetMetalSpec Spec(double k = SheetMaterials.MildSteel) =>
+        new(Thickness, Radius, k);
+
+    private static double FoldedVolume(SheetMetalBody body) =>
+        BrepMassProperties.Compute(body.Solid.ToBrep()).Volume;
+
+    // -------------------------------------------------------------------- bend model
+
+    [Fact]
+    public void BendAllowanceIsTheNeutralAxisArcLength()
+    {
+        // A 90-degree bend, R = 2, T = 1.5, K = 0.44: BA = (pi/2)(2 + 0.66) = 4.1783.
+        double allowance = SheetMetalSpec.BendAllowance(Math.PI / 2, 2, 1.5, 0.44);
+        Assert.Equal(Math.PI / 2 * (2 + 0.44 * 1.5), allowance, 12);
+    }
+
+    [Fact]
+    public void BendDeductionIsTwoSetbacksLessTheAllowance()
+    {
+        const double angle = Math.PI / 2;
+        double setback = SheetMetalSpec.OutsideSetback(angle, Radius, Thickness);
+        double allowance = SheetMetalSpec.BendAllowance(angle, Radius, Thickness, 0.44);
+        Assert.Equal(2 * setback - allowance,
+            SheetMetalSpec.BendDeduction(angle, Radius, Thickness, 0.44), 12);
+        // The setback of a square bend is exactly R + T (tan 45 = 1).
+        Assert.Equal(Radius + Thickness, setback, 12);
+    }
+
+    [Fact]
+    public void AKFactorOutsideTheSheetIsRefused()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => SheetMetalSpec.BendAllowance(Math.PI / 2, 2, 1.5, 1.2));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => SheetMetalSpec.BendAllowance(Math.PI / 2, 2, 1.5, 0));
+    }
+
+    // ----------------------------------------------------------------- folded solid
+
+    [Fact]
+    public void ABaseFlangeIsExactlyItsSketchExtrudedToThickness()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec());
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(PlateX * PlateY * Thickness, BrepMassProperties.Compute(solid).Volume, 6);
+    }
+
+    [Fact]
+    public void AFoldedSheetIsBRepNative()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 25);
+        var report = body.Solid.Explain(TargetRep.Brep);
+        Assert.True(report.IsConvertible);
+        Assert.All(report.Entries, e => Assert.Equal(NodeSupport.Native, e.Support));
+    }
+
+    [Fact]
+    public void ANinetyDegreeFlangesTipLandsWhereClosedFormPutsIt()
+    {
+        // Bend-outside: the bend's tangent line IS the named edge, so the flange's outer
+        // face lands at x = 80 + (R + T) and the outer virtual sharp is on the plate's
+        // own bottom plane there. A 25 mm flange measured from it reaches z = 25 exactly.
+        const double flangeLength = 25;
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), flangeLength);
+
+        var bounds = Aabb.Empty;
+        foreach (var vertex in body.Solid.ToBrep().Vertices)
+            bounds = bounds.Union(vertex.Position);
+
+        Assert.Equal(PlateX + Radius + Thickness, bounds.Max.X, 9);
+        Assert.Equal(flangeLength, bounds.Max.Z, 9);
+    }
+
+    [Fact]
+    public void ADownFlangeMirrorsAnUpFlangeThroughTheSheet()
+    {
+        var up = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+        var down = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, direction: SheetBendDirection.Down);
+
+        Assert.Equal(FoldedVolume(up), FoldedVolume(down), 6);
+
+        var bounds = Aabb.Empty;
+        foreach (var vertex in down.Solid.ToBrep().Vertices)
+            bounds = bounds.Union(vertex.Position);
+        // The flange now hangs below the sheet: its outer face reaches z = -(25 - T).
+        Assert.Equal(-(25 - Thickness), bounds.Min.Z, 9);
+    }
+
+    // -------------------------------------------------------- the volume identity oracle
+
+    [Fact]
+    public void AtKOfAHalf_TheFoldedVolumeEqualsTheFlatBlanksExactly()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 25);
+
+        double folded = FoldedVolume(body);
+        double flat = body.Unfold().Volume;
+        // Relative tolerance set by the tessellate-then-Richardson mass properties, not by
+        // the bend model: the bend band is the only curved surface in the part.
+        Assert.Equal(1.0, folded / flat, 6);
+    }
+
+    [Theory]
+    [InlineData(SheetMaterials.SoftAluminium)]
+    [InlineData(SheetMaterials.Aluminium)]
+    [InlineData(SheetMaterials.MildSteel)]
+    [InlineData(SheetMaterials.Stainless)]
+    public void AwayFromKOfAHalf_TheGapIsExactlyWhatTheFormulaPredicts(double k)
+    {
+        const double angle = Math.PI / 2;
+        var body = SheetMetalBody.Base(Plate(), Spec(k))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), length: 25);
+
+        double folded = FoldedVolume(body);
+        double flat = body.Unfold().Volume;
+        // Per unit width the folded bend holds theta*T*(R + T/2) and the blank spends
+        // theta*T*(R + K*T); the whole difference is that, times the flange's width.
+        double predicted = PlateY * angle * Thickness * Thickness * (0.5 - k);
+        // The blank's volume is exact; the folded one is tessellate-then-Richardson, whose
+        // grade on a curved solid is ~1e-8 relative — that, not a chosen epsilon, is what
+        // the residual has to clear. Measured here: 4.9e-6 on a folded volume of 6.1e3.
+        Assert.True(
+            Math.Abs((folded - flat) - predicted) < 1e-8 * folded,
+            $"predicted {predicted:g12}, measured {folded - flat:g12}");
+        Assert.True(folded > flat, "K below 0.5 must make the blank SHORTER than the folded material.");
+    }
+
+    [Fact]
+    public void TwoOppositeFlanges_KeepTheIdentityThroughBothBends()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(SheetFlangeTarget.BaseEdge(3), 18);
+
+        Assert.Equal(1.0, FoldedVolume(body) / body.Unfold().Volume, 6);
+    }
+
+    [Fact]
+    public void AFlangeOnAFlange_KeepsTheIdentityThroughTheChain()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(SheetFlangeTarget.FlangeTip(0), 12);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+    }
+
+    [Fact]
+    public void AnInsetFlange_KeepsTheIdentityAndLeavesTheEdgeIntactEitherSide()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25, startOffset: 10, width: 30);
+
+        var solid = body.Solid.ToBrep();
+        solid.Validate();
+        Assert.Equal(1.0, BrepMassProperties.Compute(solid).Volume / body.Unfold().Volume, 6);
+    }
+
+    [Fact]
+    public void HolesInTheBaseSketch_CarryThroughToBothTheSolidAndTheBlank()
+    {
+        var sketch = Plate().WithHole(Sketch.Circle(new Vector2d(20, 25), 5));
+        var body = SheetMetalBody.Base(sketch, Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+
+        var flat = body.Unfold();
+        Assert.Single(flat.Outline.Holes);
+        Assert.Equal(1.0, FoldedVolume(body) / flat.Volume, 6);
+    }
+
+    // ---------------------------------------------------------------- the flat pattern
+
+    [Fact]
+    public void TheFlatLengthIsTheOutsideLegsLessTheBendDeduction()
+    {
+        const double angle = Math.PI / 2;
+        const double flangeLength = 25;
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), flangeLength);
+
+        double setback = SheetMetalSpec.OutsideSetback(angle, Radius, Thickness);
+        double allowance = SheetMetalSpec.BendAllowance(angle, Radius, Thickness, SheetMaterials.MildSteel);
+        double deduction = SheetMetalSpec.BendDeduction(angle, Radius, Thickness, SheetMaterials.MildSteel);
+
+        // Walking the blank: the base's flat run, the bend's allowance, then the wall.
+        double expected = PlateX + allowance + (flangeLength - setback);
+        // And the textbook form: outside leg 1 + outside leg 2 - BD. Leg 1 runs from the
+        // plate's far edge to the virtual sharp, i.e. PlateX + setback.
+        Assert.Equal(expected, (PlateX + setback) + flangeLength - deduction, 9);
+
+        var flat = body.Unfold();
+        Assert.Equal(expected, flat.Outline.Bounds.Size.X, 9);
+        Assert.Equal(PlateY, flat.Outline.Bounds.Size.Y, 9);
+    }
+
+    [Fact]
+    public void ASmallerKFactorShortensTheBlankByExactlyTheFormula()
+    {
+        var loose = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.SoftAluminium))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+        var coined = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+
+        double looseLength = loose.Unfold().Outline.Bounds.Size.X;
+        double coinedLength = coined.Unfold().Outline.Bounds.Size.X;
+        // BA = theta*(R + K*T), so the difference is theta*T*(K1 - K2) and nothing else.
+        Assert.Equal(Math.PI / 2 * Thickness * (0.5 - SheetMaterials.SoftAluminium),
+            coinedLength - looseLength, 9);
+        Assert.True(looseLength < coinedLength, "A lower K puts the neutral axis nearer the inside, shortening the blank.");
+    }
+
+    [Fact]
+    public void EveryBendReportsItsZoneAndDirectionOnTheFlat()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(SheetFlangeTarget.BaseEdge(3), 18, direction: SheetBendDirection.Down);
+
+        var flat = body.Unfold();
+        Assert.Equal(2, flat.Bends.Count);
+        Assert.True(flat.Bends[0].Up);
+        Assert.False(flat.Bends[1].Up);
+        foreach (var bend in flat.Bends)
+        {
+            // The two tangent lines are one allowance apart, and the centre line runs
+            // halfway between them.
+            Assert.Equal(bend.Allowance, bend.StartTangent.DistanceTo(bend.StartFar), 9);
+            var (centreStart, _) = bend.CenterLine;
+            Assert.Equal(bend.Allowance / 2, bend.StartTangent.DistanceTo(centreStart), 9);
+        }
+    }
+
+    [Fact]
+    public void TheFlatPatternExportsAsDxfWithTheBlankAndTheBendsOnSeparateLayers()
+    {
+        var body = SheetMetalBody.Base(Plate().WithHole(Sketch.Circle(new Vector2d(20, 25), 5)), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+
+        var document = body.Unfold().ToDxf();
+        Assert.Contains("CUT", document.Layers);
+        Assert.Contains("BEND", document.Layers);
+        Assert.Equal(DxfLineTypes.Center.Name, document.LayerLineTypes["BEND"]);
+        // Blank outline + bore, plus the bend zone's two tangent lines.
+        Assert.Equal(2, document.Entities.Count(e => e.Layer == "CUT"));
+        Assert.Equal(2, document.Entities.Count(e => e.Layer == "BEND"));
+
+        // Round-trips: reading the CUT layer back gives the blank at the same extent.
+        var buffer = new StringWriter();
+        document.Save(buffer);
+        var reread = DxfDocument.Load(new StringReader(buffer.ToString()));
+        var blank = reread.ToSketches("CUT").OrderByDescending(s => s.Area()).First();
+        Assert.Equal(body.Unfold().Outline.Bounds.Size.X, blank.Bounds.Size.X, 6);
+    }
+
+    // ---------------------------------------------------------------------- refusals
+
+    [Fact]
+    public void ABendAlongACurvedEdgeIsRefusedByName()
+    {
+        var rounded = Sketch.RoundedRectangle(PlateX, PlateY, 8);
+        var body = SheetMetalBody.Base(rounded, Spec());
+        int arcIndex = rounded.ToCurves().Select((c, i) => (c, i)).First(p => p.c is Arc2d).i;
+
+        var exception = Assert.Throws<NotSupportedException>(
+            () => body.WithFlange(SheetFlangeTarget.BaseEdge(arcIndex), 20));
+        Assert.Contains("must be STRAIGHT", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AFlangeShorterThanItsOwnSetbackIsRefusedNamingBoth()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec());
+        var exception = Assert.Throws<ArgumentException>(
+            () => body.WithFlange(SheetFlangeTarget.BaseEdge(1), length: 2));
+        Assert.Contains("outer virtual sharp", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AHemIsRefusedRatherThanApproximated()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec());
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => body.WithFlange(SheetFlangeTarget.BaseEdge(1), 20, angleDegrees: 180));
+    }
+
+    [Fact]
+    public void TwoFlangesOverlappingOnOneEdgeAreRefused()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 20, startOffset: 5, width: 20);
+        var exception = Assert.Throws<ArgumentException>(
+            () => body.WithFlange(SheetFlangeTarget.BaseEdge(1), 20, startOffset: 15, width: 20));
+        Assert.Contains("cannot share the same stretch", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AFlangeOnAFlangesSideIsRefusedAsACornerInteraction()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+        var exception = Assert.Throws<NotSupportedException>(
+            () => body.WithFlange(new EdgeFlange(new SheetFlangeTarget(0, 1), 10)));
+        Assert.Contains("corner", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TwoFlangesMeetingAtAPlateCornerAreRefusedAtLowering()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25)
+            .WithFlange(SheetFlangeTarget.BaseEdge(2), 25);
+        var exception = Assert.Throws<NotSupportedException>(() => body.Solid.ToBrep());
+        Assert.Contains("CORNER", exception.Message, StringComparison.Ordinal);
+    }
+
+    // ----------------------------------------------------------- selectors and sites
+
+    [Fact]
+    public void EveryFlangeableEdgeIsListedAndMatchesAPickedBrepEdge()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec())
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+
+        // Four base segments plus the flange's tip.
+        Assert.Equal(5, body.Sites.Count);
+
+        var solid = body.Solid.ToBrep();
+        var tipSite = body.Sites.Single(s => s.Target.ParentFlange == 0);
+        var edge = solid.Edges.Single(e =>
+            e.IsLinear(out var a, out var b)
+            && ((a.DistanceTo(tipSite.Start) < 1e-9 && b.DistanceTo(tipSite.End) < 1e-9)
+                || (a.DistanceTo(tipSite.End) < 1e-9 && b.DistanceTo(tipSite.Start) < 1e-9)));
+        Assert.Equal(tipSite.Target, body.SiteFor(edge).Target);
+    }
+
+    // ------------------------------------------------------------ feature integration
+
+    /// <summary>The +X edge of the top face, named the way a design would.</summary>
+    private static EdgeSetRef PlusXTopEdge(double x = PlateX) =>
+        SheetMetalFeatures.EdgeBetween((x, 0, Thickness), (x, PlateY, Thickness));
+
+    private static FeatureHistory History(params Feature[] features)
+    {
+        var history = new FeatureHistory();
+        foreach (var feature in features)
+            history.Add(feature);
+        return history;
+    }
+
+    private static string Errors(RegenerationResult result) =>
+        string.Join(" ", result.Statuses.Select(s => s.Error).Where(e => e is not null));
+
+    [Fact]
+    public void ASheetPartRegeneratesThroughTheFeatureHistory()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius, KFactor = SheetMaterials.Coined },
+            new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge() });
+
+        var result = history.Regenerate();
+        Assert.True(result.Succeeded, result.ToString());
+
+        var body = SheetMetalFeatures.BodyOf(result.Body, "test");
+        Assert.Single(body.Flanges);
+        Assert.Equal(1.0, BrepMassProperties.Compute(result.Body!.ToBrep()).Volume / body.Unfold().Volume, 6);
+    }
+
+    [Fact]
+    public void EditingTheFlangeLengthReRunsOnlyTheFlangeAndMovesTheBlank()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge() });
+        Assert.True(history.Regenerate().Succeeded);
+        double before = SheetMetalFeatures.TryUnfold(history.Regenerate().Body)!.Outline.Bounds.Size.X;
+
+        var longer = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 40, Edge = PlusXTopEdge() });
+        double after = SheetMetalFeatures.TryUnfold(longer.Regenerate().Body)!.Outline.Bounds.Size.X;
+
+        // Only the wall grew, so the blank grows by exactly the length difference.
+        Assert.Equal(15.0, after - before, 9);
+    }
+
+    [Fact]
+    public void AThicknessEditReSeatsTheFlangeOnTheNewTopFace()
+    {
+        // The selector names the edge on the ORIGINAL top face; a thicker sheet moves it,
+        // which is exactly the case a persisted index would get wrong. Here the design
+        // re-states the query against the new geometry, and the regeneration says so
+        // loudly instead of folding on the wrong edge.
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = 3, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 25, Edge = SheetMetalFeatures.EdgeBetween((PlateX, 0, 3), (PlateX, PlateY, 3)) });
+        Assert.True(history.Regenerate().Succeeded);
+    }
+
+    [Fact]
+    public void AFlangeFeatureOnANonSheetBodyIsRefusedByName()
+    {
+        var history = History(
+            // Geometrically identical to the base flange, so the edge query DOES resolve
+            // and the refusal is genuinely about the missing flange tree.
+            new ExtrudeSketchFeature(Plate()) { Height = Thickness },
+            new EdgeFlangeFeature { Length = 25, Edge = PlusXTopEdge(PlateX) });
+        var result = history.Regenerate();
+        Assert.False(result.Succeeded);
+        Assert.Contains("flange tree", Errors(result), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ASheetHistorySavesAndLoadsThroughTheFeatureRegistry()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius, KFactor = SheetMaterials.Coined });
+        Assert.True(history.Regenerate().Succeeded);
+
+        // The base flange writes its blank exactly (InputJson.SaveSketch), so the registry
+        // must be able to rebuild it — a record that saves but cannot load is worse than
+        // one that refuses to save.
+        var loaded = FeatureHistory.LoadHistory(history.SaveHistory());
+        Assert.True(loaded.Complete, string.Join("; ", loaded.Warnings));
+        Assert.Equal(
+            SheetMetalFeatures.BodyOf(history.Regenerate().Body, "test").Unfold().Area,
+            SheetMetalFeatures.BodyOf(loaded.History.Regenerate().Body, "test").Unfold().Area, 9);
+    }
+
+    [Fact]
+    public void TheFluentFlangeOverloadAgreesWithTheRecordsOwnDefaults()
+    {
+        // Two default sets for the same options is a drift waiting to happen; this is the
+        // test that makes them one.
+        var target = SheetFlangeTarget.BaseEdge(1);
+        var viaRecord = SheetMetalBody.Base(Plate(), Spec()).WithFlange(new EdgeFlange(target, 25));
+        var viaOverload = SheetMetalBody.Base(Plate(), Spec()).WithFlange(target, 25);
+        Assert.Equal(viaRecord.Flanges[0], viaOverload.Flanges[0]);
+    }
+
+    [Fact]
+    public void APlacedSheetIsRefusedForTheRightReason()
+    {
+        var placed = SheetMetalBody.Base(Plate(), Spec()).Solid.Translate(0, 0, 10);
+        var exception = Assert.Throws<NotSupportedException>(
+            () => SheetMetalFeatures.BodyOf(placed, "test"));
+        Assert.Contains("PLACED", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnAmbiguousEdgeQueryIsRefusedNamingWhatIsAvailable()
+    {
+        var history = History(
+            new BaseFlangeFeature(Plate()) { Thickness = Thickness, BendRadius = Radius },
+            new EdgeFlangeFeature { Length = 25, Edge = EdgeSetRef.Convex });
+        var result = history.Regenerate();
+        Assert.False(result.Succeeded);
+        Assert.Contains("exactly one bend line", Errors(result), StringComparison.Ordinal);
+    }
+
+    // --------------------------------------------------------------------- placement
+
+    [Fact]
+    public void APlacedSheetScalesItsThicknessRadiusAndFlangeTogether()
+    {
+        var body = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+
+        double plain = FoldedVolume(body);
+        var scaled = body.Solid.Transform(Matrix4d.CreateScale(2)).ToBrep();
+        Assert.Equal(8 * plain, BrepMassProperties.Compute(scaled).Volume, 4);
+    }
+
+    [Fact]
+    public void ASheetOnANonWorldPlaneFoldsTheSameShape()
+    {
+        var plane = SketchPlane.At((10, -4, 7), new Vector3d(0, 1, 0), new Vector3d(0, 0, 1));
+        var placed = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined), plane)
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+        var flat = SheetMetalBody.Base(Plate(), Spec(SheetMaterials.Coined))
+            .WithFlange(SheetFlangeTarget.BaseEdge(1), 25);
+
+        Assert.Equal(FoldedVolume(flat), FoldedVolume(placed), 5);
+        Assert.Equal(flat.Unfold().Area, placed.Unfold().Area, 9);
+    }
+}

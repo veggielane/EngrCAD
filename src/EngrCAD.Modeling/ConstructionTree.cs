@@ -282,6 +282,11 @@ public static class ConstructionTree
             case SweepShape { Sketch: { } swept } sweep:
                 AddSketch(node, swept, sweep.PlaneMatrix, ref next);
                 break;
+            // A sheet part's blank is its base sketch — the row that lets a viewer preview
+            // the flat outline the folds grew from.
+            case SheetMetalShape sheet:
+                AddSketch(node, sheet.Body.BaseSketch, sheet.Body.Plane.ToMatrix(), ref next);
+                break;
         }
         return node;
 

@@ -80,6 +80,9 @@ public sealed class FeatureRegistry
         RegisterFactory(typeof(RevolveSketchFeature), inputs =>
             new RevolveSketchFeature(
                 InputJson.LoadSketch(Require(inputs, nameof(RevolveSketchFeature)).GetProperty("sketch"))));
+        RegisterFactory(typeof(BaseFlangeFeature), inputs =>
+            new BaseFlangeFeature(
+                InputJson.LoadSketch(Require(inputs, nameof(BaseFlangeFeature)).GetProperty("sketch"))));
     }
 
     private static JsonElement Require(JsonElement? inputs, string type) =>
