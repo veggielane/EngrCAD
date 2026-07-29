@@ -1132,6 +1132,124 @@ public sealed class SceneTools(SceneSession session)
     /// structured content (for clients that consume the declared output schema) AND as
     /// the pretty-printed text block (for clients that predate structured content).
     /// One JsonObject feeds both, so they cannot disagree.</summary>
+    // ---- document persistence ----
+
+    /// <summary>
+    /// Writes the session's whole document — tabs, parts with their feature histories,
+    /// assemblies and occurrences, mates, annotations and results — as one versioned
+    /// JSON envelope (<see cref="Document.Save"/>).
+    /// <para>This is how a session's edits <b>survive it</b>. <c>set_param</c> and the
+    /// suppression tools change the running model only, by design; saving hands that
+    /// tuning back to the user as one file. A document is its CONSTRUCTION HISTORY, so a
+    /// history-backed part reloads parametric; parts with no recipe (a raw mesh, an
+    /// imported STL, an `Sdf`, a `Shape` graph built in code) embed a binary-exact mesh
+    /// snapshot and are NAMED in the result, so nothing discovers later that a parameter
+    /// changes nothing.</para>
+    /// </summary>
+    /// <param name="path">Destination file path (<c>.json</c> by convention).</param>
+    /// <param name="embedGeometry">Embed mesh snapshots for parts with no construction
+    /// recipe (default true). False writes a recipe-only file in which those parts
+    /// become an explicit "no geometry" record naming the reason.</param>
+    public CallToolResult SaveDocument(
+        [Description("Destination file path for the document JSON.")] string path,
+        [Description("Embed mesh snapshots for parts that have no construction recipe (default "
+                   + "true). False writes a recipe-only file, smaller but not reopenable for "
+                   + "those parts.")]
+        bool embedGeometry = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return Error("save_document needs a file path.");
+
+        var scene = Session.Scene;
+        try
+        {
+            var document = new Document(scene);
+            string json = document.Save(new DocumentSaveOptions { EmbedGeometry = embedGeometry });
+            File.WriteAllText(path, json);
+
+            // Which parts would NOT come back parametric: read straight off a load of
+            // what was just written, so the answer is the file's, not a guess about it.
+            var snapshots = new JsonArray();
+            foreach (string name in Document.Load(json, new DocumentLoadOptions { Regenerate = false }).Snapshots)
+                snapshots.Add(name);
+            return Ok(new JsonObject
+            {
+                ["wrote"] = Path.GetFullPath(path),
+                ["generation"] = Session.Generation,
+                ["tabs"] = scene.Tabs.Count,
+                ["parts"] = scene.AllParts.Count(),
+                ["bytes"] = json.Length,
+                ["snapshots"] = snapshots,
+            });
+        }
+        catch (Exception e)
+        {
+            return Error($"Saving the document failed: {e.GetType().Name}: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Reads a document written by <see cref="SaveDocument"/> and makes it the session's
+    /// model. History-backed parts regenerate on load, so the result is parametric again
+    /// and every other tool (including the write tools) works on it.
+    /// <para><c>reload</c> still re-runs the design program's own source and discards
+    /// this — a loaded document is a session-lifetime overlay, not a new truth. Loading
+    /// never throws on a record it cannot rebuild: those come back as warnings.</para>
+    /// </summary>
+    /// <param name="path">The document JSON to read.</param>
+    /// <param name="adopt">Replace the session's scene with the loaded document
+    /// (default true). False reads and reports without changing the model — the dry run
+    /// an assistant wants before committing to a file it did not write.</param>
+    public CallToolResult LoadDocument(
+        [Description("Path of the document JSON to read.")] string path,
+        [Description("Make the loaded document the session's model (default true). False reads "
+                   + "and reports without changing anything.")]
+        bool adopt = true)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return Error("load_document needs a file path.");
+        if (!File.Exists(path))
+            return Error($"No document at '{Path.GetFullPath(path)}'.");
+
+        DocumentLoadResult loaded;
+        try
+        {
+            loaded = Document.LoadFile(path);
+        }
+        catch (FormatException e)
+        {
+            // A bad envelope or an unknown version is the ONE thing Load throws for:
+            // everything it could partially rebuild is a warning instead.
+            return Error($"'{Path.GetFullPath(path)}' is not a document this build reads: {e.Message}");
+        }
+        catch (Exception e)
+        {
+            return Error($"Reading the document failed: {e.GetType().Name}: {e.Message}");
+        }
+
+        var scene = loaded.Scene;
+        if (adopt)
+            Session.Adopt(scene);
+
+        var warnings = new JsonArray();
+        foreach (string warning in loaded.Warnings)
+            warnings.Add(warning);
+        var snapshots = new JsonArray();
+        foreach (string name in loaded.Snapshots)
+            snapshots.Add(name);
+        return Ok(new JsonObject
+        {
+            ["read"] = Path.GetFullPath(path),
+            ["generation"] = Session.Generation,
+            ["adopted"] = adopt,
+            ["complete"] = loaded.Complete,
+            ["tabs"] = scene.Tabs.Count,
+            ["parts"] = scene.AllParts.Count(),
+            ["warnings"] = warnings,
+            ["snapshots"] = snapshots,
+        });
+    }
+
     private static CallToolResult Ok(JsonObject payload) => new()
     {
         Content = [new TextContentBlock { Text = payload.ToJsonString(Json) }],

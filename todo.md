@@ -1309,7 +1309,11 @@ through `ViewCubeMath`/`CameraMath`; `NamedViews` is only the name table), the
 `WithRemoteControl`/`--rpc`, token optional; `--mcp --viewer <port>` bridges
 set_view/fit/set_section/set_display_mode/set_view_style/select_part/get_selection/
 measure/viewer_screenshot; every mutation marshals through `Dispatcher.UIThread`, GL
-only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
+only via `SaveScreenshot`'s capture-on-next-frame), **document persistence**
+(`save_document`/`load_document` over the `Document` envelope — a session's edits now
+survive it, reopening parametric, with snapshot parts named rather than silently
+flattened; a loaded document is an overlay `reload` still discards) and the
+**`screenshot` `t` parameter** (posed through the shared `EngrCad.PoseAt`). Remaining:
 
 - [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting —
   the protocol was driven by hand and via the SDK's own client.
@@ -1330,14 +1334,19 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   screen at t" would mean driving the transport over RPC (a `set_animation_time` verb)
   rather than re-evaluating headlessly. Small, but it needs the windowed manual pass
   above to be worth anything.
-- [ ] **Persisting session edits**: `set_param` edits die with the session by design
-  (source is the truth). A `save_document` tool writing `Document.Save` JSON next to the
-  model would let an assistant hand its tuning back to the user as one file — the whole
-  envelope now exists, so this is a tool signature plus a path policy rather than a
-  serialization project. (A narrower `save_parameters` writing only
-  `FeatureHistory.SaveParameters` is the smaller version of the same idea.)
+- [ ] **A narrower `save_parameters` tool** (writing only
+  `FeatureHistory.SaveParameters` for one part) is the smaller sibling of the
+  `save_document`/`load_document` pair that landed. Worth adding only if a client turns
+  up that wants to diff one part's numbers rather than reopen a model; the document pair
+  covers the "hand the tuning back" case that motivated it.
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
+- [ ] **`DocumentLoadResult.Snapshots` names parts by BARE name, not "tab/part"** — the
+  doc comment claimed the path form and the code has always written the name; the
+  comment is now honest. Names are unique per TAB, so the report is ambiguous for a
+  document whose tabs share a part name. Changing it is one line plus the two assertions
+  that pin the spelling (`DocumentPersistenceTests`, `DocumentToolsTests`), left out of
+  the sweep that found it because a reporting-format change deserves its own commit.
 
 ## App layer / infrastructure
 

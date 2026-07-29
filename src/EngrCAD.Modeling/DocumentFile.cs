@@ -147,8 +147,10 @@ public sealed class DocumentLoadOptions
 /// </summary>
 /// <param name="Document">The rebuilt document.</param>
 /// <param name="Warnings">One message per record that could not be fully restored.</param>
-/// <param name="Snapshots">Paths ("tab/part") of parts loaded from an embedded mesh —
-/// present and correct, but not parametric.</param>
+/// <param name="Snapshots">Names of parts loaded from an embedded mesh — present and
+/// correct, but not parametric. (Bare part names, not "tab/part" paths: names are
+/// unique per TAB, so this is ambiguous for a document whose tabs share a part name —
+/// filed in todo.md rather than changed silently, since the spelling is asserted.)</param>
 public sealed record DocumentLoadResult(
     Document Document, IReadOnlyList<string> Warnings, IReadOnlyList<string> Snapshots)
 {

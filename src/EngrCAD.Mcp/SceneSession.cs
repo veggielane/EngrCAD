@@ -123,6 +123,26 @@ public sealed class SceneSession
         }
     }
 
+    /// <summary>
+    /// Replaces the session's scene with one that did NOT come from the factory — a
+    /// document loaded from disk. The factory is untouched, so <see cref="Reload"/>
+    /// still re-runs the program's source and discards the loaded document: the
+    /// standing rule that <b>the program's source is the truth</b>, with a file as a
+    /// session-lifetime overlay. Bumps <see cref="Generation"/>.
+    /// </summary>
+    public Scene Adopt(Scene scene)
+    {
+        ArgumentNullException.ThrowIfNull(scene);
+        lock (_gate)
+        {
+            _scene = scene;
+            _animation = null;          // built over the scene it was handed
+            _animationBuilt = false;
+            _generation++;
+            return scene;
+        }
+    }
+
     /// <summary>One part's display mesh at this session's quality — the lazy seam.
     /// Meshes cache on the part, so a second tool call is free.</summary>
     public Mesh.HalfEdgeMesh MeshOf(Part part) => part.GetMesh(Quality);

@@ -52,7 +52,9 @@ This is a library entry point, not a generic host.
 | `export` | Writes `.step` (exact B-Rep, one file per part), `.stl`/`.obj` (merged with instance transforms), or `.png` (`width`/`height` set the image size). | meshes what it writes |
 | `set_param` | Edits one `[Param]` value on a feature of a history-backed part and **regenerates**. The result is the regeneration report (per-feature applied/cached/suppressed/failed/skipped with timings). A failed regeneration keeps the part's previous geometry and names the failing feature; the edit stays applied so it can be corrected — `FeatureHistory`'s own validation-first / failure-keeps-prefix semantics, surfaced verbatim. | regenerates (no meshing) |
 | `suppress_feature` / `unsuppress_feature` | Toggles a feature's suppression (a suppressed feature passes the body through untouched — a hole feature's bores disappear) and regenerates. Same result shape as `set_param`. | regenerates (no meshing) |
-| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits**: the program's source is the truth. | free |
+| `save_document` | Writes the whole model — tabs, parts with their feature histories, assemblies, mates, annotations, results — as one `Document.Save` JSON file. **This is how session edits survive the session.** Reports which parts had no construction recipe and so went out as mesh snapshots. | meshes parts with no recipe |
+| `load_document` | Reads one back and makes it the session's model (history-backed parts regenerate, so it is parametric again); `adopt: false` reads and reports without changing anything. Records this build cannot rebuild come back as warnings, never as a failure. | regenerates |
+| `reload` | Re-invokes the scene factory — the headless equivalent of hot reload. A model that throws leaves the previous scene in place. **Discards session edits AND any loaded document**: the program's source is the truth. | free |
 
 Plus one resource, `engrcad://scene`: the whole document as JSON (tabs, parts,
 geometry kinds), cheap enough to read on every turn.
@@ -167,6 +169,23 @@ session `generation`, telling clients their earlier reads are stale; `Part.Regen
 then clears the part's cached mesh/solid/edges/annotations so every later tool sees
 the edited model. Edits live in the running session only — `reload` re-runs the
 program's source and discards them.
+
+**`save_document` is how they get out.** An assistant that has tuned a model to what
+the user asked for writes the whole thing — every tab, part, history, assembly, mate,
+annotation and result — as one JSON file the user can reopen, and `load_document`
+brings it back *parametric*, so the write tools keep working on it. That the pair is
+worth having at all is a consequence of `Document`'s design decision that **a document
+is its construction history, not its geometry**; the corollary is stated rather than
+hidden, because it is the thing a client must know: a part with no recipe (a raw mesh,
+an imported STL, an `Sdf`, a `Shape` graph built in code) goes out as a binary-exact
+mesh *snapshot*, and both tools name those parts, so nothing discovers later that
+editing one changes nothing.
+
+A loaded document is a **session-lifetime overlay**, not a new truth: `reload` still
+re-runs the program's own source and discards it. That keeps one rule for the whole
+server rather than two ideas of where the model comes from. `adopt: false` reads and
+reports without changing anything — the dry run to run first on a file the assistant
+did not write itself.
 
 One protocol fact the round-trip test paid to learn: **the server dispatches
 requests concurrently**, as MCP allows. A client that edits and then reads must

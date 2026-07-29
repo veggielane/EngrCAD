@@ -230,6 +230,47 @@ public static class EngrCadMcpServer
                 OpenWorld = false,
             }),
 
+            McpServerTool.Create(tools.SaveDocument, new McpServerToolCreateOptions
+            {
+                Name = "save_document",
+                Title = "Save the document",
+                Description = "Writes the whole model — tabs, parts with their feature "
+                            + "histories, assemblies, mates, annotations and results — to one "
+                            + "JSON document file. This is how session edits SURVIVE the "
+                            + "session: set_param and the suppression tools change the running "
+                            + "model only, and saving hands that tuning back to the user as a "
+                            + "file they can reopen. A document is its construction history, so "
+                            + "history-backed parts reload parametric; parts with no recipe (a "
+                            + "raw mesh, an imported STL, an Sdf) embed a mesh snapshot and are "
+                            + "named in the result. Writes to the filesystem.",
+                ReadOnly = false,
+                Destructive = true,
+                Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.SaveDocument,
+                OpenWorld = false,
+            }),
+
+            McpServerTool.Create(tools.LoadDocument, new McpServerToolCreateOptions
+            {
+                Name = "load_document",
+                Title = "Load a document",
+                Description = "Reads a document written by save_document and makes it the "
+                            + "session's model; history-backed parts regenerate, so it is "
+                            + "parametric again and every other tool works on it. Pass "
+                            + "adopt=false to read and report without changing anything. reload "
+                            + "still re-runs the design program's own source and discards the "
+                            + "loaded document — a file is a session-lifetime overlay, not a new "
+                            + "truth. Records this build cannot rebuild come back as warnings, "
+                            + "never as a failure.",
+                ReadOnly = false,
+                Destructive = true,
+                Idempotent = true,
+                UseStructuredContent = true,
+                OutputSchema = ToolSchemas.LoadDocument,
+                OpenWorld = false,
+            }),
+
             McpServerTool.Create(tools.Reload, new McpServerToolCreateOptions
             {
                 Name = "reload",
