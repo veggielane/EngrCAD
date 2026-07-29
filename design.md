@@ -1497,9 +1497,18 @@ plate with a flush pocket went from 18 faces to 11 and a two-bore plate with a p
 to 13, and although the display mesh keeps its polygon count and its volume to nine decimals,
 the *triangulation* of a face-with-one-hole is not the triangulation of eight rectangles. What
 survives as an oracle is what the faces MEAN: fewer, better-shaped faces with the same volume
-is an improvement; a changed silhouette would not be. The committed ambient-occlusion
-fingerprints were re-taken for exactly the two fixtures whose face count fell, with the
-measurement recorded beside them.
+is an improvement; a changed silhouette would not be. Seven of the 106 rendered PNGs moved,
+every one a B-Rep-boolean scene and none with a changed silhouette — including a
+construction-preview overlay, whose exact B-Rep edges are pixel-for-pixel where they were. The
+committed ambient-occlusion fingerprints were re-taken for exactly the two fixtures whose face
+count fell, with the measurement recorded beside them.
+
+One process note, because it nearly became a wrong conclusion: the first DocsGen pass was
+polled *while it was still running* and reported four movers, so three more appeared on the
+next run and looked like nondeterminism in the renderer. Two further runs from a clean
+checkout produced all seven bit-identically (SHA-256 equal), which settles it the way this
+project settles such things — re-verify the artifact rather than reason about the code. Never
+read a build's output directory before the build says it is done.
 
 #### Coincident (flush) planar surface
 
