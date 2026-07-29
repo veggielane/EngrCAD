@@ -181,6 +181,17 @@ internal sealed class StubViewer : IRemoteViewer
             x1 < 0 ? null : (new Vector3d(0, 0, 0), new Vector3d(3, 4, 0), 5.0));
     }
 
+    /// <summary>False models a window with no animation (what most model programs are —
+    /// the host has to call WithAnimation), which the dispatcher must refuse BY NAME
+    /// rather than answering "ok" and letting a still be captured as an instant.</summary>
+    public bool Animated = true;
+
+    public Task<double?> SetAnimationTimeAsync(double t)
+    {
+        Calls.Add($"seek:{t.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+        return Task.FromResult(Animated ? Math.Clamp(t, 0, 1) : (double?)null);
+    }
+
     /// <summary>What a real viewer answers once the PNG is on disk — or, when
     /// <see cref="ScreenshotFailure"/> is set, the refusal a window that never rendered
     /// produces.</summary>
@@ -293,6 +304,39 @@ public class RemoteViewerDispatcherTests
         var error = await Assert.ThrowsAsync<RemoteMethodException>(
             () => Call(viewer, "screenshot", new JsonObject { ["path"] = "x.png" }));
         Assert.Contains("no frame", error.Message);
+    }
+
+    [Fact]
+    public async Task SetAnimationTime_parks_the_transport_and_says_it_stopped_the_clock()
+    {
+        // The headless screenshot tool takes a t and re-evaluates Animation.At(t); a live
+        // window has its own playback position, so the only way to capture an instant is
+        // to drive the transport there AND stop it. "playing" states that rather than
+        // leaving a caller to assume it.
+        var viewer = new StubViewer();
+        var result = await Call(viewer, "set_animation_time", new JsonObject { ["t"] = 0.25 });
+
+        Assert.Equal(0.25, (double?)result!["t"]);
+        Assert.False((bool?)result["playing"]);
+        Assert.Contains("seek:0.25", viewer.Calls);
+
+        // Clamped, not refused: a timeline position is a fraction, and 1.4 plainly means
+        // "the end" — the same rule AnimationPlayback.Seek applies to the scrubber.
+        var clamped = await Call(viewer, "set_animation_time", new JsonObject { ["t"] = 1.4 });
+        Assert.Equal(1.0, (double?)clamped!["t"]);
+    }
+
+    [Fact]
+    public async Task A_viewer_with_no_animation_refuses_a_seek_by_name()
+    {
+        var viewer = new StubViewer { Animated = false };
+
+        var error = await Assert.ThrowsAsync<RemoteMethodException>(
+            () => Call(viewer, "set_animation_time", new JsonObject { ["t"] = 0.5 }));
+
+        Assert.Equal(-32000, error.Code);
+        Assert.Contains("no animation", error.Message);
+        Assert.Contains("WithAnimation", error.Message);     // names the fix
     }
 
     [Fact]

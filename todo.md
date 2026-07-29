@@ -2258,15 +2258,22 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 
 - [ ] **Untested**: a real third-party MCP client (Claude Desktop/Code) connecting —
   the protocol was driven by hand and via the SDK's own client.
-- [ ] **The windowed RPC path needs one manual pass**: transport, vocabulary, and the
-  bridge are locked headlessly over real sockets with a stub viewer, but
-  `ViewportRemoteViewer` against a real window (UI-thread marshaling under a live
-  dispatcher, a real render pass reaching `WriteCapture`, and the arm-on-UI-thread /
-  wait-off-it split behind `CaptureScreenshotAsync`) has no automated test — drive
-  `samples/EngrCAD.LiveDemo --rpc` once per release, or build a windowed
-  integration test on the `SendInput` harness. Everything either side of that leg IS
-  covered headlessly: the write's ordering contract without a GL context, and the
-  vocabulary and bridge over real sockets with a stub.
+- [x] **The windowed RPC path is covered** — `ViewportRemoteViewerTests` (headless,
+  against a REAL `ViewportControl`) plus `WindowedRpcTests` (a live window, opt-in via
+  `ENGRCAD_WINDOWED_TESTS=1`). The filed reason for it being untestable was wrong; see
+  CLAUDE.md's status paragraph for what a `ViewportControl` does without a window.
+- [ ] **A client that connects the instant the port is announced sees NO parts.**
+  Measured, every run, by the windowed test: the port is reported from `OnViewportReady`
+  while `ViewportControl._instances` is only swapped in from `_pending` by the render
+  pass, so `list_parts` answers `[]` — and `select_part`/`set_display_mode` then refuse
+  with "displayed parts: " and nothing after it, which reads as "this model has no parts"
+  rather than "not yet". The test retries; that is right for a test and wrong as the only
+  answer a client gets. Reporting the PENDING list instead is NOT the fix — it would
+  desynchronize the paths from the INDICES those two methods address. The shapes worth
+  weighing: a `ready` field on `ping` (cheap, and a client has to poll anyway), or holding
+  the port announcement until the first frame (changes when `--rpc` reports, and a window
+  that never renders would then never announce). Neither is obviously right, which is why
+  it is filed rather than patched.
 - [x] **`viewer_screenshot` returns pixels** — `ViewportControl.CaptureScreenshotAsync`
   is `SaveScreenshot` with a `TaskCompletionSource`; `ViewportRemoteViewer` awaits it
   OFF the UI thread under a 10 s deadline (blocking the dispatcher is how the frame would
@@ -2286,19 +2293,19 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   because the write was tangled with the GL call: splitting `WriteCapture` out (pixels in,
   no context) makes the ORDER assertable — resume on the completion, assert the file is
   already there — and the bridge's image block, the timeout refusal and the
-  unreadable-file case are all covered over real sockets with a stub. What genuinely still
-  needs the windowed manual pass is the two legs that touch a `ViewportControl`: that a
-  real render pass reaches `WriteCapture`, and `ViewportRemoteViewer`'s own
-  arm-on-UI-thread / wait-off-it split and its `ScreenshotTimeout` (it takes a concrete
-  `ViewportControl`, so there is nothing to substitute; making that an interface is a
-  bigger change than the leg is worth).
+  unreadable-file case are all covered over real sockets with a stub. **Its closing claim
+  has since been disproved too** — it named two remaining legs and said the second could
+  not be automated because `ViewportRemoteViewer` "takes a concrete `ViewportControl`, so
+  there is nothing to substitute". Nothing needs substituting: a `ViewportControl`
+  constructs with no Avalonia application, no window and no GL context, and one that will
+  never be rendered IS the deadline's fixture. Only the FIRST leg (a real render pass
+  reaching the claim, under a live dispatcher) needs a window.
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
-- [ ] **`screenshot`'s `t` covers the animation; the RPC bridge's `viewer_screenshot`
-  does not** — a running window has its own playback position, so "capture what is on
-  screen at t" would mean driving the transport over RPC (a `set_animation_time` verb)
-  rather than re-evaluating headlessly. Small, but it needs the windowed manual pass
-  above to be worth anything.
+- [x] **`viewer_screenshot` reaches an animation's instant** — through the
+  `set_animation_time` verb the entry predicted (park the transport, pause, then capture),
+  verified against a real window by `WindowedRpcTests`. Rationale in CLAUDE.md and the two
+  READMEs.
 - [ ] **A narrower `save_parameters` tool** (writing only
   `FeatureHistory.SaveParameters` for one part) is the smaller sibling of the
   `save_document`/`load_document` pair that landed. Worth adding only if a client turns

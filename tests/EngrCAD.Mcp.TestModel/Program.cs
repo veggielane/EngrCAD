@@ -2,6 +2,7 @@ using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Mcp;
 using EngrCAD.Modeling;
+using EngrCAD.Viewer;
 
 // A minimal design program in the shape every EngrCAD model program takes: build a
 // Scene, hand it to the entry point. This one exists so the tests can drive a REAL
@@ -12,7 +13,18 @@ using EngrCAD.Modeling;
 // inject a non-JSON line into the protocol stream and break every client. The
 // stdout-purity test asserts that this line lands on stderr instead.
 
-return EngrCadMcp.Run(args, BuildScene, "mcp test model");
+var options = new EngrCadOptions { Title = "mcp test model" };
+
+// --animate is this program's OWN switch (EngrCad.Run ignores arguments it does not
+// know), so the windowed RPC test can drive a real transport while every existing stdio
+// test keeps a scene with no animation and therefore identical framing. A turntable is
+// the cheapest track that visibly moves a frame: it changes the camera and nothing else,
+// so "the picture at t = 0.5 differs from the picture at t = 0" is a claim about the
+// playback position rather than about geometry.
+if (args.Contains("--animate", StringComparer.Ordinal))
+    options.Animation = scene => new Animation(4).With(TurntableTrack.Around(scene));
+
+return EngrCadMcp.Run(args, BuildScene, options);
 
 static Scene BuildScene()
 {

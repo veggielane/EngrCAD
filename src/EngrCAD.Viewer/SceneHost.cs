@@ -633,6 +633,33 @@ internal sealed class SceneHost
 
     private void StopPlayTimer() => _playTimer?.Stop();
 
+    /// <summary>
+    /// Seeks the transport to timeline <paramref name="t"/> ∈ [0, 1] and <b>pauses</b>,
+    /// returning the applied t — or null when this window has no animation. The
+    /// remote-control endpoint's <c>set_animation_time</c>, which is what lets a bridged
+    /// <c>viewer_screenshot</c> mean the same thing the headless <c>screenshot</c>'s
+    /// <c>t</c> means.
+    /// <para><b>Pausing is deliberate, not incidental.</b> The headless tool re-evaluates
+    /// <c>Animation.At(t)</c> for one instant, so its answer is exact by construction; a
+    /// running window has its own clock, and a capture arrives one frame later — so
+    /// leaving the clock running would return a frame near t rather than at it. Callers
+    /// are told (<c>"playing": false</c>) rather than left to assume.</para>
+    /// <para>Goes through <see cref="_playToggle"/> rather than
+    /// <c>AnimationPlayback.Pause</c> so the button, the timer and the playback state
+    /// cannot disagree — the toggle's own handler is the one place that stops all three.
+    /// Setting it to a value it already holds raises nothing, so a paused transport is
+    /// untouched.</para>
+    /// </summary>
+    internal double? SeekAnimation(double t)
+    {
+        if (_playback is not { } playback)
+            return null;
+        _playToggle.IsChecked = false;
+        playback.Seek(t);
+        ApplyAnimationSample();
+        return playback.T;
+    }
+
     private void OnPlayTick(object? sender, EventArgs e)
     {
         if (_playback is not { } playback)

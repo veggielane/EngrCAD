@@ -849,7 +849,7 @@ public sealed class ViewportControl : OpenGlControlBase
 
         // A requested screenshot reads back the finished frame while the context is
         // current (GL calls are only legal here), then encodes off-thread.
-        if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } capture)
+        if (TakePendingScreenshot() is { } capture)
             CaptureFramebuffer(gl, (int)width, (int)height, capture);
     }
 
@@ -1469,6 +1469,19 @@ public sealed class ViewportControl : OpenGlControlBase
     internal sealed record PendingScreenshot(string Path, TaskCompletionSource<string>? Completion);
 
     private PendingScreenshot? _pendingScreenshot;
+
+    /// <summary>
+    /// Claims the armed capture, if any — what the render pass calls before reading the
+    /// framebuffer back. Exactly one caller can win, so a capture is performed once and a
+    /// later frame does not re-write it.
+    /// <para>A method rather than the exchange written inline in the render pass, because
+    /// the render pass is the one place with no test around it: this makes
+    /// arm-then-consume assertable without a GL context (a test plays the render pass by
+    /// taking the capture and handing it to <see cref="WriteCapture"/>), and leaves the
+    /// render pass ASKING the rule instead of restating it.</para>
+    /// </summary>
+    internal PendingScreenshot? TakePendingScreenshot() =>
+        Interlocked.Exchange(ref _pendingScreenshot, null);
 
     /// <summary>
     /// Saves the next rendered frame as a PNG. Thread-safe: the pixels are read inside

@@ -58,6 +58,16 @@ public class ViewerBridgeTests
             Task.FromResult<(Vector3d, Vector3d, double)?>(
                 (new Vector3d(0, 0, 0), new Vector3d(0, 0, 7), 7.0));
 
+        /// <summary>Null models a window with no animation, the default for a model
+        /// program that never called <c>WithAnimation</c>.</summary>
+        public bool Animated = true;
+
+        public Task<double?> SetAnimationTimeAsync(double t)
+        {
+            Calls.Add($"seek:{t.ToString(System.Globalization.CultureInfo.InvariantCulture)}");
+            return Task.FromResult(Animated ? Math.Clamp(t, 0, 1) : (double?)null);
+        }
+
         /// <summary>A real viewer answers only once the PNG is on disk, so the stub
         /// writes one — that file IS what the bridge reads back and turns into an image
         /// block, and a stub that merely named a path would leave the read untested.</summary>
@@ -188,6 +198,28 @@ public class ViewerBridgeTests
     }
 
     [Fact]
+    public void Set_animation_time_parks_the_transport_and_refuses_a_window_without_one()
+    {
+        // The parity gap this closes: the headless `screenshot` tool takes a t and
+        // re-evaluates the animation for that instant, while a live window has its own
+        // playback position — so the bridge drives the transport, then captures.
+        var (server, viewer, tools) = Stack();
+        using (server)
+        {
+            var parked = tools.SetAnimationTime(0.75);
+            Assert.False(parked.IsError == true);
+            Assert.Contains("0.75", Text(parked));
+            Assert.Contains("paused", Text(parked));
+            Assert.Contains("seek:0.75", viewer.Calls);
+
+            viewer.Animated = false;
+            var refused = tools.SetAnimationTime(0.5);
+            Assert.True(refused.IsError == true);
+            Assert.Contains("no animation", Text(refused));
+        }
+    }
+
+    [Fact]
     public void Endpoint_errors_come_back_as_tool_errors_naming_what_exists()
     {
         var (server, _, tools) = Stack();
@@ -251,7 +283,7 @@ public class ViewerBridgeTests
             sceneTools, "t", new ViewerTools(new ViewerRpcClient(1)));
         string[] expected = ["set_view", "fit", "set_section", "set_view_style",
                              "set_display_mode", "select_part", "get_selection", "measure",
-                             "viewer_screenshot"];
+                             "set_animation_time", "viewer_screenshot"];
         foreach (string name in expected)
             Assert.Contains(bridged.ToolCollection!, t => t.ProtocolTool.Name == name);
         // And the headless surface is intact beside them.

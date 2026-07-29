@@ -217,6 +217,15 @@ public interface IRemoteViewer
     /// <summary>Measure between two control-space points (DIPs); null when a pick misses.</summary>
     Task<(Vector3d A, Vector3d B, double Distance)?> MeasureAsync(double x1, double y1, double x2, double y2);
 
+    /// <summary>Seeks the window's animation transport to timeline <paramref name="t"/>
+    /// ∈ [0, 1] (clamped) and <b>pauses</b> it, returning the applied t; null when this
+    /// window has no animation.
+    /// <para>Pausing is the point rather than a side effect: the headless
+    /// <c>screenshot</c> tool takes a <c>t</c> and re-evaluates the animation for that
+    /// instant, but a running window has its own clock, so "capture what is on screen at
+    /// t" is only true of a transport that has stopped moving.</para></summary>
+    Task<double?> SetAnimationTimeAsync(double t);
+
     /// <summary>Capture the next rendered frame to a PNG at <paramref name="path"/>
     /// (null = the default Pictures/EngrCAD path), completing with the path <b>once the
     /// file has been written</b> — so a caller may read the bytes back. Throws
@@ -235,7 +244,8 @@ public static class RemoteViewerDispatcher
     public static IReadOnlyList<string> Methods { get; } =
     [
         "ping", "list_parts", "set_view", "fit", "set_section", "set_display_mode",
-        "set_view_style", "select_part", "get_selection", "measure", "screenshot",
+        "set_view_style", "select_part", "get_selection", "measure", "set_animation_time",
+        "screenshot",
     ];
 
     /// <summary>Wraps a viewer as a <see cref="RemoteControlServer.Handler"/>.</summary>
@@ -342,6 +352,21 @@ public static class RemoteViewerDispatcher
                 };
             }
 
+            case "set_animation_time":
+            {
+                double t = RequireNumber(p, "t");
+                // Refuse by name rather than answering "ok" for a window with no timeline:
+                // a caller asking for an instant of an animation that does not exist has a
+                // modelling mistake, and a silent success would be captured as a still.
+                if (await viewer.SetAnimationTimeAsync(t).ConfigureAwait(false) is not { } applied)
+                    throw new RemoteMethodException(-32000,
+                        "this viewer has no animation — the host supplies one with "
+                        + "EngrCad.Configure().WithAnimation(scene => ...)");
+                // "playing" is stated rather than implied: the seek stops the clock, which
+                // is what makes a following screenshot a capture OF t rather than near it.
+                return new JsonObject { ["t"] = applied, ["playing"] = false };
+            }
+
             case "screenshot":
             {
                 string? path = (p?["path"] as JsonValue)?.GetValue<string>();
@@ -401,9 +426,17 @@ public static class RemoteViewerDispatcher
 /// capture-on-next-frame path, and geometry mutations go through the already
 /// thread-safe seams. The invoker is injectable so the marshaling contract is
 /// testable without a windowing system.
+/// <para><paramref name="seekAnimation"/> is the one thing a viewport does not own:
+/// playback state lives on the <c>SceneHost</c> (which owns the transport widgets and the
+/// timer), so the host passes a delegate rather than this class reaching for a chrome
+/// type it is deliberately independent of. Null — the default — means this viewer has no
+/// animation, which <see cref="SetAnimationTimeAsync"/> reports as null and the
+/// dispatcher refuses by name.</para>
 /// </summary>
 public sealed class ViewportRemoteViewer(
-    ViewportControl viewport, Func<Func<object?>, Task<object?>>? invoke = null) : IRemoteViewer
+    ViewportControl viewport,
+    Func<Func<object?>, Task<object?>>? invoke = null,
+    Func<double, double?>? seekAnimation = null) : IRemoteViewer
 {
     private readonly Func<Func<object?>, Task<object?>> _invoke = invoke ??
         (work => Avalonia.Threading.Dispatcher.UIThread.InvokeAsync(work).GetTask());
@@ -464,6 +497,11 @@ public sealed class ViewportRemoteViewer(
     public Task<(Vector3d A, Vector3d B, double Distance)?> MeasureAsync(
         double x1, double y1, double x2, double y2) =>
         OnUi(() => viewport.Measure(new Avalonia.Point(x1, y1), new Avalonia.Point(x2, y2)));
+
+    public Task<double?> SetAnimationTimeAsync(double t) =>
+        // On the UI thread like everything else here: the seek moves the transport widgets
+        // and re-poses the viewport, both of which are UI state.
+        seekAnimation is null ? Task.FromResult<double?>(null) : OnUi(() => seekAnimation(t));
 
     /// <summary>
     /// How long <see cref="ScreenshotAsync"/> waits for the window to produce a frame.
