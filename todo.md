@@ -1298,6 +1298,22 @@ UI dependencies, which makes this unusually feasible.
   The honest next step is smaller: extract the *pure* per-part upload description
   (mesh + feature edges + wire edges + pick BVH, keyed by part reference) that all
   three build today by hand, and leave scheduling to each front end.
+  **Re-assessed while the pose/measure rungs landed, and the shape is now clearer.**
+  The three passes build the same five things per part — `RenderMesh.CreateFlat(mesh)`,
+  the `FieldRendering.TryBuild` result and whether the ghost pass applies, the occlusion
+  array (window/offscreen only), `Part.GetFeatureEdges()` segments, `WireframeEdges`
+  segments, and a `PickMesh` — and every one is a pure function of `(Part, quality,
+  fields, ambientOcclusion)`. So the extractable piece is a `PartUpload` VALUE plus a
+  `PartUploads.Build(part, ...)` in `Viewer.Core`, with each front end keeping its own
+  dictionary, its own GL calls and its own scheduling. Two things it must NOT do: decide
+  WHICH of the five to build (the offscreen pass deliberately skips what its one-shot
+  mode cannot use, the other two deliberately build all of them so a dropdown never
+  re-uploads — a shared "what to build" rule would silently make one of those wrong),
+  and own the cache (the browser's release-on-tab-switch and the window's
+  release-on-deinit are different lifetimes). Worth about a day; the payoff is that the
+  ~40 lines each pass repeats — including the "a deformed part gets NO edge overlay"
+  rule, currently stated three times — become one. Nothing is blocked on it, which is
+  why it is still filed rather than done.
 - [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
   written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
   shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —
@@ -1308,19 +1324,51 @@ UI dependencies, which makes this unusually feasible.
   their SDF isolines~~ ✅ → ~~view cube~~ ✅ → ~~annotations~~ ✅ → ~~properties panel +
   BOM~~ ✅ (the int-uniform prerequisite landed as the `IntUniform`/`Vec4ArrayUniform`
   typed markers in `engrcad-gl.js` — the JS dispatches on marker shape, C# decides
-  which uniforms are which). **Remaining rungs**: construction-tree rows + rollback
-  previews (needs `ConstructionPreviewCache`'s background-lowering story rethought for
-  one thread), the measure tool (two picks → a transient dimension — `PickResult`
-  already carries the world point), exploded views (`Scene.Instances(factor)` is
-  front-end-free already), and a multi-plane section UI (the frame already takes
-  `SectionPlane[]` + `SectionCombine`; isolines would then want `SectionClip.Siblings`
-  per plane).
+  which uniforms are which) → ~~the measure tool~~ ✅ → ~~exploded views + animation
+  playback~~ ✅ (both are `ViewportFrame.PoseByPath`, a pure function matching by
+  occurrence path; the transport is `AnimationPlayback` from Viewer.Core with a timer
+  and three widgets here) → ~~multi-plane section planes + combine, through to picking~~
+  ✅ → ~~debug-modifier parity (`DebugFilter.Shown` in `ResolveInstances`)~~ ✅.
+  **Remaining rungs**: construction-tree rows + rollback previews (needs
+  `ConstructionPreviewCache`'s background-lowering story rethought for one thread);
+  a multi-plane section **UI** (the plane list and combine are plumbed end to end now —
+  what is missing is a toolbar affordance for building the set, which the desktop does
+  not have either); multi-plane isolines want `SectionClip.Siblings` per plane; and the
+  `?report` self-check should grow pose/measure relationships (the pose seam is unit
+  tested, but "the canvas changed when the slider moved" is the check this front end's
+  culture asks for).
 - [ ] **Docs-site embedding, the general form** — one page embeds the demo today
   (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
   viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
   documentation, all statically hosted on the existing GitHub Pages deployment. Needs the
-  scene-to-frame layer first, plus a way to ship one runtime shared by every embed rather
-  than a 1.9 MB payload per page.
+  scene-to-frame layer first (✅ landed), plus a way to ship one runtime shared by every
+  embed rather than a 1.9 MB payload per page.
+  **Assessed; the shape, and why it is bigger than it looks.** The runtime sharing is
+  the easy half and is already solved by the deployment: `_site/live/` holds ONE published
+  app, so every page iframes the same origin and the browser caches the 1.9 MB once —
+  what is missing is a way for a page to say WHICH scene that one app should build.
+  Three options, in increasing order of what they buy:
+  (a) **A snippet id in the query string** (`/live/?example=fillet-corners`), with the
+  demo app carrying a switch over the docs' snippet ids. Cheapest, and wrong for the same
+  reason a second copy of a shader is: the snippet's source would live in the markdown
+  AND in the app, and they would drift.
+  (b) **Ship the compiled snippets as a data file.** DocsGen already compiles and runs
+  every fence through Roslyn; it could emit the snippet SOURCES into `_site/live/` and the
+  app could compile one in the browser — but that means shipping Roslyn to WASM, which is
+  several times the payload of the kernel and defeats the shared-runtime argument.
+  (c) **Emit each scene as data, not as code.** The document format now exists
+  (`Document.Save`), so DocsGen could save each `render:` snippet's scene as a `.json`
+  document beside its PNG and the demo app could `Document.Load` one by id. Payload is a
+  few KB per example, the app needs no compiler, and the scene is provably the one the
+  PNG was rendered from because both come from one evaluation. The cost is that a
+  document is geometry-or-history rather than the snippet's own code, so a page's
+  interactive block and its code fence are two representations of one model rather than
+  one — acceptable, and honest, if the page says so.
+  Recommendation: **(c)**, once someone wants it; it is a DocsGen change plus a load-by-id
+  route in the demo, not a viewer change. Filed rather than built because it is a docs
+  *infrastructure* project with its own deployment questions (cache busting per docs
+  build, and what an embed does when a document names geometry this build cannot
+  rebuild), and nothing depends on it.
 - [ ] **Out of scope until later**: editing/sketching in the browser, collaboration,
   server-side model storage. This is a *viewer* first.
 

@@ -87,6 +87,34 @@
     /// bounds, the desktop's default when the toggle first goes on.</summary>
     [Parameter] public double? SectionOffset { get; set; }
 
+    /// <summary>
+    /// Exploded-view factor: 0 assembled, 1 fully exploded, through the same
+    /// <c>Scene.Instances(factor)</c> flattening the desktop slider and every exporter
+    /// use. Missing <c>Occurrence.ExplodeOffset</c>s are derived once, on the first
+    /// non-zero factor, by <c>Scene.AutoExplode</c>.
+    /// <para><b>Changing it uploads nothing.</b> The instance count and order are
+    /// independent of the factor — the exploded view's own load-bearing rule — so this
+    /// re-poses the matrices already on the GPU, exactly as the desktop's
+    /// <c>SetInstancePoses</c> does, and picking follows because the pick instances take
+    /// the same matrices.</para>
+    /// </summary>
+    [Parameter] public double Explode { get; set; }
+
+    /// <summary>
+    /// An <c>Animation</c> to scrub, played by <see cref="AnimationTime"/>. The whole
+    /// transport machine (<c>Animation.At</c>, <c>AnimationPlayback</c>) is UI-free in
+    /// <c>EngrCAD.Viewer.Core</c> precisely so this front end reuses it rather than
+    /// re-implementing playback: what lives here is a clock and a slider.
+    /// <para>Poses are matched to the drawn instances <b>by occurrence path</b> (a
+    /// whole-scene track may carry other tabs' instances — ignored; unmatched instances
+    /// keep their document pose), which is the desktop's rule, and the sample's camera
+    /// is applied when the animation has a camera track.</para>
+    /// </summary>
+    [Parameter] public Animation? Animation { get; set; }
+
+    /// <summary>Timeline position in [0, 1] for <see cref="Animation"/>.</summary>
+    [Parameter] public double AnimationTime { get; set; }
+
     /// <summary>The view cube in the top-right corner (on, as on the desktop): clicks
     /// animate to the face/edge/corner view, dragging on it orbits and rotate-snaps to
     /// the nearest standard orientation on release, hovering brightens the target.</summary>
@@ -152,7 +180,12 @@
     private readonly List<PickInstance> _pick = [];
     private readonly List<int> _pickScratch = [];
 
-    private (bool Enabled, SectionAxis Axis, double? Offset) _shownSection = (false, SectionAxis.Z, null);
+    // The section state a frame was drawn with. The explicit plane list rides in it
+    // too, so a host swapping a quarter cut for an octant re-runs the isoline rebuild
+    // rather than redrawing stale contours.
+    private (bool Enabled, SectionAxis Axis, double? Offset,
+             IReadOnlyList<SectionPlane>? Planes, SectionCombine Combine) _shownSection =
+        (false, SectionAxis.Z, null, null, SectionCombine.Intersection);
     private ViewportContours? _contours;
 
     // View cube state: the hovered direction (drives the face brighten), whether the
@@ -174,6 +207,8 @@
     private bool _annotationsDirty = true;
     private bool _shownAnnotations = true;
     private bool _shownViewCube = true;
+    private double _shownExplode;
+    private (Animation? Animation, double Time) _shownAnimation;
     // Parts whose implicit lowering failed and was already reported (the failure is
     // cached on the Part, so without this every rebuild repeats the status line —
     // the same dedupe the desktop SectionContourRenderer keeps).
@@ -354,8 +389,25 @@
         _ => v.Z,
     };
 
+    /// <summary>
+    /// Up to four explicit section planes, combined by <see cref="SectionCombine"/> —
+    /// two perpendicular planes are the classic quarter cutaway, three an octant. Set
+    /// alongside <see cref="SectionEnabled"/>; when non-empty these WIN over the
+    /// <see cref="SectionAxis"/>/<see cref="SectionOffset"/> pair, which stays the
+    /// one-plane spelling a toolbar drives.
+    /// </summary>
+    [Parameter] public IReadOnlyList<SectionPlane>? SectionPlanes { get; set; }
+
+    /// <summary>How several <see cref="SectionPlanes"/> combine: Intersection clips only
+    /// where EVERY plane excludes (the quarter/octant cutaway), Union where any does.
+    /// With one plane the two rules coincide, so single-plane output is unchanged.</summary>
+    [Parameter] public SectionCombine SectionCombine { get; set; } = SectionCombine.Intersection;
+
     private IReadOnlyList<SectionPlane>? ActiveSectionPlanes() =>
-        SectionEnabled ? [SectionPlane.On(SectionAxis, EffectiveSectionOffset)] : null;
+        !SectionEnabled ? null
+        : SectionPlanes is { Count: > 0 } explicitPlanes
+            ? [.. explicitPlanes.Take(ViewerShaders.MaxSectionPlanes)]
+            : [SectionPlane.On(SectionAxis, EffectiveSectionOffset)];
 
     /// <summary>
     /// Drives the section state directly (the toolbar's toggle/axis-cycle path, and how
@@ -386,7 +438,7 @@
 
     private async Task ApplySectionAsync()
     {
-        _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+        _shownSection = (SectionEnabled, SectionAxis, SectionOffset, SectionPlanes, SectionCombine);
         await RebuildContoursAsync();
         await PumpAsync();
     }
@@ -400,6 +452,75 @@
         ShowAnnotations = show;
         _shownAnnotations = show;
         return PumpAsync();
+    }
+
+    // ---- poses only: exploded views and animation playback ----
+    //
+    // Both ride the ONE rule that makes them cheap and makes picking keep working: the
+    // instance COUNT and ORDER never depend on the factor or on t, so a change is new
+    // matrices over buffers that are already uploaded. This is the browser's
+    // SetInstancePoses, and the reason the desktop's explode slider and animation
+    // transport were free once the flatten walk existed.
+
+    /// <summary>Sets the exploded-view factor and re-poses (uploads nothing).</summary>
+    public Task SetExplodeAsync(double factor)
+    {
+        Explode = factor;
+        _shownExplode = factor;
+        return ApplyPosesAsync();
+    }
+
+    /// <summary>Scrubs <see cref="Animation"/> to timeline t ∈ [0, 1] and re-poses. The
+    /// evaluation is <c>Animation.At(t)</c> — the same pure function the desktop
+    /// transport scrubs and every export samples, so a browser frame and an exported one
+    /// are the same picture.</summary>
+    public Task SetAnimationTimeAsync(double t)
+    {
+        AnimationTime = Math.Clamp(t, 0, 1);
+        _shownAnimation = (Animation, AnimationTime);
+        return ApplyPosesAsync();
+    }
+
+    /// <summary>The poses the current explode factor and animation position imply, over
+    /// the SAME instance list <see cref="LoadAsync"/> drew. Null when nothing is
+    /// posed.</summary>
+    private IReadOnlyList<PartInstance>? PosedInstances()
+    {
+        // The animation wins where it has an opinion: an ExplodeTrack IS the explode,
+        // so applying the slider underneath it as well would double the offsets.
+        if (Animation is { } animation)
+            return animation.At(AnimationTime).Instances;
+        if (Explode == 0)          // exact-zero: an un-exploded flatten is the document's own
+            return null;
+        if (CurrentTab is { } tab)
+        {
+            Scene?.AutoExplode();
+            return tab.Instances(Explode);
+        }
+        return null;
+    }
+
+    private async Task ApplyPosesAsync()
+    {
+        if (_gl is null || _drawn.Count == 0)
+            return;
+
+        // Matching is ViewportFrame.PoseByPath — a pure function, so the rule (by
+        // occurrence path, unmatched instances keep their document pose) is asserted as
+        // values rather than inspected through a canvas.
+        var world = ViewportFrame.PoseByPath(_drawnInstances, PosedInstances());
+        for (int i = 0; i < _drawn.Count; i++)
+        {
+            _drawn[i] = _drawn[i] with { World = world[i] };
+            _pick[i] = _pick[i] with { Model = world[i] };
+        }
+
+        if (Animation?.At(AnimationTime).Camera is { } camera)
+            _camera = camera;
+        // Annotations are posed by their instance transform, so a re-pose invalidates
+        // the billboarded cache exactly as a camera move does.
+        _annotationsDirty = true;
+        await PumpAsync();
     }
 
     // ---- view cube ----
@@ -573,9 +694,11 @@
             _loadedFrom = Content;
             _showingFurniture = Furniture;
             _shownStyle = ViewStyle;
-            _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+            _shownSection = (SectionEnabled, SectionAxis, SectionOffset, SectionPlanes, SectionCombine);
             _shownAnnotations = ShowAnnotations;
             _shownViewCube = ShowViewCube;
+            _shownExplode = Explode;
+            _shownAnimation = (Animation, AnimationTime);
             await LoadAsync();
             return;
         }
@@ -589,9 +712,9 @@
             _shownStyle = ViewStyle;
             redraw = true;
         }
-        if (_shownSection != (SectionEnabled, SectionAxis, SectionOffset))
+        if (_shownSection != (SectionEnabled, SectionAxis, SectionOffset, SectionPlanes, SectionCombine))
         {
-            _shownSection = (SectionEnabled, SectionAxis, SectionOffset);
+            _shownSection = (SectionEnabled, SectionAxis, SectionOffset, SectionPlanes, SectionCombine);
             await RebuildContoursAsync();
             redraw = true;
         }
@@ -604,6 +727,15 @@
         {
             _shownViewCube = ShowViewCube;
             redraw = true;
+        }
+        // Poses last, and through their own path: a re-pose uploads nothing and already
+        // ends in a draw, so folding it into the redraw flag would draw twice.
+        if (_shownExplode != Explode || _shownAnimation != (Animation, AnimationTime))
+        {
+            _shownExplode = Explode;
+            _shownAnimation = (Animation, AnimationTime);
+            await ApplyPosesAsync();
+            return;
         }
         if (redraw)
             await PumpAsync();
@@ -638,12 +770,17 @@
 
     private IReadOnlyList<PartInstance> ResolveInstances()
     {
+        // DebugFilter, exactly as the window, the offscreen pass, --export and the MCP
+        // tools apply it: Hidden parts never render (and must not even influence the
+        // framing), an active Isolate shows only isolated parts, and Ghost renders
+        // translucent through Part.EffectiveDisplayMode further down. With no flags set
+        // it is the identity, which is why this could be added without moving a pixel.
         if (Instances is not null)
-            return Instances;
+            return DebugFilter.Shown(Instances);
         if (CurrentTab is { } tab)
-            return tab.Instances();
+            return DebugFilter.Shown([.. tab.Instances()]);
         if (Parts is not null)
-            return [.. Parts.Select(p => new PartInstance(p, p.Transform, p.Name))];
+            return DebugFilter.Shown([.. Parts.Select(p => new PartInstance(p, p.Transform, p.Name))]);
         return [];
     }
 
@@ -782,6 +919,15 @@
             if (generation != _generation)
                 return;
             await PumpAsync();
+        }
+        // A load builds every instance at its DOCUMENT pose, so a scene that was already
+        // exploded or scrubbed when it loaded has to be re-posed once here. It costs one
+        // extra draw and only when a pose is actually active.
+        if (PosedInstances() is not null)
+        {
+            await ApplyPosesAsync();
+            if (generation != _generation)
+                return;
         }
         if (!_failed)
             await ReportAsync(null);
@@ -1031,18 +1177,26 @@
             // rebuilds, a static camera never does. Billboarding is CPU-side, so the
             // upload is a few hundred small segments, well under one part draw.
             ViewportAnnotations? annotations = null;
-            if (ShowAnnotations && _annotationItems.Count > 0)
+            // The measurement shows whatever the Annot toggle says — it is the answer to
+            // a question the user just asked, not documentation attached to a part (the
+            // desktop's rule, restated because the two paths decide separately).
+            if ((ShowAnnotations && _annotationItems.Count > 0) || _measurement is not null)
             {
                 var annotationCamera = AnnotationCamera.From(
                     _camera, orthographic: false, height * pixelScale, pixelScale);
                 if (_annotationsDirty || annotationCamera != _builtAnnotationCamera)
                 {
                     _annotationScratch.Clear();
-                    foreach (var (index, item) in _annotationItems)
+                    if (ShowAnnotations)
                     {
-                        if (index < _drawn.Count && _drawn[index].Visible)
-                            _annotationScratch.Add(item);
+                        foreach (var (index, item) in _annotationItems)
+                        {
+                            if (index < _drawn.Count && _drawn[index].Visible)
+                                _annotationScratch.Add(item);
+                        }
                     }
+                    if (_measurement is { } measurement)
+                        _annotationScratch.Add(new AnnotationItem(measurement, Matrix4d.Identity));
                     AnnotationGeometry.Build(_annotationSegments, _annotationScratch, annotationCamera);
                     await gl.UploadLineVerticesAsync(
                         "@annotations", RenderGeometry.SegmentVertices(_annotationSegments));
@@ -1060,7 +1214,8 @@
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
                 _selected, _hovered,
-                sectionPlanes: ActiveSectionPlanes(), contours: _contours,
+                sectionPlanes: ActiveSectionPlanes(), sectionCombine: SectionCombine,
+                contours: _contours,
                 cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null,
                 annotations: annotations, legend: legend));
         }
@@ -1099,14 +1254,82 @@
         var planes = ActiveSectionPlanes();
         return ScenePick.Nearest(
             x, y, width, height, viewProjection, _pick,
-            sectionEnabled: planes is not null, sectionPlanes: planes,
+            sectionEnabled: planes is not null, sectionPlanes: planes, combine: SectionCombine,
             scratch: _pickScratch);
+    }
+
+    // ---- the measure tool ----
+    //
+    // Two picks make a transient point-to-point dimension. Everything about what one
+    // LOOKS like is shared (LinearDimension resolves it, AnnotationGeometry draws it),
+    // so this is the pick raycast plus two fields.
+
+    /// <summary>
+    /// Measure mode: while on, clicks pick surface POINTS instead of selecting parts —
+    /// two picks create a transient dimension shown immediately. Turning it off clears
+    /// the measurement, as on the desktop.
+    /// </summary>
+    [Parameter] public bool MeasureMode { get; set; }
+
+    /// <summary>The transient measurement's text, or null when there is none — what a
+    /// host puts in its status bar.</summary>
+    public string? Measurement => _measurement?.Text;
+
+    private Vector3d? _measureStart;
+    private ResolvedAnnotation? _measurement;
+
+    /// <summary>
+    /// Runs one measure pick at a canvas position — the exact path a measure-mode click
+    /// takes. Public so tests and hosts drive the tool directly, the same reason the
+    /// desktop exposes <c>MeasurePick</c>.
+    /// </summary>
+    public async Task MeasurePickAsync(double x, double y)
+    {
+        var (width, height) = _lastSize;
+        var hit = PickAt(x, y, width, height);
+        if (hit.Index < 0)
+        {
+            await ReportAsync("measure: no surface under the cursor");
+            return;
+        }
+        if (_measureStart is not { } start)
+        {
+            _measureStart = hit.World;
+            _measurement = null;
+            await ReportAsync(
+                $"measure: first point ({hit.World.X:G4}, {hit.World.Y:G4}, {hit.World.Z:G4}) - click the second");
+        }
+        else
+        {
+            _measurement = new LinearDimension(start, hit.World).Resolve();
+            _measureStart = null;
+            await ReportAsync($"measure: {_measurement.Text}");
+        }
+        _annotationsDirty = true;
+        await PumpAsync();
+    }
+
+    /// <summary>Clears the measurement and any half-finished pick (the desktop's
+    /// Escape).</summary>
+    public Task ClearMeasurementAsync()
+    {
+        if (_measureStart is null && _measurement is null)
+            return Task.CompletedTask;
+        _measureStart = null;
+        _measurement = null;
+        _annotationsDirty = true;
+        return PumpAsync();
     }
 
     /// <summary>A click: select what is under it, or clear the selection by clicking it
     /// again (the desktop's rule) or by clicking nothing.</summary>
     private async Task PickAndSelectAsync(double x, double y)
     {
+        if (MeasureMode)
+        {
+            await MeasurePickAsync(x, y);
+            return;
+        }
         var (width, height) = _lastSize;
         int hit = PickAt(x, y, width, height).Index;
         int wanted = hit == _selected ? -1 : hit;   // clicking the selection clears it
