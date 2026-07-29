@@ -242,6 +242,21 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   - `TriangulateBandWithHoles`/`ZipSlabs` has no interior rows — irrelevant today
     because every reachable band-with-holes lives on a cylinder or extrusion (ruled in
     v, chords exact), but a revolved band with holes would want the same treatment.
+  - **A wrapping band whose boundary carries a coarse INTRUDING bump folds, and worse with
+    density.** Newly reachable: carrier clipping turned `Torus(12,4) − plane − a blind Ø3
+    bore` from a refusal into a `Validate`-clean genus-1 solid whose volume converges
+    monotonically upward on the exact Pappus value (2916.5 / 2998.7 / 3009.4 / 3014.5 /
+    3018.4 / 3019.6 / 3020.5 at 16/32/48/64/96/128/192 against 3021.1) — but the torus's
+    tube is split into two `RevolvedSurface` halves at the generator seam, so each takes HALF
+    the bore rim, split at the seam rather than at the rim's u-extremes, and that half is not
+    u-monotone. The periodic-band tier pairs its chains by u, which is exactly the
+    configuration that inverts (the `ZipBand` lesson), and the rim is a 15–17-sample tracer
+    polyline that does not refine with the grid: folds run 2 / 0 / 0 / 1 / 1 / 14 / 53 and
+    worst agreement −0.304 / 0.743 / 0.994 / −0.133 / −0.179 / −0.226 / −0.304. Pinned as a
+    RECORD (not a bar) by
+    `TrimmedFaceRefusalTests.TorusCutWithABore_BuildsWithARecordedTessellationResidual`. The
+    fix is either splitting such a rim at its u-extremes before it becomes a boundary chain,
+    or routing a band with a non-monotone boundary run to the slab sweep.
   ~~Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5~~ ✅ **fixed and verified** — see below.
 - ~~**A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by
@@ -335,74 +350,58 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     a PARTNER at the terminus**, which is the finding worth keeping: "a curve stops inside
     the face" alone also describes a TRACER-TRUNCATED curve, whose end is an artefact with
     nothing to meet, and routing those to the arrangement only trades one refusal for
-    another (measured on `Torus(12,4) − plane − Ø3 bore`, a documented refusal either way:
-    it failed one stage earlier and less informatively).
+    another.
 
-    **What remains is the CLIP itself, and it has been measured.** Turning it on
-    (`ClipToFaces` — the stretches of the carrier curve inside BOTH faces' trims, both
-    faces handed the same piece, a curve surviving whole handed back as ITSELF so a closed
-    curve stays closed) leaves **22 of 443 Interop tests failing**, and **13 of those 22 have
-    one named cause**: `FaceGeometry.Contains`' upward-v ray cannot see a rim below the
-    probe, so it calls every point on a POLE-BOUNDED single-wrapping-loop face outside; the
-    clip then drops the whole seam curve and the boolean returns two touching shells (a
-    sphere-through-a-box union measured Euler 4 instead of 2). The clip's containment test
-    must err toward KEEPING — a stretch wrongly kept only reproduces today's behaviour,
-    one wrongly dropped loses a seam silently — so it needs the same pole-bounded exception
-    `ProbePoint` already documents. With that, **22 → 9**.
+    **The CLIP is now LANDED too** (`BrepBoolean.ClipToFace`/`ClipBreakpoints`), and it did
+    NOT unblock the chamfer — see the two blockers below, one of which turned out to be a
+    third. The 22-of-443 failure list this entry recorded resolved to four causes and all
+    four are fixed; the ones worth keeping are in the READMEs and design.md §5, and the
+    headline is that **the clip's rule had to become ASYMMETRIC**: handing both faces the
+    stretches inside both trims cuts the curve exactly ON a face's own boundary wherever the
+    two faces SHARE a boundary, so each face now drops only the stretches inside ITSELF and
+    outside its partner. Landed with it: `FaceGeometry.ContainsTwoSided` (the pole-bounded
+    keep-bias, shared with `PlanarSection`), the conditional closed-curve seam anchor,
+    `FaceSplitter.ChainWrapsPeriod` (a wrapping chain is two bands, not a hole plus a disk),
+    the stepwise periodic unwrap in the chain pull, and `TraceFaces`' tops-first tie-break
+    for wrapping boundaries at the same v. `CarrierClipTests` pins the five claims.
 
-    **The nine that remain are dominated by ONE error**, and it is not a new one:
-    `An edge's two uses must have opposite sense` out of `BrepSolid.Validate`, on
-    `WholeSolidFilletBooleanTests.BandCrossingTool_*` (4), `TrimmedFaceTests.
-    Difference_SlotThroughBore_TrimmedBoreWallFragments`, and
-    `NearMissCarrierTests.BoreSwallowingTheCornerItself_IsExact` — **the same message the
-    second-chamfer blocker below reports**, so that blocker is NOT chamfer-specific: it is a
-    sense/seam-sealing defect that clipped seams expose, and fixing it once fixes both. The
-    other three are `CoplanarBooleanTests.IntersectionSharingTopAndBottom_KeepsOneCopy`
-    ("Arrangement tracing did not close" — a clipped piece with no partner reaching the
-    cascade), `TrimmedFaceRefusalTests` "cap cut low with bore", and
-    `TessellationCorpusQualityTests.SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`.
-    **The clip was therefore not landed**: a boolean core that is 95% right is worse than one
-    that refuses, and none of the nine is a test that merely needs its expectation updated.
-    Note also that clipping legitimately CHANGES face counts on existing models (four wall
-    lines clipped to a tool's footprint split a host face into 2 rather than 9), so the
-    docs-render byte-identity oracle has to be re-argued when it does land.
-
-    **Three follow-on fixes the prototype needed** (each correct in itself, none reachable
-    without the clip, all re-derivable from this entry):
-    - `SeamBreaks` must map a CLOSED curve's seam parameter into a clipped piece (both
-      sides otherwise build a different number of seam edges over the same geometry — three
-      single-use edges on the rod's top cap).
-    - `ExtractInteriorChains` must honour mandatory breaks BEFORE chaining: the chain path
-      builds one edge per curve and would span a break the other side has already split at.
-    - ~~`BrepBoolean.ProbePoint` decides "this loop wraps the band" by u-SPAN~~ ✅ **landed
-      ahead of the rest** (it was a latent bug on its own): `FaceGeometry.LoopWrapsPeriod`
-      is now the one rule — span as the cheap first half of an AND, net u DRIFT as the
-      decision — and all three sites ask it (`ProbePoint`, `TraceFaces`' band pairing, and
-      wrap-splitting's "every loop must span the band" precondition, the last two of which
-      had the same latent defect). `LoopWrapTests` + `ProbePointWrapTests` pin it, the
-      latter on a hand-built 272° contractible facet whose probe used to land outside
-      itself.
-    - `BRepTessellator.IsFullHelicalBand` admitted a 4-coedge band whose two rails came out
+    Two follow-on fixes the prototype named that turned out NOT to be needed, recorded so
+    nobody re-derives them: `ExtractInteriorChains` does not need to honour mandatory breaks
+    before chaining (the wrapping-chain reroute takes the case that motivated it), and
+    `SeamBreaks` does not need to MAP a closed curve's seam parameter into a clipped piece —
+    the anchor is simply dropped when the clip left either side with open pieces, since
+    nothing anchors there any more. Already landed earlier: `FaceGeometry.LoopWrapsPeriod`
+    as the one net-u-DRIFT rule (`LoopWrapTests` + `ProbePointWrapTests`).
+    - [ ] `BRepTessellator.IsFullHelicalBand` admits a 4-coedge band whose two rails came out
       of the split with DIFFERENT spans, and its sheared grid pairs row j of one rail with
-      row j of the other — so it threw an internal "boundary polylines disagree in sample
+      row j of the other — so it throws an internal "boundary polylines disagree in sample
       count". It should check that pairing precondition, exactly as `IsRingPairedBand` does.
+      Not reachable while the chamfer is blocked; keep it filed with the chamfer.
 
-    **Two further blockers beyond the clip**, both found by the prototype:
-    - The **default** `Shape.ExternalThread(chamferEnds: true)` sets the chamfer to the full
-      thread depth, which puts the cone's base radius exactly ON the minor diameter — the
-      cone is then TANGENT to every root band along the cap plane. That case fails earlier
-      with "Arrangement tracing did not close" and is a coincident/tangent curved-face
-      input, which the boolean refuses by design. A smaller chamfer (0.5 on M8×1.25) works.
-      So flipping the `Explain` classification needs the tangent case too, or the API needs
-      to admit sub-depth chamfers as the Native subset.
-    - Applying the SECOND chamfer (the other end) to boolean output produced
-      "An edge's two uses must have opposite sense". **Now known NOT to be chamfer-specific**:
-      the identical message is what six of the nine remaining clip failures above throw, on
-      fillet bands, a slot through a bore and a bore swallowing a corner — none of which
-      involves a chamfer. It is a sense/seam-sealing defect that any clipped seam exposes, so
-      it should be diagnosed once, on the smallest of those cases
-      (`NearMissCarrierTests.BoreSwallowingTheCornerItself_IsExact`), rather than inside the
-      thread work.
+    **What still blocks the chamfer, re-measured WITH the clip landed** (M8×1.25, a 6 mm
+    rod, `rod − revolve(the region outside a 45° cone)`; the unchamfered rod reproduces the
+    prototype's 246.56 / 247.76 / 248.06 at 32/64/128 exactly, so the fixture is the same one):
+    - A **sub-depth chamfer (0.5)** now fails as `Open splitting curves must start and end
+      outside the face: a **PolylineCurve3d** on a HelicalSurface ends at … strictly inside
+      the face`. The curve is a TRACER POLYLINE, not the exact conical `SpiralArc3d` the
+      coaxial analytic family is supposed to give — so the next step is to find out why
+      `TryCoaxialProfileLine` declines this cone (its carrier is a `RevolvedSurface` of a
+      slanted line, which is the case it claims; suspect the tool's *other* faces, or a
+      generator whose sampled (radius, axial) fit is rejected). Until the cut is analytic
+      the clip cannot help: a truncated tracer end has no partner to meet, which is exactly
+      the case `NeedsSimultaneousArrangement` refuses on purpose.
+    - The **default full-depth chamfer** still puts the cone's base radius exactly ON the
+      minor diameter, so the cone is TANGENT to every root band along the cap plane — a
+      coincident/tangent curved-face input the boolean refuses by design. It now fails as
+      "unclosed solid" with 2 of 16 edges unpaired rather than "Arrangement tracing did not
+      close". Flipping the `Explain` classification needs the tangent case too, or the API
+      needs to admit sub-depth chamfers as the Native subset.
+    - ~~The SECOND chamfer's "An edge's two uses must have opposite sense"~~ ✅ **fixed** —
+      it was never chamfer-specific and never a seam-SEALING defect: `SplitByClosedCurveChain`
+      pulled each chain curve independently, so on a PERIODIC surface the concatenation
+      jumped a whole period at every junction and the signed area deciding which side is the
+      disk came out by luck. Diagnosed on the smallest case as this entry advised, and the
+      four `WholeSolidFilletBooleanTests.BandCrossingTool_*` failures went with it.
   - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
     needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
     it keeps each carrier in its own family and has no `HelicalSurface` case, and a
