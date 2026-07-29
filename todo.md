@@ -745,9 +745,34 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   (winding numbers only for the initial seed). Also: `SurfacePatches`/`ClaimFaces`
   rebuild per round rather than incrementally, and `BuildEncroachmentIndex` rebuilds a
   BVH per refinement pass.
-- [ ] **Tet meshing breadth**: boundary-layer (prismatic) elements for CFD-style
-  analyses; hex-dominant or voxel/SDF-based meshing (cut cells from `Sdf.Sampled`
-  grids) as an alternative route; *curved* (iso-parametric) quadratic elements, whose
+- [ ] **Boundary-layer residuals** (the layer itself landed — `BoundaryLayerSpec`,
+  graded stack marched inward from a `Facets`-selected wall, prisms split by
+  Dompierre's index rule, interface read back off the fill; see the Fea README and
+  design.md §3b). What it does NOT give:
+  - **Uniform thickness only.** No per-facet or per-tag thickness law, and no
+    `cos`-correction at a convex corner: the march measures its thickness ALONG its own
+    direction, so a box corner's perpendicular stand-off is `cos` of half the corner
+    angle (0.577) rather than the requested value. `MinMarchClearance` reports it. A
+    per-node correction is the obvious next step and is a local change.
+  - **The wall triangulation is not refined for you**, and because the interface is
+    frozen this is what sets the in-plane element size — measured, a plain
+    two-triangles-per-face box gets no core refinement at all and reports 72 declined
+    points. Auto-refining a PLANAR wall patch (and its columns) before marching is safe
+    and would remove the sharpest edge of the limitation; a curved wall's midpoint is
+    not on the surface, so that half needs the surface, not just the mesh.
+  - **A rim may only stop on FLAT faces.** More than two distinct non-wall plane normals
+    at a rim vertex is refused by name. Sliding a rim along a CURVED neighbour needs a
+    projection onto that surface, which the mesher has no handle on today.
+  - **Concave corners stretch rather than fan.** A single marched node at a reentrant
+    corner produces a sharp wedge in the offset surface; a peanut (two unioned spheres)
+    and a dumbbell prism both fail recovery on the resulting slivers. Multiple normals
+    per node (the standard fix) is a real feature, not a tweak.
+  - **The self-intersection net is unreachable from real bodies** — see design.md §3b for
+    why that is structural rather than lucky. If a shape ever reaches it, that is the
+    fixture the backstop has been waiting for.
+- [ ] **Tet meshing breadth**: hex-dominant or voxel/SDF-based meshing (cut cells from
+  `Sdf.Sampled` grids) as an alternative route; *curved* (iso-parametric) quadratic
+  elements, whose
   mid-edge nodes would sit on the true surface rather than at edge midpoints — note
   that this needs a decision about what a shared node means where two boundary patches
   meet at an angle, which is exactly why the current layer is deliberately
@@ -2123,11 +2148,16 @@ from what was already understood rather than from scratch.
   - **Advection needs stabilization** (SUPG) once it dominates diffusion, or the solution
     oscillates rather than being merely inaccurate — a failure mode that looks like a bug
     forever.
-  - **The mesh requirement is the blocker.** Resolving a boundary layer needs anisotropic
-    prism/hex layers at walls with aspect ratios in the hundreds; the tet mesher
-    deliberately produces isotropic elements and boundary layers are already filed as its
-    top gap. **Do that first** — a CFD solver on isotropic tets can only ever produce
-    plausible-looking pictures.
+  - **The mesh requirement is no longer the blocker, and it is worth being precise about
+    what that changed.** `BoundaryLayerSpec` now marches a graded anisotropic stack inward
+    from a `Facets`-selected wall (measured stretches to 72x, the wall named by the same
+    selector a no-slip condition would use, the volume identity and both patch tests
+    surviving it). So a CFD solver would no longer be running on isotropic tets. What it
+    does NOT give is uniform y+ control on curved walls (no `cos` correction at corners,
+    no per-facet thickness law), rims that slide along curved neighbours, or concave
+    corners meshed with multiple normals per node — all filed above. Nothing here touches
+    the flow physics: **what the mesher gives CFD is the mesh, not the solver**, and the
+    staging below is unchanged.
   - **Turbulence is a modelling choice, not an algorithm.** Laminar-only is a defensible
     v1 and covers real engineering (internal flow at low Re, cooling channels); RANS
     (k-ω SST) is a second project with its own wall-function subtleties.

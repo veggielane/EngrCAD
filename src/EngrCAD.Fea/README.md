@@ -182,6 +182,155 @@ measure `HoleFiller`'s minimum-weight triangulation uses, for the same reason: a
 form needs a degeneracy guard, and a degeneracy guard on a cross product is an *area*
 threshold.
 
+## Anisotropic boundary layers
+
+A boundary layer is a graded stack of very flat elements marched **inward** from a named wall,
+with the isotropic pipeline filling whatever is left. It is what resolves a steep gradient
+normal to a surface — a viscous wall in CFD, a thermal skin, a contact face — without paying
+for isotropic elements of that thickness everywhere.
+
+```csharp
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    FacetTags = tags,                       // B-Rep face ids, say
+    RefineQuality = true,
+    MaxElementSize = 2.0,
+    BoundaryLayer = new BoundaryLayerSpec
+    {
+        Wall = Facets.Tag(1),               // the SAME selector a no-slip condition uses
+        FirstLayerThickness = 0.15,
+        LayerCount = 4,
+        GrowthRatio = 1.3,
+    },
+}, out var report);
+
+var layer = report.BoundaryLayer!.Value;    // element count, measured thicknesses, clearance
+```
+
+**Walls are named the way boundary conditions are named.** `BoundaryLayerSpec.Wall` is a
+`Facets` predicate over the input surface's triangles, so `Facets.Tag(id)` picks the same face
+for the layer that it picks for a condition later, and the geometric selectors
+(`OnPlane`/`FacingAlong`/`InBox`) work here too.
+
+The stack's elements are emitted **first**, so `[0, BoundaryLayerReport.ElementCount)` names
+them in the finished mesh.
+
+### How it works, and why it is only one new stage
+
+The nodes are marched first; what is left over is then bounded by an ordinary closed triangle
+mesh — the offset wall plus the non-wall faces trimmed back to the stack's rim — which
+`TetMesher` already knows how to fill. So there is **no new volume algorithm**: this stage
+produces columns and a surface, and every guarantee the existing pipeline gives (a conforming
+boundary, the volume identity, exact orientation, determinism, refusals that name what failed)
+is inherited rather than restated.
+
+**Nodes march along a per-node average, not the facet normal.** The direction at a wall vertex
+is the angle-weighted average of its incident wall facets' normals (the same pseudonormal
+convention `MeshSdf` uses). Marching each triangle along its own normal would move a shared
+vertex to several different places and tear the layer open along every edge where two facets
+disagree — which on a curved wall is every edge.
+
+**A rim node slides along the flat face it stops on**, and it does so by construction rather
+than by tolerance: its direction is projected out of every non-wall plane it touches, so
+`p + s·d` stays in that plane at every `s` and the stack's side wall is genuinely part of the
+part's surface. How far the projection had to turn the direction is then *checked*
+(`MinimumConstraintCosine`, 60° by default). A rim landing on a CURVED neighbour — more than
+two distinct plane normals at one vertex — is refused by name.
+
+**Prisms are split into three tetrahedra each, and the diagonal rule is combinatorial.**
+`TetMesh` stores tetrahedra, so the prisms have to be split, and each quadrilateral side face
+needs a diagonal that BOTH prisms sharing it agree on — otherwise the mesh is non-conforming
+and every solver integrates over a gap it cannot see. The rule is Dompierre's: a quad's
+diagonal contains whichever of its two base vertices has the smaller index in the input
+surface. It is symmetric in the two, so neighbours agree without communicating.
+
+> The geometric rule this repo uses elsewhere (`PolygonFan`'s shorter 3D diagonal) would be
+> **wrong here**, and not marginally. A layer quad on a flat wall is an exact rectangle, whose
+> two diagonals are mathematically equal, so the choice would fall to round-off on essentially
+> every element of the stack — the same trap that made 408 of a UV sphere's 960 quads flip on
+> an ulp.
+
+**The stage runs in two passes, and the reason is the mesher's own design.** Boundary recovery
+works per planar *patch* precisely because a Delaunay triangulation picks its own diagonal
+across a coplanar quad — so handing the fill an offset wall and assuming it comes back
+triangulated the same way is wrong on the most ordinary geometry there is, and wrong silently.
+Hence: march the columns, hand over the surface, then read the interface triangulation **back**
+off the finished fill and build the prisms on that. The fill chooses; the stack conforms.
+
+### The interface is frozen — and that is the one thing to plan around
+
+Once the stack has elements against the offset wall, the fill must not insert a vertex into
+it. Sizing-driven boundary refinement and quality refinement's encroachment splitting both
+honour that (recovery is deliberately left free, so a genuine failure is caught by the layer's
+own interface check, which can say what went wrong).
+
+The consequence is the standing rule of boundary-layer meshing, and it is worth stating
+plainly: **the surface mesh sets the layer's in-plane element size.** Ruppert's encroachment
+rule blocks interior refinement inside the interface triangles' diametral balls, so on a plain
+two-triangles-per-face box those balls are half the box and *nothing* refines. Refine the WALL
+surface to the size you want before growing the layer.
+`TetMeshDiagnostics.RefinementBlockedByFrozenBoundary` reports how many refinement points were
+declined for this reason, so the limitation is a number rather than a surprise.
+
+### Refusing loudly
+
+Producing inverted elements where a layer does not fit is far worse than refusing, so four
+nets sit in front of that, in the order they fire, each naming what to change:
+
+| net | catches | message |
+| --- | --- | --- |
+| per-facet fold | a wall turning faster than the stack is tall — a convex corner or fillet smaller than the stack, or a facet shorter than it | names the facet, its tag, its centroid and the layer |
+| trimmed-face inversion | two flat walls swapping places across a thin part | names the face and its signed area before and after |
+| self-intersection (`MeshIntersection.WithinItself`) | the offset surface genuinely crossing itself | names where and by how much |
+| consumed volume | a stack that swallows its body | names the body and what is left |
+
+**Nothing reachable from a real body currently exercises the self-intersection net**, and the
+reason is structural rather than lucky: two flat walls closing on each other never *cross* —
+they swap places, and two parallel sheets that have swapped places are still parallel — so the
+face between them turns inside out first; and where a wall is curved enough to make the offsets
+genuinely cross, its facets fold before they get there. It stays as the backstop for a shape
+with neither property, and `BoundaryLayerTests` locks which net catches which family so the
+finding cannot rot.
+
+### Verified
+
+On a 20³ box with the whole surface walled (0.5 mm first layer, ratio 1.2, 3 layers), a
+Ø10×20 duct with a graded wall and an isotropic core, an L-prism with a genuine concave edge,
+and boxes over six decades of scale:
+
+- **volume identity** — sum of element volumes against the input surface's, relative:
+  **0 to 3.8e-14** across every fixture, well inside the mesher's own 1e-9 bar
+- **layer thicknesses and growth reproduced exactly** — measured first layer
+  `0.15000000000000036` against a requested `0.15`, worst measured ratio
+  `1.3000000000000074` against a requested `1.3`
+- **the stack's outer skin has exactly the wall's area**, to 1e-9 relative
+- **every face is used once or twice** (the direct statement of conformity), and the faces used
+  once are exactly the reported boundary facets
+- **determinism** — two runs bit-identical, positions and element order
+- **the existing structural and thermal verification fixtures still hold through a layered
+  mesh** (`BoundaryLayerSolverTests`, linear / quadratic):
+
+  | fixture | measured on a layered mesh |
+  | --- | --- |
+  | structural displacement patch test | displacement **9.8e-16 / 9.6e-15** relative, strain 3.4e-14 / 1.4e-13 |
+  | thermal patch test | temperature **2.4e-15 / 9.9e-15** relative, flux 9.1e-14 / 3.0e-13, energy balance 1.2e-14 / 2.6e-14 |
+  | 1D slab, exact linear profile | temperature **1.1e-14 / 4.0e-14** relative on a 100 K drop, flux 1.4e-13 / 3.0e-13 |
+  | equilibrium (pressure + gravity vs reactions) | **1.2e-12** relative |
+  | cantilever vs Euler–Bernoulli | **−1.27% → −0.32% → −0.16%** at 420 / 1 688 / 3 796 quadratic elements — monotone from the stiff side |
+
+The patch tests are the ones that earn their keep, because a wrongly split prism is invisible
+to everything else: the solve converges and returns a plausible answer. A linear field can only
+be reproduced *exactly* if the elements genuinely tile the body, so a patch test on a layered
+mesh is a direct measurement of the diagonal rule.
+
+### Not in v1
+
+Uniform thickness only (no per-facet law); the march measures its thickness **along its own
+direction**, so at a convex corner the perpendicular stand-off is `cos` of half the corner
+angle rather than the requested value (the report's `MinMarchClearance` is that number); a rim
+may only stop on FLAT faces; the wall triangulation is not refined for you; and CFD needs a
+flow solver, which this is not — what it gives CFD is the mesh, not the physics.
+
 ## Quadratic (10-node) elements
 
 `QuadraticTetMesh.From(linear)` is a **pure function** of the linear mesh: nothing re-meshes,

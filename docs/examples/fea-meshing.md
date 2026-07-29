@@ -159,6 +159,202 @@ scene.Add(new Part("graded mesh", cutaway) { Color = new PartColor(0.85f, 0.62f,
 
 `MaxElementSize` is the uniform form of the same idea; supply both and the smaller wins.
 
+## Anisotropic boundary layers
+
+A sizing field refines a region *isotropically* — smaller elements in every direction at
+once, at a cost that grows as the cube. When the thing you need to resolve is a steep gradient
+**normal to a surface** (a viscous wall, a thermal skin, a contact face) that is the wrong
+shape of refinement: you want elements that are thin across the wall and as coarse as ever
+along it.
+
+`BoundaryLayerSpec` marches a graded stack of exactly those elements inward from a wall you
+name, and the ordinary pipeline fills whatever is left.
+
+```csharp run:fea-boundary-layer
+// A duct: a bore with rings along it and flat ends. Tag 1 = wall, 2 = inlet, 3 = outlet.
+// Note the RINGS: the wall is divided along its length, not left as two tall triangles per
+// segment, because a layer's in-plane element size comes from the surface mesh (see below).
+static (HalfEdgeMesh Surface, int[] Tags) Duct(double radius, double length, int segments, int rings)
+{
+    var p = new List<Vector3d>();
+    for (int k = 0; k <= rings; k++)
+        for (int i = 0; i < segments; i++)
+        {
+            double a = 2 * Math.PI * i / segments;
+            p.Add(new Vector3d(radius * Math.Cos(a), radius * Math.Sin(a), length * k / rings));
+        }
+    int bottom = p.Count; p.Add(new Vector3d(0, 0, 0));
+    int top = p.Count; p.Add(new Vector3d(0, 0, length));
+
+    var faces = new List<int[]>();
+    var tags = new List<int>();
+    for (int k = 0; k < rings; k++)
+        for (int i = 0; i < segments; i++)
+        {
+            int j = (i + 1) % segments;
+            int a = k * segments + i, b = k * segments + j;
+            int c = (k + 1) * segments + j, d = (k + 1) * segments + i;
+            faces.Add([a, b, c]); tags.Add(1);
+            faces.Add([a, c, d]); tags.Add(1);
+        }
+    for (int i = 0; i < segments; i++)
+    {
+        int j = (i + 1) % segments;
+        faces.Add([bottom, j, i]); tags.Add(2);
+        faces.Add([top, rings * segments + i, rings * segments + j]); tags.Add(3);
+    }
+    return (HalfEdgeMesh.Build(p, faces), [.. tags]);
+}
+
+var (surface, tags) = Duct(radius: 5, length: 20, segments: 32, rings: 12);
+
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    FacetTags = tags,
+    RefineQuality = true,
+    MaxElementSize = 2.0,
+    BoundaryLayer = new BoundaryLayerSpec
+    {
+        // The SAME selector a no-slip condition would use later.
+        Wall = Facets.Tag(1),
+        FirstLayerThickness = 0.15,
+        LayerCount = 4,
+        GrowthRatio = 1.3,
+    },
+}, out var report);
+
+var layer = report.BoundaryLayer!.Value;
+Console.WriteLine($"{tets.TetCount} elements, {layer.ElementCount} of them in the layer");
+Console.WriteLine($"first layer {layer.FirstLayerThickness:G6} (asked {0.15}), " +
+                  $"growth {layer.MeasuredGrowthRatio:G6} (asked {1.3}), " +
+                  $"stack {layer.TotalThickness:G6} tall");
+Console.WriteLine($"volume residual {report.VolumeResidual:E2}");
+
+// The mesher's own oracle survives the layer: the elements still fill exactly the surface.
+if (report.VolumeResidual > 1e-9)
+    throw new Exception($"volume identity failed: {report.VolumeResidual:E2}");
+
+// The quality report tells the two populations apart and applies the right rule to each.
+var quality = TetQuality.Analyze(tets);
+Console.WriteLine($"{quality.AnisotropicCount} anisotropic elements " +
+                  $"(max stretch {quality.MaxStretch:F1}x, un-stretched min dihedral " +
+                  $"{quality.MinStretchedDihedralDegrees:F1} deg); " +
+                  $"{quality.SliverCount} slivers among the {quality.IsotropicCount} isotropic ones");
+```
+
+**Walls are named the way boundary conditions are named.** `Wall` is a `Facets` predicate over
+the input surface's triangles, so `Facets.Tag(id)` picks the same face for the layer that it
+picks for a load or a support later.
+
+The stack's elements come out **first**, so `[0, layer.ElementCount)` names them.
+
+### Reading the quality report
+
+`TetQuality`'s sliver rule is tuned for isotropic elements and would call every legitimate
+layer element degenerate — a tetrahedron cut from a prism 0.15 mm thick and 1 mm wide has a
+minimum dihedral under a degree and a radius-edge ratio in the tens, and it is exactly right.
+So the report **partitions** by measured stretch and gives each half the rule that means
+something for it:
+
+| number | over which elements |
+| --- | --- |
+| `SliverCount`, `MaxRadiusEdgeRatio`, `MeanRadiusEdgeRatio` | isotropic only |
+| `AnisotropicCount`, `MaxStretch`, `MeanAnisotropicStretch` | the stretched ones |
+| `MinStretchedDihedralDegrees` | the stretched ones, measured after un-stretching each along its own thinnest axis |
+
+A mesh with nothing stretched in it reports exactly what it always did, number for number.
+
+> [!NOTE]
+> A legitimate layer element and an accidental sliver are **affinely equivalent** — the stack
+> element is four nearly-coplanar points too — so no purely local geometric measure separates
+> them, and `MinStretchedDihedralDegrees` rates an unintended sliver just as kindly. What
+> distinguishes them is whether the thin direction is shared with the neighbours and with the
+> physics, which is intent, not geometry. That is why `AnisotropicCount` is reported *beside*
+> the stretched quality: on a mesh you did not ask to be anisotropic, any value above zero is
+> the finding, and on one you did, it should equal `layer.ElementCount`.
+
+### The surface mesh sets the in-plane size
+
+Once the stack has elements against its inner face, the fill must not insert a vertex into it
+— so refinement is blocked inside that face's triangles. On a plain
+two-triangles-per-face box those blocked regions are half the box and *nothing* refines.
+
+**Refine the wall surface to the size you want before growing the layer.**
+`report.RefinementBlockedByFrozenBoundary` counts the refinement points declined for this
+reason, so the limitation is a number you can look at rather than a surprise.
+
+### It refuses rather than inverting elements
+
+A stack that does not fit would otherwise produce inverted elements, which is far worse than
+no mesh at all. Each refusal names what to change:
+
+```csharp run:fea-boundary-layer-refusal
+// An L-shaped section whose corners turn much faster than a 14 mm stack can follow.
+Vector2d[] outline =
+    [new(0, 0), new(20, 0), new(20, 10), new(10, 10), new(10, 20), new(0, 20)];
+var points = new List<Vector3d>();
+foreach (var q in outline) points.Add(new Vector3d(q.X, q.Y, 0));
+foreach (var q in outline) points.Add(new Vector3d(q.X, q.Y, 20));
+
+int n = outline.Length;
+var prismFaces = new List<int[]>();
+foreach (var (a, b, c) in PolygonTriangulator.Triangulate(outline))
+{
+    prismFaces.Add([a, c, b]);
+    prismFaces.Add([n + a, n + b, n + c]);
+}
+for (int i = 0; i < n; i++)
+{
+    int j = (i + 1) % n;
+    prismFaces.Add([i, j, n + j]);
+    prismFaces.Add([i, n + j, n + i]);
+}
+var body = HalfEdgeMesh.Build(points, prismFaces);
+
+try
+{
+    TetMesher.Mesh(body, new TetMeshOptions
+    {
+        BoundaryLayer = new BoundaryLayerSpec
+        {
+            Wall = f => Math.Abs(f.Normal.Z) < 0.5,
+            FirstLayerThickness = 2.0,
+            LayerCount = 4,
+            GrowthRatio = 1.4,
+        },
+    });
+    throw new Exception("a stack that cannot fit should not have meshed");
+}
+catch (TetMeshException ex)
+{
+    Console.WriteLine(ex.Message);
+    // "...folds the wall facet 8 ... The wall turns faster there than the stack is tall..."
+}
+
+// The same body with a stack that fits meshes exactly.
+var ok = TetMesher.Mesh(body, new TetMeshOptions
+{
+    BoundaryLayer = new BoundaryLayerSpec
+    {
+        Wall = f => Math.Abs(f.Normal.Z) < 0.5,
+        FirstLayerThickness = 0.4,
+        LayerCount = 3,
+        GrowthRatio = 1.2,
+    },
+}, out var report);
+
+Console.WriteLine($"{ok.TetCount} elements, volume residual {report.VolumeResidual:E2}");
+if (Math.Abs(ok.Volume - body.Volume()) > Math.Abs(body.Volume()) * 1e-9)
+    throw new Exception("volume identity failed on the L-section");
+```
+
+The other two nets are a face **turning inside out** (two flat walls swapping places across a
+thin part) and the leftover volume going **non-positive** (a stack that swallows its body).
+
+> [!NOTE]
+> What this gives CFD is the **mesh**, not the physics: a graded near-wall stack with the
+> boundary conditions already named. There is no flow solver here.
+
 ## Boundary facet tags — the seam for boundary conditions
 
 Every boundary facet names the input triangle it came from

@@ -275,6 +275,76 @@ elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityRepo
 minimum dihedral beside radius-edge and counts what the first measure cannot see. Sliver
 exudation is the named next step (todo.md).
 
+### Anisotropic boundary layers, and the three decisions in them
+
+A boundary layer is a graded stack of very flat elements marched inward from a wall selected
+by a `Facets` predicate — **the same selector a boundary condition uses**, so a wall is named
+once. The architectural point is that it adds no volume algorithm: the nodes are marched
+first, and what is left over is bounded by an ordinary closed triangle mesh that `TetMesher`
+already fills, so the volume identity, exact orientation, determinism and the refusal culture
+are all inherited rather than restated.
+
+1. **Prisms split into three tetrahedra, and the diagonal rule is COMBINATORIAL, not
+   geometric.** `TetMesh` stores tetrahedra, so a prism's three quadrilateral side faces each
+   need a diagonal, and two prisms sharing one must agree or the mesh is non-conforming and
+   every solver silently integrates over a gap. The rule is Dompierre's — a quad's diagonal
+   contains whichever of its two base vertices has the smaller index in the input surface —
+   which is symmetric in the two, so neighbours agree without communicating.
+   **`PolygonFan`'s shorter-3D-diagonal rule would be wrong here**, and not marginally: a
+   layer quad on a flat wall is an exact rectangle, whose two diagonals are mathematically
+   equal, so the choice would fall to round-off on essentially every element of the stack —
+   the same trap that made 408 of a UV sphere's 960 quads flip on an ulp. This is the one
+   place in the repo where the geometric rule is the wrong answer, and the reason is that a
+   boundary layer is made *entirely* of the degenerate case that rule's tie guard exists for.
+2. **The stage runs in TWO passes, because the party that decides the interface triangulation
+   is the fill, not the layer.** Boundary recovery works per planar PATCH precisely because a
+   Delaunay triangulation picks its own diagonal across a coplanar quad — so handing the fill
+   an offset wall and assuming it comes back triangulated the same way is wrong on a box, and
+   wrong *silently*. So: march the columns, hand over the surface, then read the interface
+   triangulation back off the finished fill and build the prisms on that. The fill chooses;
+   the stack conforms. And the weld is by exact position, which makes the conformity check
+   fall out for free: each interface triangle is then used by two elements and vanishes from
+   the combined boundary, so **"every boundary face has a known tag" IS the statement that the
+   two meshes conform** — there is no separate check to keep in step.
+3. **The quality report PARTITIONS rather than judging.** `TetQuality`'s sliver rule is tuned
+   for isotropic elements and would call every legitimate layer element degenerate, and a
+   report that cries wolf on correct output is worse than none. So elements are split by
+   measured stretch: `SliverCount` and the radius-edge figures cover the isotropic ones only,
+   while the stretched ones are counted and measured in their own metric
+   (`MinStretchedDihedralDegrees` — the minimum dihedral after un-stretching along the
+   element's thinnest principal axis; only that axis, because a full whitening maps *every*
+   non-degenerate tetrahedron to a well-shaped one and so carries no signal, whereas scaling
+   one axis restores a layer element and leaves a needle exactly as bad). A mesh with nothing
+   stretched reports what it always did, number for number.
+   **The honest limit is stated rather than implied**: a legitimate layer element and an
+   accidental sliver are AFFINELY EQUIVALENT — the stack element is four nearly-coplanar
+   points too — so no purely local geometric measure separates them. What distinguishes them
+   is whether the thin direction is shared with the neighbours and with the physics, which is
+   intent, not geometry. Hence `AnisotropicCount` sits beside the stretched quality rather
+   than instead of it, and the layered mesher's own `ElementCount` is what to check it against.
+
+**The frozen interface is the consequence to plan around.** Once the stack has elements
+against its inner face, optional refinement must not insert a vertex there, so Ruppert's
+encroachment rule blocks interior points inside those triangles' diametral balls — which on a
+plain two-triangles-per-face box is the whole interior. That is not a defect but the standing
+rule of boundary-layer meshing showing through: **the surface mesh sets the layer's in-plane
+element size**. It is reported (`RefinementBlockedByFrozenBoundary`) rather than left to be
+discovered. Note which refinement paths are frozen and which are not: the two OPTIONAL ones
+are (both merely decline, and the loop is still bounded without them), while boundary RECOVERY
+is deliberately left free — if a frozen patch must be split for the mesh to conform at all,
+that is a real failure and the layer's own interface check names it better than a refusal to
+try would.
+
+**Which net catches which failure was worth measuring.** Three refusals sit in front of ever
+producing an inverted element: a per-facet fold test, a trimmed-face inversion test, and the
+leftover volume going non-positive; behind them is a global self-intersection test
+(`MeshIntersection.WithinItself`). **Nothing reachable from a real body exercises that last
+one**, and the reason is structural: two flat walls closing on each other never *cross* — they
+swap places, and two parallel sheets that have swapped places are still parallel — so the face
+between them turns inside out first; and where a wall is curved enough to make the offsets
+genuinely cross, its facets fold before they get there. It stays as the backstop, with the
+verdict locked by test — the `TrimmedFaceRefusalTests` pattern.
+
 ## 3c. Structural analysis (`EngrCAD.Fea`)
 
 Small-strain isotropic linear elasticity on those meshes, 3 displacement degrees of freedom
