@@ -1335,6 +1335,49 @@ var plate = new Part("plate", plateShape)
   `Drill`: annotations belong to the PART, and a graph node cannot know which part
   will carry it.
 
+## Saving a document (`DocumentFile.cs`)
+
+A `Scene` describes a model; a **`Document`** is that scene in a file — one JSON envelope
+with a version field, carrying tabs, parts (name, colour, transform, display mode,
+`ClippedBySection`, the debug modifiers), each part's `FeatureHistory`, assemblies with
+their occurrences and explode offsets, `MateSet`s, 3D annotations, results and
+`FieldDisplay`.
+
+```csharp
+var document = new Document(scene);
+document.Mates.Add(mateSet);          // a scene does not own its mates; a document does
+document.SaveFile("bracket.json");
+
+var result = Document.LoadFile("bracket.json");
+foreach (string warning in result.Warnings)
+    Console.WriteLine(warning);
+```
+
+**A document is its construction history, not its geometry.** Nothing exact is stored: a
+history-backed part saves its history and REGENERATES on load, so the reloaded part is
+still parametric. Geometry with no recipe — a raw `HalfEdgeMesh`, an imported `.stl`, an
+`Sdf`, a `Shape` graph built in code — is handled *explicitly* rather than dropped: its
+display mesh is embedded as a **snapshot** (binary-exact base64, so it reloads bit for
+bit), and `DocumentLoadResult.Snapshots` names every part that came back that way.
+`DocumentSaveOptions.EmbedGeometry = false` writes a recipe-only file where those parts
+become an explicit "no geometry" record naming the reason.
+
+Embedded rather than an external reference, deliberately: a document that points at files
+beside it is a manifest, and the reference breaks the first time the file moves. The one
+case an external reference genuinely wins — a scan mesh large enough that inlining it is
+absurd — is filed in todo.md rather than built.
+
+Loading follows `LoadParameters`' convention: **warnings, never exceptions**, for opaque
+features (a `BooleanFeature`'s `Shape` tool, a `FromFunc` lambda, a `ComponentFeature` —
+`DocumentLoadOptions.ResolveOpaqueFeature` is the hook), selector-backed annotations
+(`LinearDimension.BetweenFaces`, `RadialDimension.OnEdge` measure through lambdas), and
+catalogue parts (the geometry loads, the `HardwareComponent` cannot). Only a structurally
+invalid file — bad JSON, a missing envelope, an unknown version — throws.
+
+`save → load → save` is a **byte-identical fixed point** for everything that round-trips;
+a file carrying opaque records is smaller the second time by exactly those records and a
+fixed point from there. See `docs/examples/documents.md`.
+
 ## Standard components ("smart" hardware)
 
 Real hardware, where **a component is more than geometry: placing it modifies the host

@@ -858,17 +858,32 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   exist), and emit visible/hidden per segment for the DXF/SVG layer item. That gets
   usable drawings at display fidelity now and leaves exact HLR as the upgrade whose
   seam (a list of classified 2D segments) is already right.
-- [ ] OCAF-style document framework: undo/redo, attributes, persistence. Design
-  assessment (task #11): do NOT port OCAF's label-tree/attribute model — this
-  codebase's document model is `Scene`/`Tab`/`Part` with `FeatureHistory` as the
-  parametric core, and its natural persistence is what already half-exists
-  (`SaveParameters`/`LoadParameters`, `MatePersistence`): the missing piece is one
-  serialized DOCUMENT envelope (scene structure + per-part feature history + mates +
-  materials) with a version field. Undo/redo should ride the same seam as hot reload:
-  a document snapshot is a value, an edit produces a new one, and the viewer swaps
-  scenes — the `MeshChangeSet` journaling lesson (complete state, bit-identical
-  restore) applies at document granularity rather than OCAF-style per-attribute
-  deltas.
+- [ ] **Document framework residuals** (the OCAF assessment's verdict held: do NOT port
+  OCAF's label-tree/attribute model; `Scene`/`Tab`/`Part` with `FeatureHistory` as the
+  parametric core is the document, and one versioned envelope is the persistence. Landed:
+  `Document`/`DocumentFile.cs` — scene structure + per-part feature history + assemblies
+  and poses + mates + annotations + results, with snapshots for geometry that has no
+  recipe, warnings-not-exceptions on load, and a byte-identical save→load→save fixed
+  point). Open:
+  - [ ] **Materials.** The envelope has no material because `Part` has no material — see
+    the per-part-material item above; when it lands it is one more part record field.
+  - [ ] **`Shape`-graph serialization** would let a code-built `Shape` part save as a
+    recipe instead of a snapshot, and would make `BooleanFeature` and `ComponentFeature`
+    round-trip through `FeatureHistory` as well. It is the single biggest remaining gap in
+    what a document can carry, and it is a real project: the graph has ~40 node types,
+    several carrying sketches, fonts, hole specs, catalogue objects and lambdas.
+  - [ ] **External geometry references.** Snapshots are embedded on purpose (design.md
+    §6b). The case that would justify a `{"kind": "external", "path": ...}` record is a
+    scan mesh too large to inline; it needs a resolver hook, path resolution relative to
+    the document, and a missing-file policy, so it waits for a real need.
+  - [ ] **Selector-backed annotations do not round-trip.** `LinearDimension.BetweenFaces`
+    and `RadialDimension.OnEdge` take `Func<BrepSolid, …>` lambdas, so they save as opaque
+    markers. The fix is not more serialization machinery but the vocabulary that already
+    exists: overloads taking `FaceRef`/`EdgeSetRef`, whose `Descriptor` is the serialized
+    form. Small, and it would make dimensions as persistent as features already are.
+  - [ ] **Joint/coupling persistence** (also filed under mechanisms) is the other layer a
+    document silently loses today: `Document` saves the `MateSet`s but not the `Joint`s
+    built on top of them.
 
 ## build123d / CadQuery parity (open items)
 

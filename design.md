@@ -852,6 +852,40 @@ Design decisions:
   onto its plane, or a sub-shape's feature edges) — never meshes — built on a
   background task, because the one rule the viewer cannot break is that lowering never
   runs on the UI or render thread.
+- **A document is its construction history; geometry with no recipe is a SNAPSHOT, named.**
+  The saved-document envelope (`Document`, `DocumentFile.cs`) stores no exact geometry at
+  all: a part backed by a `FeatureHistory` saves that history and regenerates on load, so
+  the reloaded part is still parametric. The interesting decision is what to do with the
+  parts that have no history — a raw `HalfEdgeMesh`, an imported `.stl`, an `Sdf`, a
+  `Shape` graph built in code. Three options were on the table and only one is honest:
+  drop them (silently loses bodies), pretend they are parametric (a lie the first edit
+  exposes), or **embed the display mesh as an explicitly-labelled snapshot** —
+  binary-exact base64, and `DocumentLoadResult.Snapshots` names every part that came back
+  that way, so a host can say "these parts are not parametric" instead of a UI discovering
+  it when a parameter refuses to change anything. Embedded rather than an external file
+  reference, deliberately: a document that points at its neighbours is a *manifest*, and
+  the reference breaks the first time the file is moved, renamed or emailed — with the
+  failure surfacing as missing geometry rather than as a missing file. One file that
+  reloads the model is the whole value of an envelope. (The case an external reference
+  genuinely wins — a scan mesh large enough that inlining it is absurd — is filed rather
+  than built; nothing in the repo produces such a part, and the resolver it needs is real
+  design work that should follow a real need.)
+- **The fixed point is the test that earns its keep.** `save → load → save` being
+  byte-identical is not a tidiness property: it is the only check that catches a field
+  written but never read, a default that reloads as a *different* default, or an ordering
+  that is not purely a function of the model — all of which pass a volumes-and-poses
+  comparison. It caught one such field immediately. A snapshot record wanted a `"source"`
+  naming the geometry type it came from (`BoxShape`), which is genuinely useful to a human
+  reading the file — and which *cannot* survive its own round trip, because a `BoxShape`
+  snapshot reloads as a `HalfEdgeMesh` and the second save writes a different name. The
+  rule that follows: **an informational field either round-trips or does not belong in the
+  file.** The actionable half of that information lives in `DocumentLoadResult.Snapshots`,
+  which is computed at load rather than stored. The honest scope of the claim is also
+  worth stating: the fixed point holds for everything that round-trips, and a file
+  carrying opaque records (a lambda-backed dimension, a `Shape`-graph boolean tool) is
+  smaller the *second* time by exactly the records the load already warned about — then a
+  fixed point from there. "A record was reported and dropped" and "the file is drifting"
+  are different things, and the tests assert them separately.
 - **A smart component's local origin is its SEATING DATUM, not the host face.** That one
   choice is what makes the hardware library composable: `SeatDepth` says how far below
   the host's face the datum sits and `InsertedLength` how far the body reaches below it,
