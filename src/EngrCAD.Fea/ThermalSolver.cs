@@ -549,7 +549,7 @@ public static class ThermalSolver
         var states = new List<ThermalResults>();
         var times = new List<double>();
 
-        double storedInitial = Quadratic(capacity, current);
+        double storedInitial = StoredEnergy(capacity,current);
         double integratedHeat = 0;
         double integratedScale = 0;
         double worstResidual = 0;
@@ -630,7 +630,7 @@ public static class ThermalSolver
         }
         double stepMs = stopwatch.Elapsed.TotalMilliseconds;
 
-        double storedFinal = Quadratic(capacity, current);
+        double storedFinal = StoredEnergy(capacity,current);
         // The first law over the WHOLE run: the energy that arrived must be the energy
         // that is now stored. Scale is the accumulated magnitude of what flowed, so a run
         // whose net flow cancels does not report a relative error of 1.
@@ -1140,13 +1140,16 @@ public static class ThermalSolver
         return denominator > 0 ? numerator / denominator : numerator;
     }
 
-    /// <summary><c>x' · M · x</c> — the stored energy when M is the capacity matrix and x
-    /// the temperature field, measured from the caller's zero.</summary>
-    private static double Quadratic(PackedSparseMatrix m, double[] x)
+    /// <summary>
+    /// The stored thermal energy <c>1' · C · T = integral(rho·c·T dV)</c>, measured from
+    /// the caller's zero of temperature.
+    /// <para>Note it is <b>linear</b> in T, not the quadratic form a strain energy is: the
+    /// energy stored by raising a body's temperature is proportional to the rise, not to
+    /// its square. Squaring it would give an energy-like number with no physical meaning
+    /// and would break the first-law check that reads it.</para>
+    /// </summary>
+    private static double StoredEnergy(PackedSparseMatrix m, double[] x)
     {
-        // Not x'Mx: the stored energy of a temperature FIELD is integral(rho·c·T dV),
-        // which is 1'·C·x, a linear functional. Squaring it would be an energy-like number
-        // with no physical meaning and would break the first-law check.
         var product = m.Multiply(x);
         double sum = 0;
         foreach (double v in product)

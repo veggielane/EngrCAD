@@ -461,6 +461,80 @@ public class ThermalTransientTests(ITestOutputHelper output)
     }
 
     /// <summary>
+    /// The end-to-end negative control for the capacity matrix's quadrature: solving the
+    /// SAME transient with the conductivity's rule for the capacity gives a measurably
+    /// different answer, and a worse one.
+    ///
+    /// <para><c>ThermalElementTests</c> shows the under-integrated 4-node capacity is
+    /// rank-one with the correct total; this shows it matters to a solve. Without it,
+    /// "the capacity needs a higher rule" is an argument rather than a measurement — and
+    /// the argument is exactly the kind that survives being wrong, because the cheap rule
+    /// conserves energy perfectly while distributing it incorrectly.</para>
+    ///
+    /// <para><b>The comparison has to be made MID-transient.</b> Run to ten time constants
+    /// and the two agree to 2.2e-7 K, because by then both have reached the same steady
+    /// state — the capacity matrix decides the PATH, not the destination, and a check
+    /// taken at the end measures neither.</para>
+    ///
+    /// <para>The body's Biot number is 4.2e-3, so its physical answer is the
+    /// lumped-capacitance exponential to within that; both rules are reported against it,
+    /// which is the reference that says which path is the better one rather than merely
+    /// which is different.</para>
+    /// </summary>
+    [Fact]
+    public void UnderIntegratingTheCapacity_ChangesTheTransientPath()
+    {
+        const double side = 20, initial = 20, ambient = 200, film = 0.05;
+        var tets = StructuredTetMesh.Box(Vector3d.Zero, new Vector3d(side, side, side), 3, 3, 3);
+        var mesh = AnalysisMesh.Of(tets);
+
+        ThermalModel Build() => new ThermalModel(mesh, Metal).Convection(Facets.All, film, ambient);
+        double volume = side * side * side, area = 6 * side * side;
+        double tau = Metal.VolumetricHeatCapacity * volume / (film * area);
+        double biot = film * (volume / area) / Metal.ThermalConductivity;
+
+        double[] Run(int? capacityDegree)
+        {
+            var run = ThermalSolver.SolveTransient(
+                Build(),
+                // One time constant, in forty steps: the transient is fully active here.
+                new ThermalTransientOptions(tau / 40, 40)
+                {
+                    InitialTemperature = initial,
+                    StoreEvery = 40,
+                },
+                new ThermalSolveOptions { CapacityQuadratureDegree = capacityDegree });
+            return [.. run.Final.Temperature];
+        }
+
+        var exact = Run(null);          // the production degree-2 rule
+        var crude = Run(1);             // the conductivity's one-point rule
+
+        double difference = 0;
+        for (int v = 0; v < mesh.NodeCount; v++)
+            difference = Math.Max(difference, Math.Abs(exact[v] - crude[v]));
+
+        double lumped = ambient + (initial - ambient) * Math.Exp(-1.0);
+        double exactMean = exact.Average(), crudeMean = crude.Average();
+
+        output.WriteLine(
+            $"tau = {tau:G6} s, compared at t = tau; Biot = {biot:E2}, so the physical answer "
+            + $"is the lumped exponential to about that");
+        output.WriteLine($"  lumped capacitance at t = tau: {lumped:F6} C");
+        output.WriteLine(
+            $"  degree-2 capacity (production): mean {exactMean:F6} C, "
+            + $"off by {Math.Abs(exactMean - lumped):E3}");
+        output.WriteLine(
+            $"  degree-1 capacity (the conductivity's rule): mean {crudeMean:F6} C, "
+            + $"off by {Math.Abs(crudeMean - lumped):E3}");
+        output.WriteLine($"  the two paths differ by up to {difference:E3} K at t = tau");
+
+        // The check that the rule matters at all: a "does the capacity total right" test
+        // cannot see this, because both rules total exactly rho.c.V.
+        Assert.True(difference > 1e-4, $"the two rules agree to {difference:E3} K");
+    }
+
+    /// <summary>
     /// The stored states are what they claim: the initial condition applies to the FREE
     /// nodes while a prescribed temperature wins at t = 0, <c>StoreEvery</c> is honoured,
     /// and the final step is always stored whatever it was.

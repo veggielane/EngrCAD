@@ -49,9 +49,6 @@ internal sealed class SurfaceSampler
     /// meshes are not the same body and the result is meaningless.</summary>
     public double MaxSampleDistance { get; }
 
-    /// <summary>Number of display vertices mapped.</summary>
-    public int Count => _samples.Length;
-
     /// <summary>Builds the correspondence.</summary>
     public static SurfaceSampler Build(AnalysisMesh mesh, HalfEdgeMesh displayMesh)
     {
