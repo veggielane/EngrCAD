@@ -48,6 +48,10 @@ var modes = ModalSolver.Solve(
     new ModalSolveOptions { ModeCount = 1 });
 double period = 1.0 / modes.Mode(1).Frequency;
 
+// The prose below quotes this band; asserting it here is what keeps the two from drifting.
+if (modes.Mode(1).Frequency is < 300 or > 3000)
+    throw new Exception($"first mode {modes.Mode(1).Frequency:F0} Hz is outside the quoted band");
+
 var results = TransientSolver.Solve(
     Case(), new TransientSolveOptions(period / 40, 120));
 
@@ -86,11 +90,13 @@ with the undeformed plate ghosted behind it. The peak deflection is close to twi
 one, and the plate then oscillates about the static position for ever — because nothing here
 is damped.
 
-**On the time scale, honestly.** This plate's first mode is a few thousand hertz, so the whole
-run above spans about a millisecond. A transient of a stiff metal part is *always* like that:
-if you animate one, you are watching a slowdown of several thousand, and the caption should
-say so. Only structures like buildings and long spans have transients you could watch at true
-speed.
+**On the time scale, honestly.** This plate's first bending mode is a few hundred hertz, so the
+three cycles above span a few *milliseconds*. A transient of a stiff metal part is always like
+that — hundreds of hertz to tens of kilohertz — so if you animate one you are watching a
+slowdown of a thousand or more, and the caption should say so rather than implying the clip
+runs at true speed. Only structures like buildings and long spans are slow enough to watch
+honestly. (It is the same caveat `DeformationTracks.Oscillate` carries for a mode shape, and
+the one readers most often assume a solver has arranged away.)
 
 ## Choosing a step
 

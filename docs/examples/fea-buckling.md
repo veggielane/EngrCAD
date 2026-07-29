@@ -310,8 +310,10 @@ implementation rather than a stopgap.
   static state; it says nothing about post-buckling behaviour, imperfection sensitivity, or a
   structure whose prestress redistributes as it deforms. An imperfection-sensitive shell can
   buckle at a fraction of this number — a property of the theory, not of the implementation.
-- **No transient dynamics.** Frequency response is steady-state; direct time integration
-  (Newmark, HHT) is a different stepping loop.
+- **Steady state only, on this page.** Frequency response answers what a structure settles into
+  under a sustained sine; an arbitrary load history needs
+  [direct time integration](fea-transient.md), which is a different stepping loop and needs no
+  modes at all.
 - **Nodal-force excitation only.** Base acceleration would ride the participation factors the
   modal results already carry.
 - **Multiplicity three and above** inherits the [modal solver's](fea-modal.md) limitation.

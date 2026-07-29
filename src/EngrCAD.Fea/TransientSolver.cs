@@ -251,7 +251,10 @@ public static class TransientSolver
         var fullEffective = FeaAssembly.Combine(
             fullStiffness, stiffnessCoefficient, fullMass, massCoefficient);
 
-        var k = FeaAssembly.Reduce(fullStiffness, reduced, freeCount);
+        // The reduced mass is needed for the initial acceleration's own solve; the reduced
+        // STIFFNESS is not needed at all, because every use of K here is a full-vector
+        // product (the right-hand side terms and the reaction residual) and the reduction
+        // would be a whole matrix built to be read by nobody.
         var m = FeaAssembly.Reduce(fullMass, reduced, freeCount);
         var effective = FeaAssembly.Reduce(fullEffective, reduced, freeCount);
 
