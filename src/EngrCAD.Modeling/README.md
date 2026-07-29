@@ -169,15 +169,15 @@ to nothing and are dropped, their endpoints becoming B-Rep poles (partial revolv
 still need axis clearance).
 
 **The sketch field is the inner loop of every implicit sketch solid, so `SketchRegion`
-is structure-of-arrays with lane-wise kernels** — lines, full circles, partial arcs and
-cubic béziers all have one — behind a bounding-box reject and a y-bucket index over the
-ray-parity pieces. Every one of those is a *pure restructuring*: the double that comes
-out is bit-for-bit what a plain loop over the segment classes returns, held by golden
-bit-hashes taken from that loop plus batch-vs-scalar bit equality
+is structure-of-arrays with lane-wise kernels** — lines, full circles, partial arcs,
+cubic béziers and elliptical arcs all have one — behind a bounding-box reject and a
+y-bucket index over the ray-parity pieces. Every one of those is a *pure restructuring*:
+the double that comes out is bit-for-bit what a plain loop over the segment classes
+returns, held by golden bit-hashes taken from that loop plus batch-vs-scalar bit equality
 (`SketchRegionKernelTests`). Measured on the batch entry: **2.23×** on a stadium
-(arc-dominated) and **1.37×** on an all-bézier outline.
+(arc-dominated), **1.37×** on an all-bézier outline and **5.4–6.5×** on elliptical ones.
 
-Two of those kernels needed an argument rather than a transcription:
+Three of those kernels needed an argument rather than a transcription:
 
 - **Partial arcs decide in-sweep by a cross-product wedge test, not `Atan2`** — which has
   no bit-exact vector form. With `c₀ = f × o` and `c₁ = g × o` against the sweep's two
@@ -197,6 +197,26 @@ Two of those kernels needed an argument rather than a transcription:
   its value because a sticky per-lane flag gates the write to the refined parameter, not
   because iterating on would be harmless. It would not be: a vanishing `g′` makes the step
   infinite and the clamp would turn that into 0 or 1.
+- **The elliptical-arc kernel is deliberately only HALF lane-wise**, and the measurement
+  says the vectorized half was never the point. An ellipse's distance is a quartic root, so
+  `EllipseSeg.Distance` delegates to `EngrCAD.BRep`'s shared `Curve2d.NearestPoint` — a
+  65-point scan plus a bracketed Newton — and the scan's parameters are the *same for every
+  query*, exactly as the bézier's 17 are. Baking them removes 65 `Math.Cos` and 65
+  `Math.Sin` per query and leaves a scan that is pure arithmetic, hence vectorizable to the
+  bit; hoisting the cosine/sine pair inside the Newton step is another three-for-one, since
+  the shared code calls `PointAt`, `DerivativeAt` and `SecondDerivativeAt` separately and
+  each recomputes both at the same angle. **The refinement itself stays scalar because
+  .NET 10's `Vector.Cos`/`Vector.Sin` are not bit-identical to the scalar ones** — measured
+  here, 11 858 of 200 000 doubles differ for `Cos` and 19 172 for `Sin`, each by one ulp,
+  which is far more than a field whose sign drives boolean classification can spend. So the
+  scalar column (no SIMD in it at all) carries **4.2–5.6×** from baking and hoisting, and
+  SIMD adds only **1.18–1.24×** on top — because once the scan is baked, the refinement it
+  cannot touch is most of what remains.
+- **The ellipse is also the one transcription whose source is in another project**, so it
+  is held bit-equal to `Curve2d.NearestPoint` *on the same binary* through an internal
+  `ellipseKernel` seam, rather than only against a committed hash. A future edit to the
+  shared curve solve then fails naming the drift instead of surfacing as a moved number —
+  and the same seam is what makes the A/B above a genuine one-process interleave.
 
 **Degeneracy guards scale with the sketch.** A sketch's units and scale are entirely the
 caller's choice — a micron seal groove and a metre weldment go through the same

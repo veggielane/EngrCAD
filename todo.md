@@ -481,13 +481,21 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
     its own foot parameter as a VARIABLE — which is the standard treatment and is real
     work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
-- [ ] **A lane-wise `SketchRegion` kernel for elliptical arcs.** Every other segment kind
-  has one; an ellipse lands in the `General` tier because its distance is `Curve2d`'s
-  64-sample scan plus bracketed Newton (point-to-ellipse is a quartic root, so there is
-  no closed form to transcribe). The batch contract is the strong one — bit-identical to
-  the scalar path — so a kernel here must reproduce that scan and its Newton stop exactly,
-  the way `CubicMinimum`'s sticky per-lane mask does. Measure before building: the
-  bounding-box reject already fronts it.
+- ~~**A lane-wise `SketchRegion` kernel for elliptical arcs.**~~ ✅ **done** —
+  `EllipseData`/`EllipseRefine`/`EllipseMinimum` in `SketchRegion.cs`. Measured
+  **5.4–6.5×** on the batch entry over two elliptical profiles (one-process A/B over the
+  new internal `ellipseKernel` seam). The interesting part is the split: the scalar column,
+  which contains no SIMD, carries **4.2–5.6×** of it purely from baking the 65 scan points
+  and hoisting the Newton step's cosine/sine pair, while SIMD adds only **1.18–1.24×** on
+  top — the scan vectorizes, the refinement cannot, and once the scan is baked the
+  refinement is most of what is left. It cannot, because `Vector.Cos`/`Vector.Sin` are not
+  bit-identical to the scalar ones (measured: 11 858 / 19 172 of 200 000 differ, one ulp).
+  - [ ] **The refinement is still scalar per lane, and only a bit-exact vector
+    cosine/sine would change that.** Not worth writing one: a correctly-rounded vector
+    `sin`/`cos` is a substantial numerics project, and the measurement above says the
+    ceiling it would buy is the ~1.2× the vectorized scan already demonstrates, on the one
+    segment kind that is rarest in real sketches. Filed so the next reader does not
+    re-derive the arithmetic — the barrier is exactness, not effort.
 - [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
   but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
   polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`
