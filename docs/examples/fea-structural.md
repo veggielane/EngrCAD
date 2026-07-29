@@ -58,20 +58,12 @@ rather than the built-in edge an eye goes to first.
 
 ## Units
 
-Nothing in this kernel carries a unit, so a material is only meaningful against a length
-unit you choose. `Materials` is stated in the **mm / N / MPa / tonne** system, which is
-what the rest of EngrCAD assumes:
-
-| Quantity | Unit | Example |
-| --- | --- | --- |
-| Length, displacement | mm | the model's own coordinates |
-| Force | N | `Force(..., new Vector3d(0, 0, -1200))` |
-| Stress, Young's modulus | MPa = N/mm² | steel E = 210 000 |
-| Density | tonne/mm³ | steel 7850 kg/m³ = 7.85e-9 |
-| Acceleration | mm/s² | `Materials.GravityMillimetres` = 9806.65 |
-
-SI (m / N / Pa / kg) works identically. What does not work is mixing the two, and no check
-can catch that — which is why the system is documented rather than enforced.
+The **mm / N / MPa / tonne / s** system `ModelUnits` states once for the whole repository:
+lengths and displacements in mm, forces in N, stresses and moduli in MPa = N/mm² (steel
+E = 210 000), **densities in tonne/mm³** (steel 7.85e-9), accelerations in mm/s²
+(`Materials.GravityMillimetres` = 9806.65). The quantity table and the reasoning behind
+the density choice are on the [Materials & mass](materials.md#units-one-convention-stated-once)
+page — one statement, cross-referenced, rather than a copy per solver that could drift.
 
 ## Saying what is held and what pushes
 

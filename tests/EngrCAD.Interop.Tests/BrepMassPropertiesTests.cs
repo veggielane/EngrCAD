@@ -11,6 +11,17 @@ namespace EngrCAD.Interop.Tests;
 /// tessellation covers a planar face exactly, so the divergence-theorem sum is an
 /// identity); curved solids are held to a stated convergence rate and a measured error at
 /// the default accuracy, because the route is tessellate-then-sum and says so.
+///
+/// <para><b>The densities below are deliberately NOT the repository's unit convention,
+/// and that is the point being asserted.</b> <c>BrepMassProperties</c> is unit-AGNOSTIC —
+/// the density is the caller's, and its default of 1 makes a mass equal a volume — because
+/// the convention belongs to the document and simulation layers that own materials, not to
+/// the integrator underneath them (see <c>EngrCAD.Core.ModelUnits</c>, which states the
+/// repository's mm / N / MPa / tonne / s system once, and design.md §2 for why it lives
+/// where a conversion cannot). These tests therefore pick any self-consistent pair they
+/// like — kg with mm here — and check that mass, inertia and centroid come out of THAT
+/// pair correctly. Anything reading <c>Part.Material</c> supplies tonne/mm³ instead and
+/// gets tonnes back; nothing here needs to know which.</para>
 /// </summary>
 public class BrepMassPropertiesTests
 {
@@ -30,7 +41,9 @@ public class BrepMassPropertiesTests
     [Fact]
     public void Box_IsExact()
     {
-        const double a = 4, b = 6, c = 10, density = 7.85e-6;   // steel in kg/mm³
+        // Steel in kg/mm³ — a self-consistent pair this integrator is free to take, not
+        // the repository's tonne/mm³ convention (ModelUnits): see the class remarks.
+        const double a = 4, b = 6, c = 10, density = 7.85e-6;
         var solid = SolidFactory.MakeBox(new Aabb((0, 0, 0), (a, b, c)));
         var mp = BrepMassProperties.Compute(solid, density);
 
@@ -67,7 +80,8 @@ public class BrepMassPropertiesTests
     [Fact]
     public void Cylinder_ApproachesClosedFormAndConvergesQuadratically()
     {
-        const double r = 3, h = 12, density = 2.7e-6;   // aluminium in kg/mm³
+        // Aluminium in kg/mm³ — the caller's pair, unit-agnostic here (class remarks).
+        const double r = 3, h = 12, density = 2.7e-6;
         var solid = SolidFactory.MakeCylinder(r, h);
 
         double exactVolume = Math.PI * r * r * h;

@@ -85,10 +85,11 @@ Two consequences for this project:
   refuses a zero density. This is the same doctrine the model already followed for selectors
   that match nothing — refuse where the mistake was made, naming what is missing.
 
-**Units are `ModelUnits`' mm / N / MPa / tonne / s throughout**: E in MPa, density in
-tonne/mm³ (steel 7.85e-9), conductivity in mW/(mm·K) — numerically the SI W/(m·K) — specific
-heat in mm²/(s²·K), which is the SI J/(kg·K) × 1e6, expansion in 1/K, gravity 9806.65 mm/s².
-Every verification number below is stated in that system.
+**Units are `EngrCAD.Core.ModelUnits`' mm / N / MPa / tonne / s throughout.** That type is
+the single statement of the convention for the whole repository — the quantity-by-quantity
+table, the tonne/mm³ density and the reasoning behind it live in its doc comment and in
+design.md §2, and this project cross-references them rather than keeping a second copy that
+could drift. Every verification number below is stated in that system.
 
 ```csharp
 var surface = Shape.Box(40, 30, 6)

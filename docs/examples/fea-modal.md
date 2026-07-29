@@ -50,8 +50,9 @@ what the solve cost.
 
 ## Units, and why they come out in hertz
 
-Nothing in this kernel carries a unit, but the **mm / N / tonne** system `Materials` is
-stated in is *consistent in seconds*: one tonne is one N·s²/mm, so `lambda = K/M` has units
+The **mm / N / MPa / tonne / s** system `ModelUnits` states once
+([Materials & mass](materials.md#units-one-convention-stated-once)) is *consistent in
+seconds*: one tonne is one N·s²/mm, so `lambda = K/M` has units
 of 1/s² and `omega` and `f` come out in rad/s and Hz with no conversion. Use SI (m / N / kg)
 and the same holds. Mix the two — a density in kg/m³ against a modulus in MPa — and the
 frequencies are wrong by a factor of a thousand with nothing to catch it, which is why

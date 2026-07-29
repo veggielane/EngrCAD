@@ -47,9 +47,10 @@ the bore itself.
 
 ## Units
 
-Nothing in this kernel carries a unit, so a material is only meaningful against a length
-unit you choose. `Materials` is stated in the **mm / N / tonne / s** system, where energy is
-N·mm = mJ and power is mW:
+The base system is `ModelUnits`' **mm / N / MPa / tonne / s**, stated once on the
+[Materials & mass](materials.md#units-one-convention-stated-once) page. What that implies
+for heat is worth a table of its own, because energy comes out as N·mm = mJ and power as
+mW, and two of these surprise people:
 
 | Quantity | Unit here | Against SI |
 | --- | --- | --- |
