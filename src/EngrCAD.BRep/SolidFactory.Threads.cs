@@ -202,4 +202,71 @@ public static partial class SolidFactory
 
         return new BrepSolid([new BrepShell(faces)]);
     }
+
+    /// <summary>
+    /// The solid a 45° lead-in chamfer REMOVES from a threaded rod at one end: the region
+    /// outside a coaxial cone that reaches <paramref name="majorRadius"/> at
+    /// <paramref name="chamferLength"/> from the end face and shrinks by the same amount
+    /// per unit of axial travel toward it. Subtract it from
+    /// <see cref="MakeThreadedRod"/>'s output; the chamfer is the standard bolt-point
+    /// lead-in, and its cut on every band is EXACT (a conical
+    /// <see cref="SpiralArc3d"/> — see <c>SurfaceIntersection</c>'s coaxial family).
+    /// <para><b>Every face of the tool clears the rod except the cone</b>, which is the
+    /// whole reason it is shaped this way rather than as the cone alone. The cone's
+    /// generator is extended past both ends by a quarter of the chamfer, so the flat that
+    /// bounds it sits at a radius strictly outside the rod and the flat that caps it sits
+    /// axially outside the rod's end face — the tool-overshoot rule <c>Drill</c> follows,
+    /// which is what keeps every intersecting pair transversal. (The overshoot is belt
+    /// and braces rather than load-bearing: a coaxial annulus meeting a helical band is
+    /// itself an exact cut now. It was not always, and a tool whose flat rim lies ON the
+    /// crest cylinder is exactly the input that found that gap.)</para>
+    /// <para>A chamfer at or beyond the thread depth puts the cone tangent to every root
+    /// band along the end plane — coincident curved-surface boolean input, which is
+    /// refused one layer up rather than here: this factory builds the tool for whatever
+    /// chamfer it is given.</para>
+    /// </summary>
+    /// <param name="majorRadius">The rod's major radius; the cone reaches it exactly
+    /// <paramref name="chamferLength"/> from the end face.</param>
+    /// <param name="chamferLength">Axial (and, at 45°, radial) depth of the chamfer.</param>
+    /// <param name="endAxial">Axial coordinate of the rod's end face in
+    /// <paramref name="frame"/> (0 for the bottom cap, the rod's length for the top).</param>
+    /// <param name="atMaxAxial">True when the rod's material lies BELOW
+    /// <paramref name="endAxial"/> (the top end), false for the bottom end.</param>
+    /// <param name="frame">The rod's own axis pose; defaults to the world frame.</param>
+    public static BrepSolid MakeThreadEndChamferTool(
+        double majorRadius, double chamferLength, double endAxial, bool atMaxAxial,
+        Frame3d? frame = null)
+    {
+        if (!(majorRadius > 0) || !double.IsFinite(majorRadius))
+            throw new ArgumentOutOfRangeException(nameof(majorRadius));
+        if (!(chamferLength > 0) || !double.IsFinite(chamferLength))
+            throw new ArgumentOutOfRangeException(nameof(chamferLength));
+        if (!double.IsFinite(endAxial))
+            throw new ArgumentOutOfRangeException(nameof(endAxial));
+        double over = chamferLength / 4;
+        if (!(majorRadius - chamferLength - over > 0))
+            throw new ArgumentOutOfRangeException(nameof(chamferLength),
+                "The chamfer cone would reach the axis; chamfer less than the major radius.");
+
+        var f = frame ?? Frame3d.FromXY(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY);
+        // In (radius, axial): the cone runs from the wide end, one overshoot outside the
+        // rod, to the narrow end, one overshoot past the end face. `sign` turns the top
+        // end's geometry into the bottom end's by reflecting the axial direction.
+        double sign = atMaxAxial ? 1 : -1;
+        double wideAxial = endAxial - sign * (chamferLength + over);
+        double narrowAxial = endAxial + sign * over;
+        double wideRadius = majorRadius + over;
+        double narrowRadius = majorRadius - chamferLength - over;
+        double outerRadius = majorRadius + chamferLength + 2 * over;
+
+        Vector3d At(double radius, double axial) => f.Origin + f.X * radius + f.Z * axial;
+        var profile = Profile.FromPoints(
+        [
+            At(wideRadius, wideAxial),
+            At(outerRadius, wideAxial),
+            At(outerRadius, narrowAxial),
+            At(narrowRadius, narrowAxial),
+        ]);
+        return Revolve(profile, f.Origin, f.Z);
+    }
 }

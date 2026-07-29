@@ -27,10 +27,10 @@ pitch and tap-drill values against a current standard before production use.
 
 ## External threads
 
-`Shape.ExternalThread(spec, length, clearance, chamferEnds)` builds a threaded stud
-along +Z over z ∈ [0, length], with 45° lead-in chamfers down to the minor diameter
-on both ends by default. A plain `double` first argument is shorthand for the
-metric catalog:
+`Shape.ExternalThread(spec, length, clearance, chamferEnds, chamferLength)` builds a
+threaded stud along +Z over z ∈ [0, length], with 45° lead-in chamfers down to the minor
+diameter on both ends by default; `chamferLength` asks for a shallower one instead. A
+plain `double` first argument is shorthand for the metric catalog:
 
 ```csharp render:thread-stud
 // An M8×1.25 stud welded onto a plain boss. Threads mesh through Surface Nets, so
@@ -132,6 +132,49 @@ scene.Add(new Part("M8 B-Rep stud", stud, Palette.Steel));
 
 ![A B-Rep-native M8 threaded stud with crisp helical facet edges](images/thread-brep.png)
 
+### Lead-in chamfers, exactly
+
+A **sub-depth** chamfer is B-Rep-native as well. A coaxial cone meets a helical band in
+an exact *conical spiral*: substitute the band's `r = r₀ + dr·v`, `z = z₀ + dz·v + rate·u`
+into the cone's `r = a + b·z` and the generator parameter comes out **linear in the
+turning angle**, so the cut has a closed form (`SpiralArc3d`) rather than a sampled one.
+The chamfer is then one ordinary difference against
+`SolidFactory.MakeThreadEndChamferTool`, whose other faces are pushed clear of the rod so
+every intersecting pair stays transversal.
+
+Pass the depth you want with `chamferLength`:
+
+```csharp render:thread-chamfered
+// A 0.5 mm 45-degree lead-in on both ends, exact in B-Rep: the cone cuts each helical
+// band in a conical spiral arc, so the chamfer needs no sampled geometry at all.
+var stud = Shape.ExternalThread(8, length: 16, chamferLength: 0.5);
+
+var scene = new Scene();
+scene.Add(new Part("chamfered M8 stud", stud, Palette.Steel));
+
+// Nearly side-on rather than the auto-framed iso view: a chamfer is on BOTH ends, and
+// looking down at the rod hides the lower one behind the rod's own body.
+var camera = new CameraState(0.6, 0.12, 29, (0, 0, 8));
+```
+
+![An M8 threaded stud whose ends are cut back by exact 45-degree lead-in cones](images/thread-chamfered.png)
+
+The default `chamferEnds: true` asks for a chamfer of the full **thread depth**, which
+puts the cone's base exactly on the minor diameter and therefore *tangent* to every root
+band along the end plane — coincident curved-surface boolean input, which the kernel
+refuses by name rather than attempts. So the B-Rep-native range is
+`0 < chamferLength < spec.ThreadDepth` (0.677 mm for M8×1.25); at or past that depth,
+and for any clearance, take `ToImplicit()`/`ToMesh()`.
+
+> [!NOTE]
+> About one chamfer depth in ten inside that range still **fails loudly** in the kernel
+> rather than returning a solid. Scanned at 5% steps of the thread depth across M6×1,
+> M8×1.25, M10×1.5 and M12×1.75 the failures are one to three steps of nineteen each, at
+> unrelated fractions — it is an alignment effect in the chamfer cone's trimmed
+> triangulation, not a depth threshold, so nudging the chamfer by a few hundredths clears
+> it. It never returns wrong geometry: `Explain` still reports Native and `ToBrep()`
+> throws with the stage that refused.
+
 **Threaded holes are B-Rep-native too** (at zero clearance): the B-Rep path never
 drills the pilot separately — the pilot bore wall and the thread tool's root band
 would be coaxial (tangent, unsupported boolean input) — and instead subtracts ONE
@@ -189,16 +232,12 @@ planes **perpendicular to its axis** (the exact spiral-arc case). A cut slicing
 B-Rep kernel; give the design a clearance (printable parts want one anyway) or drop
 to `ToImplicit()` and the SDF route handles it exactly.
 
-`Explain` reports each case truthfully — Native for the basic profile, and a
-per-cause Impossible otherwise. The chamfer's blocker has moved and the message says
-where: the 45° cone's cut through a helical band is now **exact** (substituting the
-band's law into a coaxial cone's makes the generator parameter linear in the turning
-angle, so the cut is a conical spiral, not a sampled curve), and the trimmed bands it
-leaves tessellate — what remains is that the face splitter cannot yet split a face along
-a curve that terminates exactly *on* its boundary, which that cut does by construction.
-Clearance is a different and unchanged story: it offsets the profile as a distance field
-whose rounded reflex corners have no exact B-Rep counterpart. Helical surfaces are not
-STEP-exportable yet (same bucket as swept surfaces):
+`Explain` reports each case truthfully — Native for the basic profile with or without a
+sub-depth chamfer, and a per-cause Impossible otherwise. The two remaining causes are
+different in kind: a **full-depth chamfer** is a geometric coincidence (the cone lands
+tangent to every root band), while **clearance** has no exact counterpart at all, since it
+offsets the profile as a distance field whose reflex corners round into arcs. Helical
+surfaces are not STEP-exportable yet (same bucket as swept surfaces):
 
 ```csharp run:thread-explain
 var plain = Shape.ExternalThread(8, length: 12, chamferEnds: false);
@@ -207,10 +246,15 @@ brep.Validate();
 if (!plain.CanConvertTo(TargetRep.Brep))
     throw new Exception("unchamfered external threads are B-Rep-native");
 
-var chamfered = Shape.ExternalThread(8, length: 12);   // default: 45° lead-in chamfers
-Console.WriteLine(chamfered.Explain(TargetRep.Brep));  // names the chamfer as the blocker
+var lead = Shape.ExternalThread(8, length: 12, chamferLength: 0.5);
+lead.ToBrep().Validate();                           // also Native: the cone cut is exact
+if (!lead.CanConvertTo(TargetRep.Brep))
+    throw new Exception("sub-depth chamfers are B-Rep-native");
+
+var chamfered = Shape.ExternalThread(8, length: 12);   // default: full-thread-depth cones
+Console.WriteLine(chamfered.Explain(TargetRep.Brep));  // names the tangency
 if (chamfered.CanConvertTo(TargetRep.Brep))
-    throw new Exception("chamfered threads must not silently drop their chamfers");
+    throw new Exception("a full-depth chamfer is tangent to every root band");
 if (!chamfered.CanConvertTo(TargetRep.Implicit) || !chamfered.CanConvertTo(TargetRep.Mesh))
     throw new Exception("threads are implicit-native and meshable");
 

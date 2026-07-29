@@ -272,7 +272,7 @@ public static class BRepTessellator
         // these same polylines, so the sampling agrees by construction.
         if (edge.Curve.Underlying is Helix3d or SpiralArc3d)
         {
-            int n = AngularSegments(domain.Length, segmentsPerCircle);
+            int n = AngularSegments(TurningAngle(edge.Curve, domain), segmentsPerCircle);
             var points = new List<Vector3d>(n + 1);
             for (int i = 0; i <= n; i++)
                 points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
@@ -599,6 +599,31 @@ public static class BRepTessellator
     /// different arithmetic may differ by an ulp and must not round apart).</summary>
     private static int AngularSegments(double span, int segmentsPerCircle) =>
         Math.Max(1, (int)Math.Ceiling(Math.Abs(span) * segmentsPerCircle / (2 * Math.PI) - 1e-9));
+
+    /// <summary>
+    /// The angle an edge riding a <see cref="Helix3d"/> or <see cref="SpiralArc3d"/> turns
+    /// through, measured in the carrier's OWN parameter — which is the angle.
+    /// <para>For a raw carrier that is just the edge's domain length, but a
+    /// <see cref="CurveSegment"/> — what the face splitter hands back after every cut —
+    /// reparameterizes to [0, 1] while <c>Underlying</c> still points at the spiral, so
+    /// reading the domain there measures a segment FRACTION as if it were radians. Every
+    /// such edge got the same count whatever it spanned (11 at segmentsPerCircle = 64,
+    /// and 11 at 256 as well: a density FLOOR, exactly the shape of the baked-tracer-polyline
+    /// finding). On a chamfered thread it put two cuts of the same 0.785 rad span at 8 and
+    /// 11 samples, which the sheared helical grid reports as "boundary polylines disagree
+    /// in sample count".</para>
+    /// <para>Third occurrence of one rule: <b><c>Underlying</c> is a TYPE hint and says
+    /// nothing about the parameter mapping</b> (see <c>FaceGeometry.ExactSampleParameters</c>,
+    /// which exists for the same reason on the polyline side).</para>
+    /// </summary>
+    private static double TurningAngle(Curve3d curve, in Interval domain)
+    {
+        if (curve is not CurveSegment segment)
+            return Math.Abs(domain.Length);
+        double s0 = segment.BaseStart + (segment.BaseEnd - segment.BaseStart) * domain.Start;
+        double s1 = segment.BaseStart + (segment.BaseEnd - segment.BaseStart) * domain.End;
+        return TurningAngle(segment.Base, new Interval(Math.Min(s0, s1), Math.Max(s0, s1)));
+    }
 
     /// <summary>
     /// A full helical band — the parallelogram in (u, v) between two helix rails

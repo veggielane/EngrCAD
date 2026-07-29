@@ -527,32 +527,47 @@ public abstract class Shape
     /// roots also drop radially by the same amount) — the external thread <em>shrinks</em>;
     /// pair with the same clearance on <see cref="ThreadedHole"/>, whose void grows.
     /// Typical FDM values: 0.1–0.25 mm. <paramref name="chamferEnds"/> cuts 45° lead-in
-    /// cones on both ends down to the minor diameter.
+    /// cones on both ends down to the minor diameter;
+    /// <paramref name="chamferLength"/> overrides that depth (in millimetres of axial —
+    /// and, at 45°, radial — cut) when a shallower lead-in is wanted.
     /// <para>Representation support: implicit-Native (<see cref="Sdf.Thread"/>, exact
     /// sign). B-Rep-<b>Native</b> for the unmodified basic profile — zero
-    /// <paramref name="clearance"/> and <c>chamferEnds: false</c> — as a boolean-free
-    /// helical sweep (<see cref="SolidFactory.MakeThreadedRod"/>: one exact
+    /// <paramref name="clearance"/> — as a boolean-free helical sweep
+    /// (<see cref="SolidFactory.MakeThreadedRod"/>: one exact
     /// <see cref="HelicalSurface"/> band per profile facet sharing <see cref="Helix3d"/>
-    /// rails, spiral-bounded flat caps; not STEP-exportable). With chamfers or clearance
-    /// B-Rep stays Impossible — truthfully reported — because 45° chamfer cones cut the
-    /// helical bands (future surface-intersection work) and clearance offsets the
-    /// profile as a distance field (reflex corners round into arcs with no exact B-Rep
-    /// counterpart); meshes then bridge through Surface Nets — the printing route.
-    /// Unchamfered, clearance-free threads mesh via exact B-Rep tessellation.</para>
+    /// rails, spiral-bounded flat caps; not STEP-exportable), and Native with a
+    /// <b>SUB-DEPTH</b> chamfer as well: a coaxial cone cuts each helical band in an
+    /// exact conical <see cref="SpiralArc3d"/>, so the chamfer is one ordinary
+    /// difference against <see cref="SolidFactory.MakeThreadEndChamferTool"/>.
+    /// A chamfer at or past <see cref="ThreadSpec.ThreadDepth"/> — which the
+    /// <paramref name="chamferEnds"/> default asks for — puts the cone's base exactly on
+    /// the minor diameter and therefore TANGENT to every root band along the end plane,
+    /// which is coincident curved-surface boolean input and stays Impossible. Clearance
+    /// stays Impossible too (a distance-field offset rounds reflex corners into arcs with
+    /// no exact B-Rep counterpart); meshes then bridge through Surface Nets — the
+    /// printing route.</para>
     /// </summary>
-    public static Shape ExternalThread(ThreadSpec spec, double length, double clearance = 0, bool chamferEnds = true)
+    public static Shape ExternalThread(
+        ThreadSpec spec, double length, double clearance = 0, bool chamferEnds = true,
+        double? chamferLength = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (length <= 0)
             throw new ArgumentOutOfRangeException(nameof(length));
+        if (chamferLength is { } explicitChamfer && (!(explicitChamfer >= 0) || explicitChamfer >= spec.MajorDiameter / 2))
+            throw new ArgumentOutOfRangeException(nameof(chamferLength),
+                "A chamfer must be non-negative and shallower than the major radius.");
         ValidateThreadClearance(clearance, spec);
-        return new ThreadShape(spec, length, -clearance, chamferEnds ? spec.ThreadDepth : 0);
+        return new ThreadShape(
+            spec, length, -clearance, chamferLength ?? (chamferEnds ? spec.ThreadDepth : 0));
     }
 
     /// <summary>Coarse-metric convenience overload:
     /// <c>ExternalThread(8, …)</c> is an M8×1.25 stud (see <see cref="StandardThreads.Metric"/>).</summary>
-    public static Shape ExternalThread(double size, double length, double clearance = 0, bool chamferEnds = true) =>
-        ExternalThread(StandardThreads.Metric(size), length, clearance, chamferEnds);
+    public static Shape ExternalThread(
+        double size, double length, double clearance = 0, bool chamferEnds = true,
+        double? chamferLength = null) =>
+        ExternalThread(StandardThreads.Metric(size), length, clearance, chamferEnds, chamferLength);
 
     /// <summary>
     /// Cuts internally threaded holes: at each 2D point on <paramref name="plane"/>

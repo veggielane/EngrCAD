@@ -1483,6 +1483,31 @@ is now that shape, and the four cases are members of it rather than separate typ
 - **parallel profiles** (dr = b·dz) never cross transversally, and a tangential contact is
   not reported here by contract.
 
+A fifth member joins from the other end and is spelled separately for a reason: a **coaxial
+annulus** — a revolve of an axis-PERPENDICULAR generator, which is a shoulder face, a washer
+seat, or the flat that bounds a chamfer tool — has no `r = a + b·z` form at all, because its
+b is infinite. It is therefore recognized on its own (`TryCoaxialDisk`) and cut as the
+axis-perpendicular PLANE it is, clipped to its own radial extent, sharing the one
+implementation of that cut with the `PlaneSurface` case rather than being folded into a
+homogeneous `αr + βz = γ` form that would obscure which member is which. Recognizing it at
+all is not a nicety: a chamfer tool's flat is exactly this surface, and without the arm the
+pair fell to the marching tracer, whose polyline hugged the annulus's own v = 0 edge where
+its rim sat on the crest cylinder and ended strictly inside the band — which face splitting
+refuses by name, three faces from the cause.
+
+**And the dr = 0 case must be computed in closed form, not left to the general expressions.**
+A band with dr = 0 is a strip of a coaxial cylinder — a thread's crest or root flat — and a
+coaxial cone meets one in a CIRCLE: the radius stays r₀ and the axial coordinate is the
+single z where a + b·z = r₀. The general form reaches that circle only up to rounding
+(dz·(b·rate/(−b·dz)) + rate is mathematically −rate + rate and lands ~1e-17 off for a pitch
+whose ratios are not binary-exact), and `SpiralArc3d.IsPlanar` is an **exact-zero** test that
+`BRepTessellator.IsFullHelicalBand` and every other downstream tier reads. So whether a crest
+band's chamfer cut was recognized as the cap-SHAPED cut it is came down to which way the last
+bit fell: the same 0.3 mm chamfer tessellated at one end of a rod and welded non-manifold at
+the other, with nothing geometric between the two. Same family as the `Orient2d`-on-round-off
+lesson — an exact predicate applied to a quantity that is round-off answers confidently and
+wrong.
+
 Two consequences worth stating. First, an end chamfer needs no traced curve at all, so the
 `CornerPolicy.ExactOnly`/`AllowTraced` question that governs curved corners simply does not
 arise for it. Second, the *non*-coaxial pairs — a cross-hole, a tilted face — are genuinely

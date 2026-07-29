@@ -96,6 +96,76 @@ public class CoaxialHelicalIntersectionTests
         Assert.True(onCarrier < 1e-12, $"off the cylinder by {onCarrier:E3}");
     }
 
+    /// <summary>
+    /// A coaxial ANNULUS — a revolve of an axis-PERPENDICULAR generator — is the b = ∞
+    /// member of the family: no radius = a + b·axial form describes it, so it is
+    /// recognized separately and cut as the plane it is, clipped to its own radial extent.
+    /// Before it was recognized the pair fell to the marching tracer, and a chamfer tool's
+    /// flat is exactly this surface.
+    /// </summary>
+    [Fact]
+    public void ACoaxialAnnulusCutsAHelicalBandInAnExactPlanarArc()
+    {
+        var band = Flank();                       // r 3.3 to 4 as the generator rises 0.4
+        var annulus = Coaxial(3.5, 1.0, 5.0, 1.0);  // the flat of a shoulder at z = 1
+
+        var arc = Assert.IsType<SpiralArc3d>(
+            Assert.Single(SurfaceIntersection.Intersect(band, annulus, Region)));
+        Assert.True(arc.IsPlanar, "an axis-perpendicular carrier cuts in a plane");
+        Assert.Equal(0, arc.AxialRate);           // exact: IsPlanar is an exact-zero test
+
+        for (int i = 0; i <= 64; i++)
+        {
+            var p = arc.PointAt(arc.Domain.ParameterAt(i / 64.0));
+            Assert.Equal(1.0, p.Z, 12);
+            double radius = Math.Sqrt(p.X * p.X + p.Y * p.Y);
+            Assert.InRange(radius, 3.5 - 1e-9, 5.0 + 1e-9);
+            Assert.True(band.TryProjectPoint(p, out var uv, 1e-6));
+            Assert.True(band.PointAt(uv.X, uv.Y).DistanceTo(p) < 1e-12);
+        }
+    }
+
+    /// <summary>The annulus's own RADIAL extent bounds the cut: an annulus whose inner
+    /// rim clears the band's radii entirely reports nothing, where the unbounded plane
+    /// through it would report a full arc.</summary>
+    [Fact]
+    public void ACoaxialAnnulusOutsideTheBandsRadiiReportsNothing()
+    {
+        var band = Flank();
+        Assert.Empty(SurfaceIntersection.Intersect(band, Coaxial(4.5, 1.0, 6.0, 1.0), Region));
+        Assert.Empty(SurfaceIntersection.Intersect(band, Coaxial(1.0, 1.0, 3.0, 1.0), Region));
+    }
+
+    /// <summary>
+    /// A CONSTANT-RADIUS band — a thread's crest or root flat, i.e. a strip of a coaxial
+    /// cylinder — is met by a coaxial cone in a CIRCLE, and the arithmetic has to say so
+    /// EXACTLY. The general v-linear-in-u expressions reach it only up to rounding, and
+    /// <see cref="SpiralArc3d.IsPlanar"/> is an exact-zero test every downstream gate
+    /// reads: with the rounded form the SAME chamfer on the same rod came out planar at
+    /// one end and not at the other, which routed one crest fragment to the sheared band
+    /// grid and the other to the trimmed path.
+    /// </summary>
+    [Fact]
+    public void AConeCutsAConstantRadiusBandInAnExactlyPlanarCircle()
+    {
+        // A crest flat: radius 4 throughout, rising P/8 axially per turn.
+        var crest = new HelicalSurface(
+            Frame3d.FromOrthonormal(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY),
+            new Vector2d(4, -Pitch / 16), new Vector2d(4, Pitch / 16), Pitch,
+            new Interval(0, 6 * Math.PI));
+
+        // Both slopes: r = a - z (a descending chamfer) and r = a + z (an ascending one).
+        foreach (var cone in (RevolvedSurface[])[Coaxial(3.6, 2, 5.1, 0.5), Coaxial(3.6, 0.5, 5.1, 2)])
+        {
+            var arc = Assert.IsType<SpiralArc3d>(
+                Assert.Single(SurfaceIntersection.Intersect(crest, cone, Region)));
+            Assert.Equal(0, arc.AxialRate);      // EXACTLY zero, not 1e-17
+            Assert.Equal(0, arc.Slope);          // and a circle, not a spiral
+            Assert.True(arc.IsPlanar);
+            Assert.Equal(4.0, arc.RadiusAtZero, 12);
+        }
+    }
+
     [Fact]
     public void ACoaxialCylinderClearOfTheBandReportsNothing()
     {

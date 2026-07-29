@@ -1880,12 +1880,33 @@ public sealed class CurveSegment(Curve3d baseCurve, double start, double end) : 
 
     private double Map(double t) => start + (end - start) * t;
 
+    /// <summary>
+    /// The base curve at the mapped parameter.
+    /// <para><b>The wrap is only meaningful on a CLOSED base.</b> A segment straddling a
+    /// closed curve's seam legitimately runs past its domain end, and there wrapping IS
+    /// what the parameter means. An OPEN base has nothing on the other side, so wrapping
+    /// a parameter that overshoots by an ULP — which the clipping arithmetic that builds
+    /// these segments produces routinely — does not nudge the sample, it TELEPORTS it to
+    /// the base's start. Measured on a thread's end chamfer: a conical spiral trimmed to
+    /// a face ended one ulp past its carrier arc's domain, so the edge's last sample came
+    /// back 0.375 mm away at the far end of the arc, off the face entirely. The loop then
+    /// pulled back with a stray vertex, the band tier stopped recognizing a band, the ear
+    /// clipper ran instead and folded 244 of 3562 facets — three stages downstream of one
+    /// ulp. Clamp instead: an open base's parameter is bounded by its own domain.</para>
+    /// </summary>
     public override Vector3d PointAt(double t)
     {
         double s = Map(t);
         var d = baseCurve.Domain;
-        if (s > d.End)
-            s = d.Start + (s - d.Start) % d.Length;
+        if (baseCurve.IsClosed)
+        {
+            if (s > d.End)
+                s = d.Start + (s - d.Start) % d.Length;
+        }
+        else
+        {
+            s = Math.Clamp(s, d.Start, d.End);
+        }
         return baseCurve.PointAt(s);
     }
 

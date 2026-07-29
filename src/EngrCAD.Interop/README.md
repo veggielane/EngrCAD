@@ -149,8 +149,21 @@ logging complements them, never replaces them.
     agree by construction) and v an INFINITE step, since the generator is straight and
     `PointAt` is affine in v — a v-chord lies exactly on the surface and never needs
     refining. Covered by `TrimmedHelicalFaceTests` on hand-built faces whose trimming
-    curve comes from the production intersection; the constructions that would reach one
-    from the `Shape` API are blocked upstream and named there.
+    curve comes from the production intersection, and end to end by `ChamferedThreadTests`
+    now that a 45° lead-in chamfer reaches this path from the `Shape` API.
+
+    **`SampleEdge`'s angular rule must read the turning angle through the curve's own
+    parameter mapping, not off the edge's domain.** A `Helix3d` or `SpiralArc3d` parameter
+    IS the angle, but a `CurveSegment` — what the face splitter hands back after every
+    cut — reparameterizes to [0, 1] while `Underlying` still points at the spiral, so
+    `domain.Length` there measures a segment FRACTION as if it were radians. Every such
+    edge got the same count whatever it spanned (11 at `segmentsPerCircle` 64 — and 11 at
+    256 as well: a density FLOOR, the shape of the baked-tracer-polyline finding), and on
+    a chamfered thread it put two cuts of the SAME 0.785 rad span at 8 and 11 samples,
+    which the sheared grid reports as *boundary polylines disagree in sample count*. That
+    is the third occurrence of one rule: **`Underlying` is a TYPE hint and says nothing
+    about the parameter mapping** — the same reason `FaceGeometry.ExactSampleParameters`
+    exists on the polyline side.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:

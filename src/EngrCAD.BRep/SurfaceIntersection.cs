@@ -129,9 +129,17 @@ public static class SurfaceIntersection
             (RevolvedSurface r, PlaneSurface p) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
             (PlaneSurface p, HelicalSurface h) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
             (HelicalSurface h, PlaneSurface p) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
+            // A coaxial ANNULUS is the axis-perpendicular plane restricted to its own
+            // radial extent — the b = infinity member of the family below, which no
+            // radius = a + b·axial form can carry. Checked first so the disk never
+            // reaches the straight-profile fit that must refuse it.
+            (HelicalSurface h, RevolvedSurface r) when TryCoaxialDisk(r, h, out double zDisk, out var radial)
+                => PlaneHelicalAt(zDisk, h, radial),
+            (RevolvedSurface r, HelicalSurface h) when TryCoaxialDisk(r, h, out double zDisk, out var radial)
+                => PlaneHelicalAt(zDisk, h, radial),
             // A coaxial surface of revolution whose (radius, axial) profile is a straight
-            // LINE — a thread's end-chamfer cone, a coaxial cylinder, a coaxial disk —
-            // meets a helical band in an exact conical spiral. See CoaxialHelical.
+            // LINE — a thread's end-chamfer cone, a coaxial cylinder — meets a helical
+            // band in an exact conical spiral. See CoaxialHelical.
             (HelicalSurface h, RevolvedSurface r) when TryCoaxialProfileLine(r, h, out var line)
                 => CoaxialHelical(line, h),
             (RevolvedSurface r, HelicalSurface h) when TryCoaxialProfileLine(r, h, out var line)
@@ -206,11 +214,46 @@ public static class SurfaceIntersection
     private static List<Curve3d> PlaneHelical(PlaneSurface plane, HelicalSurface helical)
     {
         var frame = helical.Frame;
-        double zCap = (plane.Origin - frame.Origin).Dot(frame.Z);
+        return PlaneHelicalAt((plane.Origin - frame.Origin).Dot(frame.Z), helical, null);
+    }
+
+    /// <summary>
+    /// The plane cut above, taking the cap height DIRECTLY and admitting a bounded
+    /// carrier: a coaxial annulus is that same plane restricted to
+    /// <paramref name="radialRange"/>. Passing null is the unbounded plane and is
+    /// bit-for-bit the previous arithmetic — the v = 0 and v = 1 expressions are kept
+    /// verbatim and only a clip that actually moves them takes the general form.
+    /// </summary>
+    private static List<Curve3d> PlaneHelicalAt(
+        double zCap, HelicalSurface helical, Interval? radialRange)
+    {
+        var frame = helical.Frame;
         double rate = helical.AxialRate;
         double z0 = helical.ProfileStart.Y, z1 = helical.ProfileEnd.Y;
         double r0 = helical.ProfileStart.X;
         double dr = helical.ProfileEnd.X - r0, dz = z1 - z0;
+
+        // The generator range the carrier admits. An unbounded plane takes the whole
+        // generator; an annulus takes the v where the radius r0 + dr·v lies on it.
+        double vLo = 0, vHi = 1;
+        if (radialRange is { } radii)
+        {
+            // Deliberate exact-zero test: dr divides below, and a bit-zero dr (a crest or
+            // root flat) makes the radius constant — on the annulus or off it, no interval.
+            if (dr == 0)
+            {
+                if (r0 < radii.Start || r0 > radii.End)
+                    return [];
+            }
+            else
+            {
+                double vA = (radii.Start - r0) / dr, vB = (radii.End - r0) / dr;
+                vLo = Math.Max(vLo, Math.Min(vA, vB));
+                vHi = Math.Min(vHi, Math.Max(vA, vB));
+                if (!(vHi - vLo > 1e-12))
+                    return [];
+            }
+        }
 
         // Deliberate exact-zero test: dz divides the general branch below, and only a
         // bit-zero dz (horizontal generator) makes that division invalid.
@@ -219,12 +262,14 @@ public static class SurfaceIntersection
             double u = (zCap - z0) / rate;
             if (u < helical.DomainU.Start - 1e-9 || u > helical.DomainU.End + 1e-9)
                 return [];
-            return [new Line3d(helical.PointAt(u, 0), helical.PointAt(u, 1))];
+            return [new Line3d(helical.PointAt(u, vLo), helical.PointAt(u, vHi))];
         }
 
-        // u where the cut meets v = 0 and v = 1, ascending regardless of signs.
-        double uAt0 = (zCap - z0) / rate;
-        double uAt1 = (zCap - z1) / rate;
+        // u where the cut meets the admitted generator ends, ascending regardless of
+        // signs. vLo/vHi are compared against the literals they were seeded with, so an
+        // unclipped cut keeps the original expressions bit for bit.
+        double uAt0 = vLo == 0 ? (zCap - z0) / rate : (zCap - z0 - dz * vLo) / rate;
+        double uAt1 = vHi == 1 ? (zCap - z1) / rate : (zCap - z0 - dz * vHi) / rate;
         double uLo = Math.Max(Math.Min(uAt0, uAt1), helical.DomainU.Start);
         double uHi = Math.Min(Math.Max(uAt0, uAt1), helical.DomainU.End);
         if (!(uHi - uLo > 1e-12))
@@ -244,95 +289,144 @@ public static class SurfaceIntersection
     /// </summary>
     private readonly record struct CoaxialProfileLine(double A, double B, Interval AxialRange);
 
+    /// <summary>Number of generator samples the coaxial recognizers fit through.</summary>
+    private const int CoaxialSamples = 16;
+
+    private static bool IsCoaxialWith(
+        in Vector3d axisOrigin, in Vector3d axisDirection, in Frame3d frame)
+    {
+        if (!axisDirection.IsParallelTo(frame.Z, Tolerance.Default))
+            return false;
+        var d = axisOrigin - frame.Origin;
+        return (d - frame.Z * d.Dot(frame.Z)).Length <= Tolerance.Default.Linear;
+    }
+
+    /// <summary>
+    /// Samples a full-turn revolve's generator into (radius, axial) pairs measured in the
+    /// HELICAL band's own frame — so a revolve axis pointing the other way needs no
+    /// special case — and reports both spans. The generator is SAMPLED, never read off
+    /// <see cref="Curve3d.Underlying"/>: a translated or wrapped line's underlying curve
+    /// sits somewhere else entirely. Returns false when the carrier is not a coaxial
+    /// full-turn revolve, or when the generator has no extent at all.
+    /// </summary>
+    private static bool TrySampleCoaxialGenerator(
+        Surface carrier, in Frame3d frame,
+        Span<double> radii, Span<double> axials,
+        out Interval axialSpan, out Interval radialSpan)
+    {
+        axialSpan = default;
+        radialSpan = default;
+        if (carrier is not RevolvedSurface revolved ||
+            !revolved.IsFullTurn ||
+            !IsCoaxialWith(revolved.AxisOrigin, revolved.AxisDirection, frame))
+            return false;
+
+        var axis = frame.Z;
+        var generator = revolved.Generator;
+        var domain = generator.Domain;
+        double axialLo = double.PositiveInfinity, axialHi = double.NegativeInfinity;
+        double radiusLo = double.PositiveInfinity, radiusHi = double.NegativeInfinity;
+        for (int i = 0; i <= CoaxialSamples; i++)
+        {
+            var p = generator.PointAt(domain.ParameterAt((double)i / CoaxialSamples));
+            var d = p - frame.Origin;
+            double axial = d.Dot(axis);
+            axials[i] = axial;
+            radii[i] = (d - axis * axial).Length;
+            axialLo = Math.Min(axialLo, axials[i]);
+            axialHi = Math.Max(axialHi, axials[i]);
+            radiusLo = Math.Min(radiusLo, radii[i]);
+            radiusHi = Math.Max(radiusHi, radii[i]);
+        }
+        if (!(Math.Max(axialHi - axialLo, radiusHi - radiusLo) > 0))
+            return false;
+        axialSpan = new Interval(axialLo, axialHi);
+        radialSpan = new Interval(radiusLo, radiusHi);
+        return true;
+    }
+
     /// <summary>
     /// Recognizes a surface of revolution COAXIAL with a helical band whose (radius,
-    /// axial) profile is a straight line — the cone of a thread's 45° end chamfer, a
-    /// coaxial cylinder, or (delegated elsewhere) a coaxial disk. Everything is measured
-    /// in the HELICAL frame, so a revolve axis pointing the other way needs no special
-    /// case. The generator is SAMPLED, never read off <see cref="Curve3d.Underlying"/>:
-    /// a translated or wrapped line's underlying curve sits somewhere else entirely.
+    /// axial) profile is a straight line — the cone of a thread's 45° end chamfer, or a
+    /// coaxial cylinder.
     /// <para>A profile with no axial spread is a coaxial DISK — a plane perpendicular to
     /// the axis, which cannot be written radius = a + b·axial at all (its b is infinite).
-    /// It is refused here and handled by <see cref="PlaneHelical"/> after the caller
-    /// synthesizes the plane.</para>
+    /// It is refused here and recognized by <see cref="TryCoaxialDisk"/> instead.</para>
     /// </summary>
     private static bool TryCoaxialProfileLine(
         Surface carrier, HelicalSurface helical, out CoaxialProfileLine line)
     {
         line = default;
         var frame = helical.Frame;
-        var axis = frame.Z;
 
-        double Axial(in Vector3d p) => (p - frame.Origin).Dot(axis);
-        double Radius(in Vector3d p)
+        if (carrier is CylinderSurface cylinder)
         {
-            var d = p - frame.Origin;
-            return (d - axis * d.Dot(axis)).Length;
-        }
-        static bool Coaxial(in Vector3d axisOrigin, in Vector3d axisDirection, in Frame3d f)
-        {
-            if (!axisDirection.IsParallelTo(f.Z, Tolerance.Default))
+            if (!IsCoaxialWith(cylinder.Origin, cylinder.Axis, frame))
                 return false;
-            var d = axisOrigin - f.Origin;
-            return (d - f.Z * d.Dot(f.Z)).Length <= Tolerance.Default.Linear;
+            // Unbounded in the axial direction, so nothing to clip against.
+            line = new CoaxialProfileLine(
+                cylinder.Radius, 0,
+                new Interval(double.NegativeInfinity, double.PositiveInfinity));
+            return true;
         }
 
-        switch (carrier)
+        Span<double> radii = stackalloc double[CoaxialSamples + 1];
+        Span<double> axials = stackalloc double[CoaxialSamples + 1];
+        if (!TrySampleCoaxialGenerator(carrier, frame, radii, axials, out var axialSpan, out var radialSpan))
+            return false;
+
+        double extent = Math.Max(axialSpan.Length, radialSpan.Length);
+        // Relative degeneracy guard (scale-free tier): a disk's axial spread is
+        // zero next to its radial one, and a fit through it would be meaningless.
+        if (axialSpan.Length <= extent * 1e-12)
+            return false;
+
+        double b = (radii[^1] - radii[0]) / (axials[^1] - axials[0]);
+        double a = radii[0] - b * axials[0];
+        double tolerance = Math.Max(Tolerance.Default.Linear, extent * 1e-12);
+        for (int i = 0; i <= CoaxialSamples; i++)
         {
-            case CylinderSurface cylinder when Coaxial(cylinder.Origin, cylinder.Axis, frame):
-                // Unbounded in the axial direction, so nothing to clip against.
-                line = new CoaxialProfileLine(
-                    cylinder.Radius, 0,
-                    new Interval(double.NegativeInfinity, double.PositiveInfinity));
-                return true;
-
-            case RevolvedSurface revolved
-                when revolved.IsFullTurn && Coaxial(revolved.AxisOrigin, revolved.AxisDirection, frame):
-            {
-                var generator = revolved.Generator;
-                var domain = generator.Domain;
-                const int samples = 16;
-                Span<double> radii = stackalloc double[samples + 1];
-                Span<double> axials = stackalloc double[samples + 1];
-                for (int i = 0; i <= samples; i++)
-                {
-                    var p = generator.PointAt(domain.ParameterAt((double)i / samples));
-                    radii[i] = Radius(p);
-                    axials[i] = Axial(p);
-                }
-
-                double axialLo = double.PositiveInfinity, axialHi = double.NegativeInfinity;
-                double radiusLo = double.PositiveInfinity, radiusHi = double.NegativeInfinity;
-                for (int i = 0; i <= samples; i++)
-                {
-                    axialLo = Math.Min(axialLo, axials[i]);
-                    axialHi = Math.Max(axialHi, axials[i]);
-                    radiusLo = Math.Min(radiusLo, radii[i]);
-                    radiusHi = Math.Max(radiusHi, radii[i]);
-                }
-                double extent = Math.Max(axialHi - axialLo, radiusHi - radiusLo);
-                if (!(extent > 0))
-                    return false;
-                // Relative degeneracy guard (scale-free tier): a disk's axial spread is
-                // zero next to its radial one, and a fit through it would be meaningless.
-                if (axialHi - axialLo <= extent * 1e-12)
-                    return false;
-
-                double b = (radii[^1] - radii[0]) / (axials[^1] - axials[0]);
-                double a = radii[0] - b * axials[0];
-                double tolerance = Math.Max(Tolerance.Default.Linear, extent * 1e-12);
-                for (int i = 0; i <= samples; i++)
-                {
-                    if (Math.Abs(a + b * axials[i] - radii[i]) > tolerance)
-                        return false;
-                }
-                line = new CoaxialProfileLine(a, b, new Interval(axialLo, axialHi));
-                return true;
-            }
-
-            default:
+            if (Math.Abs(a + b * axials[i] - radii[i]) > tolerance)
                 return false;
         }
+        line = new CoaxialProfileLine(a, b, axialSpan);
+        return true;
+    }
+
+    /// <summary>
+    /// Recognizes a coaxial full-turn revolve whose generator is PERPENDICULAR to the
+    /// axis: a disk or annulus — a shoulder face, a washer seat, the flat that bounds a
+    /// chamfer tool. It is the b = ∞ member of <see cref="TryCoaxialProfileLine"/>'s
+    /// family and has no radius = a + b·axial form, so it is spelled as what it is —
+    /// the axis-perpendicular PLANE at <paramref name="axial"/>, restricted to
+    /// <paramref name="radialRange"/> — and cut by <see cref="PlaneHelicalAt"/>, the one
+    /// implementation of that cut.
+    /// <para>Recognizing it is not a nicety: without this arm the pair fell to the
+    /// marching tracer, whose polyline is chordal, has a fixed sample count and — where
+    /// the annulus's rim sits ON the band (a chamfer tool's flat meeting the crest
+    /// cylinder) — hugs the carrier's own v = 0 edge and ends strictly inside the band,
+    /// which face splitting refuses by name.</para>
+    /// </summary>
+    private static bool TryCoaxialDisk(
+        Surface carrier, HelicalSurface helical, out double axial, out Interval radialRange)
+    {
+        axial = 0;
+        radialRange = default;
+        Span<double> radii = stackalloc double[CoaxialSamples + 1];
+        Span<double> axials = stackalloc double[CoaxialSamples + 1];
+        if (!TrySampleCoaxialGenerator(
+                carrier, helical.Frame, radii, axials, out var axialSpan, out var radialSpan))
+            return false;
+
+        // The exact complement of TryCoaxialProfileLine's guard, on the same scale-free
+        // tier: no axial spread beside the radial one is what makes this a disk.
+        if (axialSpan.Length > Math.Max(axialSpan.Length, radialSpan.Length) * 1e-12)
+            return false;
+        // The generator's own start, not a mean: every sample agrees to the guard above,
+        // and an endpoint is a point the carrier actually passes through.
+        axial = axials[0];
+        radialRange = radialSpan;
+        return true;
     }
 
     /// <summary>
@@ -384,8 +478,21 @@ public static class SurfaceIntersection
             uHi = Math.Min(uHi, Math.Max(uAt0, uAt1));
         }
 
+        // A band with dr == 0 is a strip of a coaxial CYLINDER — a thread's crest or root
+        // flat — and a coaxial cone meets one in a CIRCLE: the radius stays r₀ and the
+        // axial coordinate is the single z where a + b·z = r₀. Deliberate exact-zero test
+        // on the band's OWN generator: this is the semantic case, not a near-axial one.
+        //
+        // The general expressions reach that circle only up to rounding —
+        // dz·(b·rate/(−b·dz)) + rate is mathematically −rate + rate, and lands ~1e-17 off
+        // for a pitch whose ratios are not binary-exact — while SpiralArc3d.IsPlanar is an
+        // exact-zero test that every downstream gate reads. So whether a crest band's
+        // chamfer cut was recognized as the cap-SHAPED cut it is came down to which way
+        // the last bit fell: the same 0.3 mm chamfer tessellated at one end of a rod and
+        // welded non-manifold at the other, with nothing geometric between the two.
         double radiusAtZero = r0 + dr * alpha, radiusSlope = dr * beta;
-        double axialAtZero = z0 + dz * alpha, axialSlope = dz * beta + rate;
+        double axialAtZero = dr == 0 ? (r0 - line.A) / line.B : z0 + dz * alpha;
+        double axialSlope = dr == 0 ? 0 : dz * beta + rate;
 
         // Clip to the carrier's own axial extent (a cone's generator is a finite segment;
         // a cylinder's range is infinite and clips nothing).
