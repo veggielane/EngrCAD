@@ -58,8 +58,23 @@ public class ViewerBridgeTests
             Task.FromResult<(Vector3d, Vector3d, double)?>(
                 (new Vector3d(0, 0, 0), new Vector3d(0, 0, 7), 7.0));
 
-        public Task<string> ScreenshotAsync(string? path) =>
-            Task.FromResult(path ?? "default.png");
+        /// <summary>A real viewer answers only once the PNG is on disk, so the stub
+        /// writes one — that file IS what the bridge reads back and turns into an image
+        /// block, and a stub that merely named a path would leave the read untested.</summary>
+        public byte[]? Png;
+
+        /// <summary>The refusal a window that never rendered produces.</summary>
+        public RemoteMethodException? Failure;
+
+        public Task<string> ScreenshotAsync(string? path)
+        {
+            if (Failure is { } failure)
+                return Task.FromException<string>(failure);
+            string target = path ?? Path.Combine(Path.GetTempPath(), "engrcad-stub.png");
+            if (Png is { } png)
+                File.WriteAllBytes(target, png);
+            return Task.FromResult(target);
+        }
     }
 
     private static (RemoteControlServer Server, StubViewer Viewer, ViewerTools Tools) Stack(
@@ -107,10 +122,68 @@ public class ViewerBridgeTests
             var measured = tools.Measure(10, 10, 200, 200);
             Assert.False(measured.IsError == true);
             Assert.Contains("7", Text(measured));
+        }
+    }
 
-            var screenshot = tools.Screenshot("C:/tmp/frame.png");
-            Assert.False(screenshot.IsError == true);
-            Assert.Contains("frame.png", Text(screenshot));
+    [Fact]
+    public void Viewer_screenshot_returns_the_PNG_as_an_image_block_not_a_path()
+    {
+        // The tool used to answer "the viewer WILL write its next frame to <path>" — a
+        // promise, since the window's capture happens on its next frame and the RPC
+        // handler had no edge to wait on. The endpoint now completes after the write, so
+        // the bridge simply reads the bytes back (legitimately: the endpoint is
+        // loopback-only, so the file the viewer wrote is a file this process can open).
+        var (server, viewer, tools) = Stack();
+        string path = Path.Combine(Path.GetTempPath(), $"engrcad-bridge-{Guid.NewGuid():N}.png");
+        var bytes = new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G', 1, 2, 3, 4 };
+        viewer.Png = bytes;
+        using (server)
+        {
+            var result = tools.Screenshot(path);
+            Assert.False(result.IsError == true);
+
+            var image = Assert.Single(result.Content.OfType<ImageContentBlock>());
+            Assert.Equal("image/png", image.MimeType);
+            // DecodedData, not Data: Data is the base64 the protocol carries.
+            Assert.Equal(bytes, image.DecodedData.ToArray());
+            // The path still travels, because a human may want to go and look at it.
+            Assert.Contains(path, Text(result));
+        }
+        File.Delete(path);
+    }
+
+    [Fact]
+    public void A_viewer_that_never_rendered_is_a_tool_error_carrying_its_own_message()
+    {
+        var (server, viewer, tools) = Stack();
+        viewer.Failure = new RemoteMethodException(-32000,
+            "the viewer produced no frame within 10s, so 'frame.png' was not written — a "
+            + "minimised or occluded window may not render until it is shown");
+        using (server)
+        {
+            var result = tools.Screenshot("frame.png");
+            Assert.True(result.IsError == true);
+            // The endpoint's own words, which name the real cause; a generic "capture
+            // failed" would send a reader looking at the wrong thing.
+            Assert.Contains("no frame", Text(result));
+            Assert.Contains("occluded", Text(result));
+        }
+    }
+
+    [Fact]
+    public void A_capture_the_bridge_cannot_read_back_names_the_file_it_could_not_open()
+    {
+        // The viewer reported success but the bytes are not reachable from here. The
+        // capture itself is fine, so the path is worth saying out loud rather than
+        // swallowing into "screenshot failed".
+        var (server, viewer, tools) = Stack();
+        viewer.Png = null;   // answers a path, writes nothing
+        string missing = Path.Combine(Path.GetTempPath(), $"engrcad-absent-{Guid.NewGuid():N}.png");
+        using (server)
+        {
+            var result = tools.Screenshot(missing);
+            Assert.True(result.IsError == true);
+            Assert.Contains(missing, Text(result));
         }
     }
 

@@ -1906,30 +1906,37 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 - [ ] **The windowed RPC path needs one manual pass**: transport, vocabulary, and the
   bridge are locked headlessly over real sockets with a stub viewer, but
   `ViewportRemoteViewer` against a real window (UI-thread marshaling under a live
-  dispatcher, `SaveScreenshot` actually writing) has no automated test — drive
+  dispatcher, a real render pass reaching `WriteCapture`, and the arm-on-UI-thread /
+  wait-off-it split behind `CaptureScreenshotAsync`) has no automated test — drive
   `samples/EngrCAD.LiveDemo --rpc` once per release, or build a windowed
-  integration test on the `SendInput` harness.
-- [ ] **`viewer_screenshot` returns a path, not pixels** — the capture lands on disk
-  via the window's next frame. Returning the PNG as an MCP image block needs a
-  completion signal from the render pass back to the RPC thread (the status callback
-  carries the path today); worth it if assistants use the tool blind.
-  **Assessed; the shape, and why it is more than plumbing.** `ViewportControl.SaveScreenshot`
-  arms a capture and the render pass performs it on its NEXT frame, so the RPC thread has
-  no edge to wait on — it currently returns as soon as the request is armed and the path
-  is a promise, not a fact. The fix is a `TaskCompletionSource` (or a
-  `ManualResetEventSlim`) completed from the render pass after `glReadPixels`, awaited by
-  the RPC handler with a timeout; the bridge then reads the file and returns an image
-  block exactly as headless `screenshot` does. Three details decide whether it is
-  correct: the completion must fire from inside the render pass and NOT from the status
-  callback (which reports the path and is posted separately, so it can run before the
-  bytes are on disk); the wait must have a deadline, because a minimised or occluded
-  window may not render for a long time and a hung RPC connection is worse than a path;
-  and a window that never renders should return the honest "no frame was produced"
-  rather than a stale file. Small — perhaps 40 lines across `ViewportControl`,
-  `ViewportRemoteViewer` and `ViewerTools` — but it is genuinely render-thread work, and
-  it cannot be tested by the headless socket harness that covers the rest of the bridge
-  (the stub viewer has no render pass), so it lands with the windowed manual pass above
-  or not at all.
+  integration test on the `SendInput` harness. Everything either side of that leg IS
+  covered headlessly: the write's ordering contract without a GL context, and the
+  vocabulary and bridge over real sockets with a stub.
+- [x] **`viewer_screenshot` returns pixels** — `ViewportControl.CaptureScreenshotAsync`
+  is `SaveScreenshot` with a `TaskCompletionSource`; `ViewportRemoteViewer` awaits it
+  OFF the UI thread under a 10 s deadline (blocking the dispatcher is how the frame would
+  fail to arrive), the RPC result carries `written: true`, and `ViewerTools.Screenshot`
+  reads the file and returns an MCP image block exactly as headless `screenshot` does —
+  legitimate because the endpoint is loopback-only.
+  **One detail of the filed diagnosis was wrong and is worth keeping.** It said the
+  completion must fire "from inside the render pass"; that is too EARLY. `glReadPixels`
+  runs there, but the encode and the write are deliberately off-thread, so a task
+  completed at that point hands back a path to a file that does not exist yet. It fires
+  from the write, immediately after `File.WriteAllBytes`. The entry's *conclusion* — not
+  the `Status` callback — was right, but for a stronger reason than the one given: `Status`
+  is a BROADCAST carrying prose for successes and failures alike, so a listener cannot
+  tell its own capture from the toolbar button's or from a second concurrent request's.
+  Synchronising on a string is not synchronisation.
+  It also claimed this "cannot be tested by the headless socket harness", which held only
+  because the write was tangled with the GL call: splitting `WriteCapture` out (pixels in,
+  no context) makes the ORDER assertable — resume on the completion, assert the file is
+  already there — and the bridge's image block, the timeout refusal and the
+  unreadable-file case are all covered over real sockets with a stub. What genuinely still
+  needs the windowed manual pass is the two legs that touch a `ViewportControl`: that a
+  real render pass reaches `WriteCapture`, and `ViewportRemoteViewer`'s own
+  arm-on-UI-thread / wait-off-it split and its `ScreenshotTimeout` (it takes a concrete
+  `ViewportControl`, so there is nothing to substitute; making that an interface is a
+  bigger change than the leg is worth).
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
 - [ ] **`screenshot`'s `t` covers the animation; the RPC bridge's `viewer_screenshot`

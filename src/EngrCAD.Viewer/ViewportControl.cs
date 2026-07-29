@@ -849,8 +849,8 @@ public sealed class ViewportControl : OpenGlControlBase
 
         // A requested screenshot reads back the finished frame while the context is
         // current (GL calls are only legal here), then encodes off-thread.
-        if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } screenshotPath)
-            CaptureFramebuffer(gl, (int)width, (int)height, screenshotPath);
+        if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } capture)
+            CaptureFramebuffer(gl, (int)width, (int)height, capture);
     }
 
     /// <summary>The global-style x part-mode precedence, resolved by
@@ -1461,7 +1461,14 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // ---- screenshot ----
 
-    private string? _pendingScreenshot;
+    /// <summary>
+    /// A capture the render pass has been asked for and has not performed yet: where it
+    /// will be written, and — for a caller that needs to KNOW rather than be promised —
+    /// the completion the write signals.
+    /// </summary>
+    internal sealed record PendingScreenshot(string Path, TaskCompletionSource<string>? Completion);
+
+    private PendingScreenshot? _pendingScreenshot;
 
     /// <summary>
     /// Saves the next rendered frame as a PNG. Thread-safe: the pixels are read inside
@@ -1469,10 +1476,53 @@ public sealed class ViewportControl : OpenGlControlBase
     /// resulting path (or failure) is reported through <see cref="Status"/>.
     /// With no <paramref name="path"/>, writes a timestamped file under
     /// Pictures/EngrCAD (falling back to the working directory).
+    /// <para>Fire and forget — the path is a PROMISE, since the render pass has not run
+    /// yet. A caller that must read the file wants
+    /// <see cref="CaptureScreenshotAsync"/>.</para>
     /// </summary>
-    public void SaveScreenshot(string? path = null)
+    public void SaveScreenshot(string? path = null) => ArmScreenshot(path, null);
+
+    /// <summary>
+    /// Captures the next rendered frame and completes with the PNG's path <b>once the
+    /// file has been written</b> — what an RPC caller needs, since it is going to read
+    /// the bytes back.
+    /// <para><b>Why not the <see cref="Status"/> callback, and why not the render pass
+    /// either.</b> <c>Status</c> is a BROADCAST: one event for every message this control
+    /// emits, carrying prose for successes and failures alike, so a caller listening on
+    /// it cannot tell its own capture from the toolbar button's, from a second concurrent
+    /// request's, or from an unrelated status line — synchronising on a string is not
+    /// synchronisation. And the render pass itself is too EARLY: <c>glReadPixels</c> runs
+    /// there, but the encode and the write are deliberately off-thread, so a task
+    /// completed at that point would hand back a path to a file that does not exist yet.
+    /// The completion therefore rides the capture's own write, immediately after
+    /// <c>File.WriteAllBytes</c> returns.</para>
+    /// <para><b>There is no deadline here</b>, deliberately: a minimised or occluded
+    /// window may not render for a long time, but how long to wait is a policy of
+    /// whatever is waiting (<c>ViewportRemoteViewer</c> imposes one, because an RPC
+    /// connection must not hang). What this DOES guarantee is that the task is always
+    /// resolved: a request superseded by another before any frame ran fails by name
+    /// rather than waiting forever.</para>
+    /// </summary>
+    public Task<string> CaptureScreenshotAsync(string? path = null)
     {
-        Interlocked.Exchange(ref _pendingScreenshot, path ?? DefaultScreenshotPath());
+        // RunContinuationsAsynchronously: the completion fires on the encode task, and a
+        // continuation resuming there would run caller code on a worker this class owns.
+        var completion = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ArmScreenshot(path, completion);
+        return completion.Task;
+    }
+
+    private void ArmScreenshot(string? path, TaskCompletionSource<string>? completion)
+    {
+        var superseded = Interlocked.Exchange(
+            ref _pendingScreenshot,
+            new PendingScreenshot(path ?? DefaultScreenshotPath(), completion));
+        // Only one capture can be pending, so a second request before any frame ran
+        // discards the first. Fail its awaiter rather than leaving a task nothing will
+        // ever complete.
+        superseded?.Completion?.TrySetException(new InvalidOperationException(
+            "the screenshot was superseded by another capture request before a frame was rendered"));
         Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
     }
 
@@ -1485,30 +1535,47 @@ public sealed class ViewportControl : OpenGlControlBase
         return Path.Combine(folder, $"engrcad-{DateTime.Now:yyyyMMdd-HHmmss}.png");
     }
 
-    /// <summary>Reads the finished frame (GL context current) and encodes/writes it off-thread.</summary>
-    private unsafe void CaptureFramebuffer(GL gl, int width, int height, string path)
+    /// <summary>Reads the finished frame (GL context current) and hands the pixels to
+    /// <see cref="WriteCapture"/>, which encodes and writes them off-thread.</summary>
+    private unsafe void CaptureFramebuffer(GL gl, int width, int height, PendingScreenshot capture)
     {
         var pixels = new byte[width * height * 4];
         fixed (byte* p = pixels)
             gl.ReadPixels(0, 0, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _ = WriteCapture(width, height, pixels, capture, ShowStatus);
+    }
 
+    /// <summary>
+    /// Encodes a captured frame and writes it, off the render thread, then resolves the
+    /// capture's completion and reports through the status callback.
+    /// <para><b>The ORDER is the contract</b>: the completion is set after
+    /// <c>File.WriteAllBytes</c> returns and before the status line, so a caller that
+    /// awaits it may read the file immediately. Separated from
+    /// <see cref="CaptureFramebuffer"/> — which needs a GL context — precisely so that
+    /// ordering is testable without a window.</para>
+    /// <para>Returns the encode/write task so a test can await the whole capture; the
+    /// render pass discards it.</para>
+    /// </summary>
+    internal static Task WriteCapture(
+        int width, int height, byte[] pixels, PendingScreenshot capture, Action<string> report) =>
         Task.Run(() =>
         {
             try
             {
                 // GL rows are bottom-up; the framebuffer alpha is compositing residue.
                 var png = PngWriter.Encode(width, height, pixels, flipVertically: true, forceOpaque: true);
-                if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
+                if (Path.GetDirectoryName(capture.Path) is { Length: > 0 } directory)
                     Directory.CreateDirectory(directory);
-                File.WriteAllBytes(path, png);
-                ShowStatus($"screenshot saved: {path}");
+                File.WriteAllBytes(capture.Path, png);
+                capture.Completion?.TrySetResult(capture.Path);
+                report($"screenshot saved: {capture.Path}");
             }
             catch (Exception e)
             {
-                ShowStatus($"screenshot failed: {e.Message}");
+                capture.Completion?.TrySetException(e);
+                report($"screenshot failed: {e.Message}");
             }
         });
-    }
 
     /// <summary>Zoom-to-fit: frames the camera on the visible parts' bounds.</summary>
     public void Frame()

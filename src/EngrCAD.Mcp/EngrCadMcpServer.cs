@@ -369,9 +369,10 @@ public static class EngrCadMcpServer
             {
                 Name = "viewer_screenshot",
                 Title = "Capture the viewer window",
-                Description = "Asks the running viewer to save its NEXT rendered frame as a PNG "
-                            + "(the window's own capture path — GL is only touched inside the "
-                            + "render pass). The headless render is the separate screenshot tool.",
+                Description = "Captures the running viewer's next rendered frame and returns it "
+                            + "as a PNG image (also written to disk). Waits for the frame, so a "
+                            + "minimised or occluded window reports that rather than a path. The "
+                            + "headless render is the separate screenshot tool.",
                 ReadOnly = false, Destructive = true, Idempotent = false, OpenWorld = false,
             }),
         ];

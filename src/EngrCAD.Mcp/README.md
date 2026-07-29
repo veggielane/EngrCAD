@@ -68,7 +68,8 @@ the model program runs separately with `--rpc <port>` (see the EngrCAD.Viewer RE
 `select_part`, `get_selection` (how an assistant learns what "this part" the user is
 pointing at means), `measure` (two viewport picks, returns the world points and
 distance, shows the transient dimension in the window), and `viewer_screenshot`
-(the window's own next-frame capture; the headless render stays `screenshot`).
+(the window's own next-frame capture, returned as a PNG **image block** exactly as
+the headless `screenshot` does; the headless render stays `screenshot`).
 Without `--viewer` these tools are never advertised — a headless session does not
 offer tools it cannot honor. A dead or wrong endpoint is an `isError` naming the
 `--rpc` flag; connections are per-request, so a viewer restarted by `dotnet watch`
@@ -85,7 +86,19 @@ schema (`ToolSchemas.cs`, wired via the SDK's `UseStructuredContent` +
 typed JSON without parsing text blocks. The pretty-printed text block still rides
 along for older clients; one `JsonObject` feeds both, so they cannot disagree.
 `screenshot` is the deliberate exception — its result is an image content block,
-which structured content does not model.
+which structured content does not model. `viewer_screenshot` is the same exception
+for the same reason.
+
+**`viewer_screenshot` returns pixels, not a promise.** It used to answer "the viewer
+WILL write its next frame to `<path>`", because `ViewportControl.SaveScreenshot` only
+*arms* a capture that the render pass performs on its next frame — so the RPC thread
+had no edge to wait on and the path was a claim about the future. The endpoint now
+completes when the PNG is on disk (see `ViewportControl.CaptureScreenshotAsync`), so
+the bridge simply reads the bytes back — legitimate precisely because the endpoint is
+loopback-only, which makes "the file the viewer wrote" a file this process can open.
+A window that never renders is refused **by name and on a deadline** rather than
+hanging the connection; a capture that succeeds but cannot be read back says so *and*
+names the path, since the file is still there for a human to open.
 
 ## stdout is the protocol
 

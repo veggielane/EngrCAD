@@ -494,6 +494,17 @@ Dark-themed layout around one shared GL viewport:
   filter None, `System.IO.Compression` deflate) off the render thread. With no path
   the file lands in `Pictures/EngrCAD/engrcad-<timestamp>.png` (falling back to the
   working directory).
+  **`SaveScreenshot` is fire and forget** — the render pass has not run yet, so the
+  path it names is a PROMISE. `ViewportControl.CaptureScreenshotAsync(path?)` is the
+  same capture with a `Task<string>` that completes **once the bytes are on disk**,
+  which is what a caller that intends to READ the file needs (the RPC bridge). The
+  completion fires from the write, not from the render pass — `glReadPixels` happens
+  there but the encode and write are deliberately off-thread, so a task completed at
+  that point would hand back a path to a file that does not exist yet — and not from
+  the `Status` callback either, which is a broadcast carrying prose for successes and
+  failures alike, so a listener cannot tell its own capture from the toolbar button's.
+  A capture superseded by another before any frame ran fails by name rather than
+  waiting forever; a *deadline* is the waiting caller's policy, not this control's.
 - **Properties** (right): occurrence path (plus the part name when they differ),
   kind (Shape/B-Rep/mesh/SDF), face count, closed, volume, surface area, world size,
   and world position of the selected instance.
@@ -975,9 +986,21 @@ with no way to bind wider), `RemoteViewerDispatcher` (the method vocabulary over
 `IRemoteViewer`, pure translation), and `ViewportRemoteViewer` (the only layer that
 knows Avalonia — **every call marshals through `Dispatcher.UIThread`**, and GL is
 never touched from the RPC thread: `screenshot` rides
-`ViewportControl.SaveScreenshot`'s capture-on-next-frame path). Transport and
+`ViewportControl.CaptureScreenshotAsync`'s capture-on-next-frame path). Transport and
 vocabulary are locked by headless tests over real sockets with a stub viewer; only the
 thin `ViewportRemoteViewer` wiring needs a live window.
+
+**`screenshot` waits for the frame, and the split of duties is deliberate.** Arming the
+capture is UI-thread work (it posts a render request); *waiting* is not, and must not be
+— blocking the dispatcher is exactly how the frame would fail to arrive — so
+`ViewportRemoteViewer` awaits off the UI thread and imposes the deadline
+(`ScreenshotTimeout`, 10 s, comfortably under `ViewerRpcClient`'s own 15 s so a caller
+sees the viewer's message rather than a bare socket timeout). A deadline is not optional
+here: a minimised or occluded window may not render for a very long time, and a hung RPC
+connection is a worse answer than an honest refusal naming the cause. The method's result
+carries `written: true`, so a client never has to guess whether a path it did not choose
+already exists — which is what lets the MCP bridge read the bytes and answer with an
+image.
 
 ## Headless offscreen rendering (screenshots without a window)
 

@@ -21,8 +21,10 @@ namespace EngrCAD.Viewer;
 //   ViewportRemoteViewer   — IRemoteViewer over a real ViewportControl. EVERY call
 //                            marshals through Dispatcher.UIThread — the viewer's
 //                            non-negotiable threading rule — and GL is never touched
-//                            here (screenshots ride SaveScreenshot's
-//                            capture-on-next-frame path).
+//                            here (screenshots ride CaptureScreenshotAsync's
+//                            capture-on-next-frame path). ARMING is UI-thread work;
+//                            WAITING for the frame deliberately is not, since blocking
+//                            the dispatcher is how the frame would fail to arrive.
 //
 // Security posture: loopback only (hardcoded — the listener binds IPAddress.Loopback
 // and nothing else), OFF by default, optional shared token checked on every request.
@@ -216,7 +218,9 @@ public interface IRemoteViewer
     Task<(Vector3d A, Vector3d B, double Distance)?> MeasureAsync(double x1, double y1, double x2, double y2);
 
     /// <summary>Capture the next rendered frame to a PNG at <paramref name="path"/>
-    /// (null = the default Pictures/EngrCAD path); returns the path it will write.</summary>
+    /// (null = the default Pictures/EngrCAD path), completing with the path <b>once the
+    /// file has been written</b> — so a caller may read the bytes back. Throws
+    /// <see cref="RemoteMethodException"/> when no frame was produced in time.</summary>
     Task<string> ScreenshotAsync(string? path);
 }
 
@@ -341,8 +345,11 @@ public static class RemoteViewerDispatcher
             case "screenshot":
             {
                 string? path = (p?["path"] as JsonValue)?.GetValue<string>();
+                // Returns once the file EXISTS, so the bridge can read the bytes back and
+                // answer with an image rather than a promise; "written" says so explicitly
+                // rather than leaving a client to guess from a path it did not ask for.
                 string target = await viewer.ScreenshotAsync(path).ConfigureAwait(false);
-                return new JsonObject { ["path"] = target };
+                return new JsonObject { ["path"] = target, ["written"] = true };
             }
 
             default:
@@ -458,14 +465,39 @@ public sealed class ViewportRemoteViewer(
         double x1, double y1, double x2, double y2) =>
         OnUi(() => viewport.Measure(new Avalonia.Point(x1, y1), new Avalonia.Point(x2, y2)));
 
-    public Task<string> ScreenshotAsync(string? path) => OnUi(() =>
+    /// <summary>
+    /// How long <see cref="ScreenshotAsync"/> waits for the window to produce a frame.
+    /// <para>A deadline is not optional here: a minimised, occluded or otherwise idle
+    /// window may not render for a very long time, and a hung RPC connection is a worse
+    /// answer than an honest refusal. Kept comfortably under
+    /// <c>ViewerRpcClient</c>'s own 15 s so the caller sees THIS message rather than a
+    /// socket timeout with nothing in it.</para>
+    /// </summary>
+    public TimeSpan ScreenshotTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public async Task<string> ScreenshotAsync(string? path)
     {
         string target = path ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.MyPictures),
             "EngrCAD", $"engrcad-rpc-{DateTime.Now:yyyyMMdd-HHmmss}.png");
-        viewport.SaveScreenshot(target);   // captured inside the next render pass
-        return target;
-    });
+        // Arming is UI-thread work (it posts a render request); WAITING is not, and must
+        // not be — blocking the dispatcher is exactly how the frame would fail to arrive.
+        var capture = await OnUi(() => viewport.CaptureScreenshotAsync(target)).ConfigureAwait(false);
+        try
+        {
+            // WaitAsync rather than a WhenAny race: it leaves no timer running behind a
+            // successful capture, and a capture that FAILED (an unwritable path) surfaces
+            // its own exception instead of being reported as a timeout it was not.
+            return await capture.WaitAsync(ScreenshotTimeout).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            throw new RemoteMethodException(-32000,
+                $"the viewer produced no frame within {ScreenshotTimeout.TotalSeconds:G3}s, so "
+                + $"'{target}' was not written — a minimised or occluded window may not render "
+                + "until it is shown");
+        }
+    }
 
     private int IndexOf(string path)
     {

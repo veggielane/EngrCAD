@@ -269,4 +269,9 @@ if (EngrCad.CanRenderToImage)
 ```
 
 The interactive window's `Capture` toolbar button (or
-`ViewportControl.SaveScreenshot`) saves the current framebuffer the same way.
+`ViewportControl.SaveScreenshot`) saves the current framebuffer the same way. That
+call is fire-and-forget — the capture happens in the *next* render pass, so the path
+it names is a promise. A caller that intends to read the file back wants
+`ViewportControl.CaptureScreenshotAsync(path?)`, whose `Task<string>` completes once
+the PNG has been written; it is what the MCP `viewer_screenshot` bridge tool waits on
+before returning the image.

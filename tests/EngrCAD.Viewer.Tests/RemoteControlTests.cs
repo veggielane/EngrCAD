@@ -181,10 +181,17 @@ internal sealed class StubViewer : IRemoteViewer
             x1 < 0 ? null : (new Vector3d(0, 0, 0), new Vector3d(3, 4, 0), 5.0));
     }
 
+    /// <summary>What a real viewer answers once the PNG is on disk — or, when
+    /// <see cref="ScreenshotFailure"/> is set, the refusal a window that never rendered
+    /// produces.</summary>
+    public RemoteMethodException? ScreenshotFailure;
+
     public Task<string> ScreenshotAsync(string? path)
     {
         Calls.Add($"screenshot:{path ?? "default"}");
-        return Task.FromResult(path ?? "C:/pictures/default.png");
+        return ScreenshotFailure is { } failure
+            ? Task.FromException<string>(failure)
+            : Task.FromResult(path ?? "C:/pictures/default.png");
     }
 }
 
@@ -258,6 +265,34 @@ public class RemoteViewerDispatcherTests
         var miss = await Call(viewer, "measure",
             new JsonObject { ["x1"] = -1, ["y1"] = 0, ["x2"] = 0, ["y2"] = 0 });
         Assert.False((bool?)miss!["hit"]);
+    }
+
+    [Fact]
+    public async Task Screenshot_answers_a_path_and_says_the_file_is_written()
+    {
+        // The "written" flag is not decoration: the method used to return as soon as the
+        // capture was ARMED, so a client had a path and no way to know whether the bytes
+        // existed. The contract is now that the answer arrives after the write.
+        var viewer = new StubViewer();
+        var result = await Call(viewer, "screenshot", new JsonObject { ["path"] = "C:/tmp/f.png" });
+
+        Assert.Equal("C:/tmp/f.png", (string?)result!["path"]);
+        Assert.True((bool?)result["written"]);
+        Assert.Contains("screenshot:C:/tmp/f.png", viewer.Calls);
+    }
+
+    [Fact]
+    public async Task A_window_that_never_renders_refuses_by_name_rather_than_promising_a_path()
+    {
+        var viewer = new StubViewer
+        {
+            ScreenshotFailure = new RemoteMethodException(-32000,
+                "the viewer produced no frame within 10s, so 'x.png' was not written"),
+        };
+
+        var error = await Assert.ThrowsAsync<RemoteMethodException>(
+            () => Call(viewer, "screenshot", new JsonObject { ["path"] = "x.png" }));
+        Assert.Contains("no frame", error.Message);
     }
 
     [Fact]
