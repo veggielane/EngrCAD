@@ -555,14 +555,62 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   (a per-triangle source-face array beside the mesh) would make
   `TetMeshOptions.FacetTags` populate itself and let boundary conditions be attached
   with the `BrepQueries`/`FaceRef` selector vocabulary instead of by hand.
-- [ ] **FEA: structural (linear static)** — small-strain linear elasticity on tet
-  meshes: element stiffness (linear + quadratic tets), assembly into sparse symmetric
-  systems, boundary conditions from tagged B-Rep faces (fixed supports, loads:
-  force/pressure/gravity), solve (start with `EngrCAD.Core.Solvers`' ✅-landed
-  `SparseSymmetricCG`/`SparseCholesky` — note the AMD-ordering follow-up above, which
-  FEA-scale systems will need), derive stress/strain (von
-  Mises), display as color fields + deformed-shape overlay in the viewer. Modal
-  analysis as a follow-on (eigen-solver).
+**Structural (linear static) landed** (`Material`/`Materials`, `AnalysisMesh`,
+`StructuralModel`/`Facets`/`Dof`, `StructuralSolver`/`FeaSolveReport`,
+`StructuralResults`, `TetElement`/`TetQuadrature`; docs `examples/fea-structural.md`) —
+4- and 10-node tets, AMD-ordered sparse Cholesky or CG, facet-selector boundary
+conditions, volume-weighted nodal stress, `MeshField` publishing with a display-mesh
+sampling step, `.vtu` export. Verified: patch tests exact to 1e-13, manufactured-solution
+orders 2.00/1.00 (linear) and 3.03/2.02 (quadratic), cantilever within 0.01% of
+Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
+
+- [ ] **FEA: modal analysis (the named follow-on to the static solver).** The assembly,
+  the boundary-condition vocabulary and the element library are all in place; what is
+  missing is a consistent MASS matrix (the same quadrature over `rho·N_i·N_j`, and the
+  lumped variant for comparison) and a generalized symmetric eigen-solver for
+  `K·x = lambda·M·x` at the low end of the spectrum. Lanczos or subspace iteration over
+  `SparseCholesky` (shift-and-invert, which the existing factorization already supports —
+  `StructuralSolver.EstimateCondition`'s inverse power iteration is the one-vector case of
+  exactly this). Deliberately not started with the static path: the verification bar there
+  is analytic natural frequencies (a cantilever's `1.875²/(2·pi·L²)·sqrt(EI/rho·A)`, a
+  free-free bar's axial modes) and it deserves the same treatment the static cases got
+  rather than being bolted on.
+- [ ] **FEA: orthotropic and anisotropic materials.** `Material` is isotropic and the
+  assembly reads `Lambda`/`Mu` directly, which is the right inner loop for the common
+  case; a general law needs the full 6x6 constitutive matrix plus a material FRAME per
+  region (a laminate, a rolled plate, a printed part's layer direction — `Materials.Pla`
+  already carries the caveat that a printed part is not isotropic). The index-form
+  stiffness would fall back to `B' D B` for those elements only.
+- [ ] **FEA: superconvergent stress recovery.** Quadratic stress is evaluated directly AT
+  the nodes rather than extrapolated from the integration points, where it is
+  superconvergent. Measured effect on this project's verification cases is small (Kirsch
+  lands at -0.44% as it is), so it is a refinement rather than a defect; the natural form
+  is Zienkiewicz-Zhu patch recovery, which would also give a per-element error estimator
+  for free — and an error estimator is worth more than the accuracy it buys.
+- [ ] **FEA: the factorization is the wall, and it is Core's to move.** In Release the
+  cost is overwhelmingly `SparseCholesky`: at 46 800 DOF a linear solve measures 323 ms to
+  assemble, **79 009 ms to factor**, 249 ms to substitute and 45 ms to recover stress. The
+  up-looking algorithm is unblocked (no supernodes, no BLAS-3 inner kernel), which is fine
+  for the mesh Laplacians it was written for and is the binding constraint on FEA scale.
+  Measured against it, Jacobi-preconditioned CG already wins three of four benchmark cases
+  at a few thousand unknowns (37/153/334 ms against 65/524/342), the OPPOSITE of the
+  Laplacian crossover recorded in CLAUDE.md — as that note itself predicts, since a
+  crossover measures the operator's conditioning. Options in order of value: a supernodal
+  or left-looking blocked factorization in Core; a better preconditioner than Jacobi
+  (incomplete Cholesky, or algebraic multigrid, which is what production FEA uses); or
+  simply switching the default to CG above a measured DOF threshold, which is free but
+  gives up exactness and the multi-load-case amortisation.
+  <br>Note for whoever takes this: **benchmark in Release**. The same runs in Debug look
+  assembly-dominated (1 822 ms assemble against 657 ms factor on the docs bracket) and
+  would send the work into the wrong phase entirely.
+- [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
+  embarrassingly parallel per element with a per-row merge at the end
+  (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes
+  every element stiffness a second time rather than reusing the assembly's.
+- [ ] **FEA: contact, plasticity, large deformation.** Each is a different mathematical
+  problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
+  one), and none should start before thermal and modal, which reuse the assembly as it
+  stands.
 - [ ] **FEA: thermal (steady-state + transient)** — heat conduction on the same tet
   meshes: conductivity matrix, boundary conditions (fixed temperature, heat flux,
   convection h·(T−T∞)), steady solve first, transient with implicit time stepping
