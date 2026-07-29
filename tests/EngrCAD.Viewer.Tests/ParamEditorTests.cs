@@ -103,4 +103,56 @@ public class ParamEditorTests
         Assert.True(ParamEditors.HasRange(depth) == (ParamEditors.KindFor(depth) == ParamEditorKind.Slider),
             "a bounded numeric parameter and a slider are the same claim");
     }
+
+    // ---- the material dropdown (the properties panel's other typed editor) ----
+
+    [Fact]
+    public void MaterialChoices_OfferNoneFirst_ThenTheCatalogueInOrder()
+    {
+        var choices = ParamEditors.MaterialChoices(null);
+
+        // "(none)" is a legal and common answer, so it must be reachable and it leads.
+        Assert.Null(choices[0]);
+        Assert.Equal("(none)", ParamEditors.MaterialLabel(choices[0]));
+        Assert.Equal(Materials.All.Count + 1, choices.Count);
+        Assert.Equal(Materials.All, choices.Skip(1).Select(m => m!).ToList());
+    }
+
+    [Fact]
+    public void ACatalogueMaterialSelectsItsOwnRow_RatherThanAddingOne()
+    {
+        var choices = ParamEditors.MaterialChoices(Materials.Brass);
+        Assert.Equal(Materials.All.Count + 1, choices.Count);
+        Assert.Equal(
+            Materials.All.ToList().IndexOf(Materials.Brass) + 1,
+            choices.ToList().IndexOf(Materials.Brass));
+
+        // Value equality, not reference: a rebuilt copy of a catalogue entry must select
+        // the catalogue's row instead of appending a twin.
+        var rebuilt = new Material("Brass C36000", 97_000, 0.31, 8.50e-9, 115.0, 3.80e8, 20.5e-6);
+        Assert.Equal(Materials.All.Count + 1, ParamEditors.MaterialChoices(rebuilt).Count);
+    }
+
+    /// <summary>
+    /// A material the catalogue does not carry — one a design built, or a fastener grade
+    /// a catalogue component brought with it — gets its own row. Without it the dropdown
+    /// would show nothing selected for a part that plainly states a material, which reads
+    /// as "not set", and one idle click would discard it.
+    /// </summary>
+    [Fact]
+    public void AMaterialTheCatalogueDoesNotCarry_StillHasARow()
+    {
+        var custom = new Material("Mystery alloy", density: 7.8e-9);
+        var choices = ParamEditors.MaterialChoices(custom);
+
+        Assert.Equal(Materials.All.Count + 2, choices.Count);
+        Assert.Same(custom, choices[^1]);
+        Assert.Equal("Mystery alloy", ParamEditors.MaterialLabel(choices[^1]));
+
+        // The case that made the rule: a screw's material is a FastenerMaterials grade.
+        var screw = StandardComponents.CapScrew(6, 20).ToPart();
+        var screwChoices = ParamEditors.MaterialChoices(screw.Material);
+        Assert.Equal(screw.Material, screwChoices[^1]);
+        Assert.True(screwChoices.ToList().IndexOf(screw.Material) > 0, "selectable, not lost");
+    }
 }

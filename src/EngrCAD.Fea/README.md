@@ -38,6 +38,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
 | `SurfacePatch` / `SurfacePatches` | Internal: coplanar same-tag triangle groups, the unit recovery works in |
 | `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, linear or quadratic |
+| `AnalysisBody` | One body of a multi-material model: a closed surface **and what it is made of** — the list `TetMesher.Mesh` and `StructuralModel.For` / `ThermalModel.For` BOTH read, so a region id is never restated |
 | `Material` / `Materials` | **Lives in `EngrCAD.Core`**, not here — see below |
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
@@ -84,10 +85,11 @@ Two consequences for this project:
   refuses a zero density. This is the same doctrine the model already followed for selectors
   that match nothing — refuse where the mistake was made, naming what is missing.
 
-**Units are `ModelUnits`' mm / N / MPa / tonne / s throughout**: E in MPa, density in
-tonne/mm³ (steel 7.85e-9), conductivity in mW/(mm·K) — numerically the SI W/(m·K) — specific
-heat in mm²/(s²·K), which is the SI J/(kg·K) × 1e6, expansion in 1/K, gravity 9806.65 mm/s².
-Every verification number below is stated in that system.
+**Units are `EngrCAD.Core.ModelUnits`' mm / N / MPa / tonne / s throughout.** That type is
+the single statement of the convention for the whole repository — the quantity-by-quantity
+table, the tonne/mm³ density and the reasoning behind it live in its doc comment and in
+design.md §2, and this project cross-references them rather than keeping a second copy that
+could drift. Every verification number below is stated in that system.
 
 ```csharp
 var surface = Shape.Box(40, 30, 6)
@@ -158,6 +160,43 @@ This is worth stating plainly because the intuitive advice is wrong: remeshing i
 element quality in principle, but v1 recovery wants exactly the structure a remesh removes.
 Mesh the tessellation directly and use a sizing field to control element size. Lifting the
 restriction is the top backlog item.
+
+## Several materials in one model
+
+`TetMesher.Mesh(bodies, …)` tags each tetrahedron with the index of the body it filled, and
+`StructuralModel.SetMaterial(region, material)` assigns a material to a region id — a
+correspondence that is right only as long as two separately written lists stay in the same
+order. **`AnalysisBody` makes it a fact instead of a convention**: one list of
+`(surface, material, name)` drives both the mesh and the model.
+
+```csharp
+var bodies = parts.Select(p => new AnalysisBody(p.GetMesh(), p.Material, p.Name)).ToList();
+var tets   = TetMesher.Mesh(bodies, options);
+var model  = StructuralModel.For(tets, bodies);      // region i takes bodies[i].Material
+var heat   = ThermalModel.For(tets, bodies);         // ...and so does the thermal twin
+```
+
+That expression is also the **seam with the document model**, and it is a list rather than a
+call on `Part` for a layering reason: this project depends on `EngrCAD.Core` and
+`EngrCAD.Mesh` and nothing depends on it, so it cannot see a `Part` — what the two layers do
+share is `Material` (which is *why* it lives in Core) and `HalfEdgeMesh`, and a body is those
+two together. A null material is legal on an `AnalysisBody`, because meshing needs none and it
+may have come straight from an unstated `Part.Material`; the model refuses it, by name, along
+with a mesh region no body declares and a declared body that contributed no elements.
+
+**Bodies must be DISJOINT — two mating along a face are refused by name.** That is the same
+v1 boundary the section above describes, seen from the other side, and it deserves its
+reasoning stated rather than an epsilon: welding the shared vertices *would* make the input
+tetrahedralizable, and the result would look right and be wrong. `OffendingFaces` treats
+every inside-to-inside face as interior, so an inter-body face is never recovered onto the
+input plane, and a tetrahedron straddling the interface takes ONE region for its whole
+volume — the material boundary would be a jagged surface of the mesher's choosing rather
+than the plane the design drew. A conforming multi-material mesh needs the inter-body face
+treated as a constrained boundary, plus a decision about whether a facet selector may name it
+(it would be visited from both sides, so a pressure applied there would double-count). That
+is a feature, and it is filed as one; until it lands, a bonded bi-material part is meshed as
+one surface with one material, and `AnalysisBody` serves genuinely separate bodies in one
+analysis.
 
 ## Contracts
 

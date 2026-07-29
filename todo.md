@@ -1468,25 +1468,32 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   properties panel and MCP `describe_part`; docs `examples/materials.md`; design.md §2).
   **The unit is tonne/mm³** — one convention, stated once in `ModelUnits`, with kilograms
   and grams as accessors; the 1000× discrepancy between the FEA catalogue and
-  `PartMassProperties`' old kg/mm³ remark is gone. Residuals:
-  - [ ] **Material on a `HardwareComponent`.** A catalogue fastener knows what it is made
-    of (an ISO 4762 screw is 12.9 steel, a Trisert is brass) but `ToPart()` sets only
-    `Hardware`. One field per catalogue entry, and then a BOM of bought-in parts weighs
-    itself — but the grades want transcribing against the standards rather than guessed,
-    so it carries the same verify-against-datasheet caveat as the dimension tables.
-  - [ ] **Per-region materials from a multi-body `Shape`.** `StructuralModel.SetMaterial`
-    takes a region id, and `TetMesher` already assigns region ids from multi-body input,
-    but nothing carries `Part.Material` across that seam — a scene of N parts meshed
-    together still needs its materials restated by region index.
-  - [ ] **Material in the viewer's model tree / a material editor.** The properties panel
-    reports the material; nothing sets one interactively. `DocumentEdits.SetMaterial`
-    exists, so this is UI only — a dropdown over `Materials.All` plus the current value.
-  - [ ] **`docs/examples/fea-*.md` and the FEA README still spell the unit system out
-    per page.** They are correct, but `ModelUnits` is now the single statement and they
-    should cross-reference it rather than restate it; the same is true of the two
-    `kg/mm³` comments left in `tests/EngrCAD.Interop.Tests/BrepMassPropertiesTests.cs`
-    (legal — `BrepMassProperties` is unit-agnostic by design — but they now point at a
-    convention nothing else in the repo uses).
+  `PartMassProperties`' old kg/mm³ remark is gone. **All four residuals have landed** —
+  `HardwareComponent.Material`/`FastenerMaterials` (a BOM of bought-in parts weighs itself;
+  the field carries the SUBSTANCE, not the ISO 898-1 property class, and the bearing
+  deliberately states nothing because its v1 body omits balls and cage), `AnalysisBody`
+  (one list drives `TetMesher.Mesh` and `StructuralModel.For`/`ThermalModel.For`, verified
+  on an exactly-analytic series-stiffness bar at nu = 0), the properties-panel material
+  dropdown over `ParamEditors.MaterialChoices` on the undo stack, and the fea docs +
+  `BrepMassPropertiesTests` unit cross-references. See design.md §3c and §6b. One
+  follow-up came out of it:
+  - [ ] **Conforming multi-material interfaces in `TetMesher`.** v1 meshes DISJOINT bodies
+    and now refuses two that MATE along a face, by name — the natural way to draw a
+    bi-material part. Two things stand in the way and both are precisely located.
+    (a) Their surfaces share vertices, so the input is not tetrahedralizable without a
+    cross-body weld. (b) Welding alone would be *worse than the refusal*:
+    `TetMesher.Builder.OffendingFaces` treats every inside-to-inside face as interior, so
+    an inter-body face is never recovered onto the input plane and a tetrahedron
+    straddling the interface takes ONE region for its whole volume — the material boundary
+    becomes a jagged surface of the mesher's choosing rather than the plane that was
+    drawn. The fix is to weld across bodies AND make the region-change face a recovery
+    target (`label[n] == Inside && region[n] == region[t]` is the interior test, and both
+    bodies' interface triangles are already in the same coplanar patch, so `TryOnSurface`
+    would succeed). What needs deciding rather than coding: an interface facet is visited
+    from BOTH sides, so it would appear twice in the boundary-facet list — a `Facets`
+    selector naming it would double-count a pressure, and `TetFacet.SourceTriangle` would
+    be ambiguous between two coincident input triangles. Until then, a bonded bi-material
+    part is meshed as one surface with one material.
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,

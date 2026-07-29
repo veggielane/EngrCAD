@@ -146,6 +146,69 @@ if (!bom.ToText(mass: true).Contains("over the 2 of 3 items stating a material")
 can reach the density; `UnitMassGrams` and `TotalMassGrams` are the per-item and
 per-line figures.
 
+## Bought-in parts weigh themselves
+
+A catalogue [component](components.md) already knows what it is made of, so nothing in
+a design has to say that an ISO 4762 screw is steel. `HardwareComponent.Material` comes
+from `FastenerMaterials` and `ToPart()` carries it onto the part, which is what a bill of
+materials reads:
+
+```csharp run:materials-hardware
+var build = new ComponentAssembly("plate", Shape.Box(60, 40, 8));
+var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+build.Place(StandardComponents.CapScrew(6, 20), [new(-20, 0), new(20, 0)], top);
+build.Place(StandardComponents.Washer(6), [new(-20, 0), new(20, 0)], top);
+var assembly = build.ToAssembly();
+build.Host!.Material = Materials.Aluminium6061;      // the one thing the design states
+
+Console.WriteLine(Bom.For(assembly).ToText(mass: true));
+//  QTY  ITEM              KIND       MATERIAL             MASS (g)  TOTAL (g)  WHERE
+//    2  ISO 4762 M6x20    catalogue  Alloy steel             5.454     10.908  ...
+//    2  ISO 7089 M6       catalogue  Carbon steel            1.016      2.033  ...
+//    1  plate             made       Aluminium 6061-T6     ...
+
+// An ISO 7089 M6 washer is an exact annulus, so its mass has a closed form.
+var washer = Bom.For(assembly).Lines.Single(l => l.Item.StartsWith("ISO 7089"));
+double volume = Math.PI / 4 * (12.0 * 12.0 - 6.4 * 6.4) * 1.6;
+double exact = ModelUnits.MassToGrams(volume * FastenerMaterials.CarbonSteel.Density);
+if (Math.Abs(washer.UnitMassGrams!.Value - exact) > 1e-5 * exact)
+    throw new Exception($"expected {exact} g, got {washer.UnitMassGrams}");
+```
+
+**The material is the *stuff*, and an ISO 898-1 property class is not.** 8.8, 10.9 and
+12.9 name a proof and a tensile stress; all three are steel at 7850 kg/m³, so a 12.9
+screw and an 8.8 screw of one size weigh exactly the same and the class lives in the
+designation. What *does* move a mass is a change of substance, and that is what the
+catalogue distinguishes — carbon steel, alloy steel, stainless A2 (1.4301) and A4
+(1.4401), and brass for the threaded inserts. Stainless is ~2% heavier than carbon
+steel and brass ~8% heavier again. Where `Materials` already states the alloy, the
+fastener entry *delegates* and only renames: one density per alloy, whichever name asks
+for it.
+
+One entry deliberately says **nothing**. A `DeepGrooveBearing` models two rings and
+neither the balls nor the cage, so a density times that volume is measurably less than
+the bearing's real mass — an unstated material reports an honest "unknown" where a
+stated one would report the shortfall as a number. A design that wants the lower bound
+anyway says so, and because `ToPart()` caches one part per component, one assignment
+covers every occurrence:
+
+```csharp run:materials-hardware-override
+var bearing = StandardComponents.Bearing("608");
+if (bearing.Material is not null) throw new Exception("a v1 bearing states no material");
+if (bearing.ToPart().MassGrams() is not null) throw new Exception("...so its mass is unknown");
+
+var part = bearing.ToPart().Of(FastenerMaterials.BearingSteel);   // rings only: a LOWER bound
+if (part.MassGrams() is not > 0) throw new Exception("now it weighs something");
+
+// The same call is how a design states a stainless variant of any catalogue item.
+var stainless = StandardComponents.CapScrew(6, 20).ToPart().Of(FastenerMaterials.StainlessA2);
+if (stainless.Material!.Name != "Stainless steel A2 (1.4301)") throw new Exception("A2");
+```
+
+⚠ Like every transcribed table here, `FastenerMaterials` carries nominal figures for
+getting a mass and a stiffness in the right place — verify against the supplier's
+datasheet for the specific grade before production use.
+
 ## The same material drives an analysis
 
 Nothing has to be restated for a solve. The catalogue entries carry elastic and
@@ -192,8 +255,12 @@ already coloured would be a second, hidden edit.
   [`Document.Save`/`Load`](documents.md); only the properties actually stated are
   written, so a file for a scene with no materials is byte-identical to what it
   always was.
-- **The viewer.** The properties panel shows the material name and the part's mass
-  (from the display mesh, so it can never lower a B-Rep on the UI thread), and the
-  BOM overlay shows the material column.
+- **The viewer.** The properties panel has a **material dropdown** over the catalogue
+  (plus "(none)", and plus the current material when a design built its own or a
+  catalogue component brought one) — it writes through `DocumentEdits.SetMaterial`, so
+  it is one Ctrl+Z step, and it sits above the panel's mesh gate because saying what a
+  part is made of must not wait for it to tessellate. The **Mass** row below is the
+  measurement (from the display mesh, so it can never lower a B-Rep on the UI thread),
+  and the BOM overlay shows the material column.
 - **MCP.** `describe_part` reports the material with its density in *both*
   spellings — tonne/mm³ to compute with, kg/m³ to check against a datasheet.

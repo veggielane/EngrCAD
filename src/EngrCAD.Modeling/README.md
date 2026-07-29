@@ -1694,24 +1694,50 @@ scene.AddTab("hardware").Add(build.ToAssembly("bracket"));
 // pilot; the assembly has the plate plus three posed component occurrences.
 ```
 
-A `HardwareComponent` carries three things: its own parametric `Body` (a `Shape`), a
-seating convention, and a **host preparation** — the cut the target body needs
-(`Prepare`, and `PrepareAnchor` for the far body of a stack):
+A `HardwareComponent` carries four things: its own parametric `Body` (a `Shape`), a
+seating convention, a **host preparation** — the cut the target body needs (`Prepare`, and
+`PrepareAnchor` for the far body of a stack) — and what it is **made of**:
 
-| Component | Host preparation | Body fidelity |
-| --- | --- | --- |
-| `StandardComponents.CapScrew(size, length, seating, fit, hexSocket)` — ISO 4762 SHCS | ISO 273 clearance hole, plus the DIN 974 counterbore when `ScrewSeating.Counterbored` (the default); as an anchor, the coarse tap-drill pilot plus two pitches of runout | head cylinder (dk, k = d) on a plain shank, one exact revolve; hex socket recess **opt-in** (exact — see below); **no modeled thread** (use `Shape.ExternalThread`) |
-| `StandardComponents.ButtonScrew(size, length, fit)` — ISO 7380-1 | ISO 273 clearance hole (button heads bear on the face); anchors like the cap screw | exact spherical-cap dome (the profile carries the arc) + shank, one revolve — no socket (dome rim, see below) |
-| `StandardComponents.CskScrew(size, length, fit)` — ISO 10642 | 90° countersunk clearance hole (`StandardHoles.Countersunk`); anchors like the cap screw | sharp 90° cone + shank, one revolve; head diameter **derived** via `StandardHoles.CountersunkHeadDiameter` so screw and hole agree by construction; lengths are OVERALL; seating datum = the flush head top (`SeatDepth` 0) |
-| `StandardComponents.Nut(size, fit)` — ISO 4032 | the bolt's ISO 273 clearance hole — a nut implies a through bolt, and a nutted joint taps nothing | exact hex prism bored to the nominal diameter; `ProvidesThread` with `MinimumEngagement` = its height |
-| `StandardComponents.Washer(size)` — ISO 7089 | **nothing** (deliberate no-op — the hole belongs to the screw the washer spaces) | exact annular disk |
-| `StandardComponents.Bearing(code)` — 608-style deep groove | flat-bottomed press-fit pocket: OD diameter, one width deep, bearing seats flush (nominal-size press fit, as the dowel) | two exact concentric rings (radial thirds: ring, gap, ring), a disjoint multi-shell union — no balls, cage or shields |
-| `StandardComponents.TrisertInsert(size)` — Tappex Trisert® | the catalogue pilot bore (`StandardHoles.Trisert`) at `TrisertMinimumDepth` | plain sleeve bored to the thread's minor diameter — no knurl, no flange; `ProvidesThread` with `MaximumEngagement` = its body length |
-| `StandardComponents.Dowel(diameter, length, inserted)` — ISO 2338 m6 | reamed hole at the **nominal** diameter, just past the inserted length (both bodies of a stack) | cylinder with 45° end chamfers rather than the standard's crowned ends |
+| Component | Host preparation | Body fidelity | Material |
+| --- | --- | --- | --- |
+| `StandardComponents.CapScrew(size, length, seating, fit, hexSocket)` — ISO 4762 SHCS | ISO 273 clearance hole, plus the DIN 974 counterbore when `ScrewSeating.Counterbored` (the default); as an anchor, the coarse tap-drill pilot plus two pitches of runout | head cylinder (dk, k = d) on a plain shank, one exact revolve; hex socket recess **opt-in** (exact — see below); **no modeled thread** (use `Shape.ExternalThread`) | alloy steel (class 12.9) |
+| `StandardComponents.ButtonScrew(size, length, fit)` — ISO 7380-1 | ISO 273 clearance hole (button heads bear on the face); anchors like the cap screw | exact spherical-cap dome (the profile carries the arc) + shank, one revolve — no socket (dome rim, see below) | alloy steel (class 10.9) |
+| `StandardComponents.CskScrew(size, length, fit)` — ISO 10642 | 90° countersunk clearance hole (`StandardHoles.Countersunk`); anchors like the cap screw | sharp 90° cone + shank, one revolve; head diameter **derived** via `StandardHoles.CountersunkHeadDiameter` so screw and hole agree by construction; lengths are OVERALL; seating datum = the flush head top (`SeatDepth` 0) | alloy steel (class 10.9) |
+| `StandardComponents.Nut(size, fit)` — ISO 4032 | the bolt's ISO 273 clearance hole — a nut implies a through bolt, and a nutted joint taps nothing | exact hex prism bored to the nominal diameter; `ProvidesThread` with `MinimumEngagement` = its height | carbon steel (class 8) |
+| `StandardComponents.Washer(size)` — ISO 7089 | **nothing** (deliberate no-op — the hole belongs to the screw the washer spaces) | exact annular disk | carbon steel (200 HV) |
+| `StandardComponents.Bearing(code)` — 608-style deep groove | flat-bottomed press-fit pocket: OD diameter, one width deep, bearing seats flush (nominal-size press fit, as the dowel) | two exact concentric rings (radial thirds: ring, gap, ring), a disjoint multi-shell union — no balls, cage or shields | **none, deliberately** (see below) |
+| `StandardComponents.TrisertInsert(size)` — Tappex Trisert® | the catalogue pilot bore (`StandardHoles.Trisert`) at `TrisertMinimumDepth` | plain sleeve bored to the thread's minor diameter — no knurl, no flange; `ProvidesThread` with `MaximumEngagement` = its body length | brass (C36000) |
+| `StandardComponents.Dowel(diameter, length, inserted)` — ISO 2338 m6 | reamed hole at the **nominal** diameter, just past the inserted length (both bodies of a stack) | cylinder with 45° end chamfers rather than the standard's crowned ends | carbon steel |
+
+`HardwareComponent.Material` comes from **`FastenerMaterials`** and `ToPart()` carries it
+onto `Part.Material`, so a `Bom` of bought-in parts weighs itself with nothing stated in
+the design. Three things about that field are worth knowing:
+
+- **It carries the STUFF, not the strength grade.** ISO 898-1 property classes (8.8,
+  10.9, 12.9) name a proof and a tensile stress; all three are steel at 7850 kg/m³, so an
+  M6×20 weighs the same whichever it is, and the class belongs to the designation. What
+  moves a mass is a change of *substance* — stainless A2/A4 are ~2% heavier than carbon
+  steel and brass ~8% heavier again — and that is what the catalogue distinguishes.
+- **It is not a second catalogue.** Where `Materials` (Core) already states the alloy,
+  `FastenerMaterials` delegates and only renames: `StainlessA2` *is*
+  `Materials.StainlessSteel304` under the designation ISO 3506 prints, `StainlessA4` is
+  316, `Brass` is C36000 verbatim. Two spellings of one density is the discrepancy the
+  material consolidation removed.
+- **The bearing states nothing, and that is the answer rather than an omission.** Its v1
+  body is two rings with an empty gap where the balls and cage are, so density × volume is
+  measurably *less* than the bearing's real mass; an unstated material reports "unknown" in
+  a bill of materials, where a stated one would report the shortfall as a confident number.
+  `bearing.ToPart().Of(FastenerMaterials.BearingSteel)` takes the lower bound anyway — and
+  is also how a design states a stainless variant of any entry, since `ToPart()` caches one
+  part per component so one assignment covers every occurrence.
 
 ⚠ Every transcribed table — ISO 4762/7380 head and socket dimensions, ISO 4032 nuts,
-ISO 7089 washers, the bearing boundary dimensions, the Trisert columns — carries a
-verify-against-the-datasheet warning in the source. Head height (k = d for SHCS, the 90°
+ISO 7089 washers, the bearing boundary dimensions, the Trisert columns, and
+`FastenerMaterials`' densities and moduli — carries a
+verify-against-the-datasheet warning in the source. One transcription note worth keeping:
+**ISO 2338 is the UNhardened parallel pin** (its title is "Parallel pins, of unhardened
+steel and austenitic stainless steel"); the hardened ground dowel pin is ISO 8734. It is
+easy to assume the other way round, and it happens not to change the density. Head height (k = d for SHCS, the 90°
 cone for csk), the thread profile and the clearance/counterbore/countersink/tap-drill
 sizes all come from formulas or tables already in `StandardHoles`/`StandardThreads`.
 

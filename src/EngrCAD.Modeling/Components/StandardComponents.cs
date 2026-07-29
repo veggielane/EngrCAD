@@ -132,6 +132,13 @@ public sealed class SocketHeadCapScrew : HardwareComponent
 
     public override double InsertedLength => Length;
 
+    /// <summary>Through-hardened low-alloy steel: ISO 4762 screws are supplied in
+    /// property class 12.9 (10.9 for the larger sizes), and the class is a strength grade
+    /// rather than a substance — see <see cref="FastenerMaterials"/>. Say
+    /// <c>screw.ToPart().Of(FastenerMaterials.StainlessA2)</c> for the stainless
+    /// variant.</summary>
+    public override Material? Material => FastenerMaterials.AlloySteel;
+
     /// <summary>A counterbored head sits at the recess floor; a proud head bears on the face.</summary>
     public override double SeatDepth =>
         Seating == ScrewSeating.Counterbored ? _hostHole.CounterboreDepth : 0;
@@ -241,6 +248,11 @@ public sealed class ThreadedInsert : HardwareComponent
 
     public override PartColor Color => Palette.Brass;
 
+    /// <summary>Free-machining brass — the standard Trisert material, and at 8500 kg/m³
+    /// the one catalogue entry whose density differs from steel by more than a
+    /// rounding.</summary>
+    public override Material? Material => FastenerMaterials.Brass;
+
     /// <summary>The installed insert IS a thread provider: a screw can anchor into a
     /// placed insert instead of cutting its own tap pilot (see
     /// <see cref="ComponentAssembly.PlaceThrough(HardwareComponent, IReadOnlyList{Vector2d}, SketchPlane, ComponentAssembly, SketchPlane, ComponentFeature)"/>).</summary>
@@ -327,6 +339,17 @@ public sealed class DowelPin : HardwareComponent
     public override string Designation => $"ISO 2338 Ø{Diameter:g3}×{Length:g3} m6";
 
     public override double InsertedLength => Inserted;
+
+    /// <summary>
+    /// Plain carbon steel. <b>ISO 2338 is the UNhardened parallel pin</b> — its title is
+    /// "Parallel pins, of unhardened steel and austenitic stainless steel" — and the
+    /// hardened, ground dowel pin is the separate <b>ISO 8734</b>. The distinction is
+    /// worth stating because it is easy to assume the other way round; it happens not to
+    /// change this number, since hardening is a heat treatment and both pins are steel at
+    /// 7850 kg/m³. The stainless variant the same standard covers is
+    /// <see cref="FastenerMaterials.StainlessA2"/>.
+    /// </summary>
+    public override Material? Material => FastenerMaterials.CarbonSteel;
 
     protected override Shape BuildBody()
     {

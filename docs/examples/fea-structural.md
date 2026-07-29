@@ -58,20 +58,12 @@ rather than the built-in edge an eye goes to first.
 
 ## Units
 
-Nothing in this kernel carries a unit, so a material is only meaningful against a length
-unit you choose. `Materials` is stated in the **mm / N / MPa / tonne** system, which is
-what the rest of EngrCAD assumes:
-
-| Quantity | Unit | Example |
-| --- | --- | --- |
-| Length, displacement | mm | the model's own coordinates |
-| Force | N | `Force(..., new Vector3d(0, 0, -1200))` |
-| Stress, Young's modulus | MPa = N/mm² | steel E = 210 000 |
-| Density | tonne/mm³ | steel 7850 kg/m³ = 7.85e-9 |
-| Acceleration | mm/s² | `Materials.GravityMillimetres` = 9806.65 |
-
-SI (m / N / Pa / kg) works identically. What does not work is mixing the two, and no check
-can catch that — which is why the system is documented rather than enforced.
+The **mm / N / MPa / tonne / s** system `ModelUnits` states once for the whole repository:
+lengths and displacements in mm, forces in N, stresses and moduli in MPa = N/mm² (steel
+E = 210 000), **densities in tonne/mm³** (steel 7.85e-9), accelerations in mm/s²
+(`Materials.GravityMillimetres` = 9806.65). The quantity table and the reasoning behind
+the density choice are on the [Materials & mass](materials.md#units-one-convention-stated-once)
+page — one statement, cross-referenced, rather than a copy per solver that could drift.
 
 ## Saying what is held and what pushes
 
@@ -103,6 +95,67 @@ geometric selectors are for meshes that carry no tags — an imported STL, or a 
 A selector that matches **nothing** is refused where it was written, naming the tags that
 do exist. A quietly ineffective support surfaces much later as a singular system, and the
 message there cannot point at the typo.
+
+## Several materials in one model
+
+`TetMesher` tags each element with the index of the body it filled, and
+`SetMaterial(region, material)` assigns a material to a region id — a correspondence that
+is right only as long as two separately written lists stay in the same order.
+**`AnalysisBody` makes it a fact rather than a convention**: one list of
+`(surface, material, name)` drives both the mesh and the model, and it is also the seam
+with the document model, since a `Part` already knows both halves.
+
+```csharp run:fea-two-materials
+var steelBar = new Part("steel bar", Shape.Box(40, 6, 6).Translate(20, -6, 3))
+    .Of(Materials.Steel);
+var alloyBar = new Part("alloy bar", Shape.Box(40, 6, 6).Translate(20, 6, 3))
+    .Of(Materials.Aluminium6061);
+
+// The ONE list. Nothing below names a region id.
+var bodies = new[] { steelBar, alloyBar }
+    .Select(p => new AnalysisBody(p.GetMesh(), p.Material, p.Name))
+    .ToList();
+
+var tets = TetMesher.Mesh(bodies, new TetMeshOptions { RefineQuality = true, MaxElementSize = 3.0 });
+var model = StructuralModel.For(tets, bodies);       // region i takes bodies[i].Material
+model.Fix(Facets.OnPlane(new Vector3d(0, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(40, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -200));
+
+var results = StructuralSolver.Solve(model);
+
+double Tip(int side)
+{
+    double worst = 0;
+    for (int n = 0; n < model.Mesh.NodeCount; n++)
+    {
+        var p = model.Mesh.Position(n);
+        if (Math.Abs(p.X - 40) > 1e-9 || Math.Sign(p.Y) != side) continue;
+        worst = Math.Min(worst, results.DisplacementAt(n).Z);
+    }
+    return -worst;
+}
+
+// A cantilever's deflection goes as 1/E, so the aluminium bar sinks about three times
+// as far as its steel twin - measured 0.0756 mm against 0.2284 mm, a ratio of 3.02
+// against the moduli's 3.05 (the small gap is that the mesher gave the two bars
+// slightly different discretizations, not the materials).
+double ratio = Tip(+1) / Tip(-1);
+if (ratio < 2.9 || ratio > 3.2) throw new Exception($"expected ~3.05, got {ratio}");
+```
+
+`ThermalModel.For` reads the same list to the same answer, so a coupled run states what
+things are made of exactly once. Refused by name, before anything is assembled: a body
+with no material, a mesh region no body declares, and a declared body that contributed no
+elements.
+
+> [!IMPORTANT]
+> **v1 meshes DISJOINT bodies — two mating along a face are refused.** Welding the shared
+> vertices *would* mesh, and the result would look right and be wrong: an inter-body face
+> is never recovered onto the input plane, so an element straddling the interface takes one
+> material for its whole volume and the material boundary becomes a jagged surface of the
+> mesher's choosing rather than the plane that was drawn. Until conforming interfaces land,
+> a bonded bi-material part is meshed as one surface with one material, and `AnalysisBody`
+> serves genuinely separate bodies analysed together.
 
 ## Reading the answer
 

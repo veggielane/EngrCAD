@@ -183,6 +183,30 @@ public abstract class HardwareComponent
     /// <summary>Display color of the component's part.</summary>
     public virtual PartColor Color => Palette.Steel;
 
+    /// <summary>
+    /// What the catalogue item is made of (see <see cref="FastenerMaterials"/>), or null
+    /// when the entry declines to say. <see cref="ToPart"/> puts it on the
+    /// <see cref="Part.Material"/>, which is what makes a <see cref="Bom">bill of
+    /// materials</see> of bought-in parts weigh itself — no design has to restate that an
+    /// ISO 4762 screw is steel.
+    ///
+    /// <para><b>The material is the STUFF, and an ISO 898-1 property class is not.</b>
+    /// 8.8, 10.9 and 12.9 are proof and tensile stresses; all three are steel at
+    /// 7850 kg/m³, so they weigh the same and the class lives in
+    /// <see cref="Designation"/>, not here. A change of <i>substance</i> — stainless,
+    /// brass — is what moves a mass, and that is what these values distinguish.</para>
+    ///
+    /// <para><b>Null is a real answer, not an omission.</b> An entry whose modelled body
+    /// is deliberately not the whole component (a bearing's rings without its balls and
+    /// cage) states no material, so its BOM mass reports "unknown" rather than a
+    /// confidently light number — the same rule the bill of materials already follows for
+    /// an unstated material. A design that wants one anyway says
+    /// <c>component.ToPart().Of(FastenerMaterials.BearingSteel)</c>, which also covers a
+    /// stainless variant of any entry here: <see cref="ToPart"/> caches ONE part per
+    /// component, so setting its material covers every occurrence.</para>
+    /// </summary>
+    public virtual Material? Material => null;
+
     /// <summary>The external thread this component carries into a mate (a screw's), or
     /// null for components that thread into nothing (dowels, washers, bearings).</summary>
     public virtual ThreadSpec? CarriesThread => null;
@@ -237,6 +261,9 @@ public abstract class HardwareComponent
                 // it to mark the line as bought-in, and the default explode direction
                 // uses the component's own axis instead of a radial guess.
                 Hardware = this,
+                // ...and what it is MADE of, so the same bill of materials weighs it.
+                // Null stays null: an unstated material is an unknown mass, never a zero.
+                Material = Material,
             };
     }
 

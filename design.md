@@ -481,6 +481,49 @@ zero), and an order measured against a *different model's* answer stalls at the 
 difference (the cantilever's clamped-edge singularity caps it at 1.86, which is why the
 order table comes from a manufactured solution instead).
 
+**`AnalysisBody`: the material-per-region seam is a LIST, and the list is the point.**
+`TetMesher` tags each element with the index of the body it filled; `SetMaterial(region,
+material)` assigns a material to a region id. Those two agree only while two separately
+written lists stay in the same order, which is a convention rather than a fact — so one
+`AnalysisBody` list (surface, material, name) now drives both, and `StructuralModel.For` /
+`ThermalModel.For` read exactly what `TetMesher.Mesh` read. It is a list rather than a
+method on `Part` for a layering reason: this project depends on Core and Mesh and *nothing
+depends on it*, which is what keeps a simulation stack out of every modelling consumer, so
+it cannot see a `Part` at all. What the two layers genuinely share is `Material` — which is
+precisely why that type lives in Core (§2) — and `HalfEdgeMesh`, and a body is those two
+together, so `parts.Select(p => new AnalysisBody(p.GetMesh(), p.Material, p.Name))` is the
+whole bridge. A null material stays legal on a body (meshing needs none, and it may have
+come straight from an unstated `Part.Material`) and is refused at the model, by name — the
+same "refuse where the requirement is" rule the optional analysis properties follow.
+
+**Verifying it needed a case whose answer is EXACT, and the exactness came from nu = 0.**
+A bar of two materials in series under axial load has δ = (F/A)(L₁/E₁ + L₂/E₂) — but only
+in one dimension. In 3D the two halves want to contract laterally by different amounts
+(εₗ = −ν·σ/E, and E differs), so a nonzero Poisson's ratio puts a boundary layer at the
+interface and there is no closed form left to check. **With ν = 0 in both halves there is no
+lateral coupling at all**: the exact solution is a piecewise-linear axial field with
+traction-free sides, which is *in* the linear-tet space, so the solve reproduces it to
+round-off at any density rather than converging onto it. The thermal twin is the same
+statement about a piecewise-linear temperature through two conductivities. And **the
+assertion that has teeth is the INTERFACE value, not the total** — swapping the two
+materials leaves the tip deflection and the through-flux unchanged, because series
+resistances commute, so a test asserting only the total agrees just as happily with the
+regions the wrong way round.
+
+**Bodies must be DISJOINT, and the refusal is the honest answer rather than a missing
+weld.** Two bodies mating along a face — the natural way to draw a bi-material part — share
+vertices, which used to surface deep in `DelaunayTetrahedralization` as "points N and M are
+exactly coincident; weld the input surface", true and unhelpful, since welding is exactly
+what must not happen. Welding *would* make the input tetrahedralizable and the result would
+look right and be wrong: `OffendingFaces` treats every inside-to-inside face as interior, so
+an inter-body face is never recovered onto the input plane, and a tetrahedron straddling the
+interface takes ONE region for its whole volume. The material boundary would then be a
+jagged surface of the mesher's choosing rather than the plane the design drew — a different
+geometry, not a coarser one. A conforming multi-material mesh needs the inter-body face
+treated as a constrained boundary *and* a decision about whether a facet selector may name
+it (it is visited from both sides, so a pressure applied there would double-count). That is
+a feature; `TetMesher` now refuses mating bodies up front, naming the shared vertex.
+
 ## 3d. Thermal analysis (`EngrCAD.Fea`)
 
 Heat conduction on the same tetrahedral meshes, `q = -k·grad T`, with **one temperature
@@ -1885,6 +1928,26 @@ Design decisions:
   decision worth recording: the host preparation is a **`Feature`**, not a one-shot cut —
   which is why suppressing a placement removes its bore as well as its occurrence, and
   why a thickness change re-seats the fastener and re-cuts the hole.
+- **A catalogue component's `Material` carries the SUBSTANCE, and an ISO 898-1 property
+  class is not one.** A catalogue fastener knowing what it is made of is what makes a bill
+  of materials of bought-in parts weigh itself, but the obvious reading of "grade" is a
+  trap: 8.8, 10.9 and 12.9 name a proof and a tensile stress, and all three are steel at
+  7850 kg/m³ — an M6×20 weighs the same whichever it is. So the class stays in the
+  `Designation` (and in a strength calculation this kernel does not do), while
+  `FastenerMaterials` distinguishes only what genuinely moves a mass: carbon steel, alloy
+  steel, stainless A2 and A4 (~2% heavier), brass (~8% heavier again), bearing steel. That
+  claim is asserted rather than asserted-about — `CarbonSteel.Density ==
+  AlloySteel.Density` bit for bit, so the two differ in name, modulus and conductivity and
+  in nothing else. Where `Materials` (Core) already states the alloy, the fastener entry
+  **delegates and only renames** (`StainlessA2` *is* `StainlessSteel304`), because two
+  spellings of one density is exactly the discrepancy the material consolidation removed.
+  **The bearing states no material at all, and that is an answer rather than a gap**: its
+  v1 body is two rings with the balls and cage missing, so density × volume is measurably
+  less than the real mass, and the bill of materials' own rule — an unknown mass is an
+  empty cell, never a zero a spreadsheet sums silently — makes an honest "unknown" better
+  than a confidently light number. `component.ToPart().Of(...)` overrides it (and is also
+  how a design states a stainless variant of any entry), which works because `ToPart`
+  caches one part per component, so one assignment covers every occurrence.
 - **Text maps onto the sketch vocabulary exactly, which is why it is cheap.** TrueType
   `glyf` outlines are lines plus quadratic Béziers, and `Sketch` already has `LineTo`
   and `QuadraticTo` — so a glyph converts with no flattening and inherits everything a

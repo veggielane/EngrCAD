@@ -69,6 +69,36 @@ public sealed class ThermalModel
     public ThermalModel(QuadraticTetMesh mesh, Material material)
         : this(AnalysisMesh.Of(mesh), material) { }
 
+    /// <summary>
+    /// A multi-material model built from the SAME <see cref="AnalysisBody"/> list that was
+    /// meshed — the thermal twin of
+    /// <see cref="StructuralModel.For(AnalysisMesh, IReadOnlyList{AnalysisBody})"/>, and
+    /// the reason it exists is the same: region <c>i</c> takes <c>bodies[i].Material</c>,
+    /// so the conductivities cannot drift from the geometry they belong to.
+    /// <para>Refuses a body with no material, a mesh region no body declares and a
+    /// declared body that contributed no elements — all by name, before anything is
+    /// assembled. A missing CONDUCTIVITY is <see cref="ThermalSolver"/>'s refusal, not
+    /// this one, since a model is legal to build and only a solve integrates one.</para>
+    /// </summary>
+    public static ThermalModel For(AnalysisMesh mesh, IReadOnlyList<AnalysisBody> bodies)
+    {
+        AnalysisBodies.Require(mesh, bodies, "thermal");
+        var model = new ThermalModel(mesh, bodies[0].Material!);
+        for (int b = 0; b < bodies.Count; b++)
+            model.SetMaterial(b, bodies[b].Material!);
+        return model;
+    }
+
+    /// <summary>The linear (4-node) spelling of
+    /// <see cref="For(AnalysisMesh, IReadOnlyList{AnalysisBody})"/>.</summary>
+    public static ThermalModel For(TetMesh mesh, IReadOnlyList<AnalysisBody> bodies) =>
+        For(AnalysisMesh.Of(mesh), bodies);
+
+    /// <summary>The quadratic (10-node) spelling of
+    /// <see cref="For(AnalysisMesh, IReadOnlyList{AnalysisBody})"/>.</summary>
+    public static ThermalModel For(QuadraticTetMesh mesh, IReadOnlyList<AnalysisBody> bodies) =>
+        For(AnalysisMesh.Of(mesh), bodies);
+
     /// <summary>The analysis mesh.</summary>
     public AnalysisMesh Mesh { get; }
 

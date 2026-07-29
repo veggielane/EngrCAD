@@ -117,6 +117,11 @@ public sealed class ButtonHeadScrew : HardwareComponent
 
     public override double InsertedLength => Length;
 
+    /// <summary>Through-hardened low-alloy steel: ISO 7380 button heads are supplied in
+    /// property class 10.9, which is a strength grade rather than a substance (see
+    /// <see cref="FastenerMaterials"/>).</summary>
+    public override Material? Material => FastenerMaterials.AlloySteel;
+
     protected override Shape BuildBody()
     {
         double a = HeadDiameter / 2;             // dome base radius
@@ -232,6 +237,11 @@ public sealed class CountersunkScrew : HardwareComponent
     /// the whole length reaches below it.</summary>
     public override double InsertedLength => Length;
 
+    /// <summary>Through-hardened low-alloy steel: ISO 10642 countersunk screws are
+    /// supplied in property class 10.9 (see <see cref="FastenerMaterials"/> for why the
+    /// class does not get its own material).</summary>
+    public override Material? Material => FastenerMaterials.AlloySteel;
+
     protected override Shape BuildBody()
     {
         double headRadius = HeadDiameter / 2;
@@ -337,6 +347,11 @@ public sealed class HexNut : HardwareComponent
     /// <summary>A nut bears ON the face; nothing goes into the host.</summary>
     public override double InsertedLength => 0;
 
+    /// <summary>Plain carbon steel: ISO 4032 nuts are property class 8 as standard (the
+    /// class-10 nut that pairs with a 12.9 bolt is alloy steel, and weighs the same —
+    /// see <see cref="FastenerMaterials"/>).</summary>
+    public override Material? Material => FastenerMaterials.CarbonSteel;
+
     /// <inheritdoc />
     public override ThreadSpec? ProvidesThread => Thread;
 
@@ -434,6 +449,10 @@ public sealed class PlainWasher : HardwareComponent
     /// <summary>A washer bears ON the face; nothing goes into the host.</summary>
     public override double InsertedLength => 0;
 
+    /// <summary>Plain carbon steel: ISO 7089 washers are supplied at 200 HV as standard
+    /// (the A2/A4 stainless variants are in <see cref="FastenerMaterials"/>).</summary>
+    public override Material? Material => FastenerMaterials.CarbonSteel;
+
     protected override Shape BuildBody()
     {
         // Datum = the bearing face at z = 0; the washer stands z ∈ [0, Thickness].
@@ -517,6 +536,18 @@ public sealed class DeepGrooveBearing : HardwareComponent
 
     /// <summary>Pressed fully home: the whole width sits below the housing face.</summary>
     public override double InsertedLength => Width;
+
+    /// <summary>
+    /// <b>Deliberately none</b> — the one catalogue entry that declines to say what it is
+    /// made of, and the reason is fidelity rather than ignorance. The v1 body is two rings
+    /// with an empty gap where the balls and cage are, so density × volume is measurably
+    /// LESS than the bearing's real mass; a stated material would report that shortfall as
+    /// a confident number in a bill of materials, while an unstated one reports "unknown",
+    /// which is what the BOM's own rule asks for (an unknown mass is an empty cell, never a
+    /// zero, because a spreadsheet sums zeros silently). A design that would rather have
+    /// the lower bound says <c>bearing.ToPart().Of(FastenerMaterials.BearingSteel)</c>.
+    /// </summary>
+    public override Material? Material => null;
 
     protected override Shape BuildBody()
     {

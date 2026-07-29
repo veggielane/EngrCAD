@@ -497,6 +497,21 @@ Dark-themed layout around one shared GL viewport:
 - **Properties** (right): occurrence path (plus the part name when they differ),
   kind (Shape/B-Rep/mesh/SDF), face count, closed, volume, surface area, world size,
   and world position of the selected instance.
+  **The material is EDITABLE** — a dropdown over `Materials.All` plus "(none)", and plus
+  the part's current material when the catalogue does not carry it (one a design built,
+  or a `FastenerMaterials` grade a catalogue component brought with it; without that row
+  the control would show nothing selected for a part that plainly states a material,
+  which reads as "not set", and one idle click would discard it). It follows the typed
+  `[Param]` editors' precedent exactly: **which rows** is the pure
+  `ParamEditors.MaterialChoices` in `EngrCAD.Viewer.Core`, and the write goes through
+  `DocumentEdits.SetMaterial` — the same seam document saving and MCP use — so it is one
+  Ctrl+Z step. Two placement decisions carry reasons: the dropdown sits **above** the
+  panel's `HasMesh` gate (a document property must not wait for a part to tessellate)
+  while the **Mass** row stays below it (that one is a measurement), and the edit runs
+  with `republish: false`, because a material moves no geometry — re-running the tab's
+  mesh loader would be wasted work *and* would clear the selection out from under the
+  control just used. Undo and redo still republish, deliberately: the stack does not know
+  what it is taking back, and a republish is always correct where skipping one is not.
 - **Viewport dressing**: vertical-gradient background, adaptive ground grid on z = 0
   (1-2-5 spacing from the scene size) with RGB world axes, and a **feature-edge
   overlay** drawn over polygon-offset fills — the classic shaded-with-edges CAD
