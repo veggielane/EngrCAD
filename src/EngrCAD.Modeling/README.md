@@ -129,7 +129,20 @@ var body = Shape.Extrude(plate, 0.5);           // B-Rep: exact NURBS profile
 var vase = Shape.Revolve(vaseSketch);           // implicit: exact 2D signed distance
 ```
 
-Primitives: `Rectangle`, `RoundedRectangle`, `Circle`, `Polygon`, `Slot`. Sketches are
+**Elliptical arcs** are first-class: `Sketch.Ellipse(semiX, semiY[, rotation])` and the
+builder's `EllipticalArcTo(end, semiX, semiY, rotation, largeArc, clockwise)` — SVG's
+`A` command with the same two flags and the same out-of-range rule (semi-axes too small
+to span the chord are scaled by the common factor that just reaches, so the aspect and
+rotation survive). The segment stores the centre and both semi-axis **vectors**, so a
+rotated ellipse needs no third parameter and nothing downstream is flattened: `Area()`
+is πab exactly, the region's field is exact, the B-Rep carries an `Ellipse3d`, and the
+SVG writer round-trips it as an `A` command. It round-trips through
+`ToCurves`/`FromCurves` as `Ellipse2d`, so feature persistence carries it. Two honest
+limits: an ellipse with equal semi-axes stays an ellipse (so `IsCircular` and cylinder
+promotion will not claim it — use `Circle` when you mean a circle), and it carries no
+constraint variables yet, so like a bézier only its endpoint joints can be constrained.
+
+Primitives: `Rectangle`, `RoundedRectangle`, `Circle`, `Ellipse`, `Polygon`, `Slot`. Sketches are
 pure 2D; `Shape.Extrude/Revolve/Sweep` place them with a `SketchPlane` (`XY`/`XZ`/`YZ`
 presets, `At(origin, x, y)`, or **`On(face)`** — sketch directly on any planar face of
 a lowered body: X/Y are the face surface's own directions, the normal is outward, the

@@ -696,11 +696,21 @@ public sealed class ConstrainedSketch
                 $"{LoopName(loop)} line {segment}"),
             ArcSeg => throw new ArgumentException(
                 $"Segment {segment} of the {LoopName(loop)} loop is an arc — use Arc({segment})."),
-            _ => throw new ArgumentException(
-                $"Segment {segment} of the {LoopName(loop)} loop is a bézier; only its endpoint " +
+            var other => throw new ArgumentException(
+                $"Segment {segment} of the {LoopName(loop)} loop is {KindName(other)}; only its endpoint " +
                 "joints (Point) can be constrained."),
         };
     }
+
+    /// <summary>The segment kind as a caller would say it — so a refusal names what the
+    /// segment IS rather than assuming everything unrecognized is a bézier.</summary>
+    private static string KindName(SketchSegment segment) => segment switch
+    {
+        LineSeg => "a line",
+        ArcSeg => "an arc",
+        EllipseSeg => "an elliptical arc",
+        _ => "a bézier",
+    };
 
     private SketchArcRef ArcRef(int loop, int segment)
     {
@@ -709,7 +719,7 @@ public sealed class ConstrainedSketch
         if (map.CenterVars[segment] < 0)
             throw new ArgumentException(
                 $"Segment {segment} of the {LoopName(loop)} loop is not an arc " +
-                $"(it is a {(map.Segments[segment] is LineSeg ? "line" : "bézier")}).");
+                $"(it is {KindName(map.Segments[segment])}).");
         bool circle = map.Segments[segment] is ArcSeg { IsFullCircle: true };
         int startJoint = map.SingleCircle ? -1 : map.JointVars[segment];
         int endJoint = map.SingleCircle ? -1 : map.JointVars[(segment + 1) % map.JointCount];

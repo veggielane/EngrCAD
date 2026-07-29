@@ -41,7 +41,8 @@ scene.Add(new Part("original", gear, Palette.Steel));
 // Proportional: x to 16, y and z follow (factor 2/3).
 scene.Add(new Part("resized", gear.Resized((16, 0, 0), auto: true).Translate(24, 0, 0),
     Palette.Brass));
-// Per-axis: an elliptical squash - B-Rep keeps it exact (cylinders become ellipses).
+// Per-axis: an elliptical squash - B-Rep keeps it exact (cylinders become ellipses,
+// and those rims tessellate at segmentsPerCircle like any other angular curve).
 scene.Add(new Part("squashed", gear.Resized((24, 12, 4)).Translate(-26, 0, 0),
     Palette.Coral));
 ```

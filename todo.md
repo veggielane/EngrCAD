@@ -465,9 +465,21 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
   AND branch selector, refuse-loudly with named contradictions/stationary points):
-  elliptical arcs in sketches; constraint serialization alongside feature history
-  (deliberately not v1 — it does not fall out of the `[Param]` descriptor pattern);
-  bézier constraints (tangency at bézier endpoints); point-on-arc/curve constraint.
+  ~~elliptical arcs in sketches~~ ✅ **landed** (`Ellipse2d` + `EllipseSeg`,
+  `Sketch.Ellipse`, `SketchBuilder.EllipticalArcTo`; exact in all three reps, docs
+  `sketching.md`) — what remains OF that item is the constraint side: an elliptical arc
+  carries no centre/axis variables, so it rides the chord similarity like a bézier and
+  tangency to one is not in the vocabulary; constraint serialization alongside feature
+  history (deliberately not v1 — it does not fall out of the `[Param]` descriptor
+  pattern); bézier constraints (tangency at bézier endpoints); point-on-arc/curve
+  constraint.
+- [ ] **A lane-wise `SketchRegion` kernel for elliptical arcs.** Every other segment kind
+  has one; an ellipse lands in the `General` tier because its distance is `Curve2d`'s
+  64-sample scan plus bracketed Newton (point-to-ellipse is a quartic root, so there is
+  no closed form to transcribe). The batch contract is the strong one — bit-identical to
+  the scalar path — so a kernel here must reproduce that scan and its Newton stop exactly,
+  the way `CubicMinimum`'s sticky per-lane mask does. Measure before building: the
+  bounding-box reject already fronts it.
 - [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
   but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
   polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`
@@ -1385,6 +1397,35 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
   and is the natural seed for the BOM and for Simulation.
+  **Surveyed; the blocker is a UNIT decision, not the plumbing.** Exactly one `Material`
+  exists today (`EngrCAD.Fea.Material`) and it structurally cannot express a document
+  material: its constructor refuses `youngsModulus <= 0`, so "name + density + colour" is
+  not constructible through it. Worse, **the two density conventions already disagree by
+  1000×** — `Materials.Steel.Density` is 7.85e-9 (tonne/mm³, the mm/N/MPa/tonne system a
+  consistent FEA solve needs) while `PartMassProperties` documents 7.85e-6 (kg/mm³, which
+  is fine for reading mass in kilograms). Adding a second catalogue in Modeling would
+  bake that disagreement into the model rather than resolve it, so the item is a
+  unification, not an addition:
+  - Move `Material` down to `EngrCAD.Core` — the only ancestor both `Fea` and `Modeling`
+    see (`Fea` already references Core only for `Vector3d`), and the same call as
+    `Viewer.Core`: an assembly boundary is packaging, so the namespace can stay put.
+  - Make the elasticity/thermal properties OPTIONAL and move the hard refusal from the
+    constructor to the POINT OF USE (`StructuralModel` refusing a material with no `E`,
+    by name). A material with no modulus is a perfectly good *document* material; only a
+    structural solve needs one.
+  - Then Modeling is additive and small: `Part.Material` beside `Part.Hardware`,
+    `PartMassProperties`' `Func<Part, double>? density` defaulting to
+    `p => p.Material?.Density ?? 1`, `BomLine.Material => Part.Material?.Name` (an
+    expression-bodied projection, so no ctor change) plus one column in `ToText`/`ToCsv`,
+    and a write-only-when-non-default field in `DocumentFile` to keep the
+    save→load→save fixed point byte-identical.
+  - **Decide the unit system explicitly and write it down**: mm/N/tonne, matching the
+    existing catalogue, with `PartMassProperties`' example corrected — otherwise "one
+    liner" means the returned mass silently changes meaning with the caller's source of
+    density. A cross-reference warning is in `PartMassProperties`' remarks meanwhile.
+  - Colour stays on `Part`: `Part.Color` already owns the palette-assignment invariant,
+    so a material should supply the DEFAULT at add time rather than own the property.
+  (Not landed because every step above edits `EngrCAD.Fea`.)
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,

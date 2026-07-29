@@ -826,6 +826,52 @@ The result is a lossless route from a drawn sketch to an exact analytic profile 
 touches `Region2d` — which matters because going through a region is the one deliberately
 lossy step in the whole 2D pipeline.
 
+**Elliptical arcs joined the family, and what they cost is instructive.** `Ellipse2d`
+beside `Arc2d`, `EllipseSeg` beside `ArcSeg`, both storing the centre and both semi-axis
+**VECTORS** rather than (rx, ry, rotation) — so a rotated ellipse is the ordinary case
+instead of a third parameter, an affine map of the axes is an affine map of the curve, and
+the form is `Ellipse3d`'s verbatim so the lift invents nothing. Four of the five things a
+segment must supply stayed closed form: the signed area is `½(C × (End − Start) +
+(A × B)·sweep)`, which *reduces exactly* to the circular formula at A = (r, 0), B = (0, r);
+the bounds solve `dx/dθ = 0` analytically instead of sampling; the flattening bound is
+`(|A| + |B|)·Δ²/8`; and the y-monotone parity pieces invert `y − C.y = R·sin(θ + φ)` in
+closed form, so an ellipse's ray crossing is as exact as a circle's rather than a bisection
+like a bézier's.
+
+The fifth is the **distance**, and it has no elementary closed form (point-to-ellipse is a
+quartic). Rather than write a fifth scan-and-Newton, `EllipseSeg.Distance` delegates to the
+`Curve2d` base's — one implementation, one documented contract (every candidate is a real
+point ON the curve, so the answer can only over-estimate), and the segment and the 2D curve
+family cannot disagree. The cost is stated rather than hidden: an elliptical sketch lands in
+`SketchRegion`'s `General` tier where every other kind has a lane kernel, filed with the note
+that the batch contract there is bit-identity, not a bounded deviation.
+
+Three further decisions. `Ellipse2d` does **not** override `TryToCurvedEdge`, so it
+correctly refuses the curved 2D arrangement — that tier's completeness argument is that
+agreeing in tangent *and* curvature means sharing a carrier, which stops being true the
+moment ellipses join (a circle osculates an ellipse at its axis ends). `EllipticalArcTo` is
+SVG's `A` command verbatim, flags and out-of-range rule included, because that is the only
+widely-shared spelling of this curve and matching it means an SVG path crosses either way
+with nothing re-derived; it is solved by mapping the ellipse to the **unit circle**, where
+the problem is the circular one already solved, and mapping back — legal because the map is
+linear, so it carries centres to centres and the parameter across verbatim. And an ellipse
+with equal semi-axes deliberately stays an `Ellipse2d` rather than collapsing to an arc:
+silently changing a caller's type would make `IsCircular` and cylinder promotion depend on
+whether two doubles happened to be equal.
+
+**The defect it exposed is the more valuable half.** `BRepTessellator` handed the
+`segmentsPerCircle` density to `Circle3d` and nothing else, so an ellipse — whose parameter
+is equally an angle over one turn — fell to the generic `curveSamples`. An elliptical prism
+measured **0.64% under πabh at "256 segments per circle": the deficit of a 23-gon**. That is
+not an accuracy tolerance but a wrong answer to the density the caller stated, and it was
+already reaching real geometry, since `SurfaceIntersection` returns an `Ellipse3d` for an
+oblique plane through a cylinder. The gate is now `IsAngularlyParameterized` — the condition
+itself rather than a type that happens to satisfy it, the same "a tier's gate should BE its
+correctness condition" rule the helical-band and ring-paired-band work recorded. With it,
+the prism matches the *discrete* truth `(n/2)·a·b·sin(2π/n)·h` as an **identity**, which is
+only available in closed form because nothing along the chain is flattened — the strongest
+form of test this feature could have.
+
 ### The curved 2D tier — and why it is a PARALLEL type
 
 The lossy step above is now optional. `CurvedEdge2d` / `CurvedRegion2d` /

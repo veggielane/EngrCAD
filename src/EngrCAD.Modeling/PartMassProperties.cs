@@ -17,6 +17,14 @@ namespace EngrCAD.Modeling;
 /// costs a tessellation, not a compile.</para>
 /// <para>Density is the caller's: kg/mm³ for a model in millimetres (steel 7.85e-6,
 /// aluminium 2.7e-6), or leave it at 1 to read mass as volume.</para>
+/// <para><b>Watch the unit system when a density comes from somewhere else.</b> This
+/// operation only needs mass, so kg/mm³ is a perfectly good choice and returns kilograms
+/// — but the simulation layer's material catalogue is stated in the <b>mm/N/MPa/tonne</b>
+/// system, where a consistent density is tonne/mm³ and steel reads 7.85e<b>-9</b>, a
+/// factor of 1000 away. Nothing in the kernel carries a unit, so neither figure can be
+/// checked; pick one system for a model and stay in it. (A per-part <c>Material</c> would
+/// settle this by construction and is filed in todo.md — this discrepancy is precisely
+/// why it must decide the unit system rather than inherit two.)</para>
 /// </remarks>
 public static class PartMassProperties
 {

@@ -281,7 +281,7 @@ public static class BRepTessellator
 
         if (edge.IsClosedEdge)
         {
-            int n = edge.Curve.Underlying is Circle3d ? segmentsPerCircle : curveSamples;
+            int n = IsAngularlyParameterized(edge.Curve) ? segmentsPerCircle : curveSamples;
             var points = new List<Vector3d>(n);
             for (int i = 0; i < n; i++)
                 points.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / n)));
@@ -298,6 +298,20 @@ public static class BRepTessellator
     }
 
     /// <summary>
+    /// Whether a closed curve's parameter IS an angle over one turn, which is what earns
+    /// the <c>segmentsPerCircle</c> density rather than the generic <c>curveSamples</c>.
+    /// <para>Circles and ELLIPSES both qualify — an ellipse is <c>C + A·cos θ + B·sin θ</c>,
+    /// so a caller asking for 256 segments per circle gets 256 around an ellipse too. It
+    /// used to get 32, which is not a tolerance question but a wrong ANSWER to the density
+    /// the caller stated: an elliptical prism measured 0.64% under its analytic πabh at
+    /// "256 segments", the deficit of a 23-gon. The same rule reaches the elliptical edges
+    /// <c>SurfaceIntersection</c> already produces for an oblique plane through a cylinder,
+    /// which were under-sampled the same way.</para>
+    /// </summary>
+    private static bool IsAngularlyParameterized(Curve3d curve) =>
+        curve.Underlying is Circle3d or Ellipse3d;
+
+    /// <summary>
     /// Parameter samples over a curve's full domain, matching <see cref="SampleEdge"/>'s
     /// rules exactly so face grids and shared boundary edges weld without cracks.
     /// </summary>
@@ -306,7 +320,7 @@ public static class BRepTessellator
         var domain = curve.Domain;
         if (curve.IsClosed)
         {
-            int n = curve.Underlying is Circle3d ? segmentsPerCircle : curveSamples;
+            int n = IsAngularlyParameterized(curve) ? segmentsPerCircle : curveSamples;
             return EvenParams(domain, n, includeEnd: false);
         }
         if (curve.Underlying is Line3d)

@@ -59,8 +59,11 @@ internal sealed class SketchVariables
         {
             var segments = loopSketch.Segments;
             bounds = bounds.Union(loopSketch.Bounds);
+            // A single closed curve has no joints at all — true of a full circle and,
+            // for the same structural reason, of a full ellipse.
             bool singleCircle = segments.Count == 1
-                && segments[0] is ArcSeg only && only.IsFullCircle;
+                && (segments[0] is ArcSeg { IsFullCircle: true }
+                    or EllipseSeg { IsFullEllipse: true });
 
             int[] jointVars = new int[singleCircle ? 0 : segments.Count];
             for (int j = 0; j < jointVars.Length; j++)
@@ -192,6 +195,13 @@ internal sealed class SketchVariables
                     result.Add(RebuildCubic(cubic, start, end));
                     break;
 
+                // An elliptical arc carries no centre/radius variables (see Build), so it
+                // rides the chord similarity exactly as a bézier does — same reasoning,
+                // and the same guarantee that both ends land on the joints.
+                case EllipseSeg ellipse:
+                    result.Add(RebuildEllipse(ellipse, start, end));
+                    break;
+
                 default:
                     throw new InvalidOperationException(
                         $"Unknown sketch segment kind {segment.GetType().Name}.");
@@ -219,6 +229,33 @@ internal sealed class SketchVariables
             start + ComplexMultiply(m, cubic.Control1 - cubic.P0),
             start + ComplexMultiply(m, cubic.Control2 - cubic.P0),
             end);
+    }
+
+    /// <summary>
+    /// The bézier rule for an elliptical arc: the centre and BOTH semi-axis vectors ride
+    /// the same chord similarity, so the ellipse keeps its shape and aspect relative to
+    /// its endpoints. The polar parameters are untouched because they are measured in the
+    /// ellipse's OWN axis frame, which the similarity carries with it — which is also why
+    /// both endpoints land back on the joints to rounding rather than by repair.
+    /// </summary>
+    private static EllipseSeg RebuildEllipse(EllipseSeg ellipse, Vector2d start, Vector2d end)
+    {
+        var oldStart = ellipse.Start;
+        var oldChord = ellipse.End - oldStart;
+        var newChord = end - start;
+        if (!(oldChord.LengthSquared > 0))   // exact-zero division guard: a closed arc translates
+        {
+            var delta = start - oldStart;
+            return new EllipseSeg(
+                ellipse.Center + delta, ellipse.SemiAxisX, ellipse.SemiAxisY,
+                ellipse.StartAngle, ellipse.Sweep);
+        }
+        var m = ComplexDivide(newChord, oldChord);
+        return new EllipseSeg(
+            start + ComplexMultiply(m, ellipse.Center - oldStart),
+            ComplexMultiply(m, ellipse.SemiAxisX),
+            ComplexMultiply(m, ellipse.SemiAxisY),
+            ellipse.StartAngle, ellipse.Sweep);
     }
 
     private static Vector2d ComplexMultiply(in Vector2d a, in Vector2d b) =>
