@@ -734,7 +734,7 @@ public static class StructuralSolver
                 }
             }
         }
-        var materials = ElementMaterials(model);
+        var laws = ElementLaws(model);
 
         for (int e = 0; e < mesh.ElementCount; e++)
         {
@@ -756,7 +756,7 @@ public static class StructuralSolver
                         elementPrescribed[c][3 * i + a] = prescribed[a];
                 }
             }
-            TetElement.Stiffness(mesh.Order, positions, materials[e], rule, ke);
+            TetElement.Stiffness(mesh.Order, positions, laws[e], rule, ke);
 
             for (int i = 0; i < perElement; i++)
             {
@@ -810,12 +810,17 @@ public static class StructuralSolver
 
     /// <summary>Each element's material resolved once, so the assembly and reaction loops
     /// index an array instead of hashing a region id per element.</summary>
-    private static Material[] ElementMaterials(StructuralModel model)
+    /// <summary>
+    /// The constitutive law of every element, resolved once. A law is derived per REGION and
+    /// cached on the model, so this array holds references rather than matrices — what it
+    /// buys is one dictionary probe per element instead of one per quadrature point.
+    /// </summary>
+    private static ElasticLaw[] ElementLaws(StructuralModel model)
     {
-        var materials = new Material[model.Mesh.ElementCount];
-        for (int e = 0; e < materials.Length; e++)
-            materials[e] = model.MaterialOf(e);
-        return materials;
+        var laws = new ElasticLaw[model.Mesh.ElementCount];
+        for (int e = 0; e < laws.Length; e++)
+            laws[e] = model.ElasticityOf(e);
+        return laws;
     }
 
     private static (Vector3d[] Reactions, double StrainEnergy) ReactionsAndEnergy(
@@ -825,7 +830,7 @@ public static class StructuralSolver
         var mesh = model.Mesh;
         int perElement = mesh.NodesPerElement;
         int elementDofs = 3 * perElement;
-        var materials = ElementMaterials(model);
+        var laws = ElementLaws(model);
 
         var internalForce = new Vector3d[mesh.NodeCount];
         var ke = new double[elementDofs * elementDofs];
@@ -846,7 +851,7 @@ public static class StructuralSolver
                 ue[3 * i + 1] = u.Y;
                 ue[3 * i + 2] = u.Z;
             }
-            TetElement.Stiffness(mesh.Order, positions, materials[e], rule, ke);
+            TetElement.Stiffness(mesh.Order, positions, laws[e], rule, ke);
 
             for (int i = 0; i < perElement; i++)
             {
