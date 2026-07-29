@@ -235,9 +235,10 @@ public static class EngrCad
     /// <summary>
     /// Standard main-method wrapper for model programs:
     /// no arguments → <see cref="ShowLive"/>; <c>--view</c> → static <see cref="Show"/>;
-    /// <c>--export path.step|.stl|.obj|.3mf|.amf|.off|.vtu|.glb|.gltf</c> → headless export, no window
-    /// (CI-friendly; <c>.vtu</c> carries the parts' simulation results as point data for
-    /// ParaView, <c>.glb</c>/<c>.gltf</c> the assembly hierarchy and colours for the web);
+    /// <c>--export path.step|.ecb|.stl|.obj|.3mf|.amf|.off|.vtu|.glb|.gltf</c> → headless export, no
+    /// window (CI-friendly; <c>.ecb</c> is the native lossless B-Rep archive, <c>.vtu</c>
+    /// carries the parts' simulation results as point data for ParaView,
+    /// <c>.glb</c>/<c>.gltf</c> the assembly hierarchy and colours for the web);
     /// <c>--render path.png</c> → headless offscreen screenshot, no window.
     /// <c>--render</c> additionally honors
     /// <c>--render-style points|wireframe|shaded|shaded-edges</c> (the global
@@ -650,10 +651,50 @@ public static class EngrCad
             case ".step" or ".stp":
                 return ExportStep(scene, instances, path, log);
 
+            case BrepArchive.Extension:
+                return ExportBrepArchive(instances, path, log);
+
             default:
                 Log.UnsupportedExportFormat(log, Path.GetExtension(path));
                 return 2;
         }
+    }
+
+    /// <summary>
+    /// Native <c>.ecb</c> archive of every B-Rep-representable part — the lossless
+    /// round-trip STEP cannot give (helical, lofted and swept surfaces, offset curves,
+    /// trimmed domains, <c>CurveSegment</c> mappings).
+    /// <para>Parts are written UN-POSED, one root per part, exactly as the pre-assembly
+    /// STEP export did: the archive is a geometry format, not a document format — a
+    /// scene's structure belongs in the document envelope, not smuggled into a B-Rep
+    /// file.</para>
+    /// </summary>
+    private static int ExportBrepArchive(
+        IReadOnlyList<PartInstance> instances, string path, ILogger log)
+    {
+        var plan = StepAssembly.Plan(instances);
+        foreach (var (part, _) in plan.Skipped)
+            Log.SkippingNonBrepPart(log, part.Name);
+        if (plan.Instances.Count == 0)
+        {
+            Log.NoBrepParts(log);
+            return 1;
+        }
+
+        // Distinct solids, in first-use order: a part placed forty times is written once.
+        var solids = new List<BrepSolid>();
+        var seen = new HashSet<BrepSolid>(ReferenceEqualityComparer.Instance);
+        foreach (var instance in plan.Instances)
+        {
+            if (seen.Add(instance.Solid))
+                solids.Add(instance.Solid);
+        }
+
+        BrepArchive.WriteFile(solids, path, plan.Instances[0].PartName);
+        Log.WroteMeshFormat(
+            log, path, solids.Count,
+            $"EngrCAD BREP archive v{BrepArchive.FormatVersion}");
+        return 0;
     }
 
     /// <summary>

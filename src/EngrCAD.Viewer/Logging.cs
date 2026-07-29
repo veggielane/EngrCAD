@@ -137,7 +137,7 @@ internal static partial class Log
     internal static partial void UnsupportedRenderFormat(ILogger logger, string extension);
 
     [LoggerMessage(EventId = 27, Level = LogLevel.Error,
-        Message = "Unsupported export format '{Extension}' — use .step, .stl, .obj, .3mf, .amf, .off, .vtu, .glb, or .gltf.")]
+        Message = "Unsupported export format '{Extension}' — use .step, .ecb, .stl, .obj, .3mf, .amf, .off, .vtu, .glb, or .gltf.")]
     internal static partial void UnsupportedExportFormat(ILogger logger, string extension);
 
     [LoggerMessage(EventId = 28, Level = LogLevel.Error,

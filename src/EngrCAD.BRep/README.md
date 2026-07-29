@@ -819,6 +819,31 @@ operations. Depends only on `EngrCAD.Core`.
   outward-band convention the single-rim pole case reads — with the rim circle's own
   axis alignment folded in.
 
+- **Native B-Rep archive** (`BrepArchive.Write/Read/WriteFile/ReadFile` →
+  `BrepArchiveResult`; extension `.ecb`, wired into `--export`) — the **lossless**
+  round-trip STEP cannot give. Every curve and surface type in this project round-trips
+  as ITSELF, including the ones with no AP214 entity at all: `HelicalSurface` (every
+  modelled thread), `LoftedSurface`, `SweptSurface`, `OffsetCurve3d`, `SpiralArc3d`,
+  `PhaseShiftedCurve`, plus trimmed edge domains and `CurveSegment` mappings.
+  **Text, and that is a decision about testing rather than about geometry** (design.md
+  §5): a numbered entity table with `#n` references, one entity per line, `;` comments,
+  dependencies always defined before use — so a committed corpus archive can be *diffed*
+  the way the golden fingerprints and byte-compared docs PNGs already are, where a binary
+  would need a decoder written before anyone would look at it. Exactness is not given up
+  for it: `"R"` formatting is a bijection on finite doubles, and the tests assert the
+  strong form — **save → load → save is byte-for-byte a fixed point** over a 14-solid
+  corpus (box through threaded rod, whole-solid fillet and boolean output). **The entity
+  table keys on REFERENCE identity, never on structural equality**, which is load-bearing
+  and not an optimization: `BrepEdge.IsClosedEdge` *is*
+  `ReferenceEquals(StartVertex, EndVertex)`, so two coincident vertices and one shared
+  vertex are different solids, and deduplicating by position would silently change
+  topology. The same rule gives sharing for free — an edge used by two faces is written
+  once, a seam curve shared by two edges comes back as one object. Frames are rebuilt
+  with `Frame3d.FromOrthonormal`, the only factory that stores its axes verbatim (the
+  re-deriving ones would move them by ulps and the fixed point would break — the
+  `AxisRef` lesson). An **unknown version is refused by name**, as are foreign units and
+  dangling or forward references. Scope is deliberately GEOMETRY, not document: solids,
+  not scenes, poses, features or materials.
 - **Shape healing** (`ShapeHealing.Heal/Analyze` — OCCT `ShapeFix`): repairs imported
   face-soup topology; every repair is a return value (`ShapeHealingReport`), never a
   log line, and the input is never modified. Passes in order, each switchable: vertex

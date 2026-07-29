@@ -1,7 +1,8 @@
 # Exports
 
-EngrCAD exports STEP (exact B-Rep), STL, OBJ, OFF, 3MF, AMF and glTF 2.0 (meshes), VTU
-(meshes plus simulation results), and PNG renders. The snippets on this page run against
+EngrCAD exports STEP (exact B-Rep), its own lossless `.ecb` B-Rep archive, STL, OBJ, OFF,
+3MF, AMF and glTF 2.0 (meshes), VTU (meshes plus simulation results), and PNG renders. The
+snippets on this page run against
 a temp directory (`Scratch`) during the
 docs build, so the export paths are exercised on every build — no screenshots needed
 here.
@@ -50,6 +51,76 @@ double size = imported.Solids[0].Vertices.Max(v => v.Position.X);
 Console.WriteLine($"1 m cube imported as {size} mm"); // 1000
 if (Math.Abs(size - 1000) > 1e-9)
     throw new Exception("metre units were not scaled");
+```
+
+## Native B-Rep archive (`.ecb`)
+
+STEP is the interchange format; the `.ecb` archive is the **lossless** one. It round-trips
+every curve and surface type the kernel has, including the ones STEP has no entity for —
+helical surfaces (modelled threads), lofted surfaces, swept (RMF) surfaces, offset curves,
+spiral arcs — plus trimmed edge domains and `CurveSegment` mappings.
+
+It is a **versioned, human-diffable text format**: a numbered entity table where every
+reference is `#n`, so shared topology stays shared (an edge used by two faces is written
+once and referenced twice), one entity per line, dependencies always defined before use.
+
+```csharp run:brep-archive-roundtrip
+// A modelled thread: a HelicalSurface, which STEP cannot represent at all.
+// (chamferEnds: false is the B-Rep-native form -- the end cones have no exact B-Rep.)
+var rod = Shape.ExternalThread(8, length: 10, chamferEnds: false).ToBrep();
+
+var path = Path.Combine(Scratch, "rod.ecb");
+BrepArchive.WriteFile(rod, path, name: "M8 rod");
+
+var result = BrepArchive.ReadFile(path);
+var restored = result.Single();
+restored.Validate();
+
+Console.WriteLine($"{result.Name}: {restored.Faces.Count()} faces, "
+    + $"{restored.Edges.Count()} edges, format v{result.Version}");
+if (restored.Faces.Count() != rod.Faces.Count())
+    throw new Exception("face count changed across the round trip");
+
+// save -> load -> save is byte-identical: the strong form of "exact".
+if (BrepArchive.Write(restored, "M8 rod") != File.ReadAllText(path))
+    throw new Exception("the archive is not a fixed point under round-trip");
+```
+
+The file reads like this — `Solid` at the end referencing shells, referencing faces,
+referencing surfaces and loops all the way down:
+
+```
+ENGRCAD-BREP 1
+UNITS MM
+NAME 'M8 rod'
+GENERATOR 'EngrCAD'
+
+#1 = Line((4 0 -0.078125), (4 0 0.078125))
+#2 = Helical((0 0 0 1 0 0 0 1 0), (4 -0.078125), (4 0.078125), 1.25, (0 50.26548))
+#3 = Vertex((4 0 -0.078125))
+...
+ROOT #57
+```
+
+Two contract points. An **unknown version is refused by name** rather than parsed
+hopefully — a newer writer may have added entity forms, and a partial parse of a solid we
+cannot build is worse than a clear message. And units are declared and checked, the lesson
+the STEP importer paid for.
+
+Reading gives you an ordinary `BrepSolid`, so it feeds straight back into the modelling
+API:
+
+```csharp run:brep-archive-reuse
+var original = (Shape.Box(30, 20, 10) - Shape.Cylinder(4, 30)).ToBrep();
+BrepArchive.WriteFile(original, Path.Combine(Scratch, "plate.ecb"));
+
+var reloaded = BrepArchive.ReadFile(Path.Combine(Scratch, "plate.ecb")).Single();
+var further = Shape.From(reloaded) - Shape.Cylinder(3, 30).Translate(10, 0, 0);
+
+var mesh = further.ToMesh();
+Console.WriteLine($"reloaded and cut again: {mesh.FaceCount} facets, closed = {mesh.IsClosed}");
+if (!mesh.IsClosed)
+    throw new Exception("the reloaded solid did not survive a second boolean");
 ```
 
 ### Healing imported files
@@ -209,6 +280,7 @@ no code changes, CI-friendly, no window:
 
 ```
 dotnet run --project MyDesign -- --export bracket.step   # STEP per B-Rep part
+dotnet run --project MyDesign -- --export bracket.ecb    # native lossless B-Rep archive
 dotnet run --project MyDesign -- --export bracket.stl    # merged binary STL
 dotnet run --project MyDesign -- --export bracket.obj    # merged OBJ
 dotnet run --project MyDesign -- --export bracket.off    # merged OFF

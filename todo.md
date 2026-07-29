@@ -853,10 +853,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   exports undeformed by design (see the reasoning in `GltfScene`) — a glTF morph target
   is the honest way to carry it, since a target's weight is exactly the exaggeration
   factor the file currently has nowhere to record.
-  **Native BREP serialization** should be the STEP writer's entity model dumped
-  without the AP214 ceremony ONLY if a measured need (load time, exactness of swept
-  surfaces STEP cannot carry) appears; the honest alternative — version the format
-  from day one or don't ship it — is the whole cost.
+  **Native BREP serialization** ✅ **landed** (`BrepArchive` in EngrCAD.BRep, `.ecb`,
+  `--export` wiring, docs `examples/exports.md`, decision recorded in design.md §5). The
+  measured need was the second one this assessment named: every modelled thread carries a
+  `HelicalSurface`, which STEP has no entity for, so a threaded part had no lossless file
+  representation at all. Versioned from day one, unknown versions refused by name. Format
+  residuals: no compression (a busy solid is a few hundred KB of text — fine today, and
+  the honest lever if it ever is not is gzip around the same bytes rather than a binary
+  encoding, since that keeps the diffability the format exists for); no scene/document
+  content by design (that is the OCAF envelope item below, which should REFERENCE `.ecb`
+  files rather than embed geometry); the reader does not tolerate forward references, so
+  a hand-reordered file is refused rather than sorted; and the `Diagnostics` list only
+  ever carries unknown-header warnings today — there is no partial-read mode, which is
+  the right call for a native format and the wrong one for an import format.
 - [ ] Hidden-line removal (HLR) projections for 2D drawings. Design assessment
   (task #11): the exact-algebra route (OCCT `HLRBRep`: project edges + silhouette
   curves, split at visibility changes, classify against every face) is a large

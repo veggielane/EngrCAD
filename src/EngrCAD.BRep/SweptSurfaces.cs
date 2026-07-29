@@ -373,6 +373,18 @@ public sealed class SweptSurface : Surface
     public Curve3d Generator => _profileGenerator;
     public Curve3d Path => _path;
 
+    /// <summary>The seed X direction, already projected perpendicular to the path's start
+    /// tangent and normalized — i.e. what the constructor STORED, not what it was
+    /// handed. Feeding this back reconstructs the same surface: the projection is a
+    /// no-op on an already-perpendicular unit vector.</summary>
+    public Vector3d StartX => _startX;
+
+    /// <summary>How many rotation-minimizing frames were computed along the path. It is
+    /// part of the surface's identity, not a hint — every interior frame is interpolated
+    /// between these, so two sweeps differing only in this count are different surfaces.
+    /// Exposed so a serializer can reproduce one exactly.</summary>
+    public int FrameCount => _frameParams.Length;
+
     public SweptSurface(Curve3d profileGenerator, Curve3d path, in Vector3d startX, int frameCount = 64)
     {
         if (frameCount < 2)
@@ -688,6 +700,12 @@ public sealed class SweptSurface : Surface
 /// <summary>The path traced by a fixed profile-plane offset during a sweep (a sweep "rail").</summary>
 public sealed class SweptRailCurve(SweptSurface surface, Vector2d localOffset) : Curve3d
 {
+    /// <summary>The sweep this rail rides.</summary>
+    public SweptSurface Surface => surface;
+
+    /// <summary>The fixed (x, y) offset in the sweep's moving profile plane.</summary>
+    public Vector2d LocalOffset => localOffset;
+
     public override Interval Domain => surface.DomainV;
     public override bool IsClosed => false;
     public override Vector3d PointAt(double t) => surface.FramePoint(localOffset, t);
