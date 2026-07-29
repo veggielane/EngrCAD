@@ -54,6 +54,8 @@
   href: fea-thermal.md
 - name: Modal analysis (FEA)
   href: fea-modal.md
+- name: Buckling and frequency response (FEA)
+  href: fea-buckling.md
 - name: Three representations
   href: representations.md
 - name: Saving documents

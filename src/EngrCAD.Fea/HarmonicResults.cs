@@ -84,7 +84,18 @@ public sealed class HarmonicResponse
     /// </summary>
     public double TruncationError { get; }
 
-    /// <summary>The modal coordinate <c>q_n(W)</c> at one sweep point.</summary>
+    /// <summary>
+    /// The mode's own dynamic coordinate <c>q_n(W) = F_n / (w_n² - W² + 2i·zeta_n·w_n·W)</c>
+    /// at one sweep point.
+    ///
+    /// <para><b>Deliberately the RAW coordinate, uncorrected.</b> The mode-acceleration
+    /// correction subtracts each kept mode's static term and adds the true static response
+    /// back as a whole, which is a statement about the SUM rather than about any one mode — so
+    /// folding it into a per-mode coordinate would make <c>q_n</c> stop being the answer to
+    /// <c>q_n'' + 2·zeta·w_n·q_n' + w_n²·q_n = F_n</c>, which is the only thing it means.
+    /// <see cref="ResponseAt(int, int)"/> and <see cref="DisplacementAt(int)"/> carry the
+    /// correction.</para>
+    /// </summary>
     /// <param name="frequencyIndex">Index into <see cref="Frequencies"/>.</param>
     /// <param name="modeNumber">1-based mode number.</param>
     public Complex ModalCoordinate(int frequencyIndex, int modeNumber)

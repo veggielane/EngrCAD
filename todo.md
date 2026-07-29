@@ -786,28 +786,55 @@ the shear gap growing by mode, simply-supported within 0.62% of Timoshenko, free
 modes at 2.4e-12 of the first elastic eigenvalue, orthogonality at 7.1e-15/5.8e-13, effective
 mass 61.09% against the classical 0.6132. Residuals below.
 
-- [ ] **FEA: Rayleigh (proportional) damping, and damped modes.** `C = a·M + b·K` rides the
-  two matrices modal analysis already assembles, and it is the input a frequency-response or
-  a transient-dynamics solve needs. Undamped real modes stay the default; a genuinely
-  non-proportional `C` makes the eigenproblem quadratic (complex modes, a doubled state-space
-  form) and is a different piece of work that should be scoped separately rather than
-  smuggled in behind the same API.
-- [ ] **FEA: frequency response (harmonic analysis).** The natural next consumer of the
-  modes: `(K − omega²·M + i·omega·C)·u = f` swept over a frequency range, either by modal
-  superposition (cheap once the modes exist, and exactly what the participation factors and
-  effective masses are for) or by direct complex solves per frequency (accurate, and needs a
-  complex sparse factorization `EngrCAD.Core.Solvers` does not have). Modal superposition
-  first, with the truncation error stated from the extracted effective-mass fraction rather
-  than assumed away.
-- [ ] **FEA: buckling and stress stiffening — the other eigenproblem, and it reuses
-  `LanczosEigen` unchanged.** Linear buckling is `K·phi = -lambda·K_g·phi` with `K_g` the
-  GEOMETRIC stiffness assembled from a static solve's stress field, so the new work is one
-  element matrix (`integral(sigma_ij · dN_a/dx_i · dN_b/dx_j)`) plus the wiring that runs a
-  static solve first and hands its stresses on; the eigensolver, the shift machinery and the
-  mode publishing are already there. Stress stiffening is the same `K_g` added to `K` in a
-  modal solve, which is what shifts a spinning or preloaded part's frequencies. Note the
-  shift logic needs revisiting: `K_g` is indefinite, so `K − sigma·K_g` is not made positive
-  definite by a negative shift the way `K − sigma·M` is.
+**Buckling, stress stiffening, damping and frequency response landed**
+(`BucklingSolver`/`BucklingResults`, `TetElement.GeometricStiffness`/`TetQuadrature.ForGeometric`,
+`FeaAssembly` shared with the modal solver, `ModalSolveOptions.Prestress`, `RayleighDamping`/
+`ModalDamping`, `HarmonicSolver`/`HarmonicResponse`/`HarmonicSweep`; docs
+`examples/fea-buckling.md`) — the filed note that the shift logic needed revisiting was right,
+and the answer turned out to be that the shift is not the free parameter at all: `A^-1 B` is
+self-adjoint in BOTH the A and the B inner product, so the iteration runs in the K inner
+product with operator `K^-1(-Kg)`, factorizes K itself, and needs NO shift because the
+substitution `theta = 1/lambda` has already made the wanted eigenvalue extreme. `LanczosEigen`
+took exactly one generalization for it (the metric became a parameter separate from the
+right-hand matrix) and the modal path is unchanged to the bit. Verified: all four Euler end
+conditions within 0.05–0.70% of the shear-corrected load, refinement monotone from above,
+`omega²(P)/omega²(0) = 1 + P/P_cr` to 7.4e-10, resonant amplification 25.006 against 25.000,
+half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Residuals below.
+
+- [ ] **FEA: a DIRECT (per-frequency) harmonic solve.** `(K − omega²M + i·omega·C)·u = f`
+  factorized per frequency — hundreds of times a modal sweep, and the only option in three
+  cases modal superposition structurally cannot express: non-proportional damping (the modes
+  stop diagonalising C), material properties that vary WITH frequency (the modal basis itself
+  would change per point), and a load whose spatial distribution changes with frequency. Needs
+  a complex sparse factorization `EngrCAD.Core.Solvers` does not have. File it as a second
+  method rather than a better one — `HarmonicSolver`'s docs already state which questions
+  belong to it.
+- [ ] **FEA: non-proportional damping — the quadratic eigenproblem.** A discrete dashpot, two
+  materials with different loss factors in one model, viscoelasticity or hysteretic damping all
+  leave `phi' C phi` with off-diagonal terms, at which point the damped modes are no longer the
+  undamped ones and `(lambda²M + lambda·C + K)phi = 0` needs a `2n` state-space linearization
+  in a NON-SYMMETRIC matrix pair — so neither `SparseCholesky` nor `LanczosEigen` applies and
+  the modes come out complex. Scoped separately on purpose; `RayleighDamping`'s docs say
+  precisely what is and is not covered.
+- [ ] **FEA: residual-VECTOR basis augmentation.** `HarmonicSolveOptions.StaticCorrection`
+  handles the static part of what truncated modes miss (mode acceleration), which is most of it
+  — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static
+  response orthogonalised against the kept modes and added to the basis as a pseudo-mode, which
+  also improves the response at non-zero frequencies rather than only at DC.
+- [ ] **FEA: base-acceleration (support motion) excitation for the harmonic sweep.** The modal
+  participation factors `ModalResults` already carries are exactly the modal forces of a unit
+  base acceleration, so this is a load-vector spelling rather than new mathematics; v1 takes
+  nodal forces only and says so.
+- [ ] **FEA: the buckling residual FLOOR, and whether a better residual measure removes it.**
+  The measured relative residual is a total cancellation of `K phi` against `lambda Kg phi`, so
+  its floor is `eps·kappa(K)` — worse than a modal solve's because `K^-1 Kg` does not SMOOTH
+  the way `K^-1 M` does (a geometric stiffness is derivative-like, so the Lanczos vectors keep
+  the high-frequency content K amplifies). Measured: a 23 166-DOF slender column stalls at
+  1.76e-9 where every coarser mesh reaches 1e-10, which is why the buckling default tolerance
+  is 1e-7. A residual measured in the `K^-1` norm (i.e. `|K^-1(K phi − lambda Kg phi)|`, one
+  extra back-substitution per check through a factorization that already exists) would not
+  cancel the same way and might restore a tighter default; unmeasured, and the current default
+  is honest rather than a workaround.
 - [ ] **FEA: block Lanczos, for multiplicity three and above.** Locking and restarting
   recovers the SECOND member of a degenerate pair, and the solver targets one extra mode so a
   missed copy has a run to appear in — but neither is a proof of completeness for a triple
@@ -818,7 +845,16 @@ mass 61.09% against the classical 0.6132. Residuals below.
   `M·a + C·v + K·u = f(t)`, at a constant step so ONE factorization serves the run — the same
   argument `ThermalSolver.SolveTransient` already makes, and the same reason its step is
   constant. Different in kind from modal superposition: it takes nonlinearity and arbitrary
-  load histories, and it does not need the modes at all.
+  load histories, and it does not need the modes at all. It is also the ONE consumer that
+  genuinely wants `C` as a matrix rather than as per-mode ratios, so it is where
+  `RayleighDamping` would first be assembled — `alpha·M + beta·K` through `FeaAssembly.Combine`,
+  which already exists.
+- [ ] **FEA: nonlinear buckling (post-buckling and imperfection sensitivity).** The linear
+  eigenvalue factor is computed about ONE static state and assumes the prestress scales with
+  the load without redistributing. A shell or a thin-walled section can buckle at a fraction of
+  that number, and finding out needs an arc-length (Riks) continuation over a geometrically
+  nonlinear solve — a different solver, and the honest scope statement is already in
+  `BucklingSolver`'s limitations rather than implied away.
 - [ ] **FEA: orthotropic and anisotropic materials.** `Material` is isotropic and the
   assembly reads `Lambda`/`Mu` directly, which is the right inner loop for the common
   case; a general law needs the full 6x6 constitutive matrix plus a material FRAME per

@@ -335,14 +335,14 @@ wherever the spectrum is degenerate.
 
 ## Limitations
 
-- **No damping.** These are undamped natural frequencies. Rayleigh (proportional) damping is
-  the natural next step and rides the same two matrices.
-- **No frequency response and no transient dynamics.** Modal superposition needs the modes
-  plus a load history; direct integration needs a different time-stepping loop. Both are
+- **These are UNDAMPED natural frequencies**, which is what a modal analysis means. Damping,
+  and the steady-state response it makes finite, are on the
+  [buckling and frequency response page](fea-buckling.md).
+- **No transient dynamics.** Direct time integration needs a different stepping loop, and is
   filed.
-- **No prestress, so no buckling and no stress stiffening.** A spinning or preloaded part's
-  frequencies shift, and the eigenproblem for that is `K + K_g(sigma)` — a second, geometric
-  stiffness matrix assembled from a static solve's stress field. It is the same eigensolver.
+- **Prestress is available but off by default.** A spinning or preloaded part's frequencies
+  shift, and `ModalSolveOptions.Prestress` adds the geometric stiffness a static solve's
+  stress field produces — see [stress stiffening](fea-buckling.md#stress-stiffening-the-frequencies-of-a-preloaded-part).
 - **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the
   second member of a degenerate pair; a triple root would want a block method, and that is
   filed rather than pretended.

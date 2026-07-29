@@ -537,6 +537,135 @@ the published `MeshField` is rescaled to a peak nodal magnitude of exactly 1 mod
 labelled `"mode shape"`, and the sign is pinned by making the largest component positive so
 two solves agree bit for bit.
 
+## 3f. Buckling, stress stiffening and frequency response (`EngrCAD.Fea`)
+
+Linear buckling is `(K + lambda·Kg) phi = 0` with `Kg` the geometric stiffness a prior static
+solve's stress field produces. The element matrix is the easy half and the eigensolver is the
+interesting one.
+
+**The geometric stiffness has the consistent mass matrix's shape, and that is a fact about the
+physics.** `Kg_ab = integral(grad N_a · sigma · grad N_b dV)` is a SCALAR per node pair
+replicated onto the 3x3 identity block — exactly `TetElement.ConsistentMass`'s structure —
+because an isotropic inertia couples no two axes and one stress tensor contracts each of the
+three displacement components identically. So the assembly loop is the mass matrix's with a
+different integral in it, the rule selector `TetQuadrature.ForGeometric` joins `For` and
+`ForMass` at degree `3(p-1)` (between their `2(p-1)` and `2p`), and the prestress is read
+through `StructuralResults`' own recovery seam rather than through a constitutive law restated
+here — which is what makes thermal buckling right rather than nearly right. `Degree3`'s
+negative centroid weight, a defect for a matrix that must be positive definite, is harmless for
+one that is indefinite by nature; exactness is all that is required and it is checked against
+the 15-point degree-5 rule.
+
+### The indefinite right-hand side changes the shift STRATEGY, not the shift
+
+§3e's modal solver puts a small NEGATIVE shift under the spectrum so `K − sigma·M = K + |sigma|·M`
+is positive definite and Cholesky-factorable. That works for one reason only: `M` is positive
+semi-definite, so adding a positive multiple of it can only help. **`Kg` is indefinite** —
+tension stiffens, compression softens, and one bending prestress field does both at once — so
+`K − sigma·Kg` is a definite matrix plus a *signed* multiple of an indefinite one, and no sign
+of sigma makes it reliably factorable. The modal escalation loop is worse than inapplicable:
+multiplying a failing shift by 100 pushes `K − sigma·Kg` FURTHER from definiteness, so a solver
+reusing it would spend its retries getting steadily more wrong before refusing.
+
+**The free parameter is not the shift; it is the metric.** Lanczos requires only that its inner
+product be positive definite, and `A^-1 B` is self-adjoint in the A inner product AND in the B
+inner product whenever A and B are symmetric — `<A^-1 Bx, y>_A = x'By = <x, A^-1 By>_A`, and
+the same in B. A modal solve runs in M's because M is the definite matrix there. In buckling the
+definite matrix is **K** — an unrestrained body is refused up front through the same
+`RigidBodyModes` computation the static solver refuses on, and the factorization of K itself is
+what establishes the rest, refusing by name when it will not go through. So the iteration runs
+in the **K inner product** with the operator `K^-1(-Kg)`, and the matrix that gets factorized is
+**K itself** — the same matrix a direct static solve of the model factors, on every model, with
+nothing to choose.
+
+**And once the metric is K the shift has no work left to do.** Shift-and-invert exists to turn
+INTERIOR eigenvalues into extreme ones; the reciprocal substitution has already done it. The
+operator's eigenvalues are `theta = 1/lambda`, so the smallest critical load factor — the only
+one an engineer wants — is the operator's LARGEST eigenvalue, which is what Lanczos converges
+to first with no transformation at all. `sigma = 0` is the answer rather than a fallback, and
+`BucklingSolveReport.Shift` exists to say so. ARPACK reaches the same place from the other side:
+its "buckling mode" uses `OP = (A − sigma·M)^-1 A` with metric `B = A` and REQUIRES `sigma != 0`,
+because at zero that operator is the identity — inverting the other matrix removes the
+requirement along with the choice.
+
+`LanczosEigen` therefore took exactly one generalization: **the metric became a parameter
+separate from the right-hand matrix.** Passing the same matrix for both takes the modal path's
+arithmetic operation for operation (the two products alias one buffer), so its output is
+unchanged to the bit — the same neutrality rule every optional feature here carries.
+
+Two consequences are stated rather than discovered. **Only positive factors are reported**: a
+negative theta is a factor at which the *reversed* load case buckles, so the descending-theta
+walk stops at the first non-positive value rather than skipping it — §3e's contiguous-prefix
+rule, applied to a different family. And **the indefiniteness caveat is about the general case,
+not about a column**: under uniform uniaxial compression the element integral collapses to
+`u'Kg u = -s·integral(|du/dx|²)`, non-positive for every displacement field, so `-Kg` is
+positive semi-definite and the pencil is definite. That is why the Euler cases converge as
+cleanly as they do; the machinery above is what makes a bending or mixed prestress work too.
+
+### The residual floor, and a default chosen from a measurement
+
+`BucklingSolveOptions.Tolerance` defaults to **1e-7**, two decades looser than the modal
+solver's, and the reason is structural rather than cautious. The measured residual is a TOTAL
+cancellation of `K phi` against `lambda Kg phi`, so its floor is about `eps·kappa(K)` relative
+to a smooth mode's own energy. A modal solve escapes it because its Krylov vectors come out of
+`K^-1 M`, which SMOOTHS — the high-frequency content `K` amplifies is suppressed before `K`
+ever sees it. This operator is `K^-1 Kg`, and a geometric stiffness is derivative-like, so the
+two halves roughly cancel in frequency content and the Lanczos vectors keep the part that sets
+the floor. Measured on a slender column: every mesh up to 9 310 DOF reaches 1e-10 and a
+23 166-DOF one stalls at 1.76e-9, so a 1e-9 default would refuse an ordinary refinement of an
+ordinary model. Nothing is given up — an eigenvalue is accurate to roughly the SQUARE of the
+residual over the spectral gap, and that same column accepted at 1e-5 returns 15 437.12 N
+against a finer mesh's 15 437.99 N.
+
+**An empty eigen-result has two unrelated causes**, and an empty list cannot tell them apart:
+either the spectrum genuinely holds nothing wanted, or a candidate was there and the tolerance
+was in the way. They want opposite responses from a user, so `LanczosEigen` now reports the best
+candidate it saw but did not accept, and both solvers' refusals name which case they hit.
+
+### Damping is a per-mode RATIO, and no damping matrix is ever assembled
+
+`C = alpha·M + beta·K` is offered because it is the case in which the UNDAMPED modes still
+diagonalise C: `phi' C phi = diag(alpha + beta·omega_n²)`, so the equations separate and
+`zeta_n = alpha/(2·omega_n) + beta·omega_n/2` is the whole of what any consumer needs. Forming
+`C` in order to project it back down to those numbers would be arithmetic with nothing to show
+for it, so this project has no damping matrix and that is a design statement. (The one future
+consumer that genuinely wants the matrix is direct time integration, and `FeaAssembly.Combine`
+already builds it.)
+
+**What proportional damping excludes is stated precisely rather than implied away**: a discrete
+dashpot, two materials with different loss factors in one model, viscoelasticity, joint friction
+and hysteretic damping all leave `phi' C phi` with off-diagonal terms, at which point the damped
+modes are no longer the undamped ones and `(lambda²M + lambda·C + K)phi = 0` is a QUADRATIC
+eigenproblem — complex eigenvalues and eigenvectors, solved by a `2n` state-space linearization
+in a non-symmetric matrix pair. Neither `SparseCholesky` nor `LanczosEigen` applies. It is a
+different solver, not a bigger version of this one.
+
+### Frequency response: modal superposition first, and why the direct solve is a different question
+
+Each mode is a scalar oscillator, so `q_n(W) = F_n / (w_n² − W² + 2i·zeta_n·w_n·W)` and a whole
+sweep is one dot product per mode plus a complex division per (mode, frequency) pair — nothing
+assembled, nothing factorized. The DIRECT alternative factorizes `(K − W²M + i·W·C)` per
+frequency and is the only option in three cases, none of which this can express: damping that is
+not proportional, material properties that vary WITH frequency (the modal basis itself would
+change per point), and a load whose spatial distribution changes with frequency. So it is filed
+as a second METHOD rather than a better one.
+
+**Truncation is turned into a correction rather than left as a caveat.** The mode-acceleration
+form `u(W) = u_static + sum_n phi_n F_n [1/D_n − 1/w_n²]` has a bracket that vanishes at
+`W = 0`, so the response is exactly the static answer there however few modes were kept, and the
+missing modes' static flexibility rides along at every other frequency. It costs one static
+solve the caller has usually already done. `TruncationError` is NaN without one — because then
+it is not small, it is unknown.
+
+Three smaller decisions worth recording. **The load comes from the modal model's own applied
+forces**, since every load type reduces to consistent nodal forces when applied, so there is no
+second place for a load to be specified and forgotten (a thermal load is refused by name,
+because it enters as an element integral and would be silently dropped). **Damping is required
+rather than defaulted**, because a default would be this project inventing a material property.
+And a **free-free model is refused**: a rigid mode's `F_n/(0 − W²)` grows without bound as the
+frequency falls, which is a true statement about a body that accelerates away and a useless one
+to plot.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`
