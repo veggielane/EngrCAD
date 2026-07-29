@@ -254,13 +254,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   open; both were stale.
 ## Core (EngrCAD.Core)
 
-- [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
-  (`CoplanarFaceCosine`, 0.081° = acos(1 − 1e-6)) but deliberately not widened: a dot
-  of unit vectors is already scale-free, so the quadratic-scale argument does not apply.
-  The real issue found while testing it: the companion `CoplanarFaceDistance` check
-  measures the axial gap to an **arbitrary point of a tilted face's plane** (whatever
-  `IsPlanar` reports as origin), so it is ill-defined precisely in the band a wider
-  angle would admit. Needs coplanar-boolean evidence before touching.
+- [x] ~~**`ShapeCompiler` coplanarity, and a finding under it**~~ ✅ **landed** — the
+  companion `CoplanarFaceDistance` check now measures a genuine point-to-PLANE distance
+  (`ShapeCompiler.BottomLiesInFacePlane`, one shared rule for `Drill` and `ThreadedHole`),
+  so it is well defined at any tilt; the angle stays at acos(1 − 1e-6) with a geometric
+  reason rather than a deferral. The coplanar-boolean evidence the item was waiting for
+  says the guard STAYS: `CoplanarFaces.For` collects only `IsPlanar` faces and a drill
+  tool's flat bottom is a `RevolvedSurface` pole cap, so the fusion tier cannot see it.
 - [ ] **`Fitting3d.MinVolumeBox`'s per-family angle is a sweep + golden section, not an
   algebraic root solve** (the OBB itself ✅ landed). O'Rourke derives the critical angle in
   closed form; worth doing if a hull ever shows a minimum hiding in a bracket narrower

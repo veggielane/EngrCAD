@@ -1654,6 +1654,37 @@ Design decisions:
   cannot survive anyway. An exact solid intersection was rejected as the wrong shape of
   answer: it costs a full boolean to decide a question whose useful answer is "clearly
   apart" almost always.
+
+  **A coincidence test measures to a PLANE, never along a convenient axis.** The depth
+  guard asks whether the tool's flat bottom lies in a body face's plane, which is two
+  conditions — the planes are parallel, and a point of one lies on the other — and the
+  second must be `n̂·(origin − bottom)` with the FACE's normal. Measuring
+  `axis·(origin − bottom)` instead looks equivalent, and is, exactly at zero tilt; away
+  from it the answer depends on *which* in-plane point `IsPlanar` reports, and that point
+  is arbitrary by contract (a box cap's is a CORNER; a boolean fragment inherits its
+  parent surface's, which can sit outside its own trim). Inside the guard's own 0.081°
+  parallel band an in-plane offset `L` therefore leaks `L·sin θ` into the measurement:
+  on a 200×150 plate tilted 0.057° that is **0.075 model units**, three decades past the
+  1e-6 threshold, so the guard silently failed to fire on a genuinely coplanar bottom
+  *and* refused a blind hole with 0.075 of real floor left. Both directions are pinned by
+  tests, and both fail on the old form. Two riders. The angle is deliberately not
+  widened, and now for a geometric reason rather than as a deferral: past that band the
+  bottom disk CROSSES the face in a chord rather than lying in it, which is ordinary
+  transversal boolean input, so a wider gate would start refusing legal models. And the
+  distance stays one tier looser than `CoplanarFaces.SamePlane`'s 1e-7, because this is a
+  refuse-EARLY guard where a conservative refusal costs a nudge and a missed coincidence
+  costs a "Directed edge appears twice" from inside the tessellator. The general lesson is
+  the one this repo keeps re-learning: **the kernel already had the well-formed version of
+  this test** — `CoplanarFaces.SamePlane`, same arithmetic, one layer down — and the guard
+  restated it rather than asking it. Restating a shared rule is how all four recorded
+  occurrences of this went wrong.
+
+  **The coplanar-fusion tier does not retire the guard, and the reason is structural
+  rather than a matter of degree.** `CoplanarFaces.For` collects only faces `IsPlanar`
+  recognizes, while a drill tool is ONE axis-touching revolve — chosen that way precisely
+  to keep boolean input transverse — so its flat bottom is a `RevolvedSurface` pole cap
+  and never enters the tier. A flush *cylinder* tool, whose caps are `PlaneSurface`s, does
+  fuse. So "coplanar booleans landed" narrows what the guard is for without removing it.
 - **Thread handedness is arithmetic, and `Mirror` is the same fact read backwards.**
   A left-hand thread shares every diameter with its right-hand twin — handedness is not a
   different thread — so it is carried as a flag on `ThreadSpec` rather than a second
