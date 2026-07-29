@@ -58,3 +58,57 @@ shape wrapper: `MeshReader.ReadFile` returns mesh-or-soup plus warnings and neve
 throws on dirty geometry; `MeshRepair.Clean`/`AutoRepair` are the pipeline.
 An imported mesh has no exact B-Rep — `imported.ToBrep()` honestly refuses
 (mesh-to-B-Rep reconstruction is future work); `ToMesh` and `ToImplicit` both work.
+
+## Importing exact geometry: STEP, `.ecb` and IGES
+
+Three exact-geometry importers sit beside the mesh ones, each returning diagnostics as
+**data** rather than log lines:
+
+| Format | Entry point | What you get |
+| --- | --- | --- |
+| STEP (AP214) | `StepReader.ReadFile` | `BrepSolid`s, assembly instances, units scaled to mm |
+| EngrCAD `.ecb` | `BrepArchive.ReadFile` | The kernel's own solids, losslessly ([exports](exports.md)) |
+| IGES 5.3 | `IgesReader.ReadFile` | Trimmed surfaces, loose curves and surfaces |
+
+### IGES
+
+IGES is **import-only** here, deliberately: it is a legacy format whose remaining use is
+receiving files from old CAM and surfacing systems, and writing it would mean maintaining
+a second, lossier encoding of geometry STEP already carries better.
+
+The supported entities are the ones that map onto geometry the kernel already has —
+110 line, 100 circular arc, 104 conic arc (classified from its coefficients, so an
+ellipse mislabelled as a hyperbola still imports correctly), 126/128 rational B-spline
+curve and surface, 102 composite curve, 108 plane, 118 ruled surface, 120 surface of
+revolution, 122 tabulated cylinder, 124 transformation matrix, and 142/144 trimmed
+parametric surfaces.
+
+**The result is a face soup and says so.** IGES carries no shared topology: every trimmed
+surface owns its boundary curves, so two neighbouring faces reference two
+coincident-but-distinct curves and the assembled shell's edges are used once rather than
+twice. `IgesReadResult.IsFaceSoup` reports that, and `ShapeHealing.Heal` — which exists
+for exactly this case — is the next step:
+
+```csharp
+var result = IgesReader.ReadFile("legacy.igs");
+foreach (var note in result.Diagnostics)
+    Console.WriteLine(note);
+
+if (result.Solid is { } soup)
+{
+    var (healed, report) = ShapeHealing.Heal(soup);
+    Console.WriteLine($"{report.EdgesSewn} edges sewn; manifold = {report.IsManifold}");
+    if (report.IsManifold)
+        DoSomethingWith(Shape.From(healed));
+}
+```
+
+`Shape.From(path)` deliberately does **not** learn `.igs`: it would hand back geometry
+that fails at lowering, and the healing step is a decision the caller should make
+explicitly.
+
+Units are read from the Global section and scaled to millimetres (the same rule the STEP
+importer follows), unknown entity types are skipped once with a diagnostic naming the
+type and its first offender, and a bad *record* structure — a wrong section letter, a
+broken directory pair, a non-numeric sequence number — throws `FormatException` rather
+than being sniffed past.

@@ -844,6 +844,36 @@ operations. Depends only on `EngrCAD.Core`.
   `AxisRef` lesson). An **unknown version is refused by name**, as are foreign units and
   dangling or forward references. Scope is deliberately GEOMETRY, not document: solids,
   not scenes, poses, features or materials.
+- **IGES 5.3 import** (`IgesReader.Read/ReadFile` → `IgesReadResult`; the record layer is
+  the internal `IgesParser`) — **import only, deliberately**: IGES is a legacy format
+  whose remaining use is receiving files from old CAM and surfacing systems, and writing
+  it would mean maintaining a second, lossier encoding of geometry STEP already carries
+  better. Entities are the ones that map ONTO EXISTING kernel geometry rather than
+  needing new surface types: 110 line, 100 circular arc, 104 conic arc, 126/128 rational
+  B-spline curve and surface, 102 composite curve, 116 point, 108 plane, 118 ruled (a
+  two-section `LoftedSurface`), 120 surface of revolution, 122 tabulated cylinder (an
+  `ExtrudedSurface`), 124 transformation matrix, 142/144 trimmed parametric surface.
+  **The result is a FACE SOUP and says so** (`IsFaceSoup`): IGES carries no shared
+  topology, so every trimmed surface owns its boundary curves, two neighbouring faces
+  reference two coincident-but-distinct curves, and the assembled shell's edges are used
+  once rather than twice — `Validate()` refuses it until `ShapeHealing.Heal` has sewn it,
+  which is exactly the case healing was built for. Four rules carried over from
+  `StepReader`: units resolved from the Global section and scaled to millimetres (with
+  the exact-`==` guard that a millimetre file is bit-identical, not "scaled by 1");
+  unknown entity types skipped ONCE with a diagnostic naming the type and its first
+  offender; a bad entity costing only itself; and everything reported as DATA
+  (`Diagnostics`) rather than as log lines. Two things specific to a column-oriented
+  format: **record structure is validated up front and refused by name** — column 73 is
+  the section letter and 74-80 the sequence number on every card, so a file without that
+  shape is rejected before a parameter is read (`StlReader`'s size-test-first rule) — and
+  **Hollerith counts are honoured when splitting fields**, since an author field
+  containing the parameter delimiter would otherwise shift every later Global parameter
+  by one and silently change the file's units. The conic arc (104) is classified from its
+  own coefficients rather than from its form number, which is routinely wrong; a
+  contradiction is reported and the coefficients believed. The 142 boundary takes the
+  MODEL-space curve, not the parameter-space one — this topology has no pcurve slot
+  (trimming is 3D loops pulled back on demand), so the choice is stated rather than
+  silently made.
 - **Shape healing** (`ShapeHealing.Heal/Analyze` — OCCT `ShapeFix`): repairs imported
   face-soup topology; every repair is a return value (`ShapeHealingReport`), never a
   log line, and the input is never modified. Passes in order, each switchable: vertex

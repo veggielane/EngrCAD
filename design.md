@@ -862,6 +862,47 @@ scenes, poses, features or materials; the document envelope is a separate item (
 OCAF assessment in `todo.md`), and smuggling scene structure into a B-Rep file would make
 both harder to version.
 
+### IGES: import only, and what "the useful subset" turned out to mean
+
+The standing assessment in `todo.md` was that IGES is legacy-only, worth an importer and
+never a writer. That held up, and the implementation added one thing worth recording: the
+useful subset is decided by **which entities map onto surfaces the kernel already has**,
+not by which entities are common. 118 ruled surface is a two-section `LoftedSurface`, 122
+tabulated cylinder is an `ExtrudedSurface`, 120 surface of revolution is a
+`RevolvedSurface` — each is a few lines because the target type exists. By the same test,
+entity 186 (Manifold Solid B-Rep Object) and its 502/504/508/510/514 supporting entities
+are **filed rather than built**: they are a second, parallel topology encoding inside the
+same file format, and mapping them is the same size of job as the whole rest of the
+reader — with the twist that a 186 file is the one case that would NOT need healing, so it
+buys correctness we currently get from `ShapeHealing` anyway.
+
+**The result is a face soup, and the design says so rather than hiding it.** IGES carries
+no shared topology at all: every 144 trimmed surface owns its boundary curves, so two
+faces meeting along an edge reference two coincident-but-distinct curves. The imported
+shell therefore has edges used once, `Validate()` refuses it, and `IsFaceSoup` states
+that as a return value. This is precisely the case `ShapeHealing` was built for (its own
+doc comment names foreign STEP for the same reason), so the honest import pipeline is
+three explicit steps — read, heal, wrap — and `Shape.From(path)` deliberately does not
+learn `.igs`, because it would hand back geometry that fails at lowering.
+
+Two decisions specific to a column-oriented format. **Record structure is validated up
+front and refused by name**: column 73 is the section letter and 74-80 the sequence
+number on *every* card, so a file without that shape is rejected before a parameter is
+read — `StlReader`'s "run the exact size test before any content sniffing" rule, applied
+to the first card-image reader in the codebase. And **Hollerith counts must be honoured
+when splitting fields**, which is not a nicety: an author field containing the parameter
+delimiter shifts every later Global parameter by one, and Global parameter 14 is the unit
+flag, so the failure mode is a file that imports cleanly at the wrong scale. That has a
+test.
+
+One more, and it is the same shape as the STEP reader's closed-generator disambiguation:
+**entity 104's conic type is classified from its own coefficients, not from its form
+number.** The form field is routinely wrong in real files, the discriminant `B² − 4AC` is
+exact arithmetic on data the file already gives, and a contradiction is reported as a
+diagnostic with the coefficients believed. Reading the declaration is right when the
+declaration is the only source (144's outer-vs-inner boundary); reading the geometry is
+right when the geometry is independently checkable.
+
 ## 6. Interop
 
 The conversion triangle is complete; each direction has a deliberately chosen algorithm:

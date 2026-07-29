@@ -836,11 +836,25 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   disambiguation reads OUR outward-band sense convention, so a foreign face whose wire
   winding contradicts its own same-sense flag could still pick the wrong half (per-face
   winding validation is ShapeFix_Face territory, not started)
-- [ ] Data exchange: IGES, glTF, native BREP serialization format. Design assessment
-  (task #11, each its own project): **IGES** is a legacy-only format (fixed-column
-  Part 21-era encoding, entity soup, no product structure worth the name) whose one
-  remaining use is receiving files from old CAM systems — if ever built, import-only,
-  reusing the `StepReader` diagnostics conventions; do not write it.
+- [ ] Data exchange follow-ups (glTF, native BREP and IGES import all ✅ landed; the
+  original task-#11 assessment is kept below with each verdict recorded against it).
+  **IGES** ✅ **import landed** (`IgesReader` + internal `IgesParser`, docs
+  `examples/import.md`), export **filed and refused** — the assessment's "do not write
+  it" holds: a writer would be a second, lossier encoding of geometry STEP already
+  carries better. Landed entities: 110, 100, 104, 126, 128, 102, 116, 108, 118, 120,
+  122, 124, 142, 144. **Residuals, in rough value order**: (a) **186 MSBO + 502 vertex
+  list / 504 edge list / 508 loop / 510 face / 514 shell** — the one path that yields a
+  SEWN solid rather than a face soup, but it is a second parallel topology encoding
+  inside the same format, about as large as the rest of the reader, and it buys
+  correctness `ShapeHealing` already supplies; (b) 402 associativity / 308+408
+  subfigure instances, i.e. the nearest thing IGES has to assembly structure — worth it
+  only if a real file turns up needing it; (c) 106 copious data (the polyline family),
+  cheap and common in 2D-ish files; (d) 116-point and loose-curve output is returned but
+  nothing consumes it through the `Shape` API yet; (e) the 142 parameter-space curve is
+  discarded, since the topology has no pcurve slot — if one is ever added (a real
+  change, blast radius across `FaceSplitter`/`BrepArchive`/`StepWriter`/the
+  tessellator), IGES is a consumer waiting for it; (f) entity 314 colour and 406
+  properties are skipped silently rather than carried onto `Part.Color`.
   **glTF** ✅ **landed** (`GltfWriter` in EngrCAD.Mesh + `GltfScene` in Viewer.Core;
   `.glb`/`.gltf`, `--export` and MCP wiring, docs `examples/exports.md`) — and it went
   further than this assessment expected: glTF has real hierarchy, so it preserves the
