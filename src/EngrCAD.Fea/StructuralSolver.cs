@@ -430,7 +430,15 @@ public static class StructuralSolver
     internal static string? AdvisoryFor(
         FeaSolveMethod method, int freeDofs, double factorMs, double totalMs)
     {
+        // A DURATION, and therefore deliberately absolute — the epsilon ladder does not
+        // reach it. Every relative tier in this codebase exists because a length, an area
+        // or a determinant carries the model's scale; wall-clock seconds carry no scale to
+        // be relative to, and "the factorization took a fifth of the model's extent" is
+        // not a sentence. Two seconds is where a solve stops feeling instant, so it is a
+        // judgement about people rather than about geometry.
         const double SlowFactorMs = 2_000;
+
+        // Dimensionless share of the solve, so no tier applies here either.
         const double DominatesShare = 0.8;
 
         if (method != FeaSolveMethod.Direct || factorMs < SlowFactorMs)

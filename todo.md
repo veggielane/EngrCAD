@@ -624,22 +624,33 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   <br>Partly mitigated already: `FeaSolveReport.Advisory` names the slow factorization
   after the fact, so a caller learns about the alternative without reading a benchmark
   table. What it cannot do is warn BEFORE the wait — see the next item.
-- [ ] **FEA: a pre-solve channel (the advisory's missing half).** `FeaSolveReport.Advisory`
-  tells a caller about a slow factorization once it has finished, which helps the second
-  run and not the first: the free-DOF count and the element order are both known before the
-  factor begins, and assembly has already completed in a few hundred ms, so the heads-up
-  could come 100 s earlier. Two candidate seams, and picking one is a **project-level
-  decision rather than a solver one**:
-  - An optional trailing `ILogger`, which is the precedent Interop and BRep set for exactly
-    this ("the long operations accept an optional trailing ILogger", event IDs 80/90). It
-    would mean `EngrCAD.Fea` taking the `Microsoft.Extensions.Logging.Abstractions`
-    reference, and CLAUDE.md currently records the leaf kernels (Core, Mesh, Implicit) as
-    deliberately dependency-free — Fea did not exist when that line was written, so
-    somebody has to decide whether it is a leaf in that sense.
-  - An optional `ProgressCancel`, which Core already owns and `TetMesher.Mesh` already
-    takes. This is the better shape — it would let a user ABORT a runaway factorization
-    rather than merely be told about it — but it needs `SparseCholesky.Factorize` to accept
-    one, since the 100 s is inside Core and there is currently no way out of it.
+- [ ] **`SparseCholesky.Factorize` should take a `ProgressCancel`** (Core, and the pre-solve
+  half of the FEA advisory below). `FeaSolveReport.Advisory` names a slow factorization
+  once it has finished, which helps the second run and not the first — and the first run is
+  where someone waits 108 s wondering whether it has hung. **This needs no dependency or
+  architecture decision at all**: `ProgressCancel` is Core's own optional-trailing-param
+  cancellation convention, already wired into `SurfaceNets.Polygonize`,
+  `MeshDecimator.Decimate` and `BRepTessellator.Tessellate`, so accepting one in
+  `SparseCholesky` is an addition in the vocabulary Core already speaks. It is also
+  strictly better than a warning, because it lets a user ABORT rather than read about it
+  afterwards. Poll per eliminated column, following the "polling follows cost rather than
+  code structure" rule.
+  <br>Deliberately NOT done from the FEA side first: `StructuralSolver.Solve` could take a
+  `ProgressCancel` today and thread it through assembly, the reaction pass and stress
+  recovery — but the factorization is 99% of the time on exactly the models where anyone
+  would reach for it, so the parameter would advertise a cancellation that cannot cancel
+  the slow part. An API that looks like it works is worse than one that is absent.
+- [ ] **FEA: an optional `ILogger` on the solve — an OWNER'S decision, surfaced not taken.**
+  The other candidate pre-solve channel, and the precedent is real: Interop and BRep took
+  the `Microsoft.Extensions.Logging.Abstractions` reference for exactly this ("the long
+  operations accept an optional trailing `ILogger`", event IDs 80/90). What makes it
+  Chris's call rather than an implementer's is that CLAUDE.md records the current line as a
+  deliberate REVERSAL of the earlier `IEngrCadLog` shim, and records the leaf kernels
+  (Core, Mesh, Implicit) as staying dependency-free on the reasoning that everything the
+  backlog named was reachable at the Interop/BRep seams. `EngrCAD.Fea` did not exist when
+  that was written and has no such seam above it — it is a leaf that is also a long
+  operation, which is the case the rule never had to consider. Worth noting the
+  `ProgressCancel` item above may make this moot for the case that prompted it.
 - [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
   embarrassingly parallel per element with a per-row merge at the end
   (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes
