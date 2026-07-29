@@ -171,7 +171,6 @@ public class ModalBarTests(ITestOutputHelper output)
         // Fully restrained: K is positive definite, so the shift is EXACTLY zero and the
         // factorization is literally the static solver's.
         var model = ModalFixtures.AxialBar(Length, Side, 40, ElementOrder.Linear);
-        var mesh = model.Mesh;
         model.Fix(Facets.OnPlane(Vector3d.Zero, Vector3d.UnitX), Dof.X);
         model.Fix(Facets.OnPlane(new Vector3d(Length, 0, 0), Vector3d.UnitX), Dof.X);
 
@@ -188,6 +187,5 @@ public class ModalBarTests(ITestOutputHelper output)
                 + $"{(measured - exact) / exact:P3}");
             Assert.True(Math.Abs(measured - exact) / exact < 0.01);
         }
-        _ = mesh;
     }
 }
