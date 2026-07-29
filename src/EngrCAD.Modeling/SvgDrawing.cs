@@ -300,6 +300,9 @@ public sealed class SvgDrawing
                 case ArcSeg arc:
                     AppendArc(path, arc, culture);
                     break;
+                case EllipseSeg ellipse:
+                    AppendEllipticalArc(path, ellipse, culture);
+                    break;
                 case CubicSeg cubic:
                     path.Append(string.Create(culture,
                         $" C{cubic.Control1.X:R} {cubic.Control1.Y:R} {cubic.Control2.X:R} {cubic.Control2.Y:R} {cubic.P3.X:R} {cubic.P3.Y:R}"));
@@ -331,6 +334,39 @@ public sealed class SvgDrawing
         var end = arc.End;
         path.Append(string.Create(culture,
             $" A{arc.Radius:R} {arc.Radius:R} 0 0 {sweepFlag} {end.X:R} {end.Y:R}"));
+    }
+
+    /// <summary>
+    /// An elliptical arc as SVG <c>A</c> commands — EXACT, because SVG's arc command
+    /// carries rx, ry and an x-axis rotation, which is precisely what an
+    /// <see cref="EllipseSeg"/> holds. Split at the midpoint above a half turn for the
+    /// same reason a circular arc is: the endpoint parameterization cannot express a
+    /// closed sweep in one command.
+    /// </summary>
+    private static void AppendEllipticalArc(StringBuilder path, EllipseSeg arc, CultureInfo culture)
+    {
+        int sweepFlag = arc.Sweep > 0 ? 1 : 0;
+        if (Math.Abs(arc.Sweep) > Math.PI)
+        {
+            AppendEllipticalArc(path, new EllipseSeg(
+                arc.Center, arc.SemiAxisX, arc.SemiAxisY, arc.StartAngle, arc.Sweep / 2), culture);
+            AppendEllipticalArc(path, new EllipseSeg(
+                arc.Center, arc.SemiAxisX, arc.SemiAxisY,
+                arc.StartAngle + arc.Sweep / 2, arc.Sweep / 2), culture);
+            return;
+        }
+        // The rotation SVG wants is the first semi-axis' own direction, in degrees; both
+        // radii are the axis LENGTHS, so a non-perpendicular pair (which the type permits)
+        // would not round-trip — refuse rather than emit a subtly different curve.
+        double rx = arc.SemiAxisX.Length, ry = arc.SemiAxisY.Length;
+        if (Math.Abs(arc.SemiAxisX.Dot(arc.SemiAxisY)) > 1e-12 * rx * ry)
+            throw new NotSupportedException(
+                "SVG's arc command carries two radii and one rotation, so it can only express an " +
+                "ellipse whose semi-axes are perpendicular; this one's are not.");
+        double rotation = Math.Atan2(arc.SemiAxisX.Y, arc.SemiAxisX.X) * 180 / Math.PI;
+        var end = arc.End;
+        path.Append(string.Create(culture,
+            $" A{rx:R} {ry:R} {rotation:R} 0 {sweepFlag} {end.X:R} {end.Y:R}"));
     }
 
     private static string SanitizeId(string name)

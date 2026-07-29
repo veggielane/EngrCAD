@@ -492,6 +492,60 @@ public sealed class ConstrainedSketch
             { Name = $"Distance({point}, {line}) = {distance:g6}" });
     }
 
+    /// <summary>
+    /// The point lies ON the line's carrier — the sketcher's point-on-object.
+    /// </summary>
+    /// <remarks>
+    /// <para>This is <see cref="Distance(SketchPointRef, SketchLineRef, double)"/> at zero,
+    /// which is the *right* reduction rather than a convenience: the point-to-line residual
+    /// is the SIGNED offset <c>ŝ·d̂ × (p − a)</c>, so it passes smoothly through zero and is
+    /// first order there — unlike the point-to-POINT distance, whose zero is a cone point
+    /// and which is therefore refused in favour of <see cref="Coincident"/>.</para>
+    /// <para>The carrier is INFINITE: the point need not land between the line's own
+    /// endpoints, which is what makes this useful for aligning geometry against a datum
+    /// edge. Constrain the ends too if you mean the segment.</para>
+    /// </remarks>
+    public ConstrainedSketch PointOn(SketchPointRef point, SketchLineRef line)
+    {
+        var owned = Owned(point);
+        RequireOwned(line.Owner, line.Description);
+        // side = +1: at a zero target the two signs give the same solution set, and the
+        // residual is smooth through it, so there is no branch to select.
+        return Add(new DistancePointLineConstraint(owned.Variable, line.P1, line.P2, 0, 1)
+            { Name = $"PointOn({point}, {line})" });
+    }
+
+    /// <summary>
+    /// The point lies ON the arc's carrier circle — <c>|p − c| = r</c>, one row.
+    /// </summary>
+    /// <remarks>
+    /// <para>The same residual the solver already applies internally to an arc's own two
+    /// endpoints (<c>ArcEndpointConstraint</c>), so this is that rule reused rather than a
+    /// second spelling of it — and it counts toward the rank like any other row.</para>
+    /// <para>The carrier is the whole CIRCLE, not the drawn sweep: a point-on-object
+    /// constraint that silently refused to let the point pass an arc's end would be a
+    /// branch selector in disguise. Constrain the endpoints if the sweep matters.</para>
+    /// <para>Refused when the point is drawn exactly AT the centre: the residual's gradient
+    /// there is the undefined direction <c>(p − c)/|p − c|</c>, so the solve has no first
+    /// order to work with — the stationary-configuration rule, named rather than nudged.</para>
+    /// </remarks>
+    public ConstrainedSketch PointOn(SketchPointRef point, SketchArcRef arc)
+    {
+        var owned = Owned(point);
+        RequireOwned(arc.Owner, arc.Description);
+        var seed = _map.Seed;
+        var offset = SketchVariables.Point(seed, owned.Variable) - SketchVariables.Point(seed, arc.Center);
+        // Relative to the drawn radius, so the guard is scale-free: an absolute epsilon
+        // here would reject a legitimate micron-scale sketch and pass a metre-scale
+        // coincidence.
+        if (offset.Length <= 1e-9 * Math.Max(seed[arc.Radius], _map.CharacteristicLength))
+            throw new ArgumentException(
+                $"PointOn({point}, {arc}) is drawn with the point at the arc's centre, where the " +
+                "residual |p - c| - r has no gradient direction; move the point off the centre first.");
+        return Add(new ArcEndpointConstraint(owned.Variable, arc.Center, arc.Radius)
+            { Name = $"PointOn({point}, {arc})" });
+    }
+
     /// <summary>Dimension: the arc's radius is <paramref name="radius"/> (&gt; 0).</summary>
     public ConstrainedSketch Radius(SketchArcRef arc, double radius)
     {
@@ -696,11 +750,21 @@ public sealed class ConstrainedSketch
                 $"{LoopName(loop)} line {segment}"),
             ArcSeg => throw new ArgumentException(
                 $"Segment {segment} of the {LoopName(loop)} loop is an arc — use Arc({segment})."),
-            _ => throw new ArgumentException(
-                $"Segment {segment} of the {LoopName(loop)} loop is a bézier; only its endpoint " +
+            var other => throw new ArgumentException(
+                $"Segment {segment} of the {LoopName(loop)} loop is {KindName(other)}; only its endpoint " +
                 "joints (Point) can be constrained."),
         };
     }
+
+    /// <summary>The segment kind as a caller would say it — so a refusal names what the
+    /// segment IS rather than assuming everything unrecognized is a bézier.</summary>
+    private static string KindName(SketchSegment segment) => segment switch
+    {
+        LineSeg => "a line",
+        ArcSeg => "an arc",
+        EllipseSeg => "an elliptical arc",
+        _ => "a bézier",
+    };
 
     private SketchArcRef ArcRef(int loop, int segment)
     {
@@ -709,7 +773,7 @@ public sealed class ConstrainedSketch
         if (map.CenterVars[segment] < 0)
             throw new ArgumentException(
                 $"Segment {segment} of the {LoopName(loop)} loop is not an arc " +
-                $"(it is a {(map.Segments[segment] is LineSeg ? "line" : "bézier")}).");
+                $"(it is {KindName(map.Segments[segment])}).");
         bool circle = map.Segments[segment] is ArcSeg { IsFullCircle: true };
         int startJoint = map.SingleCircle ? -1 : map.JointVars[segment];
         int endJoint = map.SingleCircle ? -1 : map.JointVars[(segment + 1) % map.JointCount];

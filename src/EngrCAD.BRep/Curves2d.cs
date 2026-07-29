@@ -529,6 +529,126 @@ public sealed class Arc2d : Curve2d
 }
 
 /// <summary>
+/// Elliptical arc: <c>C + A·cos θ + B·sin θ</c> over a signed angular sweep — the 2D twin
+/// of <see cref="Ellipse3d"/>, and <see cref="Arc2d"/>'s generalization.
+/// </summary>
+/// <remarks>
+/// <para><b>Semi-axis VECTORS, not (rx, ry, rotation).</b> A rotated ellipse is then the
+/// ordinary case rather than a third parameter, an affine map of the axes is an affine map
+/// of the curve, and the form is <see cref="Ellipse3d"/>'s verbatim, so
+/// <see cref="ToCurve3d"/> lifts A and B and invents nothing. The axes need not be
+/// perpendicular and are not checked, exactly as <see cref="Ellipse3d"/> does not check:
+/// any independent pair spans the same ellipse under a different parameterization, and
+/// forcing orthogonality would move the caller's stored vectors.</para>
+/// <para><b>The sweep is SIGNED</b>, as on <see cref="Arc2d"/> — orientation is intrinsic
+/// rather than a flag plus a reverse-and-hope repair.</para>
+/// <para><b>No <c>TryToCurvedEdge</c> override</b>, so it correctly REFUSES the curved 2D
+/// arrangement: that tier's cell walk is complete for lines and circles because agreeing
+/// in tangent AND curvature there means sharing a carrier, which is not true once
+/// ellipses join (a circle osculates an ellipse at its axis ends). Callers that must
+/// handle everything flatten the refusals at a stated chord tolerance and say so.</para>
+/// <para><b>Distance is the base class's</b> sampled scan plus bracketed Newton: a point's
+/// distance to an ellipse has no elementary closed form (it is a quartic), so there is
+/// nothing exact to override with, and the inherited contract — every candidate is a real
+/// point ON the curve, so the answer can only over-estimate — is the safe direction.</para>
+/// </remarks>
+public sealed class Ellipse2d : Curve2d
+{
+    public Vector2d Center { get; }
+
+    /// <summary>The semi-axis reached at polar parameter 0.</summary>
+    public Vector2d SemiAxisX { get; }
+
+    /// <summary>The semi-axis reached at polar parameter π/2.</summary>
+    public Vector2d SemiAxisY { get; }
+
+    public double StartAngle { get; }
+
+    /// <summary>Signed angular span in radians; positive runs from A toward B.</summary>
+    public double SweepAngle { get; }
+
+    public Ellipse2d(
+        in Vector2d center, in Vector2d semiAxisX, in Vector2d semiAxisY,
+        double startAngle, double sweepAngle)
+    {
+        // Exact-zero degeneracy guards (scale-free): a zero axis collapses the ellipse to a
+        // segment, which has no parameterization by angle at all.
+        if (!(semiAxisX.LengthSquared > 0) || !(semiAxisY.LengthSquared > 0))
+            throw new ArgumentException("Ellipse semi-axes must be non-zero.", nameof(semiAxisX));
+        if (Math.Abs(sweepAngle) > 2 * Math.PI + 1e-12)
+            throw new ArgumentOutOfRangeException(nameof(sweepAngle), "Ellipse sweep cannot exceed a full turn.");
+        Center = center;
+        SemiAxisX = semiAxisX;
+        SemiAxisY = semiAxisY;
+        StartAngle = startAngle;
+        SweepAngle = sweepAngle;
+    }
+
+    /// <summary>Axis-aligned ellipse: semi-axes <paramref name="semiX"/> along +x and
+    /// <paramref name="semiY"/> along +y.</summary>
+    public Ellipse2d(in Vector2d center, double semiX, double semiY, double startAngle, double sweepAngle)
+        : this(center, new Vector2d(semiX, 0), new Vector2d(0, semiY), startAngle, sweepAngle) { }
+
+    /// <summary>The polar parameter at curve parameter <paramref name="t"/>.</summary>
+    public double AngleAt(double t) => StartAngle + SweepAngle * t;
+
+    public override Interval Domain => Interval.Unit;
+
+    // Exact-2π semantic test with angular round-off slack, like Arc2d: closure is a
+    // topological fact about the parameterization, not a model tolerance.
+    public override bool IsClosed => Math.Abs(Math.Abs(SweepAngle) - 2 * Math.PI) < 1e-12;
+
+    public override Vector2d PointAt(double t)
+    {
+        double angle = AngleAt(t);
+        return Center + SemiAxisX * Math.Cos(angle) + SemiAxisY * Math.Sin(angle);
+    }
+
+    public override Vector2d DerivativeAt(double t)
+    {
+        double angle = AngleAt(t);
+        return (SemiAxisX * -Math.Sin(angle) + SemiAxisY * Math.Cos(angle)) * SweepAngle;
+    }
+
+    public override Vector2d SecondDerivativeAt(double t)
+    {
+        double angle = AngleAt(t);
+        return (SemiAxisX * -Math.Cos(angle) + SemiAxisY * -Math.Sin(angle)) * (SweepAngle * SweepAngle);
+    }
+
+    /// <summary>The same arc traversed the other way (start and end swap, sweep negates).</summary>
+    public Ellipse2d Reversed() =>
+        new(Center, SemiAxisX, SemiAxisY, StartAngle + SweepAngle, -SweepAngle);
+
+    /// <summary>
+    /// Exact, and built the SAME way <see cref="Arc2d.ToCurve3d"/> is: a full turn becomes
+    /// an <see cref="Ellipse3d"/> whose axes are ROTATED to this arc's own start parameter
+    /// (so the 3D curve starts where this one does), with B negated for a negative sweep
+    /// so the parameter follows the traversal; anything less becomes a
+    /// <see cref="CurveSegment"/> over an ellipse on the placement frame's own axes, which
+    /// keeps the trimmed form downstream classification expects and expresses a negative
+    /// sweep as a decreasing parameter range rather than a reversal wrapper.
+    /// </summary>
+    public override Curve3d ToCurve3d(in Frame3d plane)
+    {
+        var center = Lift(plane, Center);
+        var a = plane.ToWorldVector(new Vector3d(SemiAxisX.X, SemiAxisX.Y, 0));
+        var b = plane.ToWorldVector(new Vector3d(SemiAxisY.X, SemiAxisY.Y, 0));
+        if (IsClosed)
+        {
+            // Rotate the axis pair by StartAngle: A' = A cos s + B sin s reaches this
+            // arc's start at parameter 0, and (A', B') spans the same ellipse.
+            double cos = Math.Cos(StartAngle), sin = Math.Sin(StartAngle);
+            var rotatedA = a * cos + b * sin;
+            var rotatedB = a * -sin + b * cos;
+            return new Ellipse3d(center, rotatedA, SweepAngle > 0 ? rotatedB : -rotatedB);
+        }
+        var ellipse = new Ellipse3d(center, a, b);
+        return new CurveSegment(ellipse, StartAngle, StartAngle + SweepAngle);
+    }
+}
+
+/// <summary>
 /// 2D Bézier curve of any degree over t ∈ [0, 1], evaluated by de Casteljau. Derivatives
 /// are exact: the hodograph of a degree-n Bézier is the degree-(n−1) Bézier over the
 /// scaled control-point differences.

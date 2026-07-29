@@ -1,8 +1,8 @@
 # Sketching
 
 2D sketches are the profile language for [extrude, revolve, and sweep](extrude-revolve-sweep.md).
-Draw them with the fluent builder — `LineTo`, `ArcTo`, `ArcThrough`, `BezierTo`,
-`QuadraticTo` — or start from a primitive, and punch holes with `WithHole`.
+Draw them with the fluent builder — `LineTo`, `ArcTo`, `ArcThrough`, `EllipticalArcTo`,
+`BezierTo`, `QuadraticTo` — or start from a primitive, and punch holes with `WithHole`.
 
 ## The fluent builder
 
@@ -51,6 +51,53 @@ foreach (var (name, sketch) in new (string, Sketch)[]
 ```
 
 ![The five sketch primitives extruded side by side](images/sketch-primitives.png)
+
+## Elliptical arcs
+
+`Sketch.Ellipse` and the builder's `EllipticalArcTo` carry an ellipse **exactly** — the
+segment stores the centre and both semi-axis *vectors*, so a rotated ellipse needs no
+third parameter and there is no flattened polyline anywhere in the chain. That makes an
+elliptical profile native in all three representations, exactly like a circular one:
+`πab` from `Area()`, an exact 2D distance field, and an `Ellipse3d` in the B-Rep.
+
+`EllipticalArcTo` is SVG's `A rx ry rotation largeArc sweep` command with the same two
+flags and the same meaning, including SVG's out-of-range rule — semi-axes too small to
+span the chord are scaled up by the common factor that just reaches, so the ellipse's
+**aspect and rotation survive** and you never have to solve for the minimum ellipse
+before drawing.
+
+```csharp render:sketch-ellipse
+// A full ellipse, a rotated one, and a slotted plate whose ends are elliptical arcs.
+var oval = Sketch.Ellipse(semiX: 11, semiY: 6);
+var tilted = Sketch.Ellipse(default, semiX: 11, semiY: 6, rotationDegrees: 35);
+
+var plate = Sketch.Start(-9, -6)
+    .LineTo(9, -6)
+    .EllipticalArcTo(new(9, 6), semiX: 5, semiY: 6)     // right cap: a half-ellipse
+    .LineTo(-9, 6)
+    .EllipticalArcTo(new(-9, -6), semiX: 5, semiY: 6)   // left cap
+    .Close()
+    .WithHole(Sketch.Ellipse(default, 6, 2.5, rotationDegrees: -20));
+
+var scene = new Scene();
+scene.Add(new Part("ellipse", Shape.Extrude(oval, 4), Palette.Steel,
+    Matrix4d.CreateTranslation((-30, 0, 0))));
+scene.Add(new Part("rotated", Shape.Extrude(tilted, 4), Palette.Sky));
+scene.Add(new Part("elliptical ends", Shape.Extrude(plate, 4), Palette.Brass,
+    Matrix4d.CreateTranslation((32, 0, 0))));
+```
+
+![A plain ellipse, a rotated ellipse, and a plate with elliptical end caps and a tilted elliptical hole](images/sketch-ellipse.png)
+
+One consequence worth knowing: an ellipse with equal semi-axes is *geometrically* a
+circle but stays an `Ellipse2d`, so `BrepQueries.IsCircular` and cylinder promotion will
+not claim it. Use `Sketch.Circle` when the shape really is a circle.
+
+Everything else in the sketch vocabulary works on an elliptical arc: it round-trips
+through `ToCurves`/`FromCurves` (so it survives feature persistence), exports as an
+exact SVG `A` command, and moves with its chord under the constraint solver. What it
+does **not** yet have is its own constraint variables — like a bézier, only its endpoint
+joints can be constrained, and a tangency to an elliptical arc is not in the vocabulary.
 
 ## Sketch constraints
 
@@ -119,8 +166,28 @@ FAILED in 6 iterations; worst residual 1; 1 of 8 DOF constrained (7 free); 1 red
 
 Entities address the sketch's normalized segment order, holes included — a washer is
 `cs.Concentric(cs.Arc(0), cs.HoleArc(0, 0))` plus two diameters. Full circles carry
-center + radius only (constrain them via `CenterOf`); bézier segments ride along with
-their endpoints in v1.
+center + radius only (constrain them via `CenterOf`); bézier and elliptical-arc segments
+ride along with their endpoints in v1.
+
+**Point-on-object** — `cs.PointOn(point, line)` and `cs.PointOn(point, arc)` — pins a
+point to another entity's *carrier*, which is the sketcher's usual way of saying "this
+corner runs along that edge" or "this joint sits on that circle":
+
+```csharp
+var cs = drawn.Constrain();
+cs.PointOn(cs.Point(2), cs.Line(0));   // corner 2 anywhere on line 0's carrier
+cs.PointOn(cs.Point(3), cs.Arc(1));    // corner 3 on arc 1's carrier CIRCLE
+```
+
+Two things are worth stating because they are choices rather than accidents. The carrier
+is **infinite** — the point need not land between the line's own endpoints or inside the
+arc's drawn sweep, which is what makes the constraint useful against a datum edge;
+constrain the endpoints too if you mean the segment. And point-on-line is exactly the
+point-to-line *dimension* at zero, which is the right reduction rather than a shortcut:
+that residual is the signed offset, so it passes smoothly through zero, where the
+point-to-*point* distance's zero is a cone point and is refused in favour of
+`Coincident`. A point drawn exactly at an arc's centre is refused by name, since
+`|p − c| − r` has no gradient direction there.
 
 ## Placing sketches in 3D
 

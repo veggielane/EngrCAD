@@ -122,7 +122,9 @@ internal static class ShapeCompiler
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                         "a tapered extrusion of a sketch with holes needs loft sections with holes (a documented follow-up); cut the hole after the taper, or use ToMesh/ToImplicit"));
                 else
-                    entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    // Mirrored similarities included: this case IS a two-section loft, so
+                    // it inherits the loft's isometry argument verbatim.
+                    entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                         ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                             "ruled loft between the base section and the scaled top (SolidFactory.Loft)")
                         : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -145,10 +147,12 @@ internal static class ShapeCompiler
                         + "shell)"));
                 break;
             case LoftShape:
-                // Rigid + uniform only: the loft's chord-length parameterization and
-                // least-twist alignment are metric, so a shear would skin DIFFERENT
-                // in-between geometry than shearing the skin.
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                // Similarities only (mirrored included): the loft's chord-length
+                // parameterization and least-twist alignment are METRIC, so a shear would
+                // skin DIFFERENT in-between geometry than shearing the skin — while an
+                // isometry preserves every length and angle those two rules read, so
+                // skinning the reflected sections IS the reflected skin.
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "skinned through the placed sections (SolidFactory.Loft); section compatibility validates at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -182,8 +186,14 @@ internal static class ShapeCompiler
                 break;
 
             case DraftShape draft:
+                // Mirrored similarities included: an angle is preserved by every isometry
+                // and "narrows along the pull direction" is a metric statement, so the
+                // reflected draft is the draft along the pull direction's linear image.
+                // (Draft.Apply chooses the rotation SENSE by measurement rather than from
+                // a handedness convention, which is what makes that true rather than
+                // merely plausible.)
                 ClassifyBrep(draft.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "exact plane rotation about each face's neutral line (Draft.Apply); prism-shape constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -191,8 +201,10 @@ internal static class ShapeCompiler
                 break;
 
             case BrepShellShape brepShell:
+                // Mirrored similarities included: an inward offset by a distance is defined
+                // by distance alone, and an isometry preserves distance.
                 ClassifyBrep(brepShell.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "exact inward polyhedral shelling (Shelling.Shell); polyhedron constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -200,8 +212,11 @@ internal static class ShapeCompiler
                 break;
 
             case RoundEdgesShape roundEdges:
+                // Mirrored similarities included: the operation is the morphological
+                // opening (K erode B_r) dilate B_r, and a reflection maps a ball to the
+                // same ball, so it commutes with the whole construction.
                 ClassifyBrep(roundEdges.Child, m, entries);
-                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                entries.Add(TryDecomposeSimilarity(m, out _, out _, out _, out _)
                     ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
                         "exact morphological rounding (Filleting.FilletAllEdges); convex-edge and corner constraints validate at lowering")
                     : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
@@ -549,7 +564,7 @@ internal static class ShapeCompiler
                 if (twisted.Sketch.Holes.Count > 0)
                     throw new NotSupportedException(
                         "A tapered extrusion of a sketch with holes needs loft sections with holes; cut the hole after the taper, or use ToMesh/ToImplicit.");
-                Decompose(m, shape, out _, out _, out _);   // rigid + uniform only (the loft rule)
+                DecomposeSimilarity(m, shape, out _, out _, out _); // similarity only (the loft rule)
                 var effective = m * twisted.PlaneMatrix;
                 // The top section is the base scaled per axis about the plane origin and
                 // lifted by the height; a ruled loft between the two IS the linear taper
@@ -642,7 +657,9 @@ internal static class ShapeCompiler
 
             case LoftShape loft:
             {
-                Decompose(m, shape, out _, out _, out _); // rigid + uniform only
+                // Similarity only (mirrored included) — the sections are already placed in
+                // 3D, so the decomposition is a pure GATE and `m` is applied verbatim.
+                DecomposeSimilarity(m, shape, out _, out _, out _);
                 var placed = new Profile[loft.Sections.Count];
                 for (int i = 0; i < placed.Length; i++)
                     placed[i] = TransformProfile(loft.Sections[i], m);
@@ -708,8 +725,14 @@ internal static class ShapeCompiler
             {
                 // The angle is dimensionless, so only the neutral plane and pull
                 // direction bake; uniform scale leaves the taper alone (a scaled
-                // frustum keeps its angles).
-                Decompose(m, shape, out var draftRotation, out _, out _);
+                // frustum keeps its angles). Mirrored placements take the pull
+                // direction's LINEAR IMAGE — the same asymmetry the reflected revolve
+                // branch has, and for the same reason: the decomposition's rotation is
+                // the proper part of m*FlipZ and would drop the reflection. Proper
+                // placements keep the exact spelling they always had, so their geometry
+                // stays bit-identical. No negation here (unlike a revolve's axis): a
+                // pull direction is transported by the linear map, not conjugated.
+                DecomposeSimilarity(m, shape, out var draftRotation, out _, out _, out bool draftReflected);
                 var solid = LowerBrep(draft.Child, m);
                 Func<BrepFace, bool>? selector = null;
                 if (draft.Selector is not null)
@@ -722,14 +745,19 @@ internal static class ShapeCompiler
                 }
                 return BRep.Draft.Apply(
                     solid, m.TransformPoint(draft.NeutralOrigin),
-                    draftRotation.Rotate(draft.PullDirection), draft.AngleRadians, selector);
+                    draftReflected
+                        ? m.TransformVector(draft.PullDirection)
+                        : draftRotation.Rotate(draft.PullDirection),
+                    draft.AngleRadians, selector);
             }
 
             case BrepShellShape brepShell:
             {
                 // Wall thickness is a length: it scales with the accumulated uniform
-                // factor, like the rim features' amounts.
-                Decompose(m, shape, out _, out _, out double wallScale);
+                // factor, like the rim features' amounts. Mirrored placements are fine —
+                // only the scale is consumed, and an offset by a distance commutes with
+                // any isometry.
+                DecomposeSimilarity(m, shape, out _, out _, out double wallScale);
                 var solid = LowerBrep(brepShell.Child, m);
                 Func<BrepFace, bool>? openings = null;
                 if (brepShell.Openings is not null)
@@ -745,7 +773,9 @@ internal static class ShapeCompiler
 
             case RoundEdgesShape roundEdges:
             {
-                Decompose(m, shape, out _, out _, out double radiusScale);
+                // Mirrored placements included: the opening's structuring element is a
+                // BALL, which every reflection maps to itself.
+                DecomposeSimilarity(m, shape, out _, out _, out double radiusScale);
                 return Filleting.FilletAllEdges(
                     LowerBrep(roundEdges.Child, m), roundEdges.Radius * radiusScale);
             }
@@ -1183,23 +1213,61 @@ internal static class ShapeCompiler
     /// would actually narrow the guard to 0.0026° and let near-coplanar tools through into
     /// a boolean that cannot handle them. The cosine is quadratically flat near parallel,
     /// so the dot-product margin buys only its square root in angle.
-    /// <para>Deliberately NOT widened while naming it: this test only decides whether the
-    /// companion <see cref="CoplanarFaceDistance"/> check is meaningful, and for a face
-    /// that is genuinely tilted relative to the axis that check measures the axial gap to
-    /// an ARBITRARY point of the face's plane (whatever <c>IsPlanar</c> reports as the
-    /// origin), so it is ill-defined exactly in the band a wider angle would admit.
-    /// Widening needs its own coplanar-boolean evidence — see the backlog note.</para>
+    /// <para>Deliberately NOT widened, and the reason is now geometric rather than a
+    /// deferral: two planes coincide iff they are parallel AND a point of one lies on the
+    /// other, so this is the parallelism half of a coincidence test. Past the band the
+    /// tool's flat bottom CROSSES the face in a chord instead of lying in it, which is an
+    /// ordinary transversal boolean the kernel handles — widening would start refusing
+    /// legal models. (The companion <see cref="CoplanarFaceDistance"/> check used to be
+    /// ill-defined in exactly this band, which was the earlier reason not to touch the
+    /// angle; see <see cref="BottomLiesInFacePlane"/> for what replaced it.)</para>
     /// </summary>
     private const double CoplanarFaceCosine = 1 - 1e-6;
 
     /// <summary>
-    /// Distance within which the tool's flat bottom is treated as landing ON a face.
+    /// Distance within which the tool's flat bottom is treated as landing ON a face —
+    /// applied to a genuine point-to-plane distance (see <see cref="BottomLiesInFacePlane"/>).
     /// Absolute by design (unlike an angle it cannot be made scale-free): it is a
-    /// model-unit coincidence test against geometry the caller positioned in model units,
-    /// and it sits at the inverse-evaluation tier because <c>origin</c> comes from the
-    /// lowered solid's face geometry.
+    /// model-unit coincidence test against geometry the caller positioned in model units.
+    /// <para>Deliberately one tier LOOSER than <c>CoplanarFaces.SamePlane</c>'s 1e-7 seam
+    /// tier, which asks the same question of two faces inside the boolean. This is a
+    /// refuse-EARLY guard: a conservative refusal costs the caller a nudge to the depth
+    /// and names the reason, while a missed coincidence surfaces as a deep tessellation
+    /// error ("Directed edge appears twice"), so the asymmetric cost justifies the
+    /// asymmetric tolerance.</para>
     /// </summary>
     private const double CoplanarFaceDistance = 1e-6;
+
+    /// <summary>
+    /// Whether a hole tool's flat bottom — the disk through <paramref name="bottom"/>
+    /// perpendicular to <paramref name="axis"/> — lies IN <paramref name="face"/>'s plane.
+    /// The one rule both <see cref="ValidateDrillDepth(DrillShape, BrepSolid, in Matrix4d)"/>
+    /// and <see cref="ValidateThreadedHoleDepth"/> ask, so the two cannot drift.
+    /// <para><b>The offset is measured along the FACE's normal, never along the tool axis.</b>
+    /// <c>IsPlanar</c> hands back an arbitrary in-plane point (a box cap's is a CORNER; a
+    /// boolean fragment inherits its parent surface's, which can sit outside its own trim),
+    /// and <c>n̂·(origin − bottom)</c> is the same number for every such point while
+    /// <c>axis·(origin − bottom)</c> is not: at a tilt θ an in-plane offset L contributes
+    /// L·sin θ, which reaches the whole 1e-6 threshold by L ≈ 7e-4 model units. The old
+    /// axial form was therefore decided by WHERE the origin happened to be — on a 200×150
+    /// plate whose bottom-cap origin is the corner (−100, −75, −10), a face tilted by
+    /// 0.057° reads a 0.075 gap for a bottom sitting exactly in its plane, three decades
+    /// past the threshold, so the guard silently did not fire; and symmetrically it
+    /// refused a blind hole with 0.075 of real floor under it. Same shape as the recorded
+    /// trap that a face must be located by <c>Bounds().Center</c>, and the same arithmetic
+    /// <c>CoplanarFaces.SamePlane</c> already uses inside the boolean.</para>
+    /// </summary>
+    private static bool BottomLiesInFacePlane(BrepFace face, in Vector3d bottom, in Vector3d axis)
+    {
+        if (!face.IsPlanar(out var origin, out var normal) ||
+            !normal.TryNormalize(Tolerance.Default, out var unit))
+            return false;
+        // Parallel to the tool's bottom disk...
+        if (Math.Abs(unit.Dot(axis)) < CoplanarFaceCosine)
+            return false;
+        // ...and the bottom point lies on the face's plane.
+        return Math.Abs(unit.Dot(origin - bottom)) <= CoplanarFaceDistance;
+    }
 
     /// <summary>
     /// Recovers the per-point tool shapes from a drill's expansion, which
@@ -1256,12 +1324,19 @@ internal static class ShapeCompiler
     }
 
     /// <summary>
-    /// Rejects a drill whose tool's flat bottom is coplanar with a planar face of the
-    /// body: coplanar face pairs are unsupported boolean input (the v1 transversality
-    /// contract), and without this guard the failure surfaces as a deep tessellation
-    /// error ("Directed edge appears twice"). Follows the rim features' precedent of
-    /// validating against the lowered solid. Only exact coplanarity (within tolerance)
-    /// throws — a bottom safely short of the far face is a legitimate blind hole.
+    /// Rejects a drill whose tool's flat bottom is coplanar with a planar face of the body,
+    /// which is boolean input the exact path cannot take: without this guard the failure
+    /// surfaces as a deep tessellation error ("Directed edge appears twice"). Follows the
+    /// rim features' precedent of validating against the lowered solid. Only exact
+    /// coplanarity (within tolerance) throws — a bottom safely short of the far face is a
+    /// legitimate blind hole.
+    /// <para><b>The coplanar-fusion tier does not retire this.</b> <c>CoplanarFaces</c> now
+    /// fuses coincident PLANAR pairs in the boolean, so a flush cylinder tool would be fine
+    /// — but a drill tool is ONE axis-touching revolve, so its flat bottom is a
+    /// <c>RevolvedSurface</c> pole cap and <c>IsPlanar</c> reports false for it. The tier
+    /// collects only <c>IsPlanar</c> faces (<c>CoplanarFaces.For</c>), so it structurally
+    /// cannot see this pair, and the guard stays load-bearing. What DID change is the
+    /// measure — see <see cref="BottomLiesInFacePlane"/>.</para>
     /// </summary>
     private static void ValidateDrillDepth(DrillShape drill, in Matrix4d m)
     {
@@ -1293,11 +1368,7 @@ internal static class ShapeCompiler
                 var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, end));
                 foreach (var face in body.Faces)
                 {
-                    if (!face.IsPlanar(out var origin, out var normal))
-                        continue;
-                    if (Math.Abs(normal.Normalized().Dot(drillNormal)) < CoplanarFaceCosine)
-                        continue;
-                    if (Math.Abs(drillNormal.Dot(origin - bottom)) <= CoplanarFaceDistance)
+                    if (BottomLiesInFacePlane(face, bottom, drillNormal))
                         throw new ArgumentException(
                             $"Drill depth {drill.Depth:g6} puts the tool's " +
                             (end < -drill.Depth ? "drill point" : "bottom") +
@@ -1310,10 +1381,11 @@ internal static class ShapeCompiler
 
     /// <summary>
     /// Rejects a threaded hole whose tool's flat bottom is coplanar with a planar face
-    /// of the body — the same v1 transversality contract as
-    /// <see cref="ValidateDrillDepth"/>: coplanar face pairs are unsupported boolean
-    /// input, so increase the depth past the far face for a through hole or reduce it
-    /// for a blind one.
+    /// of the body — the same guard as <see cref="ValidateDrillDepth"/> and through the
+    /// same shared rule, so increase the depth past the far face for a through hole or
+    /// reduce it for a blind one. (A thread tool's cap is a plane rather than a revolved
+    /// pole, but the pair is still coincident-and-untraceable input here: it sits on a
+    /// helical band, not on the plane-vs-plane geometry the fusion tier handles.)
     /// </summary>
     private static void ValidateThreadedHoleDepth(ThreadedHoleShape hole, BrepSolid body, in Matrix4d effective)
     {
@@ -1323,11 +1395,7 @@ internal static class ShapeCompiler
             var bottom = effective.TransformPoint(new Vector3d(point.X, point.Y, -hole.Depth));
             foreach (var face in body.Faces)
             {
-                if (!face.IsPlanar(out var origin, out var normal))
-                    continue;
-                if (Math.Abs(normal.Normalized().Dot(drillNormal)) < CoplanarFaceCosine)
-                    continue;
-                if (Math.Abs(drillNormal.Dot(origin - bottom)) <= CoplanarFaceDistance)
+                if (BottomLiesInFacePlane(face, bottom, drillNormal))
                     throw new ArgumentException(
                         $"Threaded-hole depth {hole.Depth:g6} puts the tool's flat bottom coplanar with a " +
                         $"planar face of the body (hole at {point}); increase depth so the tool clears the " +

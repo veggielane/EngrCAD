@@ -254,13 +254,13 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   open; both were stale.
 ## Core (EngrCAD.Core)
 
-- [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
-  (`CoplanarFaceCosine`, 0.081° = acos(1 − 1e-6)) but deliberately not widened: a dot
-  of unit vectors is already scale-free, so the quadratic-scale argument does not apply.
-  The real issue found while testing it: the companion `CoplanarFaceDistance` check
-  measures the axial gap to an **arbitrary point of a tilted face's plane** (whatever
-  `IsPlanar` reports as origin), so it is ill-defined precisely in the band a wider
-  angle would admit. Needs coplanar-boolean evidence before touching.
+- [x] ~~**`ShapeCompiler` coplanarity, and a finding under it**~~ ✅ **landed** — the
+  companion `CoplanarFaceDistance` check now measures a genuine point-to-PLANE distance
+  (`ShapeCompiler.BottomLiesInFacePlane`, one shared rule for `Drill` and `ThreadedHole`),
+  so it is well defined at any tilt; the angle stays at acos(1 − 1e-6) with a geometric
+  reason rather than a deferral. The coplanar-boolean evidence the item was waiting for
+  says the guard STAYS: `CoplanarFaces.For` collects only `IsPlanar` faces and a drill
+  tool's flat bottom is a `RevolvedSurface` pole cap, so the fusion tier cannot see it.
 - [ ] **`Fitting3d.MinVolumeBox`'s per-family angle is a sweep + golden section, not an
   algebraic root solve** (the OBB itself ✅ landed). O'Rourke derives the critical angle in
   closed form; worth doing if a hull ever shows a minimum hiding in a bracket narrower
@@ -465,9 +465,30 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
   AND branch selector, refuse-loudly with named contradictions/stationary points):
-  elliptical arcs in sketches; constraint serialization alongside feature history
-  (deliberately not v1 — it does not fall out of the `[Param]` descriptor pattern);
-  bézier constraints (tangency at bézier endpoints); point-on-arc/curve constraint.
+  ~~elliptical arcs in sketches~~ ✅ **landed** (`Ellipse2d` + `EllipseSeg`,
+  `Sketch.Ellipse`, `SketchBuilder.EllipticalArcTo`; exact in all three reps, docs
+  `sketching.md`) — what remains OF that item is the constraint side: an elliptical arc
+  carries no centre/axis variables, so it rides the chord similarity like a bézier and
+  tangency to one is not in the vocabulary; constraint serialization alongside feature
+  history (deliberately not v1 — it does not fall out of the `[Param]` descriptor
+  pattern); bézier constraints (tangency at bézier endpoints). ~~point-on-arc/curve
+  constraint~~ ✅ **landed** as `PointOn(point, line)`/`PointOn(point, arc)` — the CARRIER,
+  and both reuse an existing residual rather than adding a spelling of one (point-on-line
+  IS the point-to-line dimension at zero, legitimate because that residual is signed;
+  point-on-arc IS `ArcEndpointConstraint` with an arbitrary point).
+  - [ ] **Point-on-BÉZIER and point-on-ELLIPSE** are the two the vocabulary still lacks,
+    and they are a different problem from the two that landed: a line's and a circle's
+    carrier have a closed-form signed residual (`d̂ × (p − a)`, `|p − c| − r`), where a
+    bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
+    its own foot parameter as a VARIABLE — which is the standard treatment and is real
+    work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
+- [ ] **A lane-wise `SketchRegion` kernel for elliptical arcs.** Every other segment kind
+  has one; an ellipse lands in the `General` tier because its distance is `Curve2d`'s
+  64-sample scan plus bracketed Newton (point-to-ellipse is a quartic root, so there is
+  no closed form to transcribe). The batch contract is the strong one — bit-identical to
+  the scalar path — so a kernel here must reproduce that scan and its Newton stop exactly,
+  the way `CubicMinimum`'s sticky per-lane mask does. Measure before building: the
+  bounding-box reject already fronts it.
 - [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
   but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
   polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`
@@ -1060,12 +1081,22 @@ export — is recorded in CLAUDE.md):
 - [ ] `BrepSolid` one-call transform story (`TransformedCurve` exists; add
   `TransformedSurface` or per-type transforms; `HalfEdgeMesh.Transformed(m)` ✅ landed
   with winding flip)
-- [ ] mirror B-Rep completion, remaining nodes — revolve/sweep/rim/drill ✅ landed
-  (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF for sweeps,
-  isometry-commuting surgery for rims/drills); still rigid-proper-only:
-  `Draft` (pull direction needs the linear image under the reflection),
-  `Shell(t, openings)`, `RoundEdges`, `Loft` — all isometry-commuting, each a small
-  DecomposeSimilarity change plus tests when wanted
+- [x] ~~mirror B-Rep completion, remaining nodes~~ ✅ **landed in full** — revolve/sweep/
+  rim/drill earlier (axis negation `F∘R(d,θ)∘F = R(−F·d, θ)` for revolves, intrinsic RMF
+  for sweeps, isometry-commuting surgery for rims/drills), and now `Draft` /
+  `Shell(t, openings)` / `RoundEdges` / `Loft` plus the pure taper (which lowers AS a
+  two-section loft, so leaving it refused would have been one operation disagreeing with
+  itself). Those five needed no identity — each is defined by lengths and angles alone —
+  and Draft's pull direction takes its linear image un-negated. Remaining refusal in the
+  family, with a real reason: `SheetMetalBody` (an ordered, edge-quoted flange tree would
+  need rebuilding the other way round, not re-placing).
+- [ ] **`ThreadedHole` still refuses a mirror with the rationale `ExternalThread` retired**
+  ("a mirrored thread is left-handed" — which is now Native via `TryDecomposeThreadPlacement`'s
+  FlipY branch). A threaded hole's tool is the same helical rod clipped at the pilot
+  radius, so the same decomposition should apply, with the handedness XOR'd exactly as
+  `ThreadShape` does. Not folded into the mirror-completion work because it also has to
+  carry the per-point placement and the depth validation through the reflection, which is
+  a different (and testable) job from a gate change.
 - [ ] **2D offset follow-ups** (`Region2dOffset`/`Sketch.Offset` ✅ landed — round/miter/
   chamfer joins, erosion as complement dilation; **open-path stroking ✅ landed** —
   `Region2dOffset.Stroke(path, width, cap, join)`, butt/round/square caps, both-side
@@ -1375,6 +1406,35 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   density as an argument because a `Part` has no material. A `Material` (name + density +
   display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
   and is the natural seed for the BOM and for Simulation.
+  **Surveyed; the blocker is a UNIT decision, not the plumbing.** Exactly one `Material`
+  exists today (`EngrCAD.Fea.Material`) and it structurally cannot express a document
+  material: its constructor refuses `youngsModulus <= 0`, so "name + density + colour" is
+  not constructible through it. Worse, **the two density conventions already disagree by
+  1000×** — `Materials.Steel.Density` is 7.85e-9 (tonne/mm³, the mm/N/MPa/tonne system a
+  consistent FEA solve needs) while `PartMassProperties` documents 7.85e-6 (kg/mm³, which
+  is fine for reading mass in kilograms). Adding a second catalogue in Modeling would
+  bake that disagreement into the model rather than resolve it, so the item is a
+  unification, not an addition:
+  - Move `Material` down to `EngrCAD.Core` — the only ancestor both `Fea` and `Modeling`
+    see (`Fea` already references Core only for `Vector3d`), and the same call as
+    `Viewer.Core`: an assembly boundary is packaging, so the namespace can stay put.
+  - Make the elasticity/thermal properties OPTIONAL and move the hard refusal from the
+    constructor to the POINT OF USE (`StructuralModel` refusing a material with no `E`,
+    by name). A material with no modulus is a perfectly good *document* material; only a
+    structural solve needs one.
+  - Then Modeling is additive and small: `Part.Material` beside `Part.Hardware`,
+    `PartMassProperties`' `Func<Part, double>? density` defaulting to
+    `p => p.Material?.Density ?? 1`, `BomLine.Material => Part.Material?.Name` (an
+    expression-bodied projection, so no ctor change) plus one column in `ToText`/`ToCsv`,
+    and a write-only-when-non-default field in `DocumentFile` to keep the
+    save→load→save fixed point byte-identical.
+  - **Decide the unit system explicitly and write it down**: mm/N/tonne, matching the
+    existing catalogue, with `PartMassProperties`' example corrected — otherwise "one
+    liner" means the returned mass silently changes meaning with the caller's source of
+    density. A cross-reference warning is in `PartMassProperties`' remarks meanwhile.
+  - Colour stays on `Part`: `Part.Color` already owns the palette-assignment invariant,
+    so a material should supply the DEFAULT at add time rather than own the property.
+  (Not landed because every step above edits `EngrCAD.Fea`.)
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,

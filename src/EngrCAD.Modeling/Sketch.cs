@@ -145,6 +145,32 @@ public sealed class Sketch
         return new Sketch([new ArcSeg(center, radius, 0, 2 * Math.PI)], []);
     }
 
+    /// <summary>Full ellipse centred at the origin, semi-axes along +x and +y.</summary>
+    public static Sketch Ellipse(double semiX, double semiY) => Ellipse(default, semiX, semiY, 0);
+
+    /// <summary>
+    /// Full ellipse: semi-axes <paramref name="semiX"/> and <paramref name="semiY"/>,
+    /// rotated by <paramref name="rotationDegrees"/> about <paramref name="center"/>.
+    /// Exact in all three representations (the segment carries an <see cref="Ellipse3d"/>,
+    /// not a flattened polyline) — a circle when the two semi-axes are equal, though it
+    /// stays an ellipse rather than collapsing to a circular arc, so
+    /// <c>BrepQueries.IsCircular</c> and cylinder promotion will not claim it. Use
+    /// <see cref="Circle(double)"/> when the shape really is a circle.
+    /// </summary>
+    public static Sketch Ellipse(Vector2d center, double semiX, double semiY, double rotationDegrees = 0)
+    {
+        if (!(semiX > 0))
+            throw new ArgumentOutOfRangeException(nameof(semiX), "Ellipse semi-axes must be positive.");
+        if (!(semiY > 0))
+            throw new ArgumentOutOfRangeException(nameof(semiY), "Ellipse semi-axes must be positive.");
+        double radians = rotationDegrees * Math.PI / 180;
+        double cos = Math.Cos(radians), sin = Math.Sin(radians);
+        return new Sketch(
+            [new EllipseSeg(
+                center, new Vector2d(cos, sin) * semiX, new Vector2d(-sin, cos) * semiY, 0, 2 * Math.PI)],
+            []);
+    }
+
     /// <summary>Rectangle centered at the origin with quarter-circle corners.</summary>
     public static Sketch RoundedRectangle(double width, double height, double cornerRadius)
     {
@@ -219,13 +245,15 @@ public sealed class Sketch
     {
         Line2d line => new LineSeg(line.Start, line.End),
         Arc2d arc => new ArcSeg(arc.Center, arc.Radius, arc.StartAngle, arc.SweepAngle),
+        Ellipse2d ellipse => new EllipseSeg(
+            ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY, ellipse.StartAngle, ellipse.SweepAngle),
         BezierCurve2d { Degree: 3 } cubic => new CubicSeg(
             cubic.ControlPoints[0], cubic.ControlPoints[1], cubic.ControlPoints[2], cubic.ControlPoints[3]),
         BezierCurve2d { Degree: 2 } quadratic => Elevate(quadratic),
         _ => throw new ArgumentException(
             $"Curve {index} is a {curve.GetType().Name}, which has no exact sketch segment. "
-            + "Sketches carry lines, circular arcs and cubic Beziers; convert or approximate it "
-            + "deliberately before building a sketch from it."),
+            + "Sketches carry lines, circular and elliptical arcs, and cubic Beziers; convert or "
+            + "approximate it deliberately before building a sketch from it."),
     };
 
     /// <summary>A quadratic Bézier as the EXACTLY equivalent cubic (degree elevation is a
@@ -603,6 +631,99 @@ public sealed class SketchBuilder
         return this;
 
         static double Wrap(double angle) => angle - 2 * Math.PI * Math.Floor(angle / (2 * Math.PI));
+    }
+
+    /// <summary>
+    /// Elliptical arc from the current point to <paramref name="end"/>, on an ellipse with
+    /// the given semi-axis lengths and rotation — SVG's <c>A rx ry rot largeArc sweep</c>
+    /// command, with the same two flags and the same meaning, because that is the only
+    /// widely-shared spelling of this curve and matching it means a path can cross either
+    /// way with nothing re-derived.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The semi-axes are scaled up when they cannot reach</b>, which is SVG's own
+    /// out-of-range rule (F.6.6) and is what stops a caller having to solve for the
+    /// minimum ellipse before drawing: both are multiplied by the common factor that makes
+    /// the arc exactly reach, so the ellipse's ASPECT and rotation are preserved and the
+    /// result is the unique arc of that shape through both points.</para>
+    /// <para>Exact in all three representations, and note what that costs nowhere else:
+    /// the arc lands on the sketch as an <c>EllipseSeg</c> carrying the centre and both
+    /// semi-axis VECTORS, so a rotated ellipse needs no third parameter downstream.</para>
+    /// </remarks>
+    /// <param name="semiX">Semi-axis before rotation, along the ellipse's own x.</param>
+    /// <param name="semiY">Semi-axis before rotation, along the ellipse's own y.</param>
+    /// <param name="rotationDegrees">Rotation of the ellipse's axes from the sketch's.</param>
+    /// <param name="largeArc">Take the arc of more than half a turn.</param>
+    /// <param name="clockwise">Traverse clockwise (SVG's sweep flag = 0).</param>
+    public SketchBuilder EllipticalArcTo(
+        Vector2d end, double semiX, double semiY, double rotationDegrees = 0,
+        bool largeArc = false, bool clockwise = false)
+    {
+        if (!(semiX > 0) || !(semiY > 0))
+            throw new ArgumentOutOfRangeException(nameof(semiX), "Ellipse semi-axes must be positive.");
+        var start = _current;
+        // Degenerate-chord guard at the weld tier, matching Close(): a zero-length arc has
+        // no defined sweep, and the joint would not be a distinct vertex downstream.
+        if (start.DistanceTo(end) <= 1e-9)
+            throw new ArgumentException("An elliptical arc needs distinct endpoints.", nameof(end));
+
+        double radians = rotationDegrees * Math.PI / 180;
+        double cos = Math.Cos(radians), sin = Math.Sin(radians);
+
+        // Work in the ellipse's own frame, then scale y so the ellipse becomes the UNIT
+        // CIRCLE: the arc problem is then the circular one, and the answer maps back
+        // exactly because the map is linear (it takes centres to centres and the arc's
+        // parameter across verbatim).
+        Vector2d ToUnit(in Vector2d p)
+        {
+            var local = new Vector2d(p.X * cos + p.Y * sin, -p.X * sin + p.Y * cos);
+            return new Vector2d(local.X / semiX, local.Y / semiY);
+        }
+
+        var u0 = ToUnit(start);
+        var u1 = ToUnit(end);
+        double half = (u1 - u0).Length / 2;
+        if (half > 1)
+        {
+            // SVG F.6.6: scale both semi-axes by the common factor that just reaches, so
+            // the aspect and rotation survive and the arc is the unique one of that shape.
+            semiX *= half;
+            semiY *= half;
+            u0 = ToUnit(start);
+            u1 = ToUnit(end);
+            half = 1;   // by construction, up to rounding
+        }
+
+        var chordMid = (u0 + u1) / 2;
+        var chord = u1 - u0;
+        // Exact-zero guard: distinct endpoints were checked above, and the unit map is
+        // invertible, so the chord cannot vanish here.
+        var left = new Vector2d(-chord.Y, chord.X).Normalized();
+        double offset = Math.Sqrt(Math.Max(0, 1 - half * half));
+        // Same rule as ArcTo: a counter-clockwise small arc curves left of the chord, and
+        // each of the two flags flips the side.
+        var unitCenter = chordMid + left * ((clockwise ^ largeArc) ? -offset : offset);
+
+        double startAngle = Math.Atan2(u0.Y - unitCenter.Y, u0.X - unitCenter.X);
+        double endAngle = Math.Atan2(u1.Y - unitCenter.Y, u1.X - unitCenter.X);
+        double sweep = endAngle - startAngle;
+        // Angles are dimensionless, so 1e-12 rad is legitimately absolute (the ArcTo rule).
+        if (!clockwise)
+            sweep = sweep <= 1e-12 ? sweep + 2 * Math.PI : sweep;
+        else
+            sweep = sweep >= -1e-12 ? sweep - 2 * Math.PI : sweep;
+
+        // Map the unit-circle answer back: the centre through the inverse of ToUnit, and
+        // the axes as the images of the unit circle's own.
+        var center = new Vector2d(
+            unitCenter.X * semiX * cos - unitCenter.Y * semiY * sin,
+            unitCenter.X * semiX * sin + unitCenter.Y * semiY * cos);
+        var a = new Vector2d(cos, sin) * semiX;
+        var b = new Vector2d(-sin, cos) * semiY;
+
+        _segments.Add(new EllipseSeg(center, a, b, startAngle, sweep));
+        _current = end;
+        return this;
     }
 
     /// <summary>Cubic Bézier with control points <paramref name="control1"/>/<paramref name="control2"/>.</summary>

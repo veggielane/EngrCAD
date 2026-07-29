@@ -826,6 +826,70 @@ The result is a lossless route from a drawn sketch to an exact analytic profile 
 touches `Region2d` — which matters because going through a region is the one deliberately
 lossy step in the whole 2D pipeline.
 
+**Elliptical arcs joined the family, and what they cost is instructive.** `Ellipse2d`
+beside `Arc2d`, `EllipseSeg` beside `ArcSeg`, both storing the centre and both semi-axis
+**VECTORS** rather than (rx, ry, rotation) — so a rotated ellipse is the ordinary case
+instead of a third parameter, an affine map of the axes is an affine map of the curve, and
+the form is `Ellipse3d`'s verbatim so the lift invents nothing. Four of the five things a
+segment must supply stayed closed form: the signed area is `½(C × (End − Start) +
+(A × B)·sweep)`, which *reduces exactly* to the circular formula at A = (r, 0), B = (0, r);
+the bounds solve `dx/dθ = 0` analytically instead of sampling; the flattening bound is
+`(|A| + |B|)·Δ²/8`; and the y-monotone parity pieces invert `y − C.y = R·sin(θ + φ)` in
+closed form, so an ellipse's ray crossing is as exact as a circle's rather than a bisection
+like a bézier's.
+
+The fifth is the **distance**, and it has no elementary closed form (point-to-ellipse is a
+quartic). Rather than write a fifth scan-and-Newton, `EllipseSeg.Distance` delegates to the
+`Curve2d` base's — one implementation, one documented contract (every candidate is a real
+point ON the curve, so the answer can only over-estimate), and the segment and the 2D curve
+family cannot disagree. The cost is stated rather than hidden: an elliptical sketch lands in
+`SketchRegion`'s `General` tier where every other kind has a lane kernel, filed with the note
+that the batch contract there is bit-identity, not a bounded deviation.
+
+Three further decisions. `Ellipse2d` does **not** override `TryToCurvedEdge`, so it
+correctly refuses the curved 2D arrangement — that tier's completeness argument is that
+agreeing in tangent *and* curvature means sharing a carrier, which stops being true the
+moment ellipses join (a circle osculates an ellipse at its axis ends). `EllipticalArcTo` is
+SVG's `A` command verbatim, flags and out-of-range rule included, because that is the only
+widely-shared spelling of this curve and matching it means an SVG path crosses either way
+with nothing re-derived; it is solved by mapping the ellipse to the **unit circle**, where
+the problem is the circular one already solved, and mapping back — legal because the map is
+linear, so it carries centres to centres and the parameter across verbatim. And an ellipse
+with equal semi-axes deliberately stays an `Ellipse2d` rather than collapsing to an arc:
+silently changing a caller's type would make `IsCircular` and cylinder promotion depend on
+whether two doubles happened to be equal.
+
+**Point-on-object needed no new residual, and noticing that is the design.** A sketcher's
+point-on-line is the point-to-line DIMENSION at zero — legitimate because that residual is
+the *signed* offset `d̂ × (p − a)`, which passes smoothly through zero and is first order
+there, whereas the point-to-POINT distance's zero is a cone point (which is exactly why
+`Distance(point, point, 0)` is refused in favour of `Coincident`). Point-on-arc is
+`ArcEndpointConstraint` — the row the solver already applies internally to an arc's own two
+endpoints — asked with an arbitrary point index. So the whole feature is two public methods
+and no new mathematics, and the two spellings of "|p − c| = r" cannot drift because there is
+only one. Two policy choices ride on top: the carrier is INFINITE (a line's whole carrier, an
+arc's whole circle), because a point-on-object that refused to let the point pass the drawn
+stretch would be a branch selector wearing a constraint's name; and a point drawn exactly at
+an arc's centre is refused BY NAME, since `|p − c| − r`'s gradient there is the undefined
+direction `(p − c)/|p − c|` — the same stationary-configuration rule that names an `Angle`
+mate between exactly-parallel directions rather than nudging it. What is NOT offered is
+point-on-bézier or point-on-ellipse, and the reason is structural rather than effort: those
+carriers have no closed-form signed residual, so the foot parameter would have to become a
+solver VARIABLE, which is a different mechanism and is filed as such.
+
+**The defect it exposed is the more valuable half.** `BRepTessellator` handed the
+`segmentsPerCircle` density to `Circle3d` and nothing else, so an ellipse — whose parameter
+is equally an angle over one turn — fell to the generic `curveSamples`. An elliptical prism
+measured **0.64% under πabh at "256 segments per circle": the deficit of a 23-gon**. That is
+not an accuracy tolerance but a wrong answer to the density the caller stated, and it was
+already reaching real geometry, since `SurfaceIntersection` returns an `Ellipse3d` for an
+oblique plane through a cylinder. The gate is now `IsAngularlyParameterized` — the condition
+itself rather than a type that happens to satisfy it, the same "a tier's gate should BE its
+correctness condition" rule the helical-band and ring-paired-band work recorded. With it,
+the prism matches the *discrete* truth `(n/2)·a·b·sin(2π/n)·h` as an **identity**, which is
+only available in closed form because nothing along the chain is flattened — the strongest
+form of test this feature could have.
+
 ### The curved 2D tier — and why it is a PARALLEL type
 
 The lossy step above is now optional. `CurvedEdge2d` / `CurvedRegion2d` /
@@ -1654,6 +1718,37 @@ Design decisions:
   cannot survive anyway. An exact solid intersection was rejected as the wrong shape of
   answer: it costs a full boolean to decide a question whose useful answer is "clearly
   apart" almost always.
+
+  **A coincidence test measures to a PLANE, never along a convenient axis.** The depth
+  guard asks whether the tool's flat bottom lies in a body face's plane, which is two
+  conditions — the planes are parallel, and a point of one lies on the other — and the
+  second must be `n̂·(origin − bottom)` with the FACE's normal. Measuring
+  `axis·(origin − bottom)` instead looks equivalent, and is, exactly at zero tilt; away
+  from it the answer depends on *which* in-plane point `IsPlanar` reports, and that point
+  is arbitrary by contract (a box cap's is a CORNER; a boolean fragment inherits its
+  parent surface's, which can sit outside its own trim). Inside the guard's own 0.081°
+  parallel band an in-plane offset `L` therefore leaks `L·sin θ` into the measurement:
+  on a 200×150 plate tilted 0.057° that is **0.075 model units**, three decades past the
+  1e-6 threshold, so the guard silently failed to fire on a genuinely coplanar bottom
+  *and* refused a blind hole with 0.075 of real floor left. Both directions are pinned by
+  tests, and both fail on the old form. Two riders. The angle is deliberately not
+  widened, and now for a geometric reason rather than as a deferral: past that band the
+  bottom disk CROSSES the face in a chord rather than lying in it, which is ordinary
+  transversal boolean input, so a wider gate would start refusing legal models. And the
+  distance stays one tier looser than `CoplanarFaces.SamePlane`'s 1e-7, because this is a
+  refuse-EARLY guard where a conservative refusal costs a nudge and a missed coincidence
+  costs a "Directed edge appears twice" from inside the tessellator. The general lesson is
+  the one this repo keeps re-learning: **the kernel already had the well-formed version of
+  this test** — `CoplanarFaces.SamePlane`, same arithmetic, one layer down — and the guard
+  restated it rather than asking it. Restating a shared rule is how all four recorded
+  occurrences of this went wrong.
+
+  **The coplanar-fusion tier does not retire the guard, and the reason is structural
+  rather than a matter of degree.** `CoplanarFaces.For` collects only faces `IsPlanar`
+  recognizes, while a drill tool is ONE axis-touching revolve — chosen that way precisely
+  to keep boolean input transverse — so its flat bottom is a `RevolvedSurface` pole cap
+  and never enters the tier. A flush *cylinder* tool, whose caps are `PlaneSurface`s, does
+  fuse. So "coplanar booleans landed" narrows what the guard is for without removing it.
 - **Thread handedness is arithmetic, and `Mirror` is the same fact read backwards.**
   A left-hand thread shares every diameter with its right-hand twin — handedness is not a
   different thread — so it is carried as a flag on `ThreadSpec` rather than a second
@@ -1681,6 +1776,39 @@ Design decisions:
   both alone; any two reflections differ by a rotation, so choosing the convenient one is
   free. The refusal that remains is a genuinely different one — a sheared or
   non-uniformly scaled placement cannot re-place a helix at all.
+- **Most of the mirror work was an identity; the last five nodes needed none.** Revolves
+  conjugate (`F∘Rot(d, φ)∘F = Rot(−F·d, φ)`), threads negate a rate, sweeps rely on RMF
+  transport being intrinsic. `Draft`, `Shell(t, openings)`, `RoundEdges`, `Loft` and the
+  pure taper have no such structure to fix, because each is defined by **lengths and
+  angles alone** — an offset by a distance, a rounding by a ball, a skin whose
+  parameterization and alignment are metric, a taper by an angle — and every isometry
+  preserves all of those. So the operation applied to the mirrored child simply IS the
+  mirrored operation, and the change is a gate: `Decompose` (proper only) becomes
+  `DecomposeSimilarity`. Three points worth keeping.
+
+  **A pull direction is transported; a revolve axis is conjugated.** `Draft` is the only
+  one of the five with a direction to carry, and it takes `m.TransformVector(pull)` with
+  **no negation** — the negation in the revolve case comes from conjugating a rotation,
+  which a plain vector does not undergo. Proper placements keep their original spelling
+  (`rotation.Rotate(pull)`) so existing geometry stays bit-identical; only the reflected
+  branch is new, exactly the asymmetry the reflected revolve branch already had.
+
+  **What makes the draft claim true rather than merely plausible is that `Draft.Apply`
+  chooses its rotation SENSE by measurement** (build both candidates, keep the one leaning
+  further toward the pull direction) instead of from a cross-product convention. A
+  handedness convention anywhere in there would have flipped under the reflection.
+
+  **The oracle has to be an analytic volume, not a mirrored twin.** A reflection is an
+  isometry, so a wrongly-signed pull still yields a closed, valid solid of a plausible
+  size — and comparing mirrored against unmirrored would pass it, since both would be
+  wrong the same way. Drafting a 20×12×6 block 5° about its BASE separates the cases by
+  construction: narrowing gives `abh − (a+b)t h² + (4/3)t²h³` = 1341.42 and widening
+  1542.99. (The taper is folded in for a different reason: it *lowers as* a two-section
+  loft, so leaving it refused while `Loft` was Native would have been one operation
+  disagreeing with itself.) `SheetMetalBody` stays refused and is not an oversight: a
+  flange tree is ORDERED and quoted on named edges, so a reflection reverses the sense of
+  every bend and the body would have to be rebuilt the other way round rather than
+  re-placed — which is what its refusal message has always said.
 - **Queries and rim features**: `BrepQueries` gives B-Rep topology the LINQ vocabulary
   (classification, adjacency, convexity, normal-directed face selection); `Shape.Chamfer/
   Fillet(amount, faceSelector)` run `Filleting.ChamferRim/FilletRim` topology surgery

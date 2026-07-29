@@ -266,6 +266,206 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
     }
 }
 
+// ------------------------------------------------------------------------- ellipse
+
+/// <summary>
+/// Elliptical arc <c>C + A·cos θ + B·sin θ</c> over a signed sweep — <see cref="ArcSeg"/>
+/// generalized, and exact in all three representations because the whole chain down to
+/// <see cref="Ellipse3d"/> already existed (STEP write/read, `BrepArchive`, IGES,
+/// tessellation density, plane-section chord counts).
+/// </summary>
+/// <remarks>
+/// <para><b>Every quantity here is closed form except the distance.</b> The signed area is
+/// the same shape as the circular one — <c>½(C × (End − Start) + (A × B)·sweep)</c>,
+/// which reduces to <see cref="ArcSeg.SignedAreaContribution"/> exactly when
+/// A = (r, 0) and B = (0, r) — and the y-monotone pieces invert
+/// <c>y − C.y = R·sin(θ + φ)</c> analytically, so the ray-parity crossing is as exact as a
+/// circle's rather than a bisection like <c>CubicSeg</c>'s.</para>
+/// <para><b>The distance is not.</b> A point's distance to an ellipse is a quartic root,
+/// so <see cref="Distance"/> delegates to the shared <see cref="Curve2d"/> scan-and-Newton
+/// rather than restating it — the segment and the 2D curve family then agree by
+/// construction, which is the rule the repo keeps re-learning the hard way. That makes an
+/// elliptical sketch's field the one member of the family whose per-sample cost is a
+/// 64-point scan, so it lands in <c>SketchRegion</c>'s <c>General</c> tier (behind the
+/// bounding-box reject) and is a documented follow-up for a lane kernel.</para>
+/// </remarks>
+internal sealed class EllipseSeg : SketchSegment
+{
+    private readonly Vector2d _center, _a, _b;
+    private readonly double _startAngle, _sweep;
+    private readonly Ellipse2d _curve;
+
+    public EllipseSeg(Vector2d center, Vector2d semiAxisX, Vector2d semiAxisY, double startAngle, double sweep)
+    {
+        _center = center;
+        _a = semiAxisX;
+        _b = semiAxisY;
+        _startAngle = startAngle;
+        _sweep = sweep;
+        _curve = new Ellipse2d(center, semiAxisX, semiAxisY, startAngle, sweep);
+    }
+
+    public Vector2d Center => _center;
+    public Vector2d SemiAxisX => _a;
+    public Vector2d SemiAxisY => _b;
+    public double StartAngle => _startAngle;
+    public double Sweep => _sweep;
+
+    private Vector2d PointAt(double angle) =>
+        _center + _a * Math.Cos(angle) + _b * Math.Sin(angle);
+
+    public override Vector2d Start => PointAt(_startAngle);
+    public override Vector2d End => PointAt(_startAngle + _sweep);
+
+    /// <summary>Angular round-off slack, matching <see cref="ArcSeg.IsFullCircle"/>.</summary>
+    public bool IsFullEllipse => Math.Abs(Math.Abs(_sweep) - 2 * Math.PI) < 1e-12;
+
+    public override SketchSegment Reversed() =>
+        new EllipseSeg(_center, _a, _b, _startAngle + _sweep, -_sweep);
+
+    /// <summary>
+    /// ½∮(x dy − y dx) = ½(C × (End − Start) + (A × B)·sweep), from
+    /// P × P′ = −sin θ (C × A) + cos θ (C × B) + (A × B) integrated over the sweep. The
+    /// first two terms collapse into the STORED endpoints, which is both shorter and the
+    /// closed-curve rule (an endpoint re-derived from its angle is not bit-equal to the
+    /// neighbour's stored copy).
+    /// </summary>
+    public override double SignedAreaContribution() =>
+        0.5 * (_center.Cross(End - Start) + _a.Cross(_b) * _sweep);
+
+    public override Aabb Bounds()
+    {
+        var bounds = new Aabb((Start.X, Start.Y, 0), (Start.X, Start.Y, 0)).Union((End.X, End.Y, 0));
+        // dx/dθ = 0 at tan θ = B.x/A.x and dy/dθ = 0 at tan θ = B.y/A.y (each with its
+        // +π partner), so the extremes are exact rather than sampled.
+        foreach (double angle in ExtremeAngles(_a.X, _b.X))
+            bounds = bounds.Union(Lift(PointAt(angle)));
+        foreach (double angle in ExtremeAngles(_a.Y, _b.Y))
+            bounds = bounds.Union(Lift(PointAt(angle)));
+        return bounds;
+
+        static Vector3d Lift(in Vector2d p) => new(p.X, p.Y, 0);
+    }
+
+    /// <summary>The angles inside the sweep where <c>−a·sin θ + b·cos θ = 0</c>.</summary>
+    private IEnumerable<double> ExtremeAngles(double a, double b)
+    {
+        // Exact-zero guard: a component that is identically zero in both axes never
+        // varies, so it has no extreme to report.
+        if (a == 0 && b == 0)
+            yield break;
+        double baseAngle = Math.Atan2(b, a);
+        double lo = Math.Min(_startAngle, _startAngle + _sweep);
+        double hi = Math.Max(_startAngle, _startAngle + _sweep);
+        for (double k = Math.Ceiling((lo - baseAngle) / Math.PI); ; k++)
+        {
+            double angle = baseAngle + k * Math.PI;
+            if (angle > hi)
+                yield break;
+            if (angle >= lo)
+                yield return angle;
+        }
+    }
+
+    /// <summary>One rule: the exact 3D form is <see cref="Ellipse2d.ToCurve3d"/>'s, on the
+    /// world XY plane the sketch lives in.</summary>
+    public override Curve3d ToCurve() => _curve.ToCurve3d();
+
+    public override Curve2d ToCurve2d() => _curve;
+
+    /// <summary>Delegated, deliberately — see the class remarks.</summary>
+    public override double Distance(in Vector2d point) => _curve.DistanceTo(point);
+
+    public override IEnumerable<MonotonePiece> MonotonePieces()
+    {
+        // y(θ) = C.y + R·sin(θ + φ) with R = hypot(A.y, B.y) and φ = atan2(A.y, B.y), so
+        // the y extremes are θ + φ = ±π/2 + kπ.
+        double r = Math.Sqrt(_a.Y * _a.Y + _b.Y * _b.Y);
+        // Exact-zero guard: a degenerate y (both axes horizontal) never crosses a ray.
+        if (!(r > 0))
+            yield break;
+        double phase = Math.Atan2(_a.Y, _b.Y);
+
+        double lo = Math.Min(_startAngle, _startAngle + _sweep);
+        double hi = Math.Max(_startAngle, _startAngle + _sweep);
+        var breaks = new List<double> { lo };
+        for (double k = Math.Ceiling((lo + phase - Math.PI / 2) / Math.PI); ; k++)
+        {
+            double angle = Math.PI / 2 + k * Math.PI - phase;
+            if (angle >= hi)
+                break;
+            if (angle > lo)
+                breaks.Add(angle);
+        }
+        breaks.Add(hi);
+
+        for (int i = 0; i + 1 < breaks.Count; i++)
+        {
+            var from = PointAt(breaks[i]);
+            var to = PointAt(breaks[i + 1]);
+            if (Math.Abs(from.Y - to.Y) <= 0)
+                continue;
+            // Within a piece θ + φ stays inside ONE half-period of the sine, so the
+            // inverse branch is fixed and reading it off the midpoint is exact.
+            double mid = (breaks[i] + breaks[i + 1]) / 2;
+            yield return new EllipsePiece(
+                _center, _a, _b, phase, r, from.Y, to.Y, Math.Cos(mid + phase) >= 0, mid);
+        }
+    }
+
+    /// <summary>
+    /// Uniform angular subdivision. The chord deviation over a step Δ is bounded by
+    /// max|P″|·Δ²/8 ≤ (|A| + |B|)·Δ²/8 — conservative rather than the circle's exact
+    /// sagitta, because an ellipse's curvature varies along it and a single closed form
+    /// would have to be the tightest bound over the whole sweep.
+    /// </summary>
+    public override void Flatten(double chordTolerance, List<Vector2d> into)
+    {
+        double bound = _a.Length + _b.Length;
+        double maxAngle = chordTolerance <= 0 || bound <= 0
+            ? Math.PI / 2
+            : Math.Min(Math.PI / 2, Math.Sqrt(8 * chordTolerance / bound));
+        int count = Math.Max(1, (int)Math.Ceiling(Math.Abs(_sweep) / maxAngle));
+        for (int i = 0; i < count; i++)
+            into.Add(PointAt(_startAngle + _sweep * i / count));
+    }
+
+    private sealed class EllipsePiece : MonotonePiece
+    {
+        private readonly Vector2d _center, _a, _b;
+        private readonly double _phase, _radius, _mid;
+        private readonly bool _rising;
+
+        public EllipsePiece(
+            Vector2d center, Vector2d a, Vector2d b, double phase, double radius,
+            double y0, double y1, bool rising, double mid)
+        {
+            _center = center;
+            _a = a;
+            _b = b;
+            _phase = phase;
+            _radius = radius;
+            _rising = rising;
+            _mid = mid;
+            Y0 = y0;
+            Y1 = y1;
+        }
+
+        public override double XAtY(double y)
+        {
+            // Invert y − C.y = R·sin(θ + φ) on this piece's own half-period, then evaluate
+            // x on the ellipse — closed form throughout, no bisection.
+            double s = Math.Clamp((y - _center.Y) / _radius, -1, 1);
+            double shifted = _rising ? Math.Asin(s) : Math.PI - Math.Asin(s);
+            double angle = shifted - _phase;
+            // Land in this piece's own turn: the piece spans at most half a period, so
+            // exactly one 2π shift is admissible.
+            angle += 2 * Math.PI * Math.Round((_mid - angle) / (2 * Math.PI));
+            return _center.X + _a.X * Math.Cos(angle) + _b.X * Math.Sin(angle);
+        }
+    }
+}
+
 // -------------------------------------------------------------------------- bézier
 
 internal sealed class CubicSeg(Vector2d p0, Vector2d c1, Vector2d c2, Vector2d p3) : SketchSegment
