@@ -3,8 +3,9 @@
 Simulation: **tetrahedral meshing**, **linear-static structural analysis**, **heat
 conduction** (steady and transient, with thermal-expansion coupling back into the structural
 solve), **modal analysis** (natural frequencies and mode shapes, with or without stress
-stiffening) and **linear buckling** (critical load factors from a prior static solve's stress
-field). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
+stiffening), **linear buckling** (critical load factors from a prior static solve's stress
+field) and **frequency response** (steady-state harmonic sweeps by modal superposition, with
+Rayleigh or per-mode damping). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
 `Shape.ToMesh()`, `BRepTessellator`, Surface Nets, an imported STL), fills it with tetrahedra,
 and solves on them.
 
@@ -49,6 +50,9 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `ModalResults` / `VibrationMode` / `RigidBodyMode` | Frequencies, mode shapes, participation factors, publishing and `.vtu` |
 | `BucklingSolver` / `BucklingSolveOptions` / `BucklingSolveReport` | Geometric stiffness, the K-metric eigensolve, and what it cost |
 | `BucklingResults` / `BucklingMode` | Critical load factors, buckled shapes, publishing and `.vtu` |
+| `RayleighDamping` / `ModalDamping` | `C = alpha·M + beta·K` fitted to two frequencies, or a flat / tabulated per-mode ratio — no damping matrix is ever assembled |
+| `HarmonicSolver` / `HarmonicSolveOptions` / `HarmonicSweep` | Steady-state response by modal superposition, with the mode-acceleration truncation correction |
+| `HarmonicResponse` | Complex response over the sweep: modal coordinates, transfer functions, amplitude fields, CSV |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
 | `FeaAssembly` | Internal: the DOF index map, whole-model stiffness and geometric-stiffness assembly, reduction and matrix sums — shared so two eigen-solvers cannot build different `K`s |
 | `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
@@ -931,10 +935,10 @@ square root of round-off.
 
 ## Limitations
 
-- **No damping**, so these are undamped natural frequencies. Rayleigh (proportional) damping
-  rides the same two matrices and is the natural next step.
-- **No frequency response and no transient dynamics.** Modal superposition needs the modes plus
-  a load history; direct integration needs a different stepping loop.
+- **These are UNDAMPED natural frequencies**, which is what a modal analysis means; damping
+  enters per mode where it is used (see `ModalDamping`), never as a matrix here.
+- **No transient dynamics.** Frequency response is covered by `HarmonicSolver`; direct
+  time integration needs a different stepping loop.
 - **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the second
   member of a degenerate pair; a triple root wants a block method.
 - **A near-critical prestress raises the residual floor**, because `K + s·Kg` is nearly singular
@@ -1149,3 +1153,135 @@ still 32% high at 3 550 DOF, where the quadratic answer converged to 0.2% with 4
 - **Multiplicity three and above** inherits the modal solver's limitation — locking and
   restarting recovers the second member of a degenerate pair, and a triple root wants a block
   method.
+
+---
+
+# Damping, and frequency response
+
+## Rayleigh damping — and precisely what it does not cover
+
+`C = alpha·M + beta·K`, whose whole point is that the UNDAMPED modes still diagonalise it:
+`phi' C phi = diag(alpha + beta·omega_n²)`, so the equations separate into one scalar
+oscillator per mode and the damping is a per-mode RATIO
+`zeta_n = alpha/(2·omega_n) + beta·omega_n/2`.
+
+```csharp
+var damping = RayleighDamping.FromRatios(50, 0.02, 500, 0.02);   // 2% at both ends
+double zeta  = damping.RatioAtFrequency(180);                    // 1.05% in between
+```
+
+The ratio curve is a **U** — the mass term falls as `1/omega` and the stiffness term rises
+linearly — with minimum `sqrt(alpha·beta)` at `omega = sqrt(alpha/beta)`. Two fitted points
+pin it everywhere, and **everything outside the fitted range is damped MORE than either fitted
+value**, often much more: fitting 3% at 20 Hz and 1% at 800 Hz gives 11.5% at 5 Hz and 6.2% at
+5 kHz. `HarmonicResponse.DampingRatios` reports the ratio used for every mode for exactly that
+reason. A fit with no solution — a ratio falling faster than `1/omega` between the two points —
+comes out with a negative coefficient, i.e. damping that ADDS energy, and is refused by name
+rather than returned.
+
+**What is not covered, stated rather than implied away.** Proportional damping is the special
+case in which one damping matrix happens to be diagonalised by the undamped real modes.
+Physical damping usually is not: a discrete dashpot, two materials with different loss factors
+in one model, viscoelasticity, joint friction and structural (hysteretic) damping all leave
+`phi' C phi` with off-diagonal terms. When that happens the damped system's modes are no longer
+the undamped ones — the eigenproblem becomes the **quadratic**
+`(lambda²M + lambda·C + K) phi = 0`, whose eigenvalues and eigenvectors are complex and whose
+standard solution linearises it into a `2n`-dimensional state-space problem in a non-symmetric
+matrix pair. **That is a different solver, not a bigger version of this one**, and nothing here
+attempts it. `ModalDamping` also takes a flat ratio (`Uniform`) or a measured table
+(`PerMode`), both of which are proportional by construction.
+
+**No damping matrix is ever assembled.** Every consumer wants `zeta_n`, and forming `C` in
+order to project it back down to the same numbers would be arithmetic with nothing to show for
+it. That is a design statement, not an omission.
+
+## Frequency response by modal superposition
+
+Each mode is a scalar oscillator, so the steady-state response to a harmonic load is
+`q_n(W) = F_n / (w_n² - W² + 2i·zeta_n·w_n·W)` with `F_n = phi_n' f`, and the whole sweep is
+one dot product per mode plus a complex division per (mode, frequency) pair. Nothing is
+assembled and nothing is factorized.
+
+```csharp
+var modes    = ModalSolver.Solve(model, new ModalSolveOptions { ModeCount = 6 });
+var statics  = StructuralSolver.Solve(model);              // for the truncation correction
+var response = HarmonicSolver.Solve(modes, new HarmonicSolveOptions
+{
+    Frequencies      = HarmonicSweep.Logarithmic(10, 5000, 400),
+    Damping          = ModalDamping.Rayleigh(50, 0.02, 2000, 0.02),
+    StaticCorrection = statics,
+});
+File.WriteAllText("sweep.csv", response.ToCsv(tipNode, axis: 2));
+```
+
+**The load comes from the modal model's own applied forces**, since every load type reduces to
+consistent nodal forces when it is applied — so one model carries supports, loads and the modes
+computed from it, and there is no second place for a load to be specified and forgotten. A
+thermal load is refused by name, because it enters a static solve as an element integral rather
+than a nodal force and accepting it would silently drop it. A free-free model is refused too: a
+rigid mode's `F_n/(0 - W²)` grows without bound as the frequency falls, which is a true
+statement about a body that simply accelerates away and a useless one to plot.
+
+**Damping is required rather than defaulted.** A default would be this project inventing a
+material property, and the one honest default — none — makes every resonance infinite. Say
+`ModalDamping.None` and it is allowed; an undamped mode driven at exactly its own frequency
+then returns a non-finite modal coordinate, left alone rather than clamped to a large number
+nobody chose.
+
+**Truncation is a correction, not a caveat.** `StaticCorrection` switches on the
+mode-acceleration form
+`u(W) = u_static + sum_n phi_n F_n [1/(w_n² - W² + 2i·zeta·w_n·W) - 1/w_n²]`, whose bracket
+vanishes at `W = 0` — so the response is EXACTLY the static answer there however few modes were
+kept, and the missing modes' static flexibility is carried at every other frequency.
+`TruncationError` reports what the plain sum would have missed, and is **NaN without a static
+solve**, because then it is not small, it is unknown.
+
+**What a DIRECT solve buys, and when it is actually needed** (filed, not built): factorizing
+`(K - W²M + i·W·C)` at every frequency costs a complex factorization per point — hundreds of
+times this — and is the only option in three cases, none of which this can express. Damping
+that is not proportional (the modes stop diagonalising C, and the eigenproblem becomes
+quadratic); material properties that vary WITH frequency (a viscoelastic modulus — the modal
+basis itself would change per point); and a load whose spatial distribution changes with
+frequency.
+
+## Verification
+
+- **The resonant amplification is `1/(2·zeta)`**: measured **25.006 against 25.000** (0.02%) on
+  a tip-driven cantilever at 2% damping. The reference is that MODE's static contribution, not
+  the structure's whole static deflection — the other five modes supply 3.01% of this
+  cantilever's static tip, and dividing by the whole thing reads as a 3% solver error that is
+  entirely a modelling mistake in the measurement.
+- **The half-power bandwidth is `2·zeta`** — the standard way a damping ratio is measured from
+  a response, run in reverse: **2.0005% / 4.0034% / 10.0541%** against 2% / 4% / 10%, i.e.
+  0.02% / 0.08% / 0.54% relative.
+- **The phase lags the load by a quarter turn at resonance**: 90.073°, read AT the mode's own
+  frequency rather than at the sweep's peak sample — those are two steps apart at this
+  resolution and detuning by 0.04% of the frequency rotates the phase 1.15° at 2% damping, so
+  probing the peak would measure the sweep instead of the response.
+- **The static correction is exact**: a ONE-mode response at zero frequency reproduces the full
+  static tip deflection to **1.8e-16 relative**, where the uncorrected one-mode sum is 3.01%
+  short. Truncation falls monotonically with modes kept — 3.079% / 3.079% / 0.532% / 0.191% at
+  1 / 2 / 4 / 8 modes.
+- **A Rayleigh fit reproduces both ratios to 1e-15**, its minimum matches `sqrt(alpha·beta)` at
+  `sqrt(alpha/beta)` against a search over the curve, and the ratios reach the response
+  unchanged.
+- **An unexcited mode contributes nothing however close its frequency**: driving the
+  rectangular cantilever along Z leaves the Y-bending family at **8.6e-4 and 2.6e-3** of the
+  largest modal force. Not exactly zero, and the reason is worth knowing — Kuhn's subdivision
+  picks its diagonals by index order and no reflection preserves that, the same asymmetry the
+  modal beam tests measure as a degenerate pair's splitting.
+
+## Limitations
+
+- **Proportional damping only** (above). Non-proportional damping is a quadratic eigenproblem
+  and a different solver.
+- **Harmonic (steady-state) response only.** There is no transient dynamics: Newmark or HHT at
+  a constant step would reuse the thermal transient's one-factorization-serves-every-step
+  argument, and is filed.
+- **Nodal-force excitation only.** Base acceleration would ride the participation factors the
+  modal results already carry; a load whose spatial shape changes with frequency needs the
+  direct solve.
+- **No residual-vector basis augmentation.** The mode-acceleration correction handles the
+  static part of what the truncated modes miss, which is most of it; a residual VECTOR (the
+  static response orthogonalised against the kept modes, added to the basis) would handle the
+  rest and is filed.
