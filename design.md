@@ -1906,10 +1906,16 @@ measurement, not a feeling: a cantilever at its own 40× exaggeration turns its 
 **9.9°**, matching the analytic tip slope `atan(40·3·tip/2L)` — a ~12% shading error under
 a 45° key light. Small enough that guessing would have got it wrong in either direction,
 which is why the test asserts the analytic value rather than a threshold. Cost of the
-switch, accounted honestly: exactly one committed render moved, the FEA bracket, by **11
-pixels of 1.79 million** (max channel delta 14) — float-vs-double rounding in the same
-formula, on the only committed deformed geometry with curved faces, where a face normal
-and a facet normal genuinely differ. The cantilever in `fields.md` is byte-identical.
+switch, accounted honestly: **both committed deformed renders moved, and nothing else** —
+the FEA bracket by 31 bytes of 7.17 million (max channel delta 14) and the modal blade by
+3 bytes (max delta 1), float-vs-double rounding in the same formula. The bracket moves
+more because it is the one with curved faces, where a face normal and a facet normal
+genuinely differ. The cantilever in `fields.md` is byte-identical.
+<br>Worth keeping as a rule about the accounting itself: this sentence first read "exactly
+one render moved", which was true on the branch and understated on main, because the modal
+page arrived from a sibling *between* the branch forking and its merge. **A render count is
+a property of the merge, not of the branch** — so it has to be re-measured at the merge,
+which is where the second figure above came from.
 
 **(c) Picking deliberately does NOT follow the animation, and that is stated rather than
 discovered.** A pick is answered by a BVH over triangles; a spatial index cannot be a
