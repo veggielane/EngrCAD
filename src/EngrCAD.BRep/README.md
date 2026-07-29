@@ -563,6 +563,31 @@ operations. Depends only on `EngrCAD.Core`.
   can usefully be. **Boolean-critical**: tune them together, with the whole suite and the
   DocsGen snippets as the regression net.
 
+  **Seeding is two passes, and the ORDER is the safety argument.** The first is the
+  historical isotropic `SeedResolution`×`SeedResolution` grid in (u, v), emitted in its
+  original order. The second runs only for surfaces whose two parameter directions differ
+  in MODEL length by more than `SeedAnisotropy` (4), and re-grids them with the same sample
+  budget redistributed to match the shape — `nu·nv ≈ resolution²` with `nu/nv = aspect` —
+  so the spacing is roughly equal in millimetres rather than in parameter units. Because
+  `March` traces seeds in order and skips any seed already covered by a traced branch,
+  every branch the old grid found is still traced FIRST and from the SAME seed: its
+  polyline is bit-identical, and the second pass can only add branches that used to be
+  missed entirely (the whole suite is green and unchanged, which is what that claim means
+  operationally). The case it exists for is a thread band: an M8 crest flat wound over
+  thirteen turns is ~330 mm long and 0.16 mm tall, an aspect ratio near 2000, so the
+  isotropic grid puts its columns ~13 mm apart along the band while spending 24 rows across
+  a strip a sixth of a millimetre wide — narrower than a Ø6 cross-drill's whole window.
+  Measured against that drill: the crest band returned **zero** branches and the flank band
+  six; with the second pass, three and nineteen.
+
+  **The extents are measured as SPEED × domain length, never as a chordal polyline** —
+  `ParameterExtents` averages |∂P/∂u| over a 4×4 cross of cell CENTRES (never the domain's
+  own nodes, since `Eval` clamps there and a central difference taken at a boundary is
+  silently one-sided and halves the speed it reports). A chord between two samples of a
+  coiled band measures across the coil rather than along it: an 8-sample polyline reported
+  61 mm where the band is 327 mm long — a number with no relation to either. The speed form
+  is exact for helices, circles and lines alike, because their speed is constant.
+
   **Bounded planar carriers.** A sketch extrusion's walls are `ExtrudedSurface`s over the
   profile's individual segments, so a pocket wall is `ExtrudedSurface(line, dir)` —
   geometrically a plane, but a BOUNDED one (a parallelogram). Two paths handle them, both
