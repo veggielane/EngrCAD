@@ -445,6 +445,19 @@ Dark-themed layout around one shared GL viewport:
   tab (the loader re-meshes exactly the changed part), a failed one keeps the
   previous geometry and names the failing feature in the status bar, exactly the
   feature-tree semantics.
+  **The fields are TYPED, chosen from metadata the registry already carried**: a `bool`
+  gets a checkbox, an enum a dropdown of its members (no more typing `"Counterbore"` and
+  learning the spelling from an error message), and a numeric with a *finite*
+  `[Param(Min=, Max=)]` range gets a slider beside its text box — the box stays because a
+  slider cannot express 12.7 and a designer who wants 12.7 should not have to chase it.
+  Anything else keeps the text field. **Which editor** is `ParamEditors.KindFor` in
+  `EngrCAD.Viewer.Core`, pure and asserted as a value, so a browser properties panel
+  cannot grow a second opinion about what a bounded parameter looks like; the constraint
+  one level down is that *every* editor writes through the same JSON seam, so a typed
+  editor is a better way to SAY a value, never a second way to apply one. The slider
+  commits on **release**, not per pixel of the drag — an applied value regenerates the
+  part and each application is an undo step — while the box tracks the drag so the number
+  stays live under the cursor.
   **Headless renders draw previews too** — `EngrCad.RenderToImage(..., preview:
   new ConstructionPreviewRequest(part, node))` puts one row's rollback view into a
   still image, through the same `PreviewLayer` the window uses, so the colour, the

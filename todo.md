@@ -1169,11 +1169,15 @@ honest no) is recorded in design.md §6b with the comparison committed as
   - Annotation persistence (JSON alongside `FeatureHistory.SaveParameters`) and
     STEP AP242 PMI export (far future).
 - [ ] **Construction-tree residuals** (rollback marker + suppress-from-tree +
-  `[Param]` properties-panel editing + preview-restore-by-path ✅ landed): the rollback
-  marker is click-to-place rather than a literal drag (drag-and-drop in the tree panel
-  would need Avalonia pointer capture plumbing for marginal gain); parameter fields are
-  free-text through the JSON seam — typed editors (sliders for `Min`/`Max` ranges,
-  enum dropdowns) would be the polish pass.
+  `[Param]` properties-panel editing + preview-restore-by-path + **typed editors**
+  ✅ landed — `ParamEditors.KindFor` in Viewer.Core decides checkbox / enum dropdown /
+  bounded slider / text from metadata the registry already carried, every editor still
+  writing through the one JSON seam, the slider committing on release because each
+  application regenerates and is an undo step): the rollback marker is click-to-place
+  rather than a literal drag (drag-and-drop in the tree panel would need Avalonia
+  pointer capture plumbing for marginal gain). Residual: the browser properties panel is
+  read-only, so `ParamEditors` has one consumer — the rule is shared the moment the
+  second one wants it.
 - [ ] **Ambient-occlusion bake cost — three levers examined, two declined, don't redo
   them.** The bake was 12.3 s on the demo scene and already saturates every core.
   (a) **An any-hit early-out does not exist here**: occlusion accumulates as `1 − t`, so
