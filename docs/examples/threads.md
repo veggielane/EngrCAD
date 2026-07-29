@@ -162,6 +162,15 @@ refuses by name rather than attempts. So the B-Rep-native range is
 `0 < chamferLength < spec.ThreadDepth` (0.677 mm for M8×1.25); at or past that depth,
 and for any clearance, take `ToImplicit()`/`ToMesh()`.
 
+> [!NOTE]
+> About one chamfer depth in ten inside that range still **fails loudly** in the kernel
+> rather than returning a solid. Scanned at 5% steps of the thread depth across M6×1,
+> M8×1.25, M10×1.5 and M12×1.75 the failures are one to three steps of nineteen each, at
+> unrelated fractions — it is an alignment effect in the chamfer cone's trimmed
+> triangulation, not a depth threshold, so nudging the chamfer by a few hundredths clears
+> it. It never returns wrong geometry: `Explain` still reports Native and `ToBrep()`
+> throws with the stage that refused.
+
 **Threaded holes are B-Rep-native too** (at zero clearance): the B-Rep path never
 drills the pilot separately — the pilot bore wall and the thread tool's root band
 would be coaxial (tangent, unsupported boolean input) — and instead subtracts ONE
