@@ -119,8 +119,22 @@ scene.Add(new Part("block", block));
 
 ![Different draft angles on different faces](images/draft-two-angles.png)
 
-Draft v1 handles planar-faced prisms about the pull direction; curved faces, holed caps
-and profile-folding tapers are refused with a message naming the problem.
+**Curved faces taper too, and exactly.** A face of revolution about the pull direction
+drafts by rotating its *generator* in its own axial half-plane about the point where
+that generator crosses the neutral plane — the same rule, one dimension down. So a
+drafted cylinder is exactly a cone, not a cone to some tolerance:
+
+```csharp render:draft-cylinder
+var boss = Shape.Cylinder(10, 20).Draft(6, (0, 0, -10), Vector3d.UnitZ);
+
+var scene = new Scene();
+scene.Add(new Part("tapered boss", boss, Palette.Brass));
+```
+
+![A cylinder drafted into a cone](images/draft-cylinder.png)
+
+Holed caps, profile-folding tapers and curved faces on any *other* axis are refused with
+a message naming the problem.
 
 ## Shell: hollow to constant walls
 
@@ -147,6 +161,28 @@ scene.Add(new Part("tray", tray));
 > geometry, so they are different calls: which walls a design gets is its explicit
 > choice, never a representation's. `Explain` on the SDF shell names this overload as
 > the exact route.
+
+**Curved faces shell exactly too.** A cylinder offsets to a cylinder, a cone to a cone
+and a torus to a torus, so a cylinder hollows to a cup and a pipe elbow opened at both
+ends to a genus-1 tube whose volume matches Pappus:
+
+```csharp render:shell-cup section:y,0
+var cup = Shape.Cylinder(14, 24).Shell(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+var cone = Shape.Cone(16, 8, 22).Shell(2, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+
+var scene = new Scene();
+scene.Add(new Part("cup", cup, Palette.Steel,
+    Matrix4d.CreateTranslation((-18, 0, 0))));
+scene.Add(new Part("conical cup", cone, Palette.Brass,
+    Matrix4d.CreateTranslation((18, 0, 0))));
+```
+
+![A shelled cylinder and cone, sectioned to show the walls](images/shell-cup.png)
+
+What is refused, by name: a carrier with no exact offset of its own family (swept and
+NURBS surfaces), and a rim the construction cannot reproduce as a concentric circle —
+which is what catches a *sealed* elbow, whose moved cap planes cut the offset torus in a
+quartic rather than a circle. Open that face instead.
 
 The kernel API also supports a per-face wall thickness — a thick base under thin walls:
 `Shelling.Shell(solid, face => IsBase(face) ? 4.0 : 1.5, openings)`.

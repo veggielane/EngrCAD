@@ -174,6 +174,32 @@ public sealed class VariableChamferRimFeature(Func<Vector3d, double> setbackAt) 
             .ChamferAtAngle(setbackAt, AngleDegrees, Faces.AsSelector(nameof(Faces)));
 }
 
+/// <summary>
+/// Fillets the rims of the selected planar faces with a VARIABLE radius: the law is evaluated
+/// at each rim corner of the lowered body and interpolates linearly along each edge
+/// (<see cref="Shape.Fillet(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepFace}})"/>).
+/// Like <see cref="VariableChamferRimFeature"/>, the law is a code input rather than a
+/// <c>[Param]</c>, so it is covered by the regeneration cache's instance-identity rule: a
+/// fresh instance always re-runs, and the feature does not round-trip through JSON.
+/// </summary>
+public sealed class VariableFilletRimFeature(Func<Vector3d, double> radiusAt) : Feature
+{
+    private readonly FaceSetRef _faces = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+
+    /// <inheritdoc cref="FilletRimFeature.Faces"/>
+    [Param(Description = "Rim faces")]
+    [DeferredInput]
+    public FaceSetRef Faces
+    {
+        get => _faces;
+        init => _faces = value ?? FaceSetRef.PlanarWithNormal(Vector3d.UnitZ);
+    }
+
+    public override Shape Apply(FeatureContext context) =>
+        (context.Body ?? throw new InvalidOperationException("VariableFilletRimFeature needs a body."))
+            .Fillet(radiusAt, Faces.AsSelector(nameof(Faces)));
+}
+
 /// <summary>Unions or subtracts a fixed shape (bosses, cutters).</summary>
 public sealed class BooleanFeature(Shape tool) : Feature
 {

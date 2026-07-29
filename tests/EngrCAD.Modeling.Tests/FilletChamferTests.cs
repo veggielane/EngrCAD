@@ -335,4 +335,61 @@ public class FilletChamferTests
         solid.Validate();
         Assert.True(BRepTessellator.Tessellate(solid).IsClosed);
     }
+
+    // ---- variable-radius fillets ----
+
+    [Fact]
+    public void VariableFillet_OnASlotRim_KeepsArcsConstantAndTapersTheStraights()
+    {
+        // A slot's two end arcs have BOTH their corners at the same x, so a law in x is
+        // constant across each arc and only the straights taper. The arc bands stay exact
+        // tori; the straight bands become ruled skins of true circular sections.
+        var shape = Shape.Extrude(Sketch.Slot(24, 8), 5)
+            .Fillet(p => 0.8 + 0.03 * (p.X + 12), Top);
+        var solid = shape.ToBrep();
+        solid.Validate();
+        Assert.Contains(solid.Faces, f => f.Surface is LoftedSurface);
+        Assert.Contains(solid.Faces, f => f.Surface is RevolvedSurface);
+        Assert.True(BRepTessellator.Tessellate(solid).IsClosed);
+    }
+
+    [Fact]
+    public void VariableFillet_LawVaryingAcrossASharpCorner_IsRefusedByName()
+    {
+        var shape = Shape.Box(30, 20, 6).Fillet(p => 1 + 0.02 * p.X, Top);
+        var exception = Assert.Throws<NotSupportedException>(() => shape.ToBrep());
+        Assert.Contains("circumscribe a common sphere", exception.Message);
+    }
+
+    [Fact]
+    public void VariableFillet_DescribesItselfAndStaysBrepNative()
+    {
+        var shape = Shape.Extrude(Sketch.Slot(24, 8), 5).Fillet(p => 0.8 + 0.03 * (p.X + 12), Top);
+        var report = shape.Explain(TargetRep.Brep);
+        Assert.True(report.IsConvertible);
+        Assert.Contains(report.Entries, e => e.Node.Contains("Fillet(variable)"));
+    }
+
+    [Fact]
+    public void VariableFilletEdges_ResolvesRimsAndLowers()
+    {
+        var shape = Shape.Extrude(Sketch.Slot(24, 8), 5)
+            .FilletEdges(p => 0.8 + 0.03 * (p.X + 12), s => Top(s).SelectMany(f => f.RimEdges()));
+        var solid = shape.ToBrep();
+        solid.Validate();
+        Assert.True(BRepTessellator.Tessellate(solid).IsClosed);
+    }
+
+    [Fact]
+    public void VariableFilletRimFeature_RegeneratesThroughHistory()
+    {
+        var history = new FeatureHistory();
+        history.Add(new BooleanFeature(Shape.Extrude(Sketch.Slot(24, 8), 5)));
+        history.Add(new VariableFilletRimFeature(p => 0.8 + 0.03 * (p.X + 12)));
+        var result = history.Regenerate();
+        Assert.True(result.Succeeded);
+        var solid = result.Body!.ToBrep();
+        solid.Validate();
+        Assert.True(BRepTessellator.Tessellate(solid).IsClosed);
+    }
 }

@@ -644,9 +644,11 @@ internal static class ShapeCompiler
                     // transforms are already baked into the geometry it sees — so its
                     // result is used verbatim, never multiplied by the feature scale.
                     solid = rim.SetbackLaw is { } law
-                        ? rim.LawAngleDegrees is { } lawAngle
-                            ? Filleting.ChamferRimAtAngle(solid, target, law, lawAngle)
-                            : Filleting.ChamferRim(solid, target, law)
+                        ? rim.IsFillet
+                            ? Filleting.FilletRim(solid, target, law)
+                            : rim.LawAngleDegrees is { } lawAngle
+                                ? Filleting.ChamferRimAtAngle(solid, target, law, lawAngle)
+                                : Filleting.ChamferRim(solid, target, law)
                         : rim.IsFillet
                             ? Filleting.FilletRim(solid, target, rim.Amount * featureScale)
                             : Filleting.ChamferRim(solid, target, rim.Amount * featureScale, rim.SideAmount * featureScale);

@@ -50,6 +50,7 @@ public class TessellationCorpusQualityTests
         "loft", "shelled tray", "shelled cup", "shelled cone", "shelled elbow",
         "drafted boss", "drafted cylinder",
         "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
+        "variable fillet",
         "rounded box", "rounded tetrahedron", "partial fillet run",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
         "sketch pocket", "engraved plate", "wedge",
@@ -164,6 +165,13 @@ public class TessellationCorpusQualityTests
             case "chamfered box":
                 return Shape.Box(30, 20, 6)
                     .Chamfer(1.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
+                    .ToBrep();
+            case "variable fillet":
+                // The same slot rim under a RADIUS law: ruled-skin bands on the straights
+                // (whose cross-sections are true circles of the interpolated radius) and
+                // exact torus bands on the end arcs, whose two corners carry equal values.
+                return Shape.Extrude(Sketch.Slot(24, 8), 5)
+                    .Fillet(p => 0.8 + 0.03 * (p.X + 12), s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
                     .ToBrep();
             case "variable chamfer":
                 // A slot rim under a setback law in x: tilted planar strips on the

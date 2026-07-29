@@ -967,13 +967,21 @@ each of the others is a different surface), **arc-terminal partial runs** (the
 termination itself is exact, but the periodic cylindrical neighbour needs re-trimming),
 **sharp corners at arc rim edges** (a documented policy — torus ∩ cylinder is not a
 conic; see the Filleting section), and
-**variable-radius fillets**: the band itself would be exact — a linear radius law between
-two equal-weight rational arcs is a degree-(2,1) NURBS whose v-sections are true circles,
-and it stays G1 with both neighbours — but the corner where two such bands meet is the
-intersection of two non-cylindrical surfaces, which is not a conic, so there is no exact
-miter to weld them on. (Variable-SETBACK chamfers do not have that problem — the corner
-segment is a boundary ruling of both strips — and are implemented; see `ChamferRim`'s
-law overloads above.)
+**a varying radius across a SHARP corner** — variable-radius fillets themselves landed
+(`FilletRim`/`FilletEdges` law overloads + `Shape.Fillet(radiusAt, faces)` +
+`VariableFilletRimFeature`): along a straight run the band is the RULED skin between its
+two end quarter arcs, and because those are equal-weight rational conics on one frame,
+lerping their points equals lerping their homogeneous control points, so every
+intermediate section is a TRUE circle of the interpolated radius, tangent to both
+neighbours. What is refused is the corner: two variable-radius bands are cones that do
+not circumscribe a common sphere, so they meet in a quartic with no conic to miter them
+on. A CONSTANT law across a sharp corner makes both bands equal-radius cylinders again
+and the exact bicylinder ellipse is back, so the refusal is about the law and not about
+sharp corners; arcs take the law only where it is constant along the arc (a circle
+offset by a varying amount is a spiral), exactly as variable-SETBACK chamfers do. The
+bands' top and bottom boundaries are RAILS on the band (`LoftRailCurve`) rather than
+free-standing lines, which is what makes the band's grid and the shared edge polylines
+sample the same points.
 Loft gaps: sections must already be segment-compatible (no degree
 elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution

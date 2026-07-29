@@ -91,7 +91,47 @@ public static class Filleting
         ArgumentNullException.ThrowIfNull(setbackAt);
         // Side ratio exactly 1 — the symmetric chamfer — rather than Tan(45 deg),
         // which is 1 minus an ulp.
-        return RimSurgeon.ApplyVariable(solid, face, setbackAt, 1.0);
+        return RimSurgeon.ApplyVariable(solid, face, setbackAt, 1.0, fillet: false);
+    }
+
+    /// <summary>
+    /// Variable-RADIUS fillet of the outer rim of a planar face: the law is evaluated at each
+    /// rim CORNER and the radius interpolates linearly between corner values along each edge.
+    ///
+    /// <para><b>The band is exact, and it is worth saying why.</b> Along a straight rim edge
+    /// the cross-section at parameter s is a quarter circle of radius r(s) centred at C(s),
+    /// and a linear law makes BOTH linear — so the band is the RULED skin between the two end
+    /// quarter arcs. Because those arcs are equal-weight rational conics on the same frame,
+    /// lerping their points equals lerping their homogeneous control points (the denominators
+    /// are identical), so every intermediate section is a TRUE circle of the lerped radius,
+    /// not a rational approximation of one. It is tangent to the flat face along its top
+    /// boundary and to the neighbour along its bottom, exactly as a constant fillet is.</para>
+    ///
+    /// <para><b>What is refused, and why it is the corner rather than the band.</b> A SHARP
+    /// corner between two edges carrying different radii has no exact miter: the two bands are
+    /// cones that do not circumscribe a common sphere, so they meet in a genuine quartic and
+    /// there is no conic to weld them on (a constant law across such a corner reduces to the
+    /// equal-radius bicylinder ellipse and IS exact, so those still work). An ARC rim edge
+    /// takes the law only where it is constant along the arc, for the chamfer's reason: a
+    /// circle offset by a varying amount is a spiral. Both are named when they refuse.</para>
+    /// </summary>
+    public static BrepSolid FilletRim(BrepSolid solid, BrepFace face, Func<Vector3d, double> radiusAt)
+    {
+        ArgumentNullException.ThrowIfNull(radiusAt);
+        // A fillet's "side" drop IS its radius, so the ratio is exactly 1.
+        return RimSurgeon.ApplyVariable(solid, face, radiusAt, 1.0, fillet: true);
+    }
+
+    /// <summary>Variable-radius fillet of a set of EDGES; the selection resolves to complete
+    /// rims exactly as <see cref="FilletEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>.</summary>
+    public static BrepSolid FilletEdges(
+        BrepSolid solid, IEnumerable<BrepEdge> edges, Func<Vector3d, double> radiusAt)
+    {
+        ArgumentNullException.ThrowIfNull(radiusAt);
+        var solidUnderConstruction = solid;
+        foreach (var face in RimFacesFor(solid, edges))
+            solidUnderConstruction = FilletRim(solidUnderConstruction, face, radiusAt);
+        return solidUnderConstruction;
     }
 
     /// <summary>
@@ -107,7 +147,8 @@ public static class Filleting
         if (angleDegrees <= 0 || angleDegrees >= 90)
             throw new ArgumentOutOfRangeException(nameof(angleDegrees),
                 "The chamfer angle is measured from the chamfered face and must lie strictly between 0° and 90°.");
-        return RimSurgeon.ApplyVariable(solid, face, setbackAt, Math.Tan(angleDegrees * Math.PI / 180));
+        return RimSurgeon.ApplyVariable(
+            solid, face, setbackAt, Math.Tan(angleDegrees * Math.PI / 180), fillet: false);
     }
 
     /// <summary>Variable-setback chamfer of a set of EDGES; the selection resolves to
@@ -880,7 +921,7 @@ public static class Filleting
         /// full circular rim (no corners) is accepted only when the law is constant
         /// around it, where it reduces to the exact cone band.</summary>
         public static BrepSolid ApplyVariable(
-            BrepSolid solid, BrepFace face, Func<Vector3d, double> setbackAt, double sideRatio)
+            BrepSolid solid, BrepFace face, Func<Vector3d, double> setbackAt, double sideRatio, bool fillet)
         {
             if (!face.IsPlanar(out _, out var normal))
                 throw new NotSupportedException("Rim features apply to planar faces.");
@@ -900,16 +941,19 @@ public static class Filleting
                     // land where an exactly-constant law would put them.
                     if (Math.Abs(sample - reference) > Tolerance.Default.Linear)
                         throw new NotSupportedException(
-                            "A variable setback on a full circular rim has no exact form (a circle offset " +
-                            "by a varying amount is a spiral, not a circle). Use a constant setback, or a " +
-                            "rim with corners for the law to anchor to.");
+                            $"A variable {(fillet ? "radius" : "setback")} on a full circular rim has no " +
+                            "exact form (a circle offset by a varying amount is a spiral, not a circle). " +
+                            $"Use a constant {(fillet ? "radius" : "setback")}, or a rim with corners for " +
+                            "the law to anchor to.");
                 }
                 if (reference <= 0 || !double.IsFinite(reference))
                     throw new ArgumentOutOfRangeException(nameof(setbackAt),
-                        $"The setback law must be positive and finite on the rim; it returned {reference}.");
-                return ChamferCircularRim(solid, face, rimEdge, reference, reference * sideRatio, normal);
+                        $"The law must be positive and finite on the rim; it returned {reference}.");
+                return fillet
+                    ? FilletEdge(solid, rimEdge, reference)
+                    : ChamferCircularRim(solid, face, rimEdge, reference, reference * sideRatio, normal);
             }
-            return PolygonRim(solid, face, outer, 0, 0, fillet: false, normal, setbackAt, sideRatio);
+            return PolygonRim(solid, face, outer, 0, 0, fillet, normal, setbackAt, sideRatio);
         }
 
         private static BrepLoop OuterLoop(BrepFace face)
@@ -1094,6 +1138,25 @@ public static class Filleting
                 mitered[i] = !IsSmoothCorner(previous, edges[i], up);
                 if (!mitered[i])
                     continue;
+                // A sharp corner miters on the exact bicylinder ellipse, which needs the two
+                // bands to be equal-radius CYLINDERS — so a varying law is refused here and
+                // not at the band, which is exactly where the difficulty is: two
+                // variable-radius bands are cones that do not circumscribe a common sphere, so
+                // they meet in a quartic with no conic to weld them on.
+                if (variable && fillet)
+                {
+                    int before = (i + n - 1) % n, after = (i + 1) % n;
+                    if (Math.Abs(topAt[before] - topAt[i]) > Tolerance.Default.Linear
+                        || Math.Abs(topAt[i] - topAt[after]) > Tolerance.Default.Linear)
+                        throw new NotSupportedException(
+                            $"The rim corner at {edges[i].Start} is sharp and its two edges carry different " +
+                            "radii, so there is no exact miter: two variable-radius bands are cones that do " +
+                            "not circumscribe a common sphere, and their intersection is a quartic rather " +
+                            "than a conic. Keep the radius constant across a sharp corner (its two edges " +
+                            "then miter on the exact bicylinder ellipse), vary it only along runs whose " +
+                            "corners are tangent-continuous, or blend a partial run that stops before the " +
+                            "corner.");
+                }
                 if (fillet && (previous.Arc is not null || edges[i].Arc is not null))
                     throw new NotSupportedException(
                         $"The rim corner at {edges[i].Start} joins an arc sharply, and that blend is " +
@@ -1154,21 +1217,50 @@ public static class Filleting
             var topEdges = new BrepEdge[n];
             var bottomEdges = new BrepEdge[n];
             var cornerEdges = new BrepEdge[n];
+
+            // Corner cross-sections FIRST: a variable-radius band is the ruled skin between
+            // the two of them, and its top and bottom boundaries are then rails ON that
+            // surface rather than free-standing lines — which is what makes the band's grid
+            // and the edge polylines sample the same points (the loft rule).
+            for (int i = 0; i < n; i++)
+            {
+                cornerEdges[i] = fillet
+                    ? JunctionCurve(topPoints[i], bottomPoints[i], topAt[i], up, topVertices[i], bottomVertices[i])
+                    : new BrepEdge(new Line3d(topPoints[i], bottomPoints[i]), Interval.Unit,
+                        topVertices[i], bottomVertices[i]);
+            }
+
+            var bandSurfaces = new Surface[n];
+            for (int i = 0; i < n; i++)
+            {
+                int next = (i + 1) % n;
+                bandSurfaces[i] = BandSurface(
+                    edges[i], topPoints[i], bottomPoints[i], topPoints[next], bottomPoints[next],
+                    topAt[i], topAt[next], up, fillet, mitered[i], mitered[next], variable,
+                    cornerEdges[i].Curve, cornerEdges[next].Curve);
+            }
+
             for (int i = 0; i < n; i++)
             {
                 int next = (i + 1) % n;
                 var info = edges[i];
+                if (bandSurfaces[i] is LoftedSurface skin)
+                {
+                    // The rails EVALUATE the band, so the shared edge and the face's first
+                    // and last grid columns are the same points by construction rather than
+                    // by tolerance — exactly what SolidFactory.Loft does with its junctions.
+                    topEdges[i] = new BrepEdge(
+                        new LoftRailCurve(skin, skin.DomainU.Start), Interval.Unit,
+                        topVertices[i], topVertices[next]);
+                    bottomEdges[i] = new BrepEdge(
+                        new LoftRailCurve(skin, skin.DomainU.End), Interval.Unit,
+                        bottomVertices[i], bottomVertices[next]);
+                    continue;
+                }
                 topEdges[i] = OffsetEdge(info, topPoints[i], topPoints[next], topAt[i], up, atTop: true,
                     topVertices[i], topVertices[next]);
                 bottomEdges[i] = OffsetEdge(info, bottomPoints[i], bottomPoints[next], sideAt[i], up, atTop: false,
                     bottomVertices[i], bottomVertices[next]);
-            }
-            for (int i = 0; i < n; i++)
-            {
-                cornerEdges[i] = fillet
-                    ? JunctionCurve(topPoints[i], bottomPoints[i], top, up, topVertices[i], bottomVertices[i])
-                    : new BrepEdge(new Line3d(topPoints[i], bottomPoints[i]), Interval.Unit,
-                        topVertices[i], bottomVertices[i]);
             }
 
             // Shrunk top face (holes untouched).
@@ -1230,9 +1322,7 @@ public static class Filleting
                     new BrepCoedge(bottomEdges[i], true),
                     new BrepCoedge(cornerEdges[next], false),
                 ]);
-                bands.Add(new BrepFace(
-                    BandSurface(edges[i], topPoints[i], bottomPoints[i], topPoints[next], bottomPoints[next],
-                        top, up, fillet, mitered[i], mitered[next], variable), [loop]));
+                bands.Add(new BrepFace(bandSurfaces[i], [loop]));
             }
 
             // Domain-driven neighbor surfaces must be trimmed to the lowered extent. A
@@ -1528,7 +1618,7 @@ public static class Filleting
                 ]);
                 bands.Add(new BrepFace(
                     BandSurface(edges[i], topPoints[i], bottomPoints[i], topPoints[i + 1], bottomPoints[i + 1],
-                        top, up, fillet, mitered[i], mitered[i + 1]), [loop]));
+                        top, top, up, fillet, mitered[i], mitered[i + 1]), [loop]));
             }
 
             // Termination faces: planar cross-sections perpendicular to the terminal
@@ -1825,9 +1915,25 @@ public static class Filleting
         private static Surface BandSurface(
             RimEdgeInfo info, in Vector3d topPoint, in Vector3d bottomPoint,
             in Vector3d topNext, in Vector3d bottomNext,
-            double amount, in Vector3d up, bool fillet, bool startMitered, bool endMitered,
-            bool variable = false)
+            double amount, double amountNext, in Vector3d up, bool fillet,
+            bool startMitered, bool endMitered, bool variable = false,
+            Curve3d? startSection = null, Curve3d? endSection = null)
         {
+            // A VARIABLE-radius fillet band: the ruled skin between its own two end
+            // cross-sections, which are the junction arcs the surgery has already built — so
+            // the band and the edges that bound it are literally the same geometry.
+            //
+            // It is exact, and the reason is the rational conics' shared denominator. Along a
+            // straight edge the cross-section at s is a quarter circle of radius r(s) centred
+            // at C(s), and a linear law makes both linear; the two end arcs are equal-weight
+            // rational conics on the same frame, so lerping their POINTS equals lerping their
+            // homogeneous control points, and every intermediate section is a true circle of
+            // the lerped radius. Only the start and end are checked for the branch, because a
+            // sharp corner with unequal radii is refused before reaching here.
+            if (fillet && variable && startSection is not null && endSection is not null
+                && Math.Abs(amount - amountNext) > Tolerance.Default.Linear)
+                return new LoftedSurface([startSection, endSection]);
+
             // Orientation notes: the tessellator's outward convention is ∂u × ∂v.
             // Revolved bands (∂u tangential along traversal) need bottom → top
             // generators; extruded bands (∂u = generator tangent, ∂v = edge) need
