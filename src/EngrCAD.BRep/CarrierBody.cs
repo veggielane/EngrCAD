@@ -150,6 +150,11 @@ internal sealed class CarrierBody
     /// back a valid solid. <see cref="Shelling"/> supplies offset carriers and
     /// <see cref="Draft"/> tapered ones; the machinery between is identical, which is the
     /// point of having it once.
+    ///
+    /// <para>Face <c>f</c> out is face <c>f</c> in, moved — so it inherits that face's
+    /// provenance. The correspondence is this body's own face ORDER, which every table here
+    /// (<see cref="FaceIndex"/>, <see cref="VertexFaces"/>, the carrier array the caller
+    /// supplies) is already keyed on, so a tag can only land where its carrier did.</para>
     /// </summary>
     public BrepSolid Rebuild(Surface[] carriers, string what)
     {
@@ -158,7 +163,8 @@ internal sealed class CarrierBody
         var edges = layer.BuildEdges(vertices);
         var faces = new BrepFace[Faces.Length];
         for (int f = 0; f < Faces.Length; f++)
-            faces[f] = new BrepFace(layer.Surfaces[f], MapLoops(f, edges, reverse: false), Faces[f].IsReversed);
+            faces[f] = new BrepFace(layer.Surfaces[f], MapLoops(f, edges, reverse: false), Faces[f].IsReversed)
+                .DescendsFrom(Faces[f]);
         return new BrepSolid([new BrepShell(faces)]);
     }
 
@@ -243,13 +249,21 @@ internal sealed class CarrierBody
                 // it carried) plus the inner opening as a hole, wound the other way.
                 var loops = MapLoops(f, outerEdges, reverse: false);
                 loops.AddRange(MapLoops(f, innerEdges, reverse: true));
-                rimFaces.Add(new BrepFace(Faces[f].Surface, loops, Faces[f].IsReversed));
+                rimFaces.Add(new BrepFace(Faces[f].Surface, loops, Faces[f].IsReversed)
+                    .DescendsFrom(Faces[f]));
                 continue;
             }
 
+            // One parent, TWO children: a wall and its inward twin both descend from the
+            // face that generated them, which provenance allows because a tag names a SET.
+            // A query for "the boss" therefore returns the cavity wall behind it as well —
+            // correct rather than surprising, since that wall exists only because this one
+            // does, and narrowing to the outer skin is an ordinary Within(...) away.
             outerFaces.Add(new BrepFace(
-                Faces[f].Surface, MapLoops(f, outerEdges, reverse: false), Faces[f].IsReversed));
-            innerFaces.Add(Flipped(inner.Surfaces[f], MapLoops(f, innerEdges, reverse: true)));
+                Faces[f].Surface, MapLoops(f, outerEdges, reverse: false), Faces[f].IsReversed)
+                .DescendsFrom(Faces[f]));
+            innerFaces.Add(Flipped(inner.Surfaces[f], MapLoops(f, innerEdges, reverse: true))
+                .DescendsFrom(Faces[f]));
         }
 
         if (openings == 0)

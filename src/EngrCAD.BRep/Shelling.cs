@@ -63,9 +63,12 @@ public static partial class Shelling
         for (int f = 0; f < faces.Length; f++)
         {
             var plane = polyhedron.OffsetPlane(f, offsets[f]);
+            // Face f out is face f in, displaced along its own normal: a positional parent,
+            // so provenance rides through on the same index every other table here uses.
             faces[f] = new BrepFace(
                 polyhedron.PlaneSurfaceFor(f, plane, positions, flipped: false),
-                polyhedron.MapLoops(f, edges, reverse: false));
+                polyhedron.MapLoops(f, edges, reverse: false))
+                .DescendsFrom(polyhedron.Faces[f]);
         }
         return new BrepSolid([new BrepShell(faces)]);
     }
@@ -175,20 +178,26 @@ public static partial class Shelling
                 var loops = polyhedron.MapLoops(f, outerEdges, reverse: false);
                 loops.AddRange(polyhedron.MapLoops(f, innerEdges, reverse: true));
                 rimFaces.Add(new BrepFace(
-                    polyhedron.PlaneSurfaceFor(f, polyhedron.Planes[f], outerPositions, flipped: false), loops));
+                    polyhedron.PlaneSurfaceFor(f, polyhedron.Planes[f], outerPositions, flipped: false), loops)
+                    .DescendsFrom(polyhedron.Faces[f]));
                 continue;
             }
 
+            // One parent, TWO children: the wall and its inward twin both descend from the
+            // face that generated them (provenance is a SET, so this is representable). The
+            // cavity wall exists only because this face does, which is why it inherits.
             outerFaces.Add(new BrepFace(
                 polyhedron.PlaneSurfaceFor(f, polyhedron.Planes[f], outerPositions, flipped: false),
-                polyhedron.MapLoops(f, outerEdges, reverse: false)));
+                polyhedron.MapLoops(f, outerEdges, reverse: false))
+                .DescendsFrom(polyhedron.Faces[f]));
 
             // The inner wall faces the cavity: same plane offset inward, normal flipped, and
             // every loop reversed to stay counter-clockwise about that flipped normal.
             var innerPlane = polyhedron.OffsetPlane(f, offsets[f]);
             innerFaces.Add(new BrepFace(
                 polyhedron.PlaneSurfaceFor(f, innerPlane, innerPositions, flipped: true),
-                polyhedron.MapLoops(f, innerEdges, reverse: true)));
+                polyhedron.MapLoops(f, innerEdges, reverse: true))
+                .DescendsFrom(polyhedron.Faces[f]));
         }
 
         // With no opening the cavity is sealed: outer boundary and void are separate shells.

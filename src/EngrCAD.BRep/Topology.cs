@@ -110,16 +110,22 @@ public sealed class BrepFace
     ///
     /// <para>A tag is stamped by the modelling layer (<c>Shape.Tag(name)</c> stamps every
     /// face of its child's lowering) and then <b>inherited</b> wherever a face is DERIVED
-    /// from another — every fragment a boolean's face splitting produces, and the reversed
-    /// copies a subtracted tool contributes. Faces built from scratch carry nothing, which
-    /// is the honest answer: a bore wall did not descend from the plate it was cut into.</para>
+    /// from another — every fragment a boolean's face splitting produces, the reversed
+    /// copies a subtracted tool contributes, and every face the rebuilding operations
+    /// (<see cref="Draft"/>, <see cref="Shelling"/>, <see cref="Filleting"/>,
+    /// <see cref="ShapeHealing"/>) re-emit from a positional parent. Faces built from
+    /// scratch carry nothing, which is the honest answer: a bore wall did not descend from
+    /// the plate it was cut into, and neither did a fillet band from the two faces it
+    /// blends.</para>
     ///
     /// <para><b>The guarantee is set-valued and one-sided</b>, and both halves matter. A
-    /// face can split into SEVERAL, so a tag names a set of faces and never "the" face;
-    /// and an operation that rebuilds a face on fresh geometry (rim filleting, shelling,
-    /// drafting) drops the tag rather than guessing, so a query can come back with fewer
-    /// faces than the author expected but never with a face from somewhere else. See
-    /// <c>Shape.Tag</c> for exactly where the guarantee stops.</para>
+    /// face can split into SEVERAL — and one face can generate several (shelling emits a
+    /// wall AND its cavity twin from one parent) — so a tag names a set of faces and never
+    /// "the" face. And a site that invents surface simply does not tag, so a query can come
+    /// back with fewer faces than the author expected but never with a face from somewhere
+    /// else. That direction is the whole safety argument: an incomplete answer is a
+    /// nuisance, a wrong one is a silent misresolve. See <c>Shape.Tag</c> for what still
+    /// carries no provenance.</para>
     /// </summary>
     public IReadOnlyList<string> Provenance { get; private set; } = [];
 
@@ -249,6 +255,98 @@ public sealed class BrepSolid
                 foreach (var loop in face.Loops)
                     loops.Add(new BrepLoop([.. loop.Coedges.Select(c => new BrepCoedge(CloneEdge(c.Edge), c.SameSense))]));
                 faces.Add(new BrepFace(face.Surface, loops, face.IsReversed).DescendsFrom(face));
+            }
+            shells.Add(new BrepShell(faces));
+        }
+        return new BrepSolid(shells);
+    }
+
+    /// <summary>
+    /// This solid re-placed by a proper rigid motion: a fresh, independent graph (the
+    /// <see cref="Clone"/> walk) whose geometry is moved <b>in its own family</b> — a moved
+    /// cylinder is a <see cref="CylinderSurface"/>, a moved revolve a
+    /// <see cref="RevolvedSurface"/> — rather than wrapped.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>The result is a POSE, not a re-derivation, and rigidity is what buys that.</b>
+    /// Every parameterization in this kernel is built out of lengths and angles, and an
+    /// isometry preserves both — so edge trim domains, seam phases, revolve angles and the
+    /// tessellator's grid samples are the ones the solid already had, carried over verbatim
+    /// rather than recomputed. Shear, non-uniform scale, uniform scale and reflection are
+    /// each refused BY NAME with the reason (see <see cref="GeometryTransform"/>); in
+    /// particular a uniform scale is refused not because a surface family objects but
+    /// because <see cref="PolylineCurve3d"/> is parameterized by cumulative chord length,
+    /// so scaling one would silently desynchronize it from the trim domains stored on the
+    /// edges that use it.
+    /// </para>
+    /// <para>
+    /// Nothing internal needs this — the <c>Shape</c> compiler bakes transforms into
+    /// construction inputs at lowering, which is exact for every operation and is why it
+    /// stays the route a design should take. This exists for geometry that has no
+    /// construction history to bake into: an imported STEP or IGES body being posed, or a
+    /// solid handed between two coordinate frames.
+    /// </para>
+    /// <para>
+    /// Provenance rides through, since each face is derived from exactly one parent — the
+    /// same guarantee <see cref="Clone"/> gives, and what keeps a tagged import selectable
+    /// after it is placed.
+    /// </para>
+    /// </remarks>
+    /// <param name="transform">A proper rigid motion (rotation and translation).</param>
+    public BrepSolid Transformed(in Matrix4d transform)
+    {
+        GeometryTransform.RequireRigid(transform, "Re-placing a solid");
+        var m = transform;
+
+        var vertices = new Dictionary<BrepVertex, BrepVertex>();
+        var edges = new Dictionary<BrepEdge, BrepEdge>();
+        // Curves are shared between edges (a seam curve backs two edges, a carrier backs
+        // many), so they are mapped ONCE per object. Reference identity is the right key
+        // for the same reason the archive uses it: two coincident-but-distinct curves are
+        // not the same curve, and merging them here would change what the solid means.
+        var curves = new Dictionary<Curve3d, Curve3d>(ReferenceEqualityComparer.Instance);
+        var surfaces = new Dictionary<Surface, Surface>(ReferenceEqualityComparer.Instance);
+
+        BrepVertex MoveVertex(BrepVertex vertex)
+        {
+            if (!vertices.TryGetValue(vertex, out var copy))
+                vertices[vertex] = copy = new BrepVertex(m.TransformPoint(vertex.Position));
+            return copy;
+        }
+
+        Curve3d MoveCurve(Curve3d curve)
+        {
+            if (!curves.TryGetValue(curve, out var moved))
+                curves[curve] = moved = GeometryTransform.Apply(curve, m);
+            return moved;
+        }
+
+        BrepEdge MoveEdge(BrepEdge edge)
+        {
+            if (!edges.TryGetValue(edge, out var copy))
+            {
+                // A closed edge's start and end are the SAME vertex object; the dictionary
+                // preserves that identity, which IsClosedEdge depends on. The DOMAIN is
+                // carried verbatim — an isometry does not move a parameter.
+                edges[edge] = copy = new BrepEdge(
+                    MoveCurve(edge.Curve), edge.Domain, MoveVertex(edge.StartVertex), MoveVertex(edge.EndVertex));
+            }
+            return copy;
+        }
+
+        var shells = new List<BrepShell>(Shells.Count);
+        foreach (var shell in Shells)
+        {
+            var faces = new List<BrepFace>(shell.Faces.Count);
+            foreach (var face in shell.Faces)
+            {
+                if (!surfaces.TryGetValue(face.Surface, out var moved))
+                    surfaces[face.Surface] = moved = GeometryTransform.Apply(face.Surface, m);
+                var loops = new List<BrepLoop>(face.Loops.Count);
+                foreach (var loop in face.Loops)
+                    loops.Add(new BrepLoop([.. loop.Coedges.Select(c => new BrepCoedge(MoveEdge(c.Edge), c.SameSense))]));
+                faces.Add(new BrepFace(moved, loops, face.IsReversed).DescendsFrom(face));
             }
             shells.Add(new BrepShell(faces));
         }

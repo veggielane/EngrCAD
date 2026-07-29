@@ -10,10 +10,10 @@ namespace EngrCAD.Modeling.Tests;
 ///
 /// <para>These tests are as much a MEASUREMENT as a check: the value of a naming scheme is
 /// exactly the set of operations it survives, so each one names an operation and asserts
-/// what comes out the other side — including the operations where the tag is DROPPED, which
-/// are pinned deliberately so the documented boundary cannot rot. The one property that
-/// must never break is that the failure is one-sided: fewer faces, never a face from
-/// somewhere else.</para>
+/// what comes out the other side — including the places a tag is deliberately NOT attached
+/// (a fillet band descends from neither face it blends), which are pinned so the documented
+/// boundary cannot rot. The one property that must never break is that the failure is
+/// one-sided: fewer faces, never a face from somewhere else.</para>
 /// </summary>
 public class ProvenanceTests
 {
@@ -250,41 +250,98 @@ public class ProvenanceTests
         Assert.True(solid.Faces.Count() > body.ToBrep().Faces.Count());
     }
 
-    // ---- where it STOPS (pinned so the documented boundary cannot rot) ----
+    // ---- the rebuilding operations (each site's boundary, pinned) ----
 
     /// <summary>
-    /// Rim surgery rewrites the blended face on fresh loops, so its tag is dropped; the
-    /// faces it does not touch keep theirs. Fewer, never wrong — asserted as such rather
-    /// than asserted away.
+    /// Rim surgery rewrites the blended face on fresh loops and re-trims its neighbours, and
+    /// every one of those has its parent in hand — so the tag rides through. What stays
+    /// untagged is the blend BAND, which is new material descending from no single face.
     /// </summary>
     [Fact]
-    public void ARimFilletDropsTheTagOnTheFaceItRewrites_ButNotOnTheRest()
+    public void ARimFilletKeepsTheTagOnTheFaceItRewrites_AndLeavesTheBandsUntagged()
     {
         var body = (Plate() | Boss("boss")).Tag("body");
+        var plain = body.ToBrep();
         var solid = body.Fillet(1.5, FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).AsSelector("f")).ToBrep();
 
-        int tagged = TaggedFaceCount(solid, "body");
-        Assert.True(tagged > 0, "untouched faces must keep their tag");
-        Assert.True(tagged < solid.Faces.Count(),
-            "the rewritten top faces and the new blend bands carry no tag — if this ever " +
-            "passes, provenance now survives rim surgery and the docs must say so");
+        // Every face the solid had before the surgery still answers to the tag: the
+        // rewritten tops and the trimmed neighbours included.
+        Assert.Equal(plain.Faces.Count(), TaggedFaceCount(solid, "body"));
+        Assert.True(solid.Faces.Count() > plain.Faces.Count(), "the surgery must add bands");
+        // And the bands took nothing, which is what keeps the failure one-sided.
+        Assert.All(
+            solid.Faces.Where(f => !f.Provenance.Contains("body")),
+            f => Assert.Empty(f.Provenance));
     }
 
     [Fact]
-    public void WholeSolidRoundingDropsProvenanceEntirely()
+    public void ARimFilletKeepsTheINNERTagOnTheBossItBlended()
     {
-        // FilletAllEdges rebuilds every face; nothing survives by reference.
-        var solid = Shape.Box(20, 14, 8).Tag("block").RoundEdges(2).ToBrep();
-        Assert.Equal(0, TaggedFaceCount(solid, "block"));
+        // The composition that matters in practice: the boss's own tag must survive the
+        // surgery applied to it, or "fillet the rim of the boss I named" stops being
+        // repeatable on the next regeneration.
+        var body = Plate() | Shape.Cylinder(10, 20).Translate(0, 0, 6).Tag("boss");
+        var rim = FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).Within(FaceSetRef.Tagged("boss"));
+        var solid = body.Fillet(2, rim.AsSelector("Faces")).ToBrep();
+
+        // The boss still contributes its wall and its (now shrunk) top.
+        Assert.Equal(2, TaggedFaceCount(solid, "boss"));
+        var top = FaceRef.Extreme(
+            FaceSetRef.PlanarWithNormal(Vector3d.UnitZ).Within(FaceSetRef.Tagged("boss")),
+            Vector3d.UnitZ).Resolve(solid, "top");
+        // Shape.Cylinder is CENTRED on its own origin, so a 20-tall one raised by 6 tops out
+        // at 16 — and the fillet shrinks that face's rim without moving its plane.
+        Assert.Equal(16, top.Bounds().Center.Z, 6);
     }
 
     [Fact]
-    public void DraftDropsProvenanceEntirely()
+    public void WholeSolidRoundingKeepsTheTagOnTheShrunkFaces()
+    {
+        // FilletAllEdges re-emits every original face with a shrunk boundary (a direct 1:1
+        // parent) and adds bands and corner patches that descend from nothing.
+        var solid = Shape.Box(20, 14, 8).Tag("block").RoundEdges(2).ToBrep();
+        Assert.Equal(6, TaggedFaceCount(solid, "block"));
+        Assert.Equal(26, solid.Faces.Count());        // 6 shrunk + 12 bands + 8 corners
+        Assert.All(
+            solid.Faces.Where(f => f.Provenance.Contains("block")),
+            f => Assert.True(f.IsPlanar(out _, out _)));
+    }
+
+    [Fact]
+    public void DraftKeepsTheTagOnEveryTaperedFace()
     {
         var solid = Shape.Box(30, 20, 10).Tag("block")
             .Draft(5, (0, 0, -5), Vector3d.UnitZ)
             .ToBrep();
-        Assert.Equal(0, TaggedFaceCount(solid, "block"));
+        // The prism rebuild replaces all six faces and every one has a positional parent.
+        Assert.Equal(6, solid.Faces.Count());
+        Assert.Equal(6, TaggedFaceCount(solid, "block"));
+    }
+
+    [Fact]
+    public void ShellingGivesAWallAndItsCavityTwinTheSameTag()
+    {
+        // The one place a tag legitimately answers with MORE faces than the design named:
+        // provenance is set-valued, and the inner wall exists only because the outer does.
+        // The two-argument overload is the exact inward hollow (Shelling.Shell); the
+        // one-argument Shell(t) is the SDF onion and is B-Rep-Impossible by design.
+        var solid = Shape.Box(20, 30, 10).Tag("tray").Shell(2, null).ToBrep();
+        Assert.Equal(solid.Faces.Count(), TaggedFaceCount(solid, "tray"));
+        Assert.Equal(12, solid.Faces.Count());        // six walls, six cavity twins
+    }
+
+    // ---- where it STOPS (pinned so the documented boundary cannot rot) ----
+
+    [Fact]
+    public void ANewBlendBandDescendsFromNothing()
+    {
+        // Stated as its own claim rather than as a by-product: a fillet band joins two faces
+        // and descends from neither, so attributing it to one would be a guess. This is the
+        // assertion that keeps the failure direction one-sided.
+        var solid = Shape.Box(20, 14, 8).Tag("block").RoundEdges(2).ToBrep();
+        var bands = solid.Faces.Where(f => !f.IsPlanar(out _, out _)).ToList();
+        Assert.Equal(20, bands.Count);                // 12 cylindrical + 8 spherical
+        Assert.All(bands, f => Assert.Empty(f.Provenance));
     }
 
     [Fact]

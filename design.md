@@ -1958,6 +1958,34 @@ Design decisions:
   documents that then diverge. An edit is a handful of captured doubles. Hot reload keeps
   its whole-scene swap because it genuinely rebuilds everything from source; interactive
   editing does not.
+- **A re-placement is a POSE only while the map is an ISOMETRY — and the binding constraint
+  is bookkeeping, not geometry.** `BrepSolid.Transformed` moves a solid by mapping each
+  surface and curve in its own family and carrying the topology over verbatim. The scope is
+  proper rigid motions, and that is the exact condition under which nothing downstream has to
+  be re-derived: every parameterization in this kernel is built out of lengths and angles, so
+  an isometry leaves edge trim domains, seam phases, revolve angles and grid samples alone,
+  and they are copied rather than recomputed (asserted BITWISE, since "close enough" is what
+  the design exists to avoid). The interesting refusal is **uniform scale**, which the
+  backlog had filed as admissible "where the type allows". It is not, and the type is not the
+  party that decides: `PolylineCurve3d` is parameterized by CUMULATIVE CHORD LENGTH, so
+  scaling its points scales its DOMAIN — while a `BrepEdge` stores its trim domain separately
+  from its curve and a `CurveSegment` stores base parameters in the base's units. Scaling the
+  curve alone desynchronizes them with no symptom at the point of failure, and every
+  tracer-produced edge is polyline-backed, so this is the common case rather than an exotic
+  one. Shear and non-uniform scale are refused for the ordinary reason (they change the
+  surface FAMILY — a sheared cylinder is an elliptic cylinder), and reflection because it
+  reverses orientation, so loops would need re-winding and the handedness-carrying types
+  their own rules; `Shape.Mirror` already does that correctly one layer up by baking the
+  reflection into construction inputs, and a second route would be a riskier way to reach an
+  answer the kernel already has. Two smaller rules came with it. **Curves never refuse and
+  surfaces must**: `TransformedCurve` is exact in position and parameterization for any
+  affine map and keeps its `Underlying` type, so it is a sound fallback, whereas there is no
+  surface wrapper — so an unrecognized surface type is named rather than approximated.
+  And **curve OBJECTS are mapped once and reused**, keyed on reference identity: a seam curve
+  backs two edges and a carrier backs many, so mapping per edge would split one carrier into
+  several numerically-equal copies — which is how a solid stops welding without any count
+  changing, and is the same reason `BrepArchive` keys on reference identity rather than on
+  structural equality.
 - **Topological naming: a tag names a SET, and the failure must be one-sided.** The
   selector story ("re-run the semantic query against the regenerated body") is the working
   answer and stays the default, but it has one structural blind spot: it can only say what
@@ -1972,19 +2000,37 @@ Design decisions:
   cardinality contract loudly. A scheme that promised "the" face would have to guess which
   fragment, which is precisely how naming schemes come to misresolve silently.
   **(b) The failure direction is the whole safety argument.** Inheritance is implemented at
-  the sites that derive a face from a parent; a site that builds a face from scratch, or an
-  algorithm that rebuilds the solid wholesale, simply does not tag — so a query returns
-  FEWER faces than the author expected, never a face from somewhere else. Landed: the
-  boolean pipeline (untouched faces pass through by reference; every `FaceSplitter`
-  fragment and every re-wound tool face inherits), `BrepSolid.Clone`, and therefore
-  `Drill`, patterns, transforms and `Shape.From(solid)`. Not landed, and stated rather than
-  hidden: `Draft`, `Shelling` and `FilletAllEdges` rebuild every face from scratch, and rim
-  surgery rewrites the blended face and its trimmed neighbours — all four have a
-  positional parent (`Shelling` already keeps a `Dictionary<BrepFace,int>` for exactly this
-  reason), so threading provenance is mechanical rather than hard, and it is filed instead
-  of done because the tests that pin the boundary are cheap and a half-propagated tag is
-  worth less than a documented one. STEP carries no provenance either, which is a format
-  limit rather than a choice.
+  the sites that derive a face from a parent; a site that builds a face from scratch simply
+  does not tag — so a query returns FEWER faces than the author expected, never a face from
+  somewhere else. Landed: the boolean pipeline (untouched faces pass through by reference;
+  every `FaceSplitter` fragment and every re-wound tool face inherits), `BrepSolid.Clone`,
+  and therefore `Drill`, patterns, transforms and `Shape.From(solid)` — **and every
+  wholesale-rebuild site**: `Draft`, `Shelling`, `Filleting`'s `FilletAllEdges` and rim
+  surgery, and `ShapeHealing`. Each of those discards its input's face objects and
+  constructs replacements, and each already walks its parents positionally, so the fix was
+  simply that every derive point ASK the existing `BrepFace.DescendsFrom` — no new API, and
+  a second inheritance helper would have been the mistake rather than the missing piece.
+  Two corrections to the shape this had been filed in are worth keeping. **It was recorded
+  as four sites and is really six derive points**, because `Draft` and `Shelling` each have
+  a planar path and a curved one and the two curved halves share `CarrierBody.Rebuild` /
+  `CarrierBody.Shell` — so a third of the work lives in a file naming neither operation,
+  which is exactly what a per-operation checklist misses. And **the reason recorded for the
+  work being easy was not the reason**: `Shelling`'s `Dictionary<BrepFace,int>` is never
+  consulted for this, since a positional loop counter already IS the correspondence.
+  What still carries nothing is a statement about the geometry rather than a gap — a fillet
+  band, a corner patch and a partial run's termination face descend from no single face, so
+  attributing them to one of the two surfaces they join would be a guess. The one case that
+  answers with MORE faces than the design named is shelling, where a wall and its cavity
+  twin both inherit from one parent; that is honest (the cavity wall exists only because the
+  outer one does) and it is *representable* precisely because (a) made a tag set-valued.
+  STEP carries no provenance either, which is a format limit rather than a choice.
+  **The boundary tests had to become measurements to stay worth having.** Asserting that a
+  tagged solid comes back with N tagged faces passes just as happily when a parent array is
+  off by one — the count is right and the meaning is wrong, which is the silent misresolve
+  (a) exists to prevent — so each site is now tested by tagging exactly ONE face and
+  asserting *which* output face carries it, located by `Bounds().Center` (`IsPlanar`'s origin
+  is an arbitrary in-plane point and a circular loop's face-frame origin is its seam vertex;
+  both read the rim, and both would make the assertion agree with a wrong answer).
   **(c) A tag is REFUSED, not sanitized, when the descriptor grammar cannot spell it.** The
   descriptor is the cache key and the serialized form, and it is parsed back through
   `RefLexer.ReadIdentifier` — so a tag containing a space or a comma cannot survive its own

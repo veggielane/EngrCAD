@@ -149,7 +149,7 @@ public static class Draft
 
         ValidateProfile(baseCorners, prism.TopCorners, pull, angle, "base");
         ValidateProfile(topCorners, prism.TopCorners, pull, angle, "top");
-        return BuildPrism(baseCorners, topCorners, planes, prism.BasePlane, prism.TopPlane);
+        return BuildPrism(baseCorners, topCorners, planes, prism);
     }
 
     /// <summary>
@@ -514,13 +514,21 @@ public static class Draft
     /// <see cref="PlaneSurface"/> — so the result is selectable by the same
     /// <see cref="BrepQueries"/> vocabulary (draft twice, then fillet) and STEP-exportable,
     /// which a ruled-loft rebuild would not be.
+    ///
+    /// <para><b>Every face here has a positional parent</b>, so provenance rides through:
+    /// rebuilt side face <c>i</c> IS <c>prism.SideFaces[i]</c> tapered (the same wall, at a
+    /// new angle) and the two caps keep their own planes entirely. The correspondence is the
+    /// one <see cref="ApplyCore"/> already established when it built <c>planes[i]</c> from
+    /// <c>SideFaces[i]</c> — it is not re-derived here, which is what keeps a tag from
+    /// landing on the wrong wall.</para>
     /// </summary>
     private static BrepSolid BuildPrism(
         Vector3d[] baseCorners, Vector3d[] topCorners,
         (Vector3d Origin, Vector3d Normal)[] sidePlanes,
-        (Vector3d Origin, Vector3d Normal) basePlane,
-        (Vector3d Origin, Vector3d Normal) topPlane)
+        in Prism prism)
     {
+        var basePlane = prism.BasePlane;
+        var topPlane = prism.TopPlane;
         int n = baseCorners.Length;
         var baseVertices = new BrepVertex[n];
         var topVertices = new BrepVertex[n];
@@ -562,7 +570,7 @@ public static class Draft
                         new BrepCoedge(topEdges[i], sameSense: false),
                         new BrepCoedge(rails[i], sameSense: false),
                     ]),
-                ]));
+                ]).DescendsFrom(prism.SideFaces[i]));
         }
 
         var baseLoop = new List<BrepCoedge>(n);
@@ -575,9 +583,11 @@ public static class Draft
         var baseX = (baseCorners[1] - baseCorners[0]).Normalized();
         var topX = (topCorners[1] - topCorners[0]).Normalized();
         faces.Add(new BrepFace(
-            new PlaneSurface(basePlane.Origin, baseX, basePlane.Normal.Cross(baseX)), [new BrepLoop(baseLoop)]));
+            new PlaneSurface(basePlane.Origin, baseX, basePlane.Normal.Cross(baseX)), [new BrepLoop(baseLoop)])
+            .DescendsFrom(prism.BaseCap));
         faces.Add(new BrepFace(
-            new PlaneSurface(topPlane.Origin, topX, topPlane.Normal.Cross(topX)), [new BrepLoop(topLoop)]));
+            new PlaneSurface(topPlane.Origin, topX, topPlane.Normal.Cross(topX)), [new BrepLoop(topLoop)])
+            .DescendsFrom(prism.TopCap));
         return new BrepSolid([new BrepShell(faces)]);
     }
 

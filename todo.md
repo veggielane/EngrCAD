@@ -1600,16 +1600,49 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   *after* trimmed parameter-space boundaries become exact, since the domain scan is the
   accuracy limit, not the quadrature. Would make analytic primitives exact rather than
   1e-7.
-- [ ] **`BrepSolid` one-call rigid transform** — `Transformed(Matrix4d)` rebuilding
-  topology (the `Clone()` walk) with per-type geometry mapping: plane/cylinder/sphere/
-  conic frames rigidly, extrude/revolve generators via `TransformedCurve` + mapped
-  axes, NURBS by control points (the affine rule the STEP exporter now uses), swept
-  surfaces by transformed path+profile. Assessed (task #11): well-bounded — the per-
-  type curve mapping already exists in `StepWriter.Simplify` and the Modeling compiler
-  bakes transforms per-type at lowering, so this is consolidation, not new math;
-  restrict to rigid (+uniform scale where the type allows) and refuse shear by name.
-  Nothing internal needs it today (lowering bakes transforms into construction
-  inputs), which is why it stayed behind the STEP/healing items.
+- [x] **`BrepSolid` one-call rigid transform** ✅ landed — `BrepSolid.Transformed(Matrix4d)`
+  over the new `GeometryTransform` (per-type surface and curve mapping; the `Clone()` walk
+  with geometry moved and provenance inherited). Exact for **proper rigid motions**, which is
+  the whole tier: every parameterization here is built from lengths and angles, so an isometry
+  lets edge trim domains, seam phases and revolve angles be carried VERBATIM (asserted
+  bitwise) instead of re-derived. Curve objects are mapped once and reused so a shared carrier
+  stays one object. Verified through the two consumers that can actually see a bad
+  re-placement: a posed drilled plate re-tessellates closed at the same discrete volume AND
+  survives a second boolean.
+  **The filed assessment was wrong in one place and right in another.** It proposed
+  "+uniform scale where the type allows" — but the type is not the only party that has to
+  allow it: `PolylineCurve3d` is parameterized by cumulative chord length, so scaling its
+  points scales its DOMAIN, while a `BrepEdge` stores its trim domain separately and a
+  `CurveSegment` stores base parameters in the base's units. Scaling the curve alone
+  desynchronizes them silently, and every tracer-produced edge is polyline-backed, so this is
+  the common case. Uniform scale is therefore refused for a BOOKKEEPING reason rather than a
+  geometric one, and the message says so. It was right that `StepWriter.Simplify` holds
+  similar arithmetic — see the residual below.
+  Residuals:
+  - [ ] **Uniform scale**, per the above. The fix is not in `GeometryTransform` but in
+    carrying the factor into every domain that refers to a polyline-backed curve (edge
+    domains and `CurveSegment` base parameters). Worth doing when a consumer wants to scale
+    an imported body; a design should scale through the `Shape` API, which bakes the factor
+    into construction inputs.
+  - [ ] **Reflection.** Refused because it is not merely a placement: it reverses orientation,
+    so every loop needs re-winding to keep outward normals outward, and the handedness-carrying
+    types each need their own rule — `HelicalSurface` (derived: the mirrored band is the same
+    surface on frame (L·X, −L·Y, L·Z) with NEGATED pitch and the u parameter negated, so the
+    u domain flips, which interacts with `IsFullHelicalBand` and `SampleEdge`'s angular rule)
+    and `RevolvedSurface` (the recorded conjugation identity F·Rot(d,φ)·F = Rot(−F·d,φ), i.e.
+    the negated transformed axis). `Shape.Mirror` already does all of this correctly one layer
+    up by baking the reflection into construction inputs, so this is a convenience rather
+    than a capability gap.
+  - [ ] **`StepWriter.Simplify` still holds its own wrapper-folding** for Line/Circle/Ellipse/
+    NURBS under a `TransformedCurve`. It was deliberately NOT merged into
+    `GeometryTransform.Apply`: the two do different jobs (unwrap-and-simplify for export vs
+    place), and — the load-bearing part — `Simplify` is handed whatever transform a wrapper
+    carries, which may include a uniform scale, where its circle arm keeps `c.Radius` and
+    passes scaled axes through. That is only correct for a rigid map, so it is a latent defect
+    in `Simplify` rather than a rule to centralize as-is. Merging means first making the shared
+    mapper similarity-correct (normalize the axes, scale the radius, branching only when the
+    scale differs from 1 so the rigid path stays bit-identical) and then re-checking STEP
+    output; worth doing, but as its own change with its own measurement.
 - **Per-part material** ✅ landed (`Material`/`Materials`/`ModelUnits`/`PartColor` in
   `EngrCAD.Core`; `Part.Material`/`.Of()`, `Part.MassGrams`/`DisplayMassGrams`,
   `BomLine.Material`/`UnitMassGrams`, `DocumentEdits.SetMaterial`, document persistence,
@@ -1645,19 +1678,19 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,
-  so a lost tag means fewer faces and never a wrong one — see design.md §6b). What remains,
-  each with a known parent to inherit from, so all four are mechanical rather than research:
-  - [ ] **`Draft.ApplyCore`** rebuilds the whole solid via `BuildPrism`; side face *i*
-    corresponds to `prism.SideFaces[i]` and the caps to `BaseCap`/`TopCap`. An index map
-    threaded through `BuildPrism` is the whole fix.
-  - [ ] **`Shelling.Offset`/`Shell`** already keeps a `Dictionary<BrepFace,int>` face index;
-    note one parent maps to TWO children (an outer wall and its inward twin), which
-    provenance already allows since it is a list.
-  - [ ] **`Filleting.FilletAllEdges`** re-emits every original face with a shrunk boundary
-    (a direct 1:1 parent) and adds genuinely new bands and corner patches, which correctly
-    stay untagged. **Rim surgery** (`FilletRim`/`ChamferRim`, the partial-run variants, and
-    `TrimNeighborBand`) likewise has the parent in hand at each site.
-  - [ ] **`ShapeHealing`** rebuilds through `WorkFace`; provenance would ride on that.
+  so a lost tag means fewer faces and never a wrong one — see design.md §6b.
+  **The five rebuild sites ✅ landed too**: `Draft` (planar `BuildPrism` + the curved
+  carrier path), `CarrierBody.Rebuild`/`Shell`, `Shelling`'s polyhedral `Offset`/`Shell`,
+  `Filleting`'s `FilletAllEdges` + rim surgery + `TrimNeighborBand`, and `ShapeHealing`'s
+  `WorkFace`. Every one asks the existing `BrepFace.DescendsFrom` rather than restating a
+  copy, and `FaceProvenanceTests` measures each by tagging ONE face and asserting where the
+  tag landed. **The filed framing had one thing wrong and one thing missing**: the four
+  named sites are really SIX derive points, because `Draft` and `Shelling` each have a
+  planar path and a curved one and the curved halves share `CarrierBody` — so the shared
+  rebuild is where two of the six live and neither `Draft.cs` nor `Shelling.cs` mentions
+  provenance at all; and `Shelling`'s `Dictionary<BrepFace,int>` was never needed, since
+  every one of these sites already iterates its parent array positionally and the index map
+  would have been a second spelling of the loop counter.) What remains:
   - [ ] **EDGE provenance.** Only faces carry tags today. An edge could report the tags of
     its two faces, which is enough for "fillet the edges of the boss" without a new store —
     but the sense in which an edge *belongs* to a step when its two faces disagree wants a
