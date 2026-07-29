@@ -287,13 +287,34 @@ public sealed class StructuralResults
         int perElement = Mesh.NodesPerElement;
         Span<Vector3d> positions = stackalloc Vector3d[perElement];
         Span<double> ue = stackalloc double[30];
-        Span<double> strain = stackalloc double[6];
         Span<double> stress = stackalloc double[6];
         Gather(element, positions, ue);
-        TetElement.StrainAt(Mesh.Order, positions, ue[..(3 * perElement)], r, s, t, strain);
+        VoigtStressAt(element, positions, ue[..(3 * perElement)], r, s, t, stress);
+        return TetElement.ToTensor(stress, engineeringShear: false);
+    }
+
+    /// <summary>
+    /// The Cauchy stress in VOIGT form at natural coordinates of an element, from element
+    /// data the caller has already gathered.
+    ///
+    /// <para><b>This is the seam <see cref="BucklingSolver"/> takes its prestress
+    /// through</b>, so the field a geometric stiffness is built from is bit-for-bit the field
+    /// this class reports — thermal-strain subtraction included, which is what makes thermal
+    /// buckling right rather than nearly right. The gathered-data form exists because the
+    /// assembler visits several quadrature points per element and
+    /// <see cref="StressAt(int, double, double, double)"/> would re-gather at every one.</para>
+    /// </summary>
+    internal void VoigtStressAt(
+        int element,
+        ReadOnlySpan<Vector3d> positions,
+        ReadOnlySpan<double> nodalDisplacements,
+        double r, double s, double t,
+        Span<double> stress)
+    {
+        Span<double> strain = stackalloc double[6];
+        TetElement.StrainAt(Mesh.Order, positions, nodalDisplacements, r, s, t, strain);
         SubtractThermalStrain(element, r, s, t, strain);
         Model.MaterialOf(element).Stress(strain, stress);
-        return TetElement.ToTensor(stress, engineeringShear: false);
     }
 
     /// <summary>
@@ -360,7 +381,10 @@ public sealed class StructuralResults
         return TetElement.ToTensor(strain, engineeringShear: true);
     }
 
-    private void Gather(int element, Span<Vector3d> positions, Span<double> ue)
+    /// <summary>The element's node positions and its solved nodal displacements, laid out 3
+    /// per node — the form every recovery routine here (and <see cref="BucklingSolver"/>'s
+    /// assembly) works from.</summary>
+    internal void Gather(int element, Span<Vector3d> positions, Span<double> ue)
     {
         var nodes = Mesh.Element(element);
         for (int i = 0; i < nodes.Length; i++)

@@ -108,6 +108,41 @@ public sealed record ModalSolveOptions
     } = 8;
 
     /// <summary>
+    /// A completed static solve whose stress field STIFFENS the model — the guitar string,
+    /// the spinning blade, the bolted joint. Null (the default) is the ordinary unstressed
+    /// modal analysis, and the solve is then bit-for-bit what it always was.
+    ///
+    /// <para>The eigenproblem becomes <c>(K + s·Kg) phi = lambda M phi</c> with <c>s</c>
+    /// <see cref="PrestressScale"/> and <c>Kg</c> the same
+    /// <see cref="TetElement.GeometricStiffness"/> <see cref="BucklingSolver"/> uses, from
+    /// the same recovered stress field. Tension raises every frequency, compression lowers
+    /// them, and the two features meet at the critical load: at
+    /// <c>s = </c><see cref="BucklingResults.CriticalLoadFactor"/> the matrix
+    /// <c>K + s·Kg</c> is SINGULAR, its null vector is the buckling shape, and the lowest
+    /// natural frequency is exactly zero. Past it there is no vibration problem left to
+    /// solve, and the factorization refuses by name rather than returning imaginary
+    /// frequencies as small positive ones.</para>
+    ///
+    /// <para>The prestress must have been solved on the SAME
+    /// <see cref="AnalysisMesh"/> instance — node indices are what the two assemblies share
+    /// — but not necessarily under the same supports, since a part is often preloaded in one
+    /// configuration and made to vibrate in another.</para>
+    /// </summary>
+    public StructuralResults? Prestress { get; init; }
+
+    /// <summary>
+    /// Multiplier on <see cref="Prestress"/>' stress field (default 1). A linear solve's
+    /// stress is homogeneous of degree one in its loads, so this scales the preload without
+    /// re-solving — which is what makes a frequency-versus-load curve one static solve and N
+    /// eigen-solves rather than 2N solves.
+    /// </summary>
+    public double PrestressScale { get; init; } = 1.0;
+
+    /// <summary>Quadrature rule override for the GEOMETRIC stiffness, for the same reason
+    /// the other two exist. Null uses <see cref="TetQuadrature.ForGeometric"/>.</summary>
+    internal int? GeometricQuadratureDegree { get; init; }
+
+    /// <summary>
     /// Quadrature rule override for the STIFFNESS, for tests that check the production rule
     /// is exact. Null uses the cheapest exact rule for the element order.
     /// </summary>
@@ -167,6 +202,13 @@ public sealed record ModalSolveReport
     public required int RigidBodyModeCount { get; init; }
 
     /// <summary>
+    /// The stress-stiffening multiplier that was applied, or <b>exactly zero</b> when the
+    /// solve carried no prestress. Reported because a frequency is meaningless without it: a
+    /// preloaded model's frequencies are not the part's, they are that load case's.
+    /// </summary>
+    public double PrestressScale { get; init; }
+
+    /// <summary>
     /// Total Lanczos steps, each one a back-substitution through the SINGLE factorization.
     /// The number that makes the factor-once-solve-many argument concrete: this is how many
     /// solves one factorization served.
@@ -201,7 +243,8 @@ public sealed record ModalSolveReport
         $"K {StiffnessNonZeros:N0} nnz, M {MassNonZeros:N0} nnz ({Lumping}), "
             + $"factor {FactorNonZeros:N0} nnz ({Ordering})",
         $"shift {Shift:G6}, {RigidBodyModeCount} rigid-body mode"
-            + $"{(RigidBodyModeCount == 1 ? "" : "s")} deflated",
+            + $"{(RigidBodyModeCount == 1 ? "" : "s")} deflated"
+            + (PrestressScale != 0 ? $", stress-stiffened by {PrestressScale:G6}·Kg" : ""),
         $"{(Converged ? "converged" : "NOT CONVERGED")}: {ModeCount} modes from "
             + $"{Iterations} Lanczos steps through ONE factorization"
             + $"{(Restarts > 0 ? $" and {Restarts} restart{(Restarts == 1 ? "" : "s")}" : "")}, "
@@ -298,27 +341,34 @@ public static class ModalSolver
                 + "consistent matrix's own strictly positive diagonal to preserve the mass, "
                 + "or MassLumping.Consistent.");
 
-        int totalDofs = 3 * mesh.NodeCount;
-        var reduced = new int[totalDofs];
-        int freeCount = 0;
-        for (int node = 0; node < mesh.NodeCount; node++)
-        {
-            var restraint = model.RestraintOf(node);
-            for (int axis = 0; axis < 3; axis++)
-            {
-                bool fixedHere = ((int)restraint & (1 << axis)) != 0;
-                reduced[3 * node + axis] = fixedHere ? -1 : freeCount++;
-            }
-        }
+        var reduced = FeaAssembly.ReducedIndices(model, out int freeCount);
         if (freeCount == 0)
             throw new FeaException(
                 "Every degree of freedom is restrained; there are no modes to find.");
 
         var stopwatch = Stopwatch.StartNew();
-        var fullStiffness = AssembleStiffness(model, stiffnessRule);
+        var fullStiffness = FeaAssembly.Stiffness(model, stiffnessRule);
         var (fullMass, totalMass) = AssembleMass(model, massRule, options.Lumping);
-        var k = Reduce(fullStiffness, reduced, freeCount);
-        var m = Reduce(fullMass, reduced, freeCount);
+        double prestressScale = 0;
+        if (options.Prestress is { } prestress)
+        {
+            RequireCompatiblePrestress(mesh, prestress);
+            prestressScale = options.PrestressScale;
+            // Exact-zero semantic test: a scale of exactly zero means "no preload", and
+            // adding a zero matrix would still change the summation order. Skipping it keeps
+            // the unprestressed answer bit-identical whichever way it was asked for.
+            if (prestressScale != 0)
+            {
+                var geometricRule = SelectRule(
+                    TetQuadrature.ForGeometric(mesh.Order), options.GeometricQuadratureDegree);
+                fullStiffness = FeaAssembly.Combine(
+                    fullStiffness,
+                    FeaAssembly.Geometric(prestress, geometricRule, 1.0),
+                    prestressScale);
+            }
+        }
+        var k = FeaAssembly.Reduce(fullStiffness, reduced, freeCount);
+        var m = FeaAssembly.Reduce(fullMass, reduced, freeCount);
         double assembleMs = stopwatch.Elapsed.TotalMilliseconds;
 
         // The rigid motions the supports permit — the SAME computation the static solver
@@ -328,14 +378,18 @@ public static class ModalSolver
 
         double shift = rigidModes.Length == 0 ? 0 : -ShiftFraction * DiagonalScale(k, m);
         stopwatch.Restart();
-        var (factor, usedShift) = Factorize(k, m, shift, options.Ordering, model);
+        var (factor, usedShift) = Factorize(k, m, shift, options.Ordering, model, prestressScale);
         double factorMs = stopwatch.Elapsed.TotalMilliseconds;
 
         int krylov = options.MaxKrylovDimension
             ?? Math.Max(3 * options.ModeCount + 30, 40);
         stopwatch.Restart();
+        // m for both the operator's right-hand matrix and the metric: the mass matrix is the
+        // positive semi-definite one here, so the iteration runs in ITS inner product. (The
+        // buckling solver passes k as the metric instead, for the reason BucklingSolver
+        // documents at length — its right-hand matrix is indefinite.)
         var eigen = LanczosEigen.Solve(
-            k, m, factor, usedShift, deflation, options.ModeCount,
+            k, m, m, factor, usedShift, deflation, options.ModeCount,
             options.Tolerance, krylov, options.MaxRestarts);
         double eigenMs = stopwatch.Elapsed.TotalMilliseconds;
 
@@ -345,8 +399,15 @@ public static class ModalSolver
                 + $"{eigen.Restarts + 1} runs at a tolerance of {options.Tolerance:E1}. The free "
                 + $"system has {freeCount:N0} degrees of freedom and {rigidModes.Length} rigid-body "
                 + "mode(s) were deflated; if that number is unexpectedly large the supports are "
-                + "not doing what they were meant to. Raising ModalSolveOptions.Tolerance or "
-                + "MaxKrylovDimension is the next thing to try.");
+                + "not doing what they were meant to. "
+                + (eigen.Candidate is { } candidate
+                    ? $"A candidate eigenvalue of {candidate.Eigenvalue:G6} "
+                      + $"({Math.Sqrt(Math.Max(0, candidate.Eigenvalue)) / (2 * Math.PI):G6} Hz) "
+                      + $"was found but stalled at a measured residual of {candidate.Residual:E2}, "
+                      + "so the mode is there and the tolerance is what is in the way: raise "
+                      + "ModalSolveOptions.Tolerance above that figure."
+                    : "No candidate ever appeared. Raising ModalSolveOptions.Tolerance or "
+                      + "MaxKrylovDimension is the next thing to try."));
 
         var participating = ParticipatingMass(m, reduced, mesh.NodeCount);
         var modes = BuildModes(mesh, eigen.Pairs, reduced, m);
@@ -364,6 +425,7 @@ public static class ModalSolver
             Ordering = options.Ordering,
             Shift = usedShift,
             RigidBodyModeCount = rigidModes.Length,
+            PrestressScale = prestressScale,
             Iterations = eigen.Iterations,
             Restarts = eigen.Restarts,
             Converged = eigen.Converged,
@@ -452,58 +514,31 @@ public static class ModalSolver
         }
     }
 
-    // ---- assembly --------------------------------------------------------------------
-
     /// <summary>
-    /// The FULL stiffness matrix over every degree of freedom.
-    /// <para>Assembled whole and reduced afterwards (see <see cref="Reduce"/>) rather than
-    /// assembled directly into the reduced numbering as the static solver does. The reason
-    /// is the rigid-body modes: their Rayleigh quotients and the deflation vectors are
-    /// stated over the free DOFs, while the mass matrix's TOTAL — the body's actual mass —
-    /// is a statement about every DOF including the restrained ones. Two index maps over one
-    /// assembly loop is how the thermal solver already does this, for the same reason.</para>
+    /// Refuses a prestress solved on a different analysis mesh.
+    ///
+    /// <para><b>The test is REFERENCE identity of the mesh, not a comparison of node counts
+    /// or positions</b>, and deliberately: what the two assemblies share is a node NUMBERING,
+    /// and two meshes of the same body with the same node count can number them differently
+    /// — which would silently stiffen each element with another element's stress. An
+    /// identical-looking wrong answer is exactly the failure mode a count check would let
+    /// through.</para>
     /// </summary>
-    private static PackedSparseMatrix AssembleStiffness(
-        StructuralModel model, in TetQuadrature rule)
+    private static void RequireCompatiblePrestress(AnalysisMesh mesh, StructuralResults prestress)
     {
-        var mesh = model.Mesh;
-        int perElement = mesh.NodesPerElement;
-        int elementDofs = 3 * perElement;
-        var builder = new SparseMatrixBuilder(3 * mesh.NodeCount, 3 * mesh.NodeCount);
-        var ke = new double[elementDofs * elementDofs];
-        var positions = new Vector3d[perElement];
-        var dofs = new int[elementDofs];
-
-        for (int e = 0; e < mesh.ElementCount; e++)
-        {
-            var nodes = mesh.Element(e);
-            for (int i = 0; i < perElement; i++)
-            {
-                positions[i] = mesh.Position(nodes[i]);
-                for (int a = 0; a < 3; a++)
-                    dofs[3 * i + a] = 3 * nodes[i] + a;
-            }
-            TetElement.Stiffness(mesh.Order, positions, model.MaterialOf(e), rule, ke);
-
-            for (int i = 0; i < elementDofs; i++)
-            {
-                int ri = dofs[i];
-                int row = i * elementDofs;
-                for (int j = 0; j < elementDofs; j++)
-                {
-                    double v = ke[row + j];
-                    // Exact-zero skip: a structurally absent entry is absent from the
-                    // sparsity pattern too, which is what CSR means.
-                    if (v == 0)
-                        continue;
-                    int rj = dofs[j];
-                    if (ri <= rj)
-                        builder.Add(ri, rj, v);
-                }
-            }
-        }
-        return builder.ToSymmetricUpper();
+        if (ReferenceEquals(prestress.Mesh, mesh))
+            return;
+        throw new FeaException(
+            "ModalSolveOptions.Prestress was solved on a different AnalysisMesh instance "
+            + $"({prestress.Mesh.NodeCount:N0} nodes, {prestress.Mesh.ElementCount:N0} elements) "
+            + $"from the model being solved ({mesh.NodeCount:N0} nodes, "
+            + $"{mesh.ElementCount:N0} elements). Stress stiffening adds the prestress's "
+            + "geometric stiffness element by element, so the two must share a node numbering "
+            + "and not merely a shape: build one AnalysisMesh, solve the preload case on it, "
+            + "and pass those results. (The supports may differ - only the mesh may not.)");
     }
+
+    // ---- assembly --------------------------------------------------------------------
 
     /// <summary>
     /// The FULL mass matrix over every degree of freedom, and the body's total mass.
@@ -606,34 +641,6 @@ public static class ModalSolver
         }
 
         return (builder.ToSymmetricUpper(), totalMass);
-    }
-
-    /// <summary>
-    /// The free-free block of a full matrix.
-    /// <para>The reduced index map is MONOTONE in the DOF index — free DOFs take increasing
-    /// slots — so an upper-triangle entry of the full matrix maps to an upper-triangle entry
-    /// of the reduced one, which is what lets this feed <c>ToSymmetricUpper</c> directly.
-    /// The same property the thermal solver's <c>Reduce</c> relies on.</para>
-    /// </summary>
-    private static PackedSparseMatrix Reduce(PackedSparseMatrix full, int[] reduced, int freeCount)
-    {
-        var builder = new SparseMatrixBuilder(freeCount, freeCount);
-        for (int row = 0; row < full.Rows; row++)
-        {
-            int ri = reduced[row];
-            if (ri < 0)
-                continue;
-            var columns = full.RowColumns(row);
-            var values = full.RowValues(row);
-            for (int e = 0; e < columns.Length; e++)
-            {
-                int rj = reduced[columns[e]];
-                if (rj < 0)
-                    continue;
-                builder.Add(ri, rj, values[e]);
-            }
-        }
-        return builder.ToSymmetricUpper();
     }
 
     // ---- rigid-body modes and the shift ------------------------------------------------
@@ -740,13 +747,13 @@ public static class ModalSolver
     /// </summary>
     private static (SparseCholesky Factor, double Shift) Factorize(
         PackedSparseMatrix k, PackedSparseMatrix m, double shift,
-        SparseOrdering ordering, StructuralModel model)
+        SparseOrdering ordering, StructuralModel model, double prestressScale)
     {
         Exception? last = null;
         double current = shift;
         for (int attempt = 0; attempt <= ShiftRetries; attempt++)
         {
-            var a = current == 0 ? k : Combine(k, m, -current);
+            var a = current == 0 ? k : FeaAssembly.Combine(k, m, -current);
             try
             {
                 return (SparseCholesky.Factorize(a, ordering), current);
@@ -764,12 +771,25 @@ public static class ModalSolver
         }
 
         if (shift == 0)
+        {
+            // A prestressed model has one more way to lose definiteness, and it is the
+            // physically interesting one: past the critical load K + s·Kg is indefinite,
+            // which is not an ill-conditioned mesh but a structure that has already buckled.
+            // Naming it first is what stops the message sending someone to look at slivers.
+            string cause = prestressScale != 0
+                ? $"The prestressed stiffness K + {prestressScale:G6}·Kg is not positive "
+                  + "definite. The most likely reason is that the preload is at or past the "
+                  + "critical buckling load, where K + s·Kg is singular by definition and there "
+                  + "is no vibration problem left to solve - run BucklingSolver on the same "
+                  + "reference case to find the factor, and stay below it. "
+                : "The stiffness matrix is not positive definite even though no rigid-body "
+                  + "motion survives the supports, so the model is a mechanism or its elements "
+                  + "are too ill-conditioned to factor.";
             throw new FeaException(
-                "The stiffness matrix is not positive definite even though no rigid-body motion "
-                + "survives the supports, so the model is a mechanism or its elements are too "
-                + "ill-conditioned to factor."
+                cause
                 + FeaGuards.DescribeElementShape(model.Mesh)
                 + $" (Underlying: {last?.Message})", last!);
+        }
 
         throw new FeaException(
             $"K - sigma·M would not factor at any shift between {shift:G6} and "
@@ -778,28 +798,6 @@ public static class ModalSolver
             + "one of them is ill-conditioned rather than merely unrestrained."
             + FeaGuards.DescribeElementShape(model.Mesh)
             + $" (Underlying: {last?.Message})", last!);
-    }
-
-    /// <summary><c>K + coefficient·M</c>, both symmetric-upper with the same shape rules.</summary>
-    private static PackedSparseMatrix Combine(
-        PackedSparseMatrix k, PackedSparseMatrix m, double coefficient)
-    {
-        var builder = new SparseMatrixBuilder(k.Rows, k.Columns);
-        for (int row = 0; row < k.Rows; row++)
-        {
-            var columns = k.RowColumns(row);
-            var values = k.RowValues(row);
-            for (int e = 0; e < columns.Length; e++)
-                builder.Add(row, columns[e], values[e]);
-        }
-        for (int row = 0; row < m.Rows; row++)
-        {
-            var columns = m.RowColumns(row);
-            var values = m.RowValues(row);
-            for (int e = 0; e < columns.Length; e++)
-                builder.Add(row, columns[e], coefficient * values[e]);
-        }
-        return builder.ToSymmetricUpper();
     }
 
     // ---- results ---------------------------------------------------------------------
@@ -811,7 +809,7 @@ public static class ModalSolver
         Span<double> total = stackalloc double[3];
         for (int axis = 0; axis < 3; axis++)
         {
-            var influence = InfluenceVector(m.Rows, reduced, nodeCount, axis);
+            var influence = FeaAssembly.InfluenceVector(m.Rows, reduced, nodeCount, axis);
             var product = m.Multiply(influence);
             double sum = 0;
             for (int i = 0; i < influence.Length; i++)
@@ -821,24 +819,12 @@ public static class ModalSolver
         return new Vector3d(total[0], total[1], total[2]);
     }
 
-    private static double[] InfluenceVector(int freeCount, int[] reduced, int nodeCount, int axis)
-    {
-        var influence = new double[freeCount];
-        for (int node = 0; node < nodeCount; node++)
-        {
-            int r = reduced[3 * node + axis];
-            if (r >= 0)
-                influence[r] = 1.0;
-        }
-        return influence;
-    }
-
     private static VibrationMode[] BuildModes(
         AnalysisMesh mesh, IReadOnlyList<EigenPair> pairs, int[] reduced, PackedSparseMatrix m)
     {
         var influence = new double[3][];
         for (int axis = 0; axis < 3; axis++)
-            influence[axis] = InfluenceVector(m.Rows, reduced, mesh.NodeCount, axis);
+            influence[axis] = FeaAssembly.InfluenceVector(m.Rows, reduced, mesh.NodeCount, axis);
         var massInfluence = new double[3][];
         for (int axis = 0; axis < 3; axis++)
             massInfluence[axis] = m.Multiply(influence[axis]);

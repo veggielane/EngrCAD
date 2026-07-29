@@ -754,10 +754,15 @@ public static class StructuralSolver
     /// Refuses an under-restrained model by name, per connected body — the surviving
     /// motions come from <see cref="RigidBodyModes"/>, which the modal solver asks for the
     /// opposite reason (there they are the zero-frequency modes, and a legitimate part of
-    /// the answer). One computation, two consumers, so a refusal here and a mode listing
-    /// there can never describe the same physics differently.
+    /// the answer). One computation, three consumers now (this, the modal listing and
+    /// <see cref="BucklingSolver"/>'s refusal), so they can never describe the same physics
+    /// differently.
     /// </summary>
-    private static void RequireRestraint(StructuralModel model)
+    /// <param name="model">The model to check.</param>
+    /// <param name="consequence">The closing sentence, which is the only part that differs
+    /// between callers: what the caller was going to do and why an unrestrained body defeats
+    /// it. Null takes the static solver's.</param>
+    internal static void RequireRestraint(StructuralModel model, string? consequence = null)
     {
         var surviving = RigidBodyModes.Surviving(model.Mesh, model.RestraintOf);
         if (surviving.Count == 0)
@@ -778,8 +783,10 @@ public static class StructuralSolver
             + $"mode{(count == 1 ? "" : "s")} survive{(count == 1 ? "s" : "")} the supports "
             + $"({string.Join("; ", motions.Select(m => m.Description))})."
             + $" {model.RestrainedNodeCount:N0} node{(model.RestrainedNodeCount == 1 ? " is" : "s are")} "
-            + "restrained in all. A linear static solve of an unrestrained body has no unique "
-            + "answer; add supports, or restrain the six rigid-body degrees of freedom "
-            + "statically (a 3-2-1 scheme) if the loads are self-equilibrated.");
+            + "restrained in all. "
+            + (consequence
+                ?? "A linear static solve of an unrestrained body has no unique answer; add "
+                   + "supports, or restrain the six rigid-body degrees of freedom statically "
+                   + "(a 3-2-1 scheme) if the loads are self-equilibrated."));
     }
 }
