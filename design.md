@@ -1958,6 +1958,34 @@ Design decisions:
   documents that then diverge. An edit is a handful of captured doubles. Hot reload keeps
   its whole-scene swap because it genuinely rebuilds everything from source; interactive
   editing does not.
+- **A re-placement is a POSE only while the map is an ISOMETRY — and the binding constraint
+  is bookkeeping, not geometry.** `BrepSolid.Transformed` moves a solid by mapping each
+  surface and curve in its own family and carrying the topology over verbatim. The scope is
+  proper rigid motions, and that is the exact condition under which nothing downstream has to
+  be re-derived: every parameterization in this kernel is built out of lengths and angles, so
+  an isometry leaves edge trim domains, seam phases, revolve angles and grid samples alone,
+  and they are copied rather than recomputed (asserted BITWISE, since "close enough" is what
+  the design exists to avoid). The interesting refusal is **uniform scale**, which the
+  backlog had filed as admissible "where the type allows". It is not, and the type is not the
+  party that decides: `PolylineCurve3d` is parameterized by CUMULATIVE CHORD LENGTH, so
+  scaling its points scales its DOMAIN — while a `BrepEdge` stores its trim domain separately
+  from its curve and a `CurveSegment` stores base parameters in the base's units. Scaling the
+  curve alone desynchronizes them with no symptom at the point of failure, and every
+  tracer-produced edge is polyline-backed, so this is the common case rather than an exotic
+  one. Shear and non-uniform scale are refused for the ordinary reason (they change the
+  surface FAMILY — a sheared cylinder is an elliptic cylinder), and reflection because it
+  reverses orientation, so loops would need re-winding and the handedness-carrying types
+  their own rules; `Shape.Mirror` already does that correctly one layer up by baking the
+  reflection into construction inputs, and a second route would be a riskier way to reach an
+  answer the kernel already has. Two smaller rules came with it. **Curves never refuse and
+  surfaces must**: `TransformedCurve` is exact in position and parameterization for any
+  affine map and keeps its `Underlying` type, so it is a sound fallback, whereas there is no
+  surface wrapper — so an unrecognized surface type is named rather than approximated.
+  And **curve OBJECTS are mapped once and reused**, keyed on reference identity: a seam curve
+  backs two edges and a carrier backs many, so mapping per edge would split one carrier into
+  several numerically-equal copies — which is how a solid stops welding without any count
+  changing, and is the same reason `BrepArchive` keys on reference identity rather than on
+  structural equality.
 - **Topological naming: a tag names a SET, and the failure must be one-sided.** The
   selector story ("re-run the semantic query against the regenerated body") is the working
   answer and stays the default, but it has one structural blind spot: it can only say what

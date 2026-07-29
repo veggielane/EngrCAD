@@ -289,6 +289,31 @@ operations. Depends only on `EngrCAD.Core`.
   two booleans must clone first. The damage is silent otherwise: face/edge/vertex counts
   survive, so the solid still looks intact, and the second boolean either throws deep
   inside face tracing or returns a closed, `Validate`-clean, WRONG result.
+  **`BrepSolid.Transformed(Matrix4d)`** is that same walk with the geometry moved through
+  `GeometryTransform` — each surface answered in its OWN family (a moved cylinder is a
+  `CylinderSurface`, a moved rim a `Circle3d`) rather than wrapped, so the tessellator keeps
+  its sampling rules and STEP its analytic entities. **It is a POSE, not a re-derivation, and
+  proper rigidity is exactly what buys that**: every parameterization here is built from
+  lengths and angles, both of which an isometry preserves, so edge trim domains, seam phases
+  and revolve angles are carried VERBATIM (asserted bitwise) rather than recomputed. Curves
+  are exact per type with a `TransformedCurve` fallback — itself exact in position and
+  parameterization, and its `Underlying` still reports the base type — so a curve never
+  refuses; a surface has no such wrapper, so an unknown surface type refuses by name rather
+  than approximating. Curve objects are mapped ONCE and reused, since a seam curve backs two
+  edges and a carrier backs many, and splitting one carrier into several numerically-equal
+  copies is how a solid stops welding without any count changing. Nothing internal needs
+  this — the `Shape` compiler bakes transforms into construction inputs at lowering, which is
+  exact for every operation — so it exists for geometry with no construction history to bake
+  into: an imported STEP or IGES body being posed. **Three refusals, each with its own
+  reason**: a shear or non-uniform scale changes the surface FAMILY (a sheared cylinder is an
+  elliptic cylinder, a sheared sphere an ellipsoid); a **uniform scale** looks admissible and
+  is refused for a bookkeeping reason rather than a geometric one — `PolylineCurve3d` is
+  parameterized by cumulative chord length, so scaling its points scales its DOMAIN, while a
+  `BrepEdge` stores its trim domain separately and a `CurveSegment` stores base parameters,
+  and every tracer-produced edge is polyline-backed; and a **reflection** reverses
+  orientation, so every loop would need re-winding and the handedness-carrying types
+  (`HelicalSurface`, and a `RevolvedSurface`'s axis through F·Rot(d,φ)·F = Rot(−F·d,φ)) each
+  need their own rule — `Shape.Mirror` already does all of that one layer up.
 - **Face provenance** (`BrepFace.Provenance` / `DescendsFrom(parent)` / `AddProvenance(tag)`)
   — the persistent half of topological naming, beside the semantic `BrepQueries` selectors.
   A tag is stamped by the modelling layer (`Shape.Tag`) and then **inherited wherever a face
