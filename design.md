@@ -1852,19 +1852,48 @@ expected ones — a mode shape has no physical amplitude and its sign is a conve
 the third is the one that actually misleads: **a mode does not animate at its own
 frequency, and the formula that says it can is dimensionally correct.**
 `cycles = frequency × duration` reads like the obvious binding and produces nonsense for
-every real part, because a steel blade 80 mm long and 6 mm thick rings near 780 Hz
-(`f₁ = (1.875²/2π)·√(EI/ρAL⁴)`, hand-checked at 764 Hz against an FE solve's 783), so a
-two-second clip would ask for ~1570 cycles — hundreds per rendered frame, aliasing into
-blur, and no frame rate fixes a mode that is genuinely faster than video. Stiff metal
-parts run from hundreds of hertz to tens of kilohertz; the structures slow enough to
-animate at true speed are things like tall buildings. So the API takes a small fixed cycle
-count and the docs state the slowdown factor. **Rank the caveats by what a reader will
-believe**: arbitrary amplitude and sign are things people half expect, whereas "the
-animation runs at the mode's frequency" sounds exactly like something a solver would
-arrange — which is why it is the one printed in bold beside the figure. (The wrong
-formula was in this repo's own docs for one commit, caught in review rather than by a
-test, which is itself the argument for writing the magnitude down: no assertion here
-would have failed, and the sentence read perfectly.)
+every real part, because a steel blade 80 × 20 × 6 mm rings at **783 Hz**
+(`f₁ = (1.875²/2π)·√(EI/ρAL⁴)` with E = 210 GPa; the WIDTH cancels, since `I/A = h²/12`
+for a rectangle, which is why the docs quote only the length and the thickness), so a
+two-second clip would ask for
+~1570 cycles — hundreds per rendered frame, aliasing into blur, and no frame rate fixes a
+mode that is genuinely faster than video. Stiff metal parts run from hundreds of hertz to
+tens of kilohertz; the structures slow enough to animate at true speed are things like
+tall buildings. So the API takes a small fixed cycle count and the docs state the slowdown
+factor. **Rank the caveats by what a reader will believe**: arbitrary amplitude and sign
+are things people half expect, whereas "the animation runs at the mode's frequency" sounds
+exactly like something a solver would arrange — which is why it is the one printed in bold
+beside the figure.
+
+**The cross-check that was supposed to catch this instead CONFIRMED it, and that is the
+lesson worth more than the caveat.** The wrong formula was reported by a reviewer, and it
+was verified before being acted on — correctly, since a correction believed rather than
+checked is the same defect facing the other way. The hand calculation returned 764 Hz
+against the reported 783, a 2.5% gap, which was read as the expected difference between
+beam theory and a 3D solve and taken as corroboration. It was nothing of the kind: the
+hand calculation used a textbook 200 GPa where `Materials.Steel` is 210, and
+√(210/200) = 1.0247 reproduces the entire gap to 0.05%. A **false confirmation** — an
+independent check that agreed to a few percent *and supplied a fluent physical story for
+the residual*, which is what stopped the enquiry.
+
+Two discriminators would have caught it, and the cheaper one is the surprise. **Size**:
+mode 1 of a slender cantilever must agree with Euler–Bernoulli to well under 1% (the FEA
+suite's own measurement on a 100 × 10 × 10 bar is −0.07%), so 2.5% is out of family in
+either direction. **Sign**: a 3D solid has shear deformation and rotary inertia that beam
+theory omits and both SOFTEN it, so the continuum answer lies below the Euler–Bernoulli
+one — measured −0.07%, −4.34%, −9.98% for bending modes 1, 2, 3, monotonically further
+below as the wavelength shortens — and an FE result *above* EB is therefore not a small
+discrepancy but the wrong direction. Note the sign test's honest limit: displacement-based
+FE is Rayleigh–Ritz on a subspace, so its eigenvalues bound the true ones from ABOVE, and
+a coarse mesh can overshoot EB legitimately. At mode 1 the softening is only 0.07%, so the
+margin is thin and the test is weak; it is decisive at the higher modes where softening is
+percent-level. **A cross-check landing within a few percent with a ready explanation for
+the gap is the most dangerous kind, and for a bending comparison the SIGN of the gap is a
+cheaper discriminator than its size.** Same family as the tests-that-pass-for-the-wrong-
+reason traps recorded elsewhere here, and a better example than most, because nothing
+failed: the number was close, the story was fluent, and the only thing wrong was a
+constant nobody re-read. Where a solver is in the room, quote its own answer for the exact
+mesh the page renders rather than a hand calculation at all.
 
 **What deliberately did not ride along: transient thermal playback.** Temperature per time
 step is a *colour* animation, and colour has no single-uniform form — it needs the colour
