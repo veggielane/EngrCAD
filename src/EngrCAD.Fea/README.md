@@ -642,8 +642,8 @@ Full tables are on the [docs page](../../docs/examples/fea-thermal.md). The head
 - **Convergence order** (manufactured, quartic): **2.01 / 1.00** linear and **3.05 / 2.02**
   quadratic in L2 / energy, against theory 2/1 and 3/2.
 - **Transient**: lumped capacitance to 3.0e-4 of the initial excess at Bi = 2.1e-3;
-  semi-infinite erfc to 0.118 K on an 80 K step; time order **1.05** and **2.00**; the
-  whole-run first law at 1.3e-14 … 8.5e-13.
+  semi-infinite erfc to 0.184 K on an 80 K step (2.3e-3); time order **1.05** and **2.00**;
+  the whole-run first law at 1.3e-14 … 8.5e-13.
 - **Coupling**: free bar expands to 6.9e-15 with stress at 8.5e-15 of `E·alpha·dT`;
   constrained bar carries `−E·alpha·dT` to 2.0e-15 with the lateral stresses vanishing.
 

@@ -549,7 +549,7 @@ public static class ThermalSolver
         var states = new List<ThermalResults>();
         var times = new List<double>();
 
-        double storedInitial = StoredEnergy(capacity,current);
+        double storedInitial = StoredEnergy(capacity, current);
         double integratedHeat = 0;
         double integratedScale = 0;
         double worstResidual = 0;
@@ -630,7 +630,7 @@ public static class ThermalSolver
         }
         double stepMs = stopwatch.Elapsed.TotalMilliseconds;
 
-        double storedFinal = StoredEnergy(capacity,current);
+        double storedFinal = StoredEnergy(capacity, current);
         // The first law over the WHOLE run: the energy that arrived must be the energy
         // that is now stored. Scale is the accumulated magnitude of what flowed, so a run
         // whose net flow cancels does not report a relative error of 1.

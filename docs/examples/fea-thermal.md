@@ -40,9 +40,10 @@ scene.Add(part);
 
 ![A heat spreader coloured by temperature](images/fea-thermal-spreader.png)
 
-The left face is held at 95 °C, and the top and right faces lose heat to 25 °C air through
-a film. The colours are temperature; the bore is a cold spot because it removes conducting
-material, not because anything is applied to it.
+The left face is held at 95 °C; the top and right faces lose heat to 25 °C air through a
+film; every other face is unmentioned and therefore insulated. The colours are temperature,
+and the gradient runs left to right with the bore forcing it around — nothing is applied to
+the bore itself.
 
 ## Units
 
@@ -397,7 +398,7 @@ order whatsoever.
 | Check | Measured |
 | --- | ---: |
 | Lumped capacitance vs `Tinf + (T0−Tinf)·exp(−t/tau)`, Bi = 2.1e-3 | 3.0e-4 / 5.3e-4 of the initial excess |
-| Semi-infinite solid vs the erfc profile (h = 1 mm, dt = 5 ms) | 0.118 K on an 80 K step, 1.5e-3 |
+| Semi-infinite solid vs the erfc profile (h = 1 mm, dt = 5 ms) | 0.184 K on an 80 K step, 2.3e-3 |
 | Transient run to 20 tau vs the steady solve | 3.4e-9 relative |
 | Time order, backward Euler | **1.05** (theory 1) |
 | Time order, Crank–Nicolson | **2.00** (theory 2) |
