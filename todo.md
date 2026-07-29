@@ -958,48 +958,6 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   animation export already asserts against per-frame rendering. If that holds, the shader
   path and the CPU path provably agree.
 
-- [ ] **CFD — assess honestly before starting, because it is not "FEA with different
-  physics".** Structural and thermal share a shape: symmetric positive-definite operators,
-  one unknown field, `SparseCholesky`/CG, and a verification bar of analytic solutions.
-  Incompressible flow breaks every one of those, and the backlog should say so before
-  anyone budgets it as a third solver.
-  - **The matrix is not symmetric.** Advection makes it non-symmetric and, at any
-    interesting Reynolds number, non-diagonally-dominant. `SparseSymmetricCG` and
-    `SparseCholesky` do not apply; this needs **GMRES or BiCGSTAB with a real
-    preconditioner** (ILU at minimum). That is a genuine addition to `Core.Solvers`, and
-    it is the first thing to build — it is also independently useful.
-  - **It is a saddle-point problem.** Velocity and pressure are coupled and the pressure
-    has no equation of its own. Either a segregated scheme (SIMPLE/PISO) or a monolithic
-    solve with a block preconditioner; and equal-order velocity/pressure elements are
-    **inf-sup unstable** — so either Taylor–Hood (P2 velocity / P1 pressure, which the
-    existing 10-node/4-node tet pair gives almost for free) or PSPG stabilization. The
-    Taylor–Hood route is the one that reuses what exists.
-  - **Advection needs stabilization** (SUPG) once it dominates diffusion, or the solution
-    oscillates rather than being merely inaccurate — a failure mode that looks like a bug
-    forever.
-  - **The mesh requirement is the blocker.** Resolving a boundary layer needs anisotropic
-    prism/hex layers at walls with aspect ratios in the hundreds; the tet mesher
-    deliberately produces isotropic elements and boundary layers are already filed as its
-    top gap. **Do that first** — a CFD solver on isotropic tets can only ever produce
-    plausible-looking pictures.
-  - **Turbulence is a modelling choice, not an algorithm.** Laminar-only is a defensible
-    v1 and covers real engineering (internal flow at low Re, cooling channels); RANS
-    (k-ω SST) is a second project with its own wall-function subtleties.
-  - **Staging that respects the verification culture**: (1) non-symmetric solvers in Core,
-    verified against dense references; (2) **Stokes flow** — linear, no advection, and
-    exactly where inf-sup stability is provable and testable; (3) steady Navier–Stokes,
-    laminar; (4) transient; (5) turbulence, or not.
-  - **Verification bar, non-negotiable and higher than the other solvers'** because CFD
-    fails plausibly: Poiseuille flow against the exact parabolic profile and its friction
-    factor; **lid-driven cavity against Ghia et al.'s tabulated centreline velocities** at
-    Re 100/400/1000; backward-facing step reattachment length against Armaly; and flow past
-    a cylinder against the **Schäfer–Turek** benchmark's drag/lift coefficients. Report
-    every number in the design record, as the structural and thermal solvers did.
-  - **The honest summary**: this is larger than structural and thermal combined, its
-    prerequisite (anisotropic meshing) is itself a substantial project, and a
-    half-verified CFD solver is worse than none because its output is persuasive. Worth
-    doing — but as its own campaign, staged as above, not as a fourth item in a sweep.
-
 ## OpenSCAD feature parity (open items)
 
 What remains from mapping OpenSCAD's feature set against EngrCAD (the covered ground —
@@ -2069,6 +2027,113 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   github.com/veggielane/EngrCAD) and the MIT license choice, then the actual push.
   GitHub Pages needs Settings → Pages → Source: GitHub Actions enabled once, then a
   push deploys the docs site.
+
+## Future work (whole domains, not scheduled)
+
+Each of these is its own product-sized campaign rather than a backlog item, and each sits
+here because the honest assessment says so — not because nobody got to it. They are kept
+in this file, with their reasoning intact, so that a future decision to start one begins
+from what was already understood rather than from scratch.
+
+- [ ] **CFD — assess honestly before starting, because it is not "FEA with different
+  physics".** Structural and thermal share a shape: symmetric positive-definite operators,
+  one unknown field, `SparseCholesky`/CG, and a verification bar of analytic solutions.
+  Incompressible flow breaks every one of those, and the backlog should say so before
+  anyone budgets it as a third solver.
+  - **The matrix is not symmetric.** Advection makes it non-symmetric and, at any
+    interesting Reynolds number, non-diagonally-dominant. `SparseSymmetricCG` and
+    `SparseCholesky` do not apply; this needs **GMRES or BiCGSTAB with a real
+    preconditioner** (ILU at minimum). That is a genuine addition to `Core.Solvers`, and
+    it is the first thing to build — it is also independently useful.
+  - **It is a saddle-point problem.** Velocity and pressure are coupled and the pressure
+    has no equation of its own. Either a segregated scheme (SIMPLE/PISO) or a monolithic
+    solve with a block preconditioner; and equal-order velocity/pressure elements are
+    **inf-sup unstable** — so either Taylor–Hood (P2 velocity / P1 pressure, which the
+    existing 10-node/4-node tet pair gives almost for free) or PSPG stabilization. The
+    Taylor–Hood route is the one that reuses what exists.
+  - **Advection needs stabilization** (SUPG) once it dominates diffusion, or the solution
+    oscillates rather than being merely inaccurate — a failure mode that looks like a bug
+    forever.
+  - **The mesh requirement is the blocker.** Resolving a boundary layer needs anisotropic
+    prism/hex layers at walls with aspect ratios in the hundreds; the tet mesher
+    deliberately produces isotropic elements and boundary layers are already filed as its
+    top gap. **Do that first** — a CFD solver on isotropic tets can only ever produce
+    plausible-looking pictures.
+  - **Turbulence is a modelling choice, not an algorithm.** Laminar-only is a defensible
+    v1 and covers real engineering (internal flow at low Re, cooling channels); RANS
+    (k-ω SST) is a second project with its own wall-function subtleties.
+  - **Staging that respects the verification culture**: (1) non-symmetric solvers in Core,
+    verified against dense references; (2) **Stokes flow** — linear, no advection, and
+    exactly where inf-sup stability is provable and testable; (3) steady Navier–Stokes,
+    laminar; (4) transient; (5) turbulence, or not.
+  - **Verification bar, non-negotiable and higher than the other solvers'** because CFD
+    fails plausibly: Poiseuille flow against the exact parabolic profile and its friction
+    factor; **lid-driven cavity against Ghia et al.'s tabulated centreline velocities** at
+    Re 100/400/1000; backward-facing step reattachment length against Armaly; and flow past
+    a cylinder against the **Schäfer–Turek** benchmark's drag/lift coefficients. Report
+    every number in the design record, as the structural and thermal solvers did.
+  - **The honest summary**: this is larger than structural and thermal combined, its
+    prerequisite (anisotropic meshing) is itself a substantial project, and a
+    half-verified CFD solver is worse than none because its output is persuasive. Worth
+    doing — but as its own campaign, staged as above, not as a fourth item in a sweep.
+
+- [ ] **ECAD — and the sharp line between the part of it this kernel should touch and the
+  part it should not.** "Add ECAD" reads as one thing and is really two, with very
+  different verdicts.
+  - **What this project should NOT build**: schematic capture, netlist management,
+    autorouting, copper DRC, signal integrity, SPICE. Not because they are hard, but
+    because they are a *different product* on a different data model — a connectivity
+    graph, not a geometry kernel — and every one of them is served by mature free tools.
+    Building them badly is worse than not building them, and building them well is a
+    second company.
+  - **What genuinely fits, and is where mechanical engineers actually lose time**: the
+    **MCAD–ECAD boundary**. Does the board fit the enclosure, do the connectors line up
+    with their panel cutouts, do the tall parts clear the lid, and where does the heat go?
+    Every one of those is a question this kernel is already equipped to answer, and none
+    of them needs a netlist.
+  - **The reuse story is unusually strong, which is the argument for doing it at all**:
+    - A **board is a plate with holes and a thickness** — `Sketch` outline, `Drill` for
+      mounting holes and vias, exact in B-Rep today with nothing new.
+    - A **component is a `HardwareComponent`**. That abstraction is already "a body + a
+      seating convention + a **host preparation**", and a panel-mount connector needing a
+      cutout in the enclosure wall is *precisely* that pattern — `ComponentAssembly.Place`
+      cutting the host while recording the occurrence is the behaviour, already built and
+      tested.
+    - **Keep-outs are volumes**, so the implicit engine and the existing boolean both
+      apply directly, and a violated keep-out is an ordinary interference query.
+    - **Enclosure fit** is `Bvh.QueryOverlap` + `MeshIntersection.Crosses` + the mechanism
+      sweep's clash reporting — landed, and it already knows that a *seated* part is not a
+      clash, which is the exact subtlety a board sitting on standoffs would otherwise trip.
+    - **Thermal coupling is the one that would be genuinely novel**: per-component power
+      dissipation as a volumetric `Generation` load into the landed thermal solver,
+      conducting through board and standoffs into an enclosure with convective outer
+      faces. That is a real engineering question, it is verifiable, and almost nothing in
+      the hobby/prosumer tool space answers it.
+    - **Drawings and BOM already exist** — an assembly drawing with the board in place, and
+      a parts list that distinguishes bought-in from manufactured, come for free.
+  - **Interchange, in value order** (this is the actual first deliverable, since without
+    import there is nothing to fit):
+    - **IDF 4.0** first — board outline, component placements, keep-outs; plain text, still
+      spoken by nearly every ECAD tool, and it carries *exactly* the subset above and
+      nothing this kernel would have to discard. The classic MCAD/ECAD exchange for the
+      classic MCAD/ECAD question.
+    - **KiCad `.kicad_pcb`** as the pragmatic modern target: open, documented, S-expression,
+      and its component 3D models are already STEP — which this kernel reads.
+    - **STEP AP214 board assemblies** — already have the writer, the reader and assemblies,
+      so this is mostly a mapping decision.
+    - **IPC-2581** (the modern XML successor) and **ODB++** are richer and heavier; file
+      them behind the first two.
+    - **Gerber/Excellon are FABRICATION formats** and are the wrong layer for this entirely
+      — they describe copper artwork for a photoplotter, not a solid model. Named here so
+      nobody reaches for them thinking "PCB format".
+  - **Verification bar**, in the house style: an IDF round trip that is a fixed point;
+    a board-in-enclosure case with a *known* clash that must be found and a near-miss that
+    must not be; and a thermal case with an analytic answer (a uniformly dissipating board
+    conducting to a fixed-temperature edge) before any pretty picture of a real design.
+  - **Honest sequencing**: IDF import → board + components as an `Assembly` → fit and
+    keep-out checking → panel cutouts via the component-preparation machinery → thermal
+    coupling. Each step is independently useful, which is the test of whether a domain
+    belongs here at all. Stop at any point and what exists still earns its keep.
 
 ## Not worth adopting (deliberate)
 
