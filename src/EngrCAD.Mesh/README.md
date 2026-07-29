@@ -123,6 +123,12 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
   vertices, not sliver fans); degenerate inputs (&lt; 4 points, coincident, collinear,
   coplanar) throw with the reason. Output goes through the manifold-validating `Build`
   as a safety net.
+- **`MeshFitting`** — the bridge from a hull mesh onto Core's exact minimum-volume OBB:
+  `MinVolumeBox(HalfEdgeMesh hull)` and `MinVolumeBoxOf(points)` (hull first, which is
+  what keeps the quadratic search affordable). `Fitting3d.MinVolumeBox` takes plain
+  vertices + index triples on purpose — Core owns no polyhedron type — so this is the
+  `Compute(...).Triangulated().ToIndexed()` flattening written once on the side of the
+  boundary that already knows about meshes, asserted bit-identical to it.
 - **`MeshBoolean`** — union/difference/intersection, one algorithm: the **imprint
   boolean**. Cut both meshes along their exact
   intersection curve (`MeshMeshCut`),
