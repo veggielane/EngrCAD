@@ -202,7 +202,12 @@ Three of those kernels needed an argument rather than a transcription:
   of divergent control flow is a `break` on a vanishing derivative; a stopped lane keeps
   its value because a sticky per-lane flag gates the write to the refined parameter, not
   because iterating on would be harmless. It would not be: a vanishing `g′` makes the step
-  infinite and the clamp would turn that into 0 or 1.
+  infinite and the clamp would turn that into 0 or 1. Its Newton loop also carries an
+  **exact fixed-point exit on the scalar path only** — `next == refined`, never a tolerance
+  — which is provably identity (`g` and `g′` read `refined` alone, so an iteration that
+  reproduces it makes every later one repeat itself) and removes 50.0%/35.1% of Newton
+  iterations on bézier-heavy profiles. The vector path deliberately skips it: a block exits
+  only when its slowest lane does, which measured 0.99–1.03×, i.e. nothing.
 - **The elliptical-arc kernel is deliberately only HALF lane-wise**, and the measurement
   says the vectorized half was never the point. An ellipse's distance is a quartic root, so
   `EllipseSeg.Distance` delegates to `EngrCAD.BRep`'s shared `Curve2d.NearestPoint` — a

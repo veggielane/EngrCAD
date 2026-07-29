@@ -743,7 +743,20 @@ public sealed class SketchRegion : IPlanarRegion
             double gPrime = (d1x * d1x + d1y * d1y) + (offsetX * d2x + offsetY * d2y);
             if (Math.Abs(gPrime) < 1e-18)
                 break;
-            refined = Math.Clamp(refined - g / gPrime, 0, 1);
+            double next = Math.Clamp(refined - g / gPrime, 0, 1);
+            // An EXACT fixed point, so this early exit changes nothing: g and g′ are
+            // functions of `refined` alone, so an iteration reproducing it bit for bit makes
+            // every later one recompute the same value and take the same branch. Deliberately
+            // `==` and NOT a tolerance — a tolerant stop would move results and would need
+            // the golden hashes re-derived, which is the trade this deletes rather than
+            // makes. Measured: 50.0% of Newton iterations on an all-bézier outline and 35.1%
+            // on an engraving-shaped one are redundant this way (exact counts). End to end
+            // that is 1.09× on the former and 1.01–1.03× elsewhere — small, because Newton is
+            // under half of a kernel that is itself behind the bounding-box reject.
+            // The VECTOR kernel deliberately does NOT take this exit; see CubicMinimum.
+            if (next == refined)
+                break;
+            refined = next;
         }
 
         double ut = 1 - refined, tt = refined;
@@ -763,6 +776,18 @@ public sealed class SketchRegion : IPlanarRegion
     /// therefore keeps the value it stopped at, verbatim — the correctness does not rest on a
     /// converged Newton step being a fixed point (it is not: a vanishing g′ makes the step
     /// infinite, which the clamp would turn into 0 or 1).
+    /// <para>
+    /// <b>It deliberately does NOT take <see cref="CubicDistance"/>'s exact fixed-point
+    /// exit, and the asymmetry was measured rather than assumed.</b> The scalar loop exits
+    /// as soon as ITS parameter stops moving; a block can only exit when the SLOWEST of its
+    /// lanes does, and around 30% of solves never reach an exact fixed point within the
+    /// eight steps, so the maximum over four lanes is ~7.5 of 8 — about a 6% saving, to be
+    /// bought with three extra vector operations and a branch on every iteration. Measured
+    /// end to end at <b>0.99–1.03×</b>: nothing, and a slight loss in one case. Same shape
+    /// as the arc kernel's certainty-band finding — block granularity is what destroys a
+    /// per-lane saving, so an early exit that pays in scalar code usually does not
+    /// vectorize.
+    /// </para>
     /// </summary>
     private void CubicMinimum(ReadOnlySpan<double> x, ReadOnlySpan<double> y, Span<double> best, int s)
     {

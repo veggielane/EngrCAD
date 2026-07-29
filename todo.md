@@ -41,13 +41,34 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Implicit engine (EngrCAD.Implicit)
 
-- [ ] **The bézier kernel's Newton stage is fixed at 8 iterations for every lane.** The
-  scalar code was too, so this is not a regression — but a lane-wise form makes the waste
-  visible: the sticky "active" mask already knows when every lane has stopped moving, and
-  the loop only exits early when every lane's derivative has *vanished*, not when every
-  lane has *converged*. A convergence exit would change results (the scalar path does the
-  full eight), so it needs the golden hashes re-derived deliberately, with a measurement
-  showing it is worth the churn — the reject in front already skips most cubics.
+- ~~**The bézier kernel's Newton stage is fixed at 8 iterations for every lane.**~~
+  ✅/❌ **half landed, half measured and declined** — and the entry's premise was wrong in a
+  useful way. It assumed "a convergence exit would change results ... so it needs the golden
+  hashes re-derived deliberately". An **exact fixed-point exit does not**: g and g′ are
+  functions of `refined` alone, so an iteration reproducing it bit for bit makes every later
+  one recompute the same value and take the same branch. Spelled `next == refined` rather
+  than as a tolerance (a tolerant stop *would* move results), it is provably identity, so
+  the golden churn the item was weighing does not exist. Every golden hash is unchanged, and
+  the batch-vs-scalar bit-identity test now independently verifies the argument, the two
+  paths running different iteration counts and still agreeing to the bit.
+  - **Landed on the scalar path**, where each solve exits as soon as its own parameter stops
+    moving: exact counts say **50.0%** of Newton iterations on an all-bézier outline and
+    **35.1%** on an engraving-shaped one are redundant. End to end that is only 1.09× and
+    1.01–1.03×, because Newton is under half of a kernel that is itself behind the
+    bounding-box reject — so the item's closing hint was right about the reject, just not
+    about the correctness cost.
+  - **Declined on the vector path.** A block exits only when its SLOWEST lane does, and ~30%
+    of solves never reach an exact fixed point within the eight steps, so the max over four
+    lanes is ~7.5 of 8 — about 6%, bought with three extra vector ops and a branch per
+    iteration. Measured **0.99–1.03×**: nothing, one case a slight loss.
+  - **The general lesson, which Item "arc certainty band" reached independently**: block
+    granularity destroys per-lane savings, so an early exit that pays in scalar code usually
+    does not vectorize. Worth reaching for before writing the next masked early-out.
+  - Measurement note worth keeping: the first A/B used a MEAN over two passes and the same
+    reject-dominated fixture measured **1.59× then 0.77×** on identical code — a 2× swing
+    *within one sitting*. A minimum over four passes is the right estimator for a
+    deterministic workload that scheduling noise can only slow down, and it collapsed that
+    column to a stable 1.01×.
 - ~~**The lane-wise arc kernel gives a whole block back to the scalar path when any one
   lane is inside the wedge certainty band.**~~ ❌ **measured and declined** —
   `SketchRegionBenchmark.ArcCertaintyBandCost` holds the measurement so nobody redoes it.
