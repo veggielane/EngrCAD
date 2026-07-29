@@ -344,6 +344,13 @@ public static class Materials
     public static Material StainlessSteel304 { get; } =
         new("Stainless steel 304", 193_000, 0.29, 8.00e-9, 16.2, 5.00e8, 17.3e-6);
 
+    /// <summary>Stainless steel 316: E = 193 GPa, nu = 0.29, rho = 8000 kg/m³,
+    /// k = 16.3 W/(m·K), c = 500 J/(kg·K), alpha = 16.0e-6 /K. The molybdenum-bearing
+    /// grade (X5CrNiMo17-12-2 / 1.4401), and the alloy ISO 3506 calls <b>A4</b> in a
+    /// fastener catalogue.</summary>
+    public static Material StainlessSteel316 { get; } =
+        new("Stainless steel 316", 193_000, 0.29, 8.00e-9, 16.3, 5.00e8, 16.0e-6);
+
     /// <summary>Aluminium 6061-T6: E = 68.9 GPa, nu = 0.33, rho = 2700 kg/m³,
     /// k = 167 W/(m·K), c = 896 J/(kg·K), alpha = 23.6e-6 /K.</summary>
     public static Material Aluminium6061 { get; } =
@@ -391,8 +398,8 @@ public static class Materials
     /// polymers.</summary>
     public static IReadOnlyList<Material> All { get; } =
     [
-        Steel, StainlessSteel304, Aluminium6061, Aluminium7075, Titanium6Al4V,
-        CastIron, Brass, Abs, Nylon, Pla,
+        Steel, StainlessSteel304, StainlessSteel316, Aluminium6061, Aluminium7075,
+        Titanium6Al4V, CastIron, Brass, Abs, Nylon, Pla,
     ];
 
     /// <summary>Standard gravity pointing along -Z, in mm/s² (the mm/N/MPa/tonne system).

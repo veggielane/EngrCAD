@@ -535,9 +535,13 @@ chain's parity is consistent across every joint.
   with no conductivity, `ModalSolver` one with no density — because a material with just a
   name and a density is a perfectly good *document* material and is what a bill of
   materials is mostly made of. `Materials` is the nominal, verify-against-datasheet
-  catalogue (steel, stainless, two aluminiums, titanium, cast iron, brass, ABS, PLA,
-  nylon); no entry carries a colour, deliberately, since appearance is a finish rather
-  than a property of the stuff — so assigning one to a part moves no pixels.
+  catalogue (steel, stainless 304 and 316, two aluminiums, titanium, cast iron, brass,
+  ABS, PLA, nylon); no entry carries a colour, deliberately, since appearance is a finish
+  rather than a property of the stuff — so assigning one to a part moves no pixels.
+  `EngrCAD.Modeling`'s `FastenerMaterials` extends it for the hardware catalogue and
+  *delegates* wherever this one already states the alloy (its A2 and A4 rows ARE 304 and
+  316, renamed), because two spellings of one density is exactly the discrepancy this
+  consolidation removed.
 - **`PartColor`** — RGB in [0, 1], UI-framework free. Here rather than in the document
   model only because `Material` carries one; the *policy* (the palette and the
   once-only assignment rule) stays in `EngrCAD.Modeling`, which is where the invariant is.
