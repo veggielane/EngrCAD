@@ -175,7 +175,23 @@ internal static class FeaAssembly
 
     /// <summary><c>a + coefficient·b</c>, both symmetric-upper with the same shape rules.</summary>
     public static PackedSparseMatrix Combine(
-        PackedSparseMatrix a, PackedSparseMatrix b, double coefficient)
+        PackedSparseMatrix a, PackedSparseMatrix b, double coefficient) =>
+        // Delegating rather than restating, and bit-identically: multiplying a finite double
+        // by exactly 1.0 returns it unchanged, so the entries added here are the same bits in
+        // the same order as the two-loop form always produced.
+        Combine(a, 1.0, b, coefficient);
+
+    /// <summary>
+    /// <c>aCoefficient·a + bCoefficient·b</c>, both symmetric-upper with the same shape rules.
+    ///
+    /// <para>The two-coefficient form exists for the transient solver's effective stiffness,
+    /// which is <c>(1+alpha)(1 + a1·beta_R)·K + (a0 + (1+alpha)·a1·alpha_R)·M</c> — neither
+    /// matrix enters at unit weight, so scaling one afterwards would need a third pass over
+    /// the entries to buy nothing.</para>
+    /// </summary>
+    public static PackedSparseMatrix Combine(
+        PackedSparseMatrix a, double aCoefficient,
+        PackedSparseMatrix b, double bCoefficient)
     {
         var builder = new SparseMatrixBuilder(a.Rows, a.Columns);
         for (int row = 0; row < a.Rows; row++)
@@ -183,16 +199,125 @@ internal static class FeaAssembly
             var columns = a.RowColumns(row);
             var values = a.RowValues(row);
             for (int e = 0; e < columns.Length; e++)
-                builder.Add(row, columns[e], values[e]);
+                builder.Add(row, columns[e], aCoefficient * values[e]);
         }
         for (int row = 0; row < b.Rows; row++)
         {
             var columns = b.RowColumns(row);
             var values = b.RowValues(row);
             for (int e = 0; e < columns.Length; e++)
-                builder.Add(row, columns[e], coefficient * values[e]);
+                builder.Add(row, columns[e], bCoefficient * values[e]);
         }
         return builder.ToSymmetricUpper();
+    }
+
+    /// <summary>
+    /// The FULL mass matrix over every degree of freedom, and the body's total mass.
+    ///
+    /// <para><b>The scalar integral is asked, not restated.</b>
+    /// <see cref="TetElement.ConsistentMass"/> returns the n-by-n matrix
+    /// <c>integral(rho·N_i·N_j dV)</c>; an isotropic inertia couples no two axes, so the 3x3
+    /// block for a node pair is that scalar times the identity and the assembly loop simply
+    /// writes it on the three diagonal positions.</para>
+    ///
+    /// <para><b>The total mass comes from the matrix's own entries.</b> Summing every entry
+    /// of the consistent element matrix gives exactly <c>rho·V</c>, because the shape
+    /// functions are a partition of unity — so the reported mass is the assembly's own
+    /// arithmetic rather than a second computation from densities and volumes that could
+    /// disagree in the last bits. It is also what the lumping schemes are normalised
+    /// against, which is what makes them mass-preserving by construction.</para>
+    ///
+    /// <para><b>Shared for the reason <see cref="Stiffness"/> is shared</b>: the modal solver
+    /// and the transient solver must build the SAME M, or a frequency measured from a time
+    /// history and one returned by an eigen-solve are answers about two different
+    /// discretizations — which is precisely the cross-check the two are asked to pass.</para>
+    /// </summary>
+    public static (PackedSparseMatrix Matrix, double TotalMass) Mass(
+        StructuralModel model, in TetQuadrature rule,
+        MassLumping lumping = MassLumping.Consistent)
+    {
+        var mesh = model.Mesh;
+        int perElement = mesh.NodesPerElement;
+        var builder = new SparseMatrixBuilder(3 * mesh.NodeCount, 3 * mesh.NodeCount);
+        var me = new double[perElement * perElement];
+        var positions = new Vector3d[perElement];
+        var diagonal = new double[perElement];
+        double totalMass = 0;
+
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            var nodes = mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+                positions[i] = mesh.Position(nodes[i]);
+            TetElement.ConsistentMass(
+                mesh.Order, positions, model.MaterialOf(e).Density, rule, me);
+
+            double elementMass = 0;
+            for (int i = 0; i < perElement * perElement; i++)
+                elementMass += me[i];
+            totalMass += elementMass;
+
+            if (lumping == MassLumping.Consistent)
+            {
+                for (int i = 0; i < perElement; i++)
+                {
+                    int row = i * perElement;
+                    for (int j = 0; j < perElement; j++)
+                    {
+                        double v = me[row + j];
+                        if (v == 0)
+                            continue;
+                        for (int a = 0; a < 3; a++)
+                        {
+                            int ri = 3 * nodes[i] + a, rj = 3 * nodes[j] + a;
+                            if (ri <= rj)
+                                builder.Add(ri, rj, v);
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if (lumping == MassLumping.RowSum)
+            {
+                for (int i = 0; i < perElement; i++)
+                {
+                    double sum = 0;
+                    int row = i * perElement;
+                    for (int j = 0; j < perElement; j++)
+                        sum += me[row + j];
+                    diagonal[i] = sum;
+                }
+            }
+            else
+            {
+                // HRZ: the consistent matrix's own diagonal, scaled to preserve the mass.
+                double trace = 0;
+                for (int i = 0; i < perElement; i++)
+                {
+                    diagonal[i] = me[i * perElement + i];
+                    trace += diagonal[i];
+                }
+                // Exact-zero division guard: a weightless element (already refused at the
+                // model level) or a degenerate one contributes nothing to scale.
+                double scale = trace > 0 ? elementMass / trace : 0;
+                for (int i = 0; i < perElement; i++)
+                    diagonal[i] *= scale;
+            }
+
+            for (int i = 0; i < perElement; i++)
+            {
+                if (diagonal[i] == 0)
+                    continue;
+                for (int a = 0; a < 3; a++)
+                {
+                    int r = 3 * nodes[i] + a;
+                    builder.Add(r, r, diagonal[i]);
+                }
+            }
+        }
+
+        return (builder.ToSymmetricUpper(), totalMass);
     }
 
     /// <summary>The unit rigid translation along one axis, over the FREE degrees of freedom

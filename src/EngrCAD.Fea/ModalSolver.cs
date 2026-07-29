@@ -356,7 +356,7 @@ public static class ModalSolver
 
         var stopwatch = Stopwatch.StartNew();
         var fullStiffness = FeaAssembly.Stiffness(model, stiffnessRule);
-        var (fullMass, totalMass) = AssembleMass(model, massRule, options.Lumping);
+        var (fullMass, totalMass) = FeaAssembly.Mass(model, massRule, options.Lumping);
         double prestressScale = 0;
         if (options.Prestress is { } prestress)
         {
@@ -464,31 +464,14 @@ public static class ModalSolver
     /// eigenproblem at all — <c>M</c> would be the zero matrix and every "frequency"
     /// infinite — and the mistake is easy to make, because a static solve of the same model
     /// works perfectly (density only enters a static solve through gravity).
+    /// <para>The listing and the unit warning are <see cref="FeaGuards.RequireDensity"/>'s,
+    /// shared with the transient solver: only the consequence differs between the two.</para>
     /// </summary>
-    private static void RequireMass(StructuralModel model)
-    {
-        var missing = new List<string>();
-        for (int e = 0; e < model.Mesh.ElementCount; e++)
-        {
-            var material = model.MaterialOf(e);
-            // Exact-zero semantic test: Material's constructor has already refused a
-            // negative density, and zero is documented there as "weightless", which is a
-            // legal static material and an impossible dynamic one.
-            if (material.Density == 0 && !missing.Contains(material.Name))
-                missing.Add(material.Name);
-        }
-        if (missing.Count == 0)
-            return;
-
-        throw new FeaException(
-            $"Modal analysis needs mass, and {(missing.Count == 1 ? "the material" : "these materials")} "
-            + $"in this model {(missing.Count == 1 ? "states" : "state")} a density of zero: "
-            + $"{string.Join(", ", missing)}. A zero density is legal for a STATIC solve (it "
-            + "simply means gravity does nothing), which is why this surfaces only here. Build "
-            + "the material with its density, or call Material.WithDensity(rho) - remembering "
-            + "that the mm/N/MPa/tonne system wants tonne/mm3, so steel is 7.85e-9 rather "
-            + "than 7850.");
-    }
+    private static void RequireMass(StructuralModel model) =>
+        FeaGuards.RequireDensity(
+            model,
+            "Modal analysis needs mass: without it the eigenproblem K phi = lambda M phi has "
+            + "a zero right-hand side and every frequency is infinite.");
 
     /// <summary>
     /// Refuses a non-zero prescribed displacement, by name. A modal analysis linearises
@@ -545,111 +528,6 @@ public static class ModalSolver
             + "geometric stiffness element by element, so the two must share a node numbering "
             + "and not merely a shape: build one AnalysisMesh, solve the preload case on it, "
             + "and pass those results. (The supports may differ - only the mesh may not.)");
-    }
-
-    // ---- assembly --------------------------------------------------------------------
-
-    /// <summary>
-    /// The FULL mass matrix over every degree of freedom, and the body's total mass.
-    ///
-    /// <para><b>The scalar integral is asked, not restated.</b>
-    /// <see cref="TetElement.ConsistentMass"/> returns the n-by-n matrix
-    /// <c>integral(rho·N_i·N_j dV)</c>; an isotropic inertia couples no two axes, so the 3x3
-    /// block for a node pair is that scalar times the identity and the assembly loop simply
-    /// writes it on the three diagonal positions.</para>
-    ///
-    /// <para><b>The total mass comes from the matrix's own entries.</b> Summing every entry
-    /// of the consistent element matrix gives exactly <c>rho·V</c>, because the shape
-    /// functions are a partition of unity — so the reported mass is the assembly's own
-    /// arithmetic rather than a second computation from densities and volumes that could
-    /// disagree in the last bits. It is also what the lumping schemes are normalised
-    /// against, which is what makes them mass-preserving by construction.</para>
-    /// </summary>
-    private static (PackedSparseMatrix Matrix, double TotalMass) AssembleMass(
-        StructuralModel model, in TetQuadrature rule, MassLumping lumping)
-    {
-        var mesh = model.Mesh;
-        int perElement = mesh.NodesPerElement;
-        var builder = new SparseMatrixBuilder(3 * mesh.NodeCount, 3 * mesh.NodeCount);
-        var me = new double[perElement * perElement];
-        var positions = new Vector3d[perElement];
-        var diagonal = new double[perElement];
-        double totalMass = 0;
-
-        for (int e = 0; e < mesh.ElementCount; e++)
-        {
-            var nodes = mesh.Element(e);
-            for (int i = 0; i < perElement; i++)
-                positions[i] = mesh.Position(nodes[i]);
-            TetElement.ConsistentMass(
-                mesh.Order, positions, model.MaterialOf(e).Density, rule, me);
-
-            double elementMass = 0;
-            for (int i = 0; i < perElement * perElement; i++)
-                elementMass += me[i];
-            totalMass += elementMass;
-
-            if (lumping == MassLumping.Consistent)
-            {
-                for (int i = 0; i < perElement; i++)
-                {
-                    int row = i * perElement;
-                    for (int j = 0; j < perElement; j++)
-                    {
-                        double v = me[row + j];
-                        if (v == 0)
-                            continue;
-                        for (int a = 0; a < 3; a++)
-                        {
-                            int ri = 3 * nodes[i] + a, rj = 3 * nodes[j] + a;
-                            if (ri <= rj)
-                                builder.Add(ri, rj, v);
-                        }
-                    }
-                }
-                continue;
-            }
-
-            if (lumping == MassLumping.RowSum)
-            {
-                for (int i = 0; i < perElement; i++)
-                {
-                    double sum = 0;
-                    int row = i * perElement;
-                    for (int j = 0; j < perElement; j++)
-                        sum += me[row + j];
-                    diagonal[i] = sum;
-                }
-            }
-            else
-            {
-                // HRZ: the consistent matrix's own diagonal, scaled to preserve the mass.
-                double trace = 0;
-                for (int i = 0; i < perElement; i++)
-                {
-                    diagonal[i] = me[i * perElement + i];
-                    trace += diagonal[i];
-                }
-                // Exact-zero division guard: a weightless element (already refused at the
-                // model level) or a degenerate one contributes nothing to scale.
-                double scale = trace > 0 ? elementMass / trace : 0;
-                for (int i = 0; i < perElement; i++)
-                    diagonal[i] *= scale;
-            }
-
-            for (int i = 0; i < perElement; i++)
-            {
-                if (diagonal[i] == 0)
-                    continue;
-                for (int a = 0; a < 3; a++)
-                {
-                    int r = 3 * nodes[i] + a;
-                    builder.Add(r, r, diagonal[i]);
-                }
-            }
-        }
-
-        return (builder.ToSymmetricUpper(), totalMass);
     }
 
     // ---- rigid-body modes and the shift ------------------------------------------------
