@@ -96,12 +96,20 @@ public class BrepShellShapeTests
     }
 
     [Fact]
-    public void Shell_CurvedSolid_IsRefusedByName()
+    public void Shell_CurvedSolid_IsNowExact()
     {
-        var shelled = Shape.Cylinder(5, H).Shell(T, openings: null);
-        var ex = Assert.Throws<NotSupportedException>(() => shelled.ToBrep());
-        Assert.Contains("planar", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // Curved-face shelling landed with the corner machinery: a cylinder hollows to a
+        // sealed-void tube with the analytic wall volume, where this used to refuse.
+        const double radius = 5;
+        var shelled = Shape.Cylinder(radius, H).Shell(T, openings: null);
+        var mesh = BRepTessellator.Tessellate(shelled.ToBrep(), 192, 48);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+        double exact = Math.PI * radius * radius * H
+                     - Math.PI * (radius - T) * (radius - T) * (H - 2 * T);
+        Assert.Equal(exact, mesh.Volume(), 0.05 * exact / 100);
     }
+
 
     [Fact]
     public void Shell_OpeningSelectorMatchingNothing_Throws()

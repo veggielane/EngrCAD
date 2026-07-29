@@ -367,10 +367,11 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   equal-radius perpendicular cylinders (tangent bicylinder: overlapping v-ranges
   rejected; the tracer's degenerate output there is untested); coincident or tangent
   CURVED faces (a shaft in a bore of its own diameter) — refused BY NAME for coaxial
-  equal-radius cylinders, and the honest blocker is that the shared region's rim needs
-  the two trims re-intersected on a curved carrier, which is the SAME missing machinery
-  as curved shelling corners and general trihedral fillet patches, so the three should be
-  solved together.
+  equal-radius cylinders. The shared blocker this used to name is now half-gone:
+  `SurfaceCorner` re-intersects curved carriers exactly wherever an analytic pair exists,
+  and curved shelling and draft ride it. What is left here is the OTHER half — clipping
+  the two trims against each other on a curved carrier, a 2D arrangement in the shared
+  surface's parameter space rather than a corner solve.
 - [ ] **Trimmed cylindrical tessellation with WRAPPING loops** — the blocker behind the
   one wrap-split case still refused: a cross-drill piercing a plain `CylinderSurface`
   band makes a wrapping cut whose v varies, and its sub-bands keep the whole surface, so
@@ -751,8 +752,15 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     ✅ landed (`FilletAllEdges` now rounds tetrahedra and drafted blocks: a trimmed
     spherical-triangle patch whose two pole-tangent arcs are exact meridians, plus a
     dedicated `TriangulatePoleGrid` trimmed tier excluded from midpoint refinement).
-    Remaining: curved-face shelling corners and variable-radius fillet corners still
-    need the non-conic surface–surface corner curve.
+    The shared corner machinery ✅ landed too (`SurfaceOffset`/`SurfaceCorner`/
+    `ImplicitSurface`/`CarrierBody`), unblocking curved shelling, curved draft and
+    variable-radius fillet BANDS. Remaining: the non-conic corner CURVE itself — two
+    variable-radius bands meet in a quartic, so a sharp corner under a varying law is
+    still refused. `SurfaceCorner.CornerPolicy.AllowTraced` returns one with its
+    deviation reported, but nothing in the kernel opts in (design.md §5 records why);
+    turning that into a *usable* corner needs the traced curve re-sampled at
+    tessellation time against its two exact carriers, which is the same fix the baked
+    tracer-polyline residual below wants.
   - [ ] **Partial-run follow-ups** — SETBACK terminations ✅ landed (`Filleting.
     FilletEdges/ChamferEdges` resolve contiguous partial runs; the termination is the
     planar band cross-section perpendicular to the terminal edge, the industry
@@ -761,12 +769,20 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     (the cylindrical neighbour needs periodic re-trimming), mid-EDGE stops (terminate
     at a parameter, not a vertex — needs an edge split first), and variable-setback
     laws on runs.
-  - [ ] **Variable-radius fillets** (variable-SETBACK chamfers ✅ landed — `ChamferRim`/
-    `ChamferRimAtAngle`/`ChamferEdges` law overloads + `Shape.Chamfer(setbackAt, faces)`
-    + `VariableChamferRimFeature`; strips stay exact planes because a constant top:side
-    ratio keeps the four corners coplanar). The radius case is blocked on the *corner*,
-    not the band, and needs the same non-conic-corner-curve machinery as curved-face
-    shelling.
+  - [ ] **Variable-radius fillet follow-ups** — variable-RADIUS fillets ✅ landed
+    (`FilletRim`/`FilletEdges` law overloads + `Shape.Fillet(radiusAt, faces)`/
+    `FilletEdges(radiusAt, edges)` + `VariableFilletRimFeature`, beside the
+    variable-SETBACK chamfers): along a straight run the band is the ruled skin between
+    its two end quarter arcs, whose intermediate sections are TRUE circles because equal
+    weights make lerping points identical to lerping control points, and its top and
+    bottom boundaries are `LoftRailCurve` rails on the band so the grid and the edge
+    polylines sample the same points. Remaining, refused by name: a varying radius
+    across a SHARP corner (two variable bands are cones that do not circumscribe a
+    common sphere, so they meet in a quartic — a constant law across such a corner still
+    works, so the refusal is about the law), a varying law along an ARC or on a full
+    circular rim (a spiral), and variable laws on partial RUNS (the `OpenRun` path still
+    takes a scalar; the terminations themselves would be exact, since the band's end
+    cross-section is a planar quarter arc of whatever radius the law gives).
 - [ ] **`StepReader`: trim closed NON-circular generators** — circles ✅ landed (meridian
   arcs trim a closed circular revolve generator; congruent translated end arcs trim a
   closed circular extrusion generator; both closed form, so `FilletAllEdges` output now
@@ -792,18 +808,46 @@ export+import, volume/area, tessellation — see CLAUDE.md):
     re-sample a baked intersection curve at tessellation time against its two exact
     carriers, which needs the surface pair carried on the curve.
 - [ ] **Draft follow-ups** (`Draft.Apply` landed with per-face angles in one call, wired
-  as `Shape.Draft`): curved faces; caps with holes; a non-planar neutral surface.
+  as `Shape.Draft`; CURVED faces ✅ landed too — a face of revolution about the pull axis
+  tapers by rotating its generator in its own half-plane, so a drafted cylinder is
+  exactly a cone and a drafted torus band another torus band): curved faces on any OTHER
+  axis (their drafted carrier is not a surface of any family this kernel builds); caps
+  with holes; a non-planar neutral surface.
 - [ ] **Shelling follow-ups** (`Shelling.Offset/Shell` landed with per-face wall
-  thickness, wired as `Shape.Shell(t, openings)`): curved faces (a cylinder's or
-  revolve's offset surface is analytic — `OffsetCurve3d` gives the generator — but their
-  **corners** need surface–surface re-intersection, which is the *same* blocker as
-  general trihedral fillet corner patches, so the two should be solved together);
-  >3-valent vertices (over-determined corner, same machinery); adjacent openings (their
-  shared rim has zero width — the two openings must MERGE into one rim loop, a topology
-  pass, not new geometry); global self-intersection detection (deliberately unchecked
-  today, as in OCCT and `OffsetCurve3d`). The `Shape` route exposes one thickness;
-  per-face thickness and per-face draft angles stay kernel-level escape hatches
-  (`Shape.From(...)`) until a selector-to-value vocabulary exists at the Shape level.
+  thickness, wired as `Shape.Shell(t, openings)`; CURVED faces ✅ landed on the shared
+  `CarrierBody` rebuild — a cylinder shells to a cup, a cone frustum to a conical cup, a
+  sphere offsets to a sphere, a pipe elbow opened at both ends to a genus-1 tube):
+  - [ ] **Carriers with no same-family offset** — swept and NURBS surfaces. A sweep's
+    parallel surface is not a sweep, so this needs either a fitted offset (with the
+    deviation reported, the `AllowTraced` shape of decision) or a new surface type.
+  - [ ] **Non-circular curved edges** — the rim rebuild constructs a concentric circle
+    and verifies it; a rim that is some other curve falls through to
+    `SurfaceCorner.TrySolveCurve`'s exact tier and is refused when that has no analytic
+    pair.
+  - [ ] **A SEALED shell of a partial revolve** — moving the cap planes cuts the offset
+    torus in a quartic rather than a circle, so the concentric hypothesis is genuinely
+    false and the refusal is correct. Making it work needs the tier-(c) corner curve.
+  - [ ] **Non-concurrent >3-valent vertices** — CONCURRENT ones ✅ landed: four or more
+    faces at a vertex is over-determined in general, but a square pyramid's apex has four
+    planes that meet in a point by symmetry and offsetting each keeps that true, so the
+    case now goes through the least-squares corner solve and is CHECKED rather than
+    refused wholesale. What is left is the genuinely non-concurrent corner, where the
+    offset opens the vertex into a small FACE — corner-patch construction (the
+    `FilletAllEdges` machinery), not a better solve.
+  - [ ] **Adjacent openings** — their shared rim has zero width, so the two openings must
+    MERGE into one rim loop: a topology pass, not new geometry. Attempted and deliberately
+    NOT built during the curved-corner work, because the shape of the fix is not what the
+    note above assumed: the two openings lie on different PLANES, so they cannot become one
+    face. What is actually needed is for each opening's rim annulus to lose its zero-width
+    stretch along the shared edge — the outer edge there IS the inner edge, since neither
+    plane moved — which means re-tracing both rim loops rather than merging them. That is a
+    loop-surgery pass of the same kind `FaceSplitter` does, and doing it half-way would
+    leave a solid that validates and is wrong.
+  - [ ] **Global self-intersection detection** — deliberately unchecked, as in OCCT and
+    `OffsetCurve3d`.
+  The `Shape` route exposes one thickness; per-face thickness and per-face draft angles
+  stay kernel-level escape hatches (`Shape.From(...)`) until a selector-to-value
+  vocabulary exists at the Shape level.
 - [ ] Feature operations (`BRepFeat`): pocket, boss, rib, slot as first-class features
   with faces-to-remove semantics
 - [ ] **Shape-healing follow-ups** (curved-edge RE-TRIMMING — FixGaps' parametric mode,

@@ -47,8 +47,10 @@ public class TessellationCorpusQualityTests
     [
         "drilled plate", "cross-drilled housing", "spherical cavity", "drilled sphere",
         "threaded rod", "threaded hole",
-        "loft", "shelled tray", "drafted boss",
+        "loft", "shelled tray", "shelled cup", "shelled cone", "shelled elbow",
+        "drafted boss", "drafted cylinder",
         "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
+        "variable fillet",
         "rounded box", "rounded tetrahedron", "partial fillet run",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
         "sketch pocket", "engraved plate", "wedge",
@@ -97,6 +99,39 @@ public class TessellationCorpusQualityTests
                 var top = block.PlanarFacesWithNormal(Vector3d.UnitZ).Single();
                 return Shelling.Shell(block, 2, f => ReferenceEquals(f, top));
             }
+            case "shelled cup":
+            {
+                // Curved-face shelling: a cylinder hollowed through its top. The cavity wall
+                // is a REVERSED cylinder band, which is the tessellator's flip path over a
+                // loop-driven carrier.
+                var cylinder = SolidFactory.MakeCylinder(8, 20);
+                var top = cylinder.PlanarFacesWithNormal(Vector3d.UnitZ).Single();
+                return Shelling.Shell(cylinder, 1.5, f => ReferenceEquals(f, top));
+            }
+            case "shelled cone":
+            {
+                // The case that forced the offset generator to be RE-TRIMMED: an inward offset
+                // moves a cone's rims axially as well as radially, so the inner band's
+                // domain-driven grid has to be shortened to its new loops or the trimmed
+                // tessellator refuses the face outright.
+                var cone = SolidFactory.MakeCone(12, 5, 16);
+                var cap = cone.PlanarFacesWithNormal(Vector3d.UnitZ).Single();
+                return Shelling.Shell(cone, 1.5, f => ReferenceEquals(f, cap));
+            }
+            case "shelled elbow":
+            {
+                // A quarter-turn pipe: two TANGENT torus bands whose offsets are halves of one
+                // concentric torus, opened at both ends into a genus-1 tube.
+                var tubeCentre = new Vector3d(20, 0, 0);
+                var outerArc = NurbsCurve.Arc(
+                    tubeCentre, Vector3d.UnitX, Vector3d.UnitZ, 5, -Math.PI / 2, Math.PI / 2);
+                var innerArc = NurbsCurve.Arc(
+                    tubeCentre, Vector3d.UnitX, Vector3d.UnitZ, 5, Math.PI / 2, 3 * Math.PI / 2);
+                var elbow = SolidFactory.Revolve(
+                    new Profile([outerArc, innerArc]), Vector3d.Zero, Vector3d.UnitZ, Math.PI / 2);
+                var caps = elbow.Faces.Where(f => f.Surface is PlaneSurface).ToList();
+                return Shelling.Shell(elbow, 1, caps.Contains);
+            }
             case "drafted boss":
             {
                 var block = SolidFactory.MakeBox(new Aabb((0, 0, 0), (20, 20, 10)));
@@ -107,6 +142,15 @@ public class TessellationCorpusQualityTests
                     .ToList();
                 return Draft.Apply(block, Vector3d.Zero, Vector3d.UnitZ, 5 * Math.PI / 180,
                     f => sides.Any(g => ReferenceEquals(f, g)));
+            }
+            case "drafted cylinder":
+            {
+                // Curved-face draft: a cylinder's band tapers to an exact cone, which is a
+                // RevolvedSurface whose generator was re-trimmed to the drafted rims.
+                var cylinder = SolidFactory.MakeCylinder(10, 20);
+                var band = cylinder.Faces.Single(f => !f.IsPlanar(out _, out _));
+                return Draft.Apply(cylinder, Vector3d.Zero, Vector3d.UnitZ, 8 * Math.PI / 180,
+                    f => ReferenceEquals(f, band));
             }
             case "filleted box":
                 return FilletedPrism([new(0, 0), new(30, 0), new(30, 20), new(0, 20)], 6, 2);
@@ -121,6 +165,13 @@ public class TessellationCorpusQualityTests
             case "chamfered box":
                 return Shape.Box(30, 20, 6)
                     .Chamfer(1.5, s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
+                    .ToBrep();
+            case "variable fillet":
+                // The same slot rim under a RADIUS law: ruled-skin bands on the straights
+                // (whose cross-sections are true circles of the interpolated radius) and
+                // exact torus bands on the end arcs, whose two corners carry equal values.
+                return Shape.Extrude(Sketch.Slot(24, 8), 5)
+                    .Fillet(p => 0.8 + 0.03 * (p.X + 12), s => s.PlanarFacesWithNormal(Vector3d.UnitZ))
                     .ToBrep();
             case "variable chamfer":
                 // A slot rim under a setback law in x: tilted planar strips on the

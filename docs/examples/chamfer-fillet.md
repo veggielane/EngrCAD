@@ -155,8 +155,45 @@ Two rules keep it exact, both enforced loudly: an **arc** rim edge needs the law
 constant along the arc, and a **full circular rim** needs it constant everywhere — a
 circle offset by a varying amount is a spiral, which has no exact B-Rep form.
 `ChamferAtAngle(setbackAt, degrees, faces)` holds the angle constant along the rim,
-which is exactly what keeps the strips planar. (Variable-**radius** fillets remain
-refused: the corner miter of two variable bands is not a conic.)
+which is exactly what keeps the strips planar.
+
+## Variable-radius fillets
+
+`Fillet(radiusAt, faceSelector)` is the same idea for a blend: the law is evaluated at
+each rim corner and the radius interpolates linearly along each edge.
+
+```csharp render:fillet-variable
+// The blend grows from 0.8 at the left end of the slot to 1.4 at the right. Both of a
+// slot's end arcs have their two corners at the SAME x, so the law is constant across
+// each arc and only the straight runs taper.
+var boss = Shape.Extrude(Sketch.Slot(36, 12), 8)
+    .Fillet(p => 1.1 + 0.025 * p.X, s => s.PlanarFacesWithNormal(Vector3d.UnitZ));
+
+var scene = new Scene();
+scene.Add(new Part("tapered blend", boss, Palette.Brass));
+```
+
+![A slot boss whose top blend grows along x](images/fillet-variable.png)
+
+The band is genuinely exact, not a fitted surface. Along a straight run the
+cross-section at each station is a **true** quarter circle of the interpolated radius —
+the two end arcs are equal-weight rational conics on one frame, so lerping their points
+is the same as lerping their control points — and it stays tangent to the flat face
+along its top boundary and to the wall along its bottom.
+
+Two things have no exact form and are refused by name rather than approximated:
+
+- a **sharp corner whose two edges carry different radii**. Two variable-radius bands
+  are cones that do not circumscribe a common sphere, so they meet in a quartic and
+  there is no conic to miter them on. Keep the radius constant across a sharp corner —
+  the bands are then equal-radius cylinders again and the exact bicylinder ellipse is
+  back — or vary it only along runs whose corners are tangent-continuous, as the slot
+  above does.
+- a **varying law along an arc**, for the chamfer's reason: a circle offset by a varying
+  amount is a spiral.
+
+A constant law reproduces the plain `Fillet(radius, faces)` overload exactly, mesh and
+all, so nothing is lost by reaching for the law form.
 
 ## Rounding every edge at once
 

@@ -400,11 +400,27 @@ operations. Depends only on `EngrCAD.Core`.
   name keep their planes exactly; their corners still move, because the drafted neighbours
   they meet did. The rebuild uses `PlaneSurface` faces (not a ruled loft), so the result
   stays selectable by the same `BrepQueries` vocabulary and STEP-exportable.
-  v1 handles **planar-faced prisms** — two caps perpendicular to the pull direction,
-  single-loop caps, four-sided planar sides — and rejects everything else loudly: curved
-  faces, caps with holes, selecting a cap, and a taper large enough to fold the profile
-  (checked by winding *and* per-edge direction against the original loop, since a signed
-  area alone can stay positive while one edge has already reversed).
+  The planar path handles **planar-faced prisms** — two caps perpendicular to the pull
+  direction, single-loop caps, four-sided planar sides — and rejects caps with holes,
+  selecting a cap, and a taper large enough to fold the profile (checked by winding *and*
+  per-edge direction against the original loop, since a signed area alone can stay positive
+  while one edge has already reversed).
+  **Curved faces taper too, and exactly.** A face of revolution about the pull direction
+  drafts by rotating its GENERATOR in its own axial half-plane about the point where that
+  generator crosses the neutral plane — the same "rotate about the neutral line" rule, one
+  dimension down. A drafted cylinder is therefore *exactly* a cone (a `RevolvedSurface` of a
+  straight generator, not a cone to some tolerance), a drafted cone another cone, and a
+  drafted torus band another torus band, since a rigid rotation of a circular profile is
+  still a circle. A cylinder has no generator of its own, so one is synthesized as a line in
+  its own X half-plane — which is what makes the drafted cone keep the cylinder's PHASE, its
+  rim circles still landing on the carrier's grid. Rims are then re-solved through the shared
+  `CarrierBody` rebuild (see below). The rotation SENSE is chosen by measurement rather than
+  derived: both candidates are built and the one whose normal leans further toward the pull
+  direction wins — deriving it would mean re-proving the half-plane's handedness against the
+  generator's traversal and the revolve's outward convention, three sign conventions that have
+  each cost this kernel real geometry, for an answer one dot product settles. Refused by name:
+  a curved face on any other axis (its drafted carrier is not a surface of any family this
+  kernel builds).
   **Per-face angles in one call**: `Draft.Apply(solid, neutralOrigin, pullDirection,
   angleSelector)` takes a `Func<BrepFace, double?>` (null = leave the face) — every corner
   is solved once from its two final planes, which is exactly what chaining single-angle
@@ -429,14 +445,83 @@ operations. Depends only on `EngrCAD.Core`.
   openingSelector?)` asks the selector once per non-opening face (a thick base under thin
   walls) — nothing new geometrically, since each inner corner was already the intersection
   of its three offset planes and unequal offsets just move that intersection.
-  Rejections are loud: curved faces (a cylinder offsets to a cylinder and a revolve to the
-  revolve of an `OffsetCurve3d` generator, but their *corners* need surface–surface
-  re-intersection, not a three-plane solve), vertices where more than three faces meet (the
-  offset corner is over-determined and needs corner patches), adjacent openings (zero-width
-  rim), openings on a face with holes, multi-shell inputs, and an offset that locally folds
-  the solid. **Not** checked: an offset large enough to make distant surfaces pass through
+  **Curved faces work too, and are equally exact** (a separate code path, `CarrierBody`, so
+  polyhedral output stays bit for bit what it was — the switch is a property of the INPUT, not
+  of the request): `SurfaceOffset` keeps every carrier in its own family and `SurfaceCorner`
+  re-solves every vertex as an exact root. A cylinder shells to a cup, a cone frustum to a
+  conical cup, a sphere offsets to a sphere, and a quarter-turn pipe elbow opened at both ends
+  to a genus-1 tube whose volume matches Pappus. Two rules that path had to learn:
+  **a curved rim is CONSTRUCTED and then VERIFIED, never intersected and trusted** (a
+  concentric circle about the original's own axis and phase, then every sample measured
+  against both offset carriers — a rim the construction cannot reproduce is refused by name,
+  which is exactly what catches a SEALED elbow, whose moved cap planes cut the offset torus in
+  a quartic rather than a circle); and **a domain-driven carrier must be re-trimmed to its new
+  loops** — an inward offset moves a cone's rims axially as well as radially, so the inner
+  band's `RevolvedSurface` grid keeps sampling its old extent and the trimmed tessellator
+  refuses the face outright. The generator parameter for that trim is solved geometrically
+  against the loop points' own axial coordinate, never by projecting them onto the surface
+  (the vCut lesson: a ~1e-7 projection error times the cone's slope shifts the ring radially
+  past the weld tolerance).
+  **Higher-valence vertices are solved rather than refused wholesale**: four or more faces
+  at a vertex is over-determined and usually has no offset position at all, but "usually" is
+  not "always" — a square pyramid's apex has four planes that meet in a point BY SYMMETRY,
+  and offsetting each of them keeps that true. So the over-determined case goes through the
+  least-squares corner solve and is then CHECKED, and only a vertex whose offset planes
+  genuinely miss is refused (the message says a corner like that opens into a small face,
+  which is corner-patch construction rather than a carried-over rebuild). Rejections are
+  loud: curved faces with no exact offset (swept and NURBS surfaces), non-circular curved
+  edges, non-concurrent higher-valence vertices, adjacent openings (zero-width rim),
+  openings on a face with holes, multi-shell inputs, and an offset that locally folds the
+  solid. **Not** checked: an offset large enough to make distant surfaces pass through
   each other with no local symptom — the same contract OCCT offers and `OffsetCurve3d`
   already documents for curves.
+- **`SurfaceOffset` / `SurfaceCorner` / `CarrierBody`** — the curved-corner re-intersection
+  machinery three operations were blocked on (curved shelling, curved draft, variable-radius
+  fillets), built once rather than three times.
+  - **`SurfaceOffset.TryOffset(surface, distance)`** lifts a carrier along its own normal and
+    stays in the SAME family: a plane offsets to a plane, a cylinder to a cylinder, a sphere
+    to a sphere, and a revolve to the revolve of its OFFSET GENERATOR — which for a straight
+    or circular generator is again straight or circular, so a cone offsets to a cone and a
+    torus to a torus. Frames, generator spans and sweep angles carry over verbatim, so the
+    offset surface's u = 0 sits where the original's did (the phase-alignment rule: a rim
+    circle lands on the carrier's grid only if the frame did not rotate). Internally
+    `CircularArc` recognizes a circular curve by SAMPLING it and rebuilds it in the **same
+    spelling** (`Circle3d` / `CurveSegment` / rational arc) — those agree on the point set and
+    NOT on the parameter mapping, and a revolve samples its generator at even parameter, so a
+    respelt arc silently moves every sample. Two traps it carries: a straight generator
+    extruded along ANY direction is still a plane, so a *sheared* straight extrusion offsets
+    exactly — but by the UNIT normal, since the raw cross product is short by the shear's sine
+    — while a sheared CURVED generator has no same-family offset; and the fit must use the
+    EDGE's domain, because a partial revolve's rail is a whole `Circle3d` used over a quarter
+    turn and fitting the carrier reports a full-turn sweep.
+  - **`SurfaceCorner.TrySolvePoint(carriers, seed)`** is the corner itself, and a corner POINT
+    is never approximate whatever the carriers are — it is the root of a small square system,
+    and Newton on exact carriers converges to machine precision. Three planes take the
+    algebraic Cramer solve verbatim (so polyhedral output cannot move); anything with a
+    closed-form implicit distance (`ImplicitSurface`: plane, cylinder, sphere, cone or
+    circular revolve, straight or circular extrusion) Newtons onto the root. The step is the
+    **minimum-norm** one — the corner moves only within the span of its carriers' normals —
+    and that single rule reproduces every case that would otherwise be hand-written: a SEAM
+    vertex has two incident faces because a closed rim starts and ends there, and a TANGENT
+    junction has three faces of which two are the same carrier (an elbow's profile circle
+    split into two arcs offsets to two halves of ONE circle; a sphere's two hemispheres to one
+    sphere). In each, the normal span is exactly the direction the geometry is free in, so a
+    cylinder's seam stays in its seam half-plane and an elbow's junction keeps its angle on
+    the offset profile circle without either being written down. The residual is always
+    reported; more than three independent carriers is least squares and refused when they
+    genuinely miss.
+  - **`SurfaceCorner.TrySolveCurve(a, b, start, end, policy)`** is where the exactness brand
+    bites. Analytic pairs give a conic trimmed exactly to its corners; everything else is the
+    marching tracer, whose chordal output would bake a fixed sampling floor into a primary
+    feature's B-Rep. `CornerPolicy.ExactOnly` is the default and refuses by name; `AllowTraced`
+    is opt-in and LABELS the result (`CornerCurve.Tier`) with its measured `Deviation`. Even
+    then the curve is made to TERMINATE exactly — its ends are replaced by the solved corner
+    points, so the chord error stays strictly interior and never reaches a vertex, the one
+    place the weld tier is absolute.
+  - **`CarrierBody`** is the rebuild: recognize a solid's topology once, hand it one carrier
+    per face, and get back a valid solid with every vertex re-solved, every edge reconstructed
+    and every domain-driven grid re-trimmed. `Shelling` supplies offset carriers and `Draft`
+    tapered ones; the machinery between is identical.
 - **`SurfaceIntersection`** — `Intersect(a, b, region)`: exact analytic curves for the
   common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
@@ -904,25 +989,34 @@ each of the others is a different surface), **arc-terminal partial runs** (the
 termination itself is exact, but the periodic cylindrical neighbour needs re-trimming),
 **sharp corners at arc rim edges** (a documented policy — torus ∩ cylinder is not a
 conic; see the Filleting section), and
-**variable-radius fillets**: the band itself would be exact — a linear radius law between
-two equal-weight rational arcs is a degree-(2,1) NURBS whose v-sections are true circles,
-and it stays G1 with both neighbours — but the corner where two such bands meet is the
-intersection of two non-cylindrical surfaces, which is not a conic, so there is no exact
-miter to weld them on. (Variable-SETBACK chamfers do not have that problem — the corner
-segment is a boundary ruling of both strips — and are implemented; see `ChamferRim`'s
-law overloads above.)
+**a varying radius across a SHARP corner** — variable-radius fillets themselves landed
+(`FilletRim`/`FilletEdges` law overloads + `Shape.Fillet(radiusAt, faces)` +
+`VariableFilletRimFeature`): along a straight run the band is the RULED skin between its
+two end quarter arcs, and because those are equal-weight rational conics on one frame,
+lerping their points equals lerping their homogeneous control points, so every
+intermediate section is a TRUE circle of the interpolated radius, tangent to both
+neighbours. What is refused is the corner: two variable-radius bands are cones that do
+not circumscribe a common sphere, so they meet in a quartic with no conic to miter them
+on. A CONSTANT law across a sharp corner makes both bands equal-radius cylinders again
+and the exact bicylinder ellipse is back, so the refusal is about the law and not about
+sharp corners; arcs take the law only where it is constant along the arc (a circle
+offset by a varying amount is a spiral), exactly as variable-SETBACK chamfers do. The
+bands' top and bottom boundaries are RAILS on the band (`LoftRailCurve`) rather than
+free-standing lines, which is what makes the band's grid and the shared edge polylines
+sample the same points.
 Loft gaps: sections must already be segment-compatible (no degree
 elevation / knot merging), holes in sections, open (uncapped) skins, periodic lofts that
 close back on the first section, guide curves / spine, and the "pipe shell with evolution
 law" generalization (a section scaled and twisted along a spine — which is a loft whose
 sections are generated rather than given, so it lands on `LoftedSurface` once a law
 evaluator exists). `LoftedSurface` is not STEP-exportable (same bucket as swept surfaces).
-Draft gaps: curved faces (the general face-offset-and-reintersect), caps with holes,
-per-face angles in one call, and drafting about a non-planar neutral surface.
-Shelling gaps: curved faces (cylinders/revolves offset exactly, but their corners need
-surface–surface re-intersection — the same missing machinery as the non-perpendicular
-corner patches above), higher-valence vertices, adjacent openings, variable per-face
-thickness, and global self-intersection detection.
+Draft gaps: curved faces on an axis other than the pull direction (a face of revolution
+ABOUT the pull direction now drafts exactly), caps with holes, and drafting about a
+non-planar neutral surface.
+Shelling gaps (curved faces now shell exactly — see `SurfaceOffset`/`SurfaceCorner` above):
+carriers with no same-family offset (swept and NURBS surfaces), non-circular curved edges,
+higher-valence vertices whose offset planes are NOT concurrent (a concurrent one — a
+pyramid apex — now works), adjacent openings, and global self-intersection detection.
 `HelicalSurface` faces cannot be exported to STEP (same bucket
 as swept surfaces); helical faces trimmed into anything other than a rail/spiral band
 (e.g. a helical band cut by a NON-perpendicular plane or another curved surface) have

@@ -43,12 +43,13 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Union` / `Intersect` / `Subtract` | ✅ native (`BrepBoolean`) | ✅ native | ✅ (from B-Rep, else `MeshBoolean`) |
 | `SmoothUnion` / `SmoothIntersect` / `SmoothSubtract` | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Offset` / `Shell(t)` (SDF skin) | ❌ no B-Rep form (`Shell(t)`'s message names the exact overload) | ✅ native | 🔶 polygonized |
-| `Shell(t, openings)` (exact inward hollow) | ✅ native (rigid + uniform scale; polyhedral child — `Shelling.Shell`) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
-| `Draft(angle, neutral, pull, faces?)` | ✅ native (rigid + uniform scale; planar-faced prisms — `Draft.Apply`) | 🔶 bridged | ✅ native |
+| `Shell(t, openings)` (exact inward hollow) | ✅ native (rigid + uniform scale; planar OR curved carriers — `Shelling.Shell`) | 🔶 bridged (tessellation → mesh SDF) | ✅ native |
+| `Draft(angle, neutral, pull, faces?)` | ✅ native (rigid + uniform scale; planar prisms, plus faces of revolution about the pull axis — `Draft.Apply`) | 🔶 bridged | ✅ native |
 | `RoundEdges(r)` (whole-solid rounding) | ✅ native (rigid + uniform scale; convex planar solids — `Filleting.FilletAllEdges`) | 🔶 bridged | ✅ native |
 | `Lattice` (gyroid & co.) | ❌ no B-Rep form | ✅ native | 🔶 polygonized |
 | `Chamfer` (planar-face rims) | ✅ native (miters; cone bands on circles) | 🔶 bridged | ✅ native |
 | `Fillet` (G1 planar-face rims) | ✅ native (cylinder/torus bands) | 🔶 bridged | ✅ native |
+| `Fillet(radiusAt, faces)` (variable radius) | ✅ native (ruled skins of true circular sections; a varying law across a SHARP corner or along an arc is refused by name) | 🔶 bridged | ✅ native |
 | `PatternLinear` / `PatternCircular` | ✅ native (multi-shell when disjoint) | ✅ native | ✅ native |
 | `Hull(...)` (convex hull) | ❌ mesh construction, no B-Rep import | 🔶 bridged (hull mesh → mesh SDF) | 🔶 quickhull over tessellated operand vertices (exact for polyhedral operands) |
 | `Remeshed(...)` (isotropic remesh) | ❌ a remesh is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (remeshed triangles → mesh SDF, so the field carries their chord error) | ✅ native (`Remesher` over the child's mesh lowering, projected back onto it) |
@@ -529,6 +530,21 @@ B-Rep-native (implicit lowering bridges through the tessellation); selectors run
 the *lowered* solid, so upstream transforms are visible and feature sizes scale with
 uniform scaling.
 
+Both also take a **law** instead of a number — `Chamfer(setbackAt, faces)` and
+`Fillet(radiusAt, faces)`, with `ChamferEdges`/`FilletEdges` siblings and
+`VariableChamferRimFeature`/`VariableFilletRimFeature` for histories. The law is
+evaluated at each rim corner of the lowered solid and interpolates linearly along each
+edge, and both stay exact: a linearly varying inset of a straight edge is still a
+straight line, so chamfer strips remain planes and their miters exact intersections;
+and a variable fillet band is the ruled skin between its two end quarter arcs, whose
+intermediate sections are TRUE circles of the interpolated radius (the two arcs are
+equal-weight rational conics on one frame, so lerping points equals lerping control
+points). What has no exact form is refused by name: a varying law along an **arc** (a
+circle offset by a varying amount is a spiral) or on a full circular rim, and — fillets
+only — a varying radius across a **sharp corner**, where the two bands are cones that
+do not circumscribe a common sphere and meet in a quartic. A constant law reproduces
+the plain overload exactly, mesh and all.
+
 ## Loft
 
 `Shape.Loft(sections, style)` skins a closed solid through two or more planar
@@ -582,14 +598,19 @@ var block = Shape.Box(30, 20, 12).RoundEdges(2);                          // box
 
 - **`Draft(angleDegrees, neutralOrigin, pullDirection, faces?)`** (`Draft.Apply`)
   rotates each selected side face's plane about its neutral line — exact, composable
-  (chain calls for per-face angles), planar-faced prisms only in v1. Geometry on the
-  neutral plane does not move: it is the parting line.
+  (chain calls for per-face angles). Geometry on the neutral plane does not move: it is
+  the parting line. **Curved faces of revolution about the pull axis taper too**, by
+  rotating their generator in its own half-plane about the same neutral crossing, so a
+  drafted cylinder is exactly a cone; curved faces on any other axis are refused.
 - **`Shell(thickness, openings)`** (`Shelling.Shell`) hollows INWARD keeping the outer
   surface exactly; opening faces are removed (tray), `openings: null` seals the cavity
   as a second shell. **This is deliberately a different call from `Shell(thickness)`**,
   the SDF onion `|d| − t/2` whose skin straddles the surface — two calls, two
-  geometries, never one call with representation-dependent walls. Polyhedral children
-  only in v1 (curved-face corners need surface–surface re-intersection; todo.md).
+  geometries, never one call with representation-dependent walls. **Curved faces shell
+  exactly**: a cylinder to a cup, a cone frustum to a conical cup, a pipe elbow opened
+  at both ends to a genus-1 tube. Refused by name: carriers with no same-family offset
+  (swept and NURBS surfaces) and rims the concentric-circle construction cannot
+  reproduce (a *sealed* elbow is the standard case — open a face instead).
 - **`RoundEdges(radius)`** (`Filleting.FilletAllEdges`) rounds every convex edge and
   corner in one boolean-free morphological opening — exact cylindrical bands and
   spherical corner patches. Convex planar solids with 3-valent corners in v1;

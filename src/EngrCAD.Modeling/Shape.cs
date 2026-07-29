@@ -750,6 +750,36 @@ public abstract class Shape
             solid => Filleting.RimFacesFor(solid, edges(solid)), setbackAt, lawAngleDegrees: null);
     }
 
+    /// <summary>
+    /// VARIABLE-radius fillet: <paramref name="radiusAt"/> is evaluated at each rim corner of
+    /// the LOWERED solid (transforms already baked, so the law reads final coordinates and its
+    /// result is used verbatim) and interpolates linearly along each edge — the sibling of
+    /// <see cref="Chamfer(Func{Vector3d, double}, Func{BrepSolid, IEnumerable{BrepFace}})"/>.
+    ///
+    /// <para>The band is exact: along a straight run the cross-section at each station is a
+    /// true quarter circle of the interpolated radius, and it stays tangent to both
+    /// neighbours. What has no exact form is refused by name — a SHARP corner whose two edges
+    /// carry different radii (two variable bands are cones that do not circumscribe a common
+    /// sphere, so their intersection is a quartic and there is no conic miter to weld them
+    /// on), and a varying law along an ARC (a circle offset by a varying amount is a spiral).
+    /// A constant law reproduces the plain radius overload exactly, mesh and all.</para>
+    /// </summary>
+    public Shape Fillet(Func<Vector3d, double> radiusAt, Func<BrepSolid, IEnumerable<BrepFace>> faces)
+    {
+        ArgumentNullException.ThrowIfNull(radiusAt);
+        return new RimShape(this, fillet: true, 0, 0, faces, radiusAt, lawAngleDegrees: null);
+    }
+
+    /// <summary>Variable-radius fillet of selected EDGES; the selection resolves to complete
+    /// rims exactly as <see cref="FilletEdges(double, Func{BrepSolid, IEnumerable{BrepEdge}})"/>.</summary>
+    public Shape FilletEdges(
+        Func<Vector3d, double> radiusAt, Func<BrepSolid, IEnumerable<BrepEdge>> edges)
+    {
+        ArgumentNullException.ThrowIfNull(radiusAt);
+        return new RimShape(this, fillet: true, 0, 0,
+            solid => Filleting.RimFacesFor(solid, edges(solid)), radiusAt, lawAngleDegrees: null);
+    }
+
     // ---- Draft (mould-release taper) ----
 
     /// <summary>

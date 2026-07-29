@@ -15,12 +15,20 @@ namespace EngrCAD.BRep;
 /// not name keep their planes exactly; their corners still move, because the drafted
 /// neighbours they meet did.</para>
 ///
-/// <para><b>What is rejected.</b> v1 handles <b>planar-faced prisms</b>: a solid with two
-/// cap faces perpendicular to the pull direction, single-loop caps (no holes), and
-/// four-sided planar side faces between them. Anything else — curved faces, holes, drafting
-/// a cap, a taper so large the profile folds — throws with a message naming the problem
-/// rather than silently approximating. The general case (face offset-and-reintersect
-/// against curved neighbours) is future work; for organic parts the implicit route
+/// <para><b>Curved faces taper too, and exactly.</b> A face of revolution about the pull
+/// direction drafts by rotating its GENERATOR in its own axial half-plane about the point
+/// where that generator crosses the neutral plane — the same "rotate about the neutral line"
+/// rule, one dimension down. So a drafted cylinder is exactly a cone, a drafted cone another
+/// cone, and a drafted torus band another torus band; nothing is fitted. Rims are then
+/// re-solved by <see cref="SurfaceCorner"/> through the shared <see cref="CarrierBody"/>
+/// rebuild, which is the same machinery curved <see cref="Shelling"/> uses.</para>
+///
+/// <para><b>What is rejected.</b> The planar path handles <b>planar-faced prisms</b>: two cap
+/// faces perpendicular to the pull direction, single-loop caps (no holes), and four-sided
+/// planar side faces between them. The curved path handles solids whose curved faces are
+/// surfaces of revolution about the PULL AXIS. Anything else — a curved face on some other
+/// axis, drafting a cap, a taper so large the profile folds — throws with a message naming the
+/// problem rather than silently approximating. For organic parts the implicit route
 /// (<c>Shape.ToImplicit</c>) remains available.</para>
 /// </summary>
 public static class Draft
@@ -89,6 +97,9 @@ public static class Draft
         if (!pullDirection.TryNormalize(Tolerance.Default, out var pull))
             throw new ArgumentException("The pull direction must be non-zero.", nameof(pullDirection));
 
+        if (solid.Faces.Any(f => !f.IsPlanar(out _, out _)))
+            return ApplyCurved(solid, neutralOrigin, pull, angleSelector, checkCaps);
+
         var prism = Prism.Recognize(solid, pull);
         var origin = neutralOrigin;
 
@@ -139,6 +150,261 @@ public static class Draft
         ValidateProfile(baseCorners, prism.TopCorners, pull, angle, "base");
         ValidateProfile(topCorners, prism.TopCorners, pull, angle, "top");
         return BuildPrism(baseCorners, topCorners, planes, prism.BasePlane, prism.TopPlane);
+    }
+
+    /// <summary>
+    /// Drafting a solid with curved faces. The taper is expressed once — "rotate the carrier
+    /// so its normal tilts toward the pull direction by the angle, about the neutral plane" —
+    /// and applied per carrier family; everything after that (re-solving vertices, rebuilding
+    /// rims, re-trimming domain-driven grids) is the shared <see cref="CarrierBody"/> rebuild.
+    ///
+    /// <para><b>A face of revolution drafts by rotating its GENERATOR, and that is the whole
+    /// generalization.</b> Planar draft rotates a plane about its neutral LINE; a revolve's
+    /// profile is one dimension down, so it rotates about the neutral POINT of its generator
+    /// inside its own axial half-plane. A cylinder's vertical profile line tilts into a slanted
+    /// one — exactly a cone — and a torus band's circular profile rotates rigidly, so it stays
+    /// a circle and the band stays a torus. Nothing is fitted anywhere.</para>
+    /// </summary>
+    private static BrepSolid ApplyCurved(
+        BrepSolid solid, in Vector3d neutralOrigin, in Vector3d pull,
+        Func<BrepFace, double?> angleSelector, bool checkCaps)
+    {
+        var body = CarrierBody.Recognize(solid);
+        var faces = solid.Faces.ToArray();
+        var carriers = new Surface[faces.Length];
+        var origin = neutralOrigin;
+        var direction = pull;
+        bool anyDrafted = false;
+
+        for (int f = 0; f < faces.Length; f++)
+        {
+            carriers[f] = faces[f].Surface;
+
+            // Caps are the parting faces and never taper, exactly as on the planar path: a
+            // null selector means "every SIDE face", and naming a cap explicitly is an error
+            // rather than a silent no-op.
+            if (faces[f].IsPlanar(out _, out var faceNormal)
+                && Math.Abs(faceNormal.Normalized().Dot(direction)) > 1 - NormalClassificationTolerance)
+            {
+                if (checkCaps && angleSelector(faces[f]) is not null)
+                    throw new ArgumentException(
+                        "Draft selected a cap face (one perpendicular to the pull direction). Caps are the " +
+                        "parting faces and stay put; select the side faces to taper.", nameof(angleSelector));
+                continue;
+            }
+
+            if (angleSelector(faces[f]) is not double angle)
+                continue;
+            if (Math.Abs(angle) >= Math.PI / 2 - 1e-9)
+                throw new ArgumentOutOfRangeException(nameof(angleSelector),
+                    "A draft angle must be less than 90 degrees.");
+            // Exact-zero semantic test: a zero draft is the identity, and returning the very
+            // same carrier keeps a no-op selector bit-identical.
+            if (angle == 0)
+                continue;
+            carriers[f] = Taper(faces[f].Surface, origin, direction, angle);
+            anyDrafted = true;
+        }
+        if (!anyDrafted)
+            throw new ArgumentException("Draft selected no face of the solid.", nameof(angleSelector));
+
+        return body.Rebuild(carriers, "draft");
+    }
+
+    /// <summary>
+    /// One carrier tapered: its normal tilted toward <paramref name="pull"/> by
+    /// <paramref name="angle"/>, hinged on the neutral plane.
+    ///
+    /// <para>The rotation SENSE is chosen by measurement rather than derived: both candidates
+    /// are built and the one whose normal actually leans further toward the pull direction
+    /// wins. Deriving it instead would mean re-proving the half-plane's handedness against the
+    /// generator's traversal and the revolve's own outward convention — three sign conventions
+    /// that have each cost this kernel real geometry — for an answer one dot product settles.</para>
+    /// </summary>
+    private static Surface Taper(Surface surface, in Vector3d neutralOrigin, in Vector3d pull, double angle)
+    {
+        if (surface is PlaneSurface plane)
+        {
+            var (origin, normal) = TaperPlane(plane.Origin, plane.Normal.Normalized(), neutralOrigin, pull, angle);
+            var x = normal.ArbitraryPerpendicular(Tolerance.Default);
+            return new PlaneSurface(origin, x, normal.Cross(x));
+        }
+
+        var revolved = AsRevolve(surface, pull)
+            ?? throw new NotSupportedException(
+                $"Draft can taper a plane or a surface of revolution about the pull direction; a " +
+                $"{surface.GetType().Name} face is neither. Curved faces on other axes have no exact " +
+                "taper — their drafted carrier is not a surface of any family this kernel builds.");
+
+        var axis = revolved.AxisDirection;
+        if (!HalfPlaneNormal(revolved, out var hinge))
+            throw new NotSupportedException(
+                "A drafted surface of revolution's generator lies on its own axis, so it has no profile " +
+                "plane to tilt in.");
+
+        // The generator's neutral point: where its profile crosses the neutral plane. Solved
+        // on the EXACT generator by bisection on the axial coordinate, never by projection.
+        double neutralHeight = (neutralOrigin - revolved.AxisOrigin).Dot(axis);
+        if (!TryGeneratorAt(revolved, neutralHeight, out var pivot))
+            throw new NotSupportedException(
+                "A drafted surface of revolution does not cross the neutral plane, so it has no hinge; " +
+                "move the neutral plane inside the face's own extent.");
+
+        Surface? best = null;
+        double bestLean = double.NegativeInfinity;
+        foreach (double candidate in (ReadOnlySpan<double>)[angle, -angle])
+        {
+            var rotation = Matrix4d.CreateTranslation(pivot)
+                * Matrix4d.CreateFromAxisAngle(hinge, candidate)
+                * Matrix4d.CreateTranslation(-pivot);
+            var tapered = new RevolvedSurface(
+                Rotate(revolved.Generator, rotation), revolved.AxisOrigin, axis, revolved.Angle);
+            double lean = Math.Sign(angle)
+                * tapered.NormalAt(tapered.DomainU.Mid, tapered.DomainV.Mid).Dot(pull);
+            if (lean > bestLean)
+            {
+                bestLean = lean;
+                best = tapered;
+            }
+        }
+        return best!;
+    }
+
+    /// <summary>
+    /// The surface as a revolve about the pull axis, or null. A cylinder has no generator of
+    /// its own, so one is synthesized as a line in its own X half-plane — which is what makes
+    /// a drafted cylinder come back as a cone on the SAME phase, its rim circles still landing
+    /// on the carrier's grid. The synthesized extent is arbitrary because
+    /// <see cref="CarrierBody"/> re-trims every domain-driven carrier to its own loops.
+    ///
+    /// <para>A cylinder arrives spelled two ways — as a <see cref="CylinderSurface"/> from the
+    /// factory and as a full circle EXTRUDED along its own axis from a sketch, which is what
+    /// <c>Shape.Cylinder</c> lowers to — and both must draft. The whole-turn check on the
+    /// extruded form is load-bearing for the same reason it is in
+    /// <c>SurfaceIntersection.Promote</c>: a rounded rectangle's corner is a QUARTER arc
+    /// extruded, every point of which lies on the full cylinder, so a start-point-only guard
+    /// would silently taper 270° of surface the face does not carry.</para>
+    /// </summary>
+    private static RevolvedSurface? AsRevolve(Surface surface, in Vector3d pull)
+    {
+        switch (surface)
+        {
+            case RevolvedSurface revolved
+                when revolved.AxisDirection.IsParallelTo(pull, Tolerance.Default):
+                return revolved;
+            case CylinderSurface cylinder when cylinder.Axis.IsParallelTo(pull, Tolerance.Default):
+                return AboutAxis(cylinder.Origin, cylinder.Axis, cylinder.XDirection, cylinder.Radius);
+            case ExtrudedSurface extruded
+                when extruded.Direction.IsParallelTo(pull, Tolerance.Default)
+                    && CircularArc.TryFit(extruded.Generator, out var fit)
+                    && fit.Circle.Axis.IsParallelTo(extruded.Direction, Tolerance.Default)
+                    && Math.Abs(Math.Abs(fit.Sweep) - 2 * Math.PI) < Tolerance.Default.Angular:
+                return AboutAxis(
+                    fit.Circle.Center, extruded.Direction, fit.Circle.XDirection, fit.Circle.Radius);
+            default:
+                return null;
+        }
+
+        static RevolvedSurface AboutAxis(
+            in Vector3d origin, in Vector3d axisDirection, in Vector3d radial, double radius)
+        {
+            var axis = axisDirection.Normalized();
+            var start = origin + radial * radius;
+            return new RevolvedSurface(new Line3d(start, start + axis), origin, axis);
+        }
+    }
+
+    private static bool HalfPlaneNormal(RevolvedSurface revolved, out Vector3d normal)
+    {
+        normal = default;
+        var axis = revolved.AxisDirection;
+        var domain = revolved.Generator.Domain;
+        double best = 0;
+        for (int i = 0; i <= 16; i++)
+        {
+            var offset = revolved.Generator.PointAt(domain.ParameterAt(i / 16.0)) - revolved.AxisOrigin;
+            var radial = offset - axis * offset.Dot(axis);
+            if (radial.Length > best)
+            {
+                best = radial.Length;
+                normal = axis.Cross(radial);
+            }
+        }
+        return normal.TryNormalize(Tolerance.Default, out normal);
+    }
+
+    /// <summary>
+    /// The generator point at a given axial height, found by bisection on the EXACT curve.
+    /// A generator whose axial coordinate is monotone (every one this path accepts) has one
+    /// crossing; the hinge must be exact, since every drafted point is measured from it.
+    /// </summary>
+    private static bool TryGeneratorAt(RevolvedSurface revolved, double height, out Vector3d point)
+    {
+        point = default;
+        var axis = revolved.AxisDirection;
+        var domain = revolved.Generator.Domain;
+        double Axial(double t) => (revolved.Generator.PointAt(t) - revolved.AxisOrigin).Dot(axis);
+
+        double lo = domain.Start, hi = domain.End;
+        double fLo = Axial(lo) - height, fHi = Axial(hi) - height;
+        if (fLo * fHi > 0)
+        {
+            // The neutral plane misses the generator's own extent. That is legal — the hinge
+            // is a property of the CARRIER, not of the trim — so extrapolate along the chord
+            // for a straight generator and refuse otherwise.
+            if (Math.Abs(fHi - fLo) <= Tolerance.Default.Linear)
+                return false;
+            double t = -fLo / (fHi - fLo);
+            var a = revolved.Generator.PointAt(domain.Start);
+            var b = revolved.Generator.PointAt(domain.End);
+            point = a + (b - a) * t;
+            return Math.Abs((point - revolved.AxisOrigin).Dot(axis) - height) <= Tolerance.Default.Linear;
+        }
+
+        for (int step = 0; step < 80; step++)
+        {
+            double mid = (lo + hi) / 2;
+            double fMid = Axial(mid) - height;
+            if (fLo * fMid <= 0)
+            {
+                hi = mid;
+            }
+            else
+            {
+                lo = mid;
+                fLo = fMid;
+            }
+        }
+        point = revolved.Generator.PointAt((lo + hi) / 2);
+        return true;
+    }
+
+    /// <summary>
+    /// A generator moved rigidly. A straight one is rebuilt as a fresh <see cref="Line3d"/> so
+    /// downstream cone recognition and generator trimming keep working on a plain type;
+    /// everything else goes through <see cref="Curve3d.Transformed"/>, which is exact AND
+    /// parameterization-preserving for a rigid map — the same t evaluates to the same moved
+    /// point, so an arc sampled at even angles still is.
+    /// </summary>
+    private static Curve3d Rotate(Curve3d generator, in Matrix4d rotation)
+    {
+        var domain = generator.Domain;
+        var start = generator.PointAt(domain.Start);
+        var end = generator.PointAt(domain.End);
+        var chord = end - start;
+        if (chord.TryNormalize(Tolerance.Default, out var tangent))
+        {
+            bool straight = true;
+            for (int i = 1; i < 8 && straight; i++)
+            {
+                var offset = generator.PointAt(domain.ParameterAt(i / 8.0)) - start;
+                straight = (offset - tangent * offset.Dot(tangent)).Length
+                    <= Tolerance.Default.Linear * Math.Max(1, chord.Length);
+            }
+            if (straight)
+                return new Line3d(rotation.TransformPoint(start), rotation.TransformPoint(end));
+        }
+        return generator.Transformed(rotation);
     }
 
     /// <summary>

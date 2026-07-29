@@ -110,11 +110,23 @@ public class DraftShapeTests
     }
 
     [Fact]
-    public void Draft_CurvedSolid_IsRefusedByName()
+    public void Draft_Cylinder_IsNowAnExactCone()
     {
-        var drafted = Shape.Cylinder(4, H).Draft(5, Neutral, Vector3d.UnitZ);
-        var ex = Assert.Throws<NotSupportedException>(() => drafted.ToBrep());
-        Assert.Contains("planar", ex.Message, StringComparison.OrdinalIgnoreCase);
+        // Curved-face draft landed with the corner machinery. A cylinder tapers to a cone
+        // whose volume is the analytic frustum's — and `Shape.Cylinder` lowers to a full
+        // circle EXTRUDED along its axis, so this also pins that spelling being recognized.
+        const double radius = 4;
+        double angle = 5 * Math.PI / 180;
+        var drafted = Shape.Cylinder(radius, H).Draft(5, Neutral, Vector3d.UnitZ);
+        var mesh = BRepTessellator.Tessellate(drafted.ToBrep(), 192, 48);
+        mesh.Validate();
+        Assert.True(mesh.IsClosed);
+
+        // The solid is centred, so the neutral plane sits on its BASE: the base radius is
+        // untouched and the top has drawn in by the full height times the taper.
+        double top = radius - H * Math.Tan(angle);
+        double exact = Math.PI * H / 3 * (radius * radius + radius * top + top * top);
+        Assert.Equal(exact, mesh.Volume(), 0.05 * exact / 100);
     }
 
     [Fact]

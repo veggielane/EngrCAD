@@ -138,9 +138,15 @@ public class ShellingTests
     [Fact]
     public void Shelling_RejectsWhatItCannotDoExactly()
     {
-        // Curved faces.
-        Assert.Throws<NotSupportedException>(() => Shelling.Shell(SolidFactory.MakeCylinder(3, 5), 0.5));
-        Assert.Throws<NotSupportedException>(() => Shelling.Offset(SolidFactory.MakeSphere(2), 0.5));
+        // Curved faces are NO LONGER refused (see CurvedShellingTests) — a cylinder shells and
+        // a sphere offsets exactly. What stays refused is a curved carrier with no exact
+        // offset of its own family: a swept surface's parallel is not a sweep.
+        Shelling.Shell(SolidFactory.MakeCylinder(3, 5), 0.5).Validate();
+        Shelling.Offset(SolidFactory.MakeSphere(2), 0.5).Validate();
+        var pipe = SolidFactory.Sweep(
+            Profile.FromPoints([(0, -1, 0), (0, 1, 0), (0, 1, 2), (0, -1, 2)]),
+            new NurbsCurve(1, [(0, 0, 0), (10, 0, 0)], null, [0, 0, 1, 1]));
+        Assert.Throws<NotSupportedException>(() => Shelling.Offset(pipe, 0.2));
 
         // Adjacent openings.
         var block = Block();
@@ -153,6 +159,13 @@ public class ShellingTests
         Assert.Throws<ArgumentException>(() => Shelling.Shell(Block(), 8));
         Assert.Throws<ArgumentOutOfRangeException>(() => Shelling.Shell(Block(), 0));
         Assert.Throws<ArgumentException>(() => Shelling.Offset(Block(), -12));
+
+        // A higher-valence vertex whose offset planes genuinely miss. A pyramid's apex is
+        // concurrent and DOES offset (see PyramidApex_OffsetsExactly); shearing one side
+        // face breaks that concurrency, and the refusal names it.
+        var skewed = SquarePyramid(10, 8, apexOffset: 3);
+        var exception = Assert.Throws<NotSupportedException>(() => Shelling.Offset(skewed, 0.5));
+        Assert.Contains("do not meet in a point", exception.Message);
 
         // Multi-shell input (the sealed-void result of a previous shelling).
         var sealed2 = Shelling.Shell(Block(), 2);
@@ -202,5 +215,81 @@ public class ShellingTests
             block,
             f => f.IsPlanar(out _, out var n) && n.Z < -0.9 ? 0.0 : 1.0,
             f => ReferenceEquals(f, TopOf(block))));
+    }
+
+    [Fact]
+    public void PyramidApex_OffsetsExactly_ThoughItIsFourValent()
+    {
+        // A four-valent vertex is over-determined in general — but a square pyramid's apex
+        // has four planes that meet in a point BY SYMMETRY, and offsetting each of them
+        // keeps that true. The least-squares corner solve finds it and the residual check
+        // confirms it, so the case that used to be refused wholesale now works.
+        const double half = 10, height = 8, distance = 0.5;
+        var grown = Shelling.Offset(SquarePyramid(half, height, apexOffset: 0), distance);
+        grown.Validate();
+        Assert.True(grown.SatisfiesEulerFormula(genus: 0));
+
+        // The apex rises by distance / sin(half-angle of the slant against the axis): the
+        // offset planes' meeting point is the apex pushed along the axis by d / cos(slope),
+        // with slope the angle each face's normal makes with the axis.
+        var apex = grown.Vertices.Select(v => v.Position).MaxBy(p => p.Z);
+        double slantLength = Math.Sqrt(half * half + height * height);
+        double normalZ = half / slantLength;               // each side normal's z component
+        Assert.Equal(height + distance / normalZ, apex.Z, 9);
+
+        // The base grew too, by distance in every direction plus the side lean.
+        double baseZ = grown.Vertices.Select(v => v.Position).Min(p => p.Z);
+        Assert.Equal(-distance, baseZ, 12);
+    }
+
+    /// <summary>
+    /// A square pyramid on the XY plane. <paramref name="apexOffset"/> slides the apex off
+    /// the axis, which breaks the four side planes' concurrency without changing anything
+    /// else — the difference between a corner that survives an offset and one that does not.
+    /// </summary>
+    private static BrepSolid SquarePyramid(double half, double height, double apexOffset)
+    {
+        Vector3d[] corners =
+        [
+            (-half, -half, 0), (half, -half, 0), (half, half, 0), (-half, half, 0),
+        ];
+        var apexPoint = new Vector3d(apexOffset, 0, height);
+        var apex = new BrepVertex(apexPoint);
+        var baseVertices = corners.Select(c => new BrepVertex(c)).ToArray();
+
+        var baseEdges = new BrepEdge[4];
+        var rails = new BrepEdge[4];
+        for (int i = 0; i < 4; i++)
+        {
+            int next = (i + 1) % 4;
+            baseEdges[i] = new BrepEdge(
+                new Line3d(corners[i], corners[next]), Interval.Unit, baseVertices[i], baseVertices[next]);
+            rails[i] = new BrepEdge(
+                new Line3d(corners[i], apexPoint), Interval.Unit, baseVertices[i], apex);
+        }
+
+        var faces = new List<BrepFace>(5);
+        for (int i = 0; i < 4; i++)
+        {
+            int next = (i + 1) % 4;
+            var x = (corners[next] - corners[i]).Normalized();
+            var outward = (corners[next] - corners[i]).Cross(apexPoint - corners[i]).Normalized();
+            faces.Add(new BrepFace(
+                new PlaneSurface(corners[i], x, outward.Cross(x)),
+                [new BrepLoop(
+                [
+                    new BrepCoedge(baseEdges[i], sameSense: true),
+                    new BrepCoedge(rails[next], sameSense: true),
+                    new BrepCoedge(rails[i], sameSense: false),
+                ])]));
+        }
+        // Base: normal −Z, so the loop opposes the base edges' direction.
+        faces.Add(new BrepFace(
+            new PlaneSurface(corners[0], Vector3d.UnitY, Vector3d.UnitX),
+            [new BrepLoop([.. Enumerable.Range(0, 4).Reverse()
+                .Select(i => new BrepCoedge(baseEdges[i], sameSense: false))])]));
+        var solid = new BrepSolid([new BrepShell(faces)]);
+        solid.Validate();
+        return solid;
     }
 }

@@ -78,4 +78,33 @@ public class DraftTessellationTests
         double a = Area(5), b = Area(top);
         Assert.Equal(4.0 / 3 * (a + b + Math.Sqrt(a * b)), mesh.Volume(), 9);
     }
+
+    [Fact]
+    public void Draft_Cylinder_ConvergesOnTheAnalyticFrustumVolume()
+    {
+        // A drafted cylinder is EXACTLY a cone, so the only error left is the inscribed
+        // n-gon's — which must shrink quadratically with the density.
+        const double radius = 10, height = 20;
+        double top = radius - height * Math.Tan(Ten);
+        double exact = Math.PI * height / 3 * (radius * radius + radius * top + top * top);
+
+        double previous = 0;
+        foreach (int segments in (ReadOnlySpan<int>)[32, 64, 128])
+        {
+            var cylinder = SolidFactory.MakeCylinder(radius, height);
+            var band = cylinder.Faces.Single(f => !f.IsPlanar(out _, out _));
+            var drafted = Draft.Apply(cylinder, Vector3d.Zero, Vector3d.UnitZ, Ten,
+                f => ReferenceEquals(f, band));
+            var mesh = BRepTessellator.Tessellate(drafted, segments, segments / 4);
+            mesh.Validate();
+            Assert.True(mesh.IsClosed);
+
+            double deficit = exact - mesh.Volume();
+            Assert.True(deficit > 0, $"an inscribed tessellation cannot exceed the analytic volume ({deficit})");
+            if (previous > 0)
+                Assert.True(previous / deficit > 3.5,
+                    $"quadratic convergence expected; ratio was {previous / deficit:0.00}");
+            previous = deficit;
+        }
+    }
 }

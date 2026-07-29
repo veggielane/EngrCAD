@@ -466,12 +466,60 @@ exudation is the named next step (todo.md).
   not move and drafting twice by θ/2 equals once by θ. Because the result is still
   `PlaneSurface` faces, a drafted solid stays selectable, further-draftable and
   STEP-exportable — which a ruled-loft implementation would have given up.
-- **Polyhedral offset is exact; curved offset is blocked on corners.** An offset plane
-  is a plane and an offset vertex is a three-plane intersection, so shelling a polyhedron
-  is closed-form. A cylinder's or revolve's offset *surface* is equally analytic — but
-  where three offset curved faces meet, the corner needs genuine surface–surface
-  re-intersection. That is the same missing machinery as sharp-corner fillet patches, so
-  the two problems should be solved together rather than twice.
+- **Polyhedral offset is exact, and so is curved offset — the corner machinery is
+  `SurfaceOffset` + `SurfaceCorner` + `CarrierBody`, built once for three consumers.**
+  An offset plane is a plane and an offset vertex is a three-plane intersection, so
+  shelling a polyhedron is closed-form; a cylinder's, cone's or revolve's offset surface
+  is equally analytic, and the *corners* that blocked it are now solved. Three decisions
+  are worth recording.
+
+  **A corner POINT is never approximate, whatever the carriers are.** It is the root of
+  a small square system, and Newton on exact carriers converges to machine precision, so
+  the tiers differ only in how the residual and its gradient are obtained — three planes
+  by Cramer, anything with a closed-form implicit distance by Newton on that. The
+  residual is always returned, so a caller refuses a solve rather than building a solid
+  around a point that is not on its own faces. Implicit rather than closest-point,
+  because "be on all of these" needs a residual and a gradient and not a foot — and
+  because a surface's `TryProjectPoint` answers "is this point ON me", which is false for
+  every iterate of a corner solve.
+
+  **The Newton step is MINIMUM-NORM, and that one choice deletes every special case.**
+  The carriers routinely do not pin a point: a seam vertex has two incident faces because
+  a closed rim starts and ends there, and a tangent junction has three faces of which two
+  are the same carrier (a pipe elbow's profile circle split into two arcs offsets to two
+  halves of ONE circle; a sphere's hemispheres to one sphere). Confining the step to the
+  span of the carriers' normals makes the answer "the nearest point of their common
+  locus", which reduces to the unique intersection when there is one — and reproduces
+  every hand-written rule that would otherwise be needed: a cylinder's seam stays in its
+  seam half-plane, an elbow's junction keeps its angle on the offset profile circle, a
+  sphere's equator moves radially. Each of those was written down first, as a synthetic
+  constraint plane, before the general rule replaced all of them.
+
+  **A corner CURVE is where the exactness brand bites, and the decision is: refuse by
+  default, opt in and be labelled otherwise.** Analytic pairs give a conic trimmed to its
+  corners. Everything else is the marching tracer, whose chordal output carries a fixed
+  sampling floor that no tessellation density can lower — the identical argument that
+  refuses arc-rim sharp corners below. So `CornerPolicy.ExactOnly` is the default and no
+  kernel consumer passes anything else; `AllowTraced` exists, reports
+  `CornerCurve.Deviation`, and labels its `Tier`. The reason it exists at all rather than
+  being deleted is that a *deviation you can read* is a different thing from a silent
+  approximation, and a caller outside the solid-modelling path (a drawing view, a
+  toolpath) may legitimately want it. Even then the curve is made to TERMINATE exactly:
+  its ends are replaced by the solved corner points, so the chord error stays strictly
+  interior and never reaches a vertex, which is the one place the weld tier is absolute.
+
+  Two construction rules the consumers pay for. Curved rims are **constructed and then
+  verified**, never intersected and trusted: a concentric circle about the original's own
+  axis and phase lands on the offset carriers' grids by construction, while the same
+  circle recovered from a surface–surface intersection is right where the analytic tier
+  reaches and silently chordal where it does not. Every sample is then measured against
+  both carriers — which is exactly what refuses a *sealed* pipe elbow, whose moved cap
+  planes cut the offset torus in a quartic rather than a circle. And a **domain-driven
+  carrier must be re-trimmed to its new loops**, because an inward offset moves a cone's
+  rims axially as well as radially; the generator parameter for that trim is solved
+  against the loop points' own axial coordinate on the exact carrier, never by
+  projection (the vCut lesson — a 1e-7 projection error times the slope shifts the ring
+  past the weld tier).
 - **NURBS curves have exact analytic derivatives** (`DerivativeAt`/`SecondDerivativeAt`:
   The NURBS Book A2.3 basis derivatives + the generalized rational quotient rule, so
   non-unit weights are handled; `TangentAt` is overridden, leaving finite differences
@@ -1920,11 +1968,24 @@ for `in`-parameters being illegal in expression trees.
   rows (0.893 against a 0.924 floor at 48/24) on a base mesh that was already correct.
   A uv metric is only a proxy for arc length; wherever the parameterization is
   degenerate, refinement must defer to a base mesh built at honest density.
-- **Variable-radius fillets are blocked by the corner, not the band.** The band would be
-  exact — a linear radius law between two equal-weight rational arcs is a degree-(2,1)
-  NURBS whose v-sections are true circles, G1 with both neighbours. But two such bands
-  meet in the intersection of two non-cylindrical surfaces, which is not a conic, so there
-  is no exact miter to weld them on. Variable-*setback* chamfers escape this (the corner
+- **Variable-radius fillets are limited by the corner, not the band — and the band was
+  the easy half all along.** The band is exact: a linear radius law between two
+  equal-weight rational arcs is the RULED skin between them, whose v-sections are true
+  circles because equal weights make lerping the points identical to lerping the
+  homogeneous control points (the denominators cancel), and it is G1 with both
+  neighbours. That is now implemented (`FilletRim`/`FilletEdges` law overloads,
+  `Shape.Fillet(radiusAt, faces)`, `VariableFilletRimFeature`). What stays refused is a
+  varying radius across a SHARP corner: two variable-radius bands are cones — the family
+  of circles with linear centre and linear radius is exactly a cone with apex where the
+  radius vanishes — and two cones that do not circumscribe a common sphere meet in a
+  quartic, so there is no conic miter to weld them on. A CONSTANT law across such a
+  corner makes both bands equal-radius cylinders again, which DO share an inscribed
+  sphere, so the exact bicylinder ellipse is back; the refusal is therefore about the law
+  and not about sharp corners, and it says so. One implementation rule earned it: the
+  band's top and bottom boundaries must be RAILS on the band (`LoftRailCurve`) rather
+  than free-standing lines, or the loft's v grid samples the boundary at a density the
+  straight edge polyline does not and the face T-junctions against its neighbours.
+  Variable-*setback* chamfers escape the corner problem entirely (the corner
   segment is a boundary ruling of both strips) and are implemented: the law is evaluated
   at rim corners and interpolates linearly along each edge, and two small theorems keep
   everything exact — a linearly varying perpendicular inset of a straight edge is still a
