@@ -96,6 +96,19 @@ internal static class ToolSchemas
             "bounds": { "$ref": "#/$defs/bounds" },
             "localBounds": { "$ref": "#/$defs/bounds" },
             "position": { "$ref": "#/$defs/point" },
+            "material": {
+              "type": "object",
+              "description": "Present only when the part states a material. Density is in the model's tonne/mm3 and echoed as kg/m3; mass is in grams, from the display mesh.",
+              "required": ["name", "density", "densityKgPerCubicMetre"],
+              "properties": {
+                "name": { "type": "string" },
+                "density": { "type": "number" },
+                "densityKgPerCubicMetre": { "type": "number" },
+                "massGrams": { "type": ["number", "null"] },
+                "youngsModulus": { "type": "number" },
+                "poissonsRatio": { "type": "number" }
+              }
+            },
             "paths": { "type": "array", "items": { "type": "string" } },
             "annotations": {
               "type": "array",

@@ -7,9 +7,6 @@ using EngrCAD.Mesh;
 
 namespace EngrCAD.Modeling;
 
-/// <summary>RGB color in [0, 1] for display purposes (UI-framework free).</summary>
-public readonly record struct PartColor(float R, float G, float B);
-
 /// <summary>How a part is drawn in a viewer (display metadata, UI-framework free).</summary>
 public enum DisplayMode
 {
@@ -76,7 +73,29 @@ public sealed class Part
     /// </summary>
     public HardwareComponent? Hardware { get; internal set; }
 
-    /// <summary>Display color; when null, the tab assigns the next palette color on add.</summary>
+    /// <summary>
+    /// What this part is made of — a <see cref="Material"/> from <see cref="Materials"/> or
+    /// one the design builds. Null means unstated, which is the default and stays legal:
+    /// nothing here requires a material.
+    ///
+    /// <para>Three things read it. <b>Mass properties</b> take their density from it, so
+    /// <c>part.MassProperties()</c> and <c>scene.AllInstances.MassProperties()</c> need no
+    /// density argument (the explicit overloads remain, for parts with no material).
+    /// <b>The bill of materials</b> shows the name, and optionally the mass. <b>The palette</b>
+    /// takes the material's <see cref="Material.Color"/> as this part's default color, if it
+    /// states one — a material color does NOT consume a palette slot, so attaching a material
+    /// to one part never re-colors the others.</para>
+    ///
+    /// <para><b>The density is in tonne/mm³</b>, the consistent mm/N/MPa/tonne system
+    /// <see cref="ModelUnits"/> states for the whole repository — steel is 7.85e-9 — so a
+    /// mass read from it is in tonnes and <see cref="ModelUnits.MassToGrams"/> is how a
+    /// report prints it. The same <see cref="Material"/> object drives an FEA solve, which
+    /// is the point of there being exactly one type.</para>
+    /// </summary>
+    public Material? Material { get; set; }
+
+    /// <summary>Display color; when null, the tab assigns the material's color if it has
+    /// one, else the next palette color on add.</summary>
     public PartColor? Color { get; set; }
 
     /// <summary>How viewers draw this part (shaded, wireframe, or translucent).
@@ -172,6 +191,15 @@ public sealed class Part
         Color = color;
         if (transform is { } t)
             Transform = t;
+    }
+
+    /// <summary>Sets <see cref="Material"/> and returns the part, so a material can be
+    /// stated in the same expression that adds it: <c>scene.Add(new Part("plate",
+    /// shape).Of(Materials.Aluminium6061))</c>.</summary>
+    public Part Of(Material? material)
+    {
+        Material = material;
+        return this;
     }
 
     /// <summary>
@@ -771,7 +799,7 @@ public sealed class Tab
     {
         if (_parts.Any(p => p.Name == part.Name) || _assemblies.Any(a => a.Name == part.Name))
             throw new ArgumentException($"Tab '{Name}' already contains a part named '{part.Name}'.", nameof(part));
-        part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+        EnsureColor(part);
         _parts.Add(part);
         return part;
     }
@@ -785,7 +813,7 @@ public sealed class Tab
             throw new ArgumentException(
                 $"Tab '{Name}' already contains an item named '{assembly.Name}'.", nameof(assembly));
         foreach (var part in assembly.DistinctParts())
-            part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+            EnsureColor(part);
         _assemblies.Add(assembly);
         return assembly;
     }
@@ -840,12 +868,30 @@ public sealed class Tab
     private void AssignColors()
     {
         foreach (var part in _parts)
-            part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+            EnsureColor(part);
         foreach (var assembly in _assemblies)
         {
             foreach (var part in assembly.DistinctParts())
-                part.Color ??= Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
+                EnsureColor(part);
         }
+    }
+
+    /// <summary>
+    /// The one place a part's default color is decided: its <see cref="Part.Material"/>'s
+    /// color if the material states one, else the next palette entry.
+    ///
+    /// <para><b>A material color does not consume a palette slot.</b> The cursor advances
+    /// only when the palette is actually read, so giving one part a colored material leaves
+    /// every other part's color exactly where it was — the same stability rule
+    /// <see cref="AssignColors"/> documents, extended to the new source. (It is also why no
+    /// entry in <see cref="Materials"/> carries a color: assigning a catalogue material to a
+    /// part moves no pixels.)</para>
+    /// </summary>
+    private void EnsureColor(Part part)
+    {
+        if (part.Color is not null)
+            return;
+        part.Color = part.Material?.Color ?? Palette.Cycle[_nextColor++ % Palette.Cycle.Length];
     }
 
     /// <summary>Derives explode offsets for every assembly in this tab

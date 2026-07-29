@@ -47,6 +47,8 @@ public class DocumentPersistenceTests
             Transform = Matrix4d.CreateTranslation((0, 0, 1)),
             DisplayMode = DisplayMode.Translucent,
             ClippedBySection = false,
+            // A full analysis material: every property stated, so the round trip carries them.
+            Material = Materials.Aluminium6061,
         };
         plate.Annotate(new LinearDimension((-20, 0, 6), (20, 0, 6))
         {
@@ -92,7 +94,11 @@ public class DocumentPersistenceTests
         model.Add(rig);
 
         var spares = scene.AddTab("Spares");
-        spares.Add(new Part("shim", Shape.Box(10, 10, 1)));
+        // The other shape a material comes in: a document material — a name, a density and a
+        // colour, no analysis properties at all — which is exactly what was not constructible
+        // before Material moved down to Core.
+        spares.Add(new Part("shim", Shape.Box(10, 10, 1))
+            .Of(new Material("Shim brass", density: 8.5e-9, color: Palette.Brass)));
 
         var document = new Document(scene);
         document.Mates.Add(new MateSet(rig)
@@ -220,6 +226,44 @@ public class DocumentPersistenceTests
 
         double after = MeshMassProperties.Compute(plate.GetMesh()).Volume;
         Assert.True(after > before * 1.7, $"{before} -> {after}");
+    }
+
+    // ---- materials ------------------------------------------------------
+
+    [Fact]
+    public void Materials_RoundTripInBothShapes()
+    {
+        var loaded = Document.Load(Fixture().Save()).Scene;
+
+        // A full analysis material, property for property -- so an FEA solve on a reloaded
+        // document integrates the same numbers.
+        var plate = loaded.Tabs[0].Parts[0].Material;
+        Assert.NotNull(plate);
+        Assert.Equal(Materials.Aluminium6061, plate);
+        Assert.Equal(2700, plate!.DensityKilogramsPerCubicMetre, 9);
+
+        // And a document material: name, density, colour, nothing else -- and "not stated"
+        // comes back as not stated rather than as a zero that prints differently.
+        var shim = loaded.Tabs[1].Parts[0].Material;
+        Assert.NotNull(shim);
+        Assert.Equal("Shim brass", shim!.Name);
+        Assert.Equal(8.5e-9, shim.Density);
+        Assert.Equal(Palette.Brass, shim.Color);
+        Assert.False(shim.HasElasticity);
+        Assert.Equal(0, shim.ThermalConductivity);
+    }
+
+    [Fact]
+    public void APartWithNoMaterial_WritesNoMaterialField()
+    {
+        // Write-only-when-stated: the feature costs an untouched document exactly nothing,
+        // which is what keeps the fixed point of every existing file byte-identical.
+        var scene = new Scene();
+        scene.Add(new Part("plain", Shape.Box(1, 1, 1)));
+        string json = new Document(scene).Save();
+
+        Assert.DoesNotContain("\"material\"", json);
+        Assert.Equal(json, Document.Load(json).Document.Save());
     }
 
     // ---- annotations ----------------------------------------------------

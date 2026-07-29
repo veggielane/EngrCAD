@@ -162,13 +162,42 @@ public class FeaRefusalTests(ITestOutputHelper output)
     }
 
     [Fact]
-    public void ANonPositiveOrInfiniteModulus_IsRefused()
+    public void ANegativeOrInfiniteModulus_IsRefused()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new Material("bad", 0, 0.3));
         Assert.Throws<ArgumentOutOfRangeException>(() => new Material("bad", -1, 0.3));
         Assert.Throws<ArgumentOutOfRangeException>(() => new Material("bad", double.PositiveInfinity, 0.3));
         Assert.Throws<ArgumentOutOfRangeException>(() => new Material("bad", 200_000, 0.3, -1));
         Assert.Throws<ArgumentException>(() => new Material(" ", 200_000, 0.3));
+    }
+
+    /// <summary>
+    /// A modulus of ZERO is legal to BUILD and refused where it is USED — the placement that
+    /// changed when <see cref="Material"/> moved down to EngrCAD.Core to serve the document
+    /// model as well. A material with a name and a density is what a bill of materials is
+    /// made of, so the constructor cannot demand elasticity; the structural model can, and
+    /// says which property is missing.
+    /// </summary>
+    [Fact]
+    public void AMaterialWithNoModulus_BuildsButIsRefusedByTheStructuralModel()
+    {
+        var document = new Material("mystery alloy", density: 7.8e-9);
+        Assert.False(document.HasElasticity);
+
+        var ex = Assert.Throws<FeaException>(() => new StructuralModel(Block(), document));
+        output.WriteLine(ex.Message);
+        Assert.Contains("mystery alloy", ex.Message);
+        Assert.Contains("no Young's modulus", ex.Message);
+        // The reason matters as much as the refusal: without it the solve does not go wrong,
+        // it assembles an identically zero stiffness and reports rigid-body modes instead.
+        Assert.Contains("identically zero", ex.Message);
+        Assert.Contains("WithElasticity", ex.Message);
+
+        // Same refusal on the per-region assignment, so a multi-body model cannot slip one in.
+        var model = new StructuralModel(Block(), Steel);
+        Assert.Throws<FeaException>(() => model.SetMaterial(1, document));
+
+        // And the material a solve WILL take is the same object with a modulus.
+        _ = new StructuralModel(Block(), document.WithElasticity(200_000, 0.3));
     }
 
     /// <summary>Two tet meshes side by side as one mesh — disjoint bodies.</summary>

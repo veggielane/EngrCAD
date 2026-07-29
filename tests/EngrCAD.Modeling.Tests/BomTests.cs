@@ -204,4 +204,81 @@ public class BomTests
         Assert.Equal("(empty bill of materials)", Bom.For(new Assembly("empty")).ToText());
         Assert.Equal(0, Bom.For(new Assembly("empty")).TotalQuantity);
     }
+
+    // ---- materials and mass --------------------------------------------------------
+
+    /// <summary>A 100 x 20 x 5 mm plate — 10 000 mm3, so 27 g in aluminium.</summary>
+    private static Part PlatePart(string name, Material? material = null) =>
+        new Part(name, Shape.Box(100, 20, 5)).Of(material);
+
+    [Fact]
+    public void NoMaterialsAnywhere_LeavesTheReportsExactlyAsTheyWere()
+    {
+        // The rule that keeps every existing caller byte-identical: a column that would be
+        // empty on every row is not printed.
+        var assembly = new Assembly("rig");
+        assembly.Add(BoxPart("bolt"));
+        var bom = Bom.For(assembly);
+
+        Assert.False(bom.HasMaterials);
+        Assert.DoesNotContain("MATERIAL", bom.ToText());
+        Assert.StartsWith("Quantity,Item,Kind,Paths\n", bom.ToCsv());
+    }
+
+    [Fact]
+    public void OneMaterialAnywhere_AddsTheColumnToEveryRow()
+    {
+        var assembly = new Assembly("rig");
+        assembly.Add(PlatePart("plate", Materials.Aluminium6061));
+        assembly.Add(BoxPart("shim"));
+        var bom = Bom.For(assembly);
+
+        Assert.True(bom.HasMaterials);
+        string text = bom.ToText();
+        Assert.Contains("MATERIAL", text);
+        Assert.Contains("Aluminium 6061-T6", text);
+        // A part with no material says so rather than looking like the row above it.
+        Assert.Contains("-", text);
+        Assert.StartsWith("Quantity,Item,Kind,Material,Paths\n", bom.ToCsv());
+    }
+
+    [Fact]
+    public void MassIsOptIn_AndTotalsInGrams()
+    {
+        var plate = PlatePart("plate", Materials.Aluminium6061);
+        var assembly = new Assembly("rig");
+        assembly.Add(plate);
+        assembly.Add(plate, At(0, 40, 0));
+        var bom = Bom.For(assembly);
+
+        Assert.Equal(27.0, bom.Lines[0].UnitMassGrams!.Value, 6);
+        Assert.Equal(54.0, bom.Lines[0].TotalMassGrams!.Value, 6);
+
+        // Opt-in, because it is the only part of a BOM that evaluates geometry.
+        Assert.DoesNotContain("MASS", bom.ToText());
+        string text = bom.ToText(mass: true);
+        Assert.Contains("MASS (g)", text);
+        Assert.Contains("TOTAL (g)", text);
+        Assert.Contains("27", text);
+        Assert.Contains("54 g", text);            // the footer total
+        Assert.Contains("UnitMassGrams,TotalMassGrams", bom.ToCsv(mass: true));
+    }
+
+    [Fact]
+    public void AnUnknownMassIsEmpty_NotZero_AndTheTotalSaysWhatItCovers()
+    {
+        // A spreadsheet sums zeros silently, so an unstated mass must not look like one --
+        // and a total that quietly skipped those parts would read as the assembly's weight.
+        var assembly = new Assembly("rig");
+        assembly.Add(PlatePart("plate", Materials.Aluminium6061));
+        assembly.Add(PlatePart("mystery"));
+        var bom = Bom.For(assembly);
+
+        Assert.Null(bom.Lines.Single(l => l.Item == "mystery").UnitMassGrams);
+        Assert.Contains("over the 1 of 2 items stating a material", bom.ToText(mass: true));
+
+        string csv = bom.ToCsv(mass: true);
+        var mysteryRow = csv.Split('\n').Single(l => l.StartsWith("1,mystery,"));
+        Assert.Contains(",,,", mysteryRow);       // two empty mass cells, not two zeros
+    }
 }

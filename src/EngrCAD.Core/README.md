@@ -514,6 +514,34 @@ chain's parity is consistent across every joint.
   makes results bit-for-bit deterministic regardless of scheduling. Used by the
   `SurfaceNets` sampling phase and the dense `GridSdf` bake.
 
+- **`ModelUnits`** — the one place EngrCAD's unit system is written down:
+  **mm / N / MPa / tonne / s**, so a density is tonne/mm³ (structural steel `7.85e-9`,
+  not 7850 and not 7.85e-6) and a mass computed from it is in tonnes.
+  `DensityFromKilogramsPerCubicMetre` / `DensityToKilogramsPerCubicMetre` and
+  `MassToGrams` / `MassToKilograms` are the conversions at the edges, plus
+  `Gravity` = (0, 0, −9806.65). **Why the choice went this way**: a density is either a
+  number an *equation* consumes or one a *report* prints, and only the second can be
+  converted afterwards — an FEA mass matrix must balance against a stiffness in MPa and a
+  length in mm with nowhere to put a factor, while mass properties form exactly one
+  product from the density. So the convention lives where it cannot be converted, and the
+  readable units are accessors rather than a second convention.
+- **`Material` / `Materials`** — a name, a mass density, an optional display
+  `PartColor`, and OPTIONAL analysis properties (Young's modulus, Poisson's ratio,
+  conductivity, specific heat, expansion) with the Lame parameters derived from them.
+  It lives here because it is the one type both `EngrCAD.Modeling` (`Part.Material`, mass
+  properties, the BOM) and `EngrCAD.Fea` (every solver) need, and Core is their only
+  common ancestor. **Zero means "not stated"**, and the refusal lives at the point of
+  use — `StructuralModel` refuses a material with no modulus by name, `ThermalSolver` one
+  with no conductivity, `ModalSolver` one with no density — because a material with just a
+  name and a density is a perfectly good *document* material and is what a bill of
+  materials is mostly made of. `Materials` is the nominal, verify-against-datasheet
+  catalogue (steel, stainless, two aluminiums, titanium, cast iron, brass, ABS, PLA,
+  nylon); no entry carries a colour, deliberately, since appearance is a finish rather
+  than a property of the stuff — so assigning one to a part moves no pixels.
+- **`PartColor`** — RGB in [0, 1], UI-framework free. Here rather than in the document
+  model only because `Material` carries one; the *policy* (the palette and the
+  once-only assignment rule) stays in `EngrCAD.Modeling`, which is where the invariant is.
+
 ## Deliberately not adopted (from the geometry3Sharp survey)
 
 - **`DVector<T>`** (chunked growable array) and **`MemoryPool<T>`** — g3 needed them on

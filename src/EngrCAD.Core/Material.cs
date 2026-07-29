@@ -1,26 +1,37 @@
-using EngrCAD.Core;
-
-namespace EngrCAD.Fea;
+namespace EngrCAD.Core;
 
 /// <summary>
-/// An isotropic linear-elastic material: Young's modulus, Poisson's ratio and mass
-/// density, with the derived Lame parameters every element formulation actually uses —
-/// plus the thermal triple (conductivity, specific heat, expansion coefficient) a
-/// <see cref="ThermalModel"/> reads.
+/// A material: a name, a mass density and an optional display color — plus the optional
+/// analysis properties (Young's modulus, Poisson's ratio, conductivity, specific heat,
+/// expansion) a simulation needs, and the Lame parameters an element formulation derives
+/// from them.
 ///
-/// <para><b>Units are the caller's, and they must be CONSISTENT.</b> Nothing in this
-/// kernel carries a unit, so a material is only meaningful against a length unit chosen
-/// for the model. The catalogue in <see cref="Materials"/> is stated in the
-/// <b>mm / N / MPa / tonne</b> system, which is what the rest of EngrCAD assumes (STEP
-/// export writes millimetres): lengths in mm, forces in N, stresses in MPa = N/mm²,
-/// densities in tonne/mm³ (steel 7850 kg/m³ = 7.85e-9 t/mm³) and gravity 9806.65 mm/s²
-/// (<see cref="Materials.GravityMillimetres"/>). The SI alternative — m / N / Pa / kg —
-/// works identically; what does not work is mixing them, and no check here can catch
-/// that, so the unit system is documented rather than enforced.</para>
+/// <para><b>One type serves the document model and the simulation layer</b>, which is why it
+/// lives in <c>EngrCAD.Core</c> — the only assembly both <c>EngrCAD.Modeling</c> and
+/// <c>EngrCAD.Fea</c> see. <c>Part.Material</c> and a structural solve are asking about the
+/// same physical stuff, and two types would mean two densities, which is exactly the
+/// discrepancy this consolidation removed (see the unit note below).</para>
 ///
-/// <para><b>The thermal units in that system are worth stating, because two of the three
-/// surprise people.</b> With mm / N / tonne / s, energy is N·mm = mJ and power is mJ/s =
-/// mW, so:
+/// <para><b>The analysis properties are OPTIONAL, and zero means "not stated".</b> A material
+/// with a density and no modulus is a perfectly good document material — most of a bill of
+/// materials is made of them — so the refusal lives at the point of use, where an analysis
+/// can name the property it needs: <c>StructuralModel</c> refuses a material with no Young's
+/// modulus, <c>ThermalSolver</c> one with no conductivity, <c>ModalSolver</c> one with no
+/// density. Building the material cannot know which analysis is coming, and refusing there
+/// would make a BOM entry require an elastic modulus.</para>
+///
+/// <para><b>Units are the consistent mm / N / MPa / tonne / s system</b> that
+/// <see cref="ModelUnits"/> states once for the whole repository: E in MPa, <b>density in
+/// tonne/mm³</b> (structural steel 7.85e-9 — use
+/// <see cref="ModelUnits.DensityFromKilogramsPerCubicMetre"/> when transcribing a datasheet's
+/// kg/m³, and <see cref="DensityKilogramsPerCubicMetre"/> to read it back), conductivity in
+/// mW/(mm·K), specific heat in mm²/(s²·K), expansion in 1/K. A mass computed from this
+/// density is therefore in <b>tonnes</b>; <see cref="ModelUnits.MassToKilograms"/> and
+/// <see cref="ModelUnits.MassToGrams"/> are how a report prints it. The SI alternative
+/// (m / N / Pa / kg) is equally consistent; mixing the two is what nothing here can catch.</para>
+///
+/// <para><b>The thermal units are worth stating, because two of the three surprise people.</b>
+/// With mm / N / tonne / s, energy is N·mm = mJ and power is mJ/s = mW, so:
 /// <list type="bullet">
 /// <item><description><b>Conductivity</b> is mW/(mm·K), which is <b>numerically identical
 /// to the SI W/(m·K)</b> — steel is 50 either way. That coincidence is not luck: the
@@ -53,17 +64,25 @@ namespace EngrCAD.Fea;
 public sealed record Material
 {
     /// <summary>
-    /// Builds a material. <paramref name="poissonsRatio"/> must lie in (-1, 0.5): at 0.5
-    /// the material is incompressible and Lame's first parameter diverges, which a
+    /// Builds a material. Only the name is required: a document material is
+    /// <c>new Material("Delrin", density: 1.41e-9)</c>, and every analysis property left at
+    /// its zero default means "not stated" and is refused by whichever analysis needs it,
+    /// by name.
+    ///
+    /// <para><paramref name="poissonsRatio"/> must lie in (-1, 0.5) whenever it is stated: at
+    /// 0.5 the material is incompressible and Lame's first parameter diverges, which a
     /// displacement-based formulation cannot represent (it locks). The bound is checked
     /// rather than clamped, because a value at or past it is a modelling error and a
-    /// silently adjusted one would produce a stiffness nobody asked for.
+    /// silently adjusted one would produce a stiffness nobody asked for. Note that its zero
+    /// default is a legal value as well as the unstated one — state it whenever you state a
+    /// modulus, since <see cref="HasElasticity"/> reads the modulus alone.</para>
     /// </summary>
     /// <param name="name">Display name (appears in reports and refusal messages).</param>
-    /// <param name="youngsModulus">E, in the model's stress unit (MPa for mm/N).</param>
+    /// <param name="youngsModulus">E, in the model's stress unit (MPa). Zero means "not
+    /// stated": the material has no elastic properties and a structural solve refuses it.</param>
     /// <param name="poissonsRatio">nu, dimensionless, in (-1, 0.5).</param>
-    /// <param name="density">Mass density, for gravity/body loads (t/mm³ for mm/N). Zero
-    /// is legal and means body loads contribute nothing.</param>
+    /// <param name="density">Mass density in tonne/mm³ (steel 7.85e-9). Zero is legal and
+    /// means body loads contribute nothing and a mass is unknown.</param>
     /// <param name="thermalConductivity">k, in mW/(mm·K) — numerically the SI W/(m·K).
     /// Zero means "not stated", and a thermal solve refuses such a material by name rather
     /// than assembling a singular matrix.</param>
@@ -71,20 +90,26 @@ public sealed record Material
     /// only by a transient solve; zero means "not stated" and is refused there.</param>
     /// <param name="thermalExpansion">alpha, in 1/K. Zero is legal and means a temperature
     /// change produces no thermal-expansion load.</param>
+    /// <param name="color">Display color. Null means the document model picks one from its
+    /// palette, which is what every catalogue entry here does deliberately — a material's
+    /// appearance is a finish, not a physical property.</param>
     public Material(
         string name,
-        double youngsModulus,
-        double poissonsRatio,
+        double youngsModulus = 0,
+        double poissonsRatio = 0,
         double density = 0,
         double thermalConductivity = 0,
         double specificHeat = 0,
-        double thermalExpansion = 0)
+        double thermalExpansion = 0,
+        PartColor? color = null)
     {
         if (string.IsNullOrWhiteSpace(name))
             throw new ArgumentException("A material needs a non-empty name.", nameof(name));
-        if (!(youngsModulus > 0) || double.IsInfinity(youngsModulus))
+        if (!(youngsModulus >= 0) || double.IsInfinity(youngsModulus))
             throw new ArgumentOutOfRangeException(nameof(youngsModulus), youngsModulus,
-                $"Young's modulus must be finite and positive; '{name}' was given {youngsModulus:G6}.");
+                $"Young's modulus must be finite and non-negative; '{name}' was given {youngsModulus:G6}. "
+                + "Zero means 'not stated' — a document material with no elastic properties — "
+                + "and is refused by a structural solve rather than here.");
         if (!(poissonsRatio > -1.0 && poissonsRatio < 0.5))
             throw new ArgumentOutOfRangeException(nameof(poissonsRatio), poissonsRatio,
                 $"Poisson's ratio must lie strictly in (-1, 0.5); '{name}' was given {poissonsRatio:G6}. " +
@@ -104,6 +129,7 @@ public sealed record Material
         ThermalConductivity = thermalConductivity;
         SpecificHeat = specificHeat;
         ThermalExpansion = thermalExpansion;
+        Color = color;
 
         Mu = youngsModulus / (2.0 * (1.0 + poissonsRatio));
         Lambda = youngsModulus * poissonsRatio / ((1.0 + poissonsRatio) * (1.0 - 2.0 * poissonsRatio));
@@ -119,25 +145,44 @@ public sealed record Material
     /// <summary>Display name.</summary>
     public string Name { get; }
 
-    /// <summary>Young's modulus E.</summary>
+    /// <summary>Young's modulus E in MPa; zero means "not stated"
+    /// (see <see cref="HasElasticity"/>).</summary>
     public double YoungsModulus { get; }
 
     /// <summary>Poisson's ratio nu.</summary>
     public double PoissonsRatio { get; }
 
-    /// <summary>Mass density (0 = weightless).</summary>
+    /// <summary>Mass density in <b>tonne/mm³</b> — steel 7.85e-9, not 7850 (see
+    /// <see cref="ModelUnits"/>). Zero means unknown, which for a static solve simply means
+    /// weightless.</summary>
     public double Density { get; }
 
+    /// <summary>The same density as the datasheet's kg/m³ (steel 7850) — the spelling to
+    /// print when a human has to check the number, never the one to compute with.</summary>
+    public double DensityKilogramsPerCubicMetre =>
+        ModelUnits.DensityToKilogramsPerCubicMetre(Density);
+
     /// <summary>Thermal conductivity k in the constitutive law <c>q = -k·grad T</c>
-    /// (mW/(mm·K) for mm/N, numerically the SI W/(m·K)). Zero means "not stated".</summary>
+    /// (mW/(mm·K), numerically the SI W/(m·K)). Zero means "not stated".</summary>
     public double ThermalConductivity { get; }
 
-    /// <summary>Specific heat capacity c (mm²/(s²·K) for mm/N/tonne/s, the SI J/(kg·K)
-    /// times 1e6). Zero means "not stated".</summary>
+    /// <summary>Specific heat capacity c (mm²/(s²·K), the SI J/(kg·K) times 1e6). Zero
+    /// means "not stated".</summary>
     public double SpecificHeat { get; }
 
     /// <summary>Coefficient of linear thermal expansion alpha, in 1/K.</summary>
     public double ThermalExpansion { get; }
+
+    /// <summary>Display color, or null to let the document model's palette choose.</summary>
+    public PartColor? Color { get; }
+
+    /// <summary>
+    /// True when the material states a Young's modulus, i.e. when a structural, modal or
+    /// buckling solve can use it. The modulus alone is the test: Poisson's ratio has a legal
+    /// value of zero, so it cannot distinguish "not stated" from "stated as zero", whereas a
+    /// solid with no stiffness at all is not a material.
+    /// </summary>
+    public bool HasElasticity => YoungsModulus > 0;
 
     /// <summary>Volumetric heat capacity <c>rho·c</c> — what a transient conduction solve
     /// actually integrates, and the product a caller should sanity-check (steel is 3.611
@@ -145,7 +190,8 @@ public sealed record Material
     public double VolumetricHeatCapacity => Density * SpecificHeat;
 
     /// <summary>Thermal diffusivity <c>k / (rho·c)</c>, in mm²/s — the number that sets a
-    /// transient's own time scale (steel 13.85, aluminium 68.7). Zero when the volumetric
+    /// transient's own time scale (steel 13.85, aluminium 69.03, both computed from this
+    /// catalogue's own rows rather than quoted). Zero when the volumetric
     /// heat capacity is zero, since a body with no capacity has no transient.</summary>
     public double ThermalDiffusivity
     {
@@ -158,7 +204,9 @@ public sealed record Material
         }
     }
 
-    /// <summary>Lame's first parameter, L = E·nu / ((1+nu)(1-2nu)).</summary>
+    /// <summary>Lame's first parameter, L = E·nu / ((1+nu)(1-2nu)). Zero for a material with
+    /// no modulus — which is why <c>StructuralModel</c> refuses one before it can be used
+    /// as a silent zero stiffness.</summary>
     public double Lambda { get; }
 
     /// <summary>Shear modulus (Lame's second parameter), M = E / (2(1+nu)).</summary>
@@ -209,10 +257,20 @@ public sealed record Material
         stress[5] = Mu * strain[5];
     }
 
-    /// <summary>The same material with a different density.</summary>
+    /// <summary>The same material with a different density (tonne/mm³).</summary>
     public Material WithDensity(double density) =>
         new(Name, YoungsModulus, PoissonsRatio, density,
-            ThermalConductivity, SpecificHeat, ThermalExpansion);
+            ThermalConductivity, SpecificHeat, ThermalExpansion, Color);
+
+    /// <summary>
+    /// The same material with elastic properties — the call that turns a document material
+    /// into one a structural solve accepts.
+    /// </summary>
+    /// <param name="youngsModulus">E in MPa.</param>
+    /// <param name="poissonsRatio">nu, in (-1, 0.5).</param>
+    public Material WithElasticity(double youngsModulus, double poissonsRatio) =>
+        new(Name, youngsModulus, poissonsRatio, Density,
+            ThermalConductivity, SpecificHeat, ThermalExpansion, Color);
 
     /// <summary>
     /// The same material with thermal properties. Every <c>With…</c> here carries the
@@ -227,16 +285,29 @@ public sealed record Material
     public Material WithThermal(
         double thermalConductivity, double specificHeat = 0, double thermalExpansion = 0) =>
         new(Name, YoungsModulus, PoissonsRatio, Density,
-            thermalConductivity, specificHeat, thermalExpansion);
+            thermalConductivity, specificHeat, thermalExpansion, Color);
 
     /// <summary>The same material with a different expansion coefficient.</summary>
     public Material WithThermalExpansion(double thermalExpansion) =>
         new(Name, YoungsModulus, PoissonsRatio, Density,
-            ThermalConductivity, SpecificHeat, thermalExpansion);
+            ThermalConductivity, SpecificHeat, thermalExpansion, Color);
+
+    /// <summary>The same material with a display color — the finish, not the physics, which
+    /// is why the catalogue leaves it null and this is a separate call.</summary>
+    public Material WithColor(PartColor? color) =>
+        new(Name, YoungsModulus, PoissonsRatio, Density,
+            ThermalConductivity, SpecificHeat, ThermalExpansion, color);
+
+    /// <summary>The same material under a different name — a renamed alloy or temper that
+    /// carries the same numbers.</summary>
+    public Material WithName(string name) =>
+        new(name, YoungsModulus, PoissonsRatio, Density,
+            ThermalConductivity, SpecificHeat, ThermalExpansion, Color);
 
     /// <inheritdoc/>
     public override string ToString() =>
-        $"{Name}: E = {YoungsModulus:G6}, nu = {PoissonsRatio:G4}, rho = {Density:G4}"
+        $"{Name}: rho = {Density:G4}"
+        + (HasElasticity ? $", E = {YoungsModulus:G6}, nu = {PoissonsRatio:G4}" : "")
         + (ThermalConductivity > 0 ? $", k = {ThermalConductivity:G4}" : "")
         + (SpecificHeat > 0 ? $", c = {SpecificHeat:G4}" : "")
         + (ThermalExpansion > 0 ? $", alpha = {ThermalExpansion:G4}" : "");
@@ -244,7 +315,7 @@ public sealed record Material
 
 /// <summary>
 /// A small catalogue of common engineering materials, stated in the
-/// <b>mm / N / MPa / tonne</b> unit system (see <see cref="Material"/>): E in MPa,
+/// <b>mm / N / MPa / tonne</b> unit system (see <see cref="ModelUnits"/>): E in MPa,
 /// density in tonne/mm³, conductivity in mW/(mm·K) (the SI W/(m·K)), specific heat in
 /// mm²/(s²·K) (the SI J/(kg·K) times 1e6) and expansion in 1/K.
 ///
@@ -255,6 +326,11 @@ public sealed record Material
 /// carry the same verify-against-datasheet caveat. The thermal figures deserve it more
 /// than the elastic ones: conductivity varies by a factor of two across the stainless
 /// grades, and a polymer's is sensitive to fillers and to print density.</para>
+///
+/// <para><b>No catalogue entry carries a display color</b>, deliberately: appearance is a
+/// finish (anodised, painted, as-cast) rather than a property of the stuff, so assigning
+/// one of these to a part leaves its color exactly where the palette put it and moves no
+/// pixels. <c>Material.WithColor</c> attaches one when a design wants it.</para>
 /// </summary>
 public static class Materials
 {
@@ -320,8 +396,9 @@ public static class Materials
     ];
 
     /// <summary>Standard gravity pointing along -Z, in mm/s² (the mm/N/MPa/tonne system).
-    /// Pass it to <c>StructuralModel.Gravity</c>.</summary>
-    public static Vector3d GravityMillimetres { get; } = new(0, 0, -9806.65);
+    /// Pass it to <c>StructuralModel.Gravity</c>. The same vector as
+    /// <see cref="ModelUnits.Gravity"/>, which is where the unit system is stated.</summary>
+    public static Vector3d GravityMillimetres => ModelUnits.Gravity;
 
     /// <summary>Standard gravity pointing along -Z, in m/s² (the SI system).</summary>
     public static Vector3d GravityMetres { get; } = new(0, 0, -9.80665);
