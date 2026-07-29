@@ -42,6 +42,13 @@ public enum FeaSolveMethod
     /// claim it: <see cref="StructuralSolver.Solve"/> factors and discards, so a second
     /// load case pays for a second factorization. A multi-load-case entry point is filed
     /// in todo.md, and it is what would make the amortisation real.</para>
+    /// <para><b>Where the amortisation IS real, in this project, is
+    /// <see cref="ModalSolver"/> and <see cref="ThermalSolver.SolveTransient"/>.</b> A
+    /// shift-and-invert Lanczos run factorizes <c>K - sigma·M</c> once and spends one
+    /// back-substitution per Lanczos step (18-23 of them for three to eight modes on this
+    /// project's fixtures); a constant-step transient factorizes <c>C/dt + theta·K</c> once
+    /// and spends one per time step. Both are stated with the count they measured, so the
+    /// argument is a number rather than a slogan.</para>
     /// </summary>
     Direct,
 

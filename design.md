@@ -474,6 +474,69 @@ traps it found were in the TESTS rather than the solver, and all four are the sa
 a fixture or a manufactured field that quietly makes the measurement exact — which is why
 they are recorded in CLAUDE.md's numerical notes beside the geometry ones.
 
+## 3e. Modal analysis (`EngrCAD.Fea`)
+
+`K·phi = lambda·M·phi` over the same `AnalysisMesh`, materials and supports a
+`StructuralModel` carries. Four decisions were made here and each is a departure from the
+obvious.
+
+**The mass matrix is the thermal capacity matrix under another name**, both being
+`integral(constant·N_i·N_j dV)`, so `TetElement.ConsistentMass` is the single implementation
+and `ThermalElement.Capacity` delegates to it; the structural assembly replicates each scalar
+entry onto the 3x3 identity block, since an isotropic inertia couples no two axes. What that
+sharing buys is the quadrature rule: `TetQuadrature.ForMass` is **two degrees above**
+`TetQuadrature.For`, and it is now impossible for the two physics to disagree about it. The
+reason to care is that under-integrating is *silent* — an n-point rule gives a matrix of rank
+n (1 of 4 for a linear element, 4 of 10 for a quadratic one, singular either way) while
+`sum_ij N_i N_j = 1` exactly, so the total is still exactly `rho·V` and the obvious sanity
+check passes. The control that has teeth is the **rotational inertia**, compared against
+`MeshMassProperties`' closed-form polyhedral moments in another project: 2.2e-16…9.4e-15
+relative for the production rule against **−2.4e-27 for a true 1.4e-10** for the cheap one.
+
+**Lumping is offered only in the form that is not wrong.** Row-sum lumping is refused by name
+for 10-node elements, whose row sums are `−V/20` at every corner — a negative mass, the same
+integral that already makes a quadratic element's consistent gravity load negative there.
+`MassLumping.Hrz` scales the consistent matrix's strictly positive diagonal to preserve the
+element mass, works at both orders, and coincides with row-sum exactly on a 4-node tet. The
+reason to offer any lumping is that consistent and lumped **bracket** the answer (+0.134% /
+−0.186% on a 16-element bar), not that either is better.
+
+**The eigensolver is shift-and-invert Lanczos, and this is where a direct factorization
+finally amortises.** §3c records honestly that "factor once, solve many right-hand sides"
+does not apply to the static solver, which factors and discards; here one factorization of
+`K − sigma·M` serves one back-substitution per Lanczos step (18–23 of them for three to eight
+modes on this project's fixtures), so the exact default is also the only practical one and no
+iterative linear solver is offered on this path. Three rules make it trustworthy. Full
+reorthogonalization stops round-off manufacturing ghost eigenvalues, but it also makes a
+genuine multiplicity invisible — a single-vector Krylov space holds one vector per eigenspace,
+and a square shaft's two identical bending modes are a common real case — so converged modes
+are **locked into the deflation set and the run restarted**, and the solver targets one more
+mode than asked for so a missed copy has a run to appear in. Acceptance is a **contiguous
+converged prefix**, never "whatever has converged": Ritz values converge from the extreme end
+inwards but not in lock step, and accepting out of order returned 4 997.9 Hz for a first
+bending mode of 834.9 Hz. And convergence is **measured** (`K phi − lambda M phi`) rather than
+taken from the `beta_m·|y_m|` bound, which describes the shifted, inverted operator's residual
+— one transformation away from what a caller cares about.
+
+**Rigid-body modes are separated, not refused.** The static solver refuses an unrestrained
+body because its answer is not unique; a modal analysis of one is well posed and its six
+zero-frequency modes are part of the answer. `RigidBodyModes.Surviving` was extracted from
+`StructuralSolver` so that one computation serves both — a refusal and a mode listing cannot
+then describe the same physics differently. They are deflated out of the Krylov space,
+`VibrationMode.Number` starts at 1 on the lowest mode that stores strain energy, and their
+`Eigenvalue` is reported as the *measured* Rayleigh quotient of the exact rigid field: zero in
+exact arithmetic, and in practice a conditioning measurement of that model (2.4e-12 of the
+first elastic eigenvalue on the free-free beam). Because `K` is singular when they exist the
+factorization takes a small negative shift, reported and escalated on failure; a fully
+restrained model's shift is **exactly zero** and its factorization is literally the static
+solver's.
+
+A mode shape has no amplitude and no sign, so both are conventions stated rather than assumed:
+`Shape` is mass-normalised (the scale the modal identities need, and *not* a displacement),
+the published `MeshField` is rescaled to a peak nodal magnitude of exactly 1 model unit and
+labelled `"mode shape"`, and the sign is pinned by making the largest component positive so
+two solves agree bit for bit.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

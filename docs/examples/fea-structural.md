@@ -320,6 +320,7 @@ coarsest linear one, which is the check that makes every K_t above mean anything
 - Stress at a quadratic element's nodes is evaluated directly rather than extrapolated
   from the integration points. Superconvergent recovery is the standard refinement and is
   filed.
-- No contact, no plasticity, no large deformation, no modal analysis. Every one of those
-  is a different mathematical problem rather than a bigger version of this one; modal
-  analysis is the nearest, needing a mass matrix and an eigen-solver on the same assembly.
+- No contact, no plasticity, no large deformation. Every one of those is a different
+  mathematical problem rather than a bigger version of this one. **Modal analysis has
+  landed** and reuses this assembly unchanged — see [natural frequencies and mode
+  shapes](fea-modal.md).
