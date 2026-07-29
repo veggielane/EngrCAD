@@ -76,11 +76,21 @@ public class AmbientOcclusionBenchmark(ITestOutputHelper output)
     /// vertices re-read from the float arrays per ray-triangle test). The two Surface Nets
     /// fixtures were re-taken once <see cref="PolygonFan"/> landed: their quads are
     /// genuinely non-planar, so the shorter-diagonal split gives a different set of
-    /// triangles to cast against. The two B-Rep fixtures are planar-quad and unchanged.</para>
+    /// triangles to cast against.</para>
+    /// <para>The two B-Rep fixtures were re-taken when the boolean started CLIPPING its
+    /// carrier curves to the pair's shared trim, and the reason is worth stating because it
+    /// is exactly the case where "the golden moved" is the right answer. The clip stopped
+    /// faces being split along geometry the pair does not share: the pocket went from 18
+    /// faces to 11 and the drilled plate from 20 to 13, while the display mesh kept its
+    /// polygon count (44 and 244) and its volume to nine decimals. The SOLID is the same
+    /// solid — but the triangulation of a face-with-one-hole is not the triangulation of
+    /// eight rectangles, so the flat render mesh's vertices sit in different places and
+    /// their occlusion legitimately differs. Four of the 106 rendered docs PNGs moved with
+    /// it, all four B-Rep-boolean scenes, none with a changed silhouette.</para>
     /// </summary>
     [Theory]
-    [InlineData("pocket", 132, 8893418034819288304L)]
-    [InlineData("drilled plate", 924, -7376055861503636810L)]
+    [InlineData("pocket", 132, 6950379374013342215L)]
+    [InlineData("drilled plate", 924, 1703752811058293293L)]
     [InlineData("csg blob", 173268, 5417102775247476765L)]
     [InlineData("gyroid", 228348, 3787921545543771635L)]
     public void Bake_MatchesTheGoldenBitPattern(string name, int vertices, long fingerprint)

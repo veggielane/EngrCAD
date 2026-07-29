@@ -114,7 +114,9 @@ public class TrimmedFaceRefusalTests
     // still does not put a hole in the pole-bounded cap.
     [InlineData("cap cut low with bore", true)]
     [InlineData("cone cut with bore", false)]
-    [InlineData("torus cut with bore", false)]
+    // "torus cut with bore" used to be a row here. Carrier clipping moved it from refused to
+    // BUILT, and it does not meet the shared floor — so it has its own test below rather than a
+    // row with a softer bar, which is what keeps the floor a bar instead of a knob.
     // A doubly-winding loop needs a helical intersection curve on a periodic surface.
     [InlineData("threaded pocket in a sphere", false)]
     public void ConstructionsThatWouldReachARefusal_AreStoppedEarlierOrDoNotReachIt(
@@ -135,9 +137,6 @@ public class TrimmedFaceRefusalTests
             "cone cut with bore" => (Shape.Cone(10, 0, 20)
                 - Shape.Box(40, 40, 40).Translate((0, 0, 34))
                 - Shape.Cylinder(1.5, 60).Translate((4, 0, -30))).ToBrep(),
-            "torus cut with bore" => (Shape.Torus(12, 4)
-                - Shape.Box(60, 60, 20).Translate((0, 0, 12))
-                - Shape.Cylinder(1.5, 40).Translate((12, 0, -20))).ToBrep(),
             _ => Shape.Sphere(10)
                 .ThreadedHole(StandardThreads.Metric(6), [new(0, 0)], 6,
                     SketchPlane.At((0, 0, 10), Vector3d.UnitX, Vector3d.UnitY)).ToBrep(),
@@ -176,6 +175,70 @@ public class TrimmedFaceRefusalTests
                 $"{name} produced a pole-bounded band with holes after all — the tier is now needed");
             Assert.DoesNotContain(windings, w => Math.Abs(w) > 1);
         }
+    }
+
+    /// <summary>
+    /// A torus cut by a plane and then bored blind through its tube. This was a REFUSAL until
+    /// carrier clipping landed — the bore wall's z-constant cut is now trimmed to the arc its
+    /// partner face actually shares, so it arrives as a WRAPPING chain the arrangement splits
+    /// into two bands instead of a closed circle mis-split into a hole plus a disk.
+    ///
+    /// <para><b>The boolean is right and the tessellation is not, and both are asserted here
+    /// rather than one being allowed to stand for the other.</b> The solid is Validate-clean at
+    /// genus 1 and its volume converges monotonically upward on the exact Pappus value —
+    /// 2π²·12·16 less the segment above z = 2 (2π·12·(16·acos(½) − 2√12)) less the bore's slice
+    /// of the tube — measured 2916.5 / 2998.7 / 3009.4 / 3014.5 / 3018.4 / 3019.6 / 3020.5 at
+    /// 16/32/48/64/96/128/192 segments per circle against 3021.1.</para>
+    ///
+    /// <para><b>The residual, pinned so it cannot rot and filed as open work</b>: the bore's rim
+    /// on the tube band is a marching-tracer polyline baked in at boolean time with 15–17
+    /// samples, and each torus face takes HALF of it — split at the face seam rather than at the
+    /// rim's u-extremes, so the half is not u-monotone. The periodic-band tier pairs its chains
+    /// by u, which is exactly the configuration that inverts, and the fold count therefore GROWS
+    /// with density: 2 / 0 / 0 / 1 / 1 / 14 / 53 at the densities above, worst normal agreement
+    /// −0.304 / 0.743 / 0.994 / −0.133 / −0.179 / −0.226 / −0.304. The bound below is a RECORD
+    /// of today's behaviour, not a bar the tessellator should be allowed to sit at.</para>
+    /// </summary>
+    [Fact]
+    public void TorusCutWithABore_BuildsWithARecordedTessellationResidual()
+    {
+        var solid = (Shape.Torus(12, 4)
+            - Shape.Box(60, 60, 20).Translate((0, 0, 12))
+            - Shape.Cylinder(1.5, 40).Translate((12, 0, -20))).ToBrep();
+        solid.Validate();
+        Assert.True(solid.SatisfiesEulerFormula(genus: 1), "a bored ring is still genus 1");
+
+        // Pappus throughout: the ring, less the tube's segment above the cut, less the material
+        // the bore takes out of the tube between its lower surface and the bore's ceiling at z = 0.
+        double ring = 2 * Math.PI * Math.PI * 12 * 16;
+        double segment = 2 * Math.PI * 12 * (16 * Math.Acos(0.5) - 2 * Math.Sqrt(12));
+        double bore = 2 * Quad(x => 2 * Math.Sqrt(2.25 - x * x) * Math.Sqrt(16 - x * x), 0, 1.5, 400);
+        double expected = ring - segment - bore;
+
+        double previous = double.NegativeInfinity;
+        foreach (int segments in (ReadOnlySpan<int>)[48, 96, 192])
+        {
+            double volume = BRepTessellator.Tessellate(solid, segments, segments / 2).Volume();
+            Assert.True(volume > previous, $"volume must converge upward: {previous} then {volume}");
+            Assert.True(volume < expected, $"an inscribed tessellation cannot exceed {expected}: {volume}");
+            previous = volume;
+        }
+        Assert.True(expected - previous < 0.001 * expected,
+            $"192 segments must be within 0.1% of {expected}, measured {previous}");
+
+        // The residual. Zero at the two densities where the corpus measures the trimmed tiers,
+        // and growing above them — see the remarks.
+        Assert.Equal(0, TessellationQuality.Audit(solid, 48, 24).Folds);
+        Assert.InRange(TessellationQuality.Audit(solid, 192, 96).Folds, 1, 60);
+    }
+
+    /// <summary>Midpoint rule, enough for a napkin integral used only as a test oracle.</summary>
+    private static double Quad(Func<double, double> f, double a, double b, int steps)
+    {
+        double h = (b - a) / steps, sum = 0;
+        for (int i = 0; i < steps; i++)
+            sum += f(a + h * (i + 0.5));
+        return sum * h;
     }
 
     private static int Winding(Surface surface, BrepLoop loop, double period, BrepSolid solid)

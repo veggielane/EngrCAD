@@ -100,18 +100,35 @@ public static class BrepBoolean
         // Flush operands need two extra filters; both are gated on a shared plane actually
         // existing, so a purely transversal boolean distributes its curves exactly as before.
         bool flush = sharedPlanes.Count > 0;
-        foreach (var (fa, fb, curve) in pending)
+        foreach (var (fa, fb, wholeCurve) in pending)
         {
             bool usable = !flush || MeetBeyondAPoint(fa, fb);
-            // Identical carriers on repeated geometry (patterned faces sharing a plane)
-            // produce the same curve once per pair; splitting a face twice along the same
-            // curve breaks the arrangement tracer.
-            if (usable && (!flush || ReachesInterior(fa, curve)) &&
-                !curvesA[fa].Any(existing => SameCurve(existing.Curve, curve)))
-                curvesA[fa].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fb, curve))));
-            if (usable && (!flush || ReachesInterior(fb, curve)) &&
-                !curvesB[fb].Any(existing => SameCurve(existing.Curve, curve)))
-                curvesB[fb].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fa, curve))));
+            if (!usable)
+                continue;
+            // The breakpoints are the SAME list for both sides, so wherever the two faces
+            // genuinely share the curve they cut it at identical parameters and the seams pair.
+            var cuts = ClipBreakpoints(wholeCurve, fa, fb);
+            var piecesA = ClipToFace(wholeCurve, fa, fb, cuts);
+            var piecesB = ClipToFace(wholeCurve, fb, fa, cuts);
+            // The closed-curve seam anchor is only meaningful when BOTH sides still see the
+            // closed curve — see SeamBreaks.
+            bool anchorSeam = piecesA is [var onlyA] && ReferenceEquals(onlyA, wholeCurve)
+                && piecesB is [var onlyB] && ReferenceEquals(onlyB, wholeCurve);
+            foreach (var curve in piecesA)
+            {
+                // Identical carriers on repeated geometry (patterned faces sharing a plane)
+                // produce the same curve once per pair; splitting a face twice along the same
+                // curve breaks the arrangement tracer.
+                if ((!flush || ReachesInterior(fa, curve)) &&
+                    !curvesA[fa].Any(existing => SameCurve(existing.Curve, curve)))
+                    curvesA[fa].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fb, curve), anchorSeam)));
+            }
+            foreach (var curve in piecesB)
+            {
+                if ((!flush || ReachesInterior(fb, curve)) &&
+                    !curvesB[fb].Any(existing => SameCurve(existing.Curve, curve)))
+                    curvesB[fb].Add((curve, SeamBreaks(curve, FaceSplitter.CrossingParameters(fa, curve), anchorSeam)));
+            }
         }
         foreach (var (fa, fb) in coplanarPairs)
         {
@@ -463,7 +480,8 @@ public static class BrepBoolean
                     continue;
                 if (curves.Any(existing => Covers(existing.Curve, rim)))
                     continue;
-                curves.Add((rim, SeamBreaks(rim, FaceSplitter.CrossingParameters(partner, rim))));
+                // A rim is a CurveSegment and never closed, so the anchor never applies.
+                curves.Add((rim, SeamBreaks(rim, FaceSplitter.CrossingParameters(partner, rim), anchored: true)));
             }
         }
     }
@@ -561,6 +579,134 @@ public static class BrepBoolean
         var size = overlap.Size;
         return Math.Max(size.X, Math.Max(size.Y, size.Z)) > FaceGeometry.SeamTolerance;
     }
+
+    /// <summary>
+    /// Curve parameters at which a face-pair intersection curve may be clipped: the domain ends
+    /// plus every parameter at which the curve crosses EITHER face's boundary.
+    ///
+    /// <para>Computed once per face pair and shared by both sides' clips, which is what keeps
+    /// the two solids welding: wherever the pair genuinely shares a stretch, both cut it at
+    /// identical parameters, so the edges built on it have identical endpoints. The parameters
+    /// are the exact crossings the splitter itself computes (Newton-refined against the
+    /// boundary edges), never sampled guesses — a clipped end becomes a vertex, so it must not
+    /// carry a sampling error.</para>
+    /// </summary>
+    private static List<double> ClipBreakpoints(Curve3d curve, BrepFace fa, BrepFace fb)
+    {
+        var domain = curve.Domain;
+        var breaks = new List<double> { domain.Start, domain.End };
+        breaks.AddRange(FaceSplitter.CrossingParameters(fa, curve));
+        breaks.AddRange(FaceSplitter.CrossingParameters(fb, curve));
+        breaks.Sort();
+        // Relative, because a curve parameter carries no model units.
+        double epsilon = ClipEpsilon(domain);
+        for (int i = breaks.Count - 1; i > 0; i--)
+        {
+            if (breaks[i] - breaks[i - 1] < epsilon || breaks[i] < domain.Start || breaks[i] > domain.End)
+                breaks.RemoveAt(i);
+        }
+        return breaks;
+    }
+
+    private static double ClipEpsilon(in Interval domain) => Math.Max(1e-12, domain.Length * 1e-9);
+
+    /// <summary>
+    /// The piece(s) of a face-pair intersection curve that <paramref name="face"/> should be
+    /// split along — everything except the stretches that lie inside <paramref name="face"/>
+    /// but OUTSIDE its <paramref name="partner"/>.
+    ///
+    /// <para><b>Why the curve needs clipping at all.</b> <see cref="SurfaceIntersection"/>
+    /// intersects CARRIERS, and a carrier is unbounded (a plane) or bounded only by its own
+    /// parameter rectangle (a helical band's domain is the bounding rectangle of a
+    /// parallelogram-shaped face). The curve it returns therefore runs past both faces. Each
+    /// face's splitter already discards the stretches outside ITSELF — but nothing discarded the
+    /// stretches outside the OTHER face, so a face was split along geometry the pair does not
+    /// actually share: a chamfer cone's cut ran past a threaded rod's cap and arrived at the
+    /// cone face as a dangling edge no arrangement can trace, and four wall lines of a pocket
+    /// tool cut a host face into 9 fragments where the tool's footprint asks for 2.</para>
+    ///
+    /// <para><b>The rule is asymmetric, and that is the whole design.</b> The symmetric form —
+    /// hand both faces the stretches inside both trims — is wrong wherever the two faces share
+    /// a boundary: clipping to the partner then cuts the curve exactly ON this face's own
+    /// boundary, turning a transversal crossing into a tangential touch, and the arrangement is
+    /// left with an endpoint that no boundary edge owns. Measured on
+    /// <c>Box(20,20,10) &amp; Box(10,30,10)</c>, whose side walls meet along their full height:
+    /// every vertical curve stopped exactly on both walls' rims and tracing did not close.
+    /// Keeping the stretches that lie outside THIS face costs nothing — the splitter drops them
+    /// by loop parity anyway — and it restores the crossing. So the clip removes exactly the
+    /// over-split it exists to remove, and nothing else.</para>
+    ///
+    /// <para><b>A curve that survives whole is returned as ITSELF</b>, not as a segment covering
+    /// its whole domain — a closed curve must stay closed, since the wrap-splitting and
+    /// hole-splitting paths both key on <see cref="Curve3d.IsClosed"/>. Every transversal
+    /// boolean whose curves lie inside both trims (a bore circle on a cap, a rim line between
+    /// two boxes) therefore gets bit-for-bit what it got before.</para>
+    ///
+    /// <para><b>The keep/drop test errs toward KEEPING</b> (<see cref="InsideForClip"/>): a
+    /// stretch wrongly kept only reproduces the un-clipped behaviour, while one wrongly dropped
+    /// loses a seam silently and the boolean returns two touching shells.</para>
+    /// </summary>
+    private static List<Curve3d> ClipToFace(
+        Curve3d curve, BrepFace face, BrepFace partner, List<double> breaks)
+    {
+        var domain = curve.Domain;
+        if (breaks.Count < 2)
+            return [curve];
+        double epsilon = ClipEpsilon(domain);
+
+        var kept = new List<(double S0, double S1)>();
+        for (int i = 0; i + 1 < breaks.Count; i++)
+        {
+            double s0 = breaks[i], s1 = breaks[i + 1];
+            var probe = curve.PointAt(FaceGeometry.InteriorSampleParameter(curve, s0, s1));
+            if (InsideForClip(face, probe) && !InsideForClip(partner, probe))
+                continue;
+            if (kept.Count > 0 && kept[^1].S1 >= s0 - epsilon)
+                kept[^1] = (kept[^1].S0, s1);
+            else
+                kept.Add((s0, s1));
+        }
+        if (kept.Count == 0)
+            return [];
+        if (kept.Count == 1 && kept[0].S0 <= domain.Start + epsilon && kept[0].S1 >= domain.End - epsilon)
+            return [curve];
+        // A closed curve's surviving stretches join across the seam: the piece ending at the
+        // domain end continues into the one starting at the domain start, and cutting there
+        // would leave two edges where the geometry has one.
+        if (curve.IsClosed && kept.Count > 1 &&
+            kept[0].S0 <= domain.Start + epsilon && kept[^1].S1 >= domain.End - epsilon)
+        {
+            var wrapped = (kept[^1].S0, kept[0].S1 + domain.Length);
+            kept.RemoveAt(kept.Count - 1);
+            kept[0] = wrapped;
+        }
+        return [.. kept.Select(k => (Curve3d)new CurveSegment(curve, k.S0, k.S1))];
+    }
+
+    /// <summary>
+    /// The clip's containment test, in three parts — all three of which err toward INSIDE,
+    /// because a stretch wrongly kept only reproduces the un-clipped behaviour while one
+    /// wrongly dropped loses a seam and returns two touching shells.
+    ///
+    /// <para><b>A point that does not project onto the face's surface at all counts as
+    /// inside.</b> A probe can fail to project for reasons that say nothing about the trim — a
+    /// tracer polyline is on its surface only at the vertices, and a stretch spanning none has
+    /// no exact interior sample.</para>
+    ///
+    /// <para><b>Parity is two-sided</b> (<see cref="FaceGeometry.ContainsTwoSided"/>), so a
+    /// pole-bounded face answers instead of calling every point on itself outside. Without it a
+    /// sphere-through-a-box union loses its whole seam curve and comes back at Euler 4.</para>
+    ///
+    /// <para><b>A stretch running ALONG the face's boundary counts as inside.</b> Parity there
+    /// is decided by rounding, and the geometry is exactly the case the clip must not touch:
+    /// where two solids mate, the shared rim IS a face boundary on one side. Measured on
+    /// <c>Box(20,20,10) &amp; Box(10,30,10)</c>, whose side walls meet the shared top plane
+    /// along their own top edges — dropped, the arrangement had nothing to close with.</para>
+    /// </summary>
+    private static bool InsideForClip(BrepFace face, in Vector3d probe) =>
+        !face.Surface.TryProjectPoint(probe, out _, FaceGeometry.InverseEvaluationTolerance) ||
+        FaceGeometry.ContainsTwoSided(face, probe) ||
+        FaceGeometry.DistanceToBoundary(face, probe) <= FaceGeometry.SeamTolerance;
 
     /// <summary>
     /// Whether any exact sample of the curve lies STRICTLY inside the face — on its surface,
@@ -688,9 +834,20 @@ public static class BrepBoolean
                     ? link.Curve.PointAt(link.Curve.Domain.End)
                     : link.Curve.PointAt(link.Curve.Domain.Start);
             }
-            if (closed)
+            var closedChain = closed ? chain.Select(c => c.Curve).ToList() : null;
+            // A chain that WRAPS the surface's period bounds a band, not a hole: the chain path
+            // would make a face-with-hole plus a disk, and neither side of a wrapping cut is a
+            // hole in the other. Hand it back for the arrangement, which pairs wrapping loops
+            // bottom-to-top by v. See FaceSplitter.ChainWrapsPeriod for how carrier clipping
+            // started producing these.
+            if (closedChain is not null && FaceSplitter.ChainWrapsPeriod(face, closedChain))
             {
-                chains.Add([.. chain.Select(c => c.Curve)]);
+                rest.AddRange(chain);
+                continue;
+            }
+            if (closedChain is not null)
+            {
+                chains.Add(closedChain);
             }
             else
             {
@@ -745,9 +902,18 @@ public static class BrepBoolean
     /// sides: a side that wrap-splits a band along the curve anchors its closed seam
     /// edge's vertex there, so the side that instead cuts the curve into arc segments
     /// must subdivide at the same point or the seam edges cannot pair up.
+    ///
+    /// <para><paramref name="anchored"/> is false when the CLIP left one side with open
+    /// pieces instead of the closed curve: nothing anchors at the domain start any more, and
+    /// adding the break then splits an arc the other side keeps whole. Measured on a slot
+    /// through a bore — the bore wall shares with the slot's floor only the arc inside the
+    /// slot's width, so it is cut there and never wrap-splits, while the floor still sees the
+    /// full circle; the stale anchor left the +x arc as two edges against the wall's one, six
+    /// unpaired edges in all.</para>
     /// </summary>
-    private static IReadOnlyList<double> SeamBreaks(Curve3d curve, IReadOnlyList<double> crossings) =>
-        curve.IsClosed ? [.. crossings, curve.Domain.Start] : crossings;
+    private static IReadOnlyList<double> SeamBreaks(
+        Curve3d curve, IReadOnlyList<double> crossings, bool anchored) =>
+        curve.IsClosed && anchored ? [.. crossings, curve.Domain.Start] : crossings;
 
     private static bool SameCurve(Curve3d a, Curve3d b)
     {

@@ -530,52 +530,13 @@ public static class PlanarSection
     private readonly record struct SectionRun(List<Vector3d> Points, int StartNode, int EndNode);
 
     /// <summary>
-    /// Is a point on a face's surface inside the face's trimmed region? Even-odd parity of a
-    /// v ray against the pulled-back loops, with periodic u compacted into the probe's period
-    /// — the same rule as <see cref="FaceGeometry.Contains"/>, run in BOTH v directions.
-    ///
-    /// <para>Both directions must agree for a properly closed trim, since a vertical line
-    /// crosses a closed loop an even number of times in total. They disagree exactly on a
-    /// POLE-BOUNDED face, where one side of the domain is a degenerate point rather than a
-    /// rim: a probe halfway to the pole then has a rim below it and nothing above, and the
-    /// one-sided rule of <see cref="FaceGeometry.Contains"/> declares it outside — which is
-    /// why a sphere's cross-section came back empty. When the two disagree the probe lies
-    /// between the rim and the pole, so it is inside.</para>
+    /// Is a point on a face's surface inside the face's trimmed region? The two-sided parity
+    /// rule — see <see cref="FaceGeometry.ContainsTwoSided"/>, which this page's pole finding
+    /// (a sphere's cross-section came back empty) is the origin of, and which the boolean's
+    /// carrier clip now asks as well.
     /// </summary>
-    private static bool InsideFace(BrepFace face, in Vector3d point)
-    {
-        if (!face.Surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance))
-            return false;
-
-        double period = FaceGeometry.PeriodU(face.Surface);
-        int above = 0, below = 0;
-        foreach (var loop in FaceGeometry.PullLoops(face))
-        {
-            for (int i = 0; i < loop.Count; i++)
-            {
-                var a = loop[i];
-                var b = loop[(i + 1) % loop.Count];
-                if (period > 0)
-                {
-                    b = new Vector2d(b.X + period * Math.Round((a.X - b.X) / period), b.Y);
-                    double mid = (a.X + b.X) / 2;
-                    double shift = period * Math.Round((uv.X - mid) / period);
-                    a = new Vector2d(a.X + shift, a.Y);
-                    b = new Vector2d(b.X + shift, b.Y);
-                }
-                if (a.X <= uv.X == b.X <= uv.X)
-                    continue;
-                double t = (uv.X - a.X) / (b.X - a.X);
-                if (a.Y + t * (b.Y - a.Y) > uv.Y)
-                    above++;
-                else
-                    below++;
-            }
-        }
-        bool aboveOdd = (above & 1) == 1;
-        bool belowOdd = (below & 1) == 1;
-        return aboveOdd == belowOdd ? aboveOdd : true;
-    }
+    private static bool InsideFace(BrepFace face, in Vector3d point) =>
+        FaceGeometry.ContainsTwoSided(face, point);
 
     private static double WrapParameter(in Interval domain, double t)
     {
