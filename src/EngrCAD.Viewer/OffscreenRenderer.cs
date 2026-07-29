@@ -74,10 +74,10 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true) =>
+        bool fields = true, double deformFactor = 1) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
             width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, preview, previewWorld, fields);
+            sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
@@ -94,7 +94,7 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true)
+        bool fields = true, double deformFactor = 1)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -109,7 +109,7 @@ public static class OffscreenRenderer
         var cache = new PassCache(gl);
         var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
-            preview, previewWorld, fields);
+            preview, previewWorld, fields, deformFactor);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -127,7 +127,7 @@ public static class OffscreenRenderer
     /// </summary>
     /// <param name="frames">Per frame: the posed instances and the camera to draw them with.</param>
     public static IReadOnlyList<byte[]> RenderSequence(
-        IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera)> frames,
+        IReadOnlyList<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor)> frames,
         int width, int height, bool furniture = true,
         ViewStyle style = ViewStyle.ShadedWithEdges,
         SectionAxis sectionAxis = SectionAxis.Z, double? sectionOffset = null,
@@ -148,11 +148,11 @@ public static class OffscreenRenderer
         using var gl = GL.GetApi(new LamdaNativeContext(egl.GetFunction));
         var cache = new PassCache(gl);
         var pixels = new List<byte[]>(frames.Count);
-        foreach (var (instances, camera) in frames)
+        foreach (var (instances, camera, deformFactor) in frames)
         {
             var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
                 furniture, style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine,
-                supersample, preview: null, previewWorld: null, fields);
+                supersample, preview: null, previewWorld: null, fields, deformFactor);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }
         return pixels;
@@ -204,10 +204,10 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true)
+        bool fields = true, double deformFactor = 1)
     {
         var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -222,10 +222,10 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true)
+        bool fields = true, double deformFactor = 1)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -235,12 +235,13 @@ public static class OffscreenRenderer
     private readonly record struct InstanceDraw(
         EffectiveMode Mode, uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
         uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
-        bool SectionClipped, bool FieldColored, uint GhostVao, int GhostIndexCount);
+        bool SectionClipped, bool FieldColored, double DeformScale, uint GhostVao, int GhostIndexCount);
 
     /// <summary>The per-part GL buffers a draw needs, shared by every instance of that part.</summary>
     private readonly record struct PartUpload(
         uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
-        uint WireVao, int WireVertexCount, bool FieldColored, uint GhostVao, int GhostIndexCount);
+        uint WireVao, int WireVertexCount, bool FieldColored, double DeformScale,
+        uint GhostVao, int GhostIndexCount);
 
     /// <summary>
     /// What survives between frames of one context: the four linked programs and the
@@ -282,7 +283,8 @@ public static class OffscreenRenderer
         CameraState? camera, bool furniture,
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
-        IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields)
+        IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields,
+        double deformFactor)
     {
         uint meshProgram = cache.MeshProgram;
         uint lineProgram = cache.LineProgram;
@@ -309,6 +311,7 @@ public static class OffscreenRenderer
         // field-colour attribute, whose strength uniform is 0 for such a part anyway.
         RenderUploads.SetDefaultOcclusion(gl);
         RenderUploads.SetDefaultFieldColor(gl);
+        RenderUploads.SetDefaultDeformation(gl);
 
         // Background gradient: vertexless fullscreen triangle, no depth.
         uint bgVao = gl.GenVertexArray();
@@ -380,15 +383,15 @@ public static class OffscreenRenderer
                 uint vao = 0;
                 int indexCount = 0;
                 // Simulation results (the same FieldRendering call the window makes, so
-                // both passes upload identical colour floats and a deformed shape is the
-                // same displaced mesh). Built even for the wireframe/points modes' sake
-                // of the deform, since the displaced geometry drives every mode.
+                // both passes upload identical colour and displacement floats). The
+                // geometry uploaded is the UNDEFORMED mesh: the shader displaces it from
+                // uDeformScale, which is what makes a whole animated clip reuse one
+                // upload.
                 var render = RenderMesh.CreateFlat(mesh);
                 FieldMeshData? field =
                     fields && FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out _)
                         ? built
                         : null;
-                var drawn = field?.Deformed ?? render;
                 uint ghostVao = 0;
                 int ghostIndexCount = 0;
                 if (mode != EffectiveMode.Wireframe)
@@ -396,13 +399,13 @@ public static class OffscreenRenderer
                     // Baked per-vertex occlusion (cached per mesh, shared with the
                     // window pass, deterministic) — the whole AO story is vertex data,
                     // so both passes shade from identical floats.
-                    (vao, _, _, _, _) = RenderUploads.UploadMesh(gl, drawn,
+                    (vao, _, _, _, _, _) = RenderUploads.UploadMesh(gl, render,
                         ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null,
-                        field?.Colors);
-                    indexCount = drawn.Indices.Length;
+                        field?.Colors, field?.Deformation);
+                    indexCount = render.Indices.Length;
                     if (field is { ShowGhost: true })
                     {
-                        (ghostVao, _, _, _, _) = RenderUploads.UploadMesh(gl, render);
+                        (ghostVao, _, _, _, _, _) = RenderUploads.UploadMesh(gl, render);
                         ghostIndexCount = render.Indices.Length;
                     }
                 }
@@ -412,7 +415,7 @@ public static class OffscreenRenderer
                 // that has moved (the window's rule, stated once in each pass because
                 // the passes decide what to upload separately).
                 if (mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent
-                    && field?.Deformed is null)
+                    && field is not { Deformed: true })
                 {
                     // B-Rep-backed parts overlay their ACTUAL B-Rep edges (smooth
                     // circles at any tessellation); others fall back to mesh
@@ -436,7 +439,7 @@ public static class OffscreenRenderer
                     }
                 }
                 shared = new PartUpload(vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
-                    field is not null, ghostVao, ghostIndexCount);
+                    field is not null, field?.DeformScale ?? 0, ghostVao, ghostIndexCount);
                 uploaded[part] = shared;
             }
 
@@ -446,7 +449,7 @@ public static class OffscreenRenderer
                 shared.WireVao, shared.WireVertexCount, instance.World, part.Color ?? Palette.Steel,
                 worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
                 section && part.ClippedBySection,
-                shared.FieldColored, shared.GhostVao, shared.GhostIndexCount));
+                shared.FieldColored, shared.DeformScale, shared.GhostVao, shared.GhostIndexCount));
         }
 
         // Shaded fills, pushed back slightly so the edge overlay wins the depth test.
@@ -471,6 +474,7 @@ public static class OffscreenRenderer
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
             ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
         int uFieldColor = gl.GetUniformLocation(meshProgram, "uFieldColor");
+        int uDeformScale = gl.GetUniformLocation(meshProgram, "uDeformScale");
         gl.Uniform1(uAlpha, 1f);
 
         // Section mode relies on face culling staying OFF (nothing here enables
@@ -490,6 +494,7 @@ public static class OffscreenRenderer
             gl.UniformMatrix4(uModel, 1, false, matrix);
             gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
             gl.Uniform1(uFieldColor, d.FieldColored ? FieldRendering.Strength : 0f);
+            gl.Uniform1(uDeformScale, (float)(d.DeformScale * deformFactor));
             gl.BindVertexArray(d.Vao);
             gl.DrawElements(PrimitiveType.Triangles, (uint)d.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
         }
@@ -528,6 +533,7 @@ public static class OffscreenRenderer
             gl.UseProgram(pointProgram);
             int uPointModel = gl.GetUniformLocation(pointProgram, "uModel");
             int uPointColor = gl.GetUniformLocation(pointProgram, "uColor");
+            int uPointDeformScale = gl.GetUniformLocation(pointProgram, "uDeformScale");
             CameraMath.WriteColumnMajor(view, matrix);
             gl.UniformMatrix4(gl.GetUniformLocation(pointProgram, "uView"), 1, false, matrix);
             CameraMath.WriteColumnMajor(proj, matrix);
@@ -543,6 +549,7 @@ public static class OffscreenRenderer
                 CameraMath.WriteColumnMajor(d.Model, matrix);
                 gl.UniformMatrix4(uPointModel, 1, false, matrix);
                 gl.Uniform3(uPointColor, d.Color.R, d.Color.G, d.Color.B);
+                gl.Uniform1(uPointDeformScale, (float)(d.DeformScale * deformFactor));
                 gl.BindVertexArray(d.Vao);
                 gl.DrawElements(PrimitiveType.Points, (uint)d.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
             }
@@ -581,6 +588,7 @@ public static class OffscreenRenderer
                 gl.UniformMatrix4(uModel, 1, false, matrix);
                 gl.Uniform3(uColor, d.Color.R, d.Color.G, d.Color.B);
                 gl.Uniform1(uFieldColor, d.FieldColored ? FieldRendering.Strength : 0f);
+                gl.Uniform1(uDeformScale, (float)(d.DeformScale * deformFactor));
                 gl.BindVertexArray(d.Vao);
                 gl.DrawElements(PrimitiveType.Triangles, (uint)d.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
             }
@@ -607,6 +615,9 @@ public static class OffscreenRenderer
         {
             gl.UseProgram(meshProgram);
             gl.Uniform1(uFieldColor, 0f);
+            // The ghost geometry carries no displacement buffer; stated for the same
+            // reason the window states it.
+            gl.Uniform1(uDeformScale, 0f);
             gl.Uniform1(uAlpha, FieldRendering.GhostAlpha);
             gl.Enable(EnableCap.Blend);
             gl.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
@@ -675,9 +686,11 @@ public static class OffscreenRenderer
         // on-image size, exactly as the annotation text does.
         if (fields)
         {
-            var display = draws.Exists(d => d.FieldColored)
-                ? FirstFieldDisplay(instances)
-                : null;
+            // At the EFFECTIVE exaggeration: the legend's title states the factor, so
+            // an animated frame must say the number it was drawn at (the window's
+            // ActiveFieldDisplay applies the same multiply). Factor 1 leaves it exact.
+            var display = FieldRendering.AtFactor(
+                draws.Exists(d => d.FieldColored) ? FirstFieldDisplay(instances) : null, deformFactor);
             new FieldLegendLayer().Draw(gl, display, width, height, supersample,
                 new LineProgramHandles(
                     lineProgram, uLineModel, uLineView, uLineProj, uLineColor, uLineSectionEnabled));

@@ -222,7 +222,10 @@ public static class EngrCad
         }
         OffscreenRenderer.RenderToImage(instances, path, width, height, resolved,
             furniture: true, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, preview: null, previewWorld: null, fields);
+            sectionPlanes, sectionCombine, preview: null, previewWorld: null, fields,
+            // A deformation track reaches the pass as one scalar; with no such track the
+            // factor is 1, so a still of a pose-only animation is unchanged.
+            animation.At(t).DeformFactor);
     }
 
     /// <summary>

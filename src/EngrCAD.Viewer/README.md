@@ -544,26 +544,59 @@ The toolbar **Fields** toggle (on by default) switches it off, `RenderToImage(�
 fields: false)` does the same headlessly, and the properties panel shows the part's
 results, which one is displayed, its min/max and the deformation scale.
 
-**Colour is a vertex attribute, deformation is geometry** — and the two behave
-differently on purpose:
+**Colour and deformation are both vertex attributes**, and both under the rule baked
+occlusion established:
 
-- Colours ride `aFieldColor` (attribute 3) under the exact rule baked occlusion follows:
-  a mesh uploaded with no colour buffer reads a context constant, the shader's
-  `uFieldColor` strength is 0, and `mix(uColor, vFieldColor, 0.0)` is `uColor` bit for
-  bit. **A part with no results therefore renders byte-identically** to before field
-  display existed — proved by the docs suite (all 87 rendered PNGs unchanged across the
-  shader change), not merely intended.
-- A deformed shape is different geometry, not a different pose, so it cannot ride the
-  matrices-only `SetInstancePoses` path the exploded view and the animation transport
-  use. It **re-uploads**, deliberately and explicitly, which is why `ShowFields` is a
-  mode switch and not something on the animation path. Facet normals are recomputed from
-  the displaced positions (carrying the originals over would make the deformed shape look
-  exactly like the original), the undeformed shape draws as an extra translucent body at
-  `FieldRendering.GhostAlpha`, and a deformed part gets **no feature-edge overlay** — its
-  exact B-Rep edges describe geometry that has moved.
+- Colours ride `aFieldColor` (attribute 3): a mesh uploaded with no colour buffer reads a
+  context constant, the shader's `uFieldColor` strength is 0, and
+  `mix(uColor, vFieldColor, 0.0)` is `uColor` bit for bit. **A part with no results
+  therefore renders byte-identically** to before field display existed — proved by the
+  docs suite (all 87 rendered PNGs unchanged across the shader change), not merely
+  intended.
+- Displacement rides attributes 4–7, one interleaved buffer of four vec3s per vertex, and
+  the vertex shader applies `aPos + uDeformScale * aDeformOffset`. A mesh with no
+  displacement buffer reads zero, so `aPos + s*0` is `aPos` for **any** uniform value and
+  an unaffected part is untouched however the scale is driven.
 
-Picking follows what is drawn: a deformed part's pick BVH is built over the displaced
-mesh, so a click selects it where it is on screen.
+That second bullet is the whole reason **animating a structural result costs one float
+uniform per frame** (`ViewportControl.DeformFactor`, driven by an `Animation`'s
+`DeformationTrack`): no buffer is touched, nothing is re-uploaded, and the instance list
+is untouched — the same property that lets `SetInstancePoses` animate an exploded view
+with matrices alone. The geometry uploaded is always the **undeformed** mesh; a whole clip
+reuses one upload, which is what lets `OffscreenRenderer.RenderSequence` batch a
+deformation export exactly as it batches an explode.
+
+Shading follows exactly, and the identity that makes that free is worth knowing: a
+triangle whose vertices move linearly in `s` has edges `a + s·α` and `b + s·β`, so its
+facet normal is `(a×b) + s(a×β + α×b) + s²(α×β)` — **exactly quadratic in s**. Three
+coefficient vectors therefore reproduce the displaced facet normal at every scale, which
+is the same normal the earlier CPU path recomputed. (Measured on a cantilever at its own
+40× exaggeration, the surface turns 9.9° — matching the analytic tip slope
+`atan(40·3·tip/2L)` — so reusing the source normals would have been a visible ~12%
+shading error, not a rounding one.) An all-zero result means the displaced triangle
+collapsed and the shader falls back to `aNormal`, the CPU path's own exact-zero rule.
+
+The undeformed shape draws as an extra translucent body at `FieldRendering.GhostAlpha`
+from its **own** upload rather than from the main VAO at scale 0 — it must look like the
+undeformed part, so it wants the part's face normals and no baked occlusion attached. And
+a part carrying a displacement gets **no feature-edge overlay** at any factor: those exact
+B-Rep edges describe geometry that has moved, and deciding it per frame would make the
+draw list depend on `t`, which is the one thing this path does not do. A consequence worth
+stating: the factor-0 frame of an animation is the undeformed *shape* without the
+undeformed part's chrome, so it is deliberately not the same picture as a still of a part
+whose own `DeformScale` is 0.
+
+**Picking follows the part's own exaggeration and does not follow an animation.** A pick
+BVH is a spatial index, not a uniform, so it is built once over the displaced mesh
+(`FieldRendering.PickShape`) at the scale the part states — which is the animation's
+factor-1 configuration. A click is therefore exact on a static plot and at a load ramp's
+peak, and off by the difference in exaggeration at intermediate frames; rebuilding a
+spatial index per frame is precisely the cost this design exists to avoid, so the
+mismatch is documented rather than paid for.
+
+The legend follows the effective factor (`ViewportControl.ActiveFieldDisplay` multiplies
+it in), because its title states the number: a bar reading `40X DEFORMED` over a frame
+drawn at 20× would be exactly the lie the title exists to prevent.
 
 The **legend** is `FieldLegend` (EngrCAD.Viewer.Core) drawn by `FieldLegendLayer` — a
 colour bar of flat-coloured bands, tick numbers and a title in the stroke font, on the

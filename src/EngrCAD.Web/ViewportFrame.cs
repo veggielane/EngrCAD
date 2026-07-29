@@ -42,6 +42,11 @@ namespace EngrCAD.Web;
 /// <param name="GhostKey">Key of the UNDEFORMED mesh upload when this instance is drawn
 /// displaced, or null. Drawn as a faint translucent body behind the deformed shape —
 /// the comparison is the point of a deformed-shape plot.</param>
+/// <param name="DeformScale">The part's own displacement exaggeration, 0 when it draws
+/// undeformed. Its fill and point draws send it (times the frame's deformation factor)
+/// as <c>uDeformScale</c>; the geometry uploaded is always the UNDEFORMED mesh, and the
+/// vertex shader displaces it from the attribute block — which is what makes animating
+/// a result one uniform per frame in the browser exactly as on the desktop.</param>
 public readonly record struct ViewportInstance(
     string GeometryKey, Matrix4d World, PartColor Color, Vector3d WorldCenter,
     DisplayMode Mode = DisplayMode.Shaded,
@@ -50,7 +55,8 @@ public readonly record struct ViewportInstance(
     bool Visible = true,
     bool ClippedBySection = true,
     bool FieldColored = false,
-    string? GhostKey = null);
+    string? GhostKey = null,
+    double DeformScale = 0);
 
 /// <summary>
 /// The field legend's uploads: the colour bar's triangle vertices and the combined
@@ -261,7 +267,8 @@ public static class ViewportFrame
         ViewportContours? contours = null,
         ViewportCube? cube = null,
         ViewportAnnotations? annotations = null,
-        ViewportLegend? legend = null)
+        ViewportLegend? legend = null,
+        double deformFactor = 1)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -301,6 +308,10 @@ public static class ViewportFrame
             // own fill draw overrides it, so a part with no results renders
             // byte-identically (mix(uColor, vFieldColor, 0.0) is uColor).
             ["uFieldColor"] = 0f,
+            // Neutral for the same reason, and load-bearing in the same way: a part with
+            // no displacement buffer reads zero offsets, so the value cannot move it, and
+            // a deformed instance's own draw states the scale it is drawn at.
+            ["uDeformScale"] = 0f,
             ["uSectionEnabled"] = sectionActive ? 1f : 0f,
             ["uSectionCount"] = new IntUniform(sectionCount),
             ["uPointSize"] = PointSize * (float)pixelScale,
@@ -372,6 +383,7 @@ public static class ViewportFrame
             };
             Highlighted(uniforms, i, selected, hovered);
             FieldColored(uniforms, instance);
+            Deformed(uniforms, instance, deformFactor);
             Unclipped(uniforms, sectionActive, instance);
             draws.Add(new DrawCall
             {
@@ -437,6 +449,8 @@ public static class ViewportFrame
                 // must reach them through the colour.
                 ["uColor"] = Rgb(Highlight.LineColor(i, selected, hovered, Tuple(instance.Color))),
             };
+            // The points view draws the mesh buffer, so it follows the displacement too.
+            Deformed(pointUniforms, instance, deformFactor);
             Unclipped(pointUniforms, sectionActive, instance);
             draws.Add(new DrawCall
             {
@@ -457,7 +471,7 @@ public static class ViewportFrame
         //
         // Note what is absent: no polygon offset. The fills wrote no depth, so there is
         // nothing for the edges to z-fight with, and the desktop disables it here too.
-        AppendTranslucent(draws, instances, modes, eye, selected, hovered, sectionActive);
+        AppendTranslucent(draws, instances, modes, eye, selected, hovered, sectionActive, deformFactor);
 
         // Pass 4b: the undeformed ghosts behind the deformed shapes, in the desktop
         // passes' position — after every opaque and translucent fill, blended with depth
@@ -619,7 +633,8 @@ public static class ViewportFrame
 
     private static void AppendTranslucent(
         List<DrawCall> draws, IReadOnlyList<ViewportInstance> instances,
-        EffectiveMode[] modes, in Vector3d eye, int selected, int hovered, bool sectionActive)
+        EffectiveMode[] modes, in Vector3d eye, int selected, int hovered, bool sectionActive,
+        double deformFactor)
     {
         int count = 0;
         for (int i = 0; i < instances.Count; i++)
@@ -655,6 +670,7 @@ public static class ViewportFrame
             };
             Highlighted(uniforms, index, selected, hovered);
             FieldColored(uniforms, instance);
+            Deformed(uniforms, instance, deformFactor);
             Unclipped(uniforms, sectionActive, instance);
             draws.Add(new DrawCall
             {
@@ -784,6 +800,18 @@ public static class ViewportFrame
     {
         if (instance.FieldColored)
             uniforms["uFieldColor"] = FieldRendering.Strength;
+    }
+
+    /// <summary>Adds the per-draw <c>uDeformScale</c> for a displaced instance: its own
+    /// exaggeration times the frame's animation factor, formed in double and narrowed
+    /// once so a browser frame at factor f matches a desktop render of the same
+    /// configuration. Says nothing for an undisplaced part, which keeps the frame's
+    /// neutral 0.</summary>
+    private static void Deformed(
+        Dictionary<string, object> uniforms, in ViewportInstance instance, double factor)
+    {
+        if (instance.DeformScale != 0)
+            uniforms["uDeformScale"] = (float)(instance.DeformScale * factor);
     }
 
     /// <summary>Adds the per-draw <c>uSectionEnabled = 0</c> override for an instance

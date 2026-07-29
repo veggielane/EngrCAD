@@ -51,9 +51,9 @@ public class AnimationExportBenchmark(ITestOutputHelper output)
             bounds = bounds.Union(instance.Bounds());
         var camera = CameraMath.DefaultCamera(bounds);
 
-        var timeline = new List<(IReadOnlyList<PartInstance>, CameraState)>(frames);
+        var timeline = new List<(IReadOnlyList<PartInstance>, CameraState, double)>(frames);
         for (int i = 0; i < frames; i++)
-            timeline.Add((animation.At(i / (double)frames).Instances!, camera));
+            timeline.Add((animation.At(i / (double)frames).Instances!, camera, 1.0));
 
         // Warm up both paths (JIT tiering makes a single cold run meaningless — the
         // repo's own recorded lesson).
@@ -61,7 +61,7 @@ public class AnimationExportBenchmark(ITestOutputHelper output)
         OffscreenRenderer.Render(timeline[0].Item1, width, height, camera);
 
         var perFrame = Stopwatch.StartNew();
-        foreach (var (instances, cam) in timeline)
+        foreach (var (instances, cam, _) in timeline)
             OffscreenRenderer.Render(instances, width, height, cam);
         perFrame.Stop();
 

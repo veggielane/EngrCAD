@@ -166,9 +166,12 @@
     /// (the part shows a simulation result).</param>
     /// <param name="Ghost">Key of the undeformed mesh, when the part is drawn displaced —
     /// the reference outline behind a deformed-shape plot.</param>
+    /// <param name="DeformScale">The part's own displacement exaggeration (0 when it draws
+    /// undeformed) — the <c>uDeformScale</c> uniform its draws send, before an
+    /// animation's factor.</param>
     private sealed record PartKeys(
         string Mesh, string? Edges, int EdgeVertices, string? Wire, int WireVertices, PickMesh Pick,
-        bool FieldColored = false, string? Ghost = null);
+        bool FieldColored = false, string? Ghost = null, double DeformScale = 0);
 
     private readonly List<ViewportInstance> _drawn = [];
     // Parallel to _drawn: the part, instance and pose each entry came from. The parts
@@ -881,7 +884,7 @@
                 part.EffectiveDisplayMode,   // Ghost renders translucent, same as desktop
                 keys.Edges, keys.EdgeVertices, keys.Wire, keys.WireVertices,
                 Visible: true, ClippedBySection: part.ClippedBySection,
-                FieldColored: keys.FieldColored, GhostKey: keys.Ghost));
+                FieldColored: keys.FieldColored, GhostKey: keys.Ghost, DeformScale: keys.DeformScale));
             _drawnParts.Add(part);
             _drawnInstances.Add(instance);
             _pick.Add(new PickInstance(keys.Pick, instance.World, true, part.ClippedBySection));
@@ -959,16 +962,16 @@
         var mesh = part.GetMesh();
         var render = RenderMesh.CreateFlat(mesh);
         // Simulation results, through the SHARED FieldRendering: the same colour floats
-        // and the same displaced mesh both desktop passes upload. A deformed shape
-        // replaces the uploaded geometry (it is different geometry, not a different
-        // pose) and the undeformed one goes up as a ghost.
+        // and the same displacement attributes both desktop passes upload. The geometry
+        // uploaded is the UNDEFORMED mesh — the vertex shader displaces it from
+        // uDeformScale, so animating a result is a uniform here exactly as it is on the
+        // desktop — and the undeformed shape also goes up as a ghost.
         var field = FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out _)
             ? built
             : (FieldMeshData?)null;
-        var drawn = field?.Deformed ?? render;
         string meshKey = $"part{index}";
-        await gl.UploadMeshAsync(meshKey, drawn.Positions, drawn.Normals, drawn.Indices,
-            occlusion: default, fieldColors: field?.Colors ?? []);
+        await gl.UploadMeshAsync(meshKey, render.Positions, render.Normals, render.Indices,
+            occlusion: default, fieldColors: field?.Colors ?? [], deformation: field?.Deformation ?? []);
 
         string? ghostKey = null;
         if (field is { ShowGhost: true })
@@ -981,7 +984,7 @@
         // A deformed part gets no edge overlay: its exact B-Rep edges describe geometry
         // that has moved (the desktop rule, stated in each pass because each decides
         // what to upload separately).
-        var featureEdges = field?.Deformed is null ? part.GetFeatureEdges() : [];
+        var featureEdges = field is { Deformed: true } ? [] : part.GetFeatureEdges();
         if (featureEdges.Count > 0)
         {
             edgeKey = $"part{index}.edges";
@@ -1000,9 +1003,12 @@
 
         return new PartKeys(
             meshKey, edgeKey, featureEdges.Count * 2, wireKey, wireEdges.Count * 2,
-            // Picking follows what is DRAWN: a click on a deformed part must select it
-            // where it is on screen.
-            PickMesh.Build(drawn), field is not null, ghostKey);
+            // Picking follows what is DRAWN at the part's own exaggeration: a BVH is a
+            // spatial index and cannot be a uniform, so it is built once over the
+            // displaced triangles (FieldRendering.PickShape states what an animation
+            // costs that).
+            PickMesh.Build(field is { } f ? FieldRendering.PickShape(render, f) : render),
+            field is not null, ghostKey, field?.DeformScale ?? 0);
     }
 
     /// <summary>
@@ -1122,7 +1128,7 @@
     /// parts on different scales under one bar would be a legend that lies.
     /// </summary>
     private async Task<ViewportLegend?> RebuildLegendAsync(
-        WebGlContext gl, double widthPx, double heightPx, double pixelScale)
+        WebGlContext gl, double widthPx, double heightPx, double pixelScale, double deformFactor)
     {
         ResolvedFieldDisplay? display = null;
         for (int i = 0; i < _drawn.Count && display is null; i++)
@@ -1130,6 +1136,11 @@
             if (_drawn[i].Visible && _drawnParts[i].TryResolveFieldDisplay(out var resolved, out _))
                 display = resolved;
         }
+        // At the EFFECTIVE exaggeration: the title states that number, so an animated
+        // frame must show what it was drawn at (both desktop passes apply the same
+        // multiply). It joins the cache key, so a moving factor rebuilds the widget's
+        // small line buffer and a static one never does.
+        display = FieldRendering.AtFactor(display, deformFactor);
 
         var key = (display, widthPx, heightPx, pixelScale);
         if (_legendKey is { } previous && previous.Equals(key))
@@ -1209,7 +1220,9 @@
 
             // The field legend: rebuilt (and re-uploaded) only when the display or the
             // canvas size changes — a value comparison, like the annotation camera.
-            var legend = await RebuildLegendAsync(gl, width * pixelScale, height * pixelScale, pixelScale);
+            double deformFactor = Animation?.At(AnimationTime).DeformFactor ?? 1;
+            var legend = await RebuildLegendAsync(
+                gl, width * pixelScale, height * pixelScale, pixelScale, deformFactor);
 
             await gl.RenderAsync(ViewportFrame.Build(
                 _drawn, _camera, _bounds, width / height, _furniture, ViewStyle, pixelScale,
@@ -1217,7 +1230,10 @@
                 sectionPlanes: ActiveSectionPlanes(), sectionCombine: SectionCombine,
                 contours: _contours,
                 cube: ShowViewCube ? new ViewportCube(width, height, _cubeHover) : null,
-                annotations: annotations, legend: legend));
+                annotations: annotations, legend: legend,
+                // A deformation track reaches the frame as one scalar, exactly as the
+                // pose track reaches it as matrices. Nothing is re-uploaded.
+                deformFactor: deformFactor));
         }
         catch (JSDisconnectedException)
         {

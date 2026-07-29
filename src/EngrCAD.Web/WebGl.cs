@@ -170,7 +170,8 @@ public sealed class WebGlContext : IAsyncDisposable
         ReadOnlySpan<Vector3d> normals,
         ReadOnlySpan<int> indices,
         ReadOnlySpan<float> occlusion = default,
-        ReadOnlySpan<float> fieldColors = default)
+        ReadOnlySpan<float> fieldColors = default,
+        ReadOnlySpan<float> deformation = default)
     {
         if (positions.Length != normals.Length)
             throw new ArgumentException(
@@ -182,7 +183,8 @@ public sealed class WebGlContext : IAsyncDisposable
             PackVectors(positions), PackVectors(normals),
             MemoryMarshal.AsBytes(indices).ToArray(),
             occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray(),
-            fieldColors.IsEmpty ? [] : MemoryMarshal.AsBytes(fieldColors).ToArray());
+            fieldColors.IsEmpty ? [] : MemoryMarshal.AsBytes(fieldColors).ToArray(),
+            deformation.IsEmpty ? [] : MemoryMarshal.AsBytes(deformation).ToArray());
     }
 
     /// <summary>
@@ -190,7 +192,9 @@ public sealed class WebGlContext : IAsyncDisposable
     /// — the form <c>RenderMesh.CreateFlat</c> produces and the desktop's
     /// <c>RenderUploads.UploadMesh</c> consumes, so a display mesh crosses without being
     /// widened to doubles and narrowed again. <paramref name="fieldColors"/> (three
-    /// floats per vertex) is the simulation-result colour buffer, optional under the
+    /// floats per vertex) is the simulation-result colour buffer and
+    /// <paramref name="deformation"/> (<c>FieldRendering.DeformationStride</c> floats per
+    /// vertex, four interleaved vec3s) the displacement block, both optional under the
     /// same constant-when-absent rule as <paramref name="occlusion"/>.
     /// </summary>
     public ValueTask UploadMeshAsync(
@@ -199,7 +203,8 @@ public sealed class WebGlContext : IAsyncDisposable
         ReadOnlySpan<float> normals,
         ReadOnlySpan<uint> indices,
         ReadOnlySpan<float> occlusion = default,
-        ReadOnlySpan<float> fieldColors = default)
+        ReadOnlySpan<float> fieldColors = default,
+        ReadOnlySpan<float> deformation = default)
     {
         if (positions.Length != normals.Length)
             throw new ArgumentException(
@@ -212,7 +217,8 @@ public sealed class WebGlContext : IAsyncDisposable
             MemoryMarshal.AsBytes(normals).ToArray(),
             MemoryMarshal.AsBytes(indices).ToArray(),
             occlusion.IsEmpty ? [] : MemoryMarshal.AsBytes(occlusion).ToArray(),
-            fieldColors.IsEmpty ? [] : MemoryMarshal.AsBytes(fieldColors).ToArray());
+            fieldColors.IsEmpty ? [] : MemoryMarshal.AsBytes(fieldColors).ToArray(),
+            deformation.IsEmpty ? [] : MemoryMarshal.AsBytes(deformation).ToArray());
     }
 
     /// <summary>Uploads a line list (feature edges, wireframe, grid, axes) under

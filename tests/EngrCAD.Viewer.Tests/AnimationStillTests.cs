@@ -49,9 +49,10 @@ public class AnimationStillTests
             .Aggregate(Core.Aabb.Empty, (a, b) => a.Union(b)));
 
         // Three genuinely different poses of the SAME parts — the animation contract.
-        var frames = new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera)>();
+        var frames =
+            new List<(IReadOnlyList<PartInstance> Instances, CameraState Camera, double DeformFactor)>();
         foreach (double factor in new[] { 0.0, 0.5, 1.0 })
-            frames.Add(([.. scene.Instances(factor)], camera));
+            frames.Add(([.. scene.Instances(factor)], camera, 1.0));
 
         var batched = OffscreenRenderer.RenderSequence(frames, 128, 96);
         Assert.Equal(3, batched.Count);
