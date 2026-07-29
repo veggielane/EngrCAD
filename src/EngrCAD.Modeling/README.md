@@ -1464,6 +1464,10 @@ edits (a few captured values) rather than scene snapshots. `Limit` bounds it (20
 oldest dropped), `Record` takes an already-applied edit (the viewport-drag case), and
 `Changed` drives an Edit menu.
 
+The viewer is wired to it: the model tree's suppress toggle and the properties panel's
+`[Param]` fields both go through `DocumentEdits`, and the toolbar's Undo/Redo buttons plus
+Ctrl+Z/Ctrl+Y take them back.
+
 ## Standard components ("smart" hardware)
 
 Real hardware, where **a component is more than geometry: placing it modifies the host

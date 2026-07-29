@@ -232,6 +232,25 @@ tree rows of a feature-history part additionally carry a suppress toggle, a roll
 marker, and editable `[Param]` fields in the properties panel — see the
 [parametric features](features.md) page.
 
+## Undo and redo
+
+Both model edits the window offers — the per-row **suppress** toggle and the properties
+panel's **`[Param]` fields** — go through the document edit vocabulary described on the
+[documents](documents.md) page, so the toolbar's **Undo** / **Redo** buttons (and
+<kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd>, or
+<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd>) take them back. The buttons name the step
+they would undo in their tooltip.
+
+A parameter that breaks the rebuild is **refused** rather than left applied: the value goes
+back, the model rebuilds, the status bar says why, and nothing lands on the undo stack. The
+rollback marker is deliberately outside the stack — it carries its own per-part suppression
+bookkeeping — and stays a direct edit.
+
+> The shortcut handler bubbles and does **not** claim already-handled events, unlike the
+> viewport's pointer handlers. A focused text field has its own undo; taking
+> <kbd>Ctrl</kbd>+<kbd>Z</kbd> away from it while you were typing a value would be worse
+> than missing the shortcut.
+
 ## Headless rendering
 
 `EngrCad.RenderToImage(scene, path, width, height, camera?, style?, sectionAxis?,

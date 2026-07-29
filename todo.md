@@ -910,6 +910,16 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   - [ ] **Joint/coupling persistence** (also filed under mechanisms) is the other layer a
     document silently loses today: `Document` saves the `MateSet`s but not the `Joint`s
     built on top of them.
+  - [ ] **The viewer's undo wiring wants a manual pass.** The stack, the edits and the
+    grouping are covered headlessly, and the two edit paths the window offers (the tree's
+    suppress toggle, the properties panel's `[Param]` fields) are routed through it — but
+    the Ctrl+Z/Ctrl+Y handler and the toolbar buttons themselves are only exercised by
+    running the app, since synthetic input does not reach Avalonia's keyboard stack the way
+    `SendInput` reaches its pointer stack. Same caveat the RPC window wiring carries.
+  - [ ] **The rollback bar is not undoable.** It suppresses a run of features and keeps its
+    own per-part bookkeeping of which ones IT suppressed, so folding it into the stack means
+    an edit that captures that bookkeeping too — a `CompoundEdit` of `Suppress` edits plus
+    the marker state. Worth doing when the bar next gets attention.
   - [ ] **Undo does not reach every mutation yet.** The `DocumentEdits` vocabulary covers
     what a UI performs today; the gaps are deliberate rather than forgotten —
     add/remove a whole `Part` or `Tab` (needs `Tab.Remove`/`Scene.RemoveTab`, and a removed
@@ -1173,9 +1183,11 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
 - [ ] **Persisting session edits**: `set_param` edits die with the session by design
-  (source is the truth). A `save_parameters` tool writing
-  `FeatureHistory.SaveParameters` JSON next to the model would let an assistant hand
-  its tuning back to the user as a file.
+  (source is the truth). A `save_document` tool writing `Document.Save` JSON next to the
+  model would let an assistant hand its tuning back to the user as one file — the whole
+  envelope now exists, so this is a tool signature plus a path policy rather than a
+  serialization project. (A narrower `save_parameters` writing only
+  `FeatureHistory.SaveParameters` is the smaller version of the same idea.)
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
 
@@ -1188,11 +1200,14 @@ only via `SaveScreenshot`'s capture-on-next-frame). Remaining:
   registry + whole-history JSON landed — `FeatureRegistry` with instance-free
   `[Param]` metadata and honest `CanCreate`/`Reason`, `SaveHistory`/`LoadHistory`
   with exact sketch/hole-spec constructor-input serialization via `Feature.SaveInputs`)
-  — persistent topological IDs (selectors are the naming story today), property-panel
-  UI editing of `[Param]`s driven by the registry's metadata, feature list in the
-  viewer model tree with registry-backed insertion, serialized forms for the remaining
+  — property-panel UI editing of `[Param]`s driven by the registry's metadata (free-text
+  through the JSON seam landed; typed editors are the polish pass), feature list in the
+  viewer model tree with registry-backed INSERTION (`DocumentEdits.AddFeature` is the
+  undoable half; the catalogue dialog is not built), serialized forms for the remaining
   code inputs (a `Shape`-graph serialization would unlock `BooleanFeature`; a
-  catalogue-designation lookup could rebuild `ComponentFeature`).
+  catalogue-designation lookup could rebuild `ComponentFeature`). Persistent topological
+  IDs are no longer open in the abstract: `Shape.Tag` + `BrepFace.Provenance` landed, and
+  what remains is the per-algorithm inheritance filed under "Topological naming residuals".
 - [ ] **Geometry-reference vocabulary follow-ups** — the named queries cover what the
   standard features need and no more. Wanted next: `PlaneRef.Offset(distance)` and
   `PlaneRef.Rotated` (an offset construction plane is the commonest missing one);
