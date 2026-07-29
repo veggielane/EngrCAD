@@ -1267,13 +1267,26 @@ export — is recorded in CLAUDE.md):
   `kern` kerning; **CFF/OpenType-PostScript outlines ✅ landed** — `CffOutlines`, Type 2
   charstrings → cubic `BezierTo`, CID-keyed via FDArray/FDSelect, every `.otf` opens;
   **GPOS kerning ✅ landed** — `GposKerning`, PairPos 1+2 incl. Extension lookups, with
-  the spec's GPOS-over-legacy-`kern` precedence): **text on a curve/path**
-  (layout maps the pen position to a frame instead of a straight baseline); **variable
-  fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today); **`seac` accent
-  composition** (legacy CFF accents — rejected loudly today, needs charset + standard
-  encoding); **vertical alignment** for text blocks (horizontal-only today);
-  **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
-  font reference).
+  the spec's GPOS-over-legacy-`kern` precedence; **text on a curve ✅ landed** —
+  `Shape.TextOnPath`/`TextOutlines.SketchesOnPath` over a `GlyphPose`, glyphs placed
+  rigidly by mapping control points only (exact, because a Bézier is an affine
+  combination of them), arc-length spacing, mid-advance anchoring, left-normal "up",
+  closed paths wrapping and multi-line refused by name; **vertical alignment ✅ landed** —
+  `TextStyle.VerticalAlign`, measured from the font's ascender/descender rather than the
+  ink): **variable fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today);
+  **`seac` accent composition** (legacy CFF accents — rejected loudly today, needs
+  charset + standard encoding); **`TextFeature`** as a parametric `Feature` (the
+  parameter snapshot must cover the font reference).
+- [ ] **Text on a path: bent glyphs, and per-glyph rotation control.** Deliberately NOT
+  built with the rigid placement (see CLAUDE.md for why bending costs exactness), but two
+  real requests remain. (a) An **upright** mode — every glyph translated along the path
+  and left un-rotated, the way a row of labels round a bolt circle is usually wanted;
+  cheap (it is `GlyphPose.At` at the path point) and the only open question is whether it
+  belongs on `TextStyle` or as an argument, since it is a property of the placement rather
+  than of the type. (b) **A second line via `Sketch.Offset`** as a convenience overload
+  that builds the offset curve itself — currently refused by name so the caller does it,
+  which is right while offsetting can self-intersect, but a helper that offsets and
+  REPORTS what it got would carry the honest failure.
 - [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
   `Heightmap.Mesh/ReadDat/ReadPng`, grayscale-PNG reader dependency-free over BCL
   `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —

@@ -43,6 +43,12 @@ tells you whether a font supplies either.
 A character the font doesn't contain throws, naming the character and the font, rather
 than silently dropping it.
 
+`TextStyle.VerticalAlign` moves the whole block off that baseline — to its `Top`,
+`Middle` or `Bottom`. It is measured from the **font's** ascender and descender, never
+from the ink, so two labels centred on one point line up whether or not either happens
+to contain a descender or a capital; `TextOutlines.Bounds` is still there when you
+genuinely want the ink.
+
 ## Counters are found, not assumed
 
 The holes in **O**, **A**, and **8** — counters — are detected by containment: contours
@@ -53,6 +59,63 @@ dot inside a ring) becomes its own outline again.
 That is deliberate rather than trusting the format. TrueType specifies outer contours
 clockwise and counters counter-clockwise, but real fonts routinely violate it, so
 orientation is not a reliable signal — containment is.
+
+## Text on a curve
+
+`Shape.TextOnPath` lays one line along any `Curve2d` in the sketch plane's own 2D
+coordinates — the ring of lettering round a dial, a bezel, or a curved nameplate.
+
+```csharp render:text-on-path
+string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+var font = TrueTypeFont.Load(new[] { "arial.ttf", "segoeui.ttf", "verdana.ttf" }
+    .Select(name => Path.Combine(fonts, name)).First(File.Exists));
+
+var dial = Shape.Cylinder(radius: 30, height: 4);
+var top = SketchPlane.At((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+
+// CLOCKWISE, so the letters stand outward and read right-way-up from outside the dial.
+double ring = 21;
+var path = new Arc2d(Vector2d.Zero, ring, Math.PI, -2 * Math.PI);
+var style = new TextStyle { Align = TextAlign.Center, VerticalAlign = TextVerticalAlign.Bottom };
+
+var marks = Shape.TextOnPath("ENGRCAD", font, size: font.EmSizeForCapHeight(6),
+                             height: 0.8, path, top, style,
+                             startOffset: ring * Math.PI / 2);   // a quarter turn along
+
+var scene = new Scene();
+scene.Add(new Part("dial", dial, Palette.Steel));
+scene.Add(new Part("marks", marks, Palette.Brass));
+
+// Looking down with +y up the screen, so the quarter-turn offset reads at the top.
+var camera = new CameraState(-Math.PI / 2, 1.3, 95, (0, 0, 2));
+```
+
+![ENGRCAD engraved around the rim of a steel dial](images/text-on-path.png)
+
+Four conventions carry it, and each was a real choice:
+
+- **Glyphs are placed rigidly, not bent.** Each letter is rotated to the path's tangent
+  and translated there; its outline keeps its shape exactly. Only the *control points*
+  are mapped, which **is** the curve — a Bézier is an affine combination of its control
+  points at every parameter, the same property that makes a transformed NURBS curve a
+  lossless STEP export. A warp that followed the curve's curvature is not affine, so no
+  exact Bézier image of a glyph exists under it; text on a path is therefore as exact as
+  straight text, native in all three representations.
+- **Spacing is arc length**, so letters are spaced the way the font asked however the
+  curve happens to be parameterized. A glyph anchors at the **middle** of its advance
+  (SVG's rule), so it leans about its own centre instead of pivoting off its left edge.
+- **A glyph's "up" is the path's left normal** — the tangent turned a quarter turn
+  counter-clockwise, which is the only choice that makes a straight left-to-right path
+  reproduce ordinary layout exactly. On a *counter-clockwise* circle that normal points
+  at the centre, so lettering hangs inward; run the path clockwise, as above, for text
+  standing on a rim.
+- **A closed path is a ring** and a run may cross its seam. An open one may not run off
+  either end, and text longer than the path is refused with both lengths named — rather
+  than extrapolating a curve past its own domain.
+
+Multi-line text on a path is refused by name: a second line would sit on an *offset* of
+the path, which is a different curve and can self-intersect. Build that curve deliberately
+(`Sketch.Offset`) and lay its line on it.
 
 ## Fonts it reads
 

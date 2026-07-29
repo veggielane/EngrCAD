@@ -55,6 +55,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Hull(...)` (convex hull) | ❌ mesh construction, no B-Rep import | 🔶 bridged (hull mesh → mesh SDF) | 🔶 quickhull over tessellated operand vertices (exact for polyhedral operands) |
 | `Remeshed(...)` (isotropic remesh) | ❌ a remesh is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (remeshed triangles → mesh SDF, so the field carries their chord error) | ✅ native (`Remesher` over the child's mesh lowering, projected back onto it) |
 | `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
+| `TextOnPath(...)` (one line along a `Curve2d`) | ✅ native (a rigid map of the control points IS the mapped curve) | ✅ **native** | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) + draft/shell/round-edges/loft/taper (each defined by LENGTHS and ANGLES alone, which every isometry preserves; draft takes the pull direction's linear image, un-negated — a pull is transported, not conjugated like a revolve's axis) · ❌ `SheetMetalBody` (a flange tree is ordered and edge-quoted, so a reflection would need it rebuilt the other way round, not re-placed) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
@@ -1060,9 +1061,16 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
 - **The origin is the baseline** at the start of the first line — x along the writing
   direction, y up. Descenders reach below y = 0, further lines sit below the first, and
   `TextStyle.Align` decides whether x = 0 is a line's start, middle or end.
+- **`TextStyle.VerticalAlign`** moves the whole block off that baseline (`Top`/`Middle`/
+  `Bottom`), measured from the **font's** ascender and descender rather than from the
+  ink — so two labels centred on one point line up whether or not either happens to
+  contain a descender or a capital, which an ink-measured centring would not. Default
+  `Baseline` adds nothing at all (an exact-zero test, not a zero addend), so every
+  existing layout is bit-for-bit what it was.
 - **`TextStyle`** carries `LetterSpacing` (tracking, inserted between glyphs only),
-  `LineSpacing` (baseline step, default 1.2), `Align` and `Kerning` — all spacing as a
-  multiple of the em size, so one style is correct at every size. Kerning comes from the
+  `LineSpacing` (baseline step, default 1.2), `Align`, `VerticalAlign` and `Kerning` —
+  all spacing as a multiple of the em size, so one style is correct at every size.
+  Kerning comes from the
   OpenType `GPOS` `kern` feature when the font has one (`Text/GposKerning.cs`: PairPos
   formats 1 and 2 — the class-pair matrix most fonts use — unwrapped through Extension
   lookups, both coverage and both class-definition formats, lookups accumulating), else
@@ -1080,6 +1088,41 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
   (space) draw nothing and still advance the pen.
 - `TextOutlines` also measures: `AdvanceWidth` (exact typographic width, never touches
   an outline), `Bounds` (the actual ink) and `LineHeight`.
+
+### Text on a curve
+
+`Shape.TextOnPath` / `TextOutlines.SketchesOnPath` lay ONE line along any `Curve2d` — the
+ring of lettering round a dial, a bezel, a curved nameplate. Four conventions carry it:
+
+- **Glyphs are placed RIGIDLY, not bent**, and only their control points are mapped —
+  which *is* the curve, because a Bézier is an affine combination of its control points at
+  every parameter (the same property that makes `TransformedCurve(NurbsCurve)` a lossless
+  STEP export). A warp following the curve's curvature is not affine, so no exact Bézier
+  image of a glyph exists under it: bending would mean flattening, and text on a path
+  would stop being native in all three representations. The rigid placement is what the
+  area oracle pins — a rotation preserves area exactly, so a curved glyph must enclose
+  exactly what the upright one does, an assertion a distortion cannot pass where "the
+  letters look right" would pass either.
+- **Pen positions are ARC LENGTHS** (via `ArcLengthTable2d`), so spacing is what the font
+  asked for however the curve happens to be parameterized. A glyph anchors at the
+  **middle** of its advance (SVG's text-on-path rule), so it leans about its own centre
+  rather than pivoting off its left edge.
+- **A glyph's "up" is the path's LEFT normal** — the unit tangent turned a quarter turn
+  counter-clockwise, the only choice that makes a straight left-to-right path reproduce
+  ordinary layout exactly. The consequence to state: a **counter-clockwise** circle's left
+  normal points at its centre, so lettering hangs inward; a dial's outward-standing rim
+  text wants a **clockwise** path (`new Arc2d(centre, r, start, -2 * Math.PI)`). Both
+  windings are pinned by test, because "which side does the text go" is exactly the
+  convention a one-sided test lets drift.
+- **A closed path is a ring** — a run may cross its seam — while an open one may not run
+  off either end (extrapolating a curve past its own domain is inventing geometry). Text
+  longer than the path is refused with both lengths named, and the fit test carries the
+  1e-9 weld tier so a run that exactly fills its path is not refused by an ulp of
+  subtraction round-off.
+
+**Multi-line on a path is refused by name**: a second line sits on an OFFSET of the path,
+which is a different curve and can self-intersect — the caller builds it (`Sketch.Offset`)
+and lays its line on it, rather than the layout inventing one.
 
 ### Embossing and engraving
 
