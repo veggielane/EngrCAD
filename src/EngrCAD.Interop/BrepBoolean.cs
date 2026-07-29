@@ -482,7 +482,7 @@ public static class BrepBoolean
             for (int i = 1; i < parameters.Count; i++)
             {
                 var next = existing.PointAt(parameters[i]);
-                best = Math.Min(best, DistanceToSegment(p, previous, next));
+                best = Math.Min(best, FaceGeometry.DistanceToSegment(p, previous, next));
                 previous = next;
             }
             if (best > FaceGeometry.SeamTolerance)
@@ -575,55 +575,11 @@ public static class BrepBoolean
             var p = curve.PointAt(t);
             if (!face.Surface.TryProjectPoint(p, out _, FaceGeometry.InverseEvaluationTolerance))
                 continue; // off this face's surface entirely
-            if (DistanceToBoundary(face, p) > FaceGeometry.SeamTolerance && FaceGeometry.Contains(face, p))
+            if (FaceGeometry.DistanceToBoundary(face, p) > FaceGeometry.SeamTolerance &&
+                FaceGeometry.Contains(face, p))
                 return true;
         }
         return false;
-    }
-
-    /// <summary>
-    /// Distance from a point to the face's boundary, measured against the boundary's sampled
-    /// POLYLINE rather than its samples — comparing against isolated sample points would call
-    /// a point sitting exactly on a straight edge "interior" whenever it happened to fall
-    /// between two of them (measured: a boss wall's own bottom rim read 0.125 away at 32
-    /// samples, so the degenerate split it was meant to suppress went ahead anyway).
-    /// <para>For a CURVED edge the chords lie inside the arc, so a point on the boundary can
-    /// read up to a sagitta away — which errs toward calling it interior, i.e. toward keeping
-    /// the curve, which is the pre-existing behaviour.</para>
-    /// </summary>
-    private static double DistanceToBoundary(BrepFace face, in Vector3d point)
-    {
-        const int boundarySamples = 32;
-        double best = double.PositiveInfinity;
-        foreach (var loop in face.Loops)
-        {
-            foreach (var coedge in loop.Coedges)
-            {
-                var edge = coedge.Edge;
-                var parameters = FaceGeometry.ExactSampleParameters(
-                    edge.Curve, edge.Domain.Start, edge.Domain.End, boundarySamples);
-                var previous = edge.Curve.PointAt(parameters[0]);
-                for (int i = 1; i < parameters.Count; i++)
-                {
-                    var next = edge.Curve.PointAt(parameters[i]);
-                    best = Math.Min(best, DistanceToSegment(point, previous, next));
-                    previous = next;
-                }
-            }
-        }
-        return best;
-    }
-
-    private static double DistanceToSegment(in Vector3d p, in Vector3d a, in Vector3d b)
-    {
-        var ab = b - a;
-        double lengthSquared = ab.LengthSquared;
-        // Exact-zero guard on a division, not a model tolerance: a degenerate sampling
-        // segment collapses to its own endpoint.
-        if (lengthSquared <= 0)
-            return p.DistanceTo(a);
-        double t = Math.Clamp((p - a).Dot(ab) / lengthSquared, 0, 1);
-        return p.DistanceTo(a + ab * t);
     }
 
     /// <summary>
@@ -661,8 +617,13 @@ public static class BrepBoolean
                     return [split.FaceWithHole, split.Disk!];
                 }).ToList();
             }
-            foreach (var (curve, breaks) in rest)
-                fragments = fragments.SelectMany(f => FaceSplitter.SplitByCurve(f, curve, breaks)).ToList();
+            // The whole remaining curve list goes to the face at once. FaceSplitter decides
+            // between the curve-at-a-time cascade (what this loop used to be, and still what
+            // every curve that crosses the face boundary at both ends gets) and one
+            // simultaneous arrangement, which is the only way to place curves that TERMINATE
+            // inside the face — see FaceSplitter.SplitByCurves.
+            var entries = rest.Select(r => new SplitCurve(r.Curve, r.Breaks)).ToList();
+            fragments = fragments.SelectMany(f => FaceSplitter.SplitByCurves(f, entries)).ToList();
             foreach (var fragment in fragments)
                 yield return fragment;
         }
@@ -804,17 +765,20 @@ public static class BrepBoolean
     }
 
     /// <summary>A point strictly interior to the face, for inside/outside classification.</summary>
-    private static Vector3d ProbePoint(BrepFace face)
+    internal static Vector3d ProbePoint(BrepFace face)
     {
         var loops = FaceGeometry.PullLoops(face);
 
-        // Planar-style faces: centroids of the outer loop's triangles. A loop whose
-        // unwrapped u-span covers the surface period wraps the band and cannot bound a
-        // planar region — projection jitter gives such loops a tiny nonzero area, and
-        // triangulating the sliver would put the probe on the fragment boundary.
+        // Planar-style faces: centroids of the outer loop's triangles. A loop that WRAPS the
+        // surface period bounds a band, not a planar region — projection jitter gives such
+        // loops a tiny nonzero area, and triangulating the sliver would put the probe on the
+        // fragment boundary. Wrapping is net u DRIFT, never u SPAN: a contractible facet may
+        // reach three quarters of the way round and come back (see
+        // FaceGeometry.LoopWrapsPeriod), and the band path below would then probe halfway to
+        // the surface's own domain edge — outside the fragment, classifying it away.
         var outer = loops[0];
         double periodU = FaceGeometry.PeriodU(face.Surface);
-        bool wrapsU = periodU > 0 && outer.Max(p => p.X) - outer.Min(p => p.X) > 0.75 * periodU;
+        bool wrapsU = FaceGeometry.LoopWrapsPeriod(outer, periodU);
         if (!wrapsU && Math.Abs(FaceGeometry.LoopSignedArea(outer)) > 1e-12)
         {
             // Largest triangles first: a sliver's centroid hugs the fragment boundary,

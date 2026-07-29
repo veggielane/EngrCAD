@@ -730,6 +730,50 @@ operations. Depends only on `EngrCAD.Core`.
   plane): one vertex per junction, ONE edge per curve — so a boolean's other side,
   splitting each band by its own arc, pairs edge-for-edge in seam sealing — with the
   hole loop wound opposite the outer loop and the disk sharing the same edges.
+
+  **`SplitByCurves(face, curves)` is where the routing decision lives, and there are two
+  ways to split a face by several curves.** A **CASCADE** — each curve applied in turn to
+  the fragments the previous ones produced — is what booleans have always done and remains
+  bit-for-bit what they get: a curve that enters and leaves through the face's boundary
+  closes its own arrangement, and a later curve meets an earlier one's segments as ordinary
+  boundary edges of the fragment it is splitting, so curve–curve crossings come out for
+  free. **ONE SIMULTANEOUS ARRANGEMENT** is required when a curve TERMINATES INSIDE the
+  face, which the cascade structurally cannot do: the first curve applied has no partner
+  segments to end on, so its arrangement has a dangling edge and cannot be traced. That is
+  exactly the shape a face-pair intersection curve takes once it is clipped to the OTHER
+  face's trim — it stops where the neighbouring face's boundary crosses this face's
+  interior, and the curve continuing from there belongs to the neighbour. `SplitByCurve` is
+  the one-curve call into the same entry point, so the incumbent path is reached through the
+  new one rather than beside it.
+
+  The simultaneous path's nodes come from four sources, all found **before a single coedge
+  moves** (the rim-surgery all-or-nothing rule: `SplitEdge` patches neighbouring faces'
+  loops, so a refusal halfway would leave them half-edited): a curve crossing the face
+  boundary; two curves crossing each other (`CurveCrossings` + `RefineCurvePair`, the
+  curve–curve twin of the boundary refinement, seeded in uv and solved in 3D for the same
+  sagitta reason); two open curves whose **ENDPOINTS COINCIDE**; and mandatory seam breaks.
+  The third is not a special case of the second and must not be reached for by loosening a
+  transversality test — two clipped curves meeting end to end **touch**, and whether a
+  crossing test fires there depends on the angle they happen to meet at. Nodes within the
+  seam tier of one another are ONE node, so a corner where two clipped curves and the
+  boundary all meet yields one vertex rather than three. A dangling end with nothing to meet
+  is refused by name, reporting the point and how many curves were offered for the face —
+  the usual cause being that the curve it should have met was never handed to this face.
+
+  **The gate is "a curve stops strictly inside the face WHERE ANOTHER CURVE IS THERE TO MEET
+  IT", and both halves were paid for.** *Strictly* means clear of the boundary by the seam
+  tier, since an open cut may legitimately end exactly ON the boundary (a plane∩helical-band
+  spiral arc ends on the band's rails). The partner clause is what separates a CLIPPED curve,
+  whose terminus is a real corner the neighbouring face's curve continues from, from a
+  **TRACER-TRUNCATED** one, whose terminus is an artefact of the marching step and has nothing
+  to meet — and tracer truncation is common, so without the clause the new path engages on
+  ordinary geometry. Measured on `Torus(12, 4) − plane − Ø3 bore`, a construction that is a
+  documented refusal either way: routed to the arrangement it failed as *"two band-bottom
+  boundaries with no top between them"* instead of as the boolean's own *"unclosed solid"* —
+  one stage earlier and less informatively. The arrangement cannot help a curve with no
+  partner; it can only trade one refusal for another. One curve therefore never qualifies,
+  which is what makes `SplitByCurve` exactly the incumbent function.
+
   Wrap-splitting refuses faces with
   non-wrapping loops (a contractible fragment can share the band's carrier surface; a
   wrapping curve with no crossings lies outside it), and a fragment with ≥ 2 loops
@@ -742,6 +786,19 @@ operations. Depends only on `EngrCAD.Core`.
   along +u = material above, mirrored on reversed faces), paired bottom-to-top by v
   into band sub-faces — pulled signed area is meaningless for them (the hemisphere
   band between a bitten equator and an untouched cap ring is the canonical case).
+
+  **"Wraps the period" is net u DRIFT, never u SPAN** — one rule,
+  `FaceGeometry.LoopWrapsPeriod`, asked by all three sites that need it (this tracing,
+  wrap-splitting's "every loop must span the band" precondition, and
+  `BrepBoolean.ProbePoint`). A contractible loop may reach most of the way round the
+  period and come back: a threaded rod's end-chamfer facet on its cone spans **272°** and
+  closes with a net drift of 0.02 rad. A span test files that as a band boundary and every
+  consumer then does something structurally wrong with it — the tracer hunts a partner
+  boundary to pair it with, wrap-splitting lets a wrapping cut fabricate a phantom band out
+  of it, and `ProbePoint` walks halfway toward the surface's own v domain edge and lands
+  outside the fragment entirely, so the boolean classifies the facet away. A genuine wrap
+  drifts a full period; a contractible loop returns to where it started. The span survives
+  as the cheap first half of an AND (no loop can drift a period without spanning one).
 
 - **`Filleting`** — rim chamfering and filleting as topology surgery on an existing solid
   (no booleans): the outer rim of a planar face is replaced by a bevel or blend band, the

@@ -162,6 +162,66 @@ public static class FaceGeometry
         return result;
     }
 
+    /// <summary>
+    /// Whether a pulled-back loop <b>wraps</b> the surface's periodic direction — i.e. it is a
+    /// band boundary (a bore wall's ring, a cut running right round a cylinder) rather than the
+    /// boundary of a contractible region on the same surface.
+    /// </summary>
+    /// <remarks>
+    /// <para><b>The decision is the net u DRIFT over the traversal, not the u SPAN.</b> A loop
+    /// that reaches far round the period and comes back is contractible however far it reached:
+    /// the chamfer facet on a threaded rod's end cone spans <b>272°</b> and closes with a net
+    /// drift of 0.02 rad. A span test calls that a band boundary, and every consumer then does
+    /// something structurally wrong with it — <c>BrepBoolean.ProbePoint</c> walks halfway to the
+    /// surface's own domain edge and lands outside the fragment entirely (so the facet is
+    /// classified away), <c>FaceSplitter.TraceFaces</c> files it for bottom-to-top band pairing,
+    /// and <c>SplitByCurve</c> lets a wrapping cut fabricate a phantom band out of it. A genuine
+    /// wrap drifts a full period; a contractible loop returns to where it started.</para>
+    /// <para>The span survives as the cheap first half of an AND: it rejects almost every loop
+    /// without touching the endpoints, and no loop can drift a period without spanning one. Both
+    /// halves read the polyline <see cref="PullLoops"/> produces — traversal-ordered, unwrapped
+    /// stepwise, and with each coedge's final sample dropped as the junction with the next — so
+    /// a full wrap's drift is a period less one sampling step, comfortably past the half-period
+    /// threshold at any usable sample count.</para>
+    /// </remarks>
+    public static bool LoopWrapsPeriod(IReadOnlyList<Vector2d> pulledLoop, double period)
+    {
+        if (period <= 0 || pulledLoop.Count < 2)
+            return false;
+        double min = double.PositiveInfinity, max = double.NegativeInfinity;
+        foreach (var p in pulledLoop)
+        {
+            min = Math.Min(min, p.X);
+            max = Math.Max(max, p.X);
+        }
+        if (max - min <= 0.75 * period)
+            return false;
+        return Math.Abs(pulledLoop[^1].X - pulledLoop[0].X) > 0.5 * period;
+    }
+
+    /// <summary>
+    /// A parameter strictly inside [<paramref name="s0"/>, <paramref name="s1"/>] at which the
+    /// curve is genuinely ON its surface — used wherever a stretch of a curve has to be asked
+    /// "are you inside this face?".
+    ///
+    /// <para><b>The arithmetic midpoint is wrong for a tracer polyline.</b> A polyline is exact
+    /// only at its VERTICES, so a mid-chord point sits a sagitta off the surface — measured
+    /// 5e-3 on a whole-solid fillet's quarter-arc band at the tracer's own sample density, five
+    /// thousand times the 1e-6 inverse-evaluation tolerance. The projection then FAILS and the
+    /// stretch is silently discarded as "leaves the surface entirely". A stretch that spans no
+    /// vertex has no exact interior sample and keeps the midpoint, and non-polyline curves keep
+    /// it bit-for-bit: an analytic curve is exact everywhere, so there is nothing to fix and no
+    /// reason to move an existing probe.</para>
+    /// </summary>
+    public static double InteriorSampleParameter(Curve3d curve, double s0, double s1)
+    {
+        double midpoint = (s0 + s1) / 2;
+        if (!IsPolylineBacked(curve))
+            return midpoint;
+        var exact = ExactSampleParameters(curve, s0, s1, 2);
+        return exact.Count > 2 ? exact[exact.Count / 2] : midpoint;
+    }
+
     /// <summary>Signed area of a pulled-back closed polyline; positive = counter-clockwise in (u, v).</summary>
     public static double LoopSignedArea(IReadOnlyList<Vector2d> loop)
     {
@@ -207,6 +267,57 @@ public static class FaceGeometry
             loops.Add(points);
         }
         return loops;
+    }
+
+    /// <summary>
+    /// Distance from a point to a face's boundary, measured against the boundary's sampled
+    /// POLYLINE rather than against its samples — comparing against isolated sample points
+    /// would call a point sitting exactly on a straight edge "interior" whenever it happened
+    /// to fall between two of them (measured: a boss wall's own bottom rim read 0.125 away at
+    /// 32 samples, so the degenerate split it was meant to suppress went ahead anyway).
+    /// <para>For a CURVED edge the chords lie inside the arc, so a point on the boundary can
+    /// read up to a sagitta away — which errs toward calling it interior, the conservative
+    /// direction for both callers (keeping a boolean's rim curve, and refusing a splitting
+    /// curve that terminates in open space).</para>
+    /// </summary>
+    /// <remarks>
+    /// One rule, asked by <c>BrepBoolean.ReachesInterior</c> and by <c>FaceSplitter</c>'s
+    /// "does this curve terminate inside the face?" gate. Restating it per call site is how
+    /// three separate sagitta defects got in (see <see cref="ExactSampleParameters"/>).
+    /// </remarks>
+    public static double DistanceToBoundary(BrepFace face, in Vector3d point, int boundarySamples = 32)
+    {
+        double best = double.PositiveInfinity;
+        foreach (var loop in face.Loops)
+        {
+            foreach (var coedge in loop.Coedges)
+            {
+                var edge = coedge.Edge;
+                var parameters = ExactSampleParameters(
+                    edge.Curve, edge.Domain.Start, edge.Domain.End, boundarySamples);
+                var previous = edge.Curve.PointAt(parameters[0]);
+                for (int i = 1; i < parameters.Count; i++)
+                {
+                    var next = edge.Curve.PointAt(parameters[i]);
+                    best = Math.Min(best, DistanceToSegment(point, previous, next));
+                    previous = next;
+                }
+            }
+        }
+        return best;
+    }
+
+    /// <summary>Distance from a point to a line segment.</summary>
+    public static double DistanceToSegment(in Vector3d p, in Vector3d a, in Vector3d b)
+    {
+        var ab = b - a;
+        double lengthSquared = ab.LengthSquared;
+        // Exact-zero guard on a division, not a model tolerance: a degenerate sampling
+        // segment collapses to its own endpoint.
+        if (lengthSquared <= 0)
+            return p.DistanceTo(a);
+        double t = Math.Clamp((p - a).Dot(ab) / lengthSquared, 0, 1);
+        return p.DistanceTo(a + ab * t);
     }
 
     /// <summary>

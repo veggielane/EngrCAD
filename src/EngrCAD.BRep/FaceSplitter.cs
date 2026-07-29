@@ -11,6 +11,16 @@ public sealed record ClosedSplitResult(BrepFace FaceWithHole, BrepFace? Disk, Br
 /// and the chain edges in traversal order (one per input curve).</summary>
 public sealed record ChainSplitResult(BrepFace FaceWithHole, BrepFace? Disk, IReadOnlyList<BrepEdge> Edges);
 
+/// <summary>
+/// One splitting curve, with the mandatory seam breaks it must be subdivided at (a boolean's
+/// other solid crosses the curve with its own face boundaries there, and both sides have to
+/// break at the same parameters or the seam edges cannot pair up). Null when there are none.
+/// </summary>
+public readonly record struct SplitCurve(Curve3d Curve, IReadOnlyList<double>? Breaks = null)
+{
+    public static implicit operator SplitCurve(Curve3d curve) => new(curve);
+}
+
 /// <summary>Topology surgery shared by splitting operations.</summary>
 public static class TopologyEditor
 {
@@ -271,33 +281,12 @@ public static class FaceSplitter
     }
 
     /// <summary>
-    /// A parameter strictly inside [<paramref name="s0"/>, <paramref name="s1"/>] at which the
-    /// curve is genuinely ON its surface — used to ask whether a stretch of a splitting curve
-    /// lies inside the face.
-    ///
-    /// <para><b>The arithmetic midpoint is wrong for a tracer polyline</b>, and this is the
-    /// third site to learn it (after <c>BRepTessellator.SampleEdge</c> and <c>TraceFaces</c>'
-    /// departure probes): a polyline is exact only at its VERTICES, so a mid-chord point sits a
-    /// sagitta off the surface — measured 5e-3 on a whole-solid fillet's quarter-arc band at
-    /// the tracer's own sample density, five thousand times the 1e-6 inverse-evaluation
-    /// tolerance. The projection then FAILS, the stretch is discarded as "leaves the surface
-    /// entirely", no seam edge is built, and the face comes back unsplit with no complaint.
-    /// <see cref="FaceGeometry.ExactSampleParameters"/> is the shared rule; a stretch that
-    /// spans no vertex has no exact interior sample and keeps the midpoint, which is the
-    /// pre-existing behaviour.</para>
-    ///
-    /// <para>Non-polyline curves keep the arithmetic midpoint bit-for-bit: every analytic curve
-    /// is exact everywhere, so there is nothing to fix and no reason to move an existing
-    /// probe.</para>
+    /// The exact interior sample rule, one of the three sites that learned it (after
+    /// <c>BRepTessellator.SampleEdge</c> and <c>TraceFaces</c>' departure probes) — the shared
+    /// rule now lives on <see cref="FaceGeometry.InteriorSampleParameter"/>.
     /// </summary>
-    private static double InteriorProbeParameter(Curve3d curve, double s0, double s1)
-    {
-        double midpoint = (s0 + s1) / 2;
-        if (!FaceGeometry.IsPolylineBacked(curve))
-            return midpoint;
-        var exact = FaceGeometry.ExactSampleParameters(curve, s0, s1, 2);
-        return exact.Count > 2 ? exact[exact.Count / 2] : midpoint;
-    }
+    private static double InteriorProbeParameter(Curve3d curve, double s0, double s1) =>
+        FaceGeometry.InteriorSampleParameter(curve, s0, s1);
 
     /// <summary>
     /// Curve parameters where the curve crosses the face's boundary. Used by booleans to
@@ -320,9 +309,130 @@ public static class FaceSplitter
     /// sides, and the resulting sub-faces are returned (the input face is superseded).
     /// A closed curve with no crossings that lies inside the face falls back to
     /// <see cref="SplitByClosedCurve"/>; a curve entirely outside returns the face as-is.
+    /// <para>One curve is the degenerate case of <see cref="SplitByCurves"/>, which is where
+    /// the routing decision lives.</para>
     /// </summary>
     public static IReadOnlyList<BrepFace> SplitByCurve(
-        BrepFace face, Curve3d curve, IReadOnlyList<double>? mandatoryBreaks = null)
+        BrepFace face, Curve3d curve, IReadOnlyList<double>? mandatoryBreaks = null) =>
+        SplitByCurves(face, [new SplitCurve(curve, mandatoryBreaks)]);
+
+    /// <summary>
+    /// Splits a face along SEVERAL curves, choosing between two ways of doing it.
+    ///
+    /// <para><b>A CASCADE when every curve can stand alone</b> — each curve applied in turn to
+    /// the fragments the previous ones produced, which is what booleans have always done and
+    /// remains bit-for-bit what they get. It works because a curve that enters and leaves
+    /// through the face's boundary closes its own arrangement, and a later curve meets an
+    /// earlier one's segments as ordinary boundary edges of the fragment it is splitting, so
+    /// curve–curve crossings come out for free.</para>
+    ///
+    /// <para><b>ONE SIMULTANEOUS ARRANGEMENT when a curve TERMINATES INSIDE the face</b>, which
+    /// the cascade structurally cannot do: the first curve applied has no partner segments to
+    /// end on, so its arrangement has a dangling edge and cannot be traced. That is exactly the
+    /// shape a face-pair intersection curve takes once it is clipped to the OTHER face's trim —
+    /// it stops where the neighbouring face's boundary crosses this face's interior, and the
+    /// curve that continues from there belongs to the neighbour. The simultaneous path nodes
+    /// every curve against the boundary, against every other curve, and at coincident
+    /// endpoints, then traces the whole graph once.</para>
+    ///
+    /// <para>The gate is a property of the INPUT, tested before any topology is touched (the
+    /// rim-surgery all-or-nothing rule): a split that refused halfway would leave the face's
+    /// loops — and its neighbours', which <see cref="TopologyEditor.SplitEdge"/> patches —
+    /// half-edited. Curves whose ends all lie outside or on the boundary therefore never reach
+    /// the new code path.</para>
+    /// </summary>
+    public static IReadOnlyList<BrepFace> SplitByCurves(BrepFace face, IReadOnlyList<SplitCurve> curves)
+    {
+        if (curves.Count == 0)
+            return [face];
+        if (!NeedsSimultaneousArrangement(face, curves))
+        {
+            var fragments = new List<BrepFace> { face };
+            foreach (var entry in curves)
+                fragments = [.. fragments.SelectMany(f => SplitBySingleCurve(f, entry.Curve, entry.Breaks))];
+            return fragments;
+        }
+        return SplitBySimultaneousArrangement(face, curves);
+    }
+
+    /// <summary>
+    /// Whether one curve TERMINATES strictly inside the face <b>where another curve is there to
+    /// meet it</b> — the one configuration the cascade cannot handle and the arrangement can.
+    ///
+    /// <para>Both halves are load-bearing. "Strictly inside" means clear of the boundary by the
+    /// seam tier, since an open cut may legitimately end exactly ON the boundary (a
+    /// plane∩helical-band spiral arc ends on the band's rails) and that has always worked.
+    /// "Where another curve is there to meet it" is what separates a CLIPPED curve, whose
+    /// terminus is a real corner the neighbouring face's curve continues from, from a
+    /// TRACER-TRUNCATED one, whose terminus is an artefact of the marching step and has nothing
+    /// to meet: the arrangement cannot help the second — it would trade one refusal for another
+    /// — and the cascade's own message names it better. Measured on a torus cut by a plane and
+    /// then bored, which is a documented refusal either way: routed to the arrangement it
+    /// failed as "two band-bottom boundaries with no top between them" instead of as the
+    /// boolean's own "unclosed solid", i.e. one stage earlier and less informatively.</para>
+    ///
+    /// <para>One curve therefore never qualifies, which is what makes <see cref="SplitByCurve"/>
+    /// the incumbent path exactly. Loops are pulled at most once, and only when an endpoint
+    /// turns out to lie on this face's surface at all, so the common answer costs two
+    /// projections per curve.</para>
+    /// </summary>
+    private static bool NeedsSimultaneousArrangement(BrepFace face, IReadOnlyList<SplitCurve> curves)
+    {
+        if (curves.Count < 2)
+            return false;
+        List<List<Vector2d>>? loops = null;
+        double period = FaceGeometry.PeriodU(face.Surface);
+        for (int i = 0; i < curves.Count; i++)
+        {
+            var curve = curves[i].Curve;
+            if (curve.IsClosed)
+                continue;
+            foreach (double endParam in (ReadOnlySpan<double>)[curve.Domain.Start, curve.Domain.End])
+            {
+                var p = curve.PointAt(endParam);
+                if (!face.Surface.TryProjectPoint(p, out var uv, FaceGeometry.InverseEvaluationTolerance))
+                    continue;
+                loops ??= FaceGeometry.PullLoops(face);
+                if (!ParityContains(loops, uv, period))
+                    continue;
+                if (FaceGeometry.DistanceToBoundary(face, p) <= FaceGeometry.SeamTolerance)
+                    continue;
+                for (int j = 0; j < curves.Count; j++)
+                {
+                    if (j != i && MeetsCurve(curves[j].Curve, p))
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a point sits on a curve at the seam tier. Endpoints are compared exactly; the
+    /// interior is measured against the curve's sampled POLYLINE, so a T-junction on a strongly
+    /// CURVED partner can read up to a chord sagitta away and be missed — in which case the
+    /// cascade runs and refuses by name, which is the safe direction.
+    /// </summary>
+    private static bool MeetsCurve(Curve3d curve, in Vector3d point)
+    {
+        var parameters = FaceGeometry.ExactSampleParameters(
+            curve, curve.Domain.Start, curve.Domain.End, 96);
+        var previous = curve.PointAt(parameters[0]);
+        if (previous.DistanceTo(point) <= FaceGeometry.SeamTolerance)
+            return true;
+        for (int i = 1; i < parameters.Count; i++)
+        {
+            var next = curve.PointAt(parameters[i]);
+            if (next.DistanceTo(point) <= FaceGeometry.SeamTolerance ||
+                FaceGeometry.DistanceToSegment(point, previous, next) <= FaceGeometry.SeamTolerance)
+                return true;
+            previous = next;
+        }
+        return false;
+    }
+
+    private static IReadOnlyList<BrepFace> SplitBySingleCurve(
+        BrepFace face, Curve3d curve, IReadOnlyList<double>? mandatoryBreaks)
     {
         var surface = face.Surface;
         double period = FaceGeometry.PeriodU(surface);
@@ -351,7 +461,7 @@ public static class FaceSplitter
                     // carrier surface, so the wrapping curve pulls back onto it — but
                     // with no boundary crossings it lies outside the fragment's region
                     // and must not split it (splitting would fabricate a phantom band).
-                    if (rawLoops.Any(l => l.Max(p => p.X) - l.Min(p => p.X) < 0.75 * period))
+                    if (rawLoops.Any(l => !FaceGeometry.LoopWrapsPeriod(l, period)))
                         return [face];
                     // Several wrapping cuts can hit the same band (a tool crossing a
                     // bore pierces its wall twice): each sub-band shares the full
@@ -469,6 +579,398 @@ public static class FaceSplitter
 
         // 3. Trace sub-faces from the planar graph.
         return TraceFaces(face, segmentCoedges, period);
+    }
+
+    // ---- simultaneous arrangement over several curves ----
+
+    /// <summary>A point where the arrangement's edges meet: on the face boundary, on one or
+    /// more splitting curves, or both. One <see cref="BrepVertex"/> comes out of it.</summary>
+    private sealed class ArrangementNode(Vector3d position)
+    {
+        public Vector3d Position { get; } = position;
+        public BrepVertex? Vertex { get; set; }
+
+        /// <summary>Boundary edges this node sits on, with the edge parameter. More than one
+        /// when the node lands on a vertex shared by two boundary edges.</summary>
+        public List<(BrepEdge Edge, double T)> OnBoundary { get; } = [];
+
+        /// <summary>Splitting curves passing through, with their own parameters.</summary>
+        public List<(int Curve, double S)> OnCurves { get; } = [];
+    }
+
+    /// <summary>
+    /// One arrangement over all of a face's splitting curves at once — the general form of
+    /// <see cref="SplitBySingleCurve"/>, reached when a curve terminates inside the face (see
+    /// <see cref="SplitByCurves"/> for why the cascade cannot).
+    ///
+    /// <para>The graph's NODES come from four sources, all found before a single coedge moves:
+    /// a curve crossing the face boundary; two curves crossing each other; two open curves
+    /// whose ENDPOINTS coincide (the junction a pair of clipped curves makes, which no
+    /// transversality test can be asked for — they meet, they do not cross); and mandatory seam
+    /// breaks. Nodes within the seam tier of each other are ONE node, so a corner where two
+    /// clipped curves and the boundary all meet yields one vertex rather than three.</para>
+    ///
+    /// <para>Everything after that is the single-curve path's own machinery: boundary edges are
+    /// split outward-in, each curve's stretches between consecutive nodes become two-use edges
+    /// filtered by loop parity, and <see cref="TraceFaces"/> walks the whole graph once.</para>
+    /// </summary>
+    private static IReadOnlyList<BrepFace> SplitBySimultaneousArrangement(
+        BrepFace face, IReadOnlyList<SplitCurve> entries)
+    {
+        var surface = face.Surface;
+        double period = FaceGeometry.PeriodU(surface);
+        var rawLoops = FaceGeometry.PullLoops(face);
+
+        // Curves that lie on this face's surface at all.
+        var curves = new List<Curve3d>();
+        var breaks = new List<IReadOnlyList<double>?>();
+        var runs = new List<List<List<(double S, Vector2d Uv)>>>();
+        var fullyOn = new List<bool>();
+        foreach (var entry in entries)
+        {
+            var pulled = PullCurveRuns(entry.Curve, surface, out bool on);
+            if (pulled.Count == 0)
+                continue;
+            curves.Add(entry.Curve);
+            breaks.Add(entry.Breaks);
+            runs.Add(pulled);
+            fullyOn.Add(on);
+        }
+        if (curves.Count == 0)
+            return [face];
+
+        var nodes = new List<ArrangementNode>();
+        ArrangementNode NodeAt(in Vector3d p)
+        {
+            foreach (var existing in nodes)
+            {
+                if (existing.Position.DistanceTo(p) <= FaceGeometry.SeamTolerance)
+                    return existing;
+            }
+            var fresh = new ArrangementNode(p);
+            nodes.Add(fresh);
+            return fresh;
+        }
+        static void AddCurveParam(ArrangementNode node, int curve, double s)
+        {
+            if (!node.OnCurves.Any(c => c.Curve == curve && Math.Abs(c.S - s) < CrossingParameterDedupe))
+                node.OnCurves.Add((curve, s));
+        }
+
+        // (a) Boundary crossings — the same routine the single-curve path uses.
+        for (int i = 0; i < curves.Count; i++)
+        {
+            foreach (var crossing in FindCrossings(face, curves[i], runs[i], fullyOn[i], period))
+            {
+                var node = NodeAt(curves[i].PointAt(crossing.CurveParam));
+                if (!node.OnBoundary.Any(b =>
+                        ReferenceEquals(b.Edge, crossing.Edge) && Math.Abs(b.T - crossing.EdgeParam) < 1e-9))
+                    node.OnBoundary.Add((crossing.Edge!, crossing.EdgeParam));
+                AddCurveParam(node, i, crossing.CurveParam);
+            }
+        }
+
+        // (b) Curve-curve crossings, and (c) coincident endpoints. The second is not a special
+        // case of the first: two clipped curves meeting end to end TOUCH, and a transversality
+        // test at a shared endpoint is decided by whatever angle they happen to meet at.
+        for (int i = 0; i < curves.Count; i++)
+        {
+            for (int j = i + 1; j < curves.Count; j++)
+            {
+                foreach (var (si, sj, point) in CurveCrossings(
+                             curves[i], runs[i], fullyOn[i], curves[j], runs[j], fullyOn[j], period))
+                {
+                    var node = NodeAt(point);
+                    AddCurveParam(node, i, si);
+                    AddCurveParam(node, j, sj);
+                }
+                if (curves[i].IsClosed || curves[j].IsClosed)
+                    continue;
+                foreach (double si in (ReadOnlySpan<double>)[curves[i].Domain.Start, curves[i].Domain.End])
+                {
+                    foreach (double sj in (ReadOnlySpan<double>)[curves[j].Domain.Start, curves[j].Domain.End])
+                    {
+                        var pi = curves[i].PointAt(si);
+                        if (pi.DistanceTo(curves[j].PointAt(sj)) > FaceGeometry.SeamTolerance)
+                            continue;
+                        var node = NodeAt(pi);
+                        AddCurveParam(node, i, si);
+                        AddCurveParam(node, j, sj);
+                    }
+                }
+            }
+        }
+
+        // (d) Mandatory seam breaks that fall inside the face.
+        for (int i = 0; i < curves.Count; i++)
+        {
+            foreach (double raw in breaks[i] ?? [])
+            {
+                double s = WrapParam(curves[i], curves[i].Domain.Clamp(raw));
+                var point = curves[i].PointAt(s);
+                if (!surface.TryProjectPoint(point, out var uv, FaceGeometry.InverseEvaluationTolerance))
+                    continue; // off this face's surface — the break belongs elsewhere
+                if (!ParityContains(rawLoops, uv, period))
+                    continue;
+                AddCurveParam(NodeAt(point), i, s);
+            }
+        }
+
+        // (e) Split the boundary edges. A node found on two boundary edges sits on the vertex
+        // they share, so the endpoint entry is preferred: it needs no split and hands back the
+        // vertex the neighbouring faces already reference.
+        static bool AtEndpoint(BrepEdge edge, double t)
+        {
+            double epsilon = Math.Max(1e-9, edge.Domain.Length * 1e-7);
+            return t <= edge.Domain.Start + epsilon || t >= edge.Domain.End - epsilon;
+        }
+        var perEdge = new Dictionary<BrepEdge, List<(ArrangementNode Node, double T)>>();
+        foreach (var node in nodes)
+        {
+            if (node.OnBoundary.Count == 0)
+                continue;
+            var chosen = node.OnBoundary.FirstOrDefault(b => AtEndpoint(b.Edge, b.T), node.OnBoundary[0]);
+            if (!perEdge.TryGetValue(chosen.Edge, out var list))
+                perEdge[chosen.Edge] = list = [];
+            list.Add((node, chosen.T));
+        }
+        foreach (var (original, list) in perEdge)
+        {
+            var edge = original;
+            double endEpsilon = Math.Max(1e-9, original.Domain.Length * 1e-7);
+            foreach (var (node, t) in list.OrderByDescending(x => x.T))
+            {
+                if (t >= edge.Domain.End - endEpsilon)
+                    node.Vertex = edge.EndVertex;
+                else if (t <= edge.Domain.Start + endEpsilon)
+                    node.Vertex = edge.StartVertex;
+                else
+                {
+                    var (first, _, vertex) = TopologyEditor.SplitEdge(edge, t);
+                    node.Vertex = vertex;
+                    edge = first; // remaining (smaller) parameters live in the first piece
+                }
+            }
+        }
+        foreach (var node in nodes)
+            node.Vertex ??= new BrepVertex(node.Position);
+
+        // (f) Each curve's stretches between consecutive nodes become two-use edges.
+        var segmentCoedges = new List<BrepCoedge>();
+        var deferredClosed = new List<int>();
+        for (int i = 0; i < curves.Count; i++)
+        {
+            var curve = curves[i];
+            var onCurve = nodes
+                .SelectMany(n => n.OnCurves.Where(c => c.Curve == i).Select(c => (Node: n, c.S)))
+                .OrderBy(x => x.S)
+                .Aggregate(new List<(ArrangementNode Node, double S)>(), (list, x) =>
+                {
+                    if (list.Count == 0 || Math.Abs(list[^1].S - x.S) > CrossingParameterDedupe)
+                        list.Add(x);
+                    return list;
+                });
+
+            if (onCurve.Count == 0)
+            {
+                // No node anywhere: a closed curve interior to the face (a bore rim) or a
+                // wrapping cut, both of which the single-curve path owns. An OPEN curve with
+                // no node either misses the face — nothing to do — or terminates in open
+                // space inside it, which is the refusal below.
+                if (curve.IsClosed)
+                    deferredClosed.Add(i);
+                else
+                    RequireTerminusOutside(face, surface, rawLoops, period, curve,
+                        curve.Domain.Start, curve.Domain.End, curve.Domain.Start, curves.Count);
+                continue;
+            }
+            if (!curve.IsClosed)
+            {
+                RequireTerminusOutside(face, surface, rawLoops, period, curve,
+                    curve.Domain.Start, onCurve[0].S, curve.Domain.Start, curves.Count);
+                RequireTerminusOutside(face, surface, rawLoops, period, curve,
+                    onCurve[^1].S, curve.Domain.End, curve.Domain.End, curves.Count);
+            }
+
+            int segmentCount = curve.IsClosed ? onCurve.Count : onCurve.Count - 1;
+            for (int k = 0; k < segmentCount; k++)
+            {
+                var from = onCurve[k];
+                var to = onCurve[(k + 1) % onCurve.Count];
+                double s0 = from.S;
+                double s1 = to.S;
+                if (s1 <= s0) // closed-curve wrap segment
+                    s1 += curve.Domain.Length;
+                double mid = InteriorProbeParameter(curve, s0, s1);
+                if (!surface.TryProjectPoint(
+                        curve.PointAt(WrapParam(curve, mid)), out var midUv, FaceGeometry.InverseEvaluationTolerance))
+                    continue; // this stretch leaves the surface entirely
+                if (!ParityContains(rawLoops, midUv, period))
+                    continue; // this stretch lies outside the face
+
+                var edge = new BrepEdge(new CurveSegment(curve, s0, s1), Interval.Unit, from.Node.Vertex!, to.Node.Vertex!);
+                segmentCoedges.Add(new BrepCoedge(edge, true));
+                segmentCoedges.Add(new BrepCoedge(edge, false));
+            }
+        }
+
+        IReadOnlyList<BrepFace> fragments = segmentCoedges.Count == 0
+            ? [face]
+            : TraceFaces(face, segmentCoedges, period);
+        foreach (int i in deferredClosed)
+            fragments = [.. fragments.SelectMany(f => SplitBySingleCurve(f, curves[i], breaks[i]))];
+        return fragments;
+    }
+
+    /// <summary>
+    /// Refuses an open curve whose end stretch runs into the face's interior with no node to
+    /// terminate on — a dangling edge, which no arrangement can trace. The message names the
+    /// point and how many curves were offered, because the usual cause is that the curve the
+    /// dangling end was supposed to meet was never handed to this face.
+    /// </summary>
+    private static void RequireTerminusOutside(
+        BrepFace face, Surface surface, List<List<Vector2d>> rawLoops, double period,
+        Curve3d curve, double s0, double s1, double terminusParam, int curveCount)
+    {
+        double endEpsilon = Math.Max(1e-9, curve.Domain.Length * 1e-7);
+        if (s1 - s0 <= endEpsilon)
+            return;
+        double probe = InteriorProbeParameter(curve, s0, s1);
+        if (!surface.TryProjectPoint(curve.PointAt(probe), out var uv, FaceGeometry.InverseEvaluationTolerance) ||
+            !ParityContains(rawLoops, uv, period))
+            return;
+        var terminus = curve.PointAt(terminusParam);
+        throw new NotSupportedException(
+            $"Open splitting curves must start and end outside the face, on its boundary, or where " +
+            $"another splitting curve terminates: a {curve.GetType().Name} on a " +
+            $"{surface.GetType().Name} runs into the interior of the face's {face.Loops.Count} loop(s) " +
+            $"and stops at {terminus} (uv {uv}) with nothing to meet. {curveCount} curve(s) were " +
+            "offered for this face.");
+    }
+
+    /// <summary>
+    /// Points where two splitting curves on one face cross, seeded from their pulled-back
+    /// polylines and refined against the exact 3D curves — the same two-stage rule the boundary
+    /// crossings use, and for the same reason (a uv-space answer is off-surface by the sampling
+    /// sagitta wherever either curve is a tracer polyline).
+    /// </summary>
+    private static List<(double Sa, double Sb, Vector3d Point)> CurveCrossings(
+        Curve3d a, List<List<(double S, Vector2d Uv)>> runsA, bool fullyOnA,
+        Curve3d b, List<List<(double S, Vector2d Uv)>> runsB, bool fullyOnB, double period)
+    {
+        var found = new List<(double, double, Vector3d)>();
+        bool wrapA = a.IsClosed && fullyOnA;
+        bool wrapB = b.IsClosed && fullyOnB;
+        foreach (var runA in runsA)
+        {
+            for (int i = 0; i < runA.Count - 1 + (wrapA ? 1 : 0); i++)
+            {
+                var (sa0, a0) = runA[i];
+                var (sa1, a1) = runA[(i + 1) % runA.Count];
+                if (wrapA && i == runA.Count - 1)
+                {
+                    sa1 = a.Domain.End;
+                    a1 = runA[0].Uv;
+                    if (period > 0)
+                        a1 = new Vector2d(a1.X + period * Math.Round((a0.X - a1.X) / period), a1.Y);
+                }
+                foreach (var runB in runsB)
+                {
+                    for (int j = 0; j < runB.Count - 1 + (wrapB ? 1 : 0); j++)
+                    {
+                        var (sb0, b0) = runB[j];
+                        var (sb1, b1) = runB[(j + 1) % runB.Count];
+                        if (wrapB && j == runB.Count - 1)
+                        {
+                            sb1 = b.Domain.End;
+                            b1 = runB[0].Uv;
+                            if (period > 0)
+                                b1 = new Vector2d(b1.X + period * Math.Round((b0.X - b1.X) / period), b1.Y);
+                        }
+                        var (c0, c1) = (b0, b1);
+                        if (period > 0)
+                        {
+                            c1 = new Vector2d(c1.X + period * Math.Round((c0.X - c1.X) / period), c1.Y);
+                            double shift = period * Math.Round(((a0.X + a1.X) / 2 - (c0.X + c1.X) / 2) / period);
+                            c0 = new Vector2d(c0.X + shift, c0.Y);
+                            c1 = new Vector2d(c1.X + shift, c1.Y);
+                        }
+                        if (!SegmentsCross(a0, a1, c0, c1, out double fa, out double fb))
+                            continue;
+                        double sa = sa0 + fa * (sa1 - sa0);
+                        double sb = sb0 + fb * (sb1 - sb0);
+                        if (!RefineCurvePair(a, b, ref sa, ref sb))
+                            continue;
+                        sa = WrapParam(a, sa);
+                        sb = WrapParam(b, sb);
+                        if (!WithinDomain(a, ref sa) || !WithinDomain(b, ref sb))
+                            continue;
+                        var point = a.PointAt(sa);
+                        if (!found.Any(f => f.Item3.DistanceTo(point) <= FaceGeometry.SeamTolerance))
+                            found.Add((sa, sb, point));
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
+    /// <summary>Whether a refined parameter lands on the curve, snapping the last rounding
+    /// onto the domain; closed curves are already wrapped into theirs.</summary>
+    private static bool WithinDomain(Curve3d curve, ref double s)
+    {
+        if (curve.IsClosed)
+            return true;
+        var domain = curve.Domain;
+        double epsilon = Math.Max(1e-9, domain.Length * 1e-7);
+        if (s < domain.Start - epsilon || s > domain.End + epsilon)
+            return false;
+        s = domain.Clamp(s);
+        return true;
+    }
+
+    /// <summary>
+    /// 2x2 Gauss–Newton for A(sa) = B(sb), the curve–curve twin of
+    /// <see cref="RefineCrossing"/>. Both parameters are free (an edge's is clamped there,
+    /// because an edge is a bounded piece of its curve); finite-difference samples are held
+    /// inside an open curve's domain, since evaluating a NURBS past its knots is not defined.
+    /// </summary>
+    private static bool RefineCurvePair(Curve3d a, Curve3d b, ref double sa, ref double sb)
+    {
+        static double Sample(Curve3d c, double s) => c.IsClosed ? WrapParam(c, s) : c.Domain.Clamp(s);
+        static Vector3d Speed(Curve3d c, double s)
+        {
+            double h = Math.Max(1e-8, c.Domain.Length * 1e-7);
+            double lo = Sample(c, s - h), hi = Sample(c, s + h);
+            double span = c.IsClosed ? 2 * h : hi - lo;
+            if (span <= 0)
+                return c.DerivativeAt(c.Domain.Clamp(s));
+            return (c.PointAt(hi) - c.PointAt(lo)) / span;
+        }
+
+        double s = sa, t = sb;
+        for (int iteration = 0; iteration < 20; iteration++)
+        {
+            var f = a.PointAt(Sample(a, s)) - b.PointAt(Sample(b, t));
+            // Two decades below the 1e-9 weld tolerance, as RefineCrossing's own test is:
+            // the crossing becomes a vertex position shared by both curves' segments.
+            if (f.Length < 1e-11)
+            {
+                sa = s;
+                sb = t;
+                return true;
+            }
+            var da = Speed(a, s);
+            var db = Speed(b, t);
+            double a11 = da.Dot(da), a12 = -da.Dot(db), a22 = db.Dot(db);
+            double b1 = -da.Dot(f), b2 = db.Dot(f);
+            double determinant = a11 * a22 - a12 * a12;
+            if (determinant < 1e-12 * a11 * a22 || determinant <= 0)
+                return false; // near-parallel (tangential) — not a transversal crossing
+            s += (b1 * a22 - b2 * a12) / determinant;
+            t += (b2 * a11 - b1 * a12) / determinant;
+        }
+        return false;
     }
 
     /// <summary>
@@ -1144,8 +1646,7 @@ public static class FaceSplitter
             .Select(l =>
             {
                 var polyline = LoopPolyline(l, surface, period);
-                bool wraps = period > 0 &&
-                    polyline.Max(p => p.X) - polyline.Min(p => p.X) > 0.75 * period;
+                bool wraps = FaceGeometry.LoopWrapsPeriod(polyline, period);
                 return (Coedges: l, Polyline: polyline,
                     Area: orientation * FaceGeometry.LoopSignedArea(polyline), Wraps: wraps);
             })

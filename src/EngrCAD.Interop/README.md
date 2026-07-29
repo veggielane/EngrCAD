@@ -496,6 +496,20 @@ logging complements them, never replaces them.
     its seam vertex there), and `ProbePoint` preferring the largest triangle's centroid
     (sliver centroids sit within the classification SDF's sagitta of the other solid's
     curved surface).
+  - **A face's whole curve list goes to `FaceSplitter.SplitByCurves` at once**, which owns
+    the choice between the curve-at-a-time cascade (what `SplitAll` used to spell inline, and
+    still what every curve crossing the face boundary at both ends gets, bit for bit) and one
+    simultaneous arrangement. Only the second can place a curve that TERMINATES inside the
+    face, which is what a face-pair curve becomes once it is clipped to the other face's trim.
+  - **`ProbePoint` decides "this fragment is a band" by net u DRIFT, not u SPAN**
+    (`FaceGeometry.LoopWrapsPeriod`, the one rule the face splitter's tracing and
+    wrap-splitting also ask). The band path probes halfway toward the surface's own v
+    domain edge, which is right for a ring-bounded band and catastrophic for a
+    CONTRACTIBLE facet that merely reaches most of the way round — a threaded rod's
+    end-chamfer facet spans 272° and closes — because the probe then lands outside the
+    fragment and the boolean classifies it away. Pinned by `ProbePointWrapTests`, whose
+    fixture asserts it still CARRIES the configuration (one loop, span past three quarters
+    of the period, no wrap) so it cannot quietly stop testing it.
   - Drilling works into **cylinders** exactly as into boxes (the cap bounds a closed
     circular edge, so a different split/re-weld path runs): for well-posed inputs the
     result is `Validate`-clean with the right genus and exact volume in all three
