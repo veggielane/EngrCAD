@@ -88,6 +88,26 @@ logging complements them, never replaces them.
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
   edge polylines exactly; everything is welded (with seam zipping to repair T-junctions
   from earcut's collinear filtering).
+  - **`IsRingPairedBand` — the ring path checks its own precondition.** A plain
+    `CylinderSurface` has no parameter grid at all: `TessellateCylinderBand` emits one
+    quad per sample index j joining `bottom[j]` to `top[j]`, which is the right band
+    *exactly when the two loop polylines sample the same azimuths in the same order*.
+    Two natural rings do — both are circles on the cylinder's own frame at identical
+    parameters, so their radial parts agree to a few ulps. Two INDEPENDENTLY traced
+    wrapping cuts do not, and the old gate (two loops, one closed coedge each) admitted
+    exactly the case the pairing could not triangulate: a cross-drill piercing the wall
+    left the tool's band bounded by two marching-tracer polylines with unrelated phases,
+    and **18 of its 40 quads faced inward** (worst facet-vs-surface agreement −0.0000)
+    before the weld reported a duplicated directed edge three stages downstream. The gate
+    now compares the paired samples' radial vectors at the weld tier; anything that fails
+    goes to `TrimmedFaceTessellator`, which pairs by pulled-back u. That is what makes
+    `FaceSplitter`'s non-planar wrap cut work on a plain cylinder — the split and the
+    trimmed path were both correct all along. Residual, pre-existing and measured: a
+    traced rim's sample count is set by the tracer's ARC-LENGTH step, so a *small* band
+    gets few samples per turn and the facets beside it fall under the corpus's
+    density-scaled floor (a Ø10 drill's rim carries 66 samples per turn and reads
+    0.858 / 0.9995 / 0.9998 at 32/96/192, a Ø3 one carries 40 and reads
+    0.974 / 0.949 / 0.565) — fold-free throughout, and volumes still converge.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:

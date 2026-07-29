@@ -104,14 +104,15 @@ public static class BRepTessellator
             case PlaneSurface plane:
                 TessellatePlanarFace(face, plane, edgePolylines, polygons);
                 break;
-            case CylinderSurface when IsCylinderBand(face):
+            case CylinderSurface when IsRingPairedBand(face, edgePolylines):
                 TessellateCylinderBand(face, edgePolylines, polygons);
                 break;
             case CylinderSurface:
                 if (!TrimmedFaceTessellator.TryTessellate(
                         face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? cylinderFailure))
                     throw new NotSupportedException(
-                        "Cylindrical faces must be full two-ring bands or trimmed regions with non-wrapping loops. " +
+                        "Cylindrical faces must be ring-paired two-ring bands, or trimmed regions the " +
+                        "parameter-space path can handle. " +
                         Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, cylinderFailure));
                 break;
             case HelicalSurface helical:
@@ -341,9 +342,53 @@ public static class BRepTessellator
         _ => throw new NotSupportedException($"No grid sampling for {surface.GetType().Name}."),
     };
 
-    private static bool IsCylinderBand(BrepFace face) =>
-        face.Loops.Count == 2 &&
-        face.Loops.All(l => l.Coedges.Count == 1 && l.Coedges[0].Edge.IsClosedEdge);
+    /// <summary>
+    /// Whether <see cref="TessellateCylinderBand"/>'s index pairing is VALID for this face —
+    /// a statement about what the loops are, not merely about how many there are.
+    /// <para>That path is the ring-driven one: it emits one quad per sample index j joining
+    /// <c>bottom[j]</c> to <c>top[j]</c>, which is the correct band exactly when the two
+    /// polylines sample the SAME azimuths in the same order. Two natural rings do — both are
+    /// circles on the cylinder's own frame sampled at identical parameters, so their radial
+    /// parts agree to a few ulps — and that is why a plain cylinder needs no parameter grid at
+    /// all. Two INDEPENDENTLY traced wrapping cuts do not: a cross-drill piercing the wall
+    /// leaves the band bounded by two marching-tracer polylines with unrelated phases, and
+    /// pairing those by index folds the band (measured on a Ø3 cross-drill through a Ø10
+    /// cylinder: 18 of 40 quads faced inward, worst facet-vs-surface normal agreement −0.0000,
+    /// and the weld then reported a duplicated directed edge). Such faces go to
+    /// <see cref="TrimmedFaceTessellator"/>, which pairs by pulled-back u instead.</para>
+    /// <para>So this is not a filter in front of a working path — it is that path's own
+    /// correctness condition, checked rather than assumed. The old test (two loops, one closed
+    /// coedge each) admitted exactly the case it could not triangulate.</para>
+    /// </summary>
+    private static bool IsRingPairedBand(BrepFace face, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)
+    {
+        if (face.Loops.Count != 2 ||
+            !face.Loops.All(l => l.Coedges.Count == 1 && l.Coedges[0].Edge.IsClosedEdge))
+            return false;
+
+        var cylinder = (CylinderSurface)face.Surface;
+        var axis = cylinder.Axis.Normalized();
+        var first = edgePolylines[face.Loops[0].Coedges[0].Edge];
+        var second = edgePolylines[face.Loops[1].Coedges[0].Edge];
+        if (first.Count != second.Count)
+            return false;
+
+        // Both samples lie on the same cylinder, so their radial vectors share a magnitude
+        // (the radius) and comparing them directly compares the AZIMUTH. 1e-9 is the absolute
+        // weld tier, which is the right one: rings that pair are exactly constructed on one
+        // frame, so anything that fails here was never index-pairable.
+        Vector3d Radial(in Vector3d p)
+        {
+            var d = p - cylinder.Origin;
+            return d - axis * d.Dot(axis);
+        }
+        for (int j = 0; j < first.Count; j++)
+        {
+            if ((Radial(first[j]) - Radial(second[j])).Length > Tolerance.Default.Linear)
+                return false;
+        }
+        return true;
+    }
 
     /// <summary>
     /// Whether the face's loops sample exactly the surface's natural grid boundary — the

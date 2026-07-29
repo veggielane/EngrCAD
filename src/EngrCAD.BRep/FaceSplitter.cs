@@ -680,24 +680,19 @@ public static class FaceSplitter
     /// domain — tessellation must route them through the trimmed-face path. Each
     /// boundary loop goes to the side of the cut its v-range lies on; a loop whose
     /// v-range overlaps the cut's is a tangent/intersecting configuration we reject.
+    /// <para>A plain <see cref="CylinderSurface"/> band used to be refused here, on the
+    /// reading that its sub-bands "would need trimmed cylindrical tessellation with
+    /// wrapping loops, which does not exist". The split was never the problem: a cylinder
+    /// is ring-driven, so handing both sub-bands the whole surface is already the correct
+    /// edit, and the trimmed path pairs wrapping loops by pulled-back u perfectly well.
+    /// What was wrong sat one stage later — <c>BRepTessellator</c> routed any two-loop
+    /// closed-edge face to its index-pairing RING path, which folds when the two loops are
+    /// independently traced cuts with unrelated sample phases. That route now checks its
+    /// own pairing precondition, so this case simply works.</para>
     /// </summary>
     private static IReadOnlyList<BrepFace> SplitBandByNonPlanarWrapCurve(
         BrepFace face, Curve3d curve, List<(double S, Vector2d Uv)> pulledCurve, bool traversesPlusU)
     {
-        // The constant-v case handles a raw CylinderSurface band, but this one cannot:
-        // its sub-bands keep the whole surface and rely on trimmed-face tessellation,
-        // which supports cylindrical faces only with NON-wrapping loops — and every
-        // fragment here is bounded by a wrapping cut. Refuse by name rather than let the
-        // split succeed and the mesh builder report a non-manifold edge three stages
-        // later. An extruded-circle band (what Drill and the Shape pipeline actually
-        // produce) takes the domain-driven path and does work.
-        if (face.Surface is CylinderSurface)
-            throw new NotSupportedException(
-                "A wrapping cut whose v varies (a cross-drill piercing a bore wall) is not supported on a " +
-                "plain CylinderSurface band yet: the sub-bands would need trimmed cylindrical tessellation " +
-                "with wrapping loops. Build the bore from an extruded circle (SolidFactory.Extrude / " +
-                "Shape.Drill), whose band takes the domain-driven path.");
-
         double cutMin = pulledCurve.Min(p => p.Uv.Y);
         double cutMax = pulledCurve.Max(p => p.Uv.Y);
         var pulledLoops = FaceGeometry.PullLoops(face);

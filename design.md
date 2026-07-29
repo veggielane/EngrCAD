@@ -822,6 +822,37 @@ closed curve whose pullback drifts a full period (a bore circle
 on a band) is recognized as non-contractible and handled by `SplitBandByWrapCurve`,
 which cuts the band into two bands with exactly reconstructed sub-surfaces.
 
+##### A refusal that named the wrong stage
+
+`SplitBandByWrapCurve`'s non-planar branch — a cut whose v *varies*, which is what a
+cross-drill or a tilted plane leaves — used to refuse a plain `CylinderSurface` by name,
+and the message named a missing capability: "the sub-bands would need trimmed cylindrical
+tessellation with wrapping loops". The evidence for it was strong and, read literally,
+correct: lifting the refusal made the split succeed and produced `Directed edge appears
+twice` from the mesh builder three stages later, so the refusal was reinstated and the
+capability filed.
+
+**Both halves of the diagnosis were wrong.** The split was right, and the trimmed path
+already pairs wrapping loops by pulled-back u. The defect was in `BRepTessellator`'s
+ROUTING: a plain cylinder has no parameter grid, so its band is tessellated by pairing
+ring sample j to ring sample j, and the gate for that path asked only how many loops the
+face had. That is not the path's precondition. **The precondition is that the two loop
+polylines sample the same azimuths in the same order** — true of two natural rings (both
+circles on the cylinder's own frame at identical parameters, radial parts equal to a few
+ulps), false of two independently traced cuts, whose phases have no relation at all.
+Pairing those by index folds the band: measured, 18 of the tool band's 40 quads faced
+inward at a worst facet-vs-surface agreement of −0.0000, and the duplicated directed edge
+was that fold reaching the welder.
+
+Two things worth keeping. **A tier's gate should be its own correctness condition, checked,
+not a proxy for it** — `IsRingPairedBand` compares the paired samples and hands everything
+else to the trimmed path, which is both the fix and the honest statement of when index
+pairing is valid. And **"the failure moved downstream when I lifted the guard" is evidence
+that the guard is load-bearing, not evidence about what it is guarding against**; the
+recorded lesson at the time ("generalizing a refusal can make failure worse") was true of
+the experiment and false as a conclusion, because the new failure was a *different* bug
+that the refusal had been hiding.
+
 A third mechanism exists for the curves the tracer DOES have to produce. **The tracer breaks
 its step only after the corrector's parameters leave the domain**, so a traced curve always
 stops up to one march step short of a bounded surface's edge. Where that edge also bounds the

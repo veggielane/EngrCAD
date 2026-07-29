@@ -372,14 +372,21 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   and curved shelling and draft ride it. What is left here is the OTHER half — clipping
   the two trims against each other on a curved carrier, a 2D arrangement in the shared
   surface's parameter space rather than a corner solve.
-- [ ] **Trimmed cylindrical tessellation with WRAPPING loops** — the blocker behind the
-  one wrap-split case still refused: a cross-drill piercing a plain `CylinderSurface`
-  band makes a wrapping cut whose v varies, and its sub-bands keep the whole surface, so
-  they need the trimmed path — which supports cylindrical faces only with *non*-wrapping
-  loops. Refused by name today (the message points at the extruded-circle route, which
-  does work); letting it through was measurably worse, since the split succeeded and the
-  failure resurfaced three stages later as `Directed edge appears twice` from the mesh
-  builder.
+- ~~**Trimmed cylindrical tessellation with WRAPPING loops**~~ ✅ **done** — and the
+  standing diagnosis was wrong in an instructive way. The refusal blamed a missing
+  capability ("the sub-bands need trimmed cylindrical tessellation with wrapping loops");
+  the trimmed path had that capability all along and the split was fine. What was broken
+  was `BRepTessellator`'s ROUTING: any two-loop closed-edge cylindrical face went to the
+  index-pairing RING path, whose correctness condition — the two polylines sample the
+  same azimuths in the same order — two independently traced cuts do not meet.
+  `IsRingPairedBand` now checks that condition, cross-drills and tilted-plane cuts of a
+  plain cylinder work, and the corpus gained `cross-drilled cylinder band`.
+  Residual (pre-existing, now measured): a traced rim's sample count comes from the
+  tracer's ARC-LENGTH step, so a *small* band gets few samples per turn — a Ø3 drill
+  through a Ø10 cylinder reads facet-vs-surface agreement 0.974 / 0.949 / 0.565 at
+  32/96/192 (fold-free, volume converging) against 0.858 / 0.9995 / 0.9998 for a Ø10
+  drill through a Ø26 one. Same fixed-sampling floor recorded under the whole-solid
+  fillet booleans; a density-aware tracer step would close both.
 - [ ] **The tracer reports NOTHING for a conic partially crossing a bounded extrusion's
   edge** — a bore whose rim runs off the side wall it pierces. Pre-existing and separate
   from the bounded-patch tier above, which correctly *defers* that case rather than

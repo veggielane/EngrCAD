@@ -636,11 +636,15 @@ operations. Depends only on `EngrCAD.Core`.
   loops — and vCut is `(cutStart − origin)·axis` exactly, one dot product with no
   projection error to refine away. A cylinder is also unbounded in v, so the "the cut
   coincides with a boundary ring" test reads the rings; against an infinite domain it
-  could never fire. The NON-planar case refuses on a cylinder BY NAME (its fragments
-  would need trimmed cylindrical tessellation with wrapping loops, which does not exist)
-  rather than splitting successfully and surfacing three stages later as a non-manifold
-  mesh edge. Bores from `Shape.Drill` and `SolidFactory.Extrude` are extruded circles
-  and take the domain-driven path, which is why this went unexercised for so long.
+  could never fire. Bores from `Shape.Drill` and `SolidFactory.Extrude` are extruded
+  circles and take the domain-driven path, which is why this went unexercised for so
+  long. The NON-planar case (a cross-drill piercing the wall, or a tilted plane cutting
+  it in an ellipse) **now works on a plain cylinder too**. It used to refuse by name, on
+  the reading that its fragments "would need trimmed cylindrical tessellation with
+  wrapping loops, which does not exist" — but the splitting was never the problem and
+  neither was the trimmed path, which pairs wrapping loops by pulled-back u perfectly
+  well. The defect sat one stage later, in `BRepTessellator`'s ROUTING; see the Interop
+  README's `IsRingPairedBand` note.
   `TopologyEditor`
   supplies `SplitEdge` (patches every using loop) and `SealSeams` (boolean output
   sealing). **All coedge/curve sampling goes through
