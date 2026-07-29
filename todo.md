@@ -96,10 +96,38 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   polygonization 1.2–1.5×, allocation at res 256 145 → 103 MB, output bit-identical.
   Residual:
   - [ ] **The grid WALK is now the cost** (~175 ms of a 213 ms res-384 polygonize; assembly
-    is 15–18%). The named candidates are the per-cell `int[8]` component map (one heap
+    is 15–18%). The named candidates are the per-cell `int[12]` crossing map (one heap
     allocation per mixed cell — the same defect the quad arrays had), the crossing
     interpolation, and the three quad passes re-reading `values` through `Corner()`.
     Re-measure before choosing: that is what this entry's own history argues for.
+- ~~**Surface Nets' manifold contract was false in general.**~~ ✅ **done.**
+  `Sphere(16).Lattice(Gyroid(12, 1.2))` at resolution 88 threw `Directed edge 4954 → 4967
+  appears twice` from `HalfEdgeMesh.Build`. The gap: an *ambiguous* grid face (inside
+  corners exactly a diagonal pair) has all four edges crossing, so it carries two quad
+  edges between the same two cells, and when BOTH cells join that pair into one component
+  the two quads share a directed edge. Fixed by splitting such a component by the outside
+  blob each crossing reaches, tested once per interior face by the cell on its + side; the
+  split provably always exists. Only the broken configuration changes, so the golden
+  fingerprints and all 97 docs PNGs are untouched. Reproduced on three gyroid variants and,
+  tellingly, on a plain `Sphere(10).Shell(0.6)` at resolution 44 — a one-cell-thick wall,
+  not a lattice. Residuals:
+  - [ ] **A saddle cell whose inside is connected but whose OUTSIDE splits in two has two
+    surface components and still gets ONE shared vertex** — the mean of crossings from two
+    separate sheets. Manifold, so not this bug, but a geometry-quality question: the general
+    rule is one vertex per (inside blob, outside blob) interface, which is exactly the
+    surface-component count. Measured cost of adopting it unconditionally: 204 split cells
+    in the res-88 gyroid against the 6 that were actually broken, plus 1 cell in the `csg`
+    golden and 2 in `torus` — so it moves fingerprints and probably PNGs, and wants its own
+    decision with renders looked at, not a silent ride-along on a manifoldness fix.
+  - [ ] **Only ONE of the two cells splits** (the + side owns the test), because the sliding
+    window cannot promise a cell the slab beyond its + neighbour and the window may be as
+    small as two slabs. Manifoldness needs only one side, but the result is side-asymmetric;
+    making it symmetric means either a 4-slab window (breaking the "output is independent of
+    the window size" invariant, which is locked by test) or carrying a second forward record.
+  - [ ] **A non-manifold interior VERTEX is neither checked nor proven absent.** `Build`
+    rejects duplicated directed edges and bow-tie *boundary* vertices; an interior vertex
+    whose link is two fans would pass. Nothing has produced one, but the contract claim
+    should say what it covers.
 - [ ] **`MeshSdf` batch queries: two levers measured, both declined — don't redo either.**
   74–85% of a mesh narrow band's wall clock is inside `Bvh.Nearest`, so the headroom is
   real, but *seeding* the branch and bound measured 1.12–1.20× (`MeshSdfBatchTests`) and a

@@ -20,6 +20,31 @@ logging complements them, never replaces them.
   Surfaces crossing the sampling region come out open there. The
   optional `ProgressCancel` reports coarse progress and cancels cooperatively
   (throws `OperationCanceledException`, partial results discarded).
+  - **The inside-corner rule alone is NOT manifold, and the gap is the ambiguous face.**
+    A grid face whose inside corners are exactly a diagonal pair (Marching Cubes' ambiguous
+    face) has all four of its edges crossing, so it carries two quad edges between the same
+    two cells — and when BOTH cells join that pair into one component, the two quads land on
+    the same DIRECTED edge and `HalfEdgeMesh.Build` refuses the mesh. That is the *only* way
+    a duplicate arises: two such instances must come from one pair of cells, hence one shared
+    face, and a face with just two crossings gives its two instances opposite directions.
+    So each interior face is tested once, by the cell on its **+ side**, against the
+    neighbour across it; where both join, that component is **split by the outside blob each
+    crossing reaches**. The split always exists, because a cell can never join both an
+    ambiguous face's inside pair AND its outside pair — a path between the inside pair must
+    use an off-diagonal corner of the far face as *inside*, while a path between the outside
+    pair needs both of them *outside*. Nothing else is refined, so every other cell stays
+    bit-identical (every golden fingerprint and every rendered docs PNG is untouched by the
+    fix). The per-cell map is therefore keyed by **cube edge**, not by inside corner: one
+    corner's crossings can end up on two different vertices. Whether the configuration lands
+    is an ALIGNMENT question, not a tolerance one — `Sphere(16).Lattice(Gyroid(12, 1.2))`
+    fails at resolution 88 and at none of the other nine tried — so `SurfaceNetsManifoldTests`
+    sweeps families and resolutions rather than pinning one fixture, and asserts each fixture
+    still *carries* the configuration so it cannot quietly stop testing it. A one-cell-thick
+    wall is what produces it, which is why a plain `Sphere(10).Shell(0.6)` at resolution 44
+    reproduces it (240 such faces) just as a gyroid lattice does: the gap was in the rule,
+    never in lattices. Cost is unmeasurable at res 192/256 (a second 8-corner flood fill is
+    O(cells with a sign change), i.e. O(n²) against the O(n³) walk); allocation rises ~2 MB
+    at res 256, the map going from 8 ints per mixed cell to 12.
   - **Sampling is deinterleaved and streamed.** The grid is never materialized as points:
     coordinates are generated from the indices straight into pooled x/y/z scratch and fed
     to `Sdf.Evaluate(x, y, z, distances)` — the SoA batch entry — so the round trip that

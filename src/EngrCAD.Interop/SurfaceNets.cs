@@ -8,10 +8,16 @@ namespace EngrCAD.Interop;
 
 /// <summary>
 /// Implicit → mesh conversion by Surface Nets (dual contouring without normals-based
-/// vertex placement): one vertex per sign-changing cell, placed at the mean of its edge
-/// crossings; one quad per interior sign-changing grid edge. Produces closed quad-dominant
-/// meshes for smooth fields whose surface stays inside the sampled region; surfaces that
-/// cross the region boundary come out open there.
+/// vertex placement): one vertex per connected component of a cell's inside corners, placed
+/// at the mean of that component's edge crossings; one quad per interior sign-changing grid
+/// edge. Produces closed quad-dominant meshes for smooth fields whose surface stays inside
+/// the sampled region; surfaces that cross the region boundary come out open there.
+/// <para>
+/// Output is MANIFOLD by contract, not by hope: a component is split further where an
+/// <em>ambiguous</em> grid face — one whose inside corners are a diagonal pair — is joined
+/// by the cells on both sides, the one configuration that puts two quads on a single
+/// directed edge. See the rule and its proof in <c>ProcessSlab</c>.
+/// </para>
 /// </summary>
 public static class SurfaceNets
 {
@@ -174,14 +180,23 @@ public static class SurfaceNets
         }
 
         // One vertex per connected component of inside-corners per cell (manifold surface
-        // nets): a plain one-vertex-per-cell scheme produces non-manifold edges on grid
-        // faces with diagonal sign patterns (thin sheets, saddles). Each slab's map gives,
-        // per mixed cell (j, k) and per inside corner, that component's vertex; only the
-        // current and previous slabs are ever needed, so the map does not grow with nx.
+        // nets), refined at ambiguous faces (see ProcessSlab): a plain one-vertex-per-cell
+        // scheme produces non-manifold edges on grid faces with diagonal sign patterns
+        // (thin sheets, saddles). Each slab's map gives, per mixed cell (j, k) and per
+        // CUBE EDGE, the vertex that edge's crossing belongs to — keyed by the edge rather
+        // than by its inside corner, since a corner's crossings can end up on two different
+        // vertices. Only the current and previous slabs are ever needed, so the map does
+        // not grow with nx.
         int[]?[] previousMap = new int[ny * nz][];
         int[]?[] currentMap = new int[ny * nz][];
         var previousTouched = new List<int>();
         var currentTouched = new List<int>();
+        // Whether the previous slab's cell joins the two diagonals of its far (+x) face —
+        // bit 0 for corners 1~7, bit 1 for 3~5. The +x neighbour needs that answer to test
+        // the face they share, and the sliding window cannot promise it the slab beyond, so
+        // the one bit pair the test needs is carried forward instead of the samples.
+        var previousFarJoins = new byte[ny * nz];
+        var currentFarJoins = new byte[ny * nz];
 
         var positions = new List<Vector3d>();
         // Quads are bucketed by the loop variable that was OUTERMOST in the dense version's
@@ -267,17 +282,41 @@ public static class SurfaceNets
         {
             Span<int> corners = stackalloc int[8];
             Span<int> stack = stackalloc int[8];
+            Span<int> component = stackalloc int[8];
+            Span<int> neighborComponent = stackalloc int[8];
+            Span<int> neighborStack = stackalloc int[8];
+            // Cube edges, in the order the crossings are averaged in. The INDEX into this
+            // span is the key the per-cell map is stored under, and the quad passes below
+            // name the same edges by those indices: x-aligned 0..3 (by dy + 2dz), y-aligned
+            // 4..7 (dx + 2dz), z-aligned 8..11 (dx + 2dy).
             ReadOnlySpan<(int A, int B)> edges =
             [
                 (0, 1), (2, 3), (4, 5), (6, 7),
                 (0, 2), (1, 3), (4, 6), (5, 7),
                 (0, 4), (1, 5), (2, 6), (3, 7),
             ];
+            // The cell's three LOW faces, each listed twice — once per diagonal corner pair,
+            // as (face corner mask, the pair). A face whose inside corners are EXACTLY one of
+            // its diagonals is Marching Cubes' AMBIGUOUS face: all four of its edges cross,
+            // so it carries two quad edges between the same pair of cells, and those two
+            // quads share a directed edge unless one of the cells separates them. Only the
+            // low faces are listed because a face is owned by the cell on its + side, which
+            // makes every interior face somebody's low face and tests it exactly once.
+            ReadOnlySpan<(int Face, int A, int B)> diagonals =
+            [
+                (0x55, 0, 6), (0x55, 2, 4),   // -x
+                (0x33, 0, 5), (0x33, 1, 4),   // -y
+                (0x0F, 0, 3), (0x0F, 1, 2),   // -z
+            ];
 
             (previousMap, currentMap) = (currentMap, previousMap);
+            (previousFarJoins, currentFarJoins) = (currentFarJoins, previousFarJoins);
             (previousTouched, currentTouched) = (currentTouched, previousTouched);
             foreach (int slot in currentTouched)
+            {
                 currentMap[slot] = null;
+                currentFarJoins[slot] = 0;
+            }
             currentTouched.Clear();
 
             int local = i - baseSlab;
@@ -287,6 +326,68 @@ public static class SurfaceNets
             // Corner of cell (i, j, k): local x offset dx picks the slab, (j+dy, k+dz) the
             // sample within it.
             int Corner(int dx, int j, int k) => (dx == 0 ? slab0 : slab1) + j * sz + k;
+
+            // Component id per corner, flooding within the corner's OWN side over the cube's
+            // face adjacency (bit flips). Inside corners are seeded first and in corner
+            // order, so inside component ids — and therefore the order vertices are created
+            // in below — are exactly what an inside-only fill gave.
+            static void Components(int insideMask, Span<int> component, Span<int> scratch)
+            {
+                component.Fill(-1);
+                int next = 0;
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    int side = pass == 0 ? 1 : 0;
+                    for (int seed = 0; seed < 8; seed++)
+                    {
+                        if (component[seed] >= 0 || ((insideMask >> seed) & 1) != side)
+                            continue;
+                        int id = next++;
+                        int top = 0;
+                        scratch[top++] = seed;
+                        component[seed] = id;
+                        while (top > 0)
+                        {
+                            int c = scratch[--top];
+                            foreach (int neighbor in (ReadOnlySpan<int>)[c ^ 1, c ^ 2, c ^ 4])
+                            {
+                                if (component[neighbor] < 0 && ((insideMask >> neighbor) & 1) == side)
+                                {
+                                    component[neighbor] = id;
+                                    scratch[top++] = neighbor;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Does the cell across this LOW face join the same diagonal pair? Owning only the
+            // low faces is what keeps the neighbour reachable: the -x answer was left behind
+            // by the slab already processed, and -y/-z sit inside the same slab pair, so no
+            // cell ever needs a slab the sliding window may not hold. A face on the grid
+            // boundary carries no quad edge, so a missing neighbour is not an answer needed.
+            bool NeighborJoins(
+                int face, int da, int db, int j, int k, Span<int> scratch, Span<int> scratchStack)
+            {
+                if (face == 0x55) // -x: the slab already processed left its answer behind
+                    return i > 0 && (previousFarJoins[j * nz + k] & (da == 0 ? 1 : 2)) != 0;
+
+                int flip;
+                if (face == 0x33 && j > 0) { j--; flip = 2; }        // -y
+                else if (face == 0x0F && k > 0) { k--; flip = 4; }   // -z
+                else return false;
+
+                int mask = 0;
+                for (int c = 0; c < 8; c++)
+                {
+                    if (values[Corner(c & 1, j + ((c >> 1) & 1), k + ((c >> 2) & 1))] < 0)
+                        mask |= 1 << c;
+                }
+                Components(mask, scratch, scratchStack);
+                // The pair's corners in the neighbour are ours with that axis' bit flipped.
+                return scratch[da ^ flip] == scratch[db ^ flip];
+            }
 
             // Cells are visited in exactly the (j, k) order the full walk used — the tile
             // loop only skips runs the cull proved empty, so vertex numbering is unchanged.
@@ -319,61 +420,92 @@ public static class SurfaceNets
                         if (insideMask is 0 or 255)
                             continue;
 
-                        var map = new int[8];
+                        var map = new int[12];
                         Array.Fill(map, -1);
 
-                        // Flood-fill inside corners over the cube's face adjacency (bit flips).
-                        int seenMask = 0;
+                        Components(insideMask, component, stack);
+
+                        // Which inside components must be SPLIT, one bit per component id.
+                        //
+                        // A grid face whose inside corners are exactly a diagonal pair is
+                        // ambiguous: all four of its edges cross, so it carries two quad
+                        // edges between the same two cells. Those two quads land on the same
+                        // DIRECTED edge — the mesh is non-manifold and Build refuses it —
+                        // exactly when BOTH cells join that pair into one component. So each
+                        // interior face is tested once, by the cell on its + side, against
+                        // the neighbour across it; a face at the grid boundary carries no
+                        // quad edge and is skipped.
+                        //
+                        // The split is by the outside blob each crossing reaches, and it is
+                        // always available: a cell can never join both an ambiguous face's
+                        // inside pair AND its outside pair, since a path between the inside
+                        // pair must use an off-diagonal corner of the far face as INSIDE
+                        // while a path between the outside pair needs both of them OUTSIDE.
+                        // Nothing else is refined, so every other cell stays bit-identical.
+                        int splitComponents = 0;
+                        foreach (var (face, da, db) in diagonals)
+                        {
+                            if ((insideMask & face) != ((1 << da) | (1 << db)) ||
+                                component[da] != component[db])
+                                continue;
+                            if (!NeighborJoins(face, da, db, j, k, neighborComponent, neighborStack))
+                                continue;
+                            splitComponents |= 1 << component[da];
+                        }
+
+                        // The far (+x) face's answer, for the neighbour that will test it.
+                        currentFarJoins[j * nz + k] = (byte)(
+                            (component[1] == component[7] ? 1 : 0) |
+                            (component[3] == component[5] ? 2 : 0));
+
+                        int seenComponents = 0;
                         for (int seed = 0; seed < 8; seed++)
                         {
-                            if ((insideMask & (1 << seed)) == 0 || (seenMask & (1 << seed)) != 0)
+                            if ((insideMask & (1 << seed)) == 0)
                                 continue;
-                            int componentMask = 0;
-                            int top = 0;
-                            stack[top++] = seed;
-                            seenMask |= 1 << seed;
-                            while (top > 0)
+                            int id = component[seed];
+                            if ((seenComponents & (1 << id)) != 0)
+                                continue;
+                            seenComponents |= 1 << id;
+                            bool split = (splitComponents & (1 << id)) != 0;
+
+                            // Vertex: mean of the crossings on edges leaving the component —
+                            // all of them at once when not splitting (the original rule, same
+                            // edge order and the same arithmetic), otherwise one vertex per
+                            // outside blob reached, in first-encounter order.
+                            while (true)
                             {
-                                int c = stack[--top];
-                                componentMask |= 1 << c;
-                                foreach (int neighbor in (ReadOnlySpan<int>)[c ^ 1, c ^ 2, c ^ 4])
+                                int key = int.MinValue;
+                                var sum = Vector3d.Zero;
+                                int crossings = 0;
+                                for (int e = 0; e < edges.Length; e++)
                                 {
-                                    int bit = 1 << neighbor;
-                                    if ((insideMask & bit) != 0 && (seenMask & bit) == 0)
-                                    {
-                                        seenMask |= bit;
-                                        stack[top++] = neighbor;
-                                    }
+                                    if (map[e] >= 0)
+                                        continue; // taken by an earlier group of this component
+                                    var (ea, eb) = edges[e];
+                                    bool aIn = (insideMask & (1 << ea)) != 0;
+                                    if (aIn == ((insideMask & (1 << eb)) != 0))
+                                        continue;
+                                    int insideCorner = aIn ? ea : eb;
+                                    int outsideCorner = aIn ? eb : ea;
+                                    if (component[insideCorner] != id)
+                                        continue;
+                                    int reached = split ? component[outsideCorner] : -1;
+                                    if (key == int.MinValue)
+                                        key = reached;
+                                    else if (reached != key)
+                                        continue;
+                                    double t = values[corners[insideCorner]] /
+                                        (values[corners[insideCorner]] - values[corners[outsideCorner]]);
+                                    sum += Vector3d.Lerp(
+                                        CornerPosition(i, j, k, insideCorner),
+                                        CornerPosition(i, j, k, outsideCorner), t);
+                                    crossings++;
+                                    map[e] = positions.Count;
                                 }
-                            }
-
-                            // Component vertex: mean of the crossings on edges leaving it.
-                            var sum = Vector3d.Zero;
-                            int crossings = 0;
-                            foreach (var (ea, eb) in edges)
-                            {
-                                bool aIn = (componentMask & (1 << ea)) != 0;
-                                bool bIn = (componentMask & (1 << eb)) != 0;
-                                if (aIn == bIn)
-                                    continue;
-                                int insideCorner = aIn ? ea : eb;
-                                int outsideCorner = aIn ? eb : ea;
-                                if (values[corners[outsideCorner]] < 0)
-                                    continue; // both grid-inside: edge internal to the solid
-                                double t = values[corners[insideCorner]] /
-                                    (values[corners[insideCorner]] - values[corners[outsideCorner]]);
-                                sum += Vector3d.Lerp(
-                                    CornerPosition(i, j, k, insideCorner),
-                                    CornerPosition(i, j, k, outsideCorner), t);
-                                crossings++;
-                            }
-
-                            int vertex = positions.Count;
-                            positions.Add(sum / crossings);
-                            for (int c = 0; c < 8; c++)
-                            {
-                                if ((componentMask & (1 << c)) != 0)
-                                    map[c] = vertex;
+                                if (crossings == 0)
+                                    break;
+                                positions.Add(sum / crossings);
                             }
                         }
 
@@ -403,12 +535,14 @@ public static class SurfaceNets
                         bool insideStart = values[Corner(0, j, k)] < 0;
                         if (insideStart == values[Corner(1, j, k)] < 0)
                             continue;
-                        int d = insideStart ? 0 : 1; // local x-bit of the inside endpoint
+                        // The grid edge is each neighbour's x-aligned cube edge at the
+                        // (dy, dz) corner the cell sees it from; which END is inside only
+                        // decides the winding.
                         Emit(facesX,
-                            currentMap[(j - 1) * nz + k - 1], d | 2 | 4,
-                            currentMap[j * nz + k - 1], d | 4,
-                            currentMap[j * nz + k], d,
-                            currentMap[(j - 1) * nz + k], d | 2,
+                            currentMap[(j - 1) * nz + k - 1], 3,
+                            currentMap[j * nz + k - 1], 2,
+                            currentMap[j * nz + k], 0,
+                            currentMap[(j - 1) * nz + k], 1,
                             flip: !insideStart);
                     }
                 }
@@ -431,12 +565,11 @@ public static class SurfaceNets
                         bool insideStart = values[Corner(0, j, k)] < 0;
                         if (insideStart == values[Corner(0, j + 1, k)] < 0)
                             continue;
-                        int d = (insideStart ? 0 : 1) << 1; // local y-bit of the inside endpoint
                         Emit(facesY[j] ??= [],
-                            previousMap[j * nz + k - 1], d | 1 | 4,
-                            previousMap[j * nz + k], d | 1,
-                            currentMap[j * nz + k], d,
-                            currentMap[j * nz + k - 1], d | 4,
+                            previousMap[j * nz + k - 1], 7,
+                            previousMap[j * nz + k], 5,
+                            currentMap[j * nz + k], 4,
+                            currentMap[j * nz + k - 1], 6,
                             flip: !insideStart);
                     }
                 }
@@ -456,12 +589,11 @@ public static class SurfaceNets
                         bool insideStart = values[Corner(0, j, k)] < 0;
                         if (insideStart == values[Corner(0, j, k + 1)] < 0)
                             continue;
-                        int d = (insideStart ? 0 : 1) << 2; // local z-bit of the inside endpoint
                         Emit(facesZ[k] ??= [],
-                            previousMap[(j - 1) * nz + k], d | 1 | 2,
-                            currentMap[(j - 1) * nz + k], d | 2,
-                            currentMap[j * nz + k], d,
-                            previousMap[j * nz + k], d | 1,
+                            previousMap[(j - 1) * nz + k], 11,
+                            currentMap[(j - 1) * nz + k], 10,
+                            currentMap[j * nz + k], 8,
+                            previousMap[j * nz + k], 9,
                             flip: !insideStart);
                     }
                 }
@@ -476,16 +608,16 @@ public static class SurfaceNets
             (k + ((c >> 2) & 1)) * cell);
 
         // One quad per interior sign-changing grid edge, wound so normals point outward.
-        // Each adjacent cell contributes the vertex of the component that contains its
-        // local copy of the edge's inside endpoint.
+        // Each adjacent cell contributes the vertex carrying that edge's crossing, named by
+        // the edge's index in the cell's own cube-edge numbering.
         static void Emit(
             List<int> into,
-            int[]? m0, int corner0, int[]? m1, int corner1,
-            int[]? m2, int corner2, int[]? m3, int corner3, bool flip)
+            int[]? m0, int edge0, int[]? m1, int edge1,
+            int[]? m2, int edge2, int[]? m3, int edge3, bool flip)
         {
             if (m0 is null || m1 is null || m2 is null || m3 is null)
                 return;
-            int v0 = m0[corner0], v1 = m1[corner1], v2 = m2[corner2], v3 = m3[corner3];
+            int v0 = m0[edge0], v1 = m1[edge1], v2 = m2[edge2], v3 = m3[edge3];
             if (v0 < 0 || v1 < 0 || v2 < 0 || v3 < 0)
                 return;
             if (flip)
