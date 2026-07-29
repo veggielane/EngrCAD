@@ -226,12 +226,42 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   0 on Box − Sphere). Residuals filed below.
 - [ ] **Trimmed-face residuals after the interior-rows upgrade** (all bounded, none a
   fold-or-refusal class):
-  - `Box(20,20,20) − Sphere(12)` stays out of the corpus: at each hole rim's u-extreme
-    the rim tangent goes vertical, no level path anchors cleanly, and a narrow column a
-    few steps tall remains for refinement — worst agreement 0.7024 at 48/24 against the
-    0.9239 floor (locked with committed baselines in
-    `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`). A per-column cut at the
-    rim's turning vertex is the likely finish.
+  - `Box(20,20,20) − Sphere(12)` stays out of the corpus — **but the reason recorded here
+    was backwards, and the measurement that settles it also rules out the obvious fix.**
+    The entry said a narrow column at each hole rim's u-extreme "remains for refinement",
+    i.e. that refinement was covering for a missing row. Measured with
+    `AuditTrimmedPath(..., refine: false)`, the BASE triangulation is the BETTER mesh at
+    every density from 48/24 up, and it CLEARS the corpus floor at 96/48 where the shipped
+    (refined) result does not:
+
+    | density | floor | refined | base only |
+    |---|---|---|---|
+    | 16/8 | 0.3827 | **0.8832** | 0.8369 |
+    | 48/24 | 0.9239 | 0.7024 | **0.9014** |
+    | 96/48 | 0.9808 | 0.9240 | **0.9814** |
+    | 192/96 | 0.9952 | 0.9727 | **0.9952** |
+
+    So what holds this member below the bar is refinement, not a missing level path — and
+    note the 16/8 row, which is why the fix is not simply "refine less": at the COARSEST
+    density refinement genuinely helps (0.8369 → 0.8832). Refinement helps where the base
+    is coarse and hurts where it is already at grid density.
+
+    **The blunt version was built and measured and is NOT the answer.** Strengthening the
+    landed guard from "a split may not invert a facet" to "a split may not make any facet
+    agree WORSE than its parent" does exactly what this table asks — refinement goes idle
+    on this solid (worst dot equal to the base at every density, triangle counts within
+    0.05% of it) and 96/48 clears the floor — and it breaks two other things: the 16/8 row
+    above regresses below its own committed floor, and
+    `WholeSolidFilletBooleanTests.BandCrossingTool_ConvergesWithTessellationDensity` stalls
+    (steps 9.236e-3 then 8.741e-3, where the test requires them to shrink), because there
+    refinement is doing real convergence work. A rule that cannot tell those two situations
+    apart is not the fix.
+
+    What is left is the original idea stated correctly: a row path that reaches the column
+    at the rim's turning vertex, so the BASE is right there and refinement has nothing to
+    do — plus, plausibly, a density-aware gate so refinement keeps its coarse-mesh duty and
+    drops its fine-mesh interference. Committed baselines live in
+    `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`.
   - **A sub-depth chamfer cone is an extreme-aspect strip, and its facets are coarse
     even though they are now fold-free.** Measured over all 76 scanned depths (M6×1 /
     M8×1.25 / M10×1.5 / M12×1.75, both ends, 64 segments per circle): 0 folds and 0

@@ -414,6 +414,22 @@ logging complements them, never replaces them.
     drilled sphere's pole face — i.e. refinement still makes those faces WORSE, just no
     longer inside out. That the unrefined base is the better mesh is the sign the real
     fix is a row path covering the coarse-rim region, not another rule in `Refine`.
+
+    **And the blunt version of that rule was built, measured and rejected, which is what
+    makes the boundary here a decision rather than an omission.** Strengthening the guard
+    from "may not invert a facet" to "may not make any facet agree WORSE than its parent"
+    does exactly what the fidelity numbers ask: on `Box(20,20,20) − Sphere(12)` — the
+    corpus's hardest shape, whose residual was likewise filed as a missing level path —
+    refinement goes idle, the worst dot matches the base at every density, and 96/48
+    CLEARS the corpus floor (0.9814 against 0.9808) where the shipped result sits at
+    0.9240. It also breaks two things. At the COARSEST density refinement genuinely helps
+    (16/8 measures 0.8369 base against 0.8832 refined), so the strong rule regresses that
+    row below its own committed floor; and
+    `WholeSolidFilletBooleanTests.BandCrossingTool_ConvergesWithTessellationDensity`
+    stalls, its volume steps going 9.236e-3 then 8.741e-3 where the test requires them to
+    shrink. **Refinement helps where the base is coarse and hurts where the base is
+    already at grid density**, and a rule that cannot tell those apart is not the fix —
+    so the guard stays at the inversion test, which is the part that is unambiguous.
   - **Progress + cancellation** (`ProgressCancel? progress = null`, free when absent) is
     polled at **edge and face boundaries** — the coarse checkpoints, since one trimmed face
     is an indivisible ear-clipping job — and cancellation throws rather than returning a
