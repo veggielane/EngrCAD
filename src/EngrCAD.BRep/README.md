@@ -759,10 +759,20 @@ operations. Depends only on `EngrCAD.Core`.
   boundary all meet yields one vertex rather than three. A dangling end with nothing to meet
   is refused by name, reporting the point and how many curves were offered for the face —
   the usual cause being that the curve it should have met was never handed to this face.
-  The gate (`NeedsSimultaneousArrangement`) is a property of the input: "does any curve stop
-  strictly inside the face", where *strictly* means clear of the boundary by the seam tier,
-  since an open cut may legitimately end exactly ON the boundary (a plane∩helical-band
-  spiral arc ends on the band's rails).
+
+  **The gate is "a curve stops strictly inside the face WHERE ANOTHER CURVE IS THERE TO MEET
+  IT", and both halves were paid for.** *Strictly* means clear of the boundary by the seam
+  tier, since an open cut may legitimately end exactly ON the boundary (a plane∩helical-band
+  spiral arc ends on the band's rails). The partner clause is what separates a CLIPPED curve,
+  whose terminus is a real corner the neighbouring face's curve continues from, from a
+  **TRACER-TRUNCATED** one, whose terminus is an artefact of the marching step and has nothing
+  to meet — and tracer truncation is common, so without the clause the new path engages on
+  ordinary geometry. Measured on `Torus(12, 4) − plane − Ø3 bore`, a construction that is a
+  documented refusal either way: routed to the arrangement it failed as *"two band-bottom
+  boundaries with no top between them"* instead of as the boolean's own *"unclosed solid"* —
+  one stage earlier and less informatively. The arrangement cannot help a curve with no
+  partner; it can only trade one refusal for another. One curve therefore never qualifies,
+  which is what makes `SplitByCurve` exactly the incumbent function.
 
   Wrap-splitting refuses faces with
   non-wrapping loops (a contractible fragment can share the band's carrier surface; a

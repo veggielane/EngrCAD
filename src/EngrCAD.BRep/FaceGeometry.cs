@@ -199,6 +199,29 @@ public static class FaceGeometry
         return Math.Abs(pulledLoop[^1].X - pulledLoop[0].X) > 0.5 * period;
     }
 
+    /// <summary>
+    /// A parameter strictly inside [<paramref name="s0"/>, <paramref name="s1"/>] at which the
+    /// curve is genuinely ON its surface — used wherever a stretch of a curve has to be asked
+    /// "are you inside this face?".
+    ///
+    /// <para><b>The arithmetic midpoint is wrong for a tracer polyline.</b> A polyline is exact
+    /// only at its VERTICES, so a mid-chord point sits a sagitta off the surface — measured
+    /// 5e-3 on a whole-solid fillet's quarter-arc band at the tracer's own sample density, five
+    /// thousand times the 1e-6 inverse-evaluation tolerance. The projection then FAILS and the
+    /// stretch is silently discarded as "leaves the surface entirely". A stretch that spans no
+    /// vertex has no exact interior sample and keeps the midpoint, and non-polyline curves keep
+    /// it bit-for-bit: an analytic curve is exact everywhere, so there is nothing to fix and no
+    /// reason to move an existing probe.</para>
+    /// </summary>
+    public static double InteriorSampleParameter(Curve3d curve, double s0, double s1)
+    {
+        double midpoint = (s0 + s1) / 2;
+        if (!IsPolylineBacked(curve))
+            return midpoint;
+        var exact = ExactSampleParameters(curve, s0, s1, 2);
+        return exact.Count > 2 ? exact[exact.Count / 2] : midpoint;
+    }
+
     /// <summary>Signed area of a pulled-back closed polyline; positive = counter-clockwise in (u, v).</summary>
     public static double LoopSignedArea(IReadOnlyList<Vector2d> loop)
     {

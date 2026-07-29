@@ -617,8 +617,13 @@ public static class BrepBoolean
                     return [split.FaceWithHole, split.Disk!];
                 }).ToList();
             }
-            foreach (var (curve, breaks) in rest)
-                fragments = fragments.SelectMany(f => FaceSplitter.SplitByCurve(f, curve, breaks)).ToList();
+            // The whole remaining curve list goes to the face at once. FaceSplitter decides
+            // between the curve-at-a-time cascade (what this loop used to be, and still what
+            // every curve that crosses the face boundary at both ends gets) and one
+            // simultaneous arrangement, which is the only way to place curves that TERMINATE
+            // inside the face — see FaceSplitter.SplitByCurves.
+            var entries = rest.Select(r => new SplitCurve(r.Curve, r.Breaks)).ToList();
+            fragments = fragments.SelectMany(f => FaceSplitter.SplitByCurves(f, entries)).ToList();
             foreach (var fragment in fragments)
                 yield return fragment;
         }

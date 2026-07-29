@@ -958,7 +958,13 @@ splitting and B-Rep booleans will consume.
   meeting end to end touch, so no transversality test may be asked to decide it), then runs
   the same boundary splitting, parity-filtered segment construction and `TraceFaces` walk.
   The routing gate is evaluated before any topology is touched, because `SplitEdge` patches
-  neighbouring faces' loops and a refusal halfway would leave them half-edited.
+  neighbouring faces' loops and a refusal halfway would leave them half-edited — and it
+  requires a PARTNER at the terminus, which is what separates a clipped curve (whose corner
+  the neighbour's curve continues from) from a tracer-truncated one (whose end is an artefact
+  with nothing to meet, and which the arrangement could only refuse differently, one stage
+  earlier and less informatively than the boolean's own two-manifold check).
+  `BrepBoolean.SplitAll` hands each face its whole curve list, so the routing decision lives
+  in one place.
 
 #### Assessment: should `FaceSplitter`'s tracing run on `Arrangement2d`? — **No**
 

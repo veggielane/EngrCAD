@@ -281,33 +281,12 @@ public static class FaceSplitter
     }
 
     /// <summary>
-    /// A parameter strictly inside [<paramref name="s0"/>, <paramref name="s1"/>] at which the
-    /// curve is genuinely ON its surface — used to ask whether a stretch of a splitting curve
-    /// lies inside the face.
-    ///
-    /// <para><b>The arithmetic midpoint is wrong for a tracer polyline</b>, and this is the
-    /// third site to learn it (after <c>BRepTessellator.SampleEdge</c> and <c>TraceFaces</c>'
-    /// departure probes): a polyline is exact only at its VERTICES, so a mid-chord point sits a
-    /// sagitta off the surface — measured 5e-3 on a whole-solid fillet's quarter-arc band at
-    /// the tracer's own sample density, five thousand times the 1e-6 inverse-evaluation
-    /// tolerance. The projection then FAILS, the stretch is discarded as "leaves the surface
-    /// entirely", no seam edge is built, and the face comes back unsplit with no complaint.
-    /// <see cref="FaceGeometry.ExactSampleParameters"/> is the shared rule; a stretch that
-    /// spans no vertex has no exact interior sample and keeps the midpoint, which is the
-    /// pre-existing behaviour.</para>
-    ///
-    /// <para>Non-polyline curves keep the arithmetic midpoint bit-for-bit: every analytic curve
-    /// is exact everywhere, so there is nothing to fix and no reason to move an existing
-    /// probe.</para>
+    /// The exact interior sample rule, one of the three sites that learned it (after
+    /// <c>BRepTessellator.SampleEdge</c> and <c>TraceFaces</c>' departure probes) — the shared
+    /// rule now lives on <see cref="FaceGeometry.InteriorSampleParameter"/>.
     /// </summary>
-    private static double InteriorProbeParameter(Curve3d curve, double s0, double s1)
-    {
-        double midpoint = (s0 + s1) / 2;
-        if (!FaceGeometry.IsPolylineBacked(curve))
-            return midpoint;
-        var exact = FaceGeometry.ExactSampleParameters(curve, s0, s1, 2);
-        return exact.Count > 2 ? exact[exact.Count / 2] : midpoint;
-    }
+    private static double InteriorProbeParameter(Curve3d curve, double s0, double s1) =>
+        FaceGeometry.InteriorSampleParameter(curve, s0, s1);
 
     /// <summary>
     /// Curve parameters where the curve crosses the face's boundary. Used by booleans to
@@ -377,20 +356,35 @@ public static class FaceSplitter
     }
 
     /// <summary>
-    /// Whether any of the curves TERMINATES strictly inside the face — the one configuration
-    /// the one-curve-at-a-time cascade cannot handle. "Strictly" means clear of the boundary by
-    /// the seam tier: an open cut may legitimately end exactly ON the boundary (a
-    /// plane∩helical-band spiral arc ends on the band's rails), and that case has always
-    /// worked. Loops are pulled at most once, and only when an endpoint turns out to lie on
-    /// this face's surface at all, so the common answer costs two projections per curve.
+    /// Whether one curve TERMINATES strictly inside the face <b>where another curve is there to
+    /// meet it</b> — the one configuration the cascade cannot handle and the arrangement can.
+    ///
+    /// <para>Both halves are load-bearing. "Strictly inside" means clear of the boundary by the
+    /// seam tier, since an open cut may legitimately end exactly ON the boundary (a
+    /// plane∩helical-band spiral arc ends on the band's rails) and that has always worked.
+    /// "Where another curve is there to meet it" is what separates a CLIPPED curve, whose
+    /// terminus is a real corner the neighbouring face's curve continues from, from a
+    /// TRACER-TRUNCATED one, whose terminus is an artefact of the marching step and has nothing
+    /// to meet: the arrangement cannot help the second — it would trade one refusal for another
+    /// — and the cascade's own message names it better. Measured on a torus cut by a plane and
+    /// then bored, which is a documented refusal either way: routed to the arrangement it
+    /// failed as "two band-bottom boundaries with no top between them" instead of as the
+    /// boolean's own "unclosed solid", i.e. one stage earlier and less informatively.</para>
+    ///
+    /// <para>One curve therefore never qualifies, which is what makes <see cref="SplitByCurve"/>
+    /// the incumbent path exactly. Loops are pulled at most once, and only when an endpoint
+    /// turns out to lie on this face's surface at all, so the common answer costs two
+    /// projections per curve.</para>
     /// </summary>
     private static bool NeedsSimultaneousArrangement(BrepFace face, IReadOnlyList<SplitCurve> curves)
     {
+        if (curves.Count < 2)
+            return false;
         List<List<Vector2d>>? loops = null;
         double period = FaceGeometry.PeriodU(face.Surface);
-        foreach (var entry in curves)
+        for (int i = 0; i < curves.Count; i++)
         {
-            var curve = entry.Curve;
+            var curve = curves[i].Curve;
             if (curve.IsClosed)
                 continue;
             foreach (double endParam in (ReadOnlySpan<double>)[curve.Domain.Start, curve.Domain.End])
@@ -403,8 +397,36 @@ public static class FaceSplitter
                     continue;
                 if (FaceGeometry.DistanceToBoundary(face, p) <= FaceGeometry.SeamTolerance)
                     continue;
-                return true;
+                for (int j = 0; j < curves.Count; j++)
+                {
+                    if (j != i && MeetsCurve(curves[j].Curve, p))
+                        return true;
+                }
             }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a point sits on a curve at the seam tier. Endpoints are compared exactly; the
+    /// interior is measured against the curve's sampled POLYLINE, so a T-junction on a strongly
+    /// CURVED partner can read up to a chord sagitta away and be missed — in which case the
+    /// cascade runs and refuses by name, which is the safe direction.
+    /// </summary>
+    private static bool MeetsCurve(Curve3d curve, in Vector3d point)
+    {
+        var parameters = FaceGeometry.ExactSampleParameters(
+            curve, curve.Domain.Start, curve.Domain.End, 96);
+        var previous = curve.PointAt(parameters[0]);
+        if (previous.DistanceTo(point) <= FaceGeometry.SeamTolerance)
+            return true;
+        for (int i = 1; i < parameters.Count; i++)
+        {
+            var next = curve.PointAt(parameters[i]);
+            if (next.DistanceTo(point) <= FaceGeometry.SeamTolerance ||
+                FaceGeometry.DistanceToSegment(point, previous, next) <= FaceGeometry.SeamTolerance)
+                return true;
+            previous = next;
         }
         return false;
     }

@@ -118,15 +118,31 @@ public class SimultaneousSplitTests
     }
 
     [Fact]
-    public void DanglingCurveWithNoPartner_IsStillRefused()
+    public void DanglingCurveWithNoPartner_TakesTheCascadeAndIsRefusedThere()
     {
         var top = TopFace(Box());
         var dangling = new Line3d((-1, 1, 2), (1, 1, 2));   // ends mid-face
         var elsewhere = new Line3d((-1, 1.8, 2), (3, 1.8, 2)); // a full chord, nowhere near it
 
+        // Nothing terminates where the dangling end stops, so the arrangement could only
+        // trade one refusal for another — this is the tracer-truncation shape, and the
+        // incumbent path names it.
         var error = Assert.Throws<NotSupportedException>(
             () => FaceSplitter.SplitByCurves(top, [dangling, elsewhere]));
-        Assert.Contains("2 curve(s) were offered", error.Message);
+        Assert.Contains("must start and end outside the face", error.Message);
+    }
+
+    [Fact]
+    public void DanglingEndTouchingAPartner_TakesTheArrangement()
+    {
+        var top = TopFace(Box());
+        var dangling = new Line3d((-1, 1, 2), (1, 1, 2));      // ends mid-face...
+        var partner = new Line3d((1, 1, 2), (1, 3, 2));        // ...exactly where this starts
+
+        var parts = FaceSplitter.SplitByCurves(top, [dangling, partner]);
+        Assert.Equal(2, parts.Count);
+        Assert.Single(parts, f => FaceGeometry.Contains(f, (0.5, 0.5, 2)));
+        Assert.Single(parts, f => FaceGeometry.Contains(f, (1.5, 1.5, 2)));
     }
 
     [Fact]

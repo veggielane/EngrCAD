@@ -496,6 +496,11 @@ logging complements them, never replaces them.
     its seam vertex there), and `ProbePoint` preferring the largest triangle's centroid
     (sliver centroids sit within the classification SDF's sagitta of the other solid's
     curved surface).
+  - **A face's whole curve list goes to `FaceSplitter.SplitByCurves` at once**, which owns
+    the choice between the curve-at-a-time cascade (what `SplitAll` used to spell inline, and
+    still what every curve crossing the face boundary at both ends gets, bit for bit) and one
+    simultaneous arrangement. Only the second can place a curve that TERMINATES inside the
+    face, which is what a face-pair curve becomes once it is clipped to the other face's trim.
   - **`ProbePoint` decides "this fragment is a band" by net u DRIFT, not u SPAN**
     (`FaceGeometry.LoopWrapsPeriod`, the one rule the face splitter's tracing and
     wrap-splitting also ask). The band path probes halfway toward the surface's own v
