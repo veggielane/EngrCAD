@@ -17,29 +17,46 @@ namespace EngrCAD.Viewer;
 //    a part with no results renders BYTE-IDENTICALLY to before this existed. That is
 //    not a hope -- the docs PNGs are the oracle.
 //
-//  * DEFORMATION is new geometry. It cannot ride the pose path the exploded view and
-//    the animation transport use (matrices only, no buffer touched), because a
-//    displaced shape is a different mesh, not a different placement. So it re-uploads,
-//    deliberately and explicitly, and it is kept off the animation path.
+//  * DEFORMATION rides the SAME rule, and used not to. A displaced shape looks like new
+//    geometry, so the first version built it on the CPU and re-uploaded — which put it
+//    off the matrices-only animation path, because animating it would have re-uploaded
+//    every frame. It does not have to be an exception: the displacement travels ONCE as
+//    attributes 4-7 and the vertex shader applies `position + uDeformScale * offset`, so
+//    a whole result animation is ONE float uniform per frame. The normal is exact rather
+//    than carried over (see DeformationAttributes), and the same constant-when-absent
+//    rule holds: no buffer means zero, so an unaffected part renders byte-identically
+//    whatever uDeformScale says.
+//
+//    The CPU displacement survives for exactly one job — PICK GEOMETRY, which is a
+//    spatial index and cannot be a uniform. See PickShape.
 
 /// <summary>
 /// The per-part vertex data a field display contributes: the colour buffer every render
 /// pass uploads as attribute 3, and — when the display asks for a deformed shape — the
-/// displaced mesh to upload instead of the original.
+/// displacement attribute buffer it uploads as attributes 4-7.
 /// </summary>
 /// <param name="Colors">RGB per render-mesh vertex (3 floats each), in the render
 /// mesh's own vertex order.</param>
-/// <param name="Deformed">The displaced render mesh, or null when the display shows the
-/// undeformed shape. Same vertex order and index buffer as the source, so
-/// <paramref name="Colors"/> applies to it unchanged.</param>
+/// <param name="Deformation">The interleaved displacement attributes (see
+/// <see cref="FieldRendering.DeformationAttributes"/>), or null when the display shows
+/// the undeformed shape. Same vertex order as the source mesh, so
+/// <paramref name="Colors"/> and the index buffer apply to it unchanged.</param>
 /// <param name="Display">The resolved display this was built from (the field, its
 /// range and map — what a legend and a properties panel read).</param>
 public readonly record struct FieldMeshData(
-    float[] Colors, RenderMesh? Deformed, ResolvedFieldDisplay Display)
+    float[] Colors, float[]? Deformation, ResolvedFieldDisplay Display)
 {
+    /// <summary>Whether this part draws displaced (it carries a displacement buffer AND
+    /// a non-zero scale). A part with <c>DeformScale = 0</c> gets no buffer at all.</summary>
+    public bool Deformed => Deformation is not null;
+
+    /// <summary>The part's own exaggeration factor — the <c>uDeformScale</c> uniform
+    /// before any animation multiplies it, and 0 when nothing is displaced.</summary>
+    public double DeformScale => Deformed ? Display.DeformScale : 0;
+
     /// <summary>Whether the undeformed shape should also be drawn, ghosted (only
-    /// meaningful when <see cref="Deformed"/> is non-null).</summary>
-    public bool ShowGhost => Deformed is not null && Display.ShowUndeformed;
+    /// meaningful when <see cref="Deformed"/> is true).</summary>
+    public bool ShowGhost => Deformed && Display.ShowUndeformed;
 }
 
 /// <summary>
@@ -115,12 +132,70 @@ public static class FieldRendering
         }
 
         var colors = Colors(display.Field, display.Range, display.ColorMap, render);
-        var deformed = display.Deform is { } field && display.DeformScale != 0
-            ? Deform(render, field, display.DeformScale)
+        // The buffer carries the displacement per UNIT scale: the exaggeration is the
+        // uDeformScale uniform, which is what makes animating it free. A zero scale gets
+        // no buffer at all, so "shows no deformed shape" stays one question.
+        var deformation = display.Deform is { } field && display.DeformScale != 0
+            ? DeformationAttributes(render, field)
             : null;
-        data = new FieldMeshData(colors, deformed, display);
+        data = new FieldMeshData(colors, deformation, display);
         error = null;
         return true;
+    }
+
+    /// <summary>Floats per vertex in the interleaved deformation buffer: the
+    /// displacement offset and the three coefficients of the displaced facet normal,
+    /// four vec3 attributes at slots 4-7.</summary>
+    public const int DeformationStride = 12;
+
+    /// <summary>
+    /// The <c>uDeformScale</c> uniform for one part: its own exaggeration times the
+    /// animation's current factor (1 when nothing is animating it).
+    /// <para>One function because the byte-for-byte equality between an animated frame
+    /// and a static render of the same configuration rests on it — the product is formed
+    /// in double and narrowed once, so a part displayed at <c>s*f</c> and a part at
+    /// <c>s</c> animated to factor <c>f</c> send the identical float.</para>
+    /// </summary>
+    public static float DeformUniform(in FieldMeshData data, double factor) =>
+        (float)(data.DeformScale * factor);
+
+    /// <summary>
+    /// The resolved display a LEGEND should be built from at the given animation factor:
+    /// the same display with its exaggeration multiplied. The legend's title states that
+    /// number, so a bar reading "40X DEFORMED" over a frame drawn at 20X would be exactly
+    /// the lie the title exists to prevent. Factor 1 returns the display unchanged.
+    /// </summary>
+    public static ResolvedFieldDisplay? AtFactor(ResolvedFieldDisplay? display, double factor) =>
+        display is { } resolved
+            ? resolved with { DeformScale = resolved.DeformScale * factor }
+            : null;
+
+    /// <summary>The displacement every mesh vertex reads when no deformation buffer is
+    /// attached: exactly zero, so <c>aPos + s*0</c> is <c>aPos</c> for every finite
+    /// scale and the normal expression takes its <c>aNormal</c> fallback. The
+    /// constant-when-absent rule <c>aOcclusion</c> and <c>aFieldColor</c> already
+    /// follow, and the reason a part with no results renders byte-identically however
+    /// the deform uniform is set.</summary>
+    public static readonly (float X, float Y, float Z) NeutralDeformation = (0f, 0f, 0f);
+
+    /// <summary>
+    /// The shape a pick BVH must index for this part: the CPU-displaced mesh when a
+    /// deformed shape is shown, the source mesh otherwise.
+    /// <para><b>This is the one place the CPU displacement survives, and it is not a
+    /// second render path.</b> Picking is a spatial index, not a draw call, so it cannot
+    /// ride a uniform — a click must be answered against triangles that exist somewhere.
+    /// The index is therefore built at the part's OWN <c>DeformScale</c>, which is the
+    /// animation's factor-1 configuration: a pick is exact on a static plot and at a load
+    /// ramp's peak, and off by the difference in exaggeration at intermediate frames.
+    /// Rebuilding a BVH per frame is precisely the cost this design exists to avoid, so
+    /// the mismatch is stated rather than paid for.</para>
+    /// </summary>
+    public static RenderMesh PickShape(RenderMesh render, in FieldMeshData data)
+    {
+        ArgumentNullException.ThrowIfNull(render);
+        return data.Deformed && data.Display.Deform is { } field
+            ? Deform(render, field, data.Display.DeformScale)
+            : render;
     }
 
     /// <summary>
@@ -167,9 +242,100 @@ public static class FieldRendering
     }
 
     /// <summary>
+    /// The interleaved deformation attributes for a render mesh: 12 floats per vertex —
+    /// the displacement offset (attribute 4) followed by the three coefficients of the
+    /// displaced facet normal (attributes 5, 6, 7), which the vertex shader evaluates as
+    /// <c>n0 + s*n1 + s*s*n2</c>.
+    /// <para><b>Why three coefficients and not a re-upload.</b> A triangle whose vertices
+    /// move linearly in the scale s has edges <c>a + s*alpha</c> and <c>b + s*beta</c>,
+    /// so its facet normal is
+    /// <c>(a x b) + s*(a x beta + alpha x b) + s^2*(alpha x beta)</c> — a polynomial of
+    /// degree exactly two. The displaced shading is therefore EXACT at every scale from
+    /// data sent once, which is what let the CPU deformation path retire instead of
+    /// living on beside the shader one. It reproduces what that path computed: the
+    /// per-TRIANGLE normal of the displaced facet, not the source face's normal (a
+    /// non-planar quad's two halves genuinely have different normals once bent).</para>
+    /// <para>Only the DIRECTION matters — the fragment shader normalizes — so the three
+    /// coefficients are divided by the largest of their magnitudes purely to keep float32
+    /// well conditioned at any model scale. When all three vanish (a triangle that is
+    /// degenerate at every scale) they are left at zero, which is the shader's signal to
+    /// fall back to the source normal.</para>
+    /// </summary>
+    /// <param name="render">The undeformed render mesh (flat: three consecutive vertices
+    /// per triangle, so a facet normal is one cross product written to three vertices).</param>
+    /// <param name="displacement">Vector result, indexed by source vertex.</param>
+    public static float[] DeformationAttributes(RenderMesh render, MeshField displacement)
+    {
+        ArgumentNullException.ThrowIfNull(render);
+        ArgumentNullException.ThrowIfNull(displacement);
+        if (!displacement.IsVector)
+            throw new ArgumentException(
+                $"Field '{displacement.Name}' is a scalar field; a deformed shape needs a vector field.",
+                nameof(displacement));
+
+        var attributes = new float[render.VertexCount * DeformationStride];
+        var offsets = new Vector3d[render.VertexCount];
+        for (int v = 0; v < render.VertexCount; v++)
+        {
+            var d = displacement.VectorAt(render.SourceVertices[v]);
+            offsets[v] = d;
+            attributes[v * DeformationStride] = (float)d.X;
+            attributes[v * DeformationStride + 1] = (float)d.Y;
+            attributes[v * DeformationStride + 2] = (float)d.Z;
+        }
+
+        for (int t = 0; t < render.TriangleCount; t++)
+        {
+            uint i0 = render.Indices[t * 3];
+            uint i1 = render.Indices[t * 3 + 1];
+            uint i2 = render.Indices[t * 3 + 2];
+            var p0 = At(render.Positions, i0);
+            var a = At(render.Positions, i1) - p0;
+            var b = At(render.Positions, i2) - p0;
+            var alpha = offsets[i1] - offsets[i0];
+            var beta = offsets[i2] - offsets[i0];
+
+            var n0 = a.Cross(b);
+            var n1 = a.Cross(beta) + alpha.Cross(b);
+            var n2 = alpha.Cross(beta);
+            // Exact-zero guard, not a tolerance: a scale factor of zero would be a
+            // division by zero, and every other magnitude is a legitimate conditioning
+            // choice rather than a decision about geometry.
+            double largest = Math.Max(n0.Length, Math.Max(n1.Length, n2.Length));
+            if (largest != 0)
+            {
+                n0 /= largest;
+                n1 /= largest;
+                n2 /= largest;
+            }
+
+            foreach (uint i in (ReadOnlySpan<uint>)[i0, i1, i2])
+            {
+                Write(attributes, i, 3, n0);
+                Write(attributes, i, 6, n1);
+                Write(attributes, i, 9, n2);
+            }
+        }
+        return attributes;
+
+        static void Write(float[] attributes, uint vertex, int slot, in Vector3d value)
+        {
+            int at = (int)vertex * DeformationStride + slot;
+            attributes[at] = (float)value.X;
+            attributes[at + 1] = (float)value.Y;
+            attributes[at + 2] = (float)value.Z;
+        }
+    }
+
+    /// <summary>
     /// The render mesh with every vertex displaced by <paramref name="displacement"/>
     /// times <paramref name="scale"/>, and its facet normals recomputed from the moved
     /// positions.
+    /// <para><b>Not the render path any more</b> — the vertex shader displaces from
+    /// <see cref="DeformationAttributes"/>, which is what makes a result animation one
+    /// uniform per frame. This builds the geometry a PICK BVH indexes (see
+    /// <see cref="PickShape"/>), and remains the readable statement of what the shader's
+    /// quadratic normal coefficients reproduce.</para>
     /// <para>Normals must be rebuilt, not carried over: a deformed shape lit by the
     /// original normals looks like the original, which defeats the entire point of a
     /// deformed-shape plot. The flat render mesh stores three consecutive vertices per
@@ -233,8 +399,8 @@ public static class FieldRendering
             Indices = render.Indices,
             SourceVertices = render.SourceVertices,
         };
-
-        static Vector3d At(float[] positions, uint index) =>
-            new(positions[index * 3], positions[index * 3 + 1], positions[index * 3 + 2]);
     }
+
+    private static Vector3d At(float[] positions, uint index) =>
+        new(positions[index * 3], positions[index * 3 + 1], positions[index * 3 + 2]);
 }

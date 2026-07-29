@@ -655,7 +655,9 @@ internal sealed class SceneHost
     }
 
     /// <summary>Renders the playback position: slider follows, pose tracks re-pose the
-    /// viewport (matrices only), camera tracks move the camera.</summary>
+    /// viewport (matrices only), camera tracks move the camera, deformation tracks set
+    /// one float uniform. All three touch no buffer, which is what makes playback of a
+    /// structural result cost the same as playback of an exploded view.</summary>
     private void ApplyAnimationSample()
     {
         if (_playback is not { } playback)
@@ -668,6 +670,7 @@ internal sealed class SceneHost
             ApplyAnimatedPoses(posed);
         if (sample.Camera is { } camera)
             Viewport.Camera = camera;
+        Viewport.DeformFactor = sample.DeformFactor;
     }
 
     /// <summary>

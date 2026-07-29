@@ -26,12 +26,12 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uAlpha, _uAmbientOcclusion, _uFieldColor;
+    private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
     private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
     private uint _pointProgram;
-    private int _uPointModel, _uPointView, _uPointProj, _uPointColor, _uPointSize;
+    private int _uPointModel, _uPointView, _uPointProj, _uPointColor, _uPointSize, _uPointDeformScale;
 
     // The section-plane uniforms of each program, written through the shared
     // SectionUniforms helper so the window and the headless pass clip identically.
@@ -50,7 +50,7 @@ public sealed class ViewportControl : OpenGlControlBase
     // ambient occlusion on can backfill occlusion buffers without re-uploading geometry.
     private readonly record struct PartBuffers(
         Part Part, uint Vao, uint Vbo, uint Ebo, uint EdgeVao, uint EdgeVbo,
-        uint WireVao, uint WireVbo, uint AoVbo, uint FieldVbo,
+        uint WireVao, uint WireVbo, uint AoVbo, uint FieldVbo, uint DeformVbo,
         uint GhostVao, uint GhostVbo, uint GhostEbo);
 
     private readonly List<PartBuffers> _gpuBuffers = [];
@@ -78,9 +78,10 @@ public sealed class ViewportControl : OpenGlControlBase
         uint Vao, uint Vbo, uint Ebo, int IndexCount, Matrix4d Model, (float R, float G, float B) Color,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
         uint WireVao, uint WireVbo, int WireVertexCount, Vector3d WorldCenter,
-        // Field display: whether this instance's mesh carries a field-colour buffer,
-        // and the undeformed shape's buffers when a deformed one is being shown.
-        bool FieldColored, uint GhostVao, int GhostIndexCount);
+        // Field display: whether this instance's mesh carries a field-colour buffer, the
+        // part's own displacement exaggeration (0 when it draws undeformed), and the
+        // undeformed shape's buffers when a deformed one is being shown.
+        bool FieldColored, double DeformScale, uint GhostVao, int GhostIndexCount);
 
     // CPU-side pick data per object: triangles plus a BVH over them, in object space
     // (PickMesh, EngrCAD.Viewer.Core — the browser client raycasts through the same
@@ -265,6 +266,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uAlpha = _gl.GetUniformLocation(_program, "uAlpha");
         _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
         _uFieldColor = _gl.GetUniformLocation(_program, "uFieldColor");
+        _uDeformScale = _gl.GetUniformLocation(_program, "uDeformScale");
         // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
         // the GL default for a disabled attribute is 0, which would shade parts black.
         RenderUploads.SetDefaultOcclusion(_gl);
@@ -272,6 +274,9 @@ public sealed class ViewportControl : OpenGlControlBase
         // constant, and its uFieldColor strength is 0, so it renders exactly as before
         // field display existed.
         RenderUploads.SetDefaultFieldColor(_gl);
+        // And for the displacement attributes: zero, so a part with no displacement
+        // result is unmoved and unshaded-differently whatever uDeformScale carries.
+        RenderUploads.SetDefaultDeformation(_gl);
 
         _lineProgram = CompileLineProgram(_gl);
         _uLineModel = _gl.GetUniformLocation(_lineProgram, "uModel");
@@ -287,6 +292,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uPointProj = _gl.GetUniformLocation(_pointProgram, "uProj");
         _uPointColor = _gl.GetUniformLocation(_pointProgram, "uColor");
         _uPointSize = _gl.GetUniformLocation(_pointProgram, "uPointSize");
+        _uPointDeformScale = _gl.GetUniformLocation(_pointProgram, "uDeformScale");
         _pointSection = new SectionUniforms(_gl, _pointProgram);
         // Desktop GL ignores gl_PointSize unless program point size is enabled; the
         // cap does not exist under GLES (it is always on), where enabling it errors.
@@ -302,7 +308,7 @@ public sealed class ViewportControl : OpenGlControlBase
         uint Vao, uint Vbo, uint Ebo, int IndexCount,
         uint EdgeVao, uint EdgeVbo, int EdgeVertexCount,
         uint WireVao, uint WireVbo, int WireVertexCount, PickMesh Pick, uint AoVbo,
-        bool FieldColored, uint GhostVao, int GhostIndexCount);
+        bool FieldColored, double DeformScale, uint GhostVao, int GhostIndexCount);
 
     /// <summary>Uploads an instance list, replacing existing GPU resources. Each
     /// distinct part is prepared and uploaded once (cached display mesh → RenderMesh,
@@ -342,7 +348,7 @@ public sealed class ViewportControl : OpenGlControlBase
                     s.EdgeVao, s.EdgeVbo, s.EdgeVertexCount,
                     s.WireVao, s.WireVbo, s.WireVertexCount,
                     worldBounds.IsEmpty ? Vector3d.Zero : worldBounds.Center,
-                    s.FieldColored, s.GhostVao, s.GhostIndexCount));
+                    s.FieldColored, s.DeformScale, s.GhostVao, s.GhostIndexCount));
                 _pickData.Add(s.Pick);
                 _visible.Add(visible is null || i >= visible.Count || visible[i]);
                 _instances.Add(instance);
@@ -376,9 +382,9 @@ public sealed class ViewportControl : OpenGlControlBase
         var mesh = part.GetMesh();
         var render = RenderMesh.CreateFlat(mesh);
         // Simulation results, if the part shows any: a colour buffer for attribute 3
-        // and, for a deformed-shape display, a displaced mesh that REPLACES the
-        // uploaded geometry (a displaced shape is different geometry, not a different
-        // pose — this is the one place the viewport deliberately re-uploads).
+        // and, for a deformed-shape display, the displacement attributes for 4-7. The
+        // geometry uploaded is the UNDEFORMED mesh either way — the shader displaces it
+        // from a uniform, which is what keeps an animated result off the re-upload path.
         FieldMeshData? field = null;
         if (_showFields)
         {
@@ -387,51 +393,56 @@ public sealed class ViewportControl : OpenGlControlBase
             else if (fieldError is not null)
                 ShowStatus(fieldError);   // a display asked for and not honourable, named
         }
-        var drawn = field?.Deformed ?? render;
 
         // B-Rep-backed parts get their edge overlay from the ACTUAL B-Rep edges
         // (exact circles stay smooth at coarse tessellation); others fall back to
         // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
         // A DEFORMED part gets none: those edges describe geometry that has moved, and
         // drawing them over the displaced shape would be a wrong outline rather than a
-        // coarse one.
-        var featureEdges = field?.Deformed is null
-            ? part.GetFeatureEdges()
-            : [];
+        // coarse one. The test is whether the part CARRIES a displacement, not what the
+        // scale happens to be at this instant: the draw list must not depend on an
+        // animation's t, which is the rule that lets a whole clip reuse one upload.
+        var featureEdges = field is { Deformed: true }
+            ? []
+            : part.GetFeatureEdges();
         var wireEdges = WireframeEdges.Extract(mesh);
         // Baked per-vertex occlusion, but ONLY if it is already cached: TryGet never
         // bakes, so this upload can never stall the render thread. An uncached part goes
         // up without an occlusion buffer, which reads the constant 1.0 and is exactly the
         // flat-lit shading; the background bake (StartOcclusionBake) then publishes its
         // result and BackfillOcclusion attaches it on a later frame.
-        var (vao, vbo, ebo, aoVbo, fieldVbo) = RenderUploads.UploadMesh(gl, drawn,
+        var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(gl, render,
             _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null,
-            field?.Colors);
+            field?.Colors, field?.Deformation);
         var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
         var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
 
         // The undeformed shape, ghosted behind the deformed one — the comparison IS the
-        // point of a deformed-shape plot. Its own buffers, no colours and no pick data:
-        // it is a reference outline, not a pickable body.
+        // point of a deformed-shape plot. It keeps its OWN buffers rather than re-drawing
+        // the main VAO at scale 0, for two reasons that both say the same thing: it must
+        // look like the undeformed part, so it wants the part's own face normals (the
+        // displaced shading is per triangle) and no baked occlusion attached to it.
         uint ghostVao = 0, ghostVbo = 0, ghostEbo = 0;
         int ghostIndexCount = 0;
         if (field is { ShowGhost: true })
         {
-            (ghostVao, ghostVbo, ghostEbo, _, _) = RenderUploads.UploadMesh(gl, render);
+            (ghostVao, ghostVbo, ghostEbo, _, _, _) = RenderUploads.UploadMesh(gl, render);
             ghostIndexCount = render.Indices.Length;
         }
 
         _gpuBuffers.Add(new PartBuffers(
-            part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo, fieldVbo,
+            part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo, fieldVbo, deformVbo,
             ghostVao, ghostVbo, ghostEbo));
 
-        return new SharedMesh(vao, vbo, ebo, drawn.Indices.Length,
+        return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
             edgeVao, edgeVbo, featureEdges.Count * 2,
             wireVao, wireVbo, wireEdges.Count * 2,
-            // Picking follows what is DRAWN: a click on a deformed part must select it
-            // where it is on screen, not where its undeformed shape used to be.
-            PickMesh.Build(drawn), aoVbo,
-            field is not null, ghostVao, ghostIndexCount);
+            // Picking follows what is DRAWN at the part's own exaggeration: the pick BVH
+            // is a spatial index, so unlike the shading it cannot be a uniform, and it is
+            // built once over the displaced triangles (FieldRendering.PickShape states
+            // what that costs while an animation is running).
+            PickMesh.Build(field is { } f ? FieldRendering.PickShape(render, f) : render), aoVbo,
+            field is not null, field?.DeformScale ?? 0, ghostVao, ghostIndexCount);
     }
 
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
@@ -450,6 +461,8 @@ public sealed class ViewportControl : OpenGlControlBase
                 gl.DeleteBuffer(b.AoVbo);
             if (b.FieldVbo != 0)
                 gl.DeleteBuffer(b.FieldVbo);
+            if (b.DeformVbo != 0)
+                gl.DeleteBuffer(b.DeformVbo);
             if (b.GhostVao != 0)
             {
                 gl.DeleteBuffer(b.GhostVbo);
@@ -754,6 +767,10 @@ public sealed class ViewportControl : OpenGlControlBase
                 gl.UniformMatrix4(_uPointModel, 1, false, matrix);
                 var pointColor = HighlightedColor(i, m.Color);
                 gl.Uniform3(_uPointColor, pointColor.R, pointColor.G, pointColor.B);
+                // The points view draws the mesh buffer, so it follows the displacement
+                // exactly as the fills do — the CPU path gave it that for free by
+                // uploading displaced positions.
+                gl.Uniform1(_uPointDeformScale, (float)(m.DeformScale * _deformFactor));
                 gl.BindVertexArray(m.Vao);
                 gl.DrawElements(PrimitiveType.Points, (uint)m.IndexCount, DrawElementsType.UnsignedInt, (void*)0);
             }
@@ -1162,6 +1179,10 @@ public sealed class ViewportControl : OpenGlControlBase
         // buffer, everything else stays at the neutral 0 and renders exactly as it did
         // before field display existed.
         gl.Uniform1(_uFieldColor, m.FieldColored ? FieldRendering.Strength : 0f);
+        // Per-draw for the same reason: the part's own exaggeration times whatever an
+        // animation's deformation track currently says. A part with no displacement
+        // buffer reads zero offsets, so the value cannot reach it.
+        gl.Uniform1(_uDeformScale, (float)(m.DeformScale * _deformFactor));
         // One shader knob for both states: 1.0 = selection gold, 0.35 = the fainter
         // hover tint; a hovered selected part just shows selection (Highlight.Strength,
         // shared with the browser client so both mean the same thing by "selected").
@@ -1188,6 +1209,9 @@ public sealed class ViewportControl : OpenGlControlBase
                 any = true;
                 gl.UseProgram(_program);
                 gl.Uniform1(_uFieldColor, 0f);
+                // The ghost geometry carries no displacement buffer, so this only says
+                // out loud what its zero attributes already guarantee.
+                gl.Uniform1(_uDeformScale, 0f);
                 gl.Uniform1(_uHighlight, 0f);
                 gl.Uniform1(_uAlpha, FieldRendering.GhostAlpha);
                 gl.Enable(EnableCap.Blend);
@@ -1552,10 +1576,10 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <c>Part.FieldDisplay</c> (default true — a scene that states a field display
     /// shows it). Switching it off returns every part to its own colour and undeformed
     /// shape.
-    /// <para>Unlike the other view toggles this one <b>re-uploads</b>: colours are a
-    /// vertex attribute and a deformed shape is different geometry, not a different
-    /// pose. That is deliberate and it is why this is a mode switch rather than
-    /// something on the animation path.</para>
+    /// <para>Unlike the other view toggles this one <b>re-uploads</b>: colours and
+    /// displacements are vertex attributes, so switching them on or off is a change of
+    /// buffers. Changing the AMOUNT of displacement is not — that is
+    /// <see cref="DeformFactor"/>, one uniform.</para>
     /// </summary>
     public bool ShowFields
     {
@@ -1574,6 +1598,34 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    private double _deformFactor = 1;
+
+    /// <summary>
+    /// A multiplier on every part's own <c>FieldDisplay.DeformScale</c> — 1 (the
+    /// default) draws each part at the exaggeration it states, 0 draws every result
+    /// undeformed.
+    /// <para><b>This is the animation seam for a structural result</b>, and it costs one
+    /// float uniform per frame: the displacement rides as a vertex attribute, so nothing
+    /// is re-uploaded, no buffer is touched and the instance list is untouched — exactly
+    /// the property that lets <c>SetInstancePoses</c> animate an exploded view with
+    /// matrices alone. A <c>DeformationTrack</c> on an <see cref="Animation"/> drives it.
+    /// </para>
+    /// <para>What deliberately does NOT follow it: the pick BVH, which is built once at
+    /// each part's own scale (see <c>FieldRendering.PickShape</c>), and the feature-edge
+    /// overlay, which a part carrying a displacement never draws at any factor.</para>
+    /// </summary>
+    public double DeformFactor
+    {
+        get => _deformFactor;
+        set
+        {
+            if (_deformFactor == value)
+                return;
+            _deformFactor = value;
+            RequestNextFrameRendering();
+        }
+    }
+
     private ResolvedFieldDisplay? _activeField;
 
     /// <summary>
@@ -1588,8 +1640,14 @@ public sealed class ViewportControl : OpenGlControlBase
     /// resolution takes the PART's lock, and the render thread must not be able to queue
     /// behind a mesh in flight on another thread — the rule <see cref="Part.HasMesh"/>
     /// exists for.</para>
+    /// <para>Reported at the EFFECTIVE exaggeration (the part's own times
+    /// <see cref="DeformFactor"/>), because the legend's title states that number and a
+    /// legend saying "40X DEFORMED" over a frame drawn at 20X would be exactly the lie
+    /// the title exists to prevent. With no animation the factor is 1, so the value is
+    /// the display's own, unchanged.</para>
     /// </summary>
-    public ResolvedFieldDisplay? ActiveFieldDisplay => _showFields ? _activeField : null;
+    public ResolvedFieldDisplay? ActiveFieldDisplay =>
+        _showFields ? FieldRendering.AtFactor(_activeField, _deformFactor) : null;
 
     /// <summary>Re-resolves <see cref="ActiveFieldDisplay"/> from the visible instances.
     /// Caller holds <see cref="_sceneLock"/>, off the render thread or at a scene

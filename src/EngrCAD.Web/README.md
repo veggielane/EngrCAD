@@ -255,25 +255,40 @@ part hides its annotations; the toolbar's Annot toggle matches the desktop's.
 ## Simulation results (colour maps, legend, deformed shape)
 
 Thin for the same reason: `FieldRendering.TryBuild` (EngrCAD.Viewer.Core) produces the
-colour floats and the displaced mesh both desktop passes upload, and this project only
-uploads them and says which draws carry `uFieldColor`.
+colour floats and the displacement attributes both desktop passes upload, and this
+project only uploads them and says which draws carry `uFieldColor` and `uDeformScale`.
 
-Two things follow the desktop exactly. **Colour is a vertex attribute** — `aFieldColor`
-at slot 3, bound in `createProgram` beside `aOcclusion` and carrying the same
-constant-when-absent rule: `uploadMesh` with no colour bytes disables the array and sets
-the context constant white, the frame's shared `uFieldColor` is 0, and only a
-field-coloured instance's own fill overrides it. That neutral default is what makes a
-part with no results produce identical pixels. **A deformed shape is different geometry**,
-not a different pose, so the displaced mesh REPLACES the part's upload, the undeformed
-one goes up under a `.ghost` key and draws blended with depth writes off after every
-fill, and a deformed part uploads no feature edges (they describe geometry that has
-moved). Picking follows what is drawn — the BVH is built over the displaced mesh.
+**Both are vertex attributes** — `aFieldColor` at slot 3 and the deformation block at
+4–7, all bound in `createProgram` beside `aOcclusion` and carrying the same
+constant-when-absent rule: `uploadMesh` with no such bytes disables those arrays and sets
+the context constants (white, and zero), the frame's shared `uFieldColor` and
+`uDeformScale` are 0, and only an affected instance's own fill overrides them. That
+neutral default is what makes a part with no results produce identical pixels. The
+deformation arrives as ONE buffer of four interleaved vec3s per vertex, so it is four
+attribute pointers over one upload rather than four buffers.
+
+**Animating a result is therefore one uniform per frame in the browser too**: the geometry
+uploaded is always the undeformed mesh, `ViewportFrame.Build` takes a `deformFactor`, and
+an `Animation`'s `DeformationTrack` supplies it — the same mechanism the explode slider and
+the pose track already use, reaching the front end as a number instead of matrices.
+`DeformFrameTests` pins the claim as values: changing the factor changes exactly one
+uniform on exactly one draw and leaves every geometry key, draw and other uniform
+identical, which a pixel test could not distinguish from a re-upload.
+
+The undeformed shape goes up under its own `.ghost` key (it must look like the undeformed
+part, so it keeps that part's face normals) and draws blended with depth writes off after
+every fill; a part carrying a displacement uploads no feature edges at any factor, since
+they describe geometry that has moved and deciding it per frame would make the draw list
+depend on `t`. Picking follows the part's own exaggeration and deliberately **not** an
+animation's factor — the BVH is built once over `FieldRendering.PickShape`, because a
+spatial index cannot be a uniform.
 
 The legend is `FieldLegend`'s geometry uploaded under two keys and drawn one call per
 band (each needs its own colour, exactly as the cube's faces are drawn), with its own
 pixel-coordinate projection and the depth test off, between the annotations and the
-cube. It is rebuilt only when the resolved display or the canvas size changes — value
-equality as the key, the annotation overlay's rule.
+cube. It is rebuilt only when the resolved display, the canvas size or the effective
+exaggeration changes — value equality as the key, the annotation overlay's rule; the
+factor is in that key because the title states the number.
 
 ## Properties panel and BOM
 

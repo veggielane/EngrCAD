@@ -1838,16 +1838,142 @@ Design decisions:
   `uFieldColor` strength of 0 that makes `mix(uColor, vFieldColor, 0.0)` exactly
   `uColor`, so a part with no results renders **byte-identically** (the oracle is the
   docs suite: all 89 rendered PNGs unchanged across the shader change, which no unit
-  test could have shown). *A deformed shape is GEOMETRY, not a pose* — so it cannot ride
-  the matrices-only `SetInstancePoses` path the exploded view and the animation
-  transport share, it re-uploads deliberately, it is kept off the animation path, and its
-  facet normals are recomputed from the displaced positions (carrying the originals over
-  would make the deformed shape look exactly like the original, which is the entire point
-  of the plot). Two smaller rules earn their place: a zero-span range normalizes to
+  test could have shown). *A deformed shape looked like GEOMETRY and is now an attribute
+  too* — see the record below, which is where the animation of a structural result comes
+  from. Two smaller rules earn their place: a zero-span range normalizes to
   **0.5**, because a constant field has no position to report and an extreme colour would
   read as a hot spot; and a merged VTU fills a part's missing array with **NaN**, VTK's
   own "no value", since dropping the array loses the result that exists and zeros show a
   fake safe region.
+
+### Animating a deformed result — and the exception that turned out not to be one
+
+The animation layer's load-bearing rule is that **an animation must not touch geometry**:
+instance count and order are independent of t, so a viewer animates with matrices alone
+and picking keeps working. A deformed-shape plot looked like the counter-example — it is
+genuinely new vertex positions per frame — which is why the first version built the
+displaced mesh on the CPU, re-uploaded it, and was documented as *off* the animation path.
+
+**It does not have to be an exception.** Send the displacement ONCE as a vertex attribute
+and let the vertex shader apply `position + uDeformScale * displacement`; then a whole
+result animation changes **one float uniform per frame**. Three decisions carry it, and
+each was a real choice.
+
+**(a) The attribute, under the constant-when-absent rule — established twice already.**
+Slots 4–7 (offset plus three normal coefficients, one interleaved buffer), the same rule
+`aOcclusion` and `aFieldColor` follow: no buffer means zero, so `aPos + s*0` is `aPos` for
+*any* finite uniform and the normal expression takes its `aNormal` fallback. A part with
+no displacement result therefore renders byte-identically however the scale is driven —
+which is what let the change land with 102 of 103 rendered docs PNGs untouched. That
+precedent existing twice is why the design is credible rather than hopeful: the property
+was already proven at pixel scale before this used it.
+
+**(b) The CPU deformation path RETIRED from rendering rather than living on beside the
+shader one.** Two paths computing the same displaced shape would have disagreed in the
+last bits forever, and the verification bar — *an animated frame at t must equal a static
+render of the same configuration, byte for byte* — is only meaningful if there is one
+renderer. What made retiring it free is an identity worth keeping: a triangle whose
+vertices move linearly in `s` has edges `a + s·α` and `b + s·β`, so its facet normal
+`(a×b) + s(a×β + α×b) + s²(α×β)` is **exactly quadratic in s**. Three coefficient vectors
+therefore reproduce the displaced facet normal at every scale, which is precisely what the
+CPU path recomputed. Only the direction matters (the fragment shader normalizes), so the
+coefficients are scaled purely for float32 conditioning, and an all-zero result is the
+shader's signal to fall back to `aNormal` — the CPU path's own exact-zero rule for a
+collapsed facet.
+
+Reusing the source normals instead was the cheap alternative and was rejected on a
+measurement, not a feeling: a cantilever at its own 40× exaggeration turns its surface
+**9.9°**, matching the analytic tip slope `atan(40·3·tip/2L)` — a ~12% shading error under
+a 45° key light. Small enough that guessing would have got it wrong in either direction,
+which is why the test asserts the analytic value rather than a threshold. Cost of the
+switch, accounted honestly: exactly one committed render moved, the FEA bracket, by **11
+pixels of 1.79 million** (max channel delta 14) — float-vs-double rounding in the same
+formula, on the only committed deformed geometry with curved faces, where a face normal
+and a facet normal genuinely differ. The cantilever in `fields.md` is byte-identical.
+
+**(c) Picking deliberately does NOT follow the animation, and that is stated rather than
+discovered.** A pick is answered by a BVH over triangles; a spatial index cannot be a
+uniform, so it is built once at the part's own `DeformScale` — the animation's factor-1
+configuration. A click is therefore exact on a static plot and at a load ramp's peak, and
+off by the difference in exaggeration in between. Rebuilding a spatial index per frame is
+exactly the cost this design exists to avoid, so the mismatch is documented instead of
+paid for. `FieldRendering.Deform` survives for this one job, which is not a second render
+path but a different question asked of the same formula. The same reasoning fixes the
+feature-edge overlay to whether a part *carries* a displacement rather than to the current
+factor: the draw list must not depend on t, or a clip could not reuse one upload. The
+visible consequence is worth stating — the factor-0 frame of an animation is the
+undeformed *shape* without the undeformed part's chrome, so it is not the same picture as
+a still of a part whose own scale is 0.
+
+The legend follows the effective factor, because its title states the number: a bar
+reading `40X DEFORMED` over a frame drawn at 20× is exactly the lie the title exists to
+prevent. And a `DeformationTrack` returning a scalar is what keeps the no-geometry rule
+intact with nothing weakened — `LoadRamp` is honest for a **linear** solve (a linear
+result scales exactly, so intermediate frames are the answers rather than a tween) and
+`Oscillate` is the mode-shape law, whose caveats are the interesting part. Two are the
+expected ones — a mode shape has no physical amplitude and its sign is a convention — and
+the third is the one that actually misleads: **a mode does not animate at its own
+frequency, and the formula that says it can is dimensionally correct.**
+`cycles = frequency × duration` reads like the obvious binding and produces nonsense for
+every real part, because a steel blade 80 × 20 × 6 mm rings at **783 Hz**
+(`f₁ = (1.875²/2π)·√(EI/ρAL⁴)` with E = 210 GPa; the WIDTH cancels, since `I/A = h²/12`
+for a rectangle, which is why the docs quote only the length and the thickness), so a
+two-second clip would ask for
+~1570 cycles — hundreds per rendered frame, aliasing into blur, and no frame rate fixes a
+mode that is genuinely faster than video. Stiff metal parts run from hundreds of hertz to
+tens of kilohertz; the structures slow enough to animate at true speed are things like
+tall buildings. So the API takes a small fixed cycle count and the docs state the slowdown
+factor. **Rank the caveats by what a reader will believe**: arbitrary amplitude and sign
+are things people half expect, whereas "the animation runs at the mode's frequency" sounds
+exactly like something a solver would arrange — which is why it is the one printed in bold
+beside the figure.
+
+**The cross-check that was supposed to catch this instead CONFIRMED it, and that is the
+lesson worth more than the caveat.** The wrong formula was reported by a reviewer, and it
+was verified before being acted on — correctly, since a correction believed rather than
+checked is the same defect facing the other way. The hand calculation returned 764 Hz
+against the reported 783, a 2.5% gap, which was read as the expected difference between
+beam theory and a 3D solve and taken as corroboration. It was nothing of the kind: the
+hand calculation used a textbook 200 GPa where `Materials.Steel` is 210, and
+√(210/200) = 1.0247 reproduces the entire gap to 0.05%. A **false confirmation** — an
+independent check that agreed to a few percent *and supplied a fluent physical story for
+the residual*, which is what stopped the enquiry.
+
+Two discriminators, and **which of them actually works here is the surprise — the
+plausible one is the weak one.** *Size* has teeth: mode 1 of a slender cantilever must
+agree with Euler–Bernoulli to well under 1% (the modal suite's own converged measurement
+on a 100 × 10 × 10 bar is −0.07%), so 2.5% is out of family in either direction. *Sign*
+sounds stronger and is not: a 3D solid has shear deformation and rotary inertia that beam
+theory omits and both SOFTEN it, so the **converged** answer lies below the
+Euler–Bernoulli one — measured −0.07%, −4.34%, −9.98% for bending modes 1, 2, 3,
+monotonically further below as the wavelength shortens.
+
+But "an FE bending result above EB is the wrong direction" is FALSE, and
+`docs/examples/fea-modal.md`'s own refinement table prints the counterexample: against
+EB's 835.5 Hz that cantilever reads 852.10 (+1.98%), 838.30 (+0.33%), 834.92 (−0.07%) and
+833.78 (−0.21%) at 5×1×1, 10×2×2, 20×2×2 and 30×3×3. **Two of the four levels sit above
+EB, legitimately.** Both are upper bounds on the truth and neither bounds the other:
+displacement-based FE is Rayleigh–Ritz on a subspace, so its eigenvalues bound the true
+ones from above; and EB is itself a kinematically constrained model that also drops rotary
+inertia, so it does too. On a coarse mesh the discretization stiffening simply wins. The
+sign test is therefore a statement about a CONVERGED mesh — decisive at the higher modes
+where the softening is percent-level, worthless at mode 1 where it is 0.07% — and +2.5% is
+a value the coarsest mesh there genuinely produces, so **a sign-only reading of this error
+would have shrugged and moved on.** Only the magnitude caught it.
+
+**The transferable rule: a cross-check that lands within a few percent AND supplies a
+ready explanation for the gap is the most dangerous kind — so check the MAGNITUDE against
+a converged reference before reading anything into the sign, because the sign of an
+unconverged comparison is a property of the mesh rather than of the physics.** Same family
+as the tests-that-pass-for-the-wrong-reason traps recorded elsewhere here, and a better
+example than most, because nothing failed: the number was close, the story was fluent, and
+the only thing wrong was a constant nobody re-read. Where a solver is in the room, quote
+its own answer for the exact mesh the page renders rather than hand-calculating at all.
+
+**What deliberately did not ride along: transient thermal playback.** Temperature per time
+step is a *colour* animation, and colour has no single-uniform form — it needs the colour
+attribute re-uploaded per frame, or n attributes uploaded once and indexed. Assuming it
+rides along because displacement does would be the mistake; it is scoped separately.
 
 ### Sheet metal (`SheetMetal.cs`, `SheetMetalFeatures.cs`, `BRep/SheetMetalSurgery.cs`)
 

@@ -316,26 +316,55 @@ public static class ViewerShaders
         """;
 
     /// <summary>Lit mesh vertex shader (position + normal + baked occlusion + field
-    /// colour, world-space lighting). aOcclusion is attribute 2 and aFieldColor
-    /// attribute 3; a mesh uploaded without either buffer leaves that array disabled and
-    /// reads the constant set at pass init (1.0, and white respectively).</summary>
+    /// colour + displacement, world-space lighting). aOcclusion is attribute 2,
+    /// aFieldColor attribute 3 and the four deformation attributes 4-7; a mesh uploaded
+    /// without a given buffer leaves that array disabled and reads the constant set at
+    /// pass init (1.0, white, and zero respectively).
+    /// <para><b>The deformation is the whole reason a result animation is cheap.</b> A
+    /// displaced shape looks like new geometry, and the CPU used to build it as such —
+    /// which put it off the matrices-only animation path, because every frame would have
+    /// re-uploaded. Sending the displacement ONCE as a vertex attribute and applying
+    /// <c>aPos + uDeformScale * aDeformOffset</c> here makes a whole result animation one
+    /// float uniform per frame, with no buffer touched and picking's instance matrices
+    /// untouched.</para>
+    /// <para><b>The normal is exact, not carried over</b>, and the identity that makes
+    /// that possible is worth stating: a triangle whose three vertices move linearly in s
+    /// has edges <c>a + s*alpha</c> and <c>b + s*beta</c>, so its facet normal
+    /// <c>(a + s*alpha) x (b + s*beta)</c> is EXACTLY QUADRATIC in s. Three coefficient
+    /// vectors therefore reproduce the displaced facet normal at every scale — the same
+    /// normal the CPU path recomputed — for one more attribute rather than a re-upload.
+    /// Only the direction matters (the fragment shader normalizes), so the coefficients
+    /// are scaled to keep float32 well conditioned, and an all-zero result means the
+    /// displaced triangle collapsed: fall back to the source normal, which is what the
+    /// CPU path did.</para></summary>
     public const string MeshVertex = """
         in vec3 aPos;
         in vec3 aNormal;
         in float aOcclusion;
         in vec3 aFieldColor;
+        in vec3 aDeformOffset;
+        in vec3 aDeformNormal0;
+        in vec3 aDeformNormal1;
+        in vec3 aDeformNormal2;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
+        uniform float uDeformScale;
         out vec3 vNormal;
         out vec3 vWorldPos;
         out float vOcclusion;
         out vec3 vFieldColor;
         void main()
         {
-            vec4 world = uModel * vec4(aPos, 1.0);
+            float s = uDeformScale;
+            // A mesh with no displacement buffer reads zero for all four attributes, so
+            // the position is aPos exactly (x + s*0 is x for every finite s) and the
+            // normal expression is exactly zero, which takes the aNormal branch. That is
+            // what keeps a part with no results rendering byte-identically.
+            vec4 world = uModel * vec4(aPos + s * aDeformOffset, 1.0);
+            vec3 nd = aDeformNormal0 + s * aDeformNormal1 + (s * s) * aDeformNormal2;
             vWorldPos = world.xyz;
-            vNormal = mat3(uModel) * aNormal;
+            vNormal = mat3(uModel) * (dot(nd, nd) > 0.0 ? nd : aNormal);
             vOcclusion = aOcclusion;
             vFieldColor = aFieldColor;
             gl_Position = uProj * uView * world;
@@ -435,17 +464,24 @@ public static class ViewerShaders
         """;
 
     /// <summary>Point-sprite vertex shader for the points view style. gl_PointSize
-    /// needs GL_PROGRAM_POINT_SIZE enabled on desktop GL (always on under GLES).</summary>
+    /// needs GL_PROGRAM_POINT_SIZE enabled on desktop GL (always on under GLES).
+    /// <para>It carries the displacement attribute too, because the points view draws
+    /// the MESH buffer: a points view of a deformed result must show the displaced
+    /// vertices, which is what the CPU deformation path gave it by uploading displaced
+    /// positions. (Wireframe does not: <c>WireframeEdges</c> reads the source half-edge
+    /// mesh, so it has never followed a deformation.)</para></summary>
     public const string PointVertex = """
         in vec3 aPos;
+        in vec3 aDeformOffset;
         uniform mat4 uModel;
         uniform mat4 uView;
         uniform mat4 uProj;
         uniform float uPointSize;
+        uniform float uDeformScale;
         out vec3 vWorldPos;
         void main()
         {
-            vec4 world = uModel * vec4(aPos, 1.0);
+            vec4 world = uModel * vec4(aPos + uDeformScale * aDeformOffset, 1.0);
             vWorldPos = world.xyz;
             gl_Position = uProj * uView * world;
             gl_PointSize = uPointSize;

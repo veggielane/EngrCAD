@@ -21,9 +21,9 @@ internal static class ViewerPrograms
 {
     /// <summary>
     /// Compiles and links a program from full sources (header already prepended).
-    /// <paramref name="bindAttributes"/> pins aPos/aNormal/aOcclusion/aFieldColor to
-    /// locations 0/1/2/3 (binding a name the shader does not declare is legal and
-    /// ignored).
+    /// <paramref name="bindAttributes"/> pins
+    /// aPos/aNormal/aOcclusion/aFieldColor/aDeformOffset/aDeformNormal0..2 to locations
+    /// 0-7 (binding a name the shader does not declare is legal and ignored).
     /// </summary>
     public static uint LinkProgram(GL gl, string vertexSource, string fragmentSource, bool bindAttributes)
     {
@@ -34,10 +34,8 @@ internal static class ViewerPrograms
         gl.AttachShader(program, fs);
         if (bindAttributes)
         {
-            gl.BindAttribLocation(program, 0, "aPos");
-            gl.BindAttribLocation(program, 1, "aNormal");
-            gl.BindAttribLocation(program, 2, "aOcclusion");
-            gl.BindAttribLocation(program, 3, "aFieldColor");
+            foreach (var (location, name) in RenderUploads.AttributeNames)
+                gl.BindAttribLocation(program, (uint)location, name);
         }
         gl.LinkProgram(program);
         gl.GetProgram(program, ProgramPropertyARB.LinkStatus, out int linked);
@@ -107,6 +105,25 @@ internal readonly struct SectionUniforms(GL gl, uint program)
 /// </summary>
 internal static class RenderUploads
 {
+    /// <summary>
+    /// The vertex attribute layout, in one list so the desktop link, the browser link
+    /// and the uploads cannot disagree about which slot carries what. Slots 4-7 are the
+    /// deformation block (offset plus the three coefficients of the displaced facet
+    /// normal), interleaved in ONE buffer at
+    /// <see cref="FieldRendering.DeformationStride"/> floats per vertex.
+    /// </summary>
+    public static readonly (int Location, string Name)[] AttributeNames =
+    [
+        (0, "aPos"),
+        (1, "aNormal"),
+        (2, "aOcclusion"),
+        (3, "aFieldColor"),
+        (4, "aDeformOffset"),
+        (5, "aDeformNormal0"),
+        (6, "aDeformNormal1"),
+        (7, "aDeformNormal2"),
+    ];
+
     /// <summary>Uploads bare xyz line vertices into a fresh VAO/VBO pair.</summary>
     public static unsafe (uint Vao, uint Vbo) UploadLines(GL gl, float[] vertices)
     {
@@ -141,14 +158,34 @@ internal static class RenderUploads
     public static void SetDefaultFieldColor(GL gl) => gl.VertexAttrib3(
         3, FieldRendering.NeutralColor.R, FieldRendering.NeutralColor.G, FieldRendering.NeutralColor.B);
 
+    /// <summary>
+    /// The displacement every mesh VAO reads when it has no deformation buffer:
+    /// attributes 4-7 stay disabled, so the shader sees these context-wide constants.
+    /// Zero, which makes <c>aPos + s*0</c> exactly <c>aPos</c> for any uDeformScale and
+    /// sends the normal expression to its <c>aNormal</c> fallback — the reason a part
+    /// with no displacement result renders byte-identically whatever the uniform says.
+    /// MUST be set once per render pass alongside <see cref="SetDefaultOcclusion"/>: the
+    /// GL default for a disabled attribute is (0, 0, 0, 1), whose w is harmless here but
+    /// whose xyz being zero is the property relied on.
+    /// </summary>
+    public static void SetDefaultDeformation(GL gl)
+    {
+        var (x, y, z) = FieldRendering.NeutralDeformation;
+        for (uint slot = 4; slot <= 7; slot++)
+            gl.VertexAttrib3(slot, x, y, z);
+    }
+
     /// <summary>Uploads a render mesh as interleaved position+normal with an index
     /// buffer, matching the mesh program's attribute layout. A non-null
     /// <paramref name="occlusion"/> (one baked value per vertex) is uploaded into its
     /// own buffer as attribute 2; otherwise that array stays disabled and the constant
     /// from <see cref="SetDefaultOcclusion"/> applies. <paramref name="fieldColors"/>
-    /// (three floats per vertex) rides attribute 3 under the identical rule.</summary>
-    public static unsafe (uint Vao, uint Vbo, uint Ebo, uint AoVbo, uint FieldVbo) UploadMesh(
-        GL gl, RenderMesh mesh, float[]? occlusion = null, float[]? fieldColors = null)
+    /// (three floats per vertex) rides attribute 3 under the identical rule, and
+    /// <paramref name="deformation"/> (<see cref="FieldRendering.DeformationStride"/>
+    /// floats per vertex) attributes 4-7.</summary>
+    public static unsafe (uint Vao, uint Vbo, uint Ebo, uint AoVbo, uint FieldVbo, uint DeformVbo) UploadMesh(
+        GL gl, RenderMesh mesh, float[]? occlusion = null, float[]? fieldColors = null,
+        float[]? deformation = null)
     {
         var interleaved = new float[mesh.VertexCount * 6];
         for (int v = 0; v < mesh.VertexCount; v++)
@@ -175,8 +212,9 @@ internal static class RenderUploads
         gl.VertexAttribPointer(1, 3, VertexAttribPointerType.Float, false, 6 * sizeof(float), (void*)(3 * sizeof(float)));
         uint aoVbo = occlusion is null ? 0 : UploadOcclusion(gl, vao, occlusion);
         uint fieldVbo = fieldColors is null ? 0 : UploadFieldColors(gl, vao, fieldColors);
+        uint deformVbo = deformation is null ? 0 : UploadDeformation(gl, vao, deformation);
         gl.BindVertexArray(0);
-        return (vao, vbo, ebo, aoVbo, fieldVbo);
+        return (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo);
     }
 
     /// <summary>
@@ -212,6 +250,30 @@ internal static class RenderUploads
         gl.BufferData<float>(BufferTargetARB.ArrayBuffer, colors, BufferUsageARB.StaticDraw);
         gl.EnableVertexAttribArray(3);
         gl.VertexAttribPointer(3, 3, VertexAttribPointerType.Float, false, 3 * sizeof(float), (void*)0);
+        return vbo;
+    }
+
+    /// <summary>
+    /// Attaches a mesh VAO's deformation attributes — the displacement offset and the
+    /// three displaced-facet-normal coefficients, four vec3s INTERLEAVED in one buffer
+    /// (<see cref="FieldRendering.DeformationStride"/> floats per vertex) because they
+    /// are produced together and consumed together. Returns the buffer id; leaves the
+    /// VAO bound (callers unbind).
+    /// </summary>
+    public static unsafe uint UploadDeformation(GL gl, uint vao, float[] deformation)
+    {
+        gl.BindVertexArray(vao);
+        uint vbo = gl.GenBuffer();
+        gl.BindBuffer(BufferTargetARB.ArrayBuffer, vbo);
+        gl.BufferData<float>(BufferTargetARB.ArrayBuffer, deformation, BufferUsageARB.StaticDraw);
+        int stride = FieldRendering.DeformationStride * sizeof(float);
+        for (uint slot = 0; slot < 4; slot++)
+        {
+            gl.EnableVertexAttribArray(4 + slot);
+            gl.VertexAttribPointer(
+                4 + slot, 3, VertexAttribPointerType.Float, false, (uint)stride,
+                (void*)(slot * 3 * sizeof(float)));
+        }
         return vbo;
     }
 }

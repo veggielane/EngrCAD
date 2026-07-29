@@ -81,7 +81,8 @@ function require(id) {
 /**
  * Compiles and links a named program from C#-supplied source. Attribute locations are
  * bound explicitly to the same slots the desktop path uses (0 position, 1 normal,
- * 2 occlusion) so one vertex layout serves every front end.
+ * 2 occlusion, 3 field colour, 4-7 deformation) so one vertex layout serves every front
+ * end. Binding a name a given shader does not declare is legal and ignored.
  */
 export function createProgram(id, name, vertexSource, fragmentSource, bindAttributes) {
     const ctx = require(id);
@@ -96,6 +97,12 @@ export function createProgram(id, name, vertexSource, fragmentSource, bindAttrib
         gl.bindAttribLocation(handle, 1, 'aNormal');
         gl.bindAttribLocation(handle, 2, 'aOcclusion');
         gl.bindAttribLocation(handle, 3, 'aFieldColor');
+        // 4-7 are the deformation block: the displacement offset and the three
+        // coefficients of the displaced facet normal, interleaved in one buffer.
+        gl.bindAttribLocation(handle, 4, 'aDeformOffset');
+        gl.bindAttribLocation(handle, 5, 'aDeformNormal0');
+        gl.bindAttribLocation(handle, 6, 'aDeformNormal1');
+        gl.bindAttribLocation(handle, 7, 'aDeformNormal2');
     }
     gl.linkProgram(handle);
     if (!gl.getProgramParameter(handle, gl.LINK_STATUS)) {
@@ -140,13 +147,18 @@ function uniform(ctx, program, name) {
 
 /**
  * Uploads (or replaces) a mesh. `positions`/`normals` are packed float32 triples and
- * `indices` packed uint32, all as raw bytes. Occlusion and field colours are optional
- * and follow the SAME rule: a VAO with no such buffer reads a context constant (1.0 for
- * occlusion, white for the field colour), which is exactly the feature-off shading --
- * the property the desktop viewer relies on to stream occlusion bakes in, and the one
- * that keeps a part with no simulation results rendering byte-identically.
+ * `indices` packed uint32, all as raw bytes. Occlusion, field colours and the
+ * deformation block are optional and follow the SAME rule: a VAO with no such buffer
+ * reads a context constant (1.0 for occlusion, white for the field colour, zero for the
+ * deformation), which is exactly the feature-off shading -- the property the desktop
+ * viewer relies on to stream occlusion bakes in, and the one that keeps a part with no
+ * simulation results rendering byte-identically however uDeformScale is set.
+ *
+ * The deformation block is ONE buffer carrying four interleaved vec3s per vertex (the
+ * displacement offset then the three displaced-facet-normal coefficients), which is why
+ * it is four attribute pointers over one upload rather than four buffers.
  */
-export function uploadMesh(id, key, positions, normals, indices, occlusion, fieldColors) {
+export function uploadMesh(id, key, positions, normals, indices, occlusion, fieldColors, deformation) {
     const ctx = require(id);
     const gl = ctx.gl;
     const existing = ctx.meshes.get(key);
@@ -183,13 +195,27 @@ export function uploadMesh(id, key, positions, normals, indices, occlusion, fiel
         gl.vertexAttrib3f(3, 1.0, 1.0, 1.0);
     }
 
+    let deformBuffer = null;
+    if (deformation && deformation.byteLength > 0) {
+        deformBuffer = buffer(gl, gl.ARRAY_BUFFER, deformation);
+        for (let slot = 0; slot < 4; slot++) {
+            gl.enableVertexAttribArray(4 + slot);
+            gl.vertexAttribPointer(4 + slot, 3, gl.FLOAT, false, 48, slot * 12);
+        }
+    } else {
+        for (let slot = 4; slot <= 7; slot++) {
+            gl.disableVertexAttribArray(slot);
+            gl.vertexAttrib3f(slot, 0.0, 0.0, 0.0);
+        }
+    }
+
     const indexBuffer = gl.createBuffer();
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuffer);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
 
     gl.bindVertexArray(null);
     ctx.meshes.set(key, {
-        vao, posBuffer, normalBuffer, occlusionBuffer, fieldBuffer, indexBuffer,
+        vao, posBuffer, normalBuffer, occlusionBuffer, fieldBuffer, deformBuffer, indexBuffer,
         indexCount: indices.byteLength / 4,
         vertexCount: positions.byteLength / 12,
     });
@@ -226,6 +252,7 @@ function releaseMesh(gl, mesh) {
     gl.deleteBuffer(mesh.indexBuffer);
     if (mesh.occlusionBuffer) gl.deleteBuffer(mesh.occlusionBuffer);
     if (mesh.fieldBuffer) gl.deleteBuffer(mesh.fieldBuffer);
+    if (mesh.deformBuffer) gl.deleteBuffer(mesh.deformBuffer);
 }
 
 function releaseLines(gl, line) {

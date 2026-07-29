@@ -42,8 +42,10 @@ public class FieldRenderingTests
             Assert.Equal(expected.G, data.Colors[v * 3 + 1]);
             Assert.Equal(expected.B, data.Colors[v * 3 + 2]);
         }
-        // No deformation asked for: the geometry is untouched and there is no ghost.
-        Assert.Null(data.Deformed);
+        // No deformation asked for: no displacement buffer and no ghost.
+        Assert.False(data.Deformed);
+        Assert.Null(data.Deformation);
+        Assert.Equal(0, data.DeformScale);
         Assert.False(data.ShowGhost);
     }
 
@@ -84,8 +86,10 @@ public class FieldRenderingTests
     }
 
     [Fact]
-    public void TryBuild_DeformsAndRecomputesNormals()
+    public void TryBuild_CarriesTheDisplacementPerUnitScale()
     {
+        // The buffer holds the displacement per UNIT scale: the exaggeration is the
+        // uniform, which is exactly what makes animating it free.
         var (part, render, count) = Plate(p => p.FieldDisplay = new FieldDisplay
         {
             Field = "stress",
@@ -93,30 +97,196 @@ public class FieldRenderingTests
             DeformScale = 2,
         });
         Assert.True(FieldRendering.TryBuild(part, render, count, out var data, out _));
-        var deformed = Assert.IsType<RenderMesh>(data.Deformed);
+        Assert.True(data.Deformed);
+        Assert.Equal(2, data.DeformScale);
+        var deformation = Assert.IsType<float[]>(data.Deformation);
+        Assert.Equal(render.VertexCount * FieldRendering.DeformationStride, deformation.Length);
 
-        Assert.Equal(render.VertexCount, deformed.VertexCount);
-        Assert.Equal(render.Indices, deformed.Indices);
-        Assert.Equal(render.SourceVertices, deformed.SourceVertices);
         var displacement = part.Result("u")!;
         for (int v = 0; v < render.VertexCount; v++)
         {
-            var d = displacement.VectorAt(render.SourceVertices[v]) * 2;
-            Assert.Equal(render.Positions[v * 3] + (float)d.X, deformed.Positions[v * 3], 4);
-            Assert.Equal(render.Positions[v * 3 + 2] + (float)d.Z, deformed.Positions[v * 3 + 2], 4);
-        }
-        // The displacement shears the plate, so at least some facet normals must have
-        // turned — carrying the source normals over would make the deformed shape look
-        // exactly like the original, which is the whole point of the plot.
-        Assert.NotEqual(render.Normals, deformed.Normals);
-        // Every normal is still a unit vector.
-        for (int v = 0; v < deformed.VertexCount; v++)
-        {
-            double length = new Vector3d(
-                deformed.Normals[v * 3], deformed.Normals[v * 3 + 1], deformed.Normals[v * 3 + 2]).Length;
-            Assert.Equal(1, length, 4);
+            var d = displacement.VectorAt(render.SourceVertices[v]);
+            int at = v * FieldRendering.DeformationStride;
+            Assert.Equal((float)d.X, deformation[at]);
+            Assert.Equal((float)d.Y, deformation[at + 1]);
+            Assert.Equal((float)d.Z, deformation[at + 2]);
         }
         Assert.True(data.ShowGhost);   // ShowUndeformed defaults on
+    }
+
+    [Fact]
+    public void DeformationAttributes_ReproduceTheDisplacedFacetNormalAtEveryScale()
+    {
+        // THE identity the design rests on: a triangle whose vertices move linearly in s
+        // has a facet normal that is exactly QUADRATIC in s, so three coefficient vectors
+        // reproduce what the CPU path recomputed — at every scale, from data sent once.
+        // Checked against Deform, the readable statement of the same thing.
+        var (part, render, _) = Plate();
+        var displacement = part.Result("u")!;
+        var attributes = FieldRendering.DeformationAttributes(render, displacement);
+
+        foreach (double scale in new[] { 0.0, 0.25, 1.0, 3.5, -2.0 })
+        {
+            var reference = FieldRendering.Deform(render, displacement, scale);
+            for (int v = 0; v < render.VertexCount; v++)
+            {
+                int at = v * FieldRendering.DeformationStride;
+                // The shader evaluates n0 + s*n1 + s*s*n2 and normalizes in the fragment
+                // stage, so only the DIRECTION is claimed.
+                var n = Coefficient(attributes, at + 3)
+                    + Coefficient(attributes, at + 6) * scale
+                    + Coefficient(attributes, at + 9) * (scale * scale);
+                var expected = new Vector3d(
+                    reference.Normals[v * 3], reference.Normals[v * 3 + 1], reference.Normals[v * 3 + 2]);
+                Assert.True(n.Length > 0, $"vertex {v} at scale {scale} has no normal");
+                Assert.Equal(1.0, (n / n.Length).Dot(expected), 5);
+
+                // And the position the shader computes matches the CPU one.
+                var offset = Coefficient(attributes, at) * scale;
+                Assert.Equal(render.Positions[v * 3] + (float)offset.X, reference.Positions[v * 3], 4);
+                Assert.Equal(render.Positions[v * 3 + 1] + (float)offset.Y, reference.Positions[v * 3 + 1], 4);
+                Assert.Equal(render.Positions[v * 3 + 2] + (float)offset.Z, reference.Positions[v * 3 + 2], 4);
+            }
+        }
+
+        static Vector3d Coefficient(float[] attributes, int at) =>
+            new(attributes[at], attributes[at + 1], attributes[at + 2]);
+    }
+
+    [Fact]
+    public void DeformationAttributes_TurnTheNormalsFarEnoughToMatterAtRealisticExaggerations()
+    {
+        // WHY the shader carries three normal coefficients rather than reusing aNormal.
+        // The docs' cantilever law at its own 40x, on a strip fine enough to resolve the
+        // bend. The fixture is a hand-built 30-span sheet on purpose: a bare
+        // Shape.Box is ONE quad per face, so its facet normal averages the whole span and
+        // reports 6.7 degrees where the resolved surface turns 9.9 — the
+        // fixture-understates-the-effect trap. Measured rather than argued, because
+        // "carrying the source normals over costs little" is exactly the kind of claim
+        // that is true until it is not.
+        const double length = 120, tip = 0.35;
+        const int spans = 30;
+        var positions = new List<Vector3d>();
+        for (int i = 0; i <= spans; i++)
+        {
+            positions.Add((i * length / spans, 0, 0));
+            positions.Add((i * length / spans, 24, 0));
+        }
+        var quads = new List<int[]>();
+        for (int i = 0; i < spans; i++)
+            quads.Add([i * 2, i * 2 + 2, i * 2 + 3, i * 2 + 1]);
+        var mesh = HalfEdgeMesh.Build(positions, quads);
+        var render = RenderMesh.CreateFlat(mesh);
+        var displacement = MeshField.SampleVector(mesh, "u", "mm",
+            p => new Vector3d(0, 0, -tip * (Sq(p.X) * (3 * length - p.X))
+                / (2 * length * length * length)));
+
+        var deformed = FieldRendering.Deform(render, displacement, 40);
+        double worst = 1;
+        for (int v = 0; v < render.VertexCount; v++)
+        {
+            var before = new Vector3d(
+                render.Normals[v * 3], render.Normals[v * 3 + 1], render.Normals[v * 3 + 2]);
+            var after = new Vector3d(
+                deformed.Normals[v * 3], deformed.Normals[v * 3 + 1], deformed.Normals[v * 3 + 2]);
+            worst = Math.Min(worst, before.Dot(after));
+        }
+        // Against the analytic slope rather than a threshold: a tip-loaded cantilever's
+        // free end has slope 3*tip/(2L), so at 40x the outermost facet turns by
+        // atan(40*3*tip/(2L)) = 9.93 degrees. Reproduced to a tenth of a degree, and 10
+        // degrees of normal error is a ~12% shading error under a 45-degree key light —
+        // small enough that guessing would have got it wrong in both directions, which is
+        // why it is measured.
+        double turned = Math.Acos(worst) * 180 / Math.PI;
+        double analytic = Math.Atan(40 * 3 * tip / (2 * length)) * 180 / Math.PI;
+        Assert.Equal(analytic, turned, 1);
+        Assert.True(turned > 5, $"deformed normals turned by only {turned:F1} degrees");
+
+        static double Sq(double x) => x * x;
+    }
+
+    [Fact]
+    public void DeformationAttributes_VanishWhereTheDisplacedTriangleCollapses()
+    {
+        // An all-zero normal expression is the shader's signal to fall back to aNormal,
+        // the same exact-zero fallback Deform makes. Here every vertex moves to the
+        // origin, so at scale 1 every facet is a point.
+        var box = MeshPrimitives.Box(new Aabb((0, 0, 0), (1, 1, 1)));
+        var render = RenderMesh.CreateFlat(box);
+        var collapse = MeshField.SampleVector(box, "u", "", p => -p);
+        var attributes = FieldRendering.DeformationAttributes(render, collapse);
+
+        for (int v = 0; v < render.VertexCount; v++)
+        {
+            int at = v * FieldRendering.DeformationStride;
+            var n = new Vector3d(attributes[at + 3], attributes[at + 4], attributes[at + 5])
+                + new Vector3d(attributes[at + 6], attributes[at + 7], attributes[at + 8])
+                + new Vector3d(attributes[at + 9], attributes[at + 10], attributes[at + 11]);
+            Assert.Equal(0, n.Length, 6);
+        }
+        Assert.All(attributes, a => Assert.False(float.IsNaN(a)));
+    }
+
+    [Fact]
+    public void DeformUniform_FormsTheProductInDoubleAndNarrowsOnce()
+    {
+        // The byte-for-byte equality between an animated frame and a static render of the
+        // same configuration rests on this: a part at s animated to factor f must send the
+        // identical float a part displayed at s*f sends.
+        var (part, render, count) = Plate(p => p.FieldDisplay = new FieldDisplay
+        {
+            Field = "stress",
+            Deform = "u",
+            DeformScale = 0.1,
+        });
+        Assert.True(FieldRendering.TryBuild(part, render, count, out var animated, out _));
+
+        var (stillPart, stillRender, stillCount) = Plate(p => p.FieldDisplay = new FieldDisplay
+        {
+            Field = "stress",
+            Deform = "u",
+            DeformScale = 0.1 * 0.3,
+        });
+        Assert.True(FieldRendering.TryBuild(stillPart, stillRender, stillCount, out var still, out _));
+
+        Assert.Equal(FieldRendering.DeformUniform(still, 1), FieldRendering.DeformUniform(animated, 0.3));
+    }
+
+    [Fact]
+    public void PickShape_DisplacesAtThePartsOwnScaleAndOtherwiseReturnsTheSourceMesh()
+    {
+        // A pick BVH is a spatial index, not a uniform, so it is built once at the part's
+        // own exaggeration — the animation's factor-1 configuration. Documented, tested.
+        var (part, render, count) = Plate(p => p.FieldDisplay = new FieldDisplay
+        {
+            Field = "stress",
+            Deform = "u",
+            DeformScale = 2,
+        });
+        Assert.True(FieldRendering.TryBuild(part, render, count, out var data, out _));
+        var picked = FieldRendering.PickShape(render, data);
+        Assert.NotSame(render, picked);
+        Assert.Equal(FieldRendering.Deform(render, part.Result("u")!, 2).Positions, picked.Positions);
+
+        var (plain, plainRender, plainCount) = Plate(
+            p => p.FieldDisplay = new FieldDisplay { Field = "stress" });
+        Assert.True(FieldRendering.TryBuild(plain, plainRender, plainCount, out var flat, out _));
+        Assert.Same(plainRender, FieldRendering.PickShape(plainRender, flat));
+    }
+
+    [Fact]
+    public void AtFactor_ScalesTheLegendsExaggerationAndLeavesFactorOneAlone()
+    {
+        var (part, _, _) = Plate(p => p.FieldDisplay = new FieldDisplay
+        {
+            Field = "stress",
+            Deform = "u",
+            DeformScale = 40,
+        });
+        Assert.True(part.TryResolveFieldDisplay(out var display, out _));
+        Assert.Equal(display, FieldRendering.AtFactor(display, 1));
+        Assert.Equal(20, FieldRendering.AtFactor(display, 0.5)!.Value.DeformScale);
+        Assert.Null(FieldRendering.AtFactor(null, 0.5));
     }
 
     [Fact]
@@ -131,7 +301,8 @@ public class FieldRenderingTests
             DeformScale = 0,
         });
         Assert.True(FieldRendering.TryBuild(part, render, count, out var data, out _));
-        Assert.Null(data.Deformed);
+        Assert.False(data.Deformed);
+        Assert.Null(data.Deformation);
         Assert.False(data.ShowGhost);
     }
 
@@ -145,7 +316,7 @@ public class FieldRenderingTests
             ShowUndeformed = false,
         });
         Assert.True(FieldRendering.TryBuild(part, render, count, out var data, out _));
-        Assert.NotNull(data.Deformed);
+        Assert.True(data.Deformed);
         Assert.False(data.ShowGhost);
     }
 
@@ -169,6 +340,8 @@ public class FieldRenderingTests
         var (_, render, _) = Plate();
         Assert.Throws<ArgumentException>(
             () => FieldRendering.Deform(render, MeshField.Scalar("s", "", [1]), 1));
+        Assert.Throws<ArgumentException>(
+            () => FieldRendering.DeformationAttributes(render, MeshField.Scalar("s", "", [1])));
     }
 
     [Fact]

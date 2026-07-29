@@ -13,10 +13,18 @@ namespace EngrCAD.Viewer;
 //
 // THE load-bearing rule, inherited from the exploded view: an animation must not touch
 // geometry. Every track returns poses (matrices over the same instance list, count and
-// order independent of t) or a camera — never a re-meshed part — which is what lets
-// SetInstancePoses animate with matrices alone, keeps picking working (HitTest reads
-// the per-instance model matrix), and makes scrubbing/reversing/export/headless
-// rendering the same code path: Animation.At(t) is a pure function.
+// order independent of t), a camera, or a scalar — never a re-meshed part — which is
+// what lets SetInstancePoses animate with matrices alone, keeps picking working
+// (HitTest reads the per-instance model matrix), and makes
+// scrubbing/reversing/export/headless rendering the same code path: Animation.At(t) is
+// a pure function.
+//
+// A DEFORMED RESULT looks like the exception and is not. New vertex positions per frame
+// would break the rule outright, which is why the deformed-shape overlay was originally
+// documented as off this path — but the displacement travels ONCE as a vertex attribute
+// and the vertex shader applies `position + uDeformScale * displacement`, so animating
+// it is one float uniform per frame. A DeformationTrack therefore carries a SCALAR, and
+// the rule stands with nothing weakened.
 
 /// <summary>Easing applied to the whole timeline before tracks see t. Tracks may add
 /// their own shaping (a keyframed camera eases per segment); a looping turntable wants
@@ -33,9 +41,18 @@ public enum AnimationEasing
 }
 
 /// <summary>One evaluated instant of an <see cref="Animation"/>: the posed instances
-/// (null when the animation has no pose track — the scene's own instances stand) and
-/// the camera (null when it has no camera track — the viewer's current camera stands).</summary>
-public sealed record AnimationSample(IReadOnlyList<PartInstance>? Instances, CameraState? Camera);
+/// (null when the animation has no pose track — the scene's own instances stand), the
+/// camera (null when it has no camera track — the viewer's current camera stands) and
+/// the deformation factor (null when it has no deformation track — every part draws at
+/// its own <c>FieldDisplay.DeformScale</c>, i.e. factor 1).</summary>
+public sealed record AnimationSample(
+    IReadOnlyList<PartInstance>? Instances, CameraState? Camera, double? DeformScale = null)
+{
+    /// <summary>The deformation factor a renderer should apply — the track's value, or 1
+    /// when nothing is animating it. One property so no front end has to spell the
+    /// "null means unchanged" convention itself.</summary>
+    public double DeformFactor => DeformScale ?? 1;
+}
 
 /// <summary>
 /// A track maps track-local t ∈ [0,1] to instance poses (<see cref="PoseTrack"/>) or a
@@ -88,6 +105,26 @@ public abstract class CameraTrack : AnimationTrack
 }
 
 /// <summary>
+/// A track that scales a simulation result's displayed deformation: it returns a factor
+/// multiplying every part's own <c>FieldDisplay.DeformScale</c>, so 1 draws each part at
+/// the exaggeration it states and 0 draws them all undeformed.
+/// <para><b>It is a scalar, and that is the whole point.</b> The displacement field
+/// travels once as a vertex attribute and the vertex shader applies it, so a whole
+/// result animation changes ONE uniform per frame — no buffer touched, no re-upload, the
+/// instance list untouched. A track producing displaced meshes would have broken the
+/// rule this file is built on; a track producing a number does not.</para>
+/// <para>For a LINEAR solve the intermediate frames are not a tween: a linear result
+/// scales exactly, so the shape at factor 0.5 is the actual answer for half the load.
+/// See <see cref="DeformationTracks"/> for the ramp and oscillation laws and for what
+/// that honesty does and does not extend to.</para>
+/// </summary>
+public abstract class DeformationTrack : AnimationTrack
+{
+    /// <summary>The deformation factor at track-local <paramref name="t"/> ∈ [0,1].</summary>
+    public abstract double ScaleAt(double t);
+}
+
+/// <summary>
 /// A timeline over poses and the camera: a duration (seconds — playback and export
 /// timing), an easing, at most one <see cref="PoseTrack"/> and at most one
 /// <see cref="CameraTrack"/>. <see cref="At"/> is a PURE function of t, which is the
@@ -114,6 +151,10 @@ public sealed class Animation
 
     /// <summary>The camera track, when the animation moves the camera.</summary>
     public CameraTrack? CameraTrack { get; private set; }
+
+    /// <summary>The deformation track, when the animation scales a displayed result's
+    /// deformation.</summary>
+    public DeformationTrack? DeformationTrack { get; private set; }
 
     public Animation(double durationSeconds = 5, AnimationEasing easing = AnimationEasing.Linear)
     {
@@ -150,6 +191,21 @@ public sealed class Animation
         return this;
     }
 
+    /// <summary>Adds the deformation track (at most one — several factors on one
+    /// uniform have no defined composition, the pose track's argument in miniature).
+    /// Chainable.</summary>
+    public Animation With(DeformationTrack track)
+    {
+        ArgumentNullException.ThrowIfNull(track);
+        if (DeformationTrack is not null)
+            throw new InvalidOperationException(
+                "This animation already has a deformation track. Two factors on one scale have " +
+                "no defined composition; sequence within one track instead (DeformationTracks.From " +
+                "takes any law of t).");
+        DeformationTrack = track;
+        return this;
+    }
+
     /// <summary>
     /// The animation evaluated at timeline <paramref name="t"/> (clamped to [0,1]):
     /// eased, windowed, handed to the tracks. Pure — the same t always returns the same
@@ -161,7 +217,8 @@ public sealed class Animation
         double eased = Easing == AnimationEasing.Smoothstep ? ViewCubeMath.Ease(clamped) : clamped;
         var poses = PoseTrack is { } pose ? pose.PosesAt(pose.LocalT(eased)) : null;
         var camera = CameraTrack is { } view ? view.CameraAt(view.LocalT(eased)) : null;
-        return new AnimationSample(poses, camera);
+        double? deform = DeformationTrack is { } flex ? flex.ScaleAt(flex.LocalT(eased)) : null;
+        return new AnimationSample(poses, camera, deform);
     }
 
     /// <summary>The animation evaluated at <paramref name="seconds"/> into playback.</summary>

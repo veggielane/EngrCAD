@@ -95,10 +95,8 @@ if (Math.Abs(uz.Range.Min + 0.5) > 1e-9) throw new Exception($"uz should reach -
 
 ## The deformed shape
 
-A displacement result can *move* the model. This is the one place the viewer deliberately
-re-uploads geometry rather than re-posing it — a displaced shape is a different mesh, not
-a different placement — and the undeformed shape is ghosted behind it, because the
-comparison is the point.
+A displacement result can *move* the model, with the undeformed shape ghosted behind it,
+because the comparison is the point.
 
 ```csharp render:field-deformed
 // A cantilever plate under an analytic deflection, exaggerated 40x. The colour is the
@@ -133,6 +131,15 @@ alone entirely.
 A deformed part draws **no feature-edge overlay** — those edges come from the exact
 B-Rep and describe geometry that has moved — and picking follows what is drawn, so a
 click selects the part where it is on screen.
+
+**The displacement is sent once, as a vertex attribute**, and the shader applies
+`position + uDeformScale * displacement`. A mesh with no displacement buffer reads zero,
+so a part with no results is untouched however the uniform is set — the same
+constant-when-absent rule the colour attribute follows. Two consequences worth knowing:
+the exaggeration is one float, so **animating it is free** (see
+[the load ramp](animation.md#a-structural-result-under-load)); and the shading is exact
+rather than carried over, because a facet normal is exactly quadratic in the scale, so
+three coefficients reproduce it at every exaggeration.
 
 ## Colour maps and ranges
 

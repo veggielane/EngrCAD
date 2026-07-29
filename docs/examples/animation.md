@@ -1,17 +1,19 @@
 # Animation
 
-Three different things want to animate — a **mechanism** driven through its range,
-an **assembly** moving between assembled and exploded, and the **camera** — and they
-are the same problem, because all three are pure functions of one parameter that move
-*poses and the camera only*. That is the load-bearing rule: **an animation never
-touches geometry**. Tracks return matrices over a fixed instance list (count and
-order independent of t) or a camera pose, never a re-meshed part, so a viewer
-animates with matrices alone and picking keeps working.
+Four different things want to animate — a **mechanism** driven through its range, an
+**assembly** moving between assembled and exploded, a **simulation result** ramping
+under its load, and the **camera** — and they are the same problem, because all four
+are pure functions of one parameter that move *poses, one scalar and the camera only*.
+That is the load-bearing rule: **an animation never touches geometry**. Tracks return
+matrices over a fixed instance list (count and order independent of t), a camera pose,
+or a number — never a re-meshed part — so a viewer animates with matrices and uniforms
+alone and picking keeps working.
 
-An `Animation` is a duration, an easing, and up to two tracks — one posing the
-scene's instances, one moving the camera — each with its own window on the shared
-timeline. `Animation.At(t)` is a **pure function of t ∈ [0, 1]**: scrubbing in the
-viewer, playing, and every export format evaluate the same function.
+An `Animation` is a duration, an easing, and up to three tracks — one posing the
+scene's instances, one moving the camera, one scaling a displayed result's deformation —
+each with its own window on the shared timeline. `Animation.At(t)` is a **pure function
+of t ∈ [0, 1]**: scrubbing in the viewer, playing, and every export format evaluate the
+same function.
 
 The images on this page are **APNGs produced by the docs build itself** — lossless,
 full colour, and served as `.png` because an APNG *is* one. (`RenderGif` exists too,
@@ -178,6 +180,121 @@ Outside its window an occurrence **holds** its boundary factor (exactly 0 before
 bit-for-bit the assembled pose — and exactly 1 after), so windows sequence rather
 than snap. The instance count and order never change with t, which is what lets the
 viewer animate with `SetInstancePoses` matrices alone.
+
+## A structural result under load
+
+A [deformed-shape plot](fields.md) looks like the one thing this page says an animation
+must never do — new vertex positions every frame. It is not, and the reason is worth
+stating because it is what makes the feature cheap: the displacement field is sent
+**once** as a vertex attribute, and the vertex shader applies
+`position + uDeformScale * displacement`. So a whole result animation changes **one float
+uniform per frame** — no buffer touched, nothing re-uploaded, the instance list untouched.
+`DeformationTrack` is that uniform on the timeline.
+
+`DeformationTracks.LoadRamp()` runs 0 → 1 → 0: the load applied and released.
+
+```csharp animate:animate-load-ramp frames:20
+var bracket = Shape.Box(60, 40, 10)
+    .Subtract(Shape.Cylinder(6, 40).Translate(0, 0, -20));
+var part = new Part("bracket", bracket, Palette.Steel);
+
+var surface = part.GetMesh();
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 14,     // coarse on purpose - this page is a picture, not a study
+});
+
+var model = new StructuralModel(AnalysisMesh.Quadratic(tets), Materials.Aluminium6061);
+model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -1200));
+
+var results = StructuralSolver.Solve(model);
+foreach (var field in results.SampleOnto(surface))
+    part.AddResult(field);
+
+part.FieldDisplay = new FieldDisplay
+{
+    Field = StructuralResults.FieldNames.VonMises,
+    Deform = StructuralResults.FieldNames.Displacement,
+    DeformScale = 60,
+};
+
+var scene = new Scene();
+scene.Add(part);
+
+var animation = new Animation(durationSeconds: 3)
+    .With(DeformationTracks.LoadRamp());
+```
+
+![A bracket flexing under a load ramp, coloured by von Mises stress](images/animate-load-ramp.png)
+
+**For a linear solve those intermediate frames are not a tween — they are the answers.**
+A linear result scales exactly with the load, so the frame at factor 0.5 is the real
+displacement and the real stress for half the load, not an interpolation between two
+computed states. That is what separates this from a cosmetic wobble, and it is worth
+saying out loud when the solve is *not* linear (contact, plasticity, large deflection):
+the shape still scales on screen, but only the endpoint was solved and the frames between
+are illustration.
+
+The legend follows: its title reads `60X DEFORMED` at the peak and half that halfway up
+the ramp, because a bar stating an exaggeration the frame was not drawn at is exactly the
+lie the title exists to prevent.
+
+### Mode shapes
+
+`DeformationTracks.Oscillate(amplitude, cycles)` swings the same uniform through
+`±amplitude` — which **is** the mode-shape animation, because vibrating in a mode is that
+mode's shape times `cos(ωt)`. Point a part's `FieldDisplay.Deform` at a mode's
+displacement result, and use a small `cycles` (2 or 3 reads well).
+
+> [!IMPORTANT]
+> **Use a fixed small `cycles`, and state the slowdown. Do not compute
+> `cycles = frequency × duration`.** That formula is dimensionally correct and produces
+> nonsense for every real part, which is what makes it worth warning about: a steel blade
+> 80 mm long and 6 mm thick has a first bending mode near **780 Hz**
+> (`f₁ = (1.875²/2π)·√(EI/ρAL⁴)`), so a two-second clip at true speed would need ~1 570
+> cycles — hundreds per rendered frame. That aliases into noise or a stationary blur, and
+> no frame rate fixes it, because the mode is genuinely faster than video.
+>
+> Stiff metal parts run from hundreds of hertz to tens of kilohertz; the structures slow
+> enough to animate at true speed are things like tall buildings. So the honest caption
+> says the playback is slowed **and by how much**: two cycles over a two-second clip
+> against 780 Hz is roughly **780× slow motion**. A modal result reports each mode's
+> frequency and period, so a page can compute that factor rather than transcribe it.
+
+> [!NOTE]
+> **A mode shape has no physical amplitude, and its sign is a convention.** What is
+> physical is the *shape* and the *frequency*; the published field is scaled so its
+> largest nodal displacement is one model unit and given a deterministic sign so a
+> re-solve reproduces it. The animation's amplitude and phase are therefore display
+> choices, not predictions — say so on any figure that carries them.
+>
+> One more, because it is measurable rather than philosophical: a mode's **direction** is
+> only well defined when its frequency is *simple*. On a symmetric part (a square shaft,
+> a round rod) the two bending modes are degenerate, and a solver returns an arbitrary
+> orthonormal basis of that eigenspace — so "mode 1" animates one valid member of a
+> family rather than *the* mode.
+>
+> Taken together those are four caveats, and the **playback rate** is the one an engineer
+> is most likely to be misled by: arbitrary amplitude and sign are things people half
+> expect, whereas "the animation runs at the mode's frequency" sounds exactly like
+> something a solver would arrange, so a viewer will believe it unless told otherwise.
+
+### What deliberately does not follow
+
+Two things stay put while the factor moves, both for the same reason — they are not
+uniforms:
+
+- **Picking.** A pick is answered by a BVH over triangles, which cannot be a uniform, so
+  it is built once at the part's *own* `DeformScale`. A click is exact on a static plot
+  and at a load ramp's peak, and off by the difference in exaggeration in between.
+  Rebuilding a spatial index per frame is precisely the cost this design avoids.
+- **The feature-edge overlay.** A part carrying a displacement draws none at any factor,
+  since those exact B-Rep edges describe geometry that has moved — and deciding it per
+  frame would make the draw list depend on t, which is what lets a whole clip reuse one
+  upload. So the factor-0 frame is the undeformed *shape* without the undeformed part's
+  chrome; it is not the same picture as a still of a part whose own scale is 0.
 
 ## Playing in the viewer
 
