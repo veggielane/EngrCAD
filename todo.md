@@ -927,6 +927,79 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   - [ ] Time-varying results (a load step / frequency slider driving `Part.Results`),
     and result persistence beside `FeatureHistory.SaveParameters`.
 
+- [ ] **Animating a structural result — and the one design decision that makes it cheap.**
+  The Animation section's load-bearing rule is that *an animation must not touch
+  geometry*: instance count and order are independent of t, so `SetInstancePoses` animates
+  with matrices alone and picking keeps working. A deformed shape looks like the exception
+  — it is genuinely new vertex positions per frame, which is why the landed deformed-shape
+  overlay re-uploads deliberately and is documented as **off** the animation path.
+  <br>**It does not have to be an exception.** Send the displacement field ONCE as a
+  vertex attribute beside `aOcclusion` and `aFieldColor` (the constant-when-absent
+  precedent is already established twice), and let the vertex shader apply
+  `position + uDeformScale * aDisplacement`. Then a result animation changes **one float
+  uniform per frame** — no buffer touched, no re-upload, the matrices-only rule intact,
+  and the web front end gets it for the same reason the explode slider did. That is the
+  whole item; everything below is what it then unlocks cheaply:
+  - A **load-ramp** track (scale 0 → 1 → 0), the obvious first demo, and the honest one
+    for a *linear* solver — a linear result scales exactly, so the intermediate frames are
+    not interpolation, they are the actual answers.
+  - **Mode shapes**, once modal analysis lands (above): animating eigenvector k at its own
+    frequency is the classic deliverable and needs nothing beyond this attribute. Note the
+    modal caveat worth stating in the docs — a mode shape has arbitrary sign and scale, so
+    the animation's amplitude is a display choice, not a physical displacement.
+  - **Transient thermal playback**, which is different in kind and must be said out loud:
+    temperature per time step is a *colour* animation, so it needs the field-colour
+    attribute re-uploaded per frame OR n attributes uploaded once. Unlike displacement it
+    has no single-uniform form, so scope it separately rather than assuming it rides along.
+  - Export falls out of the existing `AnimationExport` (APNG first, per that section's
+    ranking), and the EGL-context reuse that took a clip from 1069 → 165 ms already applies.
+  <br>**Verification bar**: the animated frames at t must equal a static
+  `RenderToImage` of the same scale factor, byte for byte — the same equality the batched
+  animation export already asserts against per-frame rendering. If that holds, the shader
+  path and the CPU path provably agree.
+
+- [ ] **CFD — assess honestly before starting, because it is not "FEA with different
+  physics".** Structural and thermal share a shape: symmetric positive-definite operators,
+  one unknown field, `SparseCholesky`/CG, and a verification bar of analytic solutions.
+  Incompressible flow breaks every one of those, and the backlog should say so before
+  anyone budgets it as a third solver.
+  - **The matrix is not symmetric.** Advection makes it non-symmetric and, at any
+    interesting Reynolds number, non-diagonally-dominant. `SparseSymmetricCG` and
+    `SparseCholesky` do not apply; this needs **GMRES or BiCGSTAB with a real
+    preconditioner** (ILU at minimum). That is a genuine addition to `Core.Solvers`, and
+    it is the first thing to build — it is also independently useful.
+  - **It is a saddle-point problem.** Velocity and pressure are coupled and the pressure
+    has no equation of its own. Either a segregated scheme (SIMPLE/PISO) or a monolithic
+    solve with a block preconditioner; and equal-order velocity/pressure elements are
+    **inf-sup unstable** — so either Taylor–Hood (P2 velocity / P1 pressure, which the
+    existing 10-node/4-node tet pair gives almost for free) or PSPG stabilization. The
+    Taylor–Hood route is the one that reuses what exists.
+  - **Advection needs stabilization** (SUPG) once it dominates diffusion, or the solution
+    oscillates rather than being merely inaccurate — a failure mode that looks like a bug
+    forever.
+  - **The mesh requirement is the blocker.** Resolving a boundary layer needs anisotropic
+    prism/hex layers at walls with aspect ratios in the hundreds; the tet mesher
+    deliberately produces isotropic elements and boundary layers are already filed as its
+    top gap. **Do that first** — a CFD solver on isotropic tets can only ever produce
+    plausible-looking pictures.
+  - **Turbulence is a modelling choice, not an algorithm.** Laminar-only is a defensible
+    v1 and covers real engineering (internal flow at low Re, cooling channels); RANS
+    (k-ω SST) is a second project with its own wall-function subtleties.
+  - **Staging that respects the verification culture**: (1) non-symmetric solvers in Core,
+    verified against dense references; (2) **Stokes flow** — linear, no advection, and
+    exactly where inf-sup stability is provable and testable; (3) steady Navier–Stokes,
+    laminar; (4) transient; (5) turbulence, or not.
+  - **Verification bar, non-negotiable and higher than the other solvers'** because CFD
+    fails plausibly: Poiseuille flow against the exact parabolic profile and its friction
+    factor; **lid-driven cavity against Ghia et al.'s tabulated centreline velocities** at
+    Re 100/400/1000; backward-facing step reattachment length against Armaly; and flow past
+    a cylinder against the **Schäfer–Turek** benchmark's drag/lift coefficients. Report
+    every number in the design record, as the structural and thermal solvers did.
+  - **The honest summary**: this is larger than structural and thermal combined, its
+    prerequisite (anisotropic meshing) is itself a substantial project, and a
+    half-verified CFD solver is worse than none because its output is persuasive. Worth
+    doing — but as its own campaign, staged as above, not as a fourth item in a sweep.
+
 ## OpenSCAD feature parity (open items)
 
 What remains from mapping OpenSCAD's feature set against EngrCAD (the covered ground —
