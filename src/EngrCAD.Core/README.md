@@ -456,7 +456,35 @@ chain's parity is consistent across every joint.
     duplicates; packing stable-sorts per row so assembly is deterministic for a
     deterministic add sequence; symmetric-upper packing *rejects* lower-triangle adds
     rather than mirroring them, since a mirror would double-count a convention-following
-    assembly). Also: `Multiply(other)` (Gustavson row-merge SpMM — the bi-Laplacian L²
+    assembly).
+    <br>**The per-row sort is a stable O(k log k) key sort, and the reason is a
+    measurement.** It was an insertion sort, justified in a comment by "assembly rows are
+    short (a vertex's ring), so the quadratic worst case never bites" — true of the mesh
+    Laplacians the class was written for, false of the 3D finite-element assembly that is
+    now its heaviest consumer: a 10-node tetrahedral mesh puts **612 raw entries** in its
+    worst row, because every element touching a node contributes 30 columns to each of that
+    node's rows. Each entry is now keyed as `(column, add-index)` packed into one long, so
+    the ordinary primitive sort puts duplicates in add order and stability stops being an
+    algorithm choice. Measured with the old sort transcribed verbatim as the baseline and
+    the two **alternating in one sitting** (`SparseMatrixBuilderBenchmark`, i9-9900K,
+    win-x64, Release):
+
+    | longest row | rows | entries | insertion | key sort | speedup |
+    |---:|---:|---:|---:|---:|---:|
+    | 6 (a vertex ring) | 40 000 | 160 120 | 1.4 ms | 1.1 ms | 1.31x |
+    | 24 | 20 000 | 320 185 | 4.7 ms | 3.6 ms | 1.30x |
+    | 90 (4-node tet row) | 12 000 | 719 506 | 28.1 ms | 14.9 ms | 1.89x |
+    | 612 (10-node tet row) | 3 000 | 1 212 416 | 241.5 ms | 33.3 ms | **7.25x** |
+
+    End to end a quadratic FEA assembly's packing went **250 ms → 31 ms** and stopped
+    growing superlinearly with the entry count. Nothing is slower, including at the row
+    length the class was written for. Output is bit-for-bit unchanged — both sorts are
+    stable, so duplicates are summed in the same order, and a floating-point sum is a
+    function of its order; a test packs the same rows both ways and compares the bits.
+    (Packing a pair into a long for **sorting** is sound in a way that packing one for
+    **hashing** is not — this codebase's recorded trap is that `long.GetHashCode` is
+    `lo ^ hi`, which collapses structured keys into a handful of buckets; a comparison reads
+    all 64 bits and is exactly lexicographic.) Also: `Multiply(other)` (Gustavson row-merge SpMM — the bi-Laplacian L²
     construction), `ToGeneral()`/`ToSymmetricUpper()` (the latter takes the stored upper
     triangle as truth without comparing the lower, because the two halves of a
     numerically symmetric product differ in their last bits — same terms, different

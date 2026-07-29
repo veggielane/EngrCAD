@@ -992,10 +992,40 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   backlog named was reachable at the Interop/BRep seams. `EngrCAD.Fea` did not exist when
   that was written and has no such seam above it — it is a leaf that is also a long
   operation, which is the case the rule never had to consider.
-- [ ] **FEA: assembly is still worth parallelising** (second, after the above). It is
-  embarrassingly parallel per element with a per-row merge at the end
-  (`ParallelFor.Blocks` + per-block builders), and the reaction/energy pass recomputes
-  every element stiffness a second time rather than reusing the assembly's.
+- [ ] **FEA: assembly parallelisation — MEASURED AND DECLINED, with the numbers, so nobody
+  redoes it.** The item read "it is embarrassingly parallel per element with a per-row merge
+  at the end", and the loop's shape does look like that. Measuring the phases separately
+  (`FeaBenchmark.WhereAssemblyTimeGoes`) says otherwise: **computing the element stiffnesses
+  is 6–18% of assembly** and everything else is the scatter into the builder, which is a
+  shared write whose ORDER decides the last bits of every summed entry and therefore cannot
+  be parallelised without giving up bit-identical output. Assembly is itself ~4% of a
+  quadratic direct solve and ~13% of a large iterative one, so a perfect parallelisation of
+  the parallelisable half is worth under 2% of a solve.
+  <br>The design that WOULD be correct if that share ever grows, recorded so the thinking is
+  not lost: per-block `SparseMatrixBuilder`s merged **in block order**, which reproduces the
+  serial add sequence exactly (block order = element order, and order is preserved within a
+  block), so the packed values stay bit-identical; per-block right-hand-side contributions
+  have to be recorded as ordered (index, value) lists and replayed rather than summed into
+  dense partial vectors, or the summation order moves. The merge is the cost and it is a
+  copy of every entry.
+  <br>The item's second half — "the reaction/energy pass recomputes every element stiffness
+  a second time" — is true and also not worth fixing: the whole pass measures 5–18 ms
+  against hundreds of ms to assemble and seconds to factor, and holding every element
+  stiffness would cost 95 MB on the largest linear case to save single-digit milliseconds.
+  `FeaSolveReport.ReactionMs` now reports the phase so the decision has a number rather than
+  hiding inside "total".
+  <br>✅ **What the measurement actually found is fixed**: `SparseMatrixBuilder`'s per-row
+  insertion sort was O(k²) at k = 612 raw entries per row, which a 10-node tetrahedral mesh
+  reaches routinely and a vertex ring never does. A stable key sort took quadratic packing
+  **250 ms → 31 ms** (7.25x on the sort, interleaved against the old code transcribed
+  verbatim) and made it linear in the entry count.
+  <br>What is left open here is the OTHER half of the scatter: appending ~1.4 M tuples into
+  15 000 per-row `List<(int, double)>` measures ~78 ns each, which is allocation churn
+  rather than work. A flat append-only `(row, col, value)` array with a stable counting sort
+  by row at pack time would remove the per-row lists entirely, is bit-identical by the same
+  argument, and is cheaper in memory — but it is a rewrite of the most widely shared class
+  in `Core.Solvers` to buy a few percent of a solve, so it wants a consumer that is actually
+  assembly-bound first.
 - [ ] **FEA: contact, plasticity, large deformation.** Each is a different mathematical
   problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
   one). Modal has landed, so the assembly is now shared by three physics and a fourth

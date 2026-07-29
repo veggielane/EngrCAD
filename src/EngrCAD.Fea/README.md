@@ -680,7 +680,51 @@ reason is the same argument reversed: it factors once and then spends the run in
 back-substitutions of uniform cost, so its step number is a genuinely exact measure of how
 far along it is. It reports one fraction per step.
 
-Whole-pipeline cost (Release), which says where the time actually goes:
+## Where assembly's time goes — and what it is worth parallelising
+
+The element loop looks embarrassingly parallel, so it is worth knowing what is actually in
+it before anyone parallelises it. Measured with the phases separated
+(`FeaBenchmark.WhereAssemblyTimeGoes`, Release, win-x64, shares taken within one sitting):
+
+| | elements | free DOF | element stiffness | whole assembly | its share | reactions |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| linear | 10 368 | 6 825 | 4 ms | 22 ms | 17% | 5 ms |
+| linear | 24 576 | 15 147 | 9 ms | 149 ms | 6% | 15 ms |
+| quadratic | 1 296 | 6 825 | 10 ms | 56 ms | 18% | 12 ms |
+| quadratic | 3 072 | 15 147 | 18 ms | 130 ms | 14% | 18 ms |
+
+**Computing the element stiffnesses is 6–18% of assembly.** The rest is the scatter into
+the matrix builder, which is a shared write whose ORDER decides the last bits of every
+summed entry — so it is the part that cannot be parallelised without giving up bit-identical
+output. Two things follow, and both were reached by measuring rather than by reasoning about
+the loop's shape:
+
+- **The parallel element loop is declined, with the number.** It can address at most the
+  6–18%, and assembly is itself ~4% of a quadratic direct solve and ~13% of a large
+  iterative one, so a perfect parallelisation of the parallelisable half is worth under 2%
+  of a solve. The shape that *would* work if that share ever grows: per-block
+  `SparseMatrixBuilder`s merged **in block order**, which reproduces the serial add sequence
+  exactly and so keeps the packed values bit-identical — the merge is the cost, and it is a
+  copy of every entry.
+- **Caching element stiffnesses for the reaction pass is declined too.** The todo's
+  suggestion was that the reaction/energy pass recomputes every element stiffness a second
+  time, which it does — but the whole pass is 5–18 ms against hundreds of milliseconds to
+  assemble and seconds to factor, and the recomputation is at most 60–90% of that. Holding
+  every element stiffness would cost 95 MB on the largest linear case to save single-digit
+  milliseconds. `FeaSolveReport.ReactionMs` now reports the phase, so the decision has a
+  number attached instead of hiding inside "total".
+
+What the measurement *did* find is one layer down and is fixed: `SparseMatrixBuilder`'s
+per-row insertion sort was O(k²) at k = 612 raw entries per row, which a 10-node
+tetrahedral mesh reaches routinely. Replacing it with a stable key sort took quadratic
+packing from **250 ms to 31 ms** (7.25x on the sort itself, measured against the old code
+transcribed verbatim and alternating in one sitting) and made it linear in the entry count.
+See the Core README. The general lesson is in CLAUDE.md: *an asymptotic guard justified by
+the caller you had is not a guard, and a new consumer is exactly the event that invalidates
+it.*
+
+Whole-pipeline cost (Release, **idle machine**, and note the assemble column predates the
+packing fix above, so it is now an upper bound), which says where the time actually goes:
 
 | | elements | free DOF | assemble | factor | solve | stress | total |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |

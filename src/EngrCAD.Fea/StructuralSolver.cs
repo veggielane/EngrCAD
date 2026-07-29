@@ -205,6 +205,11 @@ public sealed record FeaSolveReport
     /// shared costs every case's report repeats.</summary>
     public required double SolveMs { get; init; }
 
+    /// <summary>Milliseconds spent recovering this case's reactions and strain energy — a
+    /// second pass over every element, and the one phase the pipeline table used to leave
+    /// inside "total" rather than naming.</summary>
+    public double ReactionMs { get; init; }
+
     /// <summary>How many load cases shared this assembly and factorization
     /// (<see cref="StructuralSolver.SolveAll"/>); 1 for an ordinary solve.</summary>
     public int LoadCases { get; init; } = 1;
@@ -248,7 +253,8 @@ public sealed record FeaSolveReport
                 + $", |Ku-f|/|f| = {RelativeResidual:E2}",
             $"strain energy {StrainEnergy:G6}",
             $"applied {Format(AppliedForce)}, reaction {Format(ReactionForce)}, equilibrium {EquilibriumResidual:E2}",
-            $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, solve {SolveMs:F1} ms"
+            $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, solve {SolveMs:F1} ms, "
+                + $"reactions {ReactionMs:F1} ms"
                 + (LoadCases > 1 ? $" (this case; assembly and factor shared by {LoadCases} load cases)" : ""),
         };
         if (ConditionEstimate is { } condition)
@@ -468,7 +474,9 @@ public static class StructuralSolver
                 displacement[node] = new Vector3d(x, y, z);
             }
 
+            stopwatch.Restart();
             var (reactions, strainEnergy) = ReactionsAndEnergy(thisCase, displacement, rule, progress);
+            double reactionMs = stopwatch.Elapsed.TotalMilliseconds;
             var reactionTotal = Vector3d.Zero;
             // Normalised against the sum of the individual load and reaction MAGNITUDES, not
             // against the resultants. Two support forces that cancel are the normal case (a
@@ -514,6 +522,7 @@ public static class StructuralSolver
                 AssembleMs = assembleMs,
                 FactorMs = factorMs,
                 SolveMs = solveMs[c],
+                ReactionMs = reactionMs,
                 LoadCases = cases.Count,
                 ConditionEstimate = condition,
                 Advisory = AdvisoryFor(
