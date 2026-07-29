@@ -820,27 +820,70 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
 verified boundary recovery, radius-edge + sizing-field refinement, region ids from
 multi-body input, per-facet source-triangle tags, 10-node elements. Residuals below.
 
-- [ ] **Boundary recovery on irregular (remeshed) surfaces — the top gap.** Recovery is
-  happy with CAD tessellations (B-Rep output, primitives, Surface Nets): every fixture in
-  `EngrCAD.Fea.Tests` recovers in **zero rounds**, because the input triangles are already
-  Delaunay faces. It is *not* happy with an isotropic remesh — near-uniform vertex spacing
-  with no structure means enough triangles fail to be Delaunay faces that red subdivision
-  does not clear them, and the budget runs out (measured: a remeshed cylinder at three
-  parameter settings and a remeshed sphere, all refused; `RecoveryLimitationTests` pins it).
-  The irony is worth keeping: remeshing is the natural surface-quality prep and v1 recovery
-  wants exactly the structure it removes. The likely fix is the textbook one this v1
-  deliberately skipped — protecting-ball *segment and subfacet encroachment* driving recovery
-  (Shewchuk's CDT construction) instead of the weaker presence/red-subdivision scheme, which
-  would also give a termination proof rather than a budget.
-- [ ] **Sliver removal (the second named gap in tet meshing).** Radius-edge bounds provably
-  cannot exclude slivers, and the measurements say so: a refined `box 20³` is
-  0.7–1.6% slivers below 10°, and elements with a *negative* floating-point volume
-  exist even where the exact predicate says strictly positive. The standard answers
-  are **sliver exudation** (Cheng et al.'s weighted-Delaunay perturbation) and
-  optimization-based smoothing (Klingner–Shewchuk's `Stellar`: smoothing + topological
-  transformations driven by a quality objective). Either would run as a post-pass over
-  a finished `TetMesh`, which is why the mesher reports quality rather than claiming
-  it. Until then, `TetQualityReport.SliverCount` is the honest interface.
+- [ ] **Conforming Delaunay for a CURVED non-Delaunay surface triangulation** (what is left of
+  the old "boundary recovery on remeshed surfaces" top gap, whose filed diagnosis was measured
+  and found wrong in two directions — see design.md §3b and the Fea README table).
+  **What was wrong**: a remeshed surface is not the obstacle (a remeshed sphere meshes in
+  **zero** recovery rounds at three target edge lengths once the remesh is Delaunay-clean,
+  *with one patch per triangle* — the configuration the old entry blamed), and triangle quality
+  is not the criterion either (a remeshed box at a **0.145°** worst angle and radius-edge
+  **198** meshes; a remeshed sphere at **27.9°** and **1.07** is refused; the structured
+  cylinder that recovers in zero rounds has *worse* triangles than the remeshed sphere that
+  does not). **What is actually left**: where a surface is flat a patch absorbs any diagonal and
+  nothing has to be recovered, but where it is curved every triangle is its own patch and must
+  appear verbatim as a Delaunay face, and refinement cannot manufacture that. The fix is the
+  textbook one this v1 deliberately skipped — protecting-ball *segment and subfacet
+  encroachment* (Shewchuk's CDT construction, or Murphy–Mount–Gable) — which carries a
+  termination proof where the budget carries none. Red subdivision is not a weak version of it;
+  it is a different thing that provably cannot reach it, which is why the practical answer
+  today is `RemeshOptions.PreventLongEdgeFlips` (measured to turn every refused sphere row into
+  a zero-round one) and the refusal now says so.
+  Already landed off this item: non-convergence detection (five rounds without improving on the
+  best offending count, the trimmed-face monotone-decrease rule) and a refusal that measures
+  the input's worst triangle and its curved fraction instead of advising a remesh.
+- [ ] **The remesher makes a cylinder primitive worse, and nothing catches it.** Measured
+  across six settings, `Remesher.Remesh` of `MeshPrimitives.Cylinder(10, 20, 48)` lands at a
+  worst angle between **0.013° and 7.7°** with a radius-edge ratio between **3.7 and 2124** —
+  `PreventLongEdgeFlips` included, so it is not the flip stage. The seed is that the primitive's
+  n-gon caps triangulate as a **one-corner fan** (worst angle 3.74° before any remeshing) and
+  the rim is pinned, so the remesher has little freedom on the cap and degrades it. Two
+  separable pieces: the cap fan is a poor triangulation for anything downstream to start from
+  (a fan is the cheapest correct answer, not a good one), and the remesher still has no
+  shape-quality measure of its own to notice — which is the already-filed
+  `RemeshResult` minimum-angle item, here with a fixture that motivates it. Note this is an
+  `EngrCAD.Mesh` item, not an Fea one; it surfaced because the tet mesher is the first consumer
+  that cannot tolerate it.
+- [x] ~~**Sliver removal (the second named gap in tet meshing).**~~ ✅ **done** —
+  `TetSmoothing.Smooth` is the optimization-based half (interior-vertex smoothing against a
+  worst-incident-dihedral objective, boundary and deliberate anisotropy frozen, exact
+  orientation predicate on every candidate). Measured on a 20³ box: **every sliver removed** at
+  three sizes (190 → 0, 399 → 0, 1 149 → 0), worst dihedral 0.00° → 10–17°, volume drift
+  7.8e-15 … 2.1e-14 — with the residual **coordinate-sensitive** (the same box translated to
+  the origin leaves 2 of 190), so the guarantee is determinism rather than sliver-freeness.
+  Residuals filed below.
+- [ ] **Sliver exudation, and the topological half of `Stellar`.** `TetSmoothing` moves points
+  only, which is what lets it keep the boundary, the volume identity, the connectivity and the
+  orientation invariant by construction. The stronger techniques change TOPOLOGY — Cheng et
+  al.'s weighted-Delaunay perturbation, and Klingner–Shewchuk's edge/face removal and 2-3/3-2
+  flips — and would need the boundary contract, the classification and the region ids
+  re-established afterwards rather than inherited. Worth it if a fixture ever appears that
+  smoothing cannot clear; nothing in the suite currently is (every fixture reaches zero
+  slivers), which is the honest reason not to build it yet.
+- [ ] **`TetSmoothing` costs ~10x the meshing it follows** — 4.9 s against 504 ms on the
+  40 593-element box, 12.9 s at 103 103. The profile is not measured yet, but the shape is
+  obvious: 10 search directions × 8 stride halvings × every incident element's six dihedrals,
+  per vertex per pass. Cheap levers in likely order: stop a vertex's search as soon as a pass
+  finds no improving direction at the FIRST stride (most vertices after pass 1), cache each
+  element's dihedrals and invalidate only the incident ones, and hoist the `TargetDihedralDegrees`
+  gate to skip whole passes once the mesh is clean. A parallel pass is NOT free here — vertices
+  share elements, so a block decomposition would change the visit order and with it the answer,
+  and bit-identical output is asserted.
+- [ ] **`TetSmoothing` lowers the MEAN minimum dihedral by 2–4° while raising the worst.** The
+  objective is the worst incident angle, so lifting it moves a vertex away from what its other
+  elements would have preferred (measured 42.4° → 39.5°, 44.4° → 41.2°, 43.6° → 39.9°). That is
+  the right trade for conditioning and it is reported rather than buried, but a combined
+  objective — maximize the worst, break ties on the mean — would plausibly keep both. Needs a
+  measurement before it is worth the extra knob.
 - [ ] **Tet meshing performance.** Measured 31k–80k tets/s (win-x64, Release), which is
   usable but well off TetGen. The profile is Delaunay build + per-pass classification;
   the obvious lever is replacing the winding-number classification inside the
@@ -881,13 +924,32 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   meet at an angle, which is exactly why the current layer is deliberately
   straight-sided; and coincident interfaces between bodies (v1 meshes disjoint bodies
   only, and refuses overlapping ones by name).
-- [ ] **`Predicates3d.InSphere`'s exact stage allocates** (`BigInteger`), unlike
-  `Orient3d`'s stack-allocated expansion form — a deliberate trade recorded in the
-  class doc, since the expansion form of `insphereexact` needs ~6000-component
-  intermediates and hundreds of lines of hand-unrolled sign bookkeeping. An
-  `ArrayPool`-backed expansion form is the fix if profiling ever shows it matters;
-  `Predicates3d.InSphereEscalations` is the counter that would show it (a 4×4×4 lattice
-  escalates constantly, a random cloud never).
+- [ ] **`Predicates3d.InSphere`'s exact stage allocates, and it MEASURABLY matters** — the
+  profiling this entry asked for has now been done (`TetMesherBenchmark.InSphereExactStage_CostAndHowOftenItIsPaid`,
+  win-x64, Release). The exact stage escalates to `BigInteger`, unlike `Orient3d`'s
+  stack-allocated expansion form — a deliberate trade recorded in the class doc, since the
+  expansion form of `insphereexact` needs ~6000-component intermediates and hundreds of lines
+  of hand-unrolled sign bookkeeping. **Per call**: an escalated `InSphere` costs **9 229 ns and
+  5 698 bytes** against **73 ns and 0.1 bytes** for one the filter settles — 126× slower, and
+  the only allocation in either. **Per mesh**, using `TetMeshDiagnostics.InSphereEscalations`:
+
+  | mesh | tets | escalations | per tet | total alloc | est. from the exact stage |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | box 20³ conforming | 6 | 29 | 4.83 | 0.6 MB | 0.2 MB |
+  | box 20³, h = 2 | 40 593 | 12 054 | 0.30 | 191.6 MB | **65.5 MB (34%)** |
+  | sphere r10, 48×24, h = 2.5 | 14 583 | 50 690 | 3.48 | 478.9 MB | **275.4 MB (58%)** |
+
+  So on a SPHERE — whose tessellation vertices are all exactly cospherical, i.e. the documented
+  degenerate case rather than an exotic one — the exact stage is **more than half the mesher's
+  total allocation** and roughly 0.47 s of pure escalation. Every CAD sphere and cylinder
+  tessellation has this shape, so it is the normal case, not the hostile one. The estimate
+  column is escalations × the lattice's measured bytes-per-escalation and is an ESTIMATE:
+  `BigInteger` size follows the operands' exponent range, so a model at a different scale will
+  differ. Two fixes, in increasing order of work: an `ArrayPool`-backed or `stackalloc`
+  fixed-width big-integer for the 15 decomposed mantissas (the allocation is 15 `BigInteger`s
+  plus the determinant's products, all of bounded width once the inputs are known finite), or
+  Shewchuk's `insphereexact` expansion form. **Note this is an `EngrCAD.Core` item**; it is
+  filed from Fea because the tet mesher is what pays it.
 - [ ] **Feed the mesher from the model, not just from a mesh.** `TetMesher` takes a
   `HalfEdgeMesh`, so B-Rep face identity reaches it only if the caller threads a
   per-triangle tag array through. `BRepTessellator` knows the provenance; exposing it

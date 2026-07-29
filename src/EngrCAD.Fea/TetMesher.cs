@@ -466,11 +466,34 @@ public static class TetMesher
 
         // ---- stage 3: boundary recovery ----
 
+        /// <summary>
+        /// How many consecutive rounds may fail to beat the fewest offending faces seen so far
+        /// before recovery is declared non-convergent. This is the monotone-decrease rule the
+        /// trimmed-face refiner already uses, and it exists because the two ways recovery fails
+        /// both show up here and NEITHER is "one more round would have done it".
+        ///
+        /// <para>Measured on a plainly remeshed sphere: the count runs 6, 10, 11, 7, 5, and
+        /// then sits at 5 for every round after — 5 at round 12 and still 5 at round 40, while
+        /// 44 Steiner points a round are spent. It is not a stall in the strict sense, which is
+        /// why an identical-set test does NOT fire: the five faces are different faces each
+        /// round, each smaller than the last, and by round 40 their three vertices agree to
+        /// 1e-11 on a radius-10 sphere. Refinement is chasing its own tail into degeneracy.
+        /// On a remeshed cylinder the same loop diverges outright — 162, 405, 869, 1810, 3570 —
+        /// with every offending face from round 1 touching a Steiner point the round before
+        /// created.</para>
+        ///
+        /// <para>Five is generous on purpose: no fixture in the suite needs a single recovery
+        /// round, so the window only ever costs a failing input a little time.</para>
+        /// </summary>
+        private const int NonConvergenceRounds = 5;
+
         private (Side[] Label, int[] Region) Recover()
         {
             Side[] label;
             int[] region;
             List<BoundaryFace> offending;
+            int fewestSeen = int.MaxValue;
+            int roundsWithoutImprovement = 0;
 
             for (int round = 0; ; round++, _recoveryRounds++)
             {
@@ -479,29 +502,134 @@ public static class TetMesher
                 if (offending.Count == 0)
                     return (label, region);
 
-                if (round >= options.MaxRecoveryRounds)
+                if (offending.Count < fewestSeen)
                 {
-                    var worst = offending[0];
-                    var nearbyTags = new SortedSet<int>();
-                    foreach (int v in (int[])[worst.V0, worst.V1, worst.V2])
-                        if (v < _vertexPatches.Count)
-                            foreach (int p in _vertexPatches[v])
-                                nearbyTags.Add(_patches[p].Tag);
-
-                    throw new TetMeshException(
-                        $"Boundary recovery did not converge after {options.MaxRecoveryRounds} rounds: " +
-                        $"{offending.Count} faces separate the interior from the exterior without lying " +
-                        $"on the input surface. The first spans {_points[worst.V0]} / {_points[worst.V1]} " +
-                        $"/ {_points[worst.V2]}, touching surface tag(s) " +
-                        $"{(nearbyTags.Count > 0 ? string.Join(", ", nearbyTags) : "none")}. A tetrahedron " +
-                        "straddles the boundary there, which is usually a sliver triangle or a " +
-                        "near-tangential pair of surfaces; remesh the surface (Remesher.Remesh) before " +
-                        "tetrahedralizing.");
+                    fewestSeen = offending.Count;
+                    roundsWithoutImprovement = 0;
                 }
+                else if (++roundsWithoutImprovement >= NonConvergenceRounds)
+                {
+                    throw new TetMeshException(RecoveryFailure(
+                        $"Boundary recovery is not converging: after {round + 1} rounds " +
+                        $"{offending.Count} faces still separate the interior from the exterior " +
+                        "without lying on the input surface, and the count has not improved on " +
+                        $"its best of {fewestSeen} for {NonConvergenceRounds} rounds, so more " +
+                        "rounds or a larger Steiner budget will not help", offending));
+                }
+
+                if (round >= options.MaxRecoveryRounds)
+                    throw new TetMeshException(RecoveryFailure(
+                        $"Boundary recovery did not converge after {options.MaxRecoveryRounds} " +
+                        $"rounds: {offending.Count} faces separate the interior from the exterior " +
+                        "without lying on the input surface", offending));
 
                 SplitEncroached(offending);
                 progress?.ThrowIfCancelled();
             }
+        }
+
+        /// <summary>
+        /// The body of every recovery refusal: where it failed, and — measured rather than
+        /// guessed — WHY this surface is hard.
+        ///
+        /// <para>Two figures decide the diagnosis and both are computed from the input.
+        /// <b>Singleton patches</b> say how much of the surface is curved: recovery works per
+        /// planar patch, so on a flat region the triangulation may pick its own diagonals and
+        /// there is nothing to recover, while a triangle with no coplanar neighbour is its own
+        /// patch and must appear VERBATIM as a face of the Delaunay tetrahedralization. That
+        /// is the condition refinement is trying to reach, and it is the reason a remeshed box
+        /// (7 patches for 1638 triangles) meshes happily while a remeshed sphere (one patch per
+        /// triangle) need not. <b>The worst input triangle</b> says whether the surface itself
+        /// is the problem: a sliver's circumcircle is enormous relative to its shortest edge,
+        /// so it is encroached by everything near it and conforming to it is expensive by
+        /// theory rather than by implementation.</para>
+        ///
+        /// <para>The advice deliberately no longer says "remesh the surface", which was
+        /// backwards for the input that most often reaches here — measured, every remesh of
+        /// `MeshPrimitives.Cylinder` tried carries a worst angle between 0.013 and 0.185
+        /// degrees, i.e. remeshing is what CREATED the slivers.</para>
+        /// </summary>
+        private string RecoveryFailure(string headline, List<BoundaryFace> offending)
+        {
+            var worst = offending[0];
+            var nearbyTags = new SortedSet<int>();
+            foreach (int v in (int[])[worst.V0, worst.V1, worst.V2])
+                if (v < _vertexPatches.Count)
+                    foreach (int p in _vertexPatches[v])
+                        nearbyTags.Add(_patches[p].Tag);
+
+            int singletonTriangles = 0;
+            foreach (var patch in _patches)
+                if (patch.Triangles.Count == 1)
+                    singletonTriangles++;
+            int total = Math.Max(1, surfaceFaces.Count);
+            int curvedPercent = (int)Math.Round(100.0 * singletonTriangles / total);
+
+            var (minAngle, maxRadiusEdge) = WorstInputTriangle();
+
+            string why = curvedPercent >= 50
+                ? $"{curvedPercent}% of the input's {total} triangles have no coplanar neighbour, so each " +
+                  "is its own recovery patch and has to appear verbatim as a face of the Delaunay " +
+                  "tetrahedralization of the input vertices. On a flat region a patch absorbs a " +
+                  "different diagonal; on a curved one there is no such freedom."
+                : $"Only {curvedPercent}% of the input's {total} triangles are their own patch, so most of " +
+                  "the surface is flat and free to be retriangulated; the failure is local to the " +
+                  "curved or badly shaped part.";
+
+            string quality = minAngle < 5.0 || maxRadiusEdge > 5.0
+                ? $" The input surface's worst triangle has a minimum angle of {minAngle:F3} degrees and a " +
+                  $"radius-edge ratio of {maxRadiusEdge:F1}; a sliver that shape is encroached by every " +
+                  "vertex near it, and conforming to it is expensive by theory rather than by " +
+                  "implementation. Fix the SURFACE first."
+                : $" The input surface's triangles are well shaped (worst minimum angle {minAngle:F3} " +
+                  $"degrees, worst radius-edge ratio {maxRadiusEdge:F2}), so shape is not the cause.";
+
+            return $"{headline}. The first spans {_points[worst.V0]} / {_points[worst.V1]} / " +
+                   $"{_points[worst.V2]}, touching surface tag(s) " +
+                   $"{(nearbyTags.Count > 0 ? string.Join(", ", nearbyTags) : "none")}. {why}{quality} " +
+                   "If this surface came from Remesher.Remesh, set RemeshOptions.PreventLongEdgeFlips: " +
+                   "the flip stage is valence-driven with no length term, so it can replace a Delaunay " +
+                   "diagonal with a longer one, and a surface triangle that is not locally Delaunay " +
+                   "cannot be a face of the tetrahedralization (measured: a remeshed sphere is refused " +
+                   "without it and meshes in ZERO recovery rounds with it). Otherwise prefer the CAD " +
+                   "tessellation itself and control element size with TetMeshOptions.SizingField.";
+        }
+
+        /// <summary>Worst (minimum angle, radius-edge ratio) over the input triangles.</summary>
+        private (double MinAngleDegrees, double MaxRadiusEdge) WorstInputTriangle()
+        {
+            double minAngle = 180.0, maxRadiusEdge = 0;
+            foreach (var face in surfaceFaces)
+            {
+                if (face.Length != 3)
+                    continue;
+                var p0 = surfacePositions[face[0]];
+                var p1 = surfacePositions[face[1]];
+                var p2 = surfacePositions[face[2]];
+                for (int i = 0; i < 3; i++)
+                {
+                    var (a, b, c) = i switch
+                    {
+                        0 => (p0, p1, p2),
+                        1 => (p1, p2, p0),
+                        _ => (p2, p0, p1),
+                    };
+                    var u = b - a;
+                    var w = c - a;
+                    double lu = u.Length, lw = w.Length;
+                    if (lu <= 0 || lw <= 0)
+                        continue;
+                    minAngle = Math.Min(minAngle,
+                        Math.Acos(Math.Clamp(u.Dot(w) / (lu * lw), -1, 1)) * 180.0 / Math.PI);
+                }
+
+                double e0 = (p1 - p0).Length, e1 = (p2 - p1).Length, e2 = (p0 - p2).Length;
+                double area = (p1 - p0).Cross(p2 - p0).Length * 0.5;
+                double shortest = Math.Min(e0, Math.Min(e1, e2));
+                if (area > 0 && shortest > 0)
+                    maxRadiusEdge = Math.Max(maxRadiusEdge, e0 * e1 * e2 / (4 * area) / shortest);
+            }
+            return (minAngle, maxRadiusEdge);
         }
 
         /// <summary>
@@ -716,9 +844,23 @@ public static class TetMesher
             }
 
             if (_boundarySteiner + _qualitySteiner >= options.MaxSteinerPoints)
+            {
+                var (minAngle, maxRadiusEdge) = WorstInputTriangle();
                 throw new TetMeshException(
                     $"Boundary recovery exceeded the Steiner-point budget of {options.MaxSteinerPoints}. " +
-                    "Raise TetMeshOptions.MaxSteinerPoints, or simplify/remesh the input surface.");
+                    $"The input surface's worst triangle has a minimum angle of {minAngle:F3} degrees and " +
+                    $"a radius-edge ratio of {maxRadiusEdge:F1}. " +
+                    (minAngle < 5.0 || maxRadiusEdge > 5.0
+                        ? "That is a sliver, and it is the likeliest cause: its circumcircle is enormous " +
+                          "relative to its shortest edge, so it is encroached by every vertex near it and " +
+                          "refinement chases itself. Fix the SURFACE rather than raising the budget — and " +
+                          "note that remeshing can CREATE this (measured: every remesh of a 48-segment " +
+                          "cylinder primitive tried carries a worst angle under 0.2 degrees, because its " +
+                          "n-gon caps triangulate as a one-corner fan)."
+                        : "The triangles are well shaped, so raising TetMeshOptions.MaxSteinerPoints is " +
+                          "worth trying; if it still fails, the surface triangulation is not locally " +
+                          "Delaunay on a curved region, which refinement cannot repair."));
+            }
 
             // A midpoint that is ALREADY a vertex is normal, not a defect: neighbouring
             // patches refine to different levels, so a coarse triangle's edge midpoint

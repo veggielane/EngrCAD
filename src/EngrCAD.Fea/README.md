@@ -33,6 +33,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `TetMeshOptions` | Quality target, sizing field, budgets, facet tags |
 | `TetMeshDiagnostics` | What the mesher did — Steiner counts, recovery rounds, volume residual |
 | `TetQuality` / `TetQualityReport` | Dihedral angles, radius-edge, aspect, sliver counts, histograms |
+| `TetSmoothing` / `TetSmoothOptions` / `TetSmoothReport` | Sliver removal: interior-vertex optimization-based smoothing, boundary and anisotropy frozen |
 | `TetGeometry` | Per-element measures: circumsphere, dihedrals, aspect, edge lengths |
 | `QuadraticTetMesh` | The 10-node (quadratic) layer, a pure function of the linear mesh |
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
@@ -146,23 +147,76 @@ patches on a 12×6 UV sphere). Deriving the boundary from a classification decid
 independently has neither problem: a flat tetrahedron has no volume, is never kept, and its
 two interior-facing faces fall out as the boundary with no tie to break.
 
-## What kind of surface it wants — the v1 limitation
+## What kind of surface it wants
 
 Boundary recovery is happy with **CAD tessellations**: B-Rep output, primitives, Surface Nets
 fields, anything with structured triangle rows. Every fixture in the test suite recovers in
 **zero rounds** — the input triangles are already faces of the Delaunay tetrahedralization.
 
-It is **not** yet happy with **irregular remeshed surfaces**. An isotropic remesh
-(`Remesher.Remesh`) produces near-uniform vertex spacing with no structure, and enough of its
-triangles fail to be Delaunay faces that red subdivision does not clear them — measured, a
-remeshed cylinder (at three parameter settings) and a remeshed sphere all exhaust the recovery
-budget. The mesher **refuses by name** rather than returning a mesh whose boundary is quietly
-not the input surface, and `RecoveryLimitationTests` pins that so the eventual fix is visible.
+**A remeshed surface is fine too, provided its triangulation is Delaunay-clean.** This section
+used to say recovery "is not yet happy with irregular remeshed surfaces" because near-uniform
+spacing has no structure. Measured, that was wrong in two directions (win-x64, Release):
 
-This is worth stating plainly because the intuitive advice is wrong: remeshing improves
-element quality in principle, but v1 recovery wants exactly the structure a remesh removes.
-Mesh the tessellation directly and use a sizing field to control element size. Lifting the
-restriction is the top backlog item.
+| input | worst angle | worst radius-edge | patches / triangles | rounds |
+| --- | ---: | ---: | ---: | ---: |
+| remeshed sphere, `PreventLongEdgeFlips`, t = 2 | 36.3° | 0.84 | 832 / 832 | **0** |
+| remeshed sphere, `PreventLongEdgeFlips`, t = 3 | 37.8° | 0.82 | 310 / 310 | **0** |
+| remeshed sphere, `PreventLongEdgeFlips`, t = 4 | 23.1° | 1.27 | 138 / 138 | **0** |
+| remeshed sphere, plain, t = 2 | 14.6° | 1.99 | — | *refused* |
+| remeshed sphere, plain, t = 4 | 27.9° | 1.07 | — | *refused* |
+| remeshed box, plain, t = 2 | 0.145° | 198 | 7 / 1638 | **0** |
+| remeshed cylinder, every setting tried | 0.013–7.7° | 3.7–2124 | — | *refused* |
+| structured cylinder (no remesh) | 3.74° | 7.66 | 50 / 188 | **0** |
+
+**A remesh is not the obstacle.** A remeshed sphere meshes in zero rounds at three target edge
+lengths with *one patch per triangle* — precisely the configuration the old explanation
+blamed. **Triangle quality is not the criterion either**: a box at a 0.145° worst angle and a
+radius-edge ratio of 198 meshes, while a sphere at 27.9° and 1.07 is refused, and the
+structured cylinder that recovers in zero rounds has worse triangles (3.74°, 7.66) than the
+remeshed sphere that does not.
+
+What decides it is whether the surface triangulation is **already the boundary of the Delaunay
+tetrahedralization of its own vertices**:
+
+- Where the surface is **flat**, a patch lets the triangulation choose its own diagonals, so
+  there is nothing to recover. A box is six or seven patches however badly it is triangulated,
+  which is why the 0.145° row passes.
+- Where it is **curved**, every triangle is its own patch and must appear *verbatim* as a
+  face — the requirement the patch abstraction exists to avoid, arriving through the back door
+  because curvature leaves it nothing to group. Refinement cannot manufacture that.
+
+The practical rule is one flag on the remesher. Its flip stage is valence-driven with **no
+length term**, so it can replace a Delaunay diagonal with a longer one, and a surface triangle
+that is not locally Delaunay cannot be a face of the tetrahedralization.
+`RemeshOptions.PreventLongEdgeFlips` stops that, and it is the difference between every
+"refused" and every "0" in the sphere rows above.
+
+**Recovery does not merely fail to clear the rest — it does not converge, in two distinct
+ways**, and both are now detected instead of being spent on:
+
+- A plainly remeshed **sphere** runs 6, 10, 11, 7, 5 offending faces and then sits at 5 for
+  every subsequent round — 5 at round 12 and still 5 at round 40, while 44 Steiner points a
+  round are spent. It is not a stall in the strict sense: the five faces differ each round,
+  each smaller than the last, until by round 40 their three vertices agree to **1e-11** on a
+  radius-10 sphere. Refinement is chasing its own tail into degeneracy.
+- A remeshed **cylinder** diverges outright: 162, 405, 869, 1810, 3570, roughly doubling per
+  round, with every offending face from round 1 onward touching a Steiner point the previous
+  round created — refinement manufacturing the defect it is refining for.
+
+So recovery stops as soon as the offending count has failed to improve on its best for five
+rounds (`NonConvergenceRounds`, the monotone-decrease rule the trimmed-face refiner already
+uses) and says that more rounds and a larger budget will not help. **The refusal also measures
+the input** — worst minimum angle, worst radius-edge ratio, and what fraction of triangles have
+no coplanar neighbour — and no longer advises "remesh the surface", which was backwards for the
+input that most often reaches it: `MeshPrimitives.Cylinder`'s n-gon caps triangulate as a
+one-corner fan at 3.74°, and remeshing that produces the 0.013°–7.7° rows above. Conforming to
+a 0.013° sliver is expensive by *theory*, not by implementation.
+
+What remains genuinely unsolved is the curved non-Delaunay case: a conforming Delaunay
+tetrahedralization of an arbitrary PLC needs protecting-ball segment and subfacet encroachment
+(Shewchuk's CDT construction, or Murphy–Mount–Gable), which would give a termination proof
+instead of a budget. That is the backlog item; red subdivision is not a weak version of it but
+a different thing that provably cannot reach it.
 
 ## Several materials in one model
 
@@ -231,6 +285,76 @@ is what governs the stiffness matrix's conditioning and is the number that sees 
 `RadiusEdgeRatio` defaults to exactly **2.0** because that is the bound below which Delaunay
 refinement is not guaranteed to terminate; smaller values are allowed, and the Steiner budget
 is what catches them.
+
+### Removing the slivers: `TetSmoothing`
+
+`TetSmoothing.Smooth(mesh)` is the post-pass that acts on what the second measure sees. It
+moves **interior** vertices to raise the worst dihedral angle, leaving the topology and the
+boundary exactly as they were.
+
+```csharp
+var tets     = TetMesher.Mesh(surface, new TetMeshOptions { RefineQuality = true, MaxElementSize = 2 });
+var smoothed = TetSmoothing.Smooth(tets, null, out var report);
+Console.WriteLine(report);   // min dihedral 0.00 -> 17.00 deg, slivers 399 -> 0, drift 7.8e-15
+```
+
+Measured on a 20³ box (win-x64, i9-9900K, Release):
+
+| target size | elements | ms | min dihedral | mean min-dihedral | slivers < 10° | volume drift |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3.0 | 15 834 | 3 947 | 0.00° → **13.86°** | 42.4° → 39.5° | 190 → **0** | 1.3e-14 |
+| 2.0 | 40 593 | 4 924 | 0.00° → **17.00°** | 44.4° → 41.2° | 399 → **0** | 7.8e-15 |
+| 1.5 | 103 103 | 12 865 | 0.01° → **10.07°** | 43.6° → 39.9° | 1 149 → **0** | 2.1e-14 |
+
+**Every sliver goes, at every size — on this fixture, and the residual is INPUT-DEPENDENT.**
+A 20³ box whose faces are triangulated by the B-Rep tessellator instead
+(`Shape.Box(20, 20, 20).ToMesh()`, which is what the docs page measures) starts from the
+identical 190 slivers and ends with **2** rather than 0. A pattern search is a heuristic local
+optimizer, so a small difference in the input changes which candidate wins a near-tie and with
+it the whole path. Two things are worth naming as *not* the cause, because both were guessed
+first and both are wrong: it is not translation (the same primitive anchored at a corner and
+centred on the origin both reach 0) and not the build (Release and Debug agree bit for bit).
+Read the table as "essentially all" rather than as a guarantee — the pass promises a
+*deterministic* answer for a given input on a given build, not a sliver-free one, and the tests
+assert a strict decrease rather than zero for exactly that reason.
+
+Two further counterweights sit beside it. The **mean**
+minimum dihedral falls by 2–4°, because the objective is the worst incident angle and lifting
+it moves a vertex slightly away from what its other elements would have preferred — a real
+trade, and the right one when the worst element is what conditions the matrix. And it is
+**expensive**: on the 40 593-element box it costs 4.9 s against 504 ms to build the mesh, which
+is why it is a post-pass a caller asks for rather than something the mesher does.
+
+**Why smoothing rather than exudation.** The two standard answers are sliver exudation (a
+weighted-Delaunay perturbation, which changes the topology) and optimization-based smoothing
+(which moves points only). Only the second keeps every guarantee the mesher already makes
+without re-deriving any of them: the boundary is untouched so the surface-fidelity contract and
+the volume identity hold **by construction** (the drift column is pure round-off — mathematically
+the elements go on tiling the same region), the connectivity is untouched so nothing has to be
+re-classified or re-recovered, and every candidate position is accepted only if it leaves all
+incident elements strictly positively oriented **by the exact predicate**, so `TetMesh`'s
+orientation invariant is preserved rather than re-checked and hoped for. Exudation is the
+stronger technique and is still the filed next step; it is also the one that can invalidate all
+of that at once.
+
+**Three rules make it safe**, and the second is the one to know about:
+
+1. **Boundary vertices never move** — which is what makes the volume identity exact.
+2. **Vertices touching a deliberately anisotropic element never move.** A smoother that
+   "repairs" a boundary layer into isotropy would destroy the resolution the layer exists to
+   provide, so every vertex of an element stretched past
+   `TetQualityOptions.AnisotropyThreshold` is frozen and the report says how many. This
+   inherits the partition's honest limit: a layer element and an accidental sliver are
+   *affinely equivalent*, so freezing by measured stretch necessarily freezes accidental
+   stretched slivers too. Intent is not recoverable from geometry — the number is reported
+   instead of the problem being wished away.
+3. **A move must strictly improve, by a floor** — a monotone-increase rule, so the sweep
+   terminates and cannot oscillate.
+
+Deterministic throughout: ascending vertex order, a fixed direction table, a fixed halving
+stride schedule, no RNG and no parallelism, so two runs give bit-identical positions (asserted).
+The structural patch test still reproduces a constant-strain state to **3.9e-15** relative
+through a smoothed mesh, which is the check that nothing inverted or tore.
 
 **Refinement is not a quality option on curved bodies — it is what makes the mesh usable at
 all.** A tessellated sphere's vertices are *all exactly cospherical*, so a tetrahedralization
@@ -437,6 +561,17 @@ the linear mesh.
 - `TetGeometry`'s numbers are **measurements**, not decisions: no combinatorial branch in the
   mesher reads one. That separation is what lets the quality report be approximate without
   ever making the mesh wrong.
+- **The exact `InSphere` stage is where this project's allocation goes, and cospherical input
+  is the normal case rather than the hostile one.** `Predicates3d.InSphere` escalates to
+  `BigInteger` when its filter cannot settle the sign, which costs **9 229 ns and 5 698 bytes**
+  against **73 ns and 0.1 bytes** for a filtered call (win-x64, Release). A tessellated sphere's
+  vertices are *all* exactly cospherical, so it escalates 3.48 times per element and the exact
+  stage accounts for an estimated **58% of the mesher's total allocation** on a Ø20 sphere
+  (275 of 479 MB); a refined box escalates 0.30 times per element, for 34%.
+  `TetMeshDiagnostics.InSphereEscalations` reports it per run, and
+  `TetMesherBenchmark.InSphereExactStage_CostAndHowOftenItIsPaid` is the measurement. Fixing it
+  is a Core change (a pooled or fixed-width big integer, or Shewchuk's `insphereexact`
+  expansion form) and is filed in todo.md.
 
 # Structural analysis (linear static)
 

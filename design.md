@@ -320,10 +320,75 @@ failure rather than by design.
 
 **What is guaranteed and what is not.** Guaranteed: the boundary is the input surface, the
 volume identity holds to round-off, every element is positively oriented (checked exactly),
-output is deterministic, and every refusal names what failed. *Not* guaranteed: sliver-free
-elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityReport` reports
-minimum dihedral beside radius-edge and counts what the first measure cannot see. Sliver
-exudation is the named next step (todo.md).
+output is deterministic, and every refusal names what failed. *Not* guaranteed by the MESHER:
+sliver-free elements. Radius-edge bounds provably cannot exclude slivers, so `TetQualityReport`
+reports minimum dihedral beside radius-edge and counts what the first measure cannot see.
+
+**`TetSmoothing` is the post-pass that acts on it, and the choice of technique is the design
+decision.** The two standard answers are sliver *exudation* (a weighted-Delaunay perturbation,
+which changes the topology) and *optimization-based smoothing* (which moves points only). Only
+the second keeps every guarantee above without re-deriving any of them: the boundary is
+untouched, so the surface-fidelity contract and the volume identity hold **by construction**
+rather than by measurement (measured drift 7.8e-15 … 2.1e-14, pure round-off — mathematically
+the elements go on tiling the same region); the connectivity is untouched, so nothing has to be
+re-classified or re-recovered; and every candidate position is accepted only if it leaves all
+incident elements strictly positively oriented **by the exact predicate**, so `TetMesh`'s
+invariant is preserved rather than re-checked. Exudation is stronger and remains the filed next
+step; it is also the one operation that can invalidate all of that at once, which is why the
+weaker technique went first. Measured on a 20³ box: **every sliver removed** at three sizes
+(190 → 0, 399 → 0, 1 149 → 0) with the worst dihedral going 0.00° → 10–17°.
+
+**But the residual is INPUT-DEPENDENT, and that is the caveat to keep.** The same 20³ box with
+its faces triangulated by the B-Rep tessellator instead of by `MeshPrimitives.Box` starts from
+the identical 190 slivers and finishes with **2** rather than 0. A pattern search is a heuristic
+local optimizer: a small difference in the input changes which candidate wins a near-tie, and
+with it the whole path. Two candidate causes were guessed before measuring and both are wrong —
+it is not translation (the same primitive anchored at a corner and centred on the origin both
+reach 0) and not the build (Release and Debug agree bit for bit), and both negatives are pinned
+by test so the next reader does not re-guess them. So the guarantee on offer is *determinism for
+a given input on a given build*, not sliver-freeness, and the tests assert a strict decrease
+rather than zero because a fixture-specific zero is exactly the kind of claim that rots.
+
+Two further things about it are worth keeping. **The mean minimum dihedral FALLS by 2–4° while the
+worst rises**, because the objective is the worst incident angle and lifting it moves a vertex
+away from what its other elements would have preferred — a real trade, reported rather than
+buried, and the right one when the worst element is what conditions the matrix. And **a
+deliberate boundary layer is frozen, not repaired**: every vertex touching an element stretched
+past `TetQualityOptions.AnisotropyThreshold` is left alone, because a smoother that returns a
+layer to isotropy destroys exactly the resolution it exists to provide. That inherits the
+partition's honest limit unchanged — a layer element and an accidental sliver are affinely
+equivalent, so freezing by measured stretch necessarily freezes accidental stretched slivers
+too, and the count is reported instead of the ambiguity being wished away.
+
+**What recovery actually wants of its input — the filed limitation was wrong in two
+directions.** It read "recovery is not happy with an isotropic remesh, because near-uniform
+vertex spacing has no structure". Measured, a remeshed sphere meshes in **zero** recovery
+rounds at three target edge lengths once the remesh is Delaunay-clean, *with one patch per
+triangle* — the exact configuration the explanation blamed; and a remeshed box with a **0.145°**
+worst angle and a radius-edge ratio of **198** meshes while a remeshed sphere at **27.9°** and
+**1.07** is refused, so triangle quality is not the criterion either. The real condition is
+that the surface triangulation must **already be the boundary of the Delaunay tetrahedralization
+of its own vertices**. Where the surface is flat a patch absorbs any diagonal and there is
+nothing to recover; where it is curved every triangle is its own patch and must appear
+verbatim — *the requirement the patch abstraction exists to avoid, arriving through the back
+door because curvature leaves it nothing to group*. That is the honest statement of the gap,
+and it is why red subdivision is not a weak version of the textbook fix but a different thing:
+conforming to an arbitrary PLC needs protecting-ball segment and subfacet encroachment, which
+carries a termination proof where a budget carries none.
+
+Two consequences were landed rather than left implicit. **Non-convergence is detected instead
+of spent on**: the offending count failing to improve on its best for five rounds ends recovery
+with "more rounds and a larger budget will not help" — the monotone-decrease rule the
+trimmed-face refiner already uses. Note *why* the obvious identical-set stall test does NOT
+fire, because it is the interesting half: on a remeshed sphere the count sits at five from
+round 4 to round 40, but they are five *different* faces each round, each smaller than the last,
+until their three vertices agree to 1e-11 on a radius-10 sphere — refinement chasing its own
+tail into degeneracy, which a set comparison reads as progress. **And the refusal measures the
+input rather than blaming recovery**: it reports the worst minimum angle, the worst radius-edge
+ratio and the fraction of triangles with no coplanar neighbour, and it no longer says "remesh
+the surface", which was backwards for the input that most often reached it — `MeshPrimitives.Cylinder`'s
+n-gon caps triangulate as a one-corner fan at 3.74°, and every remesh of it tried lands between
+0.013° and 7.7°. Remeshing was *creating* the slivers it was being recommended as the cure for.
 
 ### Anisotropic boundary layers, and the three decisions in them
 

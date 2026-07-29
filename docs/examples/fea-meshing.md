@@ -264,6 +264,77 @@ something for it:
 
 A mesh with nothing stretched in it reports exactly what it always did, number for number.
 
+### Removing the slivers
+
+Bounding the radius-edge ratio is what Delaunay refinement can do, and it **provably** cannot
+exclude the sliver. `TetSmoothing.Smooth` is the post-pass that acts on what the dihedral
+measure sees: it moves **interior** vertices to raise the worst dihedral angle, leaving the
+topology and the boundary exactly as they were.
+
+```csharp run:fea-smoothing
+var surface = Shape.Box(20, 20, 20).ToMesh();
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 3.0,
+});
+
+var smoothed = TetSmoothing.Smooth(tets, null, out var report);
+Console.WriteLine(report);
+
+var before = TetQuality.Analyze(tets);
+var after = TetQuality.Analyze(smoothed);
+Console.WriteLine($"slivers {before.SliverCount} -> {after.SliverCount}, " +
+                  $"worst dihedral {before.MinDihedralDegrees:F2} -> {after.MinDihedralDegrees:F2} deg");
+
+// The worst element must improve and the sliver count must fall — and the volume must not
+// move, because the boundary never did.
+if (after.MinDihedralDegrees <= before.MinDihedralDegrees || after.SliverCount >= before.SliverCount)
+    throw new Exception("smoothing should raise the worst dihedral and remove slivers");
+if (report.VolumeChangeRelative > 1e-12)
+    throw new Exception("smoothing must not move the volume");
+```
+
+Measured on a 20³ box (win-x64, Release):
+
+| target size | elements | ms | min dihedral | mean min-dihedral | slivers < 10° | volume drift |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 3.0 | 15 834 | 3 947 | 0.00° → **13.86°** | 42.4° → 39.5° | 190 → **0** | 1.3e-14 |
+| 2.0 | 40 593 | 4 924 | 0.00° → **17.00°** | 44.4° → 41.2° | 399 → **0** | 7.8e-15 |
+| 1.5 | 103 103 | 12 865 | 0.01° → **10.07°** | 43.6° → 39.9° | 1 149 → **0** | 2.1e-14 |
+
+Every sliver goes at every size on that fixture — but **the residual is input-dependent**, and
+the snippet above is the demonstration: it is the same 20³ box with its faces triangulated by
+the B-Rep tessellator rather than by `MeshPrimitives.Box`, it starts from the identical 190
+slivers, and it ends with **2** rather than 0. A pattern search is a heuristic local optimizer,
+so a small difference in the input changes which candidate wins a near-tie and with it the whole
+path. (Two things that are *not* the cause, both guessed first and both wrong: translation — the
+same primitive at a corner and at the origin both reach 0 — and the build, since Release and
+Debug agree bit for bit.) Read the table as "essentially all" rather than as a guarantee: what
+the pass promises is a *deterministic* answer for a given input on a given build, not a
+sliver-free one.
+
+Two further counterweights belong beside that. The **mean**
+minimum dihedral falls by 2–4°, because the objective is the *worst* incident angle and lifting
+it moves a vertex slightly away from what its other elements would have preferred; that is the
+right trade when the worst element is what conditions the matrix, but it is a trade. And it is
+**expensive**: 4.9 s against 504 ms to build the 40 593-element mesh, which is why it is
+something you ask for rather than something the mesher does.
+
+The volume drift column is pure round-off, and that is structural rather than lucky: the
+boundary never moves, so the elements go on tiling the same region and the volume identity holds
+by construction. Every candidate position is also checked with the **exact** orientation
+predicate before it is accepted, so the mesh's positive-orientation invariant is preserved
+rather than re-checked and hoped for.
+
+> [!IMPORTANT]
+> **A deliberate boundary layer is never "repaired".** Every vertex touching an element
+> stretched past `TetQualityOptions.AnisotropyThreshold` is frozen, and
+> `TetSmoothReport.FrozenAnisotropicVertices` counts them. Smoothing a layer back towards
+> isotropy would destroy exactly the resolution it exists to provide. This inherits the
+> partition's honest limit: a layer element and an accidental sliver are affinely equivalent,
+> so freezing by measured stretch necessarily freezes accidental stretched slivers too.
+
 > [!NOTE]
 > A legitimate layer element and an accidental sliver are **affinely equivalent** — the stack
 > element is four nearly-coplanar points too — so no purely local geometric measure separates
@@ -481,18 +552,74 @@ deterministic walk, and there is no RNG anywhere. Two runs on the same input pro
 bit-identical output, including the order of the elements — so a mesh can be a regression
 baseline.
 
-## What kind of surface it wants (a real v1 limitation)
+## What kind of surface it wants
 
 Boundary recovery is happy with **CAD tessellations**: B-Rep output, primitives, Surface Nets
 fields, anything with structured triangle rows. Every fixture on this page recovers in
 **zero rounds** — the input triangles are already faces of the Delaunay tetrahedralization.
 
-It is **not** yet happy with **irregular remeshed surfaces**. An isotropic remesh
-([remeshing](remeshing.md)) produces a triangulation whose vertices sit at near-uniform
-spacing with no structure, and enough of its triangles fail to be Delaunay faces that
-red-subdivision does not clear them — measured, a remeshed cylinder and a remeshed sphere
-both exhaust the recovery budget. This is the intuitive advice being wrong: remeshing helps
-*element quality* in principle, but v1 recovery wants the structure it removes.
+**A remeshed surface is fine too, as long as its triangulation is Delaunay-clean.** That
+sentence used to read "recovery is not yet happy with irregular remeshed surfaces", and it was
+wrong in two directions. Measured:
+
+| input | worst angle | worst radius-edge | patches / triangles | recovery rounds |
+| --- | ---: | ---: | ---: | ---: |
+| remeshed sphere, `PreventLongEdgeFlips` | 36.3° | 0.84 | 832 / 832 | **0** |
+| remeshed sphere, plain | 14.6° | 1.99 | — | *refused* |
+| remeshed sphere, plain, coarser | 27.9° | 1.07 | — | *refused* |
+| remeshed box, plain | 0.145° | 198 | 7 / 1638 | **0** |
+| structured cylinder (no remesh) | 3.74° | 7.66 | 50 / 188 | **0** |
+
+Two things fall out of that table. A remesh is **not** the obstacle — the sphere meshes in zero
+rounds at three different target edge lengths with *one patch per triangle*, which is exactly
+the configuration the old explanation blamed. And triangle **quality** is not the criterion
+either: the box at a 0.145° worst angle meshes, while a sphere at 27.9° is refused.
+
+What decides it is whether the surface triangulation is **already the boundary of the Delaunay
+tetrahedralization of its own vertices**:
+
+- Where the surface is **flat**, a patch (a maximal coplanar group) lets the triangulation pick
+  its own diagonals, so there is nothing to recover — a box is six or seven patches however
+  badly it is triangulated.
+- Where it is **curved**, every triangle is its own patch and must appear *verbatim* as a face.
+  Refinement cannot manufacture that, so a surface triangle that is not locally Delaunay is a
+  permanent failure rather than a slow one.
+
+The practical rule is one flag. The remesher's flip stage is valence-driven with **no length
+term**, so it can replace a Delaunay diagonal with a longer one;
+[`RemeshOptions.PreventLongEdgeFlips`](remeshing.md) stops that, and with it a remeshed curved
+surface tetrahedralizes with no recovery at all.
+
+```csharp run:fea-remesh-clean
+var raw = Shape.Sphere(10).ToMesh(new MeshQuality { SegmentsPerCircle = 32 });
+
+// Delaunay-clean remesh: the flip stage may not lengthen an edge.
+var clean = Remesher.Remesh(raw, new RemeshOptions(TargetEdgeLength: 3.0)
+{
+    Iterations = 20,
+    FeatureAngleDegrees = 0,
+    PreventLongEdgeFlips = true,
+});
+
+var tets = TetMesher.Mesh(clean.Mesh, null, out var report);
+Console.WriteLine($"{tets.TetCount} elements, {report.RecoveryRounds} recovery round(s), " +
+                  $"{report.SurfacePatches} patches for {clean.Mesh.Triangulated().FaceCount} triangles");
+if (report.RecoveryRounds != 0)
+    throw new Exception("a Delaunay-clean remesh should need no recovery");
+```
+
+### When it does refuse
+
+A refusal now measures the input and says which of the two causes it is — and it no longer
+advises "remesh the surface", which was backwards for the input that most often reached it.
+`MeshPrimitives.Cylinder`'s n-gon caps triangulate as a one-corner fan (3.74° before any
+remeshing), and remeshing that makes it *worse*: across six settings the worst angle lands
+between 0.013° and 7.7° with a radius-edge ratio up to 2124. Conforming a Delaunay
+tetrahedralization to a 0.013° sliver is expensive by theory, not by implementation.
+
+Recovery also **stops as soon as it is not converging** rather than spending everything it was
+allowed: if the offending-face count has not improved on its best for five rounds, more rounds
+and a bigger Steiner budget provably will not help, and the message says so.
 
 ```csharp run:fea-remesh-limitation
 var raw = Shape.Cylinder(10, 20).ToMesh(new MeshQuality { SegmentsPerCircle = 48 });
@@ -505,7 +632,8 @@ try
 }
 catch (TetMeshException ex)
 {
-    // It refuses by name rather than returning a mesh whose boundary is not the surface.
+    // It refuses by name, reporting the INPUT's own worst triangle rather than blaming
+    // recovery — and never suggesting the remesh that produced the slivers.
     Console.WriteLine(ex.Message);
 }
 
@@ -516,5 +644,6 @@ if (report.RecoveryRounds != 0)
     throw new Exception("a CAD tessellation should need no recovery");
 ```
 
-So: mesh the tessellation directly, and reach for a sizing field rather than a remesh when
-you want to control element size. Lifting the restriction is the top item in the backlog.
+So: mesh the CAD tessellation directly where you have one, remesh with
+`PreventLongEdgeFlips` where you need a better surface, and reach for a sizing field rather
+than a remesh when all you want is to control element size.
