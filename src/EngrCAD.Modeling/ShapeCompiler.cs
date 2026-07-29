@@ -128,6 +128,22 @@ internal static class ShapeCompiler
                         : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
                             "a non-uniform scale or shear does not commute with the loft's parameterization"));
                 break;
+            case SheetMetalShape:
+                // Rigid + uniform only: thickness, bend radius and flange length are all
+                // LENGTHS, so a shear or non-uniform scale would give the sheet a
+                // different thickness in every direction and the bend a different radius
+                // round its own arc.
+                entries.Add(m.TryDecomposeRigidUniformScale(out _, out _, out _)
+                    ? new ConversionEntry(shape.Describe(), NodeSupport.Native,
+                        "base flange extruded, each bend welded in as topology (SheetMetalSurgery); flange " +
+                        "geometry validates at lowering")
+                    : new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
+                        "a sheet's thickness, bend radius and flange lengths are LENGTHS, so only a rigid "
+                        + "placement with a uniform scale re-places them; a shear or non-uniform scale would "
+                        + "give the sheet a different thickness in every direction, and a MIRROR would need "
+                        + "the flange tree rebuilt the other way round (a follow-up, filed with loft/draft/"
+                        + "shell)"));
+                break;
             case LoftShape:
                 // Rigid + uniform only: the loft's chord-length parameterization and
                 // least-twist alignment are metric, so a shear would skin DIFFERENT
@@ -299,7 +315,8 @@ internal static class ShapeCompiler
                     "twisted-extrusion section sweep wrapped in a mesh SDF"));
                 break;
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
-                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape:
+                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape
+                or SheetMetalShape:
                 entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Bridged,
                     "tessellated B-Rep wrapped in a mesh SDF"));
                 break;
@@ -590,6 +607,28 @@ internal static class ShapeCompiler
                 var path = IsIdentity(m) ? sweep.Path : new TransformedCurve(sweep.Path, m);
                 return SolidFactory.Sweep(
                     TransformProfile(sweep.Profile!, m), path, TransformProfiles(sweep.Holes, m));
+            }
+
+            case SheetMetalShape sheet:
+            {
+                Decompose(m, shape, out _, out _, out double sheetScale); // rigid + uniform only
+                var body = sheet.Body;
+                var effective = m * body.Plane.ToMatrix();
+                var (baseOuter, baseHoles) = body.BaseSketch.ToProfiles();
+                var flat = SolidFactory.Extrude(
+                    TransformProfile(baseOuter, effective),
+                    effective.TransformVector((0, 0, body.Spec.Thickness)),
+                    TransformProfiles(baseHoles, effective));
+                // The base's TOP face is where every flange's bend line is quoted from,
+                // and the sheet frame's own directions come straight off the placed plane
+                // so nothing is re-derived.
+                return body.BuildBrep(
+                    flat,
+                    new SheetMetalBody.SheetFrame(
+                        effective.TransformPoint((0, 0, body.Spec.Thickness)),
+                        effective.TransformVector((1, 0, 0)).Normalized(),
+                        effective.TransformVector((0, 1, 0)).Normalized()),
+                    sheetScale);
             }
 
             case LoftShape loft:
@@ -898,7 +937,8 @@ internal static class ShapeCompiler
                     rotation, translation, scale);
 
             case ExtrudeShape or RevolveShape or SweepShape or RimShape or LoftShape
-                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape:
+                or DraftShape or BrepShellShape or RoundEdgesShape or TwistExtrudeShape
+                or SheetMetalShape:
             case SourceShape { Geometry: BrepSolid }:
                 return BridgeToSdf(shape, m, quality);
 

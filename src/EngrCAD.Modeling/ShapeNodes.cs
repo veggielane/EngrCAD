@@ -762,6 +762,19 @@ internal sealed class MotionSweepShape(Shape child, IReadOnlyList<Matrix4d> pose
     internal override string Describe() => $"SweptOver({poses.Count} poses)";
 }
 
+/// <summary>
+/// A folded sheet-metal part (<see cref="SheetMetalBody"/>). A graph LEAF: its inputs are
+/// a sketch, a plane and a flange tree, so an affine placement bakes into them exactly.
+/// The folded geometry is built by direct topology surgery — a bend meets both sheets
+/// TANGENTIALLY, which is degenerate boolean input and has no boolean to do anyway, since
+/// every face is a closed form (see <c>SheetMetalSurgery</c>).
+/// </summary>
+internal sealed class SheetMetalShape(SheetMetalBody body) : Shape
+{
+    public SheetMetalBody Body => body;
+    internal override string Describe() => body.Describe();
+}
+
 internal sealed class TransformShape(Shape child, Matrix4d matrix) : Shape
 {
     public Shape Child => child;
