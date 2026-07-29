@@ -700,7 +700,20 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
   recovery — but the factorization is 99% of the time on exactly the models where anyone
   would reach for it, so the parameter would advertise a cancellation that cannot cancel
   the slow part. An API that looks like it works is worse than one that is absent.
-- [ ] **FEA: an optional `ILogger` on the solve — an OWNER'S decision, surfaced not taken.**
+- [ ] **FEA: an optional `ILogger` on the solve — RULED PERMITTED, do the `ProgressCancel`
+  item above first.** Recorded here so it is not escalated a third time. The rule as it
+  now stands does not say "Viewer and Mcp only" — the app-layer work already relaxed it to
+  **"extends inward on a weighed per-project basis"**, and `EngrCAD.Interop` and
+  `EngrCAD.BRep` both carry the reference (event IDs 80/90). Weighing Fea by that same
+  rule: it is a long-running operation with nothing above it to report on its behalf,
+  which is exactly the condition the Interop/BRep grants were made for, so it qualifies.
+  What does NOT follow is that it should be done now — cancellation beats narration for
+  the case that prompted this, so land `SparseCholesky`'s `ProgressCancel` first and only
+  add the logger if a genuine reporting need survives it. Core, Mesh and Implicit stay
+  dependency-free: each still has a consumer seam above it, which is the actual test the
+  rule applies. The two agents were right to surface rather than decide; the answer is
+  that the current rule already covers it.
+  <br>Original framing, kept because it states the question well:
   The other candidate pre-solve channel, and the precedent is real: Interop and BRep took
   the `Microsoft.Extensions.Logging.Abstractions` reference for exactly this ("the long
   operations accept an optional trailing `ILogger`", event IDs 80/90). What makes it
