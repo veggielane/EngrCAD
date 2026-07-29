@@ -1300,6 +1300,18 @@ var pulledApart = stack.Flatten(explode: 1);  // or tab.Instances(0.4), scene.In
   origin before composing, so nested offsets compose: a sub-assembly moves as a unit
   and its own occurrences move within it. At factor 0, or with no offset, the frame is
   returned untouched — an un-exploded flatten is bit-for-bit what it always was.
+- `Occurrence.ExplodePath` adds **dogleg waypoints** between the assembled position and
+  the offset (empty = the straight line, so nothing changes for an assembly that never
+  sets one). Assembly instructions want it: a screw comes straight OUT of its bore
+  before it moves aside, because a diagonal path reads as "insert it at an angle" and a
+  fitter will try. The factor maps to **arc length** along the polyline, not to segment
+  index, so the part moves at constant speed through the corner instead of lingering on
+  the shorter leg — the whole point of a path being a path. `ExplodeDisplacement(factor)`
+  is the ONE rule (exact zero at 0 and exactly the offset at 1, by decision rather than
+  by arithmetic that lands there), so the flatten walk, an `ExplodeTrack` and a future
+  explode-path renderer cannot disagree about where a part is halfway out. Paths
+  round-trip through the document format and are written only when set, so existing
+  files stay byte-identical.
 - **The instance count and order are independent of the factor.** That is what lets the
   viewer animate it with `ViewportControl.SetInstancePoses` — matrices only, no GPU
   buffer touched — so N instances keep sharing one mesh, one buffer set and one pick BVH

@@ -126,6 +126,37 @@ references — is identical at every factor, which is what lets the viewer anima
 slider by swapping matrices alone: no buffer is touched, one mesh and one pick BVH stay
 shared, and picking follows for free.
 
+### Dogleg paths
+
+A straight diagonal is fine for a picture and wrong for an instruction: it reads as
+"insert it at an angle", and a fitter will try. `Occurrence.ExplodePath` puts waypoints
+between the assembled position and the offset, so a part comes straight out of its bore
+before it moves aside:
+
+```csharp run:assembly-explode-path
+var stack = new Assembly("stack");
+stack.Add(new Part("body", Shape.Box(20, 20, 8)));
+var lid = stack.Add(new Part("lid", Shape.Box(20, 20, 3).Translate(0, 0, 8)));
+
+lid.ExplodeOffset = new Vector3d(30, 0, 40);   // where it ends up
+lid.ExplodePath.Add(new Vector3d(0, 0, 40));   // ... via straight up
+
+// The factor maps to ARC LENGTH, so the part crosses the corner at constant speed:
+// legs of 40 and 30 make 70, and half way is 35 along -- still on the vertical leg.
+var half = lid.ExplodeDisplacement(0.5);
+if (Math.Abs(half.X) > 1e-9 || Math.Abs(half.Z - 35) > 1e-9)
+    throw new Exception($"half way should still be going up, got {half}");
+
+// The ends stay exact whatever the path.
+if (lid.ExplodeDisplacement(0) != Vector3d.Zero) throw new Exception("0 is assembled");
+if (lid.ExplodeDisplacement(1) != lid.ExplodeOffset) throw new Exception("1 is the offset");
+```
+
+An empty path is the straight line, so nothing changes for an assembly that never sets
+one. `ExplodeDisplacement(factor)` is the single rule the flattening walk, an
+`ExplodeTrack` [animation](animation.md) and any future leader-line renderer all read,
+and paths survive a [document](documents.md) round trip.
+
 ## Bills of material
 
 `Bom.For` counts occurrences per distinct `Part` over the same flattening, so nested

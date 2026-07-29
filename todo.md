@@ -510,10 +510,29 @@ frame), and `EngrCad.RenderToImage(scene, animation, t, ...)` + the MCP `screens
   track (two full-instance-list producers cannot compose; whose matrices win?).
   Composing *relative displacement* tracks (mechanism pose ∘ explode displacement on
   top) is the principled extension — displacements compose where absolute pose lists do
-  not.
-- [ ] **Explode motion along the explode PATH** — `ExplodeTrack` lerps straight along
-  `ExplodeOffset`; assembly instructions sometimes want dogleg paths (out, then over).
-  Ties into the explode-path renderer item under Assemblies follow-ups.
+  not. **Assessed while the explode PATH landed; the shape and the one hard part.** The
+  extension is a `DisplacementTrack` returning a per-instance DELTA (matched by
+  occurrence path, like everything else here) that `Animation.At` post-multiplies onto
+  whatever the pose track produced, with N of them allowed because deltas compose. Two
+  of the three current tracks convert cleanly — `ExplodeTrack` already computes a
+  displacement per occurrence (`Occurrence.ExplodeDisplacement`) and merely adds it to a
+  frame, so it *is* a displacement track wearing an absolute-pose interface. The hard
+  one is `MechanismTrack`: its "delta" is only meaningful against the assembled pose it
+  was swept from, so composing an explode on top of a running mechanism displaces parts
+  along axes the mechanism has already rotated — which is either exactly right (the
+  exploded view of a posed mechanism) or exactly wrong (the offsets were designed in the
+  assembled configuration), and the answer is a product decision, not a derivation. Do
+  not build it until a concrete clip needs it and can settle that question; the honest
+  interim is that `ExplodeTrack.Stagger` already sequences within one track, which is
+  what most assembly animations actually want.
+- [x] **Explode motion along the explode PATH** — `Occurrence.ExplodePath` carries dogleg
+  waypoints (out, then over), with the factor mapped to ARC LENGTH so a part crosses the
+  corner at constant speed; `ExplodeDisplacement(factor)` is the one rule the flatten
+  walk, `ExplodeTrack` and a future explode-path renderer all read. Paths persist in the
+  document format and are written only when set, so existing files stay byte-identical.
+  The renderer half (the dashed leader lines drafting standards draw between an exploded
+  part and its seat) is still open under Assemblies follow-ups — and now has a path to
+  draw rather than a straight line to assume.
 - [ ] **WebP animation** needs a VP8/VP8L encoder — not something to hand-roll; it
   means taking a dependency (libwebp or a managed port). Worth it only if the payload
   difference matters for the docs site (the committed APNGs are the size pressure to
@@ -709,6 +728,35 @@ export — is recorded in CLAUDE.md):
   angle + max chord deviation, per-solid resolution driving mesh AND feature edges);
   the follow-on is re-resolving against the on-screen pixel size of a radius when the
   camera zooms, which needs re-tessellation plumbing in the viewer.
+  **Assessed; the criterion is the easy half and the PLUMBING is the item.** Deriving
+  the target is one line — a chord deviation of half a device pixel at the current
+  camera, i.e. `deviation = 0.5 * worldPerPixel(distance, fov, viewportHeight)` fed to
+  the existing `TessellationQuality.MaxChordDeviation` — and `Part.GetMesh(quality)`
+  already re-tessellates for a different criterion. What is missing, and what makes this
+  a real piece of work rather than a knob:
+  (a) **A re-tessellation must not run on the render thread and must not run per frame.**
+  It needs `TabMeshLoader`'s generation-token discipline (a zoom that supersedes an
+  in-flight re-mesh must not land) plus hysteresis — re-mesh on a factor-of-two change in
+  the criterion, not on every wheel notch, or a drag queues dozens of tessellations.
+  (b) **Every derived cache keys off the mesh**: feature edges, the pick BVH and the
+  ambient-occlusion bake are all per-mesh, so a re-tessellation invalidates three
+  expensive things. The AO bake is 12.3 s on the demo scene, which alone rules out
+  re-baking per zoom level — the honest v1 keeps the coarse bake and accepts that
+  occlusion is one level behind, or caps adaptivity to parts under the AO opt-out
+  threshold.
+  (c) **`Part.TryGetSolid` is the saving grace**: the B-Rep lowering is cached and
+  criterion-independent, so a re-tessellation is the tessellate half only — which is
+  what makes this affordable at all (measured elsewhere: lowering dominates a Shape
+  part's meshing).
+  (d) **The oracle is awkward**: the docs-PNG byte comparison cannot see this (renders
+  are one-shot at a fixed camera), so it needs its own test — mesh a large-radius part
+  at two camera distances and assert the segment counts differ in the direction the
+  criterion predicts, plus that a zoom back out does not *coarsen* below the quality
+  floor mid-session (a part that visibly loses detail when you pull back reads as a bug
+  even when it is the criterion working).
+  Worth about a day and a half. Not blocked on anything; deliberately not started in a
+  sweep, because a background re-mesh triggered by camera motion is exactly the kind of
+  feature that is fine in every test and janky in the hand.
 - [ ] **Debug-modifier follow-ups** (v1 ✅ landed — `Part.Ghost`/`Hidden`/`Isolated`
   + `DebugFilter` shared by window/offscreen/exports/MCP; `#` highlight deliberately
   stays the selection mechanism): web viewport honors Ghost (EffectiveDisplayMode)
@@ -1218,6 +1266,17 @@ honest no) is recorded in design.md §6b with the comparison committed as
   toggle (or per-part `DisplayMode` addition) with 2–3 built-in analytic matcaps;
   texture-based custom matcaps only if a color image reader lands for other reasons.
   Verify with the docs-PNG byte-compare discipline (default look must not move).
+  **Re-assessed this sweep and still not started, with the reason sharpened.** The
+  analytic form is genuinely small — two or three Gaussian lobes over the view-space
+  normal, ~15 lines in `ViewerShaders.MeshFragment` behind a `uMatcap` selector — but
+  it lands in the ONE file all three front ends compile, so the risk is not the shader,
+  it is that a mistake there is invisible until 100 docs PNGs move. The safe order is:
+  add the selector defaulting to 0 (the current lighting) and prove the byte comparison
+  is untouched FIRST, as its own commit; then add lobes behind non-zero values in a
+  second. That also settles where the toggle lives: not in `ViewStyle` (which is about
+  what is drawn — points, lines, fills — while a matcap is about how a fill is *lit*),
+  so a separate `EngrCadOptions.Shading` + a toolbar dropdown, with per-part override
+  deliberately NOT offered in v1 (a scene lit two ways reads as a rendering bug).
 
 ## Blazor web viewer
 
@@ -1409,6 +1468,23 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   via the window's next frame. Returning the PNG as an MCP image block needs a
   completion signal from the render pass back to the RPC thread (the status callback
   carries the path today); worth it if assistants use the tool blind.
+  **Assessed; the shape, and why it is more than plumbing.** `ViewportControl.SaveScreenshot`
+  arms a capture and the render pass performs it on its NEXT frame, so the RPC thread has
+  no edge to wait on — it currently returns as soon as the request is armed and the path
+  is a promise, not a fact. The fix is a `TaskCompletionSource` (or a
+  `ManualResetEventSlim`) completed from the render pass after `glReadPixels`, awaited by
+  the RPC handler with a timeout; the bridge then reads the file and returns an image
+  block exactly as headless `screenshot` does. Three details decide whether it is
+  correct: the completion must fire from inside the render pass and NOT from the status
+  callback (which reports the path and is posted separately, so it can run before the
+  bytes are on disk); the wait must have a deadline, because a minimised or occluded
+  window may not render for a long time and a hung RPC connection is worse than a path;
+  and a window that never renders should return the honest "no frame was produced"
+  rather than a stale file. Small — perhaps 40 lines across `ViewportControl`,
+  `ViewportRemoteViewer` and `ViewerTools` — but it is genuinely render-thread work, and
+  it cannot be tested by the headless socket harness that covers the rest of the bridge
+  (the stub viewer has no render pass), so it lands with the windowed manual pass above
+  or not at all.
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
 - [ ] **`screenshot`'s `t` covers the animation; the RPC bridge's `viewer_screenshot`
@@ -1481,12 +1557,39 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   expand/collapse, retro-assigned palette colors) — true GPU instanced drawing (matrix
   buffer, one draw per part), per-instance color/display-mode overrides, an
   **explode-path renderer** (the dashed leader lines drafting standards draw between an
-  exploded part and its seat), and **flexible sub-assemblies**: a deep mate target
-  inside a multiply-placed sub-assembly is refused today because its internal frame is
-  one shared object — per-instance internal DOF (Onshape's "flexible" instances) needs
-  instance-specific frame overlays on the flatten seam, a real design task. Mechanisms
-  (above) can now assume cross-level mates exist: a linkage whose members are
-  sub-assemblies is jointable via occurrence paths.
+  exploded part and its seat — and `Occurrence.ExplodePath` now gives it a real path to
+  draw rather than a straight line to assume), and **flexible sub-assemblies**: a deep
+  mate target inside a multiply-placed sub-assembly is refused today because its
+  internal frame is one shared object. Mechanisms (above) can now assume cross-level
+  mates exist: a linkage whose members are sub-assemblies is jointable via occurrence
+  paths.
+  **Flexible sub-assemblies, assessed — this is the big one, and it is a DOCUMENT-MODEL
+  change rather than a solver change.** The refusal is honest and structural:
+  `Occurrence.SubAssembly` points at a shared `Assembly` object, and that assembly's own
+  occurrences carry `Frame3d`s, so two placements of one sub-assembly necessarily agree
+  about every internal pose. Onshape's answer is per-instance internal state, and the
+  seam it has to attach to here is `Assembly.Flatten` — the ONE walk every consumer sees
+  (viewers, exporters, BOM, mates, mechanisms, animation). Three candidate shapes, with
+  what each costs:
+  (a) **Deep-copy on flexibility** — mark an occurrence flexible and clone its
+  sub-assembly. Simplest, and wrong: it breaks part IDENTITY (`Scene.AllParts` dedupes by
+  reference, so a cloned subtree would mesh and upload twice) and the BOM would
+  double-count.
+  (b) **A per-occurrence frame OVERLAY** — `Occurrence.Overrides: Dictionary<string,
+  Frame3d>` keyed by the relative occurrence path, consulted by `FlattenInto` as it
+  descends. Preserves identity, is additive to the format, and is a few lines in the
+  walk. The cost lands on everything that WRITES a frame: the mate solver's variables are
+  occurrence frames, so solving inside a flexible instance must write to the overlay
+  rather than to the shared occurrence, which means `MateSolver` needs to address "the
+  frame of THIS placement of that occurrence" — a path, not an object. That is the real
+  work, and it is the same change `MateRef` would need.
+  (c) **Instance-level document objects** (a first-class `AssemblyInstance` with its own
+  occurrence list) — the most general and the most disruptive; it changes what an
+  assembly IS.
+  Recommendation: **(b)**, and only when a real model needs it. Roughly two to three days
+  with the mate-solver addressing change, and the test that matters is not "it moves" but
+  that two placements of one sub-assembly can hold DIFFERENT internal poses while still
+  sharing one `Part`, one mesh and one BOM line.
 - [ ] **Standard component library — remaining fidelity** (breadth landed: ISO 7380
   button, ISO 10642 csk, ISO 4032 nuts, ISO 7089 washers, 60x deep groove bearings,
   the opt-in exact hex socket on `CapScrew`, and `PlaceThrough(..., anchorInto:)`
