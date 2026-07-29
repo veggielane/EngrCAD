@@ -2047,14 +2047,50 @@ flags; `ToText()` is the aligned table the viewer's **Check** button shows, and
 
 ## 2D interchange (DXF & SVG)
 
-`DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE with
-layers): `Add(sketch, layer)` writes lines and arcs **exactly** (LWPOLYLINE bulge =
-tan(sweep/4) is an exact arc encoding; full-circle loops become CIRCLE; cubic béziers
-flatten at a stated chord tolerance — the one lossy mapping), and `ToSketches(out
-diagnostics)` comes back: closed polylines and circles directly, loose LINE/ARC
-entities chained end-to-end at the weld tier, anything unclosable *reported*, never
-invented (the `MeshReadResult` convention). Loop nesting is deliberately the caller's
-decision on import. `SvgDrawing` writes drawings from `Shape.Section`/`Silhouette`
+`DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE / SPLINE /
+TEXT with layers): `Add(sketch, layer)` writes lines and arcs **exactly** (LWPOLYLINE
+bulge = tan(sweep/4) is an exact arc encoding; full-circle loops become CIRCLE), and
+`ToSketches(out diagnostics)` comes back: closed polylines and circles directly, loose
+LINE/ARC/SPLINE entities chained end-to-end at the weld tier, anything unclosable
+*reported*, never invented (the `MeshReadResult` convention). Loop nesting is deliberately
+the caller's decision on import.
+
+**Cubics have an exact route** (`DxfCurveMode.Spline`): a cubic Bézier IS a clamped
+degree-3 B-spline with four control points, so a SPLINE entity carries one with nothing
+approximated, and the area of a béziered profile survives a round trip to full precision
+where the default flattening manages the chord tolerance. The cost is structural rather
+than numerical and is stated instead of hidden: a loop containing a cubic arrives as a
+CHAIN (LWPOLYLINE runs plus one SPLINE per cubic) rather than one closed polyline, because
+DXF's polyline vocabulary has no cubic vertex — the reader re-closes it by endpoint. **A
+sketch with no cubics writes byte-for-byte the same file under either mode**, which is
+what makes the option safe to reach for and is asserted as a string comparison.
+
+Reading is deliberately NARROWER than writing: degree 1 (a polyline) and non-rational
+degree 3 already in Bézier form (clamped ends, interior knots of multiplicity 3 — so the
+control points split four at a time with nothing computed) convert exactly; a **rational**
+spline has no polynomial cubic form and a general B-spline needs knot-insertion Bézier
+decomposition, and both are REPORTED by name rather than sampled. The entity list is what
+the FILE says; the sketch list is what this kernel can carry exactly, and keeping the two
+apart is what keeps "sketches carry nothing flattened" true. Knot-multiplicity tests are
+**exact comparisons**, not tolerant ones: a knot vector is a list a writer either repeated
+or did not, and a tolerance would accept a curve merely NEARLY in Bézier form and then
+split it at the wrong places.
+
+**Units are declared and honoured** (`DxfDocument.Units`, `$INSUNITS`, default
+millimetres). This is the same duty the LTYPE table has, and it was learned the same way:
+a file that does not say what its numbers mean leaves every reader to guess. On load the
+declaration is honoured rather than merely reported — an inch file is scaled into
+millimetres and comes back LABELLED millimetres, so re-saving it is correct rather than
+declaring inches over millimetre coordinates, with the original unit and factor in
+`Diagnostics` (which is where "what the reader did" belongs; it is not a property that
+could round-trip). `Unitless` is the file's honest "no claim" and is never scaled —
+inventing a factor there would be the silent mis-scaling the feature exists to prevent,
+the `IgesReader` unit-flag lesson. One detail with teeth: a rescale moves VERTICES and
+leaves BULGES alone, because a bulge is tan(sweep/4) — an angle, invariant under a uniform
+scale — and scaling it too would reshape every arc; the test asserts the area scales by
+exactly the square of the factor, which only holds if the sweeps survived.
+
+`SvgDrawing` writes drawings from `Shape.Section`/`Silhouette`
 regions and exact sketches (SVG `A`/`C` commands — nothing flattened), with
 **line-class-driven styling** (`SvgLineClass.Visible`/`Hidden`/`Section` → solid /
 dashed / dash-dot groups per layer, the build123d edge-classification lesson);

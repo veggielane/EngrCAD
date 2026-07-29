@@ -1408,10 +1408,26 @@ export — is recorded in CLAUDE.md):
   with layers and an LTYPE table both ways, exact bulge arcs; `SvgDrawing`
   visible/hidden/section/thin line classes plus sheet-sized output and text over
   Section/Silhouette/Sketch/`DrawingSheet`; hidden-line classification is now COMPUTED
-  from the model by `HiddenLineRemoval`): DXF SPLINE entities (cubic béziers still
-  flatten on export), DXF units header ($INSUNITS), MTEXT for multi-line notes (a note
-  currently writes one TEXT entity per line), and SVG hatch as a `<pattern>` fill rather
-  than one path per hatch line (smaller files for a big section).
+  from the model by `HiddenLineRemoval`; **DXF SPLINE entities ✅ landed** both ways —
+  `DxfSpline` + `DxfCurveMode.Spline`, exact cubic round trip, reading narrowed to what
+  converts exactly with rational and general B-splines reported by name; **`$INSUNITS`
+  ✅ landed** both ways — declared on write, HONOURED (rescaled to mm) on read, `Unitless`
+  never scaled): MTEXT for multi-line notes (a note currently writes one TEXT entity per
+  line), and SVG hatch as a `<pattern>` fill rather than one path per hatch line (smaller
+  files for a big section — note the design question this carries: `SheetHatch.Fill`
+  returns clipped LINE SEGMENTS, and a `<pattern>` fill needs the cut REGION plus a tile,
+  so it is a change to what the hatch layer produces rather than to how it is written;
+  the anchoring survives either way, since `patternUnits="userSpaceOnUse"` is
+  origin-anchored exactly as the scan already is).
+- [ ] **DXF SPLINE follow-up: general B-spline decomposition.** Reading converts degree 1
+  and cubics ALREADY in Bézier form; a general (uniform, or unevenly-knotted) B-spline is
+  reported rather than sampled, which is right but leaves real third-party files on the
+  floor. The exact fix is knot insertion to full multiplicity (The NURBS Book A5.6 Bézier
+  decomposition) and it belongs in `EngrCAD.BRep` beside `BSplineBasis` — which is already
+  public — not in a file reader; the DXF side is then two lines. Rational splines stay
+  refused for a different reason: a sketch's `CubicSeg` is polynomial, so exactness would
+  need a rational segment type, which is a `Sketch` vocabulary change rather than an
+  import one.
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
