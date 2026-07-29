@@ -534,6 +534,45 @@ traversal, metrics, algorithms, and GPU/export extraction. Depends only on
     scheduling measured **slower** than the sweep it exists to beat (783 vs 747 ms) — all of
     the sweep's work plus the bookkeeping. A scheduler whose wake-up rule never fires is a
     pure overhead.
+  - **Bounded maximum** (`RemeshOptions.PreventLongEdgeFlips`, opt-in) — a remesh converges
+    its edge-length *distribution* fast and its *maximum* hardly at all: on a Ø20 × 20
+    cylinder at a 2 mm target, 95% of edges reach the band within 14 passes while the longest
+    sits near 2 L however many passes are spent. **The cause is the flip stage, and only the
+    flip stage** — not a collapse leaving a long edge for the next pass to find, which was the
+    standing guess, and not smoothing or projection: with flips switched off the same run ends
+    at *exactly* 1.33 L with nothing out of band, because the sweep already splits everything
+    too long, while switching the two geometry stages off instead leaves the maximum at
+    2.07 L. The flip predicate is pure valence arithmetic that never looks at a length, so on
+    an elongated quad it swaps the short diagonal for the long one and manufactures exactly
+    the edge the split stage exists to remove. The option refuses such a flip.
+  - **The rule is monotone, and that is the whole of it.** A flip is refused only when the
+    edge it would create is out of band **and no shorter than the one it replaces**. Refusing
+    every out-of-band flip instead — the obvious form — strands the sliver whose only remedy
+    was a flip from 2.5 L to 1.5 L: measured on a remeshed box, that form gives a worst
+    triangle angle of **0.02°** against the monotone form's 31.7°. What the monotone form buys
+    is an invariant — a flip can no longer raise the longest edge — so the maximum falls
+    toward `MaxEdgeLength` under the sweep instead of being churned upward every pass. The
+    comparison is exact `<` on squared lengths, a monotone-decrease rule rather than a
+    tolerance; permitting an equal length would let a pair of flips ping-pong.
+  - Measured (Release, win-x64, target 2.0, 14 passes, `MeshProjectionTarget` of the input),
+    baseline → `PreventLongEdgeFlips`:
+
+    | fixture | max/L | in band | min angle | ms |
+    |---|---|---|---|---|
+    | cylinder Ø20 × 20 | 2.01 → **1.46** | 94.6% → **99.6%** | 0.89° → 0.58° | 24 → **18** |
+    | box 20³ | 2.22 → **1.32** | 95.1% → **99.8%** | 5.57° → **28.93°** | 21 → **15** |
+    | UV sphere r10 | 1.83 → **1.31** | 96.4% → **99.9%** | 5.21° → **30.93°** | 12 → **10** |
+
+    At 40 passes the cylinder reads 1.60 → **1.31** L and the box 1.70 → **1.33** L. It is a
+    bound *approached over passes*, not a cap at pass one (a 4 L edge still needs two passes
+    to halve twice), and the smoothing and projection stages run after the sweep and move
+    vertices by their own damped step, so the end-of-pass maximum sits a fraction of a percent
+    over the threshold. **Nothing measured trades against it** — in-band share, maximum,
+    minimum and run time all improve together — with one exception worth stating: on the
+    cylinder the worst triangle angle is slightly poorer (0.58° against 0.89°), because a
+    refused flip is a valence left irregular. It is nonetheless **opt-in**, so every existing
+    remesh stays bit-identical; whether it should become the default is filed in `todo.md`
+    with these numbers attached.
   - **Face-aligned (RZN-flow) reprojection** (`RemeshOptions.Projection =
     RemeshProjection.FaceAligned`, g3's `RemesherPro.SharpEdgeReprojectionRemesh`) — the
     projection pass that keeps sharp features. Each TRIANGLE is moved rigidly onto the target

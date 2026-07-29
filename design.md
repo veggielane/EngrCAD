@@ -3186,6 +3186,35 @@ for `in`-parameters being illegal in expression trees.
   from geometry each pass and need no bookkeeping at all. A related tuning note worth
   keeping: the split/collapse thresholds are 1.33 L / 0.66 L rather than Botsch's 4/3 and
   4/5, which thrash — a fresh split lands *below* the collapse threshold.
+- **A remesher's longest edge stalls because of the FLIP stage, and the fix is a monotone
+  guard rather than a bigger algorithm.** The distribution converges fast (95% of edges
+  in band within 14 passes) while the maximum sits near 2 L forever, and the standing
+  guess — that a collapse leaves a fresh long edge for the next pass to find — is wrong.
+  The measurement that settles it is a subtraction: switch flips off and nothing else, and
+  the same run ends at *exactly* the 1.33 L split threshold with nothing out of band,
+  because the sweep already splits everything too long; switch the smoothing and projection
+  stages off instead and the maximum is unmoved at 2.07 L. The flip predicate is pure
+  valence arithmetic that never looks at a length, so on an elongated quad it swaps the
+  short diagonal for the long one and manufactures exactly the edge the split stage exists
+  to remove. `RemeshOptions.PreventLongEdgeFlips` refuses that flip.
+  **Three things about it are worth keeping.** (a) **The obvious form of the guard is
+  wrong**: refusing *every* flip that would leave an out-of-band edge strands the sliver
+  whose only remedy was a flip from 2.5 L to 1.5 L, measured as a worst triangle angle of
+  **0.02°** on a remeshed box against 31.7° for the monotone form that also permits a flip
+  strictly shortening the edge it replaces. The monotone form buys a statable invariant —
+  a flip can no longer raise the longest edge — where the strict form buys a rule that
+  merely sounds stronger. (b) **The other half of the plan measured actively harmful and
+  was dropped.** Reordering the sweep to try the split before the flip on an already-long
+  edge looks obviously right (an out-of-band edge has a definite remedy, so why let a
+  heuristic pre-empt it?) and is not: a flip *is* a remedy for a long edge, since the other
+  diagonal of an elongated quad is the short one, and splitting instead pins the bad
+  configuration and adds a vertex to it — measured, the in-band share fell 92.4% → 85.6%
+  and the worst angle 0.89° → 0.17°, more slowly. The incumbent collapse → flip → split
+  order was already right. (c) It is **opt-in** despite improving in-band share, maximum,
+  minimum and run time together on a cylinder, a box and a sphere, because a remesh is
+  wired into `Shape.Remeshed` and changing the default moves committed output; the one
+  measure that is genuinely mixed is the cylinder's worst triangle angle (0.58° against
+  0.89°), since a refused flip is a valence left irregular.
 - **Prefer the standard algorithm to the reference library's heuristic.** g3's
   `MinimalHoleFill` is four iterative edge-flip passes; its own comments describe strong
   ordering effects, non-convergence, a hard pass cap to stop oscillation, and a forced

@@ -144,6 +144,50 @@ public sealed record RemeshOptions(double TargetEdgeLength)
     /// <summary>Flip interior edges when that brings the four incident valences closer to 6.</summary>
     public bool EnableFlips { get; init; } = true;
 
+    /// <summary>
+    /// Refuse a valence flip that would leave an edge longer than
+    /// <see cref="MaxEdgeLength"/> — the <b>bounded-maximum</b> mode. Off by default, so
+    /// every existing remesh stays bit-identical.
+    /// <para>
+    /// A plain remesh converges its edge-length <i>distribution</i> fast and its
+    /// <i>maximum</i> hardly at all: measured on a Ø20 × 20 cylinder at a 2 mm target, 95% of
+    /// edges reach the <c>[0.66 L, 1.33 L]</c> band within 14 passes while the longest sits
+    /// near 2 L however many passes are spent. <b>The cause is the flip stage, and only the
+    /// flip stage.</b> It is not a collapse leaving a long edge for the next pass to find,
+    /// and it is not smoothing or projection — with flips switched off the same run ends at
+    /// exactly 1.33 L with nothing out of band, because a sweep already splits everything too
+    /// long. The flip predicate is pure valence arithmetic that never looks at a length, so
+    /// on an elongated quad it swaps the short diagonal for the long one and manufactures
+    /// exactly the edge the split stage exists to remove.
+    /// </para>
+    /// <para>
+    /// <b>The rule is monotone, not absolute, and that distinction is the whole of it.</b>
+    /// A flip is refused only when the edge it would create is out of band <i>and no shorter
+    /// than the one it replaces</i>. Refusing every out-of-band flip instead — the obvious
+    /// form — strands the sliver whose only remedy was a flip from 2.5 L to 1.5 L, measured
+    /// as a worst triangle angle of <b>0.02°</b> on a remeshed box against 28.9° for the
+    /// monotone form. What the monotone form buys is an invariant: a flip can no longer raise
+    /// the longest edge, so the maximum falls monotonically toward
+    /// <see cref="MaxEdgeLength"/> under the sweep instead of being churned upward every
+    /// pass.
+    /// </para>
+    /// <para>
+    /// <b>It is a bound approached over passes, not a guarantee at pass one</b> (a 4 L edge
+    /// still needs two passes to halve twice), and the smoothing and projection stages run
+    /// after the sweep and move vertices by their own damped step. Measured maxima on the
+    /// cylinder: 2.26 / 2.01 / 2.08 / 1.60 L at 10 / 14 / 20 / 40 passes without it,
+    /// 1.64 / 1.46 / 1.30 / 1.31 L with.
+    /// </para>
+    /// <para>
+    /// Nothing measured trades against it — on a cylinder, a box and a UV sphere it improves
+    /// the in-band share, the maximum, the minimum and the run time together — with one
+    /// exception worth stating: on the cylinder the <i>worst triangle angle</i> is slightly
+    /// poorer (0.58° against 0.89°), because a refused flip is a valence left irregular. On
+    /// the box and the sphere that measure improves several fold.
+    /// </para>
+    /// </summary>
+    public bool PreventLongEdgeFlips { get; init; }
+
     /// <summary>Which smoothing rule the per-pass smoothing uses.</summary>
     public RemeshSmoothing Smoothing { get; init; } = RemeshSmoothing.Uniform;
 
@@ -711,6 +755,14 @@ public static class Remesher
                 Collapses++;
                 return;
             }
+
+            // The flip is deliberately tried BEFORE the split, including on an edge that is
+            // too long: a flip is itself a remedy for a long edge, since the other diagonal
+            // of an elongated quad is the short one. Splitting such an edge first instead
+            // pins the bad configuration and adds a vertex to it — measured on the cylinder,
+            // reordering to split-before-flip took the in-band share 92.4% -> 85.6% and the
+            // worst triangle angle 0.89 degrees -> 0.17. What the flip stage must not do is
+            // CREATE a long edge, which is PreventLongEdgeFlips' job in TryFlip.
             if (_options.EnableFlips && !_mesh.IsBoundaryEdge(he) && TryFlip(he, twin, a, b))
             {
                 Flips++;
@@ -758,6 +810,23 @@ public static class Remesher
                 return false; // a flip destroys the edge, so a constrained edge may not flip
             int c = _mesh.Origin(_mesh.Prev(he));
             int d = _mesh.Origin(_mesh.Prev(twin));
+
+            // A flip replaces one diagonal of the quad (a, c, b, d) with the other, and the
+            // valence rule below never looks at a length — so on an elongated quad it will
+            // swap the short diagonal for the long one and manufacture exactly the edge the
+            // split stage exists to remove. That churn is the entire reason a plain remesh's
+            // maximum edge stalls near 2 L; see RemeshOptions.PreventLongEdgeFlips.
+            if (_options.PreventLongEdgeFlips)
+            {
+                double flipped = (_mesh.GetPosition(d) - _mesh.GetPosition(c)).LengthSquared;
+                if (flipped > _maxLengthSquared &&
+                    // STRICTLY shorter, exactly — a monotone-decrease rule, not a tolerance.
+                    // Permitting an equal length would let a pair of flips ping-pong; and
+                    // refusing an improving flip outright strands slivers whose only remedy
+                    // it was (measured: a worst triangle angle of 0.02 degrees on a box).
+                    flipped >= (_mesh.GetPosition(b) - _mesh.GetPosition(a)).LengthSquared)
+                    return false;
+            }
 
             // Valence-based: does the flip bring the four incident valences closer to 6?
             // Boundary vertices target their own current valence, which makes any flip that

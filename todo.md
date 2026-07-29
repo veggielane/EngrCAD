@@ -19,14 +19,35 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 `RemesherPro` scheduling (`RemeshScheduling.Queue`, `FastSplitPasses`), face-aligned
 (RZN-flow) reprojection, `RegionRemesher`, `Shape.Remeshed`. Remaining:
 
-- [ ] **The remesher's longest edge converges far more slowly than its distribution.**
-  Measured on a Ø20×20 cylinder at a 2 mm target, 94–96% of edges reach the
-  [0.66 L, 1.33 L] band within ~14 passes while the maximum sits near **2 L** however many
-  passes are spent (4.5 at 10, 4.0 at 14, 4.2 at 20, 3.4 at 40 with a fast-split prepass).
-  The mechanism is that a collapse can create a fresh edge of up to twice the target which
-  the *next* pass has to find and split. Worth a bounded-maximum mode (re-visit the edges an
-  operation created within the same pass, guarded against cascading) if anything ever needs
-  a guaranteed maximum rather than a good distribution.
+- ~~**The remesher's longest edge converges far more slowly than its distribution.**~~
+  ✅ **done** — `RemeshOptions.PreventLongEdgeFlips`, and **the filed diagnosis was wrong**.
+  It is not "a collapse creates a fresh edge of up to twice the target which the next pass
+  has to find and split", and no within-pass re-visit queue was needed (there is no cascade
+  to guard against: one split-only round over a converged mesh clears every out-of-band edge
+  and a second round finds nothing). The cause is the **flip stage**, established by
+  subtraction — switch flips off and nothing else and the same run ends at *exactly* 1.33 L
+  with nothing out of band, because the sweep already splits everything too long, while
+  switching the smoothing and projection stages off instead leaves the maximum at 2.07 L.
+  The flip predicate is pure valence arithmetic that never looks at a length, so on an
+  elongated quad it swaps the short diagonal for the long one. Measured (target 2.0, 14
+  passes) baseline → guarded: cylinder max 2.01 → 1.46 L / in band 94.6% → 99.6% / 24 → 18 ms;
+  box 2.22 → 1.32 L / 95.1% → 99.8% / worst angle 5.57° → 28.93°; sphere 1.83 → 1.31 L /
+  96.4% → 99.9°%. Two residuals:
+  - [ ] **Should `PreventLongEdgeFlips` be the DEFAULT?** It improves the in-band share, the
+    maximum, the shortest edge and the run time together on a cylinder, a box and a UV
+    sphere, which is not the "different answer, not the same one faster" that made
+    `Scheduling` opt-in. It was left off only so this change moved no committed output
+    (0 of 107 docs PNGs). The one genuinely mixed measure is the **cylinder's worst triangle
+    angle**, 0.89° → 0.58°, since a refused flip is a valence left irregular — worth
+    understanding before flipping the default, because the same measure improves several
+    fold on the box and the sphere. Flipping it would move `Shape.Remeshed` output and the
+    `remesh-plate` render.
+  - [ ] **The remesher has no shape-quality measure of its own.** Everything it reports and
+    everything the tests assert is edge LENGTH (the `[0.66 L, 1.33 L]` band), which says
+    nothing about slivers: the box fixture above sits at 95.1% in band with a worst triangle
+    angle of 5.57°, and the strict form of the flip guard reached 99.7% in band at **0.02°**.
+    A minimum-angle or radius-ratio figure on `RemeshResult` would have made that visible
+    without a bespoke test helper (`TetQuality` is the precedent, one project over).
 - [ ] **Face-aligned projection accumulates over the whole mesh even under queue
   scheduling** — a vertex's position there is a function of its incident triangles, so a
   partial accumulation would weight it against a subset. Restricting the face loop to the
