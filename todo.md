@@ -424,34 +424,64 @@ Mechanisms v1 landed (`Joints.cs`/`Mechanism.cs`/`Couplings.cs`/`HigherPairs.cs`
 a vocabulary over mates with DOF asserted against the solver's rank, drivers +
 continuation sweeps, named dead centres, analytic velocities/accelerations,
 gears/belts/cams, joint limits, interference over the sweep, swept volumes as Shape
-nodes, and Grübler/Kutzbach as a cross-check. Remaining follow-ups:
+nodes, and Grübler/Kutzbach as a cross-check. **Since then**: multiple simultaneous
+drivers (`SolveAt`/`Sweep`/`RatesAt` take lists; the multi form IS the implementation
+and the single-driver overload is sugar over it; a sweep is a straight line through
+driver space so the continuation logic is unchanged; the same coordinate driven twice
+is refused by name), `Coupling.RackAndPinion` (a cam pair with a straight law, so it
+reads the unwrapped angle and a rack driven through three turns keeps advancing), the
+dwell-rise-dwell `CamLaw` catalogue with `Segments`, and adaptive `SweptVolume(path,
+maxTravel)` (rigidly interpolated placements bounded by exact bounding-box-corner
+travel; 97%+ of the analytic disk from a 9-frame full-turn sweep). Remaining
+follow-ups:
 
-- [ ] **Multiple simultaneous drivers** — `SolveAt` takes one driver; a 2-DOF mechanism
-  (a cylindrical joint, a robot with two actuated hinges) wants a set of
-  (driver, value) pairs per step. The residual machinery already supports N driver
-  rows; the missing part is the API and the sweep over a parameter vector.
 - [ ] **Joint/coupling persistence** — `MateSet.SaveMates` covers the mates but a
   reloaded file loses the joint layer (coordinates, limits, couplings, derived
   perpendicular references). Follow the FeatureHistory/mate conventions: a joints
   section referencing joints' ends by the same descriptors mates use.
-- [ ] **Rack-and-pinion coupling** — z of one joint against θ of another
-  (Δz = r·Δθ): the screw row generalized across joints; ten lines in
-  `HigherPairs.cs` once someone needs it.
-- [ ] **Cam refinements** — roller-follower radius compensation (offset the law by the
-  roller radius along the profile normal), offset followers, and the classic
-  dwell-rise-dwell laws (cycloidal, modified trapezoid) as `CamLaw` factories
-  (trivial via `FromFunction`; the value is the catalogue, not the math).
+  **Assessed while the multi-driver work was in the file; the shape of it:** a
+  `Mechanism` is (a) a joint list, each a NAMED combination of mates over two
+  `MateRef`s plus derived perpendicular references, (b) the axis joints' *unwrapped
+  coordinates* and limits, and (c) the couplings. (a) and (c) are pure declaration and
+  round-trip the way mates do — `MateRef` already serializes, the joint kind is an enum,
+  a coupling is a kind plus two joint indices plus its scalars. What does NOT round-trip
+  by declaration is (b): `JointSweepState.AccumulatedAngle` is a HISTORY (how many turns
+  the crank has taken), and a `CamLaw` may be code (`FromFunction`) or a spline sampled
+  from a sketch. So the file writes the coordinates as data and the laws follow the
+  `Feature.SaveInputs` precedent — `FromSketch` and the catalogue laws serialize, a
+  lambda law saves a marker and loads as a warning. The one genuinely new decision is
+  whether a reloaded mechanism should re-`Add` its joints (which re-asserts each joint's
+  DOF against the solver's measured rank — the check that makes a wrong definition fail
+  by name) or trust the file; re-asserting is right, and it means a load can legitimately
+  FAIL on a file that was valid when written, which is a load-result warning rather than
+  an exception. Roughly a day, mostly test.
+- [ ] **Cam refinements: roller-follower radius compensation and offset followers.**
+  The dwell-rise-dwell catalogue landed (`CamLaw.Cycloidal`/`HarmonicRise`/
+  `ModifiedTrapezoid`/`Dwell`/`Linear` + `CamLaw.Segments`, peak-acceleration factors
+  2π / π²/2 / 8π/(2+π) asserted). These two did NOT, and the reason is that neither is a
+  law factory — **both are curve problems wearing a law's clothes**:
+  - A translating **roller** follower's centre traces the cam profile's PLANAR OFFSET at
+    the roller radius, and a planar offset is not a radial one. For a profile in polar
+    form r(θ) the offset point is p + R·n with
+    n = (r·cosθ + r′·sinθ, r·sinθ − r′·cosθ)/√(r² + r′²), whose polar ANGLE is not θ — so
+    the follower's lift at cam angle ψ needs the θ with arg(q(θ)) = ψ, a root find per
+    query, and the law's slope/curvature then need the implicit-function derivatives of
+    that root. Doable and exact; it is a small solver, not a formula, and it wants the
+    same care `FromSketch`'s bisection already got.
+  - An **offset** (non-radial) translating follower is the same shape of problem with
+    the contact condition moved off the centre line; it also changes the pressure angle,
+    which is the number the offset exists to improve, so the useful version reports that
+    too rather than only moving the lift.
+  Filed rather than approximated: r(θ) + R is wrong by O(R·r′²/r²), which is exactly
+  where a cam is steepest and the answer matters most.
 - [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
   the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts
   a `BrepBoolean.Intersection` of the posed solids would report the exact volume, at
   the cost of a boolean between arbitrarily-rotated solids per range.
-- [ ] **Adaptive swept-volume sampling** — `SweptVolume` unions the sweep's uniform
-  frames; sampling by pose DELTA (bounded rotation × extent per step) would bound the
-  scallop error instead of inheriting the study's frame count.
 - [ ] **Flexible sub-assemblies in mechanisms** — inherited from the mates layer: a
   deep occurrence whose owning sub-assembly is placed more than once is refused (one
   shared frame). A mechanism inside a twice-placed sub-assembly needs per-placement
-  frame overlays first.
+  frame overlays first. See the assessment under "Assemblies follow-ups".
 - [ ] **Deliberately out of scope**: forces, masses, friction, contact dynamics.
   That is multibody *dynamics* and belongs with Simulation below — mechanisms answer
   "where does it go", not "what does it take". Mass properties already exist

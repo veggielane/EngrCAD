@@ -1706,6 +1706,20 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   because a failed solve writes nothing), and a sweep that cannot proceed reports the
   parameter and leaves the last good pose. `MotionFrame`s carry flattened instances
   only — poses, no geometry (the Animation input format).
+- **Several drivers at once** (`SolveAt(IReadOnlyList<DriverTarget>)`,
+  `Sweep(IReadOnlyList<DriverRange>)`, `RatesAt(IReadOnlyList<DriverMotion>)`): a 2-DOF
+  mechanism — a cylindrical joint's spin AND slide, a two-hinge arm — has no single
+  answer under one driver, and pinning one variable leaves the pose (and the rates) a
+  family rather than an answer. Each driver contributes its own rows exactly as one
+  does, so **the multi-driver form is the implementation and the single-driver overload
+  is sugar over it**, not a second path. Two rules: the same joint variable driven twice
+  is refused by name (one coordinate cannot hold two targets; two drivers on one joint
+  driving *different* variables is the whole point and is fine), and a multi-driver
+  sweep is a **straight line through driver space** — every driver runs its own From→To
+  over one shared s — not a grid, which is what keeps the continuation logic identical:
+  one parameter means one step to halve. `MotionFrame.Values` carries every driver's
+  value with `Value` (and `FailedAt`) staying the first driver's, so single-driver
+  consumers read exactly what they did.
 - **Singularities are named** (`the same rank machinery`): a stall runs a
   zero-iteration rank probe with the threshold widened to 3% (a sweep stalls NEAR a
   dead centre, where the Jacobian is almost, not exactly, deficient), compared
@@ -1726,6 +1740,30 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   `CamLaw.FromSketch` samples a radial profile's **exact** sketch signed distance
   (outermost crossing, bisected) into a C² periodic spline whose own calculus feeds
   the Jacobian — verified against the eccentric-circle cam's closed form.
+  `Coupling.RackAndPinion(pinion, rack, pitchRadius)` is Δz = r·Δθ, built as a cam pair
+  with a straight law (`CamLaw.Linear`) rather than a fourth constraint class: the cam
+  coupling already ties a slide to an **unwrapped** spin through a law's exact slope and
+  curvature, which is precisely the rack relation with a constant slope — so a rack
+  driven through three turns keeps advancing instead of resetting at every seam.
+- **The dwell–rise–dwell catalogue** (`CamLaw.Cycloidal`/`HarmonicRise`/
+  `ModifiedTrapezoid`/`Dwell`/`Linear`, chained by `CamLaw.Segments`): the value is the
+  catalogue, not the math, and what makes the members worth distinguishing is what
+  happens where a rise meets a dwell. **Cycloidal** and **modified trapezoid** end with
+  zero acceleration and so join a dwell C2; **harmonic** steps, which is the classic
+  cam-noise source, and buys the lowest peak velocity (π·h/2span) in exchange. Peak
+  acceleration factors are 2π, π²/2 and **8π/(2+π) = 4.8881** respectively — the last
+  derived here (integrating the five-piece acceleration profile twice and requiring
+  h(1) = 1) rather than transcribed, and asserted, because ~22% below the cycloidal is
+  the entire reason the compromise exists. A rise **clamps outside its own span** (0
+  before, its rise after, zero slope and curvature at both), which is what lets
+  `Segments` chain it: segment spans are scaled to fill 2π, so a profile stated in
+  degrees of its own cycle keeps its shape, and each segment is evaluated at its own
+  local angle with the running lift added — the chain's slope and curvature are the
+  segments' own analytic derivatives, never a difference of the assembled lift.
+  Continuity across a joint is the SEGMENTS' business: smoothing it centrally would hide
+  the very property the catalogue exists to let a designer choose. Still open (filed):
+  roller-follower radius compensation and offset followers, which are curve-offset and
+  root-find problems rather than law factories — see todo.md for the shape of both.
 - **Interference & swept volume** (`MotionInterference.cs`):
   `study.CheckInterference()` — instance-bounds broad phase, `MeshIntersection.Crosses`
   narrow phase (transversal only: resting contact is not a clash), ranges per pair,
@@ -1733,6 +1771,21 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   exact mesh-boolean volumes opt-in per confirmed range. `study.SweptVolume(path)` /
   `Shape.SweptOver(poses)` is a graph node: implicit-**Native** (child field lowered
   once, placed per pose, unioned), mesh via Surface Nets, B-Rep honestly Impossible.
+  `SweptVolume(path, maxTravel)` makes the sampling **adaptive**: extra placements are
+  rigidly interpolated between recorded frames until no point of the part moves further
+  than `maxTravel` between consecutive ones, so the scallop is bounded by a number in
+  model units instead of inherited from whatever frame count the sweep used. Travel is
+  measured EXACTLY — the largest displacement of the part's own bounding-box corners, not
+  a rotation angle times an assumed radius — so a body spinning about its centre costs
+  few extra poses and one on the end of a long arm costs many, which is the right way
+  round. Measured on a 20-long arm swept a full turn at 9 frames: the union reaches 97%+
+  of the analytic disk at `maxTravel: 0.5` where the raw frames leave 45° scallops. The
+  recorded frames are all KEPT, so refining can only add material, and no bound leaves
+  the geometry bit-identical. The rigid interpolation itself is
+  **`MotionStudy.InterpolatePose`**, public and here because the animation layer's
+  `MechanismTrack` (over in EngrCAD.Viewer.Core) plays a study back with it — two copies
+  would be two answers to "where was the body halfway between these frames", and one of
+  them would be the one users watch.
 - **Mobility** (`Mechanism.Mobility()`): Grübler/Kutzbach beside the measured rank,
   disagreement informative not an error — the planar four-bar in space predicts −2
   where the rank correctly measures 1 (Bennett/Sarrus are the textbook cases), and

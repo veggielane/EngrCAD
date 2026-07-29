@@ -271,3 +271,144 @@ The clash report names the pair and the driver-parameter ranges
 (`rig/arm × rig/post: [0.42, 0.63]`-style); pairs directly connected by a joint
 are skipped by default, because a pin modeled at its bore's exact diameter
 interpenetrates once tessellated.
+
+A swept volume built from the study's own frames inherits whatever frame count the
+sweep happened to use, which is not a fidelity setting anyone chose. `maxTravel`
+replaces it with a bound in **model units** — extra placements are rigidly
+interpolated between the recorded frames until no point of the part moves further than
+that between consecutive ones:
+
+```csharp run:mechanism-adaptive-sweep
+var rig = new Assembly("rig");
+var ground = rig.Add(new Part("ground", Shape.Box(2, 2, 1)));
+var arm = rig.Add(new Part("arm", Shape.Box(20, 2, 2)));
+var pin = Joint.Revolute(
+    MateGeometry.Axis(ground, (0, 0, 0), Vector3d.UnitZ),
+    MateGeometry.Axis(arm, (0, 0, 0), Vector3d.UnitZ), "pin");
+var mechanism = new Mechanism(rig).Ground(ground).Add(pin);
+
+// Nine frames over a full turn: 45 degrees between placements leaves visible scallops.
+var study = mechanism.Sweep(MechanismDriver.Angle(pin), 0, 2 * Math.PI, frames: 9);
+double disk = Math.PI * 100 * 2;                       // radius 10, thickness 2
+double coarse = study.SweptVolume("arm").ToMesh().Volume();
+double refined = study.SweptVolume("arm", maxTravel: 0.5).ToMesh().Volume();
+
+if (!(coarse < refined && refined > 0.97 * disk))
+    throw new Exception($"refinement should close the gap: {coarse:g6} -> {refined:g6} of {disk:g6}");
+```
+
+Travel is measured *exactly*, as the largest displacement of the part's own
+bounding-box corners between two poses — not a rotation angle times an assumed radius
+— so a body spinning about its own centre costs few extra placements and one on the end
+of a long arm costs many. The recorded frames are all kept, so refining can only add
+material, and omitting the bound leaves the geometry bit-identical.
+
+## Driving two things at once
+
+`SolveAt` and `Sweep` take a *list*, which is what a 2-DOF mechanism needs: with one
+driver the pose is a family and the solver would be picking a member of it. A
+cylindrical joint is the smallest honest case — spin and slide on one joint:
+
+```csharp run:mechanism-multi-driver
+var rig = new Assembly("rig");
+var ground = rig.Add(new Part("base", Shape.Box(4, 2, 1)));
+var sleeve = rig.Add(new Part("sleeve", Shape.Box(4, 2, 1)));
+var joint = Joint.Cylindrical(
+    MateGeometry.Axis(ground, (0, 0, 0), Vector3d.UnitZ),
+    MateGeometry.Axis(sleeve, (0, 0, 0), Vector3d.UnitZ));
+var mechanism = new Mechanism(rig).Ground(ground).Add(joint);
+
+var spin = MechanismDriver.Angle(joint);
+var slide = MechanismDriver.Slide(joint);
+
+var one = mechanism.SolveAt(spin, Math.PI / 4);
+if (one.RemainingDegreesOfFreedom != 1) throw new Exception("one driver leaves the slide free");
+
+var both = mechanism.SolveAt([(spin, Math.PI / 4), (slide, 3.5)]);
+if (both.RemainingDegreesOfFreedom != 0) throw new Exception("two drivers pin a 2-DOF joint");
+
+// A sweep moves every driver along ONE parameter -- a coordinated motion (here a
+// helix: a full turn while sliding 10), not a grid of every combination.
+var study = mechanism.Sweep([(spin, 0, 2 * Math.PI), (slide, 0, 10.0)], frames: 21);
+if (!study.Completed) throw new Exception(study.ToString());
+if (study.Frames[10].Values.Count != 2) throw new Exception("each frame records every driver");
+```
+
+Driving the same coordinate twice is refused by name — one coordinate cannot hold two
+targets — while two drivers on one joint driving *different* variables is the whole
+point. `MotionFrame.Values` carries every driver's value; `Value` stays the first
+driver's, so code written for a single-driver study reads exactly what it did.
+
+## Rack and pinion, and the cam-law catalogue
+
+A rack and pinion is Δz = r·Δθ, which is a cam pair with a straight law — so that is
+how it is built, rather than as a fourth kind of constraint. It reads the **unwrapped**
+angle, so a rack driven through three turns keeps advancing instead of resetting at
+every seam:
+
+```csharp run:mechanism-rack
+var rig = new Assembly("rig");
+var ground = rig.Add(new Part("base", Shape.Box(4, 2, 1)));
+var pinion = rig.Add(new Part("pinion", Shape.Cylinder(12.5, 4)));
+var rack = rig.Add(new Part("rack", Shape.Box(120, 6, 4)));
+var spin = Joint.Revolute(
+    MateGeometry.Axis(ground, (0, 0, 0), Vector3d.UnitZ),
+    MateGeometry.Axis(pinion, (0, 0, 0), Vector3d.UnitZ), "pinion");
+var slide = Joint.Prismatic(
+    MateGeometry.Axis(ground, (0, 0, 0), Vector3d.UnitX),
+    MateGeometry.Axis(rack, (0, 0, 0), Vector3d.UnitX), "rack");
+var mechanism = new Mechanism(rig).Ground(ground).Add(spin).Add(slide)
+    .Add(Coupling.RackAndPinion(spin, slide, pitchRadius: 12.5));
+
+mechanism.Sweep(MechanismDriver.Angle(spin), 0, 3 * 2 * Math.PI, frames: 25);
+if (Math.Abs(slide.Displacement - 12.5 * 3 * 2 * Math.PI) > 1e-6)
+    throw new Exception($"three turns should advance 3 x 2 pi r, got {slide.Displacement}");
+```
+
+For cams, the standard dwell–rise–dwell laws are a catalogue rather than an exercise.
+What separates them is what happens where a rise meets a dwell — **cycloidal** and
+**modified trapezoid** end with zero acceleration and join a dwell smoothly, while
+**harmonic** steps (the classic source of cam noise) and buys the lowest peak velocity
+in exchange. Peak acceleration factors are 2π, 8π/(2+π) = 4.888 and π²/2 respectively,
+which is the number you choose between them on:
+
+```csharp run:mechanism-cam-laws
+double span = Math.PI;                                  // a 180-degree rise
+double rise = 10;
+
+var cycloidal = CamLaw.Cycloidal(rise, span);
+var trapezoid = CamLaw.ModifiedTrapezoid(rise, span);
+var harmonic = CamLaw.HarmonicRise(rise, span);
+
+double Peak(CamLaw law)
+{
+    double peak = 0;
+    for (int i = 0; i <= 4000; i++)
+    {
+        law.Evaluate(span * i / 4000.0, out _, out _, out double curvature);
+        peak = Math.Max(peak, Math.Abs(curvature));
+    }
+    return peak / (rise / (span * span));
+}
+
+if (Math.Abs(Peak(cycloidal) - 2 * Math.PI) > 1e-3) throw new Exception("cycloidal peaks at 2 pi");
+if (Math.Abs(Peak(trapezoid) - 4.8881) > 1e-3) throw new Exception("modified trapezoid peaks at 4.888");
+if (Math.Abs(Peak(harmonic) - Math.PI * Math.PI / 2) > 1e-3) throw new Exception("harmonic peaks at pi^2/2");
+
+// Chain them into a cycle. Spans are scaled to fill one turn, so a profile stated in
+// degrees of its own cycle keeps its shape.
+var profile = CamLaw.Segments(
+    (90.0, CamLaw.Dwell()),                       // low dwell
+    (90.0, CamLaw.Cycloidal(rise, 90)),           // rise
+    (90.0, CamLaw.Dwell(rise)),                   // high dwell
+    (90.0, CamLaw.Cycloidal(-rise, 90)));         // return
+
+profile.Evaluate(Math.PI, out double top, out _, out _);
+if (Math.Abs(top - rise) > 1e-6) throw new Exception("the cycle should be at full lift half way round");
+```
+
+A rise **clamps outside its own span** (zero before, its rise after, with zero slope
+and curvature at both), which is exactly what lets `Segments` chain it without the
+composer having to know anything about the laws it is chaining. Continuity across a
+joint stays the segments' business: smoothing it centrally would hide the very property
+the catalogue exists to let you choose.

@@ -151,26 +151,12 @@ public sealed class MechanismTrack : PoseTrack
     /// exactly a at s = 0 and exactly Δ·a = b at s = 1 (up to the quaternion round-trip;
     /// the callers return recorded frames verbatim at the endpoints anyway).
     /// </summary>
-    internal static Matrix4d InterpolateRigid(in Matrix4d a, in Matrix4d b, double s)
-    {
-        // A body that did not move between the frames (the ground link, fixtures) has
-        // bit-identical matrices — skip the inverse, and the answer is exact.
-        if (a.Equals(b))
-            return a;
-
-        var delta = b * a.Inverse();
-        var rotation = Quaterniond.FromRotationMatrix(delta);
-        var eased = Quaterniond.Slerp(Quaterniond.Identity, rotation, s);
-
-        var pa = new Vector3d(a.M14, a.M24, a.M34);
-        var pb = new Vector3d(b.M14, b.M24, b.M34);
-        var p = pa + (pb - pa) * s;
-
-        return Matrix4d.CreateTranslation(p)
-            * eased.ToMatrix()
-            * Matrix4d.CreateTranslation(-pa)
-            * a;
-    }
+    /// <para>The implementation lives in <see cref="MotionStudy.InterpolatePose"/> —
+    /// the document model, where <c>SweptVolume</c>'s adaptive subdivision also needs
+    /// it. Two copies would be two answers to "where was the body halfway between these
+    /// frames", and one of them would be the one users see moving.</para>
+    internal static Matrix4d InterpolateRigid(in Matrix4d a, in Matrix4d b, double s) =>
+        MotionStudy.InterpolatePose(a, b, s);
 }
 
 /// <summary>
