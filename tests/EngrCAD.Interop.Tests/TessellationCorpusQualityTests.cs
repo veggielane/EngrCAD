@@ -45,7 +45,8 @@ public class TessellationCorpusQualityTests
     /// </summary>
     public static TheoryData<string> Corpus =>
     [
-        "drilled plate", "cross-drilled housing", "spherical cavity", "drilled sphere",
+        "drilled plate", "cross-drilled housing", "cross-drilled cylinder band",
+        "spherical cavity", "drilled sphere",
         "threaded rod", "threaded hole",
         "loft", "shelled tray", "shelled cup", "shelled cone", "shelled elbow",
         "drafted boss", "drafted cylinder",
@@ -68,6 +69,32 @@ public class TessellationCorpusQualityTests
                 return (Shape.Box(44, 44, 30)
                     - Shape.Cylinder(13, 40)
                     - Shape.Cylinder(5, 60).RotateY(Math.PI / 2)).ToBrep();
+            case "cross-drilled cylinder band":
+            {
+                // The same cross-drill on RAW CylinderSurface bands. Not the same case as
+                // the housing above: `Shape.Cylinder` lowers to an extruded circle, whose
+                // band is grid-driven, while a plain cylinder is RING-driven and has no
+                // parameter grid at all. Both bands here end up trimmed by WRAPPING cuts
+                // whose v varies — the body's carries the two breakout holes, the tool's
+                // is the band between them — which is the shape that used to be refused.
+                // <para>The DIMENSIONS match the housing's Ø26 bore and Ø10 cross-drill on
+                // purpose, so this member differs from it in exactly one variable: the
+                // surface family. A sharper Ø3-through-Ø10 version is in
+                // <c>CylinderBandWrapSplitTests</c> with its volume convergence asserted,
+                // and it deliberately does NOT belong here — a traced rim's sample count
+                // is set by the tracer's ARC-LENGTH step, so a small band gets few samples
+                // per turn and the facets beside it sit under a floor that keeps tightening
+                // with density. Measured: the Ø10 drill's rim carries 66 samples per turn
+                // (du = 0.095) and reads 0.858 / 0.9995 / 0.9998 at 32/96/192, while the Ø3
+                // one carries 40 (du = 0.157) and reads 0.974 / 0.949 / 0.565 — fold-free
+                // throughout, so this is the recorded fixed-sampling-floor residual and not
+                // a defect in the routing this member exists to cover.</para>
+                var upright = Frame3d.FromOrthonormal(Vector3d.Zero, Vector3d.UnitX, Vector3d.UnitY);
+                var across = Frame3d.FromOrthonormal((0, -30, 15), Vector3d.UnitZ, Vector3d.UnitX);
+                return BrepBoolean.Difference(
+                    CylinderBandWrapSplitTests.Cylinder(upright, 13, 30),
+                    CylinderBandWrapSplitTests.Cylinder(across, 5, 60));
+            }
             case "spherical cavity":
                 // A spherical pocket breaking out of one face: the trimmed pole-fan and
                 // two-ring band tiers, without the pathology locked by

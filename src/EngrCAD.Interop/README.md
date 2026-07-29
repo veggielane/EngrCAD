@@ -88,6 +88,44 @@ logging complements them, never replaces them.
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
   edge polylines exactly; everything is welded (with seam zipping to repair T-junctions
   from earcut's collinear filtering).
+  - **`IsRingPairedBand` — the ring path checks its own precondition.** A plain
+    `CylinderSurface` has no parameter grid at all: `TessellateCylinderBand` emits one
+    quad per sample index j joining `bottom[j]` to `top[j]`, which is the right band
+    *exactly when the two loop polylines sample the same azimuths in the same order*.
+    Two natural rings do — both are circles on the cylinder's own frame at identical
+    parameters, so their radial parts agree to a few ulps. Two INDEPENDENTLY traced
+    wrapping cuts do not, and the old gate (two loops, one closed coedge each) admitted
+    exactly the case the pairing could not triangulate: a cross-drill piercing the wall
+    left the tool's band bounded by two marching-tracer polylines with unrelated phases,
+    and **18 of its 40 quads faced inward** (worst facet-vs-surface agreement −0.0000)
+    before the weld reported a duplicated directed edge three stages downstream. The gate
+    now compares the paired samples' radial vectors at the weld tier; anything that fails
+    goes to `TrimmedFaceTessellator`, which pairs by pulled-back u. That is what makes
+    `FaceSplitter`'s non-planar wrap cut work on a plain cylinder — the split and the
+    trimmed path were both correct all along. Residual, pre-existing and measured: a
+    traced rim's sample count is set by the tracer's ARC-LENGTH step, so a *small* band
+    gets few samples per turn and the facets beside it fall under the corpus's
+    density-scaled floor (a Ø10 drill's rim carries 66 samples per turn and reads
+    0.858 / 0.9995 / 0.9998 at 32/96/192, a Ø3 one carries 40 and reads
+    0.974 / 0.949 / 0.565) — fold-free throughout, and volumes still converge.
+  - **`IsFullHelicalBand` — the same rule, one surface family along.** A helical face used
+    to go unconditionally to `TessellateHelicalBand`'s SHEARED grid, which interpolates
+    its interior columns linearly between two exactly projected rail corners and therefore
+    assumes the face's two `SpiralArc3d` cuts ARE the ends of u. That holds for every band
+    `MakeThreadedRod` builds and for nothing else, so a face trimmed by anything but its
+    own cap planes now goes to `TrimmedFaceTessellator`. **The gate reads `IsPlanar`, not
+    "is a `SpiralArc3d`"**: a coaxial cone cuts a helical band in a `SpiralArc3d` too — the
+    conical spiral of a 45° end chamfer — so counting spiral edges would send a chamfered
+    band down a grid whose columns interpolate across a boundary running diagonally.
+    Nothing periodic is needed here: a helical band's u is NOT periodic (z advances every
+    turn), so every loop has winding 0 and the non-wrapping tiers apply, with
+    `NaturalSteps` giving u the circle density (the same rule `SampleEdge`'s
+    `AngularSegments` gives the rails and cuts bounding the face, so rows and boundaries
+    agree by construction) and v an INFINITE step, since the generator is straight and
+    `PointAt` is affine in v — a v-chord lies exactly on the surface and never needs
+    refining. Covered by `TrimmedHelicalFaceTests` on hand-built faces whose trimming
+    curve comes from the production intersection; the constructions that would reach one
+    from the `Shape` API are blocked upstream and named there.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:

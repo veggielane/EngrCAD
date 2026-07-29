@@ -190,9 +190,14 @@ B-Rep kernel; give the design a clearance (printable parts want one anyway) or d
 to `ToImplicit()` and the SDF route handles it exactly.
 
 `Explain` reports each case truthfully — Native for the basic profile, and a
-per-cause Impossible otherwise (45° chamfer cones cutting helical bands are future
-surface-intersection work; clearance offsets the profile as a distance field whose
-rounded reflex corners have no exact B-Rep counterpart). Helical surfaces are not
+per-cause Impossible otherwise. The chamfer's blocker has moved and the message says
+where: the 45° cone's cut through a helical band is now **exact** (substituting the
+band's law into a coaxial cone's makes the generator parameter linear in the turning
+angle, so the cut is a conical spiral, not a sampled curve), and the trimmed bands it
+leaves tessellate — what remains is that the face splitter cannot yet split a face along
+a curve that terminates exactly *on* its boundary, which that cut does by construction.
+Clearance is a different and unchanged story: it offsets the profile as a distance field
+whose rounded reflex corners have no exact B-Rep counterpart. Helical surfaces are not
 STEP-exportable yet (same bucket as swept surfaces):
 
 ```csharp run:thread-explain
