@@ -168,6 +168,27 @@ internal readonly struct TetQuadrature
     /// </summary>
     public static TetQuadrature ForMass(ElementOrder order) =>
         order == ElementOrder.Linear ? Degree2 : Degree5;
+
+    /// <summary>
+    /// The rule a GEOMETRIC stiffness matrix of this order needs. Its integrand is
+    /// <c>grad N_a · sigma · grad N_b</c> with <c>sigma</c> the prestress recovered from the
+    /// reference solve's own displacement field, so it is degree <c>3(p-1)</c>: constant for
+    /// a 4-node element (constant gradients, constant stress) and CUBIC for a 10-node one
+    /// (linear gradients against a linear stress), one degree above
+    /// <see cref="For"/>'s <c>2(p-1)</c> and one below <see cref="ForMass"/>'s <c>2p</c>.
+    ///
+    /// <para><b><see cref="Degree3"/>'s negative centroid weight is not a defect here.</b>
+    /// It is documented above as a poor production rule, and for a mass or stiffness matrix
+    /// that is right — a negative weight can cost a matrix that must be positive definite
+    /// its definiteness. A geometric stiffness is INDEFINITE by nature (tension stiffens,
+    /// compression softens, and one prestress field routinely does both), so there is no
+    /// definiteness to lose; all that is required is exactness, which the rule has for the
+    /// integrand's degree. <c>TetElementTests</c> pins that by asserting the matrix is
+    /// unchanged under <see cref="Degree5"/>, which is the same independent-integrator check
+    /// the elastic stiffness already carries.</para>
+    /// </summary>
+    public static TetQuadrature ForGeometric(ElementOrder order) =>
+        order == ElementOrder.Linear ? Degree1 : Degree3;
 }
 
 /// <summary>
@@ -441,6 +462,82 @@ internal static class TetElement
                 int row = i * n;
                 for (int j = 0; j < n; j++)
                     me[row + j] += wi * shape[j];
+            }
+        }
+    }
+
+    /// <summary>
+    /// The element GEOMETRIC (initial-stress) stiffness
+    /// <c>Kg_ab = integral(grad N_a · sigma · grad N_b dV)</c>, row-major, n-by-n for an
+    /// n-node element. Cleared on entry.
+    ///
+    /// <para><b>It has exactly <see cref="ConsistentMass"/>'s shape, and that is a fact
+    /// about the physics rather than a coincidence of implementation.</b> Both are a SCALAR
+    /// integral per node pair replicated onto the 3x3 identity block: a mass matrix because
+    /// an isotropic inertia couples no two axes, a geometric stiffness because the initial
+    /// stress does work against the displacement GRADIENT and the same stress tensor
+    /// contracts each of the three displacement components identically. So the assembly
+    /// loop is the mass matrix's, with this integral in place of <c>rho·N_a·N_b</c>.</para>
+    ///
+    /// <para><b>The sign convention is <c>(K + lambda·Kg) phi = 0</c>.</b> Under axial
+    /// TENSION the integrand is positive and the matrix stiffens the body — the string under
+    /// tension, whose transverse stiffness is exactly this term — while compression makes it
+    /// negative and eventually cancels <c>K</c>, which is buckling. There is no second sign
+    /// convention anywhere: <see cref="BucklingSolver"/> solves
+    /// <c>K phi = lambda·(-Kg) phi</c> with this matrix verbatim.</para>
+    ///
+    /// <para><b>The stress is passed in, per quadrature point, rather than recomputed
+    /// here.</b> The prestress a buckling analysis stiffens with must be the SAME field the
+    /// reference solve reports — thermal-strain subtraction included — so it comes from
+    /// <see cref="StructuralResults"/>' own recovery seam and this routine never forms a
+    /// constitutive law of its own.</para>
+    /// </summary>
+    /// <param name="order">Element order.</param>
+    /// <param name="nodePositions">The element's node positions.</param>
+    /// <param name="stressAtPoints">The Cauchy stress in Voigt order
+    /// <c>(xx, yy, zz, xy, yz, zx)</c>, 6 entries per quadrature point of
+    /// <paramref name="rule"/>, in the rule's own point order.</param>
+    /// <param name="rule">The quadrature rule, which must be
+    /// <see cref="TetQuadrature.ForGeometric"/> or better; the parameter exists so a test can
+    /// pass an independent one.</param>
+    /// <param name="kg">Output, at least <c>n*n</c> long.</param>
+    public static void GeometricStiffness(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        ReadOnlySpan<double> stressAtPoints,
+        in TetQuadrature rule,
+        Span<double> kg)
+    {
+        int n = nodePositions.Length;
+        kg[..(n * n)].Clear();
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+
+        for (int q = 0; q < rule.Count; q++)
+        {
+            var (r, s, t) = rule.Point(q);
+            if (!ShapeGradients(order, nodePositions, r, s, t, grad, out double detJ))
+                continue;
+            double weight = rule.Weight(q) * detJ;
+
+            int at = q * 6;
+            double sxx = stressAtPoints[at], syy = stressAtPoints[at + 1], szz = stressAtPoints[at + 2];
+            double sxy = stressAtPoints[at + 3], syz = stressAtPoints[at + 4], szx = stressAtPoints[at + 5];
+
+            for (int i = 0; i < n; i++)
+            {
+                var gi = grad[i];
+                // Unpacked into locals for the reason Stiffness documents: Vector3d's
+                // indexer is a throwing switch and this is an inner loop.
+                double gix = gi.X, giy = gi.Y, giz = gi.Z;
+                int row = i * n;
+                for (int j = 0; j < n; j++)
+                {
+                    var gj = grad[j];
+                    double tx = sxx * gj.X + sxy * gj.Y + szx * gj.Z;
+                    double ty = sxy * gj.X + syy * gj.Y + syz * gj.Z;
+                    double tz = szx * gj.X + syz * gj.Y + szz * gj.Z;
+                    kg[row + j] += weight * (gix * tx + giy * ty + giz * tz);
+                }
             }
         }
     }

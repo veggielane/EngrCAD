@@ -2,10 +2,12 @@
 
 Simulation: **tetrahedral meshing**, **linear-static structural analysis**, **heat
 conduction** (steady and transient, with thermal-expansion coupling back into the structural
-solve) and **modal analysis** (natural frequencies and mode shapes). Takes a closed manifold
-surface mesh (which every EngrCAD representation reaches — `Shape.ToMesh()`,
-`BRepTessellator`, Surface Nets, an imported STL), fills it with tetrahedra, and solves on
-them.
+solve), **modal analysis** (natural frequencies and mode shapes, with or without stress
+stiffening), **linear buckling** (critical load factors from a prior static solve's stress
+field) and **frequency response** (steady-state harmonic sweeps by modal superposition, with
+Rayleigh or per-mode damping). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
+`Shape.ToMesh()`, `BRepTessellator`, Surface Nets, an imported STL), fills it with tetrahedra,
+and solves on them.
 
 Kernel-clean: references only `EngrCAD.Core` and `EngrCAD.Mesh`, no UI and no rendering.
 Results leave as `MeshField`s, which is what lets the viewer colour-map them without ever
@@ -46,9 +48,15 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `ThermalResults` / `ThermalTransientResults` | Temperature, heat flux, per-state publishing and `.vtu` |
 | `ModalSolver` / `ModalSolveOptions` / `MassLumping` / `ModalSolveReport` | Mass assembly, the shift, the eigensolve, and what it cost |
 | `ModalResults` / `VibrationMode` / `RigidBodyMode` | Frequencies, mode shapes, participation factors, publishing and `.vtu` |
-| `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, consistent loads, quadrature |
+| `BucklingSolver` / `BucklingSolveOptions` / `BucklingSolveReport` | Geometric stiffness, the K-metric eigensolve, and what it cost |
+| `BucklingResults` / `BucklingMode` | Critical load factors, buckled shapes, publishing and `.vtu` |
+| `RayleighDamping` / `ModalDamping` | `C = alpha·M + beta·K` fitted to two frequencies, or a flat / tabulated per-mode ratio — no damping matrix is ever assembled |
+| `HarmonicSolver` / `HarmonicSolveOptions` / `HarmonicSweep` | Steady-state response by modal superposition, with the mode-acceleration truncation correction |
+| `HarmonicResponse` | Complex response over the sweep: modal coordinates, transfer functions, amplitude fields, CSV |
+| `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
+| `FeaAssembly` | Internal: the DOF index map, whole-model stiffness and geometric-stiffness assembly, reduction and matrix sums — shared so two eigen-solvers cannot build different `K`s |
 | `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
-| `LanczosEigen` | Internal: shift-and-invert Lanczos with deflation, locking and restarts |
+| `LanczosEigen` | Internal: shift-and-invert Lanczos with deflation, locking and restarts — the inner-product METRIC is a parameter separate from the right-hand matrix, which is what lets one implementation serve vibration (metric M) and buckling (metric K) |
 | `RigidBodyModes` / `SmallSymmetricEigen` | Internal: the surviving-rigid-motion computation the static solver REFUSES on and the modal solver REPORTS, plus the small dense eigensolver both need |
 | `FeaGuards` | Internal: the element-Jacobian guard EVERY solver asks, rather than each restating |
 | `SurfaceSampler` | Internal: the display-mesh correspondence every results type publishes through |
@@ -1046,16 +1054,383 @@ spurious mode at **5 540 Hz**, sitting between the second and third bending mode
 the axial family instead and adds no bending stiffness at all, because pure bending has
 `u_x = −z·w'(x)` measured from the neutral axis and that is identically zero on it.
 
+## Stress stiffening (a preloaded modal solve)
+
+`ModalSolveOptions.Prestress` takes a completed static solve and adds its geometric stiffness,
+so the eigenproblem becomes `(K + s·Kg) phi = lambda M phi` — the guitar string, the spinning
+blade, the preloaded bolted joint. `PrestressScale` multiplies the stress field without
+re-solving, because a linear solve's stress is homogeneous of degree one in its loads; a
+frequency-versus-load curve is therefore ONE static solve and N eigen-solves.
+
+```csharp
+var statics = StructuralSolver.Solve(loadedModel);          // the preload case
+var results = ModalSolver.Solve(model, new ModalSolveOptions
+{
+    ModeCount = 3,
+    Prestress = statics,
+    PrestressScale = 0.5,                                   // half the reference load
+});
+```
+
+The prestress must have been solved on the **same `AnalysisMesh` instance** — the two
+assemblies share a node numbering, not a shape, and a check on counts or positions would let
+a differently numbered mesh of the same body through. The supports may differ. A scale of
+exactly zero skips the combination entirely, so an unprestressed answer is **bit-identical**
+whichever way it was asked for.
+
+Past the critical load there is no vibration problem left: `K + s·Kg` is singular at
+`s = lambda_cr` by definition, and the factorization refuses by name rather than reporting the
+square root of round-off.
+
 ## Limitations
 
-- **No damping**, so these are undamped natural frequencies. Rayleigh (proportional) damping
-  rides the same two matrices and is the natural next step.
-- **No frequency response and no transient dynamics.** Modal superposition needs the modes plus
-  a load history; direct integration needs a different stepping loop.
-- **No prestress**, so no buckling and no stress stiffening. Both want a geometric stiffness
-  matrix `K_g(sigma)` assembled from a static solve's stress field — a second matrix, the same
-  eigensolver.
+- **These are UNDAMPED natural frequencies**, which is what a modal analysis means; damping
+  enters per mode where it is used (see `ModalDamping`), never as a matrix here.
+- **No transient dynamics.** Frequency response is covered by `HarmonicSolver`; direct
+  time integration needs a different stepping loop.
 - **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the second
   member of a degenerate pair; a triple root wants a block method.
+- **A near-critical prestress raises the residual floor**, because `K + s·Kg` is nearly singular
+  by construction: measured on the pinned-pinned column, 2.99e-10 unloaded and 3.09e-9 at 90% of
+  the critical load. The mode is right either way — its frequency lands on the closed-form law
+  to nine digits — so the answer is to raise `ModalSolveOptions.Tolerance`, which the refusal
+  now says explicitly because it reports the candidate it stalled on.
 - **Sliver elements** are the same binding constraint every solver here has, refused by name by
   the same shared guard.
+
+---
+
+# Buckling (linear eigenvalue stability)
+
+`(K + lambda·Kg) phi = 0` — the multiple of a reference load case at which a structure loses
+stability, from the geometric stiffness that load case's own stress field produces. Docs page:
+[`docs/examples/fea-buckling.md`](../../docs/examples/fea-buckling.md).
+
+```csharp
+var model = new StructuralModel(AnalysisMesh.Quadratic(tets), Materials.Steel);
+model.Fix(Facets.Tag(baseFace));
+model.Force(Facets.Tag(topFace), new Vector3d(-1000, 0, 0));    // the reference load
+
+var statics  = StructuralSolver.Solve(model);                   // the prestress
+var buckling = BucklingSolver.Solve(statics, new BucklingSolveOptions { ModeCount = 2 });
+
+double criticalLoad = buckling.CriticalLoadFactor * 1000;       // scale YOUR load by it
+```
+
+**The load factor multiplies the whole load case, not one number in it.** A linear solve's
+stress field is homogeneous of degree one in every load it was given — forces, pressures,
+gravity, a thermal field, an enforced displacement — so the eigenvalue is a factor on the case
+as a whole. Nothing here is called "the critical load", because a strut pushed from both ends
+has an applied resultant of exactly zero and a scalar critical load would have to guess which
+half of the load case was meant.
+
+## The geometric stiffness has the mass matrix's shape
+
+`Kg_ab = integral(grad N_a · sigma · grad N_b dV)` is a SCALAR per node pair replicated onto
+the 3×3 identity block — exactly `TetElement.ConsistentMass`'s structure, and for a reason
+rather than by coincidence: an isotropic inertia couples no two axes, and one stress tensor
+contracts each of the three displacement components identically. So the assembly loop is the
+mass matrix's with a different integral in it.
+
+Three things follow, and the tests pin all three:
+
+- **Every row sums to exactly zero** (measured 4.6e-17 / 3.9e-16 relative for linear /
+  quadratic), because the shape functions are a partition of unity. Physically: a rigid
+  translation of a prestressed body does no work against the prestress.
+- **The rule is `TetQuadrature.ForGeometric`** — degree `3(p-1)`, so one point for a 4-node
+  element and the degree-3 rule for a 10-node one, sitting between `For`'s `2(p-1)` and
+  `ForMass`'s `2p`. That rule's negative centroid weight is a defect for a matrix that must be
+  positive definite and is **harmless here**, since a geometric stiffness is indefinite by
+  nature; exactness is all that is required, and it is checked against the 15-point degree-5
+  rule (agreement 8.8e-15 relative).
+- **The prestress comes from `StructuralResults`' own recovery seam**, not from a constitutive
+  law restated here — so thermal-strain subtraction is included and thermal buckling is right
+  rather than nearly right.
+
+## The indefinite right-hand side changes the shift STRATEGY, not the shift
+
+This is the decision the whole solver turns on.
+
+A modal solve puts a small **negative** shift under the spectrum so `K − sigma·M = K + |sigma|·M`
+is positive definite and factorable. That works only because `M` is positive semi-definite:
+adding a positive multiple of it can only help. **`Kg` is indefinite** — tension stiffens,
+compression softens, and one bending prestress does both at once — so `K − sigma·Kg` is a
+definite matrix plus a *signed* multiple of an indefinite one, and no sign of sigma makes it
+reliably factorable. The modal escalation loop is worse than inapplicable: multiplying a
+failing shift by 100 pushes `K − sigma·Kg` **further** from definiteness, so a solver reusing
+it would spend its retries getting steadily more wrong before refusing.
+
+**The free parameter is not the shift; it is the metric.** Lanczos needs its inner product to
+be positive definite, and `A^-1 B` is self-adjoint in the A inner product *and* in the B inner
+product whenever A and B are symmetric — `<A^-1 Bx, y>_A = x'By = <x, A^-1 By>_A`, and likewise
+in B. A modal solve runs in M's because M is the definite matrix there. Here the definite
+matrix is **K**, so the iteration runs in the K inner product with the operator `K^-1(-Kg)`,
+and the matrix that gets factorized is **K itself** — literally the static solver's
+factorization, on every model, with nothing to choose.
+
+**Once the metric is K the shift has no work left to do.** Shift-and-invert exists to turn
+*interior* eigenvalues into extreme ones, and the reciprocal substitution has already done it:
+`K^-1(-Kg)` has eigenvalues `theta = 1/lambda`, so the smallest critical factor — the only one
+an engineer wants — is the operator's LARGEST eigenvalue, which is what Lanczos converges to
+first with no transformation at all. `sigma = 0` is the answer rather than a fallback, and
+`BucklingSolveReport.Shift` exists to say so.
+
+ARPACK reaches the same place from the other side: its "buckling mode" uses
+`OP = (A − sigma·M)^-1 A` with metric `B = A`, and **requires `sigma != 0`** because at zero
+that operator is the identity. Inverting the other matrix removes the requirement along with
+the choice.
+
+`LanczosEigen` therefore took exactly one generalization — the metric became a parameter
+separate from the right-hand matrix — and passing the same matrix for both takes the modal
+path's arithmetic operation for operation, which is what keeps its output identical to the bit.
+
+**Only positive load factors are reported.** A negative theta is a factor at which the
+*reversed* load case buckles, which is a real answer to a different question, so the
+descending-theta walk stops at the first non-positive value rather than skipping it — the same
+contiguous-prefix rule that makes "the lowest k" mean it. A load case with no positive factor
+at all is refused by name.
+
+**And the indefiniteness caveat is about the general case, not about a column.** Under a
+uniform uniaxial compression the element integral collapses to
+`u'Kg u = -s·integral(|du/dx|²)`, non-positive for every displacement field — so `-Kg` is
+positive semi-definite, the pencil is definite, and every factor is positive. That is why the
+Euler cases converge as cleanly as they do; the machinery above is what makes a bending or
+mixed prestress work too.
+
+## The residual has a floor, and it is worse here than in a modal solve
+
+`BucklingSolveOptions.Tolerance` defaults to **1e-7**, two decades looser than the modal
+solver's, and that is a measurement rather than a hedge. The residual
+`|K phi − lambda Kg phi| / (|K phi| + |lambda||Kg phi|)` is a *total* cancellation of two
+products, so its floor is about `eps·kappa(K)` relative to a smooth mode's own energy. A modal
+solve escapes that because its Krylov vectors come out of `K^-1 M`, which **smooths** — the
+high-frequency content `K` amplifies is suppressed before `K` ever sees it. This solver's
+operator is `K^-1 Kg`, and a geometric stiffness is derivative-like, so the two halves roughly
+cancel in frequency content and the Lanczos vectors keep the part that sets the floor.
+
+Measured on the pinned-pinned column at slenderness 69: every mesh up to 9 310 DOF reaches
+1e-10, and a 23 166-DOF one stalls at **1.76e-9** — so a 1e-9 default would refuse an ordinary
+refinement of an ordinary model. Nothing is given up: an eigenvalue is accurate to roughly the
+SQUARE of the residual over the spectral gap, and the same 23 166-DOF column accepted at 1e-5
+returns 15 437.12 N against the 9 310-DOF mesh's 15 437.99 N.
+
+The refusal when even that is unreachable **names which of the two causes it hit** —
+`LanczosEigen` now reports the best candidate it saw but did not accept, so "no positive factor
+exists" and "a factor was there and the tolerance was in the way" are different messages. They
+want opposite responses from the user, and an empty list cannot tell them apart.
+
+## Verification
+
+Full tables are on the [docs page](../../docs/examples/fea-buckling.md). A 120 × 6 × 6 steel
+column (slenderness `L/r` = 69.3) with Poisson's ratio exactly zero, 24 × 2 × 2 quadratic
+elements, against `P = pi²EI/(K·L)²`:
+
+| ends | K | Euler | Engesser | measured | vs Euler | vs Engesser |
+|---|---|---|---|---|---|---|
+| pinned–pinned | 1.0000 | 15 544.6 N | 15 468.3 N | 15 440.3 N | −0.671% | **−0.181%** |
+| fixed–free | 2.0000 | 3 886.2 N | 3 881.4 N | 3 879.6 N | −0.169% | **−0.046%** |
+| fixed–pinned | 0.6992 | 31 800.4 N | 31 482.6 N | 31 338.4 N | −1.453% | **−0.458%** |
+| fixed–fixed | 0.5000 | 62 178.5 N | 60 974.9 N | 60 550.5 N | −2.618% | **−0.696%** |
+
+Euler's derivation has no shear deformation and a three-dimensional solid has it, so the
+measured load converges BELOW the Euler value by Engesser's ratio
+`1/(1 + P_E/(kAG))` — the buckling twin of the Timoshenko correction the modal beam fixtures
+quote, and the reason the fixed–fixed row (whose Euler load is four times larger, so whose
+shear correction is four times bigger) is the furthest from Euler and no further from the
+truth.
+
+- **Refinement is monotone from ABOVE** — 16 122.23 / 15 553.67 / 15 449.65 / 15 438.52 N at
+  4/8/16/32 elements along the length. That is a theorem rather than a property of the fixture:
+  the discrete factor is a Rayleigh quotient minimised over the element subspace, and it holds
+  STRICTLY here because `nu = 0` makes the prestress field exactly `-P/A` (measured 5.45e-13
+  relative deviation from uniform), so `Kg` is exact and not merely accurate.
+- **The buckled shape is the half sine**, worst deviation **2.4e-6** over 49 centroidal nodes —
+  which separates "an eigenvalue near the Euler load" from "the Euler buckling mode".
+- **The factor is exactly inverse in the reference load**: doubling the load halves the factor
+  so their product is unchanged to **0.00e0** relative, which is the cheapest possible check
+  that `Kg` is linear in the prestress.
+- **The square section's modes come in degenerate PAIRS** (the column can bow in Y or Z),
+  splitting by 0.0046% – 0.0714% — so the locking-and-restarting machinery the modal solver
+  needed is exercised on a second physics.
+- **Stress stiffening and buckling agree to nine digits.** For a pinned-pinned beam,
+  `omega²(P)/omega²(0) = 1 + P/P_cr` exactly in Euler-Bernoulli theory, and measured on the
+  discrete 3D system with `P_cr` taken from the buckling solve it holds to **7.4e-10 relative**
+  from `P = -P_cr` (tension) through `P = +0.9 P_cr`:
+
+  | P/P_cr | −1.0 | −0.5 | 0 | +0.25 | +0.5 | +0.9 |
+  |---|---|---|---|---|---|---|
+  | f (Hz) | 1 377.77 | 1 193.19 | 974.23 | 843.71 | 688.89 | 308.08 |
+  | ω²/ω²(0) | 2.000000 | 1.500000 | 1.000000 | 0.750000 | 0.500000 | 0.100000 |
+  | relative error | −7.4e-10 | −4.1e-10 | 0 | 1.9e-10 | 4.3e-10 | 6.5e-10 |
+
+  It is that tight because the column's buckling shape and its first vibration shape are the
+  same half sine, so the ratio of two Rayleigh quotients over one vector is the ratio of their
+  numerators. One table checks the geometric stiffness, the load factor and the stress-stiffened
+  modal path against each other.
+
+### Linear tetrahedra are unusable for buckling, and the gap is measured
+
+4-node tets are known to be too stiff in bending, and a buckling load is a RATIO of a bending
+stiffness to a geometric softening — so the over-stiffness enters undiluted instead of being
+averaged against anything. Measured on the same pinned-pinned column, against a true 15 468 N:
+
+| mesh | linear | quadratic |
+|---|---|---|
+| 8×1×1 | 171 602 N (**+1 009%**) | 15 554 N (+0.55%) |
+| 16×2×2 | 55 108 N (+256%) | 15 450 N (−0.12%) |
+| 32×3×3 | 26 137 N (+69.0%) | 15 438 N (−0.20%) |
+| 48×4×4 | 20 402 N (+31.9%) | — |
+
+Where the static cantilever's tip deflection is 14% low at 12 288 linear elements, the same
+elements put a column's critical load an **order of magnitude** high on a coarse mesh and are
+still 32% high at 3 550 DOF, where the quadratic answer converged to 0.2% with 414. Use
+`AnalysisMesh.Quadratic` for any stability analysis.
+
+## Limitations
+
+- **Linear buckling only.** The load factor is the eigenvalue of a problem linearised about
+  ONE static state; it says nothing about post-buckling behaviour, imperfection sensitivity, or
+  a structure whose prestress redistributes as it deforms. A shell that is imperfection-
+  sensitive can buckle at a fraction of this number, which is a property of the theory and not
+  of the implementation.
+- **The prestress is the reference solve's, unscaled by the eigenvalue.** That is what "linear"
+  means here: `Kg(lambda·sigma) = lambda·Kg(sigma)` is assumed, which is exact for a linear
+  static solve and is precisely the assumption the `LoadFactorIsInverselyProportionalToThe
+  ReferenceLoad` test pins.
+- **Positive factors only** (see above); a load case that buckles only when reversed is refused
+  rather than reported with a negative number nobody asked for.
+- **Multiplicity three and above** inherits the modal solver's limitation — locking and
+  restarting recovers the second member of a degenerate pair, and a triple root wants a block
+  method.
+
+---
+
+# Damping, and frequency response
+
+## Rayleigh damping — and precisely what it does not cover
+
+`C = alpha·M + beta·K`, whose whole point is that the UNDAMPED modes still diagonalise it:
+`phi' C phi = diag(alpha + beta·omega_n²)`, so the equations separate into one scalar
+oscillator per mode and the damping is a per-mode RATIO
+`zeta_n = alpha/(2·omega_n) + beta·omega_n/2`.
+
+```csharp
+var damping = RayleighDamping.FromRatios(50, 0.02, 500, 0.02);   // 2% at both ends
+double zeta  = damping.RatioAtFrequency(180);                    // 1.05% in between
+```
+
+The ratio curve is a **U** — the mass term falls as `1/omega` and the stiffness term rises
+linearly — with minimum `sqrt(alpha·beta)` at `omega = sqrt(alpha/beta)`. Two fitted points
+pin it everywhere, and **everything outside the fitted range is damped MORE than either fitted
+value**, often much more: fitting 3% at 20 Hz and 1% at 800 Hz gives 11.5% at 5 Hz and 6.2% at
+5 kHz. `HarmonicResponse.DampingRatios` reports the ratio used for every mode for exactly that
+reason. A fit with no solution — a ratio falling faster than `1/omega` between the two points —
+comes out with a negative coefficient, i.e. damping that ADDS energy, and is refused by name
+rather than returned.
+
+**What is not covered, stated rather than implied away.** Proportional damping is the special
+case in which one damping matrix happens to be diagonalised by the undamped real modes.
+Physical damping usually is not: a discrete dashpot, two materials with different loss factors
+in one model, viscoelasticity, joint friction and structural (hysteretic) damping all leave
+`phi' C phi` with off-diagonal terms. When that happens the damped system's modes are no longer
+the undamped ones — the eigenproblem becomes the **quadratic**
+`(lambda²M + lambda·C + K) phi = 0`, whose eigenvalues and eigenvectors are complex and whose
+standard solution linearises it into a `2n`-dimensional state-space problem in a non-symmetric
+matrix pair. **That is a different solver, not a bigger version of this one**, and nothing here
+attempts it. `ModalDamping` also takes a flat ratio (`Uniform`) or a measured table
+(`PerMode`), both of which are proportional by construction.
+
+**No damping matrix is ever assembled.** Every consumer wants `zeta_n`, and forming `C` in
+order to project it back down to the same numbers would be arithmetic with nothing to show for
+it. That is a design statement, not an omission.
+
+## Frequency response by modal superposition
+
+Each mode is a scalar oscillator, so the steady-state response to a harmonic load is
+`q_n(W) = F_n / (w_n² - W² + 2i·zeta_n·w_n·W)` with `F_n = phi_n' f`, and the whole sweep is
+one dot product per mode plus a complex division per (mode, frequency) pair. Nothing is
+assembled and nothing is factorized.
+
+```csharp
+var modes    = ModalSolver.Solve(model, new ModalSolveOptions { ModeCount = 6 });
+var statics  = StructuralSolver.Solve(model);              // for the truncation correction
+var response = HarmonicSolver.Solve(modes, new HarmonicSolveOptions
+{
+    Frequencies      = HarmonicSweep.Logarithmic(10, 5000, 400),
+    Damping          = ModalDamping.Rayleigh(50, 0.02, 2000, 0.02),
+    StaticCorrection = statics,
+});
+File.WriteAllText("sweep.csv", response.ToCsv(tipNode, axis: 2));
+```
+
+**The load comes from the modal model's own applied forces**, since every load type reduces to
+consistent nodal forces when it is applied — so one model carries supports, loads and the modes
+computed from it, and there is no second place for a load to be specified and forgotten. A
+thermal load is refused by name, because it enters a static solve as an element integral rather
+than a nodal force and accepting it would silently drop it. A free-free model is refused too: a
+rigid mode's `F_n/(0 - W²)` grows without bound as the frequency falls, which is a true
+statement about a body that simply accelerates away and a useless one to plot.
+
+**Damping is required rather than defaulted.** A default would be this project inventing a
+material property, and the one honest default — none — makes every resonance infinite. Say
+`ModalDamping.None` and it is allowed; an undamped mode driven at exactly its own frequency
+then returns a non-finite modal coordinate, left alone rather than clamped to a large number
+nobody chose.
+
+**Truncation is a correction, not a caveat.** `StaticCorrection` switches on the
+mode-acceleration form
+`u(W) = u_static + sum_n phi_n F_n [1/(w_n² - W² + 2i·zeta·w_n·W) - 1/w_n²]`, whose bracket
+vanishes at `W = 0` — so the response is EXACTLY the static answer there however few modes were
+kept, and the missing modes' static flexibility is carried at every other frequency.
+`TruncationError` reports what the plain sum would have missed, and is **NaN without a static
+solve**, because then it is not small, it is unknown.
+
+**What a DIRECT solve buys, and when it is actually needed** (filed, not built): factorizing
+`(K - W²M + i·W·C)` at every frequency costs a complex factorization per point — hundreds of
+times this — and is the only option in three cases, none of which this can express. Damping
+that is not proportional (the modes stop diagonalising C, and the eigenproblem becomes
+quadratic); material properties that vary WITH frequency (a viscoelastic modulus — the modal
+basis itself would change per point); and a load whose spatial distribution changes with
+frequency.
+
+## Verification
+
+- **The resonant amplification is `1/(2·zeta)`**: measured **25.006 against 25.000** (0.02%) on
+  a tip-driven cantilever at 2% damping. The reference is that MODE's static contribution, not
+  the structure's whole static deflection — the other five modes supply 3.01% of this
+  cantilever's static tip, and dividing by the whole thing reads as a 3% solver error that is
+  entirely a modelling mistake in the measurement.
+- **The half-power bandwidth is `2·zeta`** — the standard way a damping ratio is measured from
+  a response, run in reverse: **2.0005% / 4.0034% / 10.0541%** against 2% / 4% / 10%, i.e.
+  0.02% / 0.08% / 0.54% relative.
+- **The phase lags the load by a quarter turn at resonance**: 90.073°, read AT the mode's own
+  frequency rather than at the sweep's peak sample — those are two steps apart at this
+  resolution and detuning by 0.04% of the frequency rotates the phase 1.15° at 2% damping, so
+  probing the peak would measure the sweep instead of the response.
+- **The static correction is exact**: a ONE-mode response at zero frequency reproduces the full
+  static tip deflection to **1.8e-16 relative**, where the uncorrected one-mode sum is 3.01%
+  short. Truncation falls monotonically with modes kept — 3.079% / 3.079% / 0.532% / 0.191% at
+  1 / 2 / 4 / 8 modes.
+- **A Rayleigh fit reproduces both ratios to 1e-15**, its minimum matches `sqrt(alpha·beta)` at
+  `sqrt(alpha/beta)` against a search over the curve, and the ratios reach the response
+  unchanged.
+- **An unexcited mode contributes nothing however close its frequency**: driving the
+  rectangular cantilever along Z leaves the Y-bending family at **8.6e-4 and 2.6e-3** of the
+  largest modal force. Not exactly zero, and the reason is worth knowing — Kuhn's subdivision
+  picks its diagonals by index order and no reflection preserves that, the same asymmetry the
+  modal beam tests measure as a degenerate pair's splitting.
+
+## Limitations
+
+- **Proportional damping only** (above). Non-proportional damping is a quadratic eigenproblem
+  and a different solver.
+- **Harmonic (steady-state) response only.** There is no transient dynamics: Newmark or HHT at
+  a constant step would reuse the thermal transient's one-factorization-serves-every-step
+  argument, and is filed.
+- **Nodal-force excitation only.** Base acceleration would ride the participation factors the
+  modal results already carry; a load whose spatial shape changes with frequency needs the
+  direct solve.
+- **No residual-vector basis augmentation.** The mode-acceleration correction handles the
+  static part of what the truncated modes miss, which is most of it; a residual VECTOR (the
+  static response orthogonalised against the kept modes, added to the basis) would handle the
+  rest and is filed.

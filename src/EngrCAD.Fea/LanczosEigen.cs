@@ -19,12 +19,26 @@ internal readonly record struct EigenPair(double Eigenvalue, double[] Vector, do
 /// <param name="Converged">False when the run hit its caps with fewer pairs than asked
 /// for.</param>
 /// <param name="WorstResidual">The largest measured residual among the returned pairs.</param>
+/// <param name="Candidate">
+/// The best eigenvalue the iteration SAW but did not accept, and the residual it stalled at
+/// — null when nothing beyond the accepted pairs ever appeared.
+///
+/// <para><b>It exists because "no pair converged" has two completely different causes and a
+/// caller cannot tell them apart from an empty list.</b> Either the spectrum genuinely holds
+/// nothing wanted (a structure with no positive buckling factor at all), or a candidate was
+/// there the whole time and its measured residual never reached the tolerance — which
+/// happens on a slender, finely meshed model where the residual's own floor is set by the
+/// conditioning of K rather than by the iteration. The two want opposite responses from the
+/// user, so a refusal that cannot name which one it hit sends people to look in the wrong
+/// place.</para>
+/// </param>
 internal sealed record LanczosResult(
     IReadOnlyList<EigenPair> Pairs,
     int Restarts,
     int Iterations,
     bool Converged,
-    double WorstResidual);
+    double WorstResidual,
+    (double Eigenvalue, double Residual)? Candidate);
 
 /// <summary>
 /// Shift-and-invert Lanczos for the generalized symmetric eigenproblem
@@ -37,6 +51,17 @@ internal sealed record LanczosResult(
 /// LARGEST of the operator — and extreme eigenvalues are exactly what Lanczos converges to
 /// first. Put sigma at or just below zero and the lowest natural frequencies come out
 /// first, which is the only end of the spectrum an engineer ever wants.</para>
+///
+/// <para><b>The METRIC is a separate parameter from M, and that is what makes this one
+/// implementation serve buckling as well as vibration.</b> <c>A^-1 B</c> is self-adjoint in
+/// the A inner product AND in the B inner product whenever A and B are symmetric —
+/// <c>&lt;A^-1 Bx, y&gt;_A = x' B y = &lt;x, A^-1 By&gt;_A</c> and likewise in B — so the
+/// iteration may run in either, and the only requirement is that the one it runs in be
+/// positive DEFINITE. A modal solve runs in M's, which is the definite one there. A
+/// buckling solve cannot: its right-hand matrix is a geometric stiffness, which is
+/// indefinite, so it runs in K's instead and factorizes K itself. Passing the same matrix
+/// for <c>m</c> and <c>metric</c> takes exactly the arithmetic the modal path always had,
+/// operation for operation, which is why that path's output is unchanged to the bit.</para>
 ///
 /// <para><b>This is the case where a direct factorization genuinely amortises.</b> Every
 /// Lanczos step is one back-substitution through ONE factorization of A. A run that takes
@@ -70,11 +95,17 @@ internal static class LanczosEigen
     /// <summary>
     /// Runs the iteration.
     /// </summary>
-    /// <param name="k">The reduced stiffness matrix (symmetric upper).</param>
-    /// <param name="m">The reduced mass matrix (symmetric upper).</param>
+    /// <param name="k">The left-hand matrix of <c>K phi = lambda M phi</c> (symmetric upper)
+    /// — the reduced stiffness for a modal solve.</param>
+    /// <param name="m">The right-hand matrix (symmetric upper): the reduced mass for a modal
+    /// solve, the negated geometric stiffness for a buckling one. It multiplies the vector
+    /// the factorization is applied to, and it appears in the measured residual.</param>
+    /// <param name="metric">The POSITIVE DEFINITE matrix whose inner product the iteration
+    /// runs in. Pass <paramref name="m"/> itself for a modal solve; pass
+    /// <paramref name="k"/> where the right-hand matrix is indefinite.</param>
     /// <param name="factor">A factorization of <c>K - shift·M</c>.</param>
     /// <param name="shift">sigma. Zero when K is positive definite.</param>
-    /// <param name="deflation">M-orthonormal vectors to exclude from the search — the
+    /// <param name="deflation">Metric-orthonormal vectors to exclude from the search — the
     /// rigid-body modes, whose eigenvalue is zero and which are reported separately.</param>
     /// <param name="wanted">How many eigenpairs above the deflation space to return.</param>
     /// <param name="tolerance">Relative residual a pair must reach to be locked.</param>
@@ -83,6 +114,7 @@ internal static class LanczosEigen
     public static LanczosResult Solve(
         PackedSparseMatrix k,
         PackedSparseMatrix m,
+        PackedSparseMatrix metric,
         SparseCholesky factor,
         double shift,
         IReadOnlyList<double[]> deflation,
@@ -112,11 +144,12 @@ internal static class LanczosEigen
         var scratchR = new double[n];
         int totalIterations = 0;
         int restart = 0;
+        (double Eigenvalue, double Residual)? candidate = null;
 
         while (locked.Count < target && restart <= maxRestarts)
         {
             var start = StartVector(n, restart);
-            if (!Purge(m, deflate, start, scratchS))
+            if (!Purge(metric, deflate, start, scratchS))
             {
                 // The start vector lay entirely in the deflation space. A different one
                 // will not (they are constructed to differ), so this is a restart, not a
@@ -126,10 +159,17 @@ internal static class LanczosEigen
             }
 
             var run = RunOnce(
-                k, m, factor, shift, deflate, start,
+                k, m, metric, factor, shift, deflate, start,
                 target - locked.Count, tolerance, maxKrylov, scratchS, scratchR);
             totalIterations += run.Steps;
             restart++;
+
+            // Keep the closest miss across every run, not the last one: a later restart may
+            // stall further away, and the number worth reporting is the best the iteration
+            // ever managed.
+            if (run.Candidate is { } miss
+                && (candidate is not { } best || miss.Residual < best.Residual))
+                candidate = miss;
 
             if (run.Pairs.Count == 0)
                 continue;
@@ -153,10 +193,11 @@ internal static class LanczosEigen
             worst = Math.Max(worst, pair.Residual);
 
         return new LanczosResult(
-            locked, Math.Max(0, restart - 1), totalIterations, converged, worst);
+            locked, Math.Max(0, restart - 1), totalIterations, converged, worst, candidate);
     }
 
-    private readonly record struct RunResult(List<EigenPair> Pairs, int Steps);
+    private readonly record struct RunResult(
+        List<EigenPair> Pairs, int Steps, (double Eigenvalue, double Residual)? Candidate);
 
     /// <summary>One Lanczos run from one start vector, stopping when it has converged
     /// <paramref name="wanted"/> pairs, hit <paramref name="maxKrylov"/>, or found an
@@ -164,6 +205,7 @@ internal static class LanczosEigen
     private static RunResult RunOnce(
         PackedSparseMatrix k,
         PackedSparseMatrix m,
+        PackedSparseMatrix metric,
         SparseCholesky factor,
         double shift,
         List<double[]> deflate,
@@ -180,10 +222,25 @@ internal static class LanczosEigen
         var alpha = new List<double>(cap);
         var beta = new List<double>(cap);
 
+        // Reference equality, and deliberately so: when the caller passes ONE matrix for
+        // both roles the two products below are literally the same numbers, so aliasing the
+        // buffers is what keeps the modal path's arithmetic identical to what it was before
+        // the metric became a parameter — not merely equivalent to it.
+        bool separateMetric = !ReferenceEquals(metric, m);
+
         var q = start;
         var p = new double[n];
-        m.Multiply(q, p);                       // p == M q, and q is already M-normalised
+        m.Multiply(q, p);                       // p == M q
+        // metricQ == metric·q, the vector every inner product is taken against; q is
+        // already metric-normalised.
+        var metricQ = p;
+        if (separateMetric)
+        {
+            metricQ = new double[n];
+            metric.Multiply(q, metricQ);
+        }
         var found = new List<EigenPair>();
+        (double Eigenvalue, double Residual)? candidate = null;
         double alphaScale = 0;
         int steps = 0;
 
@@ -194,7 +251,7 @@ internal static class LanczosEigen
 
             var r = scratchR;
             factor.Solve(p, r);                 // r = A^-1 M q_j — the one back-substitution
-            double a = Dot(p, r);               // = q_j' M r, since p is already M q_j
+            double a = Dot(metricQ, r);         // = <q_j, r>_metric
             alpha.Add(a);
             alphaScale = Math.Max(alphaScale, Math.Abs(a));
 
@@ -214,14 +271,14 @@ internal static class LanczosEigen
             // reproducible for the same reason every other kernel here does.
             for (int pass = 0; pass < 2; pass++)
             {
-                m.Multiply(r, scratchS);
+                metric.Multiply(r, scratchS);
                 foreach (var v in deflate)
                     Subtract(r, v, Dot(v, scratchS));
                 foreach (var v in basis)
                     Subtract(r, v, Dot(v, scratchS));
             }
 
-            m.Multiply(r, scratchS);
+            metric.Multiply(r, scratchS);
             double nu = Dot(r, scratchS);
             double b2 = nu > 0 ? Math.Sqrt(nu) : 0;
 
@@ -243,28 +300,42 @@ internal static class LanczosEigen
                 // its first convergence check built its next basis vector from a
                 // half-finished matrix-vector product — which showed up as the whole
                 // iteration breaking down after four steps rather than as a wrong answer.
-                found = Ritz(k, m, basis, alpha, beta, shift, wanted, tolerance, new double[n]);
+                found = Ritz(
+                    k, m, metric, basis, alpha, beta, shift, wanted, tolerance, new double[n],
+                    out var miss);
+                if (miss is { } m2 && (candidate is not { } best || m2.Residual < best.Residual))
+                    candidate = m2;
                 if (found.Count >= wanted || breakdown || lastStep)
-                    return new RunResult(found, steps);
+                    return new RunResult(found, steps, candidate);
             }
 
             if (breakdown)
-                return new RunResult(found, steps);
+                return new RunResult(found, steps, candidate);
 
             beta.Add(b2);
             var next = new double[n];
-            var nextP = new double[n];
+            var nextMetric = new double[n];
             double inverse = 1.0 / b2;
             for (int i = 0; i < n; i++)
             {
                 next[i] = r[i] * inverse;
-                nextP[i] = scratchS[i] * inverse;
+                nextMetric[i] = scratchS[i] * inverse;
+            }
+            var nextP = nextMetric;
+            if (separateMetric)
+            {
+                // scratchS holds metric·r, not m·r, so the operator's right-hand product has
+                // to be taken afresh — one extra sparse multiply per step, against a
+                // back-substitution through the whole factorization.
+                nextP = new double[n];
+                m.Multiply(next, nextP);
             }
             q = next;
             p = nextP;
+            metricQ = nextMetric;
         }
 
-        return new RunResult(found, steps);
+        return new RunResult(found, steps, candidate);
     }
 
     /// <summary>How often to run the Rayleigh-Ritz check once the basis is large enough.
@@ -281,14 +352,17 @@ internal static class LanczosEigen
     private static List<EigenPair> Ritz(
         PackedSparseMatrix k,
         PackedSparseMatrix m,
+        PackedSparseMatrix metric,
         List<double[]> basis,
         List<double> alpha,
         List<double> beta,
         double shift,
         int wanted,
         double tolerance,
-        double[] scratch)
+        double[] scratch,
+        out (double Eigenvalue, double Residual)? rejected)
     {
+        rejected = null;
         int size = basis.Count;
         int n = basis[0].Length;
         var t = new double[size * size];
@@ -332,11 +406,11 @@ internal static class LanczosEigen
                 Subtract(phi, basis[i], -y);
             }
 
-            // Re-normalise in M. The Ritz vector is M-orthonormal by construction (the
-            // basis is, and y is orthonormal), so this is a round-off correction — but it is
-            // the quantity every downstream identity is stated in, so it is asked for rather
-            // than assumed.
-            m.Multiply(phi, scratch);
+            // Re-normalise in the METRIC. The Ritz vector is metric-orthonormal by
+            // construction (the basis is, and y is orthonormal), so this is a round-off
+            // correction — but it is the quantity every downstream identity is stated in, so
+            // it is asked for rather than assumed.
+            metric.Multiply(phi, scratch);
             double norm = Dot(phi, scratch);
             if (!(norm > 0))
                 break;
@@ -367,7 +441,12 @@ internal static class LanczosEigen
             // — a plausible number that happened to be the SECOND bending pair. Stopping at
             // the first pair that has not converged is what makes "the lowest k" mean it.
             if (residual > tolerance)
+            {
+                // The closest miss of this check, recorded before the walk stops: it is the
+                // only evidence a caller has that the wanted eigenvalue was there at all.
+                rejected = (lambda, residual);
                 break;
+            }
 
             accepted.Add(new EigenPair(lambda, (double[])phi.Clone(), residual));
             if (accepted.Count >= wanted)
@@ -377,11 +456,12 @@ internal static class LanczosEigen
     }
 
     /// <summary>
-    /// M-orthogonalizes <paramref name="v"/> against <paramref name="against"/> (two passes)
-    /// and M-normalizes it. False when nothing survives, i.e. the vector lay in the space.
+    /// Orthogonalizes <paramref name="v"/> against <paramref name="against"/> in the
+    /// <paramref name="metric"/> inner product (two passes) and normalizes it there. False
+    /// when nothing survives, i.e. the vector lay in the space.
     /// </summary>
     public static bool Purge(
-        PackedSparseMatrix m, IReadOnlyList<double[]> against, double[] v, double[] scratch)
+        PackedSparseMatrix metric, IReadOnlyList<double[]> against, double[] v, double[] scratch)
     {
         int n = v.Length;
         double initial = 0;
@@ -390,12 +470,12 @@ internal static class LanczosEigen
 
         for (int pass = 0; pass < 2; pass++)
         {
-            m.Multiply(v, scratch);
+            metric.Multiply(v, scratch);
             foreach (var u in against)
                 Subtract(v, u, Dot(u, scratch));
         }
 
-        m.Multiply(v, scratch);
+        metric.Multiply(v, scratch);
         double norm = Dot(v, scratch);
         // Relative to what came in, so the test is scale-free: a vector that lost all its
         // Euclidean length to the projection is in the space, whatever the model's units.
