@@ -145,6 +145,25 @@ uploaded once and a revisit costs no GPU work at all. Measured in the demo below
 to switch to a tab placing the same two parts four times, against ~1 670 ms to build the
 model in the first place.
 
+**What a part's upload CONTAINS is shared; when it is released is not.** Everything
+`UploadPartAsync` computes before its first interop call is one
+`PartUploads.Build(part, PartUploadRequest.All)` in `EngrCAD.Viewer.Core` — the flat
+`RenderMesh`, the field colour and displacement buffers, the feature-edge and wireframe
+segments, the pick BVH — the *same call* the desktop window and the offscreen pass make,
+so the browser cannot upload different floats for one part. `All` is the window's policy
+too, and for the window's reason: the view style is a dropdown, so every piece goes up
+whatever is currently drawn. No occlusion source is supplied, because there is no bake
+here; the attribute's constant-when-absent rule makes that exactly the flat-lit shading
+rather than a special case. The **cache** is deliberately not shared — releasing on tab
+switch is this client's own lifetime, where the window releases on GL deinit.
+
+Verified the way this front end can be: two clean publishes, before and after the
+extraction, driven through `?report` in the same headless Edge sitting produced a
+**character-identical beacon** — every pixel relationship in it, from `tris=1560` and
+`bodyWhole=32374 → bodySectioned=20593` down to `hoverShifted=0`. The one field that moved
+is `tabSwitchMs`, which is a clock reading under `--virtual-time-budget` and therefore
+meaningless in a `--dump-dom` run (see below).
+
 ### This client does NOT use `TabMeshLoader`, and the reason is not Avalonia
 
 `TabMeshLoader` now lives in `EngrCAD.Viewer.Core` (it is genuinely Avalonia-free and

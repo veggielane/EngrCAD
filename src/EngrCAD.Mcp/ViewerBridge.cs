@@ -143,6 +143,15 @@ public sealed class ViewerTools(ViewerRpcClient client)
                     $"measured {(double)result!["distance"]!:G6} between the picked surface points")
                 : "measure: no surface under one of the points");
 
+    /// <summary>
+    /// Captures the running viewer's next rendered frame and returns it as an MCP
+    /// <b>image block</b>, exactly as the headless <c>screenshot</c> tool does.
+    /// <para>This used to return a PATH and nothing else — a promise, since the window's
+    /// capture happens on its next frame and the RPC handler had no edge to wait on. The
+    /// endpoint now completes only once the PNG is on disk, so the bytes can simply be
+    /// read back: the endpoint is loopback-only, which is what makes "the file the viewer
+    /// wrote" a file THIS process can open.</para>
+    /// </summary>
     public CallToolResult Screenshot(
         [Description("PNG path for the captured window frame (omit for Pictures/EngrCAD).")]
         string? path = null)
@@ -150,9 +159,47 @@ public sealed class ViewerTools(ViewerRpcClient client)
         var parameters = new JsonObject();
         if (path is not null)
             parameters["path"] = path;
-        return Forward("screenshot", parameters, result =>
-            $"viewer will write its next frame to {(string?)result?["path"]} "
-            + "(capture happens inside the render pass; the file appears after the next frame)");
+
+        JsonNode? result;
+        try
+        {
+            result = Client.SendAsync("screenshot", parameters).GetAwaiter().GetResult();
+        }
+        catch (ViewerRpcException e)
+        {
+            // The viewer's own message — "no frame within Ns" names the real cause, which
+            // a generic capture failure would hide.
+            return Error(e.Message);
+        }
+        catch (Exception e) when (e is SocketException or IOException or OperationCanceledException)
+        {
+            return Error(NoViewer(e));
+        }
+
+        string? written = (string?)result?["path"];
+        if (written is null)
+            return Error("the viewer answered the screenshot request without naming a file.");
+
+        byte[] png;
+        try
+        {
+            png = File.ReadAllBytes(written);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Worth saying the path out loud: the capture itself succeeded, so a human can
+            // still go and look at it.
+            return Error($"The viewer wrote '{written}' but it could not be read back "
+                + $"({e.GetType().Name}: {e.Message}).");
+        }
+        return new CallToolResult
+        {
+            Content =
+            [
+                ImageContentBlock.FromBytes(png, "image/png"),
+                new TextContentBlock { Text = $"viewer frame captured to {written} ({png.Length} bytes)" },
+            ],
+        };
     }
 
     // ---- plumbing ----
@@ -179,12 +226,14 @@ public sealed class ViewerTools(ViewerRpcClient client)
         }
         catch (Exception e) when (e is SocketException or IOException or OperationCanceledException)
         {
-            return Error(
-                $"No live viewer answered at 127.0.0.1:{Client.Port} ({e.GetType().Name}: {e.Message}). "
-                + "Start the model program with --rpc <port> (and pass the same port to this server "
-                + "via --viewer <port>).");
+            return Error(NoViewer(e));
         }
     }
+
+    private string NoViewer(Exception e) =>
+        $"No live viewer answered at 127.0.0.1:{Client.Port} ({e.GetType().Name}: {e.Message}). "
+        + "Start the model program with --rpc <port> (and pass the same port to this server "
+        + "via --viewer <port>).";
 
     private static CallToolResult Error(string message) => new()
     {

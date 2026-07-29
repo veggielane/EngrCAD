@@ -2971,6 +2971,29 @@ for `in`-parameters being illegal in expression trees.
   `GL` or does not; there was no third category to argue about. The seam's one cost is
   two forced class renames (linking and uploading split out of `ViewerShaders` and
   `RenderGeometry`), because a C# class cannot span assemblies.
+- **Extract the VALUE, not the lifecycle - which is why `PartUploads` exists and
+  `ViewerModel` still does not.** All three front ends built the same five things per part
+  before touching GL (`RenderMesh.CreateFlat`, the `FieldRendering.TryBuild` result, the
+  occlusion array, `Part.GetFeatureEdges`, `WireframeEdges.Extract`, plus a `PickMesh`),
+  and each is a pure function of the part. That extracts cleanly as `PartUpload` +
+  `PartUploads.Build`. What does NOT extract is *scheduling*: the window streams uploads
+  per part through `TabMeshLoader` on two threads, the offscreen pass is one-shot and
+  synchronous, and the browser interleaves awaited JS uploads on one thread. A shared
+  "ViewerModel" would have to abstract exactly the part that must not look the same, so it
+  stays declined. **Two things `Build` deliberately does not do, and each is a real
+  per-front-end policy rather than an accident.** (a) It does not decide WHICH pieces to
+  build - the one-shot offscreen pass skips what its resolved mode cannot use because it
+  has no dropdown to change its mind, while the window and the browser build everything so
+  a style dropdown never re-uploads; the caller states its policy in a `PartUploadRequest`.
+  (b) It does not own the cache: all three key on `Part` reference, but the browser
+  releases on tab switch, the window on GL deinit and the offscreen pass with its context.
+  Occlusion arrives as a *delegate* for the same reason - the window asks a never-bake
+  cache read (so an upload cannot stall the render thread) while the offscreen pass bakes
+  inline to stay deterministic, and those are different questions, not one flag. What DOES
+  belong in the shared code is every rule about the CONTENT, and the payoff is one of
+  them: **a part carrying a displacement draws no feature-edge overlay at any factor** had
+  been written out three times, once per pass. Verified the only way a pure render
+  refactor can be: all 108 committed docs PNGs byte-identical.
 - **Assembly name is not namespace, deliberately.** `EngrCAD.Viewer.Core` publishes types
   in namespace `EngrCAD.Viewer`. Nothing in .NET requires a namespace to live in one
   assembly, and `SectionPlane`/`ViewStyle` are public API with call sites in options,
@@ -3542,13 +3565,35 @@ for `in`-parameters being illegal in expression trees.
   `RemoteViewerDispatcher` (the method vocabulary over `IRemoteViewer` — pure
   translation), and `ViewportRemoteViewer` (the only layer that knows Avalonia:
   every call marshals through `Dispatcher.UIThread`, and GL is never touched — a
-  screenshot rides `SaveScreenshot`'s capture-on-next-frame path). That layering is
-  what makes the stack testable without a window: transport and vocabulary are locked
+  screenshot rides `CaptureScreenshotAsync`'s capture-on-next-frame path). That layering
+  is what makes the stack testable without a window: transport and vocabulary are locked
   headlessly over real sockets with a stub viewer, and only the thin
   `ViewportRemoteViewer` wiring needs a live window. **Off by default, opt-in**
   (`WithRemoteControl(port, token)` / `--rpc [port] [--rpc-token t]`), because the
   endpoint moves cameras and writes files: loopback-only plus an optional
   per-request token is the honest local posture, not security theater.
+- **A completion must fire where the RESULT becomes true, and a broadcast is not a
+  synchronisation primitive.** `viewer_screenshot` used to answer with a *path*, because
+  `SaveScreenshot` only arms a capture the render pass performs on its next frame — so
+  the RPC thread had nothing to wait on and the path was a claim about the future.
+  Returning pixels needs a per-request completion, and where it fires is the whole
+  question. **Not from the render pass**, which is what the backlog entry proposed and is
+  too EARLY: `glReadPixels` runs there, but the encode and the write are deliberately
+  off-thread, so a task completed there hands back a path to a file that does not exist
+  yet. **Not from the `Status` callback** either, but for a stronger reason than "it may
+  be posted late": `Status` is a BROADCAST carrying prose for successes and failures
+  alike, so a listener cannot tell its own capture from the toolbar button's or from a
+  second concurrent request's — matching a string is not synchronisation. It fires from
+  the capture's own write, immediately after `File.WriteAllBytes`. Two riders follow.
+  **Arming is UI-thread work and waiting deliberately is not** — blocking the dispatcher
+  is exactly how the frame would fail to arrive — so the deadline lives in
+  `ViewportRemoteViewer` (10 s, under `ViewerRpcClient`'s 15 s so a caller sees the
+  viewer's own message rather than a bare socket timeout), not in `ViewportControl`,
+  which cannot know how long its caller is willing to wait. And **splitting the write out
+  of the GL call is what made the ORDER testable**: `WriteCapture` takes pixels and no
+  context, so a headless test resumes on the completion and asserts the file is already
+  there — the entry had written this leg off as untestable, and it was only untestable
+  while the two were tangled.
 - **Live modeling via `dotnet watch` hot reload** (chosen over a custom `.csx`
   scripting host: standard tooling, full IDE/debugger support, no Roslyn-scripting
   dependency). `EngrCad.ShowLive(Func<Scene>)` + an assembly-level

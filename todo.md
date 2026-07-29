@@ -1938,33 +1938,24 @@ UI dependencies, which makes this unusually feasible.
   full suite green and all 53 rendered docs PNGs byte-identical. Note `TabMeshLoader`
   is Avalonia-free but **thread-model-bound** — the browser keeps its own
   single-threaded loader by design (EngrCAD.Web README).
-- [ ] **The `ViewerModel` abstraction (Scene→render-instances shared by Avalonia,
-  offscreen AND the web client)** — assessed during the step-2 move and deliberately NOT
-  forced. What the three front ends genuinely share is already extracted (frame values,
-  camera, modes, pick, widget geometry); what remains different is the *lifecycle*:
-  the window streams uploads per part through `TabMeshLoader` (two threads), the
-  offscreen pass is one-shot and synchronous, and the browser interleaves awaited JS
-  uploads on one thread. A shared ViewerModel would have to abstract exactly that
-  lifecycle, which is the part that must NOT look the same (the TabMeshLoader lesson).
-  The honest next step is smaller: extract the *pure* per-part upload description
-  (mesh + feature edges + wire edges + pick BVH, keyed by part reference) that all
-  three build today by hand, and leave scheduling to each front end.
-  **Re-assessed while the pose/measure rungs landed, and the shape is now clearer.**
-  The three passes build the same five things per part — `RenderMesh.CreateFlat(mesh)`,
-  the `FieldRendering.TryBuild` result and whether the ghost pass applies, the occlusion
-  array (window/offscreen only), `Part.GetFeatureEdges()` segments, `WireframeEdges`
-  segments, and a `PickMesh` — and every one is a pure function of `(Part, quality,
-  fields, ambientOcclusion)`. So the extractable piece is a `PartUpload` VALUE plus a
-  `PartUploads.Build(part, ...)` in `Viewer.Core`, with each front end keeping its own
-  dictionary, its own GL calls and its own scheduling. Two things it must NOT do: decide
-  WHICH of the five to build (the offscreen pass deliberately skips what its one-shot
-  mode cannot use, the other two deliberately build all of them so a dropdown never
-  re-uploads — a shared "what to build" rule would silently make one of those wrong),
-  and own the cache (the browser's release-on-tab-switch and the window's
-  release-on-deinit are different lifetimes). Worth about a day; the payoff is that the
-  ~40 lines each pass repeats — including the "a deformed part gets NO edge overlay"
-  rule, currently stated three times — become one. Nothing is blocked on it, which is
-  why it is still filed rather than done.
+- [x] **The per-part upload description** — `PartUpload` + `PartUploads.Build(part,
+  request)` + `PartUploadRequest` in `EngrCAD.Viewer.Core`: the render mesh, the
+  `FieldRendering.TryBuild` result (and its error), the occlusion array, the feature-edge
+  and wireframe segments and the pick BVH, built once for the window, the offscreen pass
+  and the browser. The caller states which pieces it wants and where occlusion comes from
+  (a delegate — never-bake cache read in the window, bake-inline offscreen, none in the
+  browser); the cache and every GL call stay with each front end. The payoff was the
+  content rules, above all **"a deformed part gets NO edge overlay at any factor"**, which
+  had been written out three times. Oracle: all 108 committed docs PNGs byte-identical.
+- [ ] **The full `ViewerModel` abstraction (Scene→render-instances shared by Avalonia,
+  offscreen AND the web client)** — assessed twice and still deliberately NOT forced.
+  Everything the three front ends genuinely share is now extracted (frame values, camera,
+  modes, pick, widget geometry, and — as of the item above — the per-part upload value);
+  what remains different is the *lifecycle*: the window streams uploads per part through
+  `TabMeshLoader` (two threads), the offscreen pass is one-shot and synchronous, and the
+  browser interleaves awaited JS uploads on one thread. A shared ViewerModel would have to
+  abstract exactly that lifecycle, which is the part that must NOT look the same (the
+  TabMeshLoader lesson). Nothing is blocked on it.
 - [ ] **`EngrCAD.Viewer.Core` pulls the whole kernel**, because `RenderModes.Resolve` is
   written against `EngrCAD.Modeling.DisplayMode`. Right for kernel-in-the-browser; if a
   shaders-only consumer ever appears, the fix is a Viewer.Core-local display-mode enum —
@@ -2049,30 +2040,37 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 - [ ] **The windowed RPC path needs one manual pass**: transport, vocabulary, and the
   bridge are locked headlessly over real sockets with a stub viewer, but
   `ViewportRemoteViewer` against a real window (UI-thread marshaling under a live
-  dispatcher, `SaveScreenshot` actually writing) has no automated test — drive
+  dispatcher, a real render pass reaching `WriteCapture`, and the arm-on-UI-thread /
+  wait-off-it split behind `CaptureScreenshotAsync`) has no automated test — drive
   `samples/EngrCAD.LiveDemo --rpc` once per release, or build a windowed
-  integration test on the `SendInput` harness.
-- [ ] **`viewer_screenshot` returns a path, not pixels** — the capture lands on disk
-  via the window's next frame. Returning the PNG as an MCP image block needs a
-  completion signal from the render pass back to the RPC thread (the status callback
-  carries the path today); worth it if assistants use the tool blind.
-  **Assessed; the shape, and why it is more than plumbing.** `ViewportControl.SaveScreenshot`
-  arms a capture and the render pass performs it on its NEXT frame, so the RPC thread has
-  no edge to wait on — it currently returns as soon as the request is armed and the path
-  is a promise, not a fact. The fix is a `TaskCompletionSource` (or a
-  `ManualResetEventSlim`) completed from the render pass after `glReadPixels`, awaited by
-  the RPC handler with a timeout; the bridge then reads the file and returns an image
-  block exactly as headless `screenshot` does. Three details decide whether it is
-  correct: the completion must fire from inside the render pass and NOT from the status
-  callback (which reports the path and is posted separately, so it can run before the
-  bytes are on disk); the wait must have a deadline, because a minimised or occluded
-  window may not render for a long time and a hung RPC connection is worse than a path;
-  and a window that never renders should return the honest "no frame was produced"
-  rather than a stale file. Small — perhaps 40 lines across `ViewportControl`,
-  `ViewportRemoteViewer` and `ViewerTools` — but it is genuinely render-thread work, and
-  it cannot be tested by the headless socket harness that covers the rest of the bridge
-  (the stub viewer has no render pass), so it lands with the windowed manual pass above
-  or not at all.
+  integration test on the `SendInput` harness. Everything either side of that leg IS
+  covered headlessly: the write's ordering contract without a GL context, and the
+  vocabulary and bridge over real sockets with a stub.
+- [x] **`viewer_screenshot` returns pixels** — `ViewportControl.CaptureScreenshotAsync`
+  is `SaveScreenshot` with a `TaskCompletionSource`; `ViewportRemoteViewer` awaits it
+  OFF the UI thread under a 10 s deadline (blocking the dispatcher is how the frame would
+  fail to arrive), the RPC result carries `written: true`, and `ViewerTools.Screenshot`
+  reads the file and returns an MCP image block exactly as headless `screenshot` does —
+  legitimate because the endpoint is loopback-only.
+  **One detail of the filed diagnosis was wrong and is worth keeping.** It said the
+  completion must fire "from inside the render pass"; that is too EARLY. `glReadPixels`
+  runs there, but the encode and the write are deliberately off-thread, so a task
+  completed at that point hands back a path to a file that does not exist yet. It fires
+  from the write, immediately after `File.WriteAllBytes`. The entry's *conclusion* — not
+  the `Status` callback — was right, but for a stronger reason than the one given: `Status`
+  is a BROADCAST carrying prose for successes and failures alike, so a listener cannot
+  tell its own capture from the toolbar button's or from a second concurrent request's.
+  Synchronising on a string is not synchronisation.
+  It also claimed this "cannot be tested by the headless socket harness", which held only
+  because the write was tangled with the GL call: splitting `WriteCapture` out (pixels in,
+  no context) makes the ORDER assertable — resume on the completion, assert the file is
+  already there — and the bridge's image block, the timeout refusal and the
+  unreadable-file case are all covered over real sockets with a stub. What genuinely still
+  needs the windowed manual pass is the two legs that touch a `ViewportControl`: that a
+  real render pass reaches `WriteCapture`, and `ViewportRemoteViewer`'s own
+  arm-on-UI-thread / wait-off-it split and its `ScreenshotTimeout` (it takes a concrete
+  `ViewportControl`, so there is nothing to substitute; making that an interface is a
+  bigger change than the leg is worth).
 - [ ] **Option (c) — viewer hosts MCP directly over HTTP+SSE** stays parked unless the
   bridge process proves annoying in practice.
 - [ ] **`screenshot`'s `t` covers the animation; the RPC bridge's `viewer_screenshot`
@@ -2087,12 +2085,6 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   covers the "hand the tuning back" case that motivated it.
   (Packaging is settled: `src/EngrCAD.Mcp` is its own package on
   `ModelContextProtocol.Core`, so viewer and kernel consumers inherit nothing.)
-- [ ] **`DocumentLoadResult.Snapshots` names parts by BARE name, not "tab/part"** — the
-  doc comment claimed the path form and the code has always written the name; the
-  comment is now honest. Names are unique per TAB, so the report is ambiguous for a
-  document whose tabs share a part name. Changing it is one line plus the two assertions
-  that pin the spelling (`DocumentPersistenceTests`, `DocumentToolsTests`), left out of
-  the sweep that found it because a reporting-format change deserves its own commit.
 
 ## App layer / infrastructure
 

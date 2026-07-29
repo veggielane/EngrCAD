@@ -237,8 +237,10 @@ public static class OffscreenRenderer
         uint WireVao, int WireVertexCount, Matrix4d Model, PartColor Color, Vector3d WorldCenter,
         bool SectionClipped, bool FieldColored, double DeformScale, uint GhostVao, int GhostIndexCount);
 
-    /// <summary>The per-part GL buffers a draw needs, shared by every instance of that part.</summary>
-    private readonly record struct PartUpload(
+    /// <summary>The per-part GL buffers a draw needs, shared by every instance of that
+    /// part. (The CPU-side data behind them is the shared <see cref="PartUpload"/>; this
+    /// is only what survives once it has been handed to GL.)</summary>
+    private readonly record struct PartBuffers(
         uint Vao, int IndexCount, uint EdgeVao, int EdgeVertexCount,
         uint WireVao, int WireVertexCount, bool FieldColored, double DeformScale,
         uint GhostVao, int GhostIndexCount);
@@ -275,7 +277,7 @@ public static class OffscreenRenderer
 
         /// <summary>Uploads keyed by <see cref="Part"/> REFERENCE — the same identity
         /// <c>Scene.AllParts</c> dedupes by, so N instances of one part share one set.</summary>
-        public Dictionary<Part, PartUpload> Uploaded { get; } = [];
+        public Dictionary<Part, PartBuffers> Uploaded { get; } = [];
     }
 
     private static unsafe byte[] Draw(
@@ -379,67 +381,61 @@ public static class OffscreenRenderer
             var mode = RenderModes.Resolve(style, part.EffectiveDisplayMode);
             if (!uploaded.TryGetValue(part, out var shared))
             {
-                var mesh = part.GetMesh();
+                // The CPU half is the shared PartUploads.Build — the SAME call the window
+                // and the browser make, so all three build identical render meshes, colour
+                // and displacement floats, and edge segments. What is one-shot-specific is
+                // the POLICY: this pass resolved the effective mode before uploading and
+                // has no dropdown to change its mind, so it asks only for the pieces that
+                // mode draws, and never for a pick BVH.
+                bool shaded = mode != EffectiveMode.Wireframe;
+                var upload = PartUploads.Build(part, new PartUploadRequest
+                {
+                    Fields = fields,
+                    FeatureEdges = mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent,
+                    WireEdges = mode == EffectiveMode.Wireframe,
+                    Pick = false,
+                    // Baked inline (unlike the window's never-bake cache read): a one-shot
+                    // render must be deterministic. Cached per mesh and shared with the
+                    // window pass, so both shade from identical floats. Skipped entirely
+                    // for wireframe, which uploads no fill to shade.
+                    Occlusion = ambientOcclusion && shaded
+                        ? static (m, r) => Viewer.AmbientOcclusion.For(m, r)
+                        : null,
+                });
+                var render = upload.Render;
+                var field = upload.Field;
+
                 uint vao = 0;
                 int indexCount = 0;
-                // Simulation results (the same FieldRendering call the window makes, so
-                // both passes upload identical colour and displacement floats). The
-                // geometry uploaded is the UNDEFORMED mesh: the shader displaces it from
-                // uDeformScale, which is what makes a whole animated clip reuse one
-                // upload.
-                var render = RenderMesh.CreateFlat(mesh);
-                FieldMeshData? field =
-                    fields && FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out _)
-                        ? built
-                        : null;
                 uint ghostVao = 0;
                 int ghostIndexCount = 0;
-                if (mode != EffectiveMode.Wireframe)
+                if (shaded)
                 {
-                    // Baked per-vertex occlusion (cached per mesh, shared with the
-                    // window pass, deterministic) — the whole AO story is vertex data,
-                    // so both passes shade from identical floats.
-                    (vao, _, _, _, _, _) = RenderUploads.UploadMesh(gl, render,
-                        ambientOcclusion ? Viewer.AmbientOcclusion.For(mesh, render) : null,
-                        field?.Colors, field?.Deformation);
-                    indexCount = render.Indices.Length;
-                    if (field is { ShowGhost: true })
+                    (vao, _, _, _, _, _) = RenderUploads.UploadMesh(
+                        gl, render, upload.Occlusion, field?.Colors, field?.Deformation);
+                    indexCount = upload.IndexCount;
+                    if (upload.ShowGhost)
                     {
                         (ghostVao, _, _, _, _, _) = RenderUploads.UploadMesh(gl, render);
-                        ghostIndexCount = render.Indices.Length;
+                        ghostIndexCount = upload.IndexCount;
                     }
                 }
                 uint edgeVao = 0;
                 int edgeVertexCount = 0;
-                // A deformed part gets no edge overlay: those edges describe geometry
-                // that has moved (the window's rule, stated once in each pass because
-                // the passes decide what to upload separately).
-                if (mode is EffectiveMode.ShadedWithEdges or EffectiveMode.Translucent
-                    && field is not { Deformed: true })
+                if (upload.FeatureEdges.Count > 0)
                 {
-                    // B-Rep-backed parts overlay their ACTUAL B-Rep edges (smooth
-                    // circles at any tessellation); others fall back to mesh
-                    // dihedrals — same rule as the window (Part.GetFeatureEdges).
-                    var featureEdges = part.GetFeatureEdges();
-                    if (featureEdges.Count > 0)
-                    {
-                        (edgeVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
-                        edgeVertexCount = featureEdges.Count * 2;
-                    }
+                    (edgeVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.FeatureEdges));
+                    edgeVertexCount = upload.FeatureEdgeVertexCount;
                 }
                 uint wireVao = 0;
                 int wireVertexCount = 0;
-                if (mode == EffectiveMode.Wireframe)
+                if (upload.WireEdges.Count > 0)
                 {
-                    var wireEdges = WireframeEdges.Extract(mesh);
-                    if (wireEdges.Count > 0)
-                    {
-                        (wireVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
-                        wireVertexCount = wireEdges.Count * 2;
-                    }
+                    (wireVao, _) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.WireEdges));
+                    wireVertexCount = upload.WireEdgeVertexCount;
                 }
-                shared = new PartUpload(vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
-                    field is not null, field?.DeformScale ?? 0, ghostVao, ghostIndexCount);
+                shared = new PartBuffers(vao, indexCount, edgeVao, edgeVertexCount, wireVao, wireVertexCount,
+                    upload.FieldColored, upload.DeformScale, ghostVao, ghostIndexCount);
                 uploaded[part] = shared;
             }
 

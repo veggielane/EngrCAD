@@ -379,43 +379,30 @@ public sealed class ViewportControl : OpenGlControlBase
     /// <summary>Uploads one distinct part's buffers and registers them for deletion.</summary>
     private SharedMesh UploadShared(GL gl, Part part)
     {
-        var mesh = part.GetMesh();
-        var render = RenderMesh.CreateFlat(mesh);
-        // Simulation results, if the part shows any: a colour buffer for attribute 3
-        // and, for a deformed-shape display, the displacement attributes for 4-7. The
-        // geometry uploaded is the UNDEFORMED mesh either way — the shader displaces it
-        // from a uniform, which is what keeps an animated result off the re-upload path.
-        FieldMeshData? field = null;
-        if (_showFields)
+        // Everything before the first GL call is the shared PartUploads.Build: the render
+        // mesh, the field colour/displacement buffers, both edge sets, the pick BVH and —
+        // through the delegate below — the occlusion array. What stays here is the policy
+        // (all four pieces, because the view-style dropdown must never re-upload) and the
+        // uploads themselves.
+        var upload = PartUploads.Build(part, PartUploadRequest.All with
         {
-            if (FieldRendering.TryBuild(part, render, mesh.VertexCount, out var built, out string? fieldError))
-                field = built;
-            else if (fieldError is not null)
-                ShowStatus(fieldError);   // a display asked for and not honourable, named
-        }
+            Fields = _showFields,
+            // Only if it is ALREADY cached: TryGet never bakes, so this upload can never
+            // stall the render thread. An uncached part goes up without an occlusion
+            // buffer, which reads the constant 1.0 and is exactly the flat-lit shading;
+            // the background bake (StartOcclusionBake) then publishes its result and
+            // BackfillOcclusion attaches it on a later frame.
+            Occlusion = _ambientOcclusion ? static (m, _) => Viewer.AmbientOcclusion.TryGet(m) : null,
+        });
+        if (upload.FieldError is { } fieldError)
+            ShowStatus(fieldError);   // a display asked for and not honourable, named
 
-        // B-Rep-backed parts get their edge overlay from the ACTUAL B-Rep edges
-        // (exact circles stay smooth at coarse tessellation); others fall back to
-        // mesh dihedrals. Cached per part — Scene.PreMesh primed it off-thread.
-        // A DEFORMED part gets none: those edges describe geometry that has moved, and
-        // drawing them over the displaced shape would be a wrong outline rather than a
-        // coarse one. The test is whether the part CARRIES a displacement, not what the
-        // scale happens to be at this instant: the draw list must not depend on an
-        // animation's t, which is the rule that lets a whole clip reuse one upload.
-        var featureEdges = field is { Deformed: true }
-            ? []
-            : part.GetFeatureEdges();
-        var wireEdges = WireframeEdges.Extract(mesh);
-        // Baked per-vertex occlusion, but ONLY if it is already cached: TryGet never
-        // bakes, so this upload can never stall the render thread. An uncached part goes
-        // up without an occlusion buffer, which reads the constant 1.0 and is exactly the
-        // flat-lit shading; the background bake (StartOcclusionBake) then publishes its
-        // result and BackfillOcclusion attaches it on a later frame.
-        var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(gl, render,
-            _ambientOcclusion ? Viewer.AmbientOcclusion.TryGet(mesh) : null,
-            field?.Colors, field?.Deformation);
-        var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(featureEdges));
-        var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(wireEdges));
+        var render = upload.Render;
+        var field = upload.Field;
+        var (vao, vbo, ebo, aoVbo, fieldVbo, deformVbo) = RenderUploads.UploadMesh(
+            gl, render, upload.Occlusion, field?.Colors, field?.Deformation);
+        var (edgeVao, edgeVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.FeatureEdges));
+        var (wireVao, wireVbo) = RenderUploads.UploadLines(gl, RenderGeometry.SegmentVertices(upload.WireEdges));
 
         // The undeformed shape, ghosted behind the deformed one — the comparison IS the
         // point of a deformed-shape plot. It keeps its OWN buffers rather than re-drawing
@@ -424,25 +411,21 @@ public sealed class ViewportControl : OpenGlControlBase
         // displaced shading is per triangle) and no baked occlusion attached to it.
         uint ghostVao = 0, ghostVbo = 0, ghostEbo = 0;
         int ghostIndexCount = 0;
-        if (field is { ShowGhost: true })
+        if (upload.ShowGhost)
         {
             (ghostVao, ghostVbo, ghostEbo, _, _, _) = RenderUploads.UploadMesh(gl, render);
-            ghostIndexCount = render.Indices.Length;
+            ghostIndexCount = upload.IndexCount;
         }
 
         _gpuBuffers.Add(new PartBuffers(
             part, vao, vbo, ebo, edgeVao, edgeVbo, wireVao, wireVbo, aoVbo, fieldVbo, deformVbo,
             ghostVao, ghostVbo, ghostEbo));
 
-        return new SharedMesh(vao, vbo, ebo, render.Indices.Length,
-            edgeVao, edgeVbo, featureEdges.Count * 2,
-            wireVao, wireVbo, wireEdges.Count * 2,
-            // Picking follows what is DRAWN at the part's own exaggeration: the pick BVH
-            // is a spatial index, so unlike the shading it cannot be a uniform, and it is
-            // built once over the displaced triangles (FieldRendering.PickShape states
-            // what that costs while an animation is running).
-            PickMesh.Build(field is { } f ? FieldRendering.PickShape(render, f) : render), aoVbo,
-            field is not null, field?.DeformScale ?? 0, ghostVao, ghostIndexCount);
+        return new SharedMesh(vao, vbo, ebo, upload.IndexCount,
+            edgeVao, edgeVbo, upload.FeatureEdgeVertexCount,
+            wireVao, wireVbo, upload.WireEdgeVertexCount,
+            upload.RequirePick, aoVbo,
+            upload.FieldColored, upload.DeformScale, ghostVao, ghostIndexCount);
     }
 
     /// <summary>Deletes the per-part GPU buffers (once each — instances share them).</summary>
@@ -866,8 +849,8 @@ public sealed class ViewportControl : OpenGlControlBase
 
         // A requested screenshot reads back the finished frame while the context is
         // current (GL calls are only legal here), then encodes off-thread.
-        if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } screenshotPath)
-            CaptureFramebuffer(gl, (int)width, (int)height, screenshotPath);
+        if (Interlocked.Exchange(ref _pendingScreenshot, null) is { } capture)
+            CaptureFramebuffer(gl, (int)width, (int)height, capture);
     }
 
     /// <summary>The global-style x part-mode precedence, resolved by
@@ -1478,7 +1461,14 @@ public sealed class ViewportControl : OpenGlControlBase
 
     // ---- screenshot ----
 
-    private string? _pendingScreenshot;
+    /// <summary>
+    /// A capture the render pass has been asked for and has not performed yet: where it
+    /// will be written, and — for a caller that needs to KNOW rather than be promised —
+    /// the completion the write signals.
+    /// </summary>
+    internal sealed record PendingScreenshot(string Path, TaskCompletionSource<string>? Completion);
+
+    private PendingScreenshot? _pendingScreenshot;
 
     /// <summary>
     /// Saves the next rendered frame as a PNG. Thread-safe: the pixels are read inside
@@ -1486,10 +1476,53 @@ public sealed class ViewportControl : OpenGlControlBase
     /// resulting path (or failure) is reported through <see cref="Status"/>.
     /// With no <paramref name="path"/>, writes a timestamped file under
     /// Pictures/EngrCAD (falling back to the working directory).
+    /// <para>Fire and forget — the path is a PROMISE, since the render pass has not run
+    /// yet. A caller that must read the file wants
+    /// <see cref="CaptureScreenshotAsync"/>.</para>
     /// </summary>
-    public void SaveScreenshot(string? path = null)
+    public void SaveScreenshot(string? path = null) => ArmScreenshot(path, null);
+
+    /// <summary>
+    /// Captures the next rendered frame and completes with the PNG's path <b>once the
+    /// file has been written</b> — what an RPC caller needs, since it is going to read
+    /// the bytes back.
+    /// <para><b>Why not the <see cref="Status"/> callback, and why not the render pass
+    /// either.</b> <c>Status</c> is a BROADCAST: one event for every message this control
+    /// emits, carrying prose for successes and failures alike, so a caller listening on
+    /// it cannot tell its own capture from the toolbar button's, from a second concurrent
+    /// request's, or from an unrelated status line — synchronising on a string is not
+    /// synchronisation. And the render pass itself is too EARLY: <c>glReadPixels</c> runs
+    /// there, but the encode and the write are deliberately off-thread, so a task
+    /// completed at that point would hand back a path to a file that does not exist yet.
+    /// The completion therefore rides the capture's own write, immediately after
+    /// <c>File.WriteAllBytes</c> returns.</para>
+    /// <para><b>There is no deadline here</b>, deliberately: a minimised or occluded
+    /// window may not render for a long time, but how long to wait is a policy of
+    /// whatever is waiting (<c>ViewportRemoteViewer</c> imposes one, because an RPC
+    /// connection must not hang). What this DOES guarantee is that the task is always
+    /// resolved: a request superseded by another before any frame ran fails by name
+    /// rather than waiting forever.</para>
+    /// </summary>
+    public Task<string> CaptureScreenshotAsync(string? path = null)
     {
-        Interlocked.Exchange(ref _pendingScreenshot, path ?? DefaultScreenshotPath());
+        // RunContinuationsAsynchronously: the completion fires on the encode task, and a
+        // continuation resuming there would run caller code on a worker this class owns.
+        var completion = new TaskCompletionSource<string>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        ArmScreenshot(path, completion);
+        return completion.Task;
+    }
+
+    private void ArmScreenshot(string? path, TaskCompletionSource<string>? completion)
+    {
+        var superseded = Interlocked.Exchange(
+            ref _pendingScreenshot,
+            new PendingScreenshot(path ?? DefaultScreenshotPath(), completion));
+        // Only one capture can be pending, so a second request before any frame ran
+        // discards the first. Fail its awaiter rather than leaving a task nothing will
+        // ever complete.
+        superseded?.Completion?.TrySetException(new InvalidOperationException(
+            "the screenshot was superseded by another capture request before a frame was rendered"));
         Avalonia.Threading.Dispatcher.UIThread.Post(RequestNextFrameRendering);
     }
 
@@ -1502,30 +1535,47 @@ public sealed class ViewportControl : OpenGlControlBase
         return Path.Combine(folder, $"engrcad-{DateTime.Now:yyyyMMdd-HHmmss}.png");
     }
 
-    /// <summary>Reads the finished frame (GL context current) and encodes/writes it off-thread.</summary>
-    private unsafe void CaptureFramebuffer(GL gl, int width, int height, string path)
+    /// <summary>Reads the finished frame (GL context current) and hands the pixels to
+    /// <see cref="WriteCapture"/>, which encodes and writes them off-thread.</summary>
+    private unsafe void CaptureFramebuffer(GL gl, int width, int height, PendingScreenshot capture)
     {
         var pixels = new byte[width * height * 4];
         fixed (byte* p = pixels)
             gl.ReadPixels(0, 0, (uint)width, (uint)height, PixelFormat.Rgba, PixelType.UnsignedByte, p);
+        _ = WriteCapture(width, height, pixels, capture, ShowStatus);
+    }
 
+    /// <summary>
+    /// Encodes a captured frame and writes it, off the render thread, then resolves the
+    /// capture's completion and reports through the status callback.
+    /// <para><b>The ORDER is the contract</b>: the completion is set after
+    /// <c>File.WriteAllBytes</c> returns and before the status line, so a caller that
+    /// awaits it may read the file immediately. Separated from
+    /// <see cref="CaptureFramebuffer"/> — which needs a GL context — precisely so that
+    /// ordering is testable without a window.</para>
+    /// <para>Returns the encode/write task so a test can await the whole capture; the
+    /// render pass discards it.</para>
+    /// </summary>
+    internal static Task WriteCapture(
+        int width, int height, byte[] pixels, PendingScreenshot capture, Action<string> report) =>
         Task.Run(() =>
         {
             try
             {
                 // GL rows are bottom-up; the framebuffer alpha is compositing residue.
                 var png = PngWriter.Encode(width, height, pixels, flipVertically: true, forceOpaque: true);
-                if (Path.GetDirectoryName(path) is { Length: > 0 } directory)
+                if (Path.GetDirectoryName(capture.Path) is { Length: > 0 } directory)
                     Directory.CreateDirectory(directory);
-                File.WriteAllBytes(path, png);
-                ShowStatus($"screenshot saved: {path}");
+                File.WriteAllBytes(capture.Path, png);
+                capture.Completion?.TrySetResult(capture.Path);
+                report($"screenshot saved: {capture.Path}");
             }
             catch (Exception e)
             {
-                ShowStatus($"screenshot failed: {e.Message}");
+                capture.Completion?.TrySetException(e);
+                report($"screenshot failed: {e.Message}");
             }
         });
-    }
 
     /// <summary>Zoom-to-fit: frames the camera on the visible parts' bounds.</summary>
     public void Frame()
