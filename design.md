@@ -945,6 +945,20 @@ splitting and B-Rep booleans will consume.
   face. Known limitation: splitting the closed edges of a generated face (e.g. a bore
   wall's circles when a cut passes through the hole) outruns the grid tessellator —
   trimmed-face tessellation is the companion work item to booleans.
+- **`FaceSplitter.SplitByCurves`** owns the choice between a **cascade** (curve by curve
+  over the fragments the previous curves produced) and **one simultaneous arrangement**
+  over all of them. The cascade is what booleans have always done and stays bit-for-bit
+  what they get; it works because a curve entering and leaving through the face boundary
+  closes its own arrangement, and a later curve then meets an earlier one's segments as
+  ordinary boundary edges. It structurally cannot work when a curve TERMINATES INSIDE the
+  face — the first curve applied has nothing to end on, and a dangling edge cannot be
+  traced — which is the shape an intersection curve takes once it is clipped to the other
+  face's trim. The simultaneous path nodes every curve against the boundary, against every
+  other curve, and at coincident ENDPOINTS (a junction, not a crossing: two clipped curves
+  meeting end to end touch, so no transversality test may be asked to decide it), then runs
+  the same boundary splitting, parity-filtered segment construction and `TraceFaces` walk.
+  The routing gate is evaluated before any topology is touched, because `SplitEdge` patches
+  neighbouring faces' loops and a refusal halfway would leave them half-edited.
 
 #### Assessment: should `FaceSplitter`'s tracing run on `Arrangement2d`? — **No**
 

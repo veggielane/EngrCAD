@@ -247,6 +247,57 @@ public static class FaceGeometry
     }
 
     /// <summary>
+    /// Distance from a point to a face's boundary, measured against the boundary's sampled
+    /// POLYLINE rather than against its samples — comparing against isolated sample points
+    /// would call a point sitting exactly on a straight edge "interior" whenever it happened
+    /// to fall between two of them (measured: a boss wall's own bottom rim read 0.125 away at
+    /// 32 samples, so the degenerate split it was meant to suppress went ahead anyway).
+    /// <para>For a CURVED edge the chords lie inside the arc, so a point on the boundary can
+    /// read up to a sagitta away — which errs toward calling it interior, the conservative
+    /// direction for both callers (keeping a boolean's rim curve, and refusing a splitting
+    /// curve that terminates in open space).</para>
+    /// </summary>
+    /// <remarks>
+    /// One rule, asked by <c>BrepBoolean.ReachesInterior</c> and by <c>FaceSplitter</c>'s
+    /// "does this curve terminate inside the face?" gate. Restating it per call site is how
+    /// three separate sagitta defects got in (see <see cref="ExactSampleParameters"/>).
+    /// </remarks>
+    public static double DistanceToBoundary(BrepFace face, in Vector3d point, int boundarySamples = 32)
+    {
+        double best = double.PositiveInfinity;
+        foreach (var loop in face.Loops)
+        {
+            foreach (var coedge in loop.Coedges)
+            {
+                var edge = coedge.Edge;
+                var parameters = ExactSampleParameters(
+                    edge.Curve, edge.Domain.Start, edge.Domain.End, boundarySamples);
+                var previous = edge.Curve.PointAt(parameters[0]);
+                for (int i = 1; i < parameters.Count; i++)
+                {
+                    var next = edge.Curve.PointAt(parameters[i]);
+                    best = Math.Min(best, DistanceToSegment(point, previous, next));
+                    previous = next;
+                }
+            }
+        }
+        return best;
+    }
+
+    /// <summary>Distance from a point to a line segment.</summary>
+    public static double DistanceToSegment(in Vector3d p, in Vector3d a, in Vector3d b)
+    {
+        var ab = b - a;
+        double lengthSquared = ab.LengthSquared;
+        // Exact-zero guard on a division, not a model tolerance: a degenerate sampling
+        // segment collapses to its own endpoint.
+        if (lengthSquared <= 0)
+            return p.DistanceTo(a);
+        double t = Math.Clamp((p - a).Dot(ab) / lengthSquared, 0, 1);
+        return p.DistanceTo(a + ab * t);
+    }
+
+    /// <summary>
     /// Whether a 3D point lies within a face (inside the outer loop, outside the holes),
     /// by parity of an upward-v ray against all pulled-back loops. Periodic u is handled
     /// by shifting each segment into the test point's period.

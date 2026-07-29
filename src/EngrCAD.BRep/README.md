@@ -730,6 +730,40 @@ operations. Depends only on `EngrCAD.Core`.
   plane): one vertex per junction, ONE edge per curve — so a boolean's other side,
   splitting each band by its own arc, pairs edge-for-edge in seam sealing — with the
   hole loop wound opposite the outer loop and the disk sharing the same edges.
+
+  **`SplitByCurves(face, curves)` is where the routing decision lives, and there are two
+  ways to split a face by several curves.** A **CASCADE** — each curve applied in turn to
+  the fragments the previous ones produced — is what booleans have always done and remains
+  bit-for-bit what they get: a curve that enters and leaves through the face's boundary
+  closes its own arrangement, and a later curve meets an earlier one's segments as ordinary
+  boundary edges of the fragment it is splitting, so curve–curve crossings come out for
+  free. **ONE SIMULTANEOUS ARRANGEMENT** is required when a curve TERMINATES INSIDE the
+  face, which the cascade structurally cannot do: the first curve applied has no partner
+  segments to end on, so its arrangement has a dangling edge and cannot be traced. That is
+  exactly the shape a face-pair intersection curve takes once it is clipped to the OTHER
+  face's trim — it stops where the neighbouring face's boundary crosses this face's
+  interior, and the curve continuing from there belongs to the neighbour. `SplitByCurve` is
+  the one-curve call into the same entry point, so the incumbent path is reached through the
+  new one rather than beside it.
+
+  The simultaneous path's nodes come from four sources, all found **before a single coedge
+  moves** (the rim-surgery all-or-nothing rule: `SplitEdge` patches neighbouring faces'
+  loops, so a refusal halfway would leave them half-edited): a curve crossing the face
+  boundary; two curves crossing each other (`CurveCrossings` + `RefineCurvePair`, the
+  curve–curve twin of the boundary refinement, seeded in uv and solved in 3D for the same
+  sagitta reason); two open curves whose **ENDPOINTS COINCIDE**; and mandatory seam breaks.
+  The third is not a special case of the second and must not be reached for by loosening a
+  transversality test — two clipped curves meeting end to end **touch**, and whether a
+  crossing test fires there depends on the angle they happen to meet at. Nodes within the
+  seam tier of one another are ONE node, so a corner where two clipped curves and the
+  boundary all meet yields one vertex rather than three. A dangling end with nothing to meet
+  is refused by name, reporting the point and how many curves were offered for the face —
+  the usual cause being that the curve it should have met was never handed to this face.
+  The gate (`NeedsSimultaneousArrangement`) is a property of the input: "does any curve stop
+  strictly inside the face", where *strictly* means clear of the boundary by the seam tier,
+  since an open cut may legitimately end exactly ON the boundary (a plane∩helical-band
+  spiral arc ends on the band's rails).
+
   Wrap-splitting refuses faces with
   non-wrapping loops (a contractible fragment can share the band's carrier surface; a
   wrapping curve with no crossings lies outside it), and a fragment with ≥ 2 loops
