@@ -253,21 +253,31 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   - `TriangulateBandWithHoles`/`ZipSlabs` has no interior rows — irrelevant today
     because every reachable band-with-holes lives on a cylinder or extrusion (ruled in
     v, chords exact), but a revolved band with holes would want the same treatment.
-  - **A wrapping band whose boundary carries a coarse INTRUDING bump folds, and worse with
-    density.** Newly reachable: carrier clipping turned `Torus(12,4) − plane − a blind Ø3
-    bore` from a refusal into a `Validate`-clean genus-1 solid whose volume converges
-    monotonically upward on the exact Pappus value (2916.5 / 2998.7 / 3009.4 / 3014.5 /
-    3018.4 / 3019.6 / 3020.5 at 16/32/48/64/96/128/192 against 3021.1) — but the torus's
-    tube is split into two `RevolvedSurface` halves at the generator seam, so each takes HALF
-    the bore rim, split at the seam rather than at the rim's u-extremes, and that half is not
-    u-monotone. The periodic-band tier pairs its chains by u, which is exactly the
-    configuration that inverts (the `ZipBand` lesson), and the rim is a 15–17-sample tracer
-    polyline that does not refine with the grid: folds run 2 / 0 / 0 / 1 / 1 / 14 / 53 and
-    worst agreement −0.304 / 0.743 / 0.994 / −0.133 / −0.179 / −0.226 / −0.304. Pinned as a
-    RECORD (not a bar) by
-    `TrimmedFaceRefusalTests.TorusCutWithABore_BuildsWithARecordedTessellationResidual`. The
-    fix is either splitting such a rim at its u-extremes before it becomes a boundary chain,
-    or routing a band with a non-monotone boundary run to the slab sweep.
+  - ~~**A wrapping band whose boundary carries a coarse INTRUDING bump folds, and worse
+    with density.**~~ ✅ **the folds are fixed, and the recorded diagnosis was wrong.**
+    The entry blamed the periodic-band tier pairing its chains by u and falling to the
+    inverting merge walk. Measured on that exact solid: **the merge walk is reached zero
+    times at any density**, both chains ARE u-monotone, and interior rows engage normally
+    — so the tier named was never involved. Every fold came from **refinement**: driving
+    the same faces with `refine: false` leaves the base fold-free at 16/32/48/64/96/128/192
+    alike, while refinement inflated the two tube halves ×4.1 at 192 segments and inverted
+    53 facets. `Refine` now refuses a split that would turn an agreeing facet into an
+    opposing one, and folds are 0 at every one of those densities (was
+    2 / 0 / 0 / 1 / 1 / 14 / 53). **The same guard cleared a defect nobody had filed**:
+    the drilled sphere, a corpus member audited only to 96/48, carried 127 folds at 192/96
+    (worst −0.9367) on its pole-bounded face and now carries none.
+  - **Refinement still makes a coarse-rim face WORSE, just no longer inside out.** Beside
+    a marching-tracer rim — 15–17 samples baked in at boolean time, whatever the grid
+    density — worst facet-vs-surface agreement at 192/96 is ~0.009 refined against ~0.18
+    unrefined on `Torus(12,4) − plane − Ø3 bore`, and **0.0079 refined against 0.9144
+    unrefined** on the drilled sphere's pole face. That the unrefined base is the better
+    mesh is the finding: the fix is a row path that covers the region beside a coarse
+    boundary so refinement stays idle there (the interior-rows argument, extended to a
+    boundary the rows currently cannot level against), NOT another rule inside `Refine`.
+    Recorded by `TrimmedFaceRefusalTests.TorusCutWithABore_...`, which now pins 0 folds at
+    48/24, 128/64 and 192/96 and bounds the worst dot as a record rather than a bar.
+    A second, independent lever on the same residual is to make the tracer's sample count
+    follow the tessellation density instead of its own arc-length step.
   ~~Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
   inscribed-ngon volume by ~5e-5~~ ✅ **fixed and verified** — see below.
 - ~~**A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by

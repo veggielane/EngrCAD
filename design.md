@@ -972,6 +972,30 @@ to plot.
   sphere 3 244 facets / 0 folds / 0.9994 with volume ratios 4.35 / 5.08, and refinement
   measured IDLE on 16 of 19 corpus members' trimmed faces — the "refinement is not a
   convergence mechanism" lesson, now enforced structurally rather than remembered.
+- **"Refinement is not a convergence mechanism" was the right lesson and only half the
+  rule; the other half is that refinement may not make a face WORSE.** Interior rows
+  demoted `Refine` to residue duty, which is where it belonged — but residue duty still
+  let it do damage wherever the base's quality is capped by something refinement cannot
+  see. The measured case is a boundary COARSER than the interior grid: a marching-tracer
+  rim keeps whatever sample count the tracer's arc-length step gave it however fine the
+  grid becomes, so an interior edge from that rim to a dense natural row is oversized by
+  the step metric and gets bisected — and lifting the midpoint onto the surface swings
+  the two halves past it, turning a correct facet into an inverted one. Refusing the
+  split leaves the parent facet, oversized and correct: exactly the fidelity trade
+  `Refine` already documents, now taken deliberately. The test compares each child's
+  facet-vs-surface agreement against `min(parent, 0)` — no constant, and it states both
+  halves at once (an agreeing facet may not become opposing; an already-opposing one may
+  not get worse). **The reason this is worth recording is what it says about diagnosis,
+  not about refinement**: two residuals had been filed against the BASE triangulation —
+  the torus-with-a-bore as "the periodic-band tier pairs its chains by u and falls to the
+  inverting merge walk", the drilled sphere implicitly by being audited only where it
+  looked clean — and driving the same faces with `refine: false` showed the base
+  fold-free at every density tried while refinement inflated the torus's tube halves ×4.1
+  and inverted 53 facets, and gave the drilled sphere 127 folds at 192/96. The merge walk
+  was reached **zero** times. A tier was blamed for a stage that ran after it, and the
+  measurement that settled it was simply turning the later stage off — the same move that
+  settled the ear-clipper's convergence stall, and worth reaching for earlier: **when a
+  pipeline stage is suspected, run the pipeline without it before theorising about it.**
 - **A degeneracy rule stated as "exactly zero" is a rule that does not fire, and the
   monotone sweep's turn test was one.** The sweep pops at a convex turn and deliberately
   does NOT treat collinear as a turn, because a ring's samples are collinear in uv and

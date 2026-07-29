@@ -2448,6 +2448,60 @@ internal static class TrimmedFaceTessellator
                     break;
                 }
             }
+
+            // Whether splitting this edge turns any owner's agreeing facet into an
+            // opposing one. Agreement is measured against the surface normal at the
+            // facet's own uv centroid — legal here, and only here, because we are IN
+            // parameter space: the audit's rule against centroids is about a 3D centroid
+            // sitting a sagitta off the surface so inverse evaluation fails, which cannot
+            // arise when the uv is already known.
+            double Agreement(in Vector2d ua, in Vector2d ub, in Vector2d uc,
+                in Vector3d pa, in Vector3d pb, in Vector3d pc)
+            {
+                var n = (pb - pa).Cross(pc - pa);
+                double length = n.Length;
+                if (length <= 0)
+                    return -1;
+                var centre = new Vector2d((ua.X + ub.X + uc.X) / 3, (ua.Y + ub.Y + uc.Y) / 3);
+                return n.Dot(NormalAt(surface, period, centre).Normalized()) / length;
+            }
+
+            bool WouldFold()
+            {
+                foreach (int t in owners)
+                {
+                    var (a, b, c) = Rotate(triangles[t], key);
+                    if (a < 0 || c == midIndex)
+                        continue; // already rewritten, or the sliver simply vanishes
+                    double parent = Agreement(uv[a], uv[b], uv[c], points[a], points[b], points[c]);
+                    double left = Agreement(uv[a], mid, uv[c], points[a], midPoint, points[c]);
+                    double right = Agreement(mid, uv[b], uv[c], midPoint, points[b], points[c]);
+                    if (Math.Min(left, right) < Math.Min(parent, 0))
+                        return true;
+                }
+                return false;
+            }
+
+            // A split may never make a face WORSE than the base it was handed. Refinement
+            // exists to carry curvature between honest samples; where a boundary is
+            // coarser than the interior grid — a traced rim keeps the sample count the
+            // TRACER's arc-length step gave it, however fine the grid around it becomes —
+            // bisecting an interior edge that runs from that coarse boundary to a dense
+            // row lifts the midpoint onto the surface and swings the two halves past it,
+            // so a facet that agreed with the surface is replaced by one that opposes it.
+            // Measured on `Torus(12,4) − plane − Ø3 bore` and on the drilled sphere: the
+            // BASE triangulation is fold-free at every density tried, and every fold at
+            // 128 and 192 segments was created here. Refusing the split leaves the parent
+            // facet — already oversized, already correct — which is the fidelity trade
+            // this method's remarks already permit, taken deliberately rather than by
+            // accident. The comparison is against `min(parent, 0)` rather than against 0,
+            // which needs no constant and says both halves of the rule at once: a facet
+            // that agrees may not be split into one that opposes, and a facet that already
+            // opposes may not be split into one that opposes MORE. A degenerate child
+            // scores −1 and is refused with them.
+            if (WouldFold())
+                continue;
+
             if (midIndex < 0)
             {
                 midIndex = uv.Count;
@@ -2505,13 +2559,28 @@ internal static class TrimmedFaceTessellator
     /// <summary>Evaluates the surface at an unwrapped uv (periodic u brought back into the domain).</summary>
     private static Vector3d EvaluateAt(Surface surface, double period, in Vector2d uv)
     {
+        var (u, v) = InDomain(surface, period, uv);
+        return surface.PointAt(u, v);
+    }
+
+    /// <summary>The surface normal at an unwrapped uv, wrapped exactly as
+    /// <see cref="EvaluateAt"/> wraps it so the two cannot disagree about which point of
+    /// the surface is meant.</summary>
+    private static Vector3d NormalAt(Surface surface, double period, in Vector2d uv)
+    {
+        var (u, v) = InDomain(surface, period, uv);
+        return surface.NormalAt(u, v);
+    }
+
+    private static (double U, double V) InDomain(Surface surface, double period, in Vector2d uv)
+    {
         double u = uv.X;
         var domainU = surface.DomainU;
         if (period > 0)
             u = domainU.Start + (((u - domainU.Start) % period) + period) % period;
         else
             u = domainU.Clamp(u);
-        return surface.PointAt(u, surface.DomainV.Clamp(uv.Y));
+        return (u, surface.DomainV.Clamp(uv.Y));
     }
 
     private static (int, int) EdgeKey(int a, int b) => a < b ? (a, b) : (b, a);

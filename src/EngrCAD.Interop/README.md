@@ -376,6 +376,44 @@ logging complements them, never replaces them.
     grid that defines the quality bar — and **pole-fan edges are refinement-exempt**,
     because the pole's u is arbitrary so a fan edge's uv u-span is an artifact
     (refining a *flat* vase disk's fan bent it into 467 folds at worst −1.0).
+
+    **A third rule joined them, and it is the one that says what refinement may NOT do:
+    a split may never turn a facet that AGREED with the surface into one that opposes
+    it.** The demotion above left refinement with residue duty, and residue duty still
+    let it do damage wherever the base's own quality is capped by something refinement
+    cannot see. The measured case is a boundary COARSER than the interior grid: a
+    marching-tracer rim keeps whatever sample count the tracer's arc-length step gave it,
+    however fine the grid around it becomes, so an interior edge running from that rim to
+    a dense natural row is oversized by the metric and gets bisected — and lifting the
+    midpoint onto the surface swings the two halves past it, replacing a correct facet
+    with an inverted one. Refusing the split leaves the parent facet, which is oversized
+    and correct: the fidelity trade `Refine` already documents, taken deliberately.
+    The test compares each child's facet-vs-surface agreement against `min(parent, 0)`,
+    which needs no constant and states both halves at once (an agreeing facet may not
+    become an opposing one; an already-opposing facet may not become worse), with a
+    degenerate child scoring −1 and refused alongside. Agreement is read at the facet's
+    own **uv** centroid — legal here and only here, because the standing rule against
+    centroids is about a 3D centroid sitting a sagitta off the surface so inverse
+    evaluation fails, which cannot arise when the uv is already known.
+
+    **This retired two filed residuals whose recorded diagnosis was wrong.**
+    `Torus(12,4) − plane − Ø3 bore` was filed as the periodic-band tier pairing its
+    chains by u and falling to the inverting merge walk; measured, **the merge walk is
+    reached zero times** on that solid at any density, both chains are u-monotone, and
+    interior rows engage normally. Driving the same faces with `refine: false` shows the
+    BASE triangulation fold-free at 16/32/48/64/96/128/192 alike, while refinement
+    inflated the two tube halves **×4.1** at 192 segments and inverted 53 facets. Folds
+    now run **0 at every one of those densities** (was 2 / 0 / 0 / 1 / 1 / 14 / 53). The
+    same guard cleared the drilled sphere — a corpus member, audited only up to 96/48 —
+    which carried **127 folds at 192/96 (worst −0.9367)** on its pole-bounded face and
+    now carries none. Both had been read as base-triangulation defects; neither was.
+
+    What remains on those two is fidelity rather than orientation, and it is filed:
+    beside a coarse traced rim the facets stay near-perpendicular, worst agreement ~0.009
+    refined against ~0.18 unrefined on the torus and 0.0079 against **0.9144** on the
+    drilled sphere's pole face — i.e. refinement still makes those faces WORSE, just no
+    longer inside out. That the unrefined base is the better mesh is the sign the real
+    fix is a row path covering the coarse-rim region, not another rule in `Refine`.
   - **Progress + cancellation** (`ProgressCancel? progress = null`, free when absent) is
     polled at **edge and face boundaries** — the coarse checkpoints, since one trimmed face
     is an indivisible ear-clipping job — and cancellation throws rather than returning a
