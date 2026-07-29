@@ -191,7 +191,13 @@ Three of those kernels needed an argument rather than a transcription:
   band sends its block back to the scalar path, so the result is **bit-identical for every
   input** rather than a bounded deviation — and the inputs that most want that land in the
   band by construction, since a segment endpoint shared bit-for-bit with its neighbour
-  sits exactly on a boundary ray.
+  sits exactly on a boundary ray. **Blending the band per LANE was measured and declined**
+  (`ArcCertaintyBandCost`): the case that motivated it — a consumer tracing along a
+  boundary — makes *every* lane uncertain for the arc being traced, so blending would
+  recover nothing, and it is not a cliff anyway because the fallback is per SEGMENT
+  (`batch/scalar` 2.48× → 1.45×, since only the traced arc degrades). Blending pays only on
+  blocks with *some* uncertain lanes, which took a register-width-aligned stride rotating
+  across four arcs to construct and which a scan line cannot produce at all.
 - **The bézier kernel masks the *write*, not the iteration.** Its Newton stage's one piece
   of divergent control flow is a `break` on a vanishing derivative; a stopped lane keeps
   its value because a sticky per-lane flag gates the write to the refined parameter, not

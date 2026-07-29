@@ -48,12 +48,22 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   lane has *converged*. A convergence exit would change results (the scalar path does the
   full eight), so it needs the golden hashes re-derived deliberately, with a measurement
   showing it is worth the churn — the reject in front already skips most cubics.
-- [ ] **The lane-wise arc kernel gives a whole block back to the scalar path when any one
-  lane is inside the wedge certainty band.** Per-lane blending would keep the other three
-  lanes vectorized. Almost certainly not worth it — the band is measure-zero against a
-  sample grid, so the fallback fires only on constructed inputs — but if a consumer ever
-  samples *along* a boundary ray (an iso-line trace on a sketch's own sweep boundary, say)
-  the whole trace would run scalar.
+- ~~**The lane-wise arc kernel gives a whole block back to the scalar path when any one
+  lane is inside the wedge certainty band.**~~ ❌ **measured and declined** —
+  `SketchRegionBenchmark.ArcCertaintyBandCost` holds the measurement so nobody redoes it.
+  **The scenario this entry named as the reason to build it is the scenario per-lane
+  blending cannot help**: sampling *along* a boundary makes every lane uncertain for the arc
+  being traced, so there is nothing left to keep vectorized and blending recovers exactly
+  zero. Nor is it a cliff, because the fallback is per SEGMENT — only the traced arc
+  degrades while the rest of the sketch vectorizes as usual, measured `batch/scalar`
+  2.48× → **1.45×**, not → 1. Blending only pays on a block with SOME uncertain lanes, which
+  took deliberate construction to produce (sample stride aligned to the register width,
+  four arcs' boundaries visited in rotation: 1.05×) and which a scan line structurally
+  cannot generate, its consecutive samples being collinear and so meeting one boundary
+  rather than four. Detail worth keeping: the band covers the LINE through the centre, not
+  the forward ray (`c₀ = f × o` vanishes both ways), so a horizontal scan line at a rounded
+  rectangle's corner-centre height lands in two arcs' bands at once — that is the realistic
+  version, it is what the 1.45× row measures, and blending buys nothing in it either.
 
 ## Interop / meshing (EngrCAD.Interop)
 

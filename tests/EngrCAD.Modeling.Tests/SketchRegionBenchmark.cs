@@ -161,6 +161,27 @@ public class SketchRegionBenchmark(ITestOutputHelper output)
         .EllipticalArcTo(new Vector2d(-24, 0), 34, 22, -15, largeArc: false, clockwise: false)
         .Close();
 
+    /// <summary>The <see cref="SketchRegionKernelTests"/> "arcs" fixture: a rounded
+    /// rectangle whose four corner arcs have axis-aligned sweep boundary rays, plus a
+    /// major-arc hole.</summary>
+    private static Sketch Arcs() => Sketch.RoundedRectangle(20, 12, 3)
+        .WithHole(Sketch.Start(-2, 0)
+            .ArcTo(new Vector2d(2, 0), 2.5, clockwise: false, largeArc: true)
+            .Close());
+
+    /// <summary>
+    /// The corner-arc centres of <see cref="Arcs"/> with a unit vector along one of that
+    /// arc's two sweep boundary rays — points at <c>centre + t·ray</c> sit EXACTLY on the
+    /// boundary, so both cross products vanish and the lane-wise wedge test refuses them.
+    /// </summary>
+    private static IEnumerable<(Vector2d Centre, Vector2d Ray)> BoundaryRays()
+    {
+        const double w = 10, h = 6, r = 3;
+        foreach (int sx in new[] { -1, 1 })
+            foreach (int sy in new[] { -1, 1 })
+                yield return (new Vector2d(sx * (w - r), sy * (h - r)), new Vector2d(sx, 0));
+    }
+
     /// <summary>A wall-clock warm-up BUDGET, not a warm-up count (JIT tiering makes a
     /// fixed count meaningless), then the mean over a fixed measurement budget.</summary>
     private static double MeanMs(Action body)
@@ -320,6 +341,118 @@ public class SketchRegionBenchmark(ITestOutputHelper output)
                 $"{points.Length / batch[1] / 1000.0,7:F2} Mpts/s ({batch[0] / batch[1],5:F2}x)   " +
                 $"Polygonize {mesh[0],6:F1} -> {mesh[1],6:F1} ms ({mesh[0] / mesh[1],5:F2}x)   " +
                 $"(sink {sink:E2})");
+        }
+    }
+
+    /// <summary>
+    /// What the arc kernel's block-granular fallback costs, for the open question of whether
+    /// to blend the certainty band per LANE instead. The point sets separate two mechanisms
+    /// that are easy to conflate, and separating them is what answers the question:
+    /// <list type="bullet">
+    /// <item><b>off-ray</b> — ordinary random sampling. Essentially no point lands within a
+    /// nanoradian of a sweep boundary, so the fallback never fires: the reference.</item>
+    /// <item><b>one-ray</b> — every point on ONE corner arc's boundary ray. This is the
+    /// scenario the backlog names (a consumer tracing along a sketch's own sweep boundary),
+    /// and the point is that for THAT arc every lane is uncertain, so per-lane blending has
+    /// nothing to keep vectorized. The other four arcs never see an uncertain lane and
+    /// vectorize either way.</item>
+    /// <item><b>spread</b> — points cycling across all four corner arcs' rays, so each of
+    /// those arcs sees exactly one uncertain lane per block. THIS is the worst case for
+    /// block granularity and the only shape per-lane blending could help, and note what it
+    /// takes to build: a caller whose sample stride is aligned to the register width and
+    /// which visits four different arcs' boundaries in rotation.</item>
+    /// </list>
+    /// <para><b>Measured</b> (win-x64, <c>Vector&lt;double&gt;.Count</c> = 4). Read the
+    /// <c>batch/scalar</c> column, not the absolute throughputs: the three sets are
+    /// genuinely different point distributions (an on-ray point is nearer the arcs, so
+    /// fewer bounding-box rejects fire and the scalar path speeds up too), and the ratio is
+    /// what isolates the vectorization from the distribution.</para>
+    /// <code>
+    /// set     | batch Mpts/s | scalar Mpts/s | batch/scalar
+    /// off-ray |    15.89     |     6.40      |   2.48x
+    /// one-ray |    10.84     |     7.50      |   1.45x
+    /// spread  |     9.47     |     8.98      |   1.05x
+    /// </code>
+    /// <para>
+    /// <b>The verdict is structural, not a ratio judgement: the case the backlog named is
+    /// the case per-lane blending cannot help.</b> Tracing along a boundary makes every lane
+    /// uncertain for the arc being traced, so there is nothing left to keep vectorized;
+    /// blending would recover exactly zero there. And it is not a cliff anyway — the
+    /// fallback is per SEGMENT, so only the traced arc degrades while the rest of the sketch
+    /// vectorizes as usual, which is why "one-ray" still runs 1.45× the scalar path.
+    /// Blending only pays in "spread", which needed the sample stride aligned to the
+    /// register width and four arcs' boundaries visited in rotation — no consumer here
+    /// produces that, and a scan line structurally cannot (consecutive samples are
+    /// collinear, so they meet one boundary, not four).
+    /// </para>
+    /// <para>
+    /// One detail worth keeping, because it makes "one-ray" more reachable than it sounds:
+    /// the certainty band is about the LINE through the centre, not the forward ray, since
+    /// <c>c₀ = f × o</c> vanishes in both directions (the kernel's own doc calls this
+    /// over-conservative "from π"). A rounded rectangle's corner arcs have axis-aligned
+    /// boundaries, so one horizontal scan line at a corner centre's height lands in TWO
+    /// arcs' bands at once. That is the realistic version of this scenario, it is what
+    /// "one-ray" measures, and blending still buys nothing in it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ArcCertaintyBandCost()
+    {
+        if (!Enabled)
+            return;
+
+        int width = System.Numerics.Vector<double>.Count;
+        output.WriteLine($"Vector<double>.Count = {width}, " +
+            $"hardware accelerated = {System.Numerics.Vector.IsHardwareAccelerated}");
+
+        var sketch = Arcs();
+        var region = new SketchRegion(sketch);
+        var bounds = sketch.Bounds;
+        var rays = BoundaryRays().ToArray();
+        const int count = 1 << 16;
+
+        Vector2d Random(Random random) => new(
+            bounds.Min.X - 2 + (bounds.Size.X + 4) * random.NextDouble(),
+            bounds.Min.Y - 2 + (bounds.Size.Y + 4) * random.NextDouble());
+
+        // t spans the ray rather than sitting at one distance, so an on-ray set exercises
+        // in-sweep and out-of-sweep answers alike rather than one branch repeatedly.
+        Vector2d OnRay(Random random, int ray) =>
+            rays[ray].Centre + rays[ray].Ray * (0.05 + 12 * random.NextDouble());
+
+        foreach (string set in new[] { "off-ray", "one-ray", "spread" })
+        {
+            var random = new System.Random(12345);
+            var points = new Vector2d[count];
+            for (int i = 0; i < count; i++)
+                points[i] = set switch
+                {
+                    "one-ray" => OnRay(random, 0),
+                    "spread" => OnRay(random, i % rays.Length),
+                    _ => Random(random),
+                };
+
+            var xs = points.Select(p => p.X).ToArray();
+            var ys = points.Select(p => p.Y).ToArray();
+            var into = new double[count];
+            double sink = 0;
+            double batchMs = MeanMs(() =>
+            {
+                region.SignedDistance(xs, ys, into);
+                sink += into[0];
+            });
+            double scalarMs = MeanMs(() =>
+            {
+                double sum = 0;
+                foreach (var point in points)
+                    sum += region.SignedDistance(point);
+                sink += sum;
+            });
+
+            output.WriteLine(
+                $"{set,-8} batch {count / batchMs / 1000.0,7:F2} Mpts/s   " +
+                $"scalar {count / scalarMs / 1000.0,7:F2} Mpts/s   " +
+                $"batch/scalar {scalarMs / batchMs,5:F2}x   (sink {sink:E2})");
         }
     }
 }
