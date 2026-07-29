@@ -68,6 +68,8 @@
   href: packing.md
 - name: Assemblies
   href: assemblies.md
+- name: Materials & mass
+  href: materials.md
 - name: Standard components
   href: components.md
 - name: Mechanisms

@@ -1113,12 +1113,55 @@ housing.Add(new Part("lid", lidSolid));            // color auto-assigned from P
 scene.Add(new Part("jig", jigMesh));               // shorthand: default "Model" tab
 ```
 
-Colorless parts get palette colors from the tab: at `Add` time, and — for parts added
-to an assembly AFTER the assembly joined the tab — retroactively on the next
-`Tab.Instances()` flatten. **The color-stability rule**: a color, once assigned, never
-changes (assignment is `??=` and the tab's palette cursor only advances), and
-latecomers take the *next* entries in the tab's display order — so adding a part later
-can never reshuffle an existing part's color, only consume a fresh one.
+Colorless parts get colors from `Tab.EnsureColor` — the part's **material color** if its
+`Material` states one, else the next palette entry — at `Add` time, and, for parts added to
+an assembly AFTER the assembly joined the tab, retroactively on the next `Tab.Instances()`
+flatten. **The color-stability rule**: a color, once assigned, never changes (assignment is
+`??=` and the tab's palette cursor only advances), and latecomers take the *next* entries in
+the tab's display order — so adding a part later can never reshuffle an existing part's
+color, only consume a fresh one. **A material color does not consume a palette slot**, which
+extends the same rule to the new source: giving one part a colored material leaves every
+other part's color exactly where it was.
+
+### `Part.Material` (and the one unit convention)
+
+A part can say what it is made of: `Part.Material` is an `EngrCAD.Core.Material` — name,
+mass density, optional display color, optional analysis properties — and `.Of(material)`
+sets it and returns the part, so it fits in the expression that builds it.
+
+```csharp
+var plate = new Part("base plate", Shape.Box(120, 80, 10)).Of(Materials.Steel);
+
+plate.MassProperties();                     // density from the material; no argument
+plate.MassGrams();                          // 753.6 -- null when no material is stated
+scene.AllInstances.MassProperties();        // the whole assembly, in one call
+```
+
+**It is the same type the FEA solvers take**, which is the point: the density a bill of
+materials weighs a part with is the density a structural or thermal solve integrates.
+Densities are therefore in `ModelUnits`' consistent **mm / N / MPa / tonne** system —
+tonne/mm³, structural steel `7.85e-9` — so a mass comes back in **tonnes** and
+`ModelUnits.MassToGrams` / `MassToKilograms` are how a report prints it. (This file used to
+document kg/mm³ here, a factor of 1000 from the simulation catalogue's figure, with nothing
+able to catch a caller mixing them.)
+
+The plumbing is deliberately additive and nothing changes for a part that states no
+material:
+
+- `Part.MassProperties(density?)`, `PartInstance.MassProperties(density?)` and
+  `instances.MassProperties(Func<Part, double>?)` all take the density as an **override**
+  now; null reads `Part.Material`, and falls back to 1 for a part with none — which makes
+  its mass a copy of its volume, the honest answer rather than a silent zero.
+- `Part.MassGrams()` is the exact route (through the cached solid) and returns null with no
+  material; `Part.DisplayMassGrams()` is the **display-mesh** figure the viewer's properties
+  panel and the MCP `describe_part` tool read, so a readout can never lower a B-Rep on the
+  UI thread and always agrees with the Volume printed beside it.
+- `DocumentEdits.SetMaterial` puts it on the undo stack; it leaves the part's color alone,
+  since a material only ever supplied the *default* at add time.
+- `Document.Save` writes only the properties actually stated, so a document for a scene with
+  no materials is byte-identical to what it always was.
+
+Docs page: `docs/examples/materials.md`.
 
 `Part.GetMesh(quality)` produces the display mesh on first use and caches it (Shapes
 via their best route, B-Reps tessellated, SDFs polygonized, meshes as-is);
@@ -1300,6 +1343,16 @@ File.WriteAllText("bom.csv", bom.ToCsv());
 - Lines group by part **reference**, the document model's own notion of sameness. Two
   separately constructed parts that happen to share a name stay two lines (they are
   two parts); `bom.ByItem()` rolls those together for a purchasing view.
+- **Materials and mass.** `BomLine.Material` is the whole `Part.Material` (not just its
+  name, so a purchasing view can reach the density), and `UnitMassGrams` /
+  `TotalMassGrams` are the per-item and per-line figures. A **MATERIAL** column appears in
+  `ToText`/`ToCsv` as soon as any line states one and not otherwise — a column empty on
+  every row is not printed, so a scene using no materials produces byte-identical output.
+  **Mass is opt-in** (`ToText(mass: true)` / `ToCsv(mass: true)`): it is the only part of a
+  BOM that evaluates geometry, and a BOM is otherwise a cheap document-model walk. An
+  unstated material gives a null mass, printed `-` and written as an *empty* CSV cell
+  rather than a zero a spreadsheet would silently sum — and the footer total names how many
+  of the items it actually covers.
 - `Bom.Structured(assembly)` is the indented BOM: one `BomNode` per item per level,
   with `Quantity` per parent and `TotalQuantity` multiplied down the tree, so a
   sub-assembly placed twice doubles everything inside it. The leaf totals agree with

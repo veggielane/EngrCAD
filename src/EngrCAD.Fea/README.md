@@ -38,7 +38,7 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `DelaunayTetrahedralization` | Internal: incremental Bowyer–Watson over exact predicates |
 | `SurfacePatch` / `SurfacePatches` | Internal: coplanar same-tag triangle groups, the unit recovery works in |
 | `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, linear or quadratic |
-| `Material` / `Materials` | Isotropic elasticity (E, nu, density) + conductivity, specific heat, expansion, and a nominal catalogue |
+| `Material` / `Materials` | **Lives in `EngrCAD.Core`**, not here — see below |
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
 | `StructuralResults` / `NodalAveraging` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
@@ -60,6 +60,34 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `RigidBodyModes` / `SmallSymmetricEigen` | Internal: the surviving-rigid-motion computation the static solver REFUSES on and the modal solver REPORTS, plus the small dense eigensolver both need |
 | `FeaGuards` | Internal: the element-Jacobian guard EVERY solver asks, rather than each restating |
 | `SurfaceSampler` | Internal: the display-mesh correspondence every results type publishes through |
+
+## `Material` is not ours — it lives in `EngrCAD.Core`
+
+Every solver here takes a `Material`, but the type is in `EngrCAD.Core` alongside
+`ModelUnits`, because the document model needs the *same* one: `Part.Material` feeds mass
+properties, the bill of materials and the default display colour, and Core is the only
+assembly both projects see. Two types would have meant two densities, which is exactly the
+1000× discrepancy the consolidation removed — the catalogue said tonne/mm³ while the
+document model's mass properties documented kg/mm³, and neither figure is wrong on its own,
+so nothing could catch a caller mixing them.
+
+Two consequences for this project:
+
+- **The analysis properties are OPTIONAL** (zero means "not stated"), so a material with
+  only a name and a density is constructible. That is a legal *document* material and an
+  illegal *analysis* one.
+- **The refusals therefore live here, at the point of use, and name the property.**
+  `StructuralModel`'s constructor and `SetMaterial` refuse a material with no Young's
+  modulus (Lame's parameters would both be zero, so the stiffness would be identically zero
+  rather than merely wrong, and the solve would report rigid-body modes for a model that has
+  none); `ThermalSolver` refuses a missing conductivity or heat capacity; `ModalSolver`
+  refuses a zero density. This is the same doctrine the model already followed for selectors
+  that match nothing — refuse where the mistake was made, naming what is missing.
+
+**Units are `ModelUnits`' mm / N / MPa / tonne / s throughout**: E in MPa, density in
+tonne/mm³ (steel 7.85e-9), conductivity in mW/(mm·K) — numerically the SI W/(m·K) — specific
+heat in mm²/(s²·K), which is the SI J/(kg·K) × 1e6, expansion in 1/K, gravity 9806.65 mm/s².
+Every verification number below is stated in that system.
 
 ```csharp
 var surface = Shape.Box(40, 30, 6)

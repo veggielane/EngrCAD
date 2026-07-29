@@ -1463,39 +1463,31 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   restrict to rigid (+uniform scale where the type allows) and refuse shear by name.
   Nothing internal needs it today (lowering bakes transforms into construction
   inputs), which is why it stayed behind the STEP/healing items.
-- [ ] **Per-part material in the document model** — `Part.MassProperties(density)` takes
-  density as an argument because a `Part` has no material. A `Material` (name + density +
-  display colour) on `Part` would make `scene.AllInstances.MassProperties()` a one-liner,
-  and is the natural seed for the BOM and for Simulation.
-  **Surveyed; the blocker is a UNIT decision, not the plumbing.** Exactly one `Material`
-  exists today (`EngrCAD.Fea.Material`) and it structurally cannot express a document
-  material: its constructor refuses `youngsModulus <= 0`, so "name + density + colour" is
-  not constructible through it. Worse, **the two density conventions already disagree by
-  1000×** — `Materials.Steel.Density` is 7.85e-9 (tonne/mm³, the mm/N/MPa/tonne system a
-  consistent FEA solve needs) while `PartMassProperties` documents 7.85e-6 (kg/mm³, which
-  is fine for reading mass in kilograms). Adding a second catalogue in Modeling would
-  bake that disagreement into the model rather than resolve it, so the item is a
-  unification, not an addition:
-  - Move `Material` down to `EngrCAD.Core` — the only ancestor both `Fea` and `Modeling`
-    see (`Fea` already references Core only for `Vector3d`), and the same call as
-    `Viewer.Core`: an assembly boundary is packaging, so the namespace can stay put.
-  - Make the elasticity/thermal properties OPTIONAL and move the hard refusal from the
-    constructor to the POINT OF USE (`StructuralModel` refusing a material with no `E`,
-    by name). A material with no modulus is a perfectly good *document* material; only a
-    structural solve needs one.
-  - Then Modeling is additive and small: `Part.Material` beside `Part.Hardware`,
-    `PartMassProperties`' `Func<Part, double>? density` defaulting to
-    `p => p.Material?.Density ?? 1`, `BomLine.Material => Part.Material?.Name` (an
-    expression-bodied projection, so no ctor change) plus one column in `ToText`/`ToCsv`,
-    and a write-only-when-non-default field in `DocumentFile` to keep the
-    save→load→save fixed point byte-identical.
-  - **Decide the unit system explicitly and write it down**: mm/N/tonne, matching the
-    existing catalogue, with `PartMassProperties`' example corrected — otherwise "one
-    liner" means the returned mass silently changes meaning with the caller's source of
-    density. A cross-reference warning is in `PartMassProperties`' remarks meanwhile.
-  - Colour stays on `Part`: `Part.Color` already owns the palette-assignment invariant,
-    so a material should supply the DEFAULT at add time rather than own the property.
-  (Not landed because every step above edits `EngrCAD.Fea`.)
+- **Per-part material** ✅ landed (`Material`/`Materials`/`ModelUnits`/`PartColor` in
+  `EngrCAD.Core`; `Part.Material`/`.Of()`, `Part.MassGrams`/`DisplayMassGrams`,
+  `BomLine.Material`/`UnitMassGrams`, `DocumentEdits.SetMaterial`, document persistence,
+  properties panel and MCP `describe_part`; docs `examples/materials.md`; design.md §2).
+  **The unit is tonne/mm³** — one convention, stated once in `ModelUnits`, with kilograms
+  and grams as accessors; the 1000× discrepancy between the FEA catalogue and
+  `PartMassProperties`' old kg/mm³ remark is gone. Residuals:
+  - [ ] **Material on a `HardwareComponent`.** A catalogue fastener knows what it is made
+    of (an ISO 4762 screw is 12.9 steel, a Trisert is brass) but `ToPart()` sets only
+    `Hardware`. One field per catalogue entry, and then a BOM of bought-in parts weighs
+    itself — but the grades want transcribing against the standards rather than guessed,
+    so it carries the same verify-against-datasheet caveat as the dimension tables.
+  - [ ] **Per-region materials from a multi-body `Shape`.** `StructuralModel.SetMaterial`
+    takes a region id, and `TetMesher` already assigns region ids from multi-body input,
+    but nothing carries `Part.Material` across that seam — a scene of N parts meshed
+    together still needs its materials restated by region index.
+  - [ ] **Material in the viewer's model tree / a material editor.** The properties panel
+    reports the material; nothing sets one interactively. `DocumentEdits.SetMaterial`
+    exists, so this is UI only — a dropdown over `Materials.All` plus the current value.
+  - [ ] **`docs/examples/fea-*.md` and the FEA README still spell the unit system out
+    per page.** They are correct, but `ModelUnits` is now the single statement and they
+    should cross-reference it rather than restate it; the same is true of the two
+    `kg/mm³` comments left in `tests/EngrCAD.Interop.Tests/BrepMassPropertiesTests.cs`
+    (legal — `BrepMassProperties` is unit-agnostic by design — but they now point at a
+    convention nothing else in the repo uses).
 - [ ] **Topological naming residuals** (v1 ✅ landed: `BrepFace.Provenance` +
   `Shape.Tag(name)` + `FaceSetRef.Tagged`/`Within`. Tags survive the whole boolean
   pipeline, `BrepSolid.Clone`, `Drill`, patterns and transforms; the failure is one-sided,
@@ -1621,8 +1613,6 @@ export+import, volume/area, tessellation — see CLAUDE.md):
   Note the one place the assessment was overruled by building it: undo stores EDITS, not
   document snapshots, because a `Scene` snapshot is not a cheap value — design.md §6b).
   Open:
-  - [ ] **Materials.** The envelope has no material because `Part` has no material — see
-    the per-part-material item above; when it lands it is one more part record field.
   - [ ] **`Shape`-graph serialization** would let a code-built `Shape` part save as a
     recipe instead of a snapshot, and would make `BooleanFeature` and `ComponentFeature`
     round-trip through `FeatureHistory` as well. It is the single biggest remaining gap in

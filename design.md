@@ -48,6 +48,56 @@ Each engine uses the data structure its mathematics wants:
 - **Matrix convention**: `Matrix4d` is row-major *storage* with **column-vector
   semantics** (`p' = M·p`; `A*B` applies `B` first). GL upload transposes to
   column-major arrays. `Quaterniond`'s Hamilton product composes in the same order.
+- **Unit convention (`ModelUnits`) — mm / N / MPa / tonne / s, and the choice is about
+  WHERE a conversion can live.** Nothing in the kernel carries a unit at runtime, so a
+  model is only meaningful against one consistent system, and the repository now names
+  exactly one: lengths in millimetres (which STEP export already assumed), forces in
+  newtons, stresses in MPa, **densities in tonne/mm³** (structural steel `7.85e-9`), time
+  in seconds, gravity `9806.65` mm/s².
+
+  This settled a real 1000× discrepancy that had shipped: the simulation catalogue stated
+  tonne/mm³ while the document model's mass properties documented kg/mm³ (steel `7.85e-6`).
+  **Neither figure is wrong on its own**, which is precisely why nothing could catch a
+  caller taking one for the other, and why a second catalogue in `EngrCAD.Modeling` would
+  have baked the disagreement in rather than resolved it.
+
+  The deciding argument is not "which unit is nicer" — it is that **a density is either a
+  number an equation consumes or a number a report prints, and only the second can be
+  converted after the fact.** FEA assembly multiplies density into a mass matrix that must
+  balance against a stiffness in MPa and a length in mm; there is no slot for a factor,
+  and the factor would have to reappear in the gravity load, the heat capacity, the natural
+  frequency, the buckling load and the transient time constant, each of which is verified
+  here against a closed form. Mass properties form exactly ONE product from the density
+  (mass = ρ·V), so a report converts that single number at the end. **The convention
+  therefore lives where it cannot be converted**, and kilograms and grams are accessors
+  (`ModelUnits.MassToKilograms`/`MassToGrams`,
+  `Material.DensityKilogramsPerCubicMetre`) rather than a second convention. A consistent
+  internal unit with a documented accessor is not the same thing as two conventions.
+
+  Two consequences worth stating. Catalogue densities are stored in tonne/mm³ but
+  **asserted in kg/m³**, because the datasheet figure is the only form a human can check —
+  a test that compares `7.85e-9` against `7.85e-9` verifies typing, not physics. And
+  `MeshMassProperties` / `BrepMassProperties` stay deliberately unit-AGNOSTIC (density is
+  the caller's, default 1 makes mass equal volume): the convention belongs to the document
+  and simulation layers that own materials, not to the integrators underneath them.
+- **`Material` lives in Core for a layering reason, not a thematic one.** It is the one
+  type `EngrCAD.Modeling` (`Part.Material` → mass properties, the BOM, the default display
+  colour) and `EngrCAD.Fea` (every solver) both need, and Core is their only common
+  ancestor — the same call as `EngrCAD.Viewer.Core`, with the namespace moved as well
+  since a modelling user must not need a simulation `using` to say what a part is made of.
+  **The analysis properties are OPTIONAL and zero means "not stated"**, extending the
+  convention the thermal fields already used, so a document material (a name, a density,
+  perhaps a colour) is constructible — which it was not before, because the constructor
+  refused `youngsModulus <= 0`. **The refusal moved to the point of use**, where the
+  analysis that needs the property can name it: `StructuralModel`'s constructor and
+  `SetMaterial` refuse a missing modulus, `ThermalSolver` a missing conductivity or heat
+  capacity, `ModalSolver` a zero density. The modulus refusal matters more than it looks —
+  without one, Lame's parameters are both *zero*, so the stiffness would be identically
+  zero rather than merely wrong and the solve would report rigid-body modes for a model
+  that has none. **The regression oracle for the whole move was the FEA verification
+  suite**: every closed-form figure (cantilever tip 1.90494 mm, Kirsch K_tn 2.4216, modal
+  frequencies which scale as 1/√ρ, Euler buckling loads, thermal transients) depends on
+  density, so any unit slipping anywhere would have shown up as a moved number. None moved.
 - **`in` parameters** keep hot paths copy-free, with one important consequence: C#
   expression trees cannot contain calls to methods with `in` parameters, so any method
   meant to appear inside a LINQ predicate must take parameters by value — that is the

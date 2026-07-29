@@ -35,7 +35,11 @@ static Scene BuildScene()
     Console.WriteLine(history.Regenerate().ToString());
 
     var scene = new Scene(); // no explicit quality: inherits the builder's 48-segment default
-    var bracket = history.ToPart("bracket", Palette.Steel);
+    // A material feeds mass properties, the BOM and (when it states a colour) the default
+    // display colour. Densities are tonne/mm3 -- the ModelUnits convention -- so the mass
+    // printed below is in grams. Swap the material and the reported mass follows live.
+    var bracket = history.ToPart("bracket", Palette.Steel).Of(Materials.Steel);
+    Console.WriteLine($"bracket: {bracket.MassGrams():F1} g of {bracket.Material!.Name}");
 
     // A PMI dimension that MEASURES the model: the face selectors re-run on every
     // regeneration, so editing Width above re-measures live (toolbar "Annot" hides it).
