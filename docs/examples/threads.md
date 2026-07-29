@@ -167,13 +167,17 @@ refuses by name rather than attempts. So the B-Rep-native range is
 and for any clearance, take `ToImplicit()`/`ToMesh()`.
 
 > [!NOTE]
-> About one chamfer depth in ten inside that range still **fails loudly** in the kernel
-> rather than returning a solid. Scanned at 5% steps of the thread depth across M6×1,
-> M8×1.25, M10×1.5 and M12×1.75 the failures are one to three steps of nineteen each, at
-> unrelated fractions — it is an alignment effect in the chamfer cone's trimmed
-> triangulation, not a depth threshold, so nudging the chamfer by a few hundredths clears
-> it. It never returns wrong geometry: `Explain` still reports Native and `ToBrep()`
-> throws with the stage that refused.
+> Every depth in that range now builds and tessellates cleanly. Scanning 5% steps of the
+> thread depth across M6×1, M8×1.25, M10×1.5 and M12×1.75 with both ends chamfered, all
+> 76 return a valid two-manifold solid with **no inverted facets**. Ten of them used to
+> emit a few silently inverted triangles on the chamfer cone — an alignment effect rather
+> than a depth threshold — which is fixed; a previous version of this note claimed those
+> depths failed *loudly*, and they did not, which is why it went unnoticed for so long.
+>
+> What remains is resolution, not correctness: a shallow chamfer makes a cone band a few
+> hundredths of a millimetre tall wrapped around the whole rod, so at a given
+> segments-per-circle its facets are coarser than the rest of the model. Raise the mesh
+> quality if a lead-in renders faceted.
 
 **Threaded holes are B-Rep-native too** (at zero clearance): the B-Rep path never
 drills the pilot separately — the pilot bore wall and the thread tool's root band

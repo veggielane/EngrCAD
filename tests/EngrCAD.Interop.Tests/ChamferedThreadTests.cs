@@ -30,6 +30,21 @@ public class ChamferedThreadTests
         new Vector2d(MinorRadius, 5 * Pitch / 8),
     ], Pitch, Length);
 
+    /// <summary>The same ISO-shaped rod at any size — the sub-depth chamfer sweep needs
+    /// several, and a fixture that only ever built one could not see an alignment
+    /// phenomenon.</summary>
+    private static BrepSolid Rod(double pitch, double majorRadius, double length)
+    {
+        double minor = majorRadius - 0.625 * (Math.Sqrt(3) / 2 * pitch);
+        return SolidFactory.MakeThreadedRod(
+        [
+            new Vector2d(majorRadius, -pitch / 16),
+            new Vector2d(majorRadius, pitch / 16),
+            new Vector2d(minor, 3 * pitch / 8),
+            new Vector2d(minor, 5 * pitch / 8),
+        ], pitch, length);
+    }
+
     private static BrepSolid Chamfered(double chamfer, bool bothEnds = true)
     {
         var body = BrepBoolean.Difference(
@@ -127,6 +142,85 @@ public class ChamferedThreadTests
         Assert.Equal(0, report.Slivers);
         Assert.True(report.Worst.WorstDot > 0.8,
             $"worst facet-vs-surface agreement {report.Worst.WorstDot:F5} on a {report.Worst.Family}");
+    }
+
+    /// <summary>
+    /// A rod chamfered at BOTH ends, over the sub-depth fractions that used to fold.
+    /// <para>The defect was in <c>TrimmedFaceTessellator.TurnsIntoInterior</c>: a chamfer
+    /// cone's boundary carries a long run of samples at CONSTANT v (the rim in the end
+    /// plane), where the monotone sweep's turn test reduces to the sign of the pullback's
+    /// own round-off. When that sign said "turn", the sweep popped and emitted a facet
+    /// spanning three consecutive rim samples — flat in the end plane, so its normal
+    /// disagreed with the 45-degree cone by exactly <c>-cos(45°) = -0.7071</c>. It is an
+    /// ALIGNMENT phenomenon, not a depth threshold: scanning 5% steps of the thread depth
+    /// on M6x1 / M8x1.25 / M10x1.5 / M12x1.75 (both ends, length 5P - 0.2, 64 segments)
+    /// folded at 0 / 4 / 3 / 3 of 19 steps each — 10 of 76, at unrelated fractions.</para>
+    /// <para>Every one of those ten is asserted here, and the sweep is over BOTH the size
+    /// and the fraction because that is the only shape of test an arithmetic tie-break
+    /// respects. The fixture is also asserted to still CARRY the configuration — a cone
+    /// face whose boundary genuinely has a long constant-v rim run — so it cannot quietly
+    /// stop exercising the trap if the tool or the chamfer geometry is ever rebuilt.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(8, 1.25, 1)]
+    [InlineData(8, 1.25, 3)]
+    [InlineData(8, 1.25, 5)]
+    [InlineData(8, 1.25, 6)]
+    [InlineData(10, 1.5, 1)]
+    [InlineData(10, 1.5, 4)]
+    [InlineData(10, 1.5, 5)]
+    [InlineData(12, 1.75, 1)]
+    [InlineData(12, 1.75, 4)]
+    [InlineData(12, 1.75, 6)]
+    public void SubDepthChamfersCarryNoFoldsAtAnyFraction(double diameter, double pitch, int step)
+    {
+        double major = diameter / 2;
+        double depth = 0.625 * (Math.Sqrt(3) / 2 * pitch);
+        double chamfer = depth * step / 20.0;
+        double length = 5 * pitch - 0.2;
+
+        var oneEnd = BrepBoolean.Difference(
+            Rod(pitch, major, length),
+            SolidFactory.MakeThreadEndChamferTool(major, chamfer, length, true));
+        var solid = BrepBoolean.Difference(
+            oneEnd, SolidFactory.MakeThreadEndChamferTool(major, chamfer, 0, false));
+
+        var report = TessellationQuality.Audit(solid, 64, 64);
+        Assert.Empty(report.Refusals);
+        Assert.Equal(0, report.Slivers);
+        Assert.Equal(0, report.Folds);
+        // NOT the corpus floor, deliberately, and the reason is worth stating: a sub-depth
+        // chamfer cone is an extreme-aspect band — 0.034 mm tall around a 25 mm
+        // circumference at the shallowest step here — so its facets are genuinely coarse
+        // whatever the sweep does. Scanning all 76 depths, the ones that never folded
+        // already measured 0.562..0.979 and the ten that did now measure 0.513..0.730, one
+        // population rather than two, so this bar records the family's real quality and
+        // still catches the defect it was written for (which read -0.7071). The coarseness
+        // itself is filed as a separate residual.
+        Assert.True(report.WorstDot > 0.4,
+            $"worst facet-vs-surface agreement {report.WorstDot:F6} on a {report.Worst.Family}");
+
+        // The configuration itself: each chamfer cone must still present a long run of
+        // tessellation vertices sitting exactly in an end plane at one radius — the
+        // constant-v rim whose turn test is pure round-off. Without this the test could
+        // pass by no longer building the shape that used to break.
+        int cones = 0;
+        foreach (var (face, polygons) in BRepTessellator.TessellateByFace(solid, 64, 64))
+        {
+            if (face.Surface is not RevolvedSurface)
+                continue;
+            foreach (double plane in (ReadOnlySpan<double>)[0, length])
+            {
+                var rim = polygons
+                    .SelectMany(p => p)
+                    .Where(v => Math.Abs(v.Z - plane) < 1e-9)
+                    .Select(v => Math.Round(Math.Sqrt(v.X * v.X + v.Y * v.Y), 9))
+                    .ToList();
+                if (rim.Count >= 32 && rim.Distinct().Count() == 1)
+                    cones++;
+            }
+        }
+        Assert.Equal(2, cones);
     }
 
     /// <summary>

@@ -232,6 +232,17 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     0.9239 floor (locked with committed baselines in
     `SpherePiercingEverySide_HasNoFoldsAndABoundedResidual`). A per-column cut at the
     rim's turning vertex is the likely finish.
+  - **A sub-depth chamfer cone is an extreme-aspect strip, and its facets are coarse
+    even though they are now fold-free.** Measured over all 76 scanned depths (M6×1 /
+    M8×1.25 / M10×1.5 / M12×1.75, both ends, 64 segments per circle): 0 folds and 0
+    slivers everywhere, worst facet-vs-surface agreement **0.513 … 0.979**, well under the
+    corpus floor `cos(3·2π/64) = 0.957`. The cause is geometry rather than triangulation —
+    at the shallowest step the cone band is 0.034 mm tall around a 25 mm circumference, an
+    aspect near 740 — so the sweep cannot improve it and the fix would be density that
+    follows the band's own ASPECT rather than the circle count (the same shape as
+    `SurfaceIntersection`'s anisotropic second seeding pass, one layer up). Until then a
+    chamfered rod is deliberately NOT a corpus member, and
+    `SubDepthChamfersCarryNoFoldsAtAnyFraction` bars at 0.4 with the reason stated.
   - The hand-built spherical band with meridian cross edges (`TrimmedBandGapTests`,
     test 1) declines rows in BOTH orientations because its boundary coordinates tie
     bit-exactly in both axes (closed-form azimuth, deterministic profile solves), and
@@ -344,18 +355,27 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     And `BRepTessellator.SampleEdge` read a `CurveSegment`'s [0, 1] domain as RADIANS,
     giving every split spiral edge the same count at any density.
 
-    **What remains**: a sporadic ~10% of chamfer depths still fails, loudly, in
-    tessellation or the boolean. Scanned at 5% steps of the thread depth on
-    M6×1 / M8×1.25 / M10×1.5 / M12×1.75 (both ends, length 5P − 0.2, 64 segments per
-    circle), the failures are 1 / 3 / 1 / 2 of 19 sub-depth steps each and at unrelated
-    fractions — an ALIGNMENT phenomenon, not a depth threshold, the same shape as the
-    Surface Nets ambiguous-face and torus-pinhole findings. The one traced to a face is a
-    SINGLE inverted facet of 102 in the chamfer cone's strip zip
-    (`TrimmedFaceTessellator.SweepCycle`), on a loop congruent in uv with one that zips
-    cleanly and differing only in which of its two long constant-v chains sits at the
-    maximum KEY — so `SweepCycle`'s extreme tie-break and chain assignment is where to
-    look. A change there is boolean-critical and wants its own pass over the trimmed
-    corpus, which is why it is filed rather than attempted alongside the chamfer.
+    ~~**What remains**: a sporadic ~10% of chamfer depths still fails, loudly…~~
+    ✅ **fixed** — and two things in the old diagnosis were wrong, both worth recording.
+    The failures were **not loud**: re-scanning at `88d6e14`, all 76 depths built,
+    validated and tessellated without an exception, so nothing failed in the boolean at
+    all — what remained was 10 depths (0 / 4 / 3 / 3 per size, not 1 / 3 / 1 / 2) emitting
+    SILENT folds, which is a worse failure than a throw and is why the count-based
+    assertions never saw it. And the tie-break was **innocent**: `SweepCycle` takes the
+    LAST of the tied minimum run and the FIRST of the tied maximum run exactly as
+    documented, and on these loops there are no ties at all — measured, `lo` and `hi` are
+    each a single vertex. The congruence the entry noticed was real but pointed one level
+    down: the two cone faces differ in which chain is DENSE (65 samples against 8), so on
+    one of them `lower[0]` lands at the same v as the whole 65-sample upper run, and every
+    pop test along that run then compares three points that are collinear BY CONSTRUCTION.
+    The defect is `SweepMonotone`'s `TurnsIntoInterior` reading the exact sign of a cross
+    product whose true value is zero: pure round-off, so the sweep popped on ~1e-15 of
+    jitter and fanned the rim flat into the end plane at facet-vs-surface agreement
+    **−0.7071 = −cos 45°** exactly. Fixed by testing the dimensionless SINE of the turn;
+    see the Interop README and design.md for why that constant is not tuned and why the
+    facet COUNT (not the fold count) is the oracle that proves it exact — exactly the 10
+    rows change, the other 66 stay byte-identical, and no changed row gains or loses a
+    facet. Pinned by `ChamferedThreadTests.SubDepthChamfersCarryNoFoldsAtAnyFraction`.
   - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
     needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
     it keeps each carrier in its own family and has no `HelicalSurface` case, and a

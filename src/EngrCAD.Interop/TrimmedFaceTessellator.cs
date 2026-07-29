@@ -1908,15 +1908,50 @@ internal static class TrimmedFaceTessellator
     /// <summary>
     /// Whether the diagonal closing (<paramref name="a"/>, <paramref name="b"/>,
     /// <paramref name="c"/>) lies inside the slab: a left turn below the interior (lower
-    /// chain) and a right turn above it (upper chain). Exactly collinear is deliberately
-    /// NOT a turn — a ring's samples are exactly collinear in uv, and popping there would
-    /// emit the zero-area triangles this whole file exists to avoid.
+    /// chain) and a right turn above it (upper chain). Collinear is deliberately NOT a
+    /// turn — a ring's samples are collinear in uv, and popping there would emit the
+    /// zero-area triangles this whole file exists to avoid.
+    /// <para><b>Collinear has to mean "straight to within round-off", not "bit-exactly
+    /// straight".</b> The cross product is <c>|b−a|·|c−b|·sin(turn)</c>, so on a
+    /// constant-parameter boundary run — where the true turn is exactly zero — what is
+    /// left is the pullback's own noise, and reading its SIGN emits a facet decided by
+    /// arithmetic. In uv that facet is degenerate and harmless; in MODEL space it is
+    /// nothing of the sort, because uv-collinear is not 3D-collinear (the standing trap
+    /// this file exists to avoid): three consecutive samples of a curved rim span a real
+    /// facet whose normal is the rim's binormal rather than the surface's. Measured on a
+    /// threaded rod's 45-degree lead-in chamfer, whose cone face carries a 65-sample rim
+    /// at constant v — the pop fired on ~1e-15 of jitter and emitted a fan lying flat in
+    /// the end plane, at facet-vs-surface agreement <b>−0.7071 = −cos(45°)</b> exactly,
+    /// the angle between the end plane and the cone. It fired for 10 of 76 scanned
+    /// chamfer depths and not the rest, which is what an arithmetic tie-break looks like.
+    /// <para>The test is therefore the dimensionless SINE of the turn, not the raw cross:
+    /// dividing by the two edge lengths is what separates the two populations rather than
+    /// merely shrinking both, since the noise is absolute in uv while a genuine turn
+    /// scales with the chord. Measured separation on the chamfer cone: ~4e-12 for a
+    /// jitter turn against ~1.6e-2 for a real one at 64 segments/circle (~4e-3 at 256) —
+    /// ten orders, so the threshold is not a tuned constant. Radians are dimensionless,
+    /// which is why this one is deliberately ABSOLUTE (the epsilon ladder's stated
+    /// exception for angular guards) rather than relative to the region's extent: the
+    /// comparison that matters is local to the triple.</para>
+    /// <para>Declining to pop is always SAFE: the vertices simply stay on the stack and
+    /// are fanned later from the opposite chain, which is the correct band triangulation
+    /// and already the path an exactly-collinear run takes.</para></para>
     /// </summary>
     private static bool TurnsIntoInterior(List<Vector2d> uv, int a, int b, int c, bool lower)
     {
+        // The cross keeps its original (b−a)x(c−a) spelling: it is algebraically the same
+        // as (b−a)x(c−b) and NOT bit-identical to it, so re-associating it here would
+        // move geometry wherever the guard does not fire.
         double cross = (uv[b] - uv[a]).Cross(uv[c] - uv[a]);
+        // |cross| = |ab|*|bc|*|sin(turn)|; a turn under a nanoradian is not a turn.
+        if (Math.Abs(cross) <= TurnSine * (uv[b] - uv[a]).Length * (uv[c] - uv[b]).Length)
+            return false;
         return lower ? cross > 0 : cross < 0;
     }
+
+    /// <summary>The smallest turn the monotone sweep will act on, as a sine. Dimensionless
+    /// (radians), so deliberately absolute — see <see cref="TurnsIntoInterior"/>.</summary>
+    private const double TurnSine = 1e-9;
 
     /// <summary>
     /// Appends a triangle wound CCW in uv, taking the winding from its own signed area.

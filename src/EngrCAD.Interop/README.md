@@ -202,6 +202,47 @@ logging complements them, never replaces them.
        - a **band whose chains meet at a point** (a cross edge of no steps) is just a
          monotone polygon with a single extreme vertex, where the sweep starts anyway.
 
+       **"Collinear is not a turn" has to mean straight to within ROUND-OFF, not
+       bit-exactly straight** — and the gap between those two readings was a real defect.
+       The pop test is the sign of `(b−a)×(c−a)`, which on a constant-parameter boundary
+       run is `|b−a|·|c−b|·sin(0)`, i.e. nothing but the pullback's own noise; an exact
+       `> 0` therefore emits a facet chosen by arithmetic. In uv that facet is degenerate
+       and harmless, and in MODEL space it is nothing of the sort, because **uv-collinear
+       is not 3D-collinear** — three consecutive samples of a curved rim span a real facet
+       whose normal is the rim's binormal, the standing trap this whole file exists to
+       avoid, arriving through the tier that was supposed to be the cure. Measured on a
+       threaded rod's 45° lead-in chamfer, whose cone face carries a 65-sample rim at
+       constant v: the pop fired on ~1e-15 of jitter and fanned that rim flat into the end
+       plane at facet-vs-surface agreement **−0.7071 = −cos 45°** exactly — the angle
+       between the end plane and the cone, which is what makes the number a fingerprint
+       rather than a symptom. `TurnsIntoInterior` now tests the dimensionless **sine** of
+       the turn (`|cross| ≤ 1e-9·|b−a|·|c−b|` is not a turn). Dividing by the two edge
+       lengths is what separates the populations rather than shrinking both, since the
+       noise is absolute in uv while a genuine turn scales with the chord: ~4e-12 for a
+       jitter turn against ~1.6e-2 for a real one at 64 segments/circle (~4e-3 at 256),
+       ten orders apart, so the constant is not tuned. Radians are dimensionless, which is
+       why this guard is deliberately absolute — the epsilon ladder's stated exception for
+       angular guards — rather than relative to the region's extent; the comparison that
+       matters is local to the triple. Declining to pop is always safe: the vertices stay
+       on the stack and are fanned later from the opposite chain, which is both the
+       correct band triangulation and already the path an exactly-collinear run took.
+       **The evidence that it is exactly right is the triangle COUNT.** Scanning 5% steps
+       of the thread depth on M6×1 / M8×1.25 / M10×1.5 / M12×1.75, both ends chamfered:
+       10 of 76 depths folded — 0/4/3/3 per size, at unrelated fractions, an alignment
+       phenomenon rather than a threshold — and after the guard **exactly those 10 rows
+       change and the other 66 are byte-identical**, with every changed row keeping its
+       facet count to the unit (16 526 → 16 526, …). The guard adds and removes no
+       geometry; it only stops round-off from choosing the diagonal. Folds went N → 0 and
+       worst agreement −0.7071 → 0.513…0.730, landing inside the 0.562…0.979 band the
+       never-folding depths already occupied — one population, so no quality was traded
+       for the fix. (That band is coarse because a sub-depth chamfer cone is an
+       extreme-aspect strip — 0.034 mm tall around a 25 mm circumference at the shallowest
+       step — which is a separate residual, filed, and NOT something the sweep can fix.)
+       Pinned by `ChamferedThreadTests.SubDepthChamfersCarryNoFoldsAtAnyFraction` over all
+       ten, which also asserts the fixture still CARRIES the configuration (each cone
+       still presenting ≥ 32 rim vertices at one radius in an end plane), so it cannot
+       quietly stop testing the trap.
+
        Neither shape is reachable from the `Shape` API yet — the constructions that would
        make one (a spherical band between two meridian cuts, a cone fragment through the
        apex) are refused earlier by the exact B-Rep boolean, and a sweep of eighteen
