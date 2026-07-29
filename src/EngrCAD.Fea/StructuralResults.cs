@@ -291,8 +291,73 @@ public sealed class StructuralResults
         Span<double> stress = stackalloc double[6];
         Gather(element, positions, ue);
         TetElement.StrainAt(Mesh.Order, positions, ue[..(3 * perElement)], r, s, t, strain);
+        SubtractThermalStrain(element, r, s, t, strain);
         Model.MaterialOf(element).Stress(strain, stress);
         return TetElement.ToTensor(stress, engineeringShear: false);
+    }
+
+    /// <summary>
+    /// Removes the thermal part of the strain before the constitutive law is applied:
+    /// <c>sigma = D·(eps - eps0)</c> with <c>eps0 = alpha·dT</c> on the diagonal.
+    ///
+    /// <para><b>This is the half of thermal coupling that is invisible when it is
+    /// missing.</b> A bar free to expand develops exactly the thermal strain and carries
+    /// zero stress; without the subtraction the recovery would report <c>E·alpha·dT</c> —
+    /// 25 MPa for steel at a 10 K rise — on a bar under no load whatever, a number that
+    /// looks entirely reasonable and is wholly spurious. The load and the subtraction are
+    /// applied from the same stored field, so applying the load is what turns this on and
+    /// there is no second step to forget.</para>
+    ///
+    /// <para>The temperature is interpolated with the ELEMENT's own shape functions, which
+    /// is what makes the free-expansion case exact rather than nearly exact: the
+    /// displacement field the solve produces is <c>alpha·dT·x</c> exactly, and its strain
+    /// therefore cancels an equally interpolated <c>eps0</c> to round-off.</para>
+    /// </summary>
+    private void SubtractThermalStrain(
+        int element, double r, double s, double t, Span<double> strain)
+    {
+        if (Model.ThermalDeltaT is not { } deltaT)
+            return;
+        double expansion = Model.MaterialOf(element).ThermalExpansion;
+        // Exact-zero semantic test, matching the load: no stated expansion, no thermal
+        // strain to remove.
+        if (expansion == 0)
+            return;
+
+        int perElement = Mesh.NodesPerElement;
+        Span<double> values = stackalloc double[10];
+        var nodes = Mesh.Element(element);
+        for (int i = 0; i < perElement; i++)
+            values[i] = deltaT[nodes[i]];
+
+        double thermal = expansion
+            * ThermalElement.InterpolateAt(Mesh.Order, values[..perElement], r, s, t);
+        strain[0] -= thermal;
+        strain[1] -= thermal;
+        strain[2] -= thermal;
+        // Shear is untouched: an isotropic material's thermal strain is a pure dilatation.
+    }
+
+    /// <summary>
+    /// The MECHANICAL strain at an element's centroid — the total strain less the thermal
+    /// part, i.e. the strain the stress is actually proportional to.
+    /// <para><see cref="ElementStrain"/> reports the TOTAL, because that is what a
+    /// displacement field's derivative is and what a strain gauge on the part would read.
+    /// The two differ only under a thermal load, and having both spellings is what lets a
+    /// coupled result be checked either way.</para>
+    /// </summary>
+    public SymmetricTensor3 ElementMechanicalStrain(int element)
+    {
+        RequireElement(element);
+        int perElement = Mesh.NodesPerElement;
+        Span<Vector3d> positions = stackalloc Vector3d[perElement];
+        Span<double> ue = stackalloc double[30];
+        Span<double> strain = stackalloc double[6];
+        Gather(element, positions, ue);
+        TetElement.StrainAt(
+            Mesh.Order, positions, ue[..(3 * perElement)], 0.25, 0.25, 0.25, strain);
+        SubtractThermalStrain(element, 0.25, 0.25, 0.25, strain);
+        return TetElement.ToTensor(strain, engineeringShear: true);
     }
 
     private void Gather(int element, Span<Vector3d> positions, Span<double> ue)
@@ -333,6 +398,12 @@ public sealed class StructuralResults
                 var (r, s, t) = TetElement.NodeCoordinates(Mesh.Order, i);
                 TetElement.StrainAt(
                     Mesh.Order, positions[..perElement], ue[..(3 * perElement)], r, s, t, strain);
+                // The SAME subtraction StressAt makes. This loop inlines the strain pass
+                // rather than calling StressAt (it would re-gather the element ten times),
+                // so the thermal correction has to be asked for explicitly here — and it is
+                // asked for, not restated, which is what keeps nodal and element stress
+                // from disagreeing under a thermal load.
+                SubtractThermalStrain(e, r, s, t, strain);
                 material.Stress(strain, stress);
                 accumulated[nodes[i]] += TetElement.ToTensor(stress, engineeringShear: false) * weight;
                 weights[nodes[i]] += weight;
@@ -403,81 +474,12 @@ public sealed class StructuralResults
         string stressUnits = "MPa")
     {
         ArgumentNullException.ThrowIfNull(displayMesh);
-
-        var vonMises = NodalVonMises;
-        int perFacet = Mesh.NodesPerFacet;
-
-        // Exact-position lookup over the analysis boundary's nodes. Exact bits, the
-        // codebase's weld doctrine: two independently computed positions are not equal,
-        // and two shared ones are.
-        var byPosition = new Dictionary<Vector3d, int>();
-        for (int f = 0; f < Mesh.FacetCount; f++)
-        {
-            foreach (int node in Mesh.Facet(f))
-                byPosition.TryAdd(Mesh.Position(node), node);
-        }
-
-        var boxes = new Aabb[Mesh.FacetCount];
-        for (int f = 0; f < Mesh.FacetCount; f++)
-        {
-            var facet = Mesh.Facet(f);
-            boxes[f] = Aabb.Empty
-                .Union(Mesh.Position(facet[0]))
-                .Union(Mesh.Position(facet[1]))
-                .Union(Mesh.Position(facet[2]));
-        }
-        var bvh = Bvh.Build(boxes);
-
-        if (Mesh.FacetCount == 0)
-            throw new FeaException("The analysis mesh has no boundary facets to sample from.");
-
-        var displacement = new Vector3d[displayMesh.VertexCount];
-        var stress = new double[displayMesh.VertexCount];
-        double worst = 0;
-        Span<double> shape = stackalloc double[6];
-
-        for (int v = 0; v < displayMesh.VertexCount; v++)
-        {
-            var p = displayMesh.GetPosition(v);
-            if (byPosition.TryGetValue(p, out int node))
-            {
-                displacement[v] = _displacement[node];
-                stress[v] = vonMises[node];
-                continue;
-            }
-
-            // The struct-metric overload, not the delegate one: this runs once per display
-            // vertex, and a closure per call is the allocation Core's own Bvh doc names
-            // (measured 104 B/call -> 0 when MeshSdf made the same move). Traversal order
-            // is identical, so the answer is bit-for-bit the delegate form's.
-            var metric = new FacetDistance(this, p);
-            bvh.Nearest(p, ref metric, out int nearest, out double distance);
-            worst = Math.Max(worst, distance);
-
-            var f = Mesh.Facet(nearest);
-            var a = Mesh.Position(f[0]);
-            var b = Mesh.Position(f[1]);
-            var c = Mesh.Position(f[2]);
-            var q = Distance3d.ClosestPointOnTriangle(p, a, b, c);
-            var (l0, l1, l2) = Barycentric(q, a, b, c);
-            TetElement.TriangleShapeValues(Mesh.Order, l0, l1, l2, shape);
-
-            var u = Vector3d.Zero;
-            double s = 0;
-            for (int i = 0; i < perFacet; i++)
-            {
-                u += _displacement[f[i]] * shape[i];
-                s += vonMises[f[i]] * shape[i];
-            }
-            displacement[v] = u;
-            stress[v] = s;
-        }
-
-        maxSampleDistance = worst;
+        var sampler = SurfaceSampler.Build(Mesh, displayMesh);
+        maxSampleDistance = sampler.MaxSampleDistance;
         return
         [
-            MeshField.Vector(FieldNames.Displacement, lengthUnits, displacement),
-            MeshField.Scalar(FieldNames.VonMises, stressUnits, stress),
+            MeshField.Vector(FieldNames.Displacement, lengthUnits, sampler.Sample(_displacement)),
+            MeshField.Scalar(FieldNames.VonMises, stressUnits, sampler.Sample(NodalVonMises)),
         ];
     }
 
@@ -485,36 +487,6 @@ public sealed class StructuralResults
     /// the sampling-distance diagnostic.</summary>
     public IReadOnlyList<MeshField> SampleOnto(HalfEdgeMesh displayMesh) =>
         SampleOnto(displayMesh, out _);
-
-    /// <summary>Allocation-free exact distance from one query point to a boundary facet's
-    /// corner triangle, for <c>Bvh.Nearest&lt;TMetric&gt;</c>.</summary>
-    private readonly struct FacetDistance(StructuralResults results, Vector3d point) : IBvhDistance
-    {
-        public double DistanceTo(int facet)
-        {
-            var mesh = results.Mesh;
-            var f = mesh.Facet(facet);
-            var closest = Distance3d.ClosestPointOnTriangle(
-                point, mesh.Position(f[0]), mesh.Position(f[1]), mesh.Position(f[2]));
-            return closest.DistanceTo(point);
-        }
-    }
-
-    private static (double L0, double L1, double L2) Barycentric(
-        in Vector3d p, in Vector3d a, in Vector3d b, in Vector3d c)
-    {
-        var v0 = b - a;
-        var v1 = c - a;
-        var v2 = p - a;
-        double d00 = v0.Dot(v0), d01 = v0.Dot(v1), d11 = v1.Dot(v1);
-        double d20 = v2.Dot(v0), d21 = v2.Dot(v1);
-        double denominator = d00 * d11 - d01 * d01;
-        if (denominator == 0)
-            return (1, 0, 0); // Exact-zero guard: a degenerate facet has no interior.
-        double l1 = (d11 * d20 - d01 * d21) / denominator;
-        double l2 = (d00 * d21 - d01 * d20) / denominator;
-        return (1.0 - l1 - l2, l1, l2);
-    }
 
     /// <summary>
     /// Writes the VOLUME mesh and its results as a ParaView <c>.vtu</c> file — linear
