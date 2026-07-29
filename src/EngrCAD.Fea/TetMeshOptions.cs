@@ -60,4 +60,32 @@ public sealed record TetMeshOptions
     /// conditions; leave null to use raw triangle indices.
     /// </summary>
     public IReadOnlyList<int>? FacetTags { get; init; }
+
+    /// <summary>
+    /// An anisotropic boundary layer marched inward from a selected wall, ahead of the
+    /// isotropic fill. Null (the default) means no layer, and the mesher's output is then
+    /// bit-for-bit what it always was.
+    ///
+    /// <para>The layer is built FIRST and what it leaves over is meshed by the ordinary
+    /// pipeline, so every guarantee that pipeline already gives — a conforming boundary, the
+    /// volume identity, exact orientation, determinism — is inherited rather than restated.
+    /// The stack's elements come out at the FRONT of the mesh, so
+    /// <c>[0, BoundaryLayerReport.ElementCount)</c> names them.</para>
+    /// </summary>
+    public BoundaryLayerSpec? BoundaryLayer { get; init; }
+
+    /// <summary>
+    /// Tags at or above this value name surface patches that OPTIONAL refinement must never
+    /// split. The boundary-layer stage sets it to the first of the tags it gives the stack's
+    /// inner face: that surface already has elements on both sides, and inserting a vertex
+    /// into it would leave the two halves non-conforming. Null everywhere else.
+    ///
+    /// <para>Only the two <i>optional</i> refinement paths honour it — sizing-driven boundary
+    /// refinement and quality refinement's encroachment splitting — because both merely
+    /// decline to insert and the refinement loop is still bounded without them. Boundary
+    /// RECOVERY is deliberately left free: if a frozen patch has to be split for the mesh to
+    /// conform at all, that is a real failure, and it is better caught by the layer's own
+    /// interface check, which can say what went wrong, than by refusing to try.</para>
+    /// </summary>
+    internal int? FrozenFacetTag { get; init; }
 }

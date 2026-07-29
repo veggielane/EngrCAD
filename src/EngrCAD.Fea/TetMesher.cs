@@ -122,8 +122,84 @@ public static class TetMesher
             }
         }
 
+        if (options.BoundaryLayer is { } layerSpec)
+        {
+            return MeshWithBoundaryLayer(
+                [.. positions], faces, [.. faceBody], options, layerSpec, surfaceVolume,
+                out diagnostics, progress);
+        }
+
         var builder = new Builder([.. positions], faces, [.. faceBody], windings, options, progress);
         return builder.Run(surfaceVolume, out diagnostics);
+    }
+
+    /// <summary>
+    /// The layered route: march the stack, hand what is left to the ordinary pipeline, weld.
+    ///
+    /// <para>Nothing about the isotropic pass changes — it is called with an ordinary closed
+    /// surface and an ordinary options record — which is the whole reason this is tractable
+    /// and why the layer cannot weaken any guarantee the plain mesher gives.</para>
+    /// </summary>
+    private static TetMesh MeshWithBoundaryLayer(
+        Vector3d[] positions,
+        List<int[]> faces,
+        int[] faceBody,
+        TetMeshOptions options,
+        BoundaryLayerSpec spec,
+        double surfaceVolume,
+        out TetMeshDiagnostics diagnostics,
+        ProgressCancel? progress)
+    {
+        var bounds = Aabb.FromPoints(positions);
+        var size = bounds.Size;
+        double extent = Math.Max(size.X, Math.Max(size.Y, size.Z));
+
+        var tags = options.FacetTags is { } supplied
+            ? Enumerable.Range(0, faces.Count).Select(i => i < supplied.Count ? supplied[i] : i).ToArray()
+            : faceBody;
+
+        var builder = new BoundaryLayerBuilder(positions, faces, tags, faceBody, spec, extent);
+        var core = builder.MarchAndBuildCore(progress);
+        progress?.Report(0.4);
+
+        // One combined call, so the isotropic pass sees the bodies exactly as it always does
+        // and its per-element region ids line up with the stack's.
+        var coreSurfaces = new List<HalfEdgeMesh>(core.Count);
+        var coreTags = new List<int>();
+        foreach (var body in core)
+        {
+            coreSurfaces.Add(body.Surface);
+            // HalfEdgeMesh.Build preserves face order and the pipeline triangulates an
+            // already-triangular mesh into the same order, so the tag list lines up.
+            coreTags.AddRange(body.Tags);
+        }
+
+        var coreOptions = options with
+        {
+            BoundaryLayer = null,
+            FacetTags = coreTags,
+            FrozenFacetTag = builder.ReservedBase,
+        };
+
+        var filled = Mesh(coreSurfaces, coreOptions, out var coreDiagnostics, progress);
+        progress?.Report(0.9);
+
+        var mesh = builder.Complete(filled, out var layerReport);
+        progress?.Report(1.0);
+
+        double residual = Math.Abs(mesh.Volume - surfaceVolume) / Math.Max(Math.Abs(surfaceVolume), 1e-300);
+        diagnostics = coreDiagnostics with
+        {
+            InputVertices = positions.Length,
+            InputTriangles = faces.Count,
+            BoundaryFacets = mesh.BoundaryFacetCount,
+            InsideTets = mesh.TetCount,
+            SurfaceVolume = surfaceVolume,
+            VolumeResidual = residual,
+            BoundaryLayer = layerReport,
+            RefinementBlockedByFrozenBoundary = coreDiagnostics.RefinementBlockedByFrozenBoundary,
+        };
+        return mesh;
     }
 
     // ------------------------------------------------------------------
@@ -152,6 +228,8 @@ public static class TetMesher
         private int _boundarySteiner;
         private int _qualitySteiner;
         private int _recoveryRounds;
+        private int _blockedByFrozen;
+        private HashSet<(int, int)> _frozenEdges = [];
 
         /// <summary>A piece of a patch, used only to GENERATE Steiner points during recovery —
         /// the output boundary comes from the triangulation's own faces, never from these.</summary>
@@ -180,6 +258,9 @@ public static class TetMesher
             _delaunay = DelaunayTetrahedralization.Build(surfacePositions, progress);
             _points = _delaunay.Points;
             InitializeVertexPatches();
+            // Frozen sub-triangles never split, so their edges never change: compute the set
+            // once, before any refinement, and both refinement paths read the same answer.
+            _frozenEdges = FrozenEdges();
             progress?.Report(0.25);
 
             // The BOUNDARY is sized before recovery, not after. A coarse solid's interior
@@ -220,7 +301,8 @@ public static class TetMesher
                 SurfaceVolume: surfaceVolume,
                 VolumeResidual: residual,
                 InSphereEscalations: Predicates3d.InSphereEscalations - escalationsBefore,
-                LocationFallbacks: _delaunay.WalkFallbacks);
+                LocationFallbacks: _delaunay.WalkFallbacks,
+                RefinementBlockedByFrozenBoundary: _blockedByFrozen);
             return mesh;
         }
 
@@ -658,6 +740,15 @@ public static class TetMesher
                 bool changed = false;
                 foreach (var sub in _subTriangles)
                 {
+                    // A frozen patch is one an outer stage has already built elements against
+                    // (the boundary layer's inner face). Splitting it, or anything sharing an
+                    // edge with it, would put a vertex on a surface those elements already
+                    // face, so the size target does not apply there.
+                    if (IsFrozenOrOnItsRim(sub))
+                    {
+                        replacement.Add(sub);
+                        continue;
+                    }
                     var a = _points[sub.V0];
                     var b = _points[sub.V1];
                     var c = _points[sub.V2];
@@ -872,6 +963,7 @@ public static class TetMesher
             hits.Clear();
             index.Query(new Aabb(point, point), hits);
             bool any = false;
+            bool frozen = false;
             foreach (int i in hits)
             {
                 var (centre, radius) = balls[i];
@@ -882,11 +974,80 @@ public static class TetMesher
 
                 any = true;
                 var sub = _subTriangles[i];
+                if (IsFrozenOrOnItsRim(sub))
+                {
+                    // A frozen sub-triangle still BLOCKS the candidate — it has to, since
+                    // Ruppert's rule is what keeps the boundary recoverable, and a point
+                    // inserted essentially on the interface makes slivers recovery then cannot
+                    // clear (measured: a lined duct's core produced 74 unrecoverable faces
+                    // when this was let through). What it cannot do is respond by splitting,
+                    // so the candidate is simply dropped and the count is REPORTED rather than
+                    // the size request being quietly ignored.
+                    frozen = true;
+                    continue;
+                }
+
                 double target = TargetSize((_points[sub.V0] + _points[sub.V1] + _points[sub.V2]) / 3.0);
                 if (!double.IsPositiveInfinity(target) && radius > 0.5 * target)
                     encroached.Add(i);
             }
+            if (frozen)
+                _blockedByFrozen++;   // once per CANDIDATE, so the number counts points
             return any;
+        }
+
+        /// <summary>
+        /// Whether a patch is one an outer stage has already committed elements against, in
+        /// which case optional refinement must leave it alone. Frozen patches are tagged at or
+        /// above <see cref="TetMeshOptions.FrozenFacetTag"/> — a RANGE rather than one value,
+        /// because the boundary layer gives its interface a tag per wall patch so two offset
+        /// regions from different walls can never merge into one patch.
+        /// </summary>
+        private bool IsFrozen(int patch) =>
+            options.FrozenFacetTag is { } frozen && _patches[patch].Tag >= frozen;
+
+        /// <summary>
+        /// The undirected edges of every frozen sub-triangle. A sub-triangle sharing one of
+        /// them must not split either: red subdivision splits all three of its edges, and a
+        /// midpoint on a frozen patch's RIM lands on the frozen patch just as surely as one in
+        /// its interior. This is the case the first version missed — a duct's flat cap
+        /// refining to its size target put a vertex on the layer's rim.
+        /// </summary>
+        private HashSet<(int, int)> FrozenEdges()
+        {
+            var edges = new HashSet<(int, int)>();
+            if (options.FrozenFacetTag is null)
+                return edges;
+            foreach (var sub in _subTriangles)
+            {
+                if (!IsFrozen(sub.Patch))
+                    continue;
+                edges.Add(Edge(sub.V0, sub.V1));
+                edges.Add(Edge(sub.V1, sub.V2));
+                edges.Add(Edge(sub.V2, sub.V0));
+            }
+            return edges;
+
+            static (int, int) Edge(int a, int b) => a < b ? (a, b) : (b, a);
+        }
+
+        /// <summary>
+        /// Whether optional refinement must leave this sub-triangle alone: it is either ON a
+        /// frozen patch, or it shares an EDGE with one. The second half is not a nicety — red
+        /// subdivision splits all three edges, so a neighbour refining to its size target
+        /// would put a vertex on the frozen patch's rim, which is on the frozen patch.
+        /// </summary>
+        private bool IsFrozenOrOnItsRim(in SubTriangle sub)
+        {
+            if (IsFrozen(sub.Patch))
+                return true;
+            if (_frozenEdges.Count == 0)
+                return false;
+            return _frozenEdges.Contains(Edge(sub.V0, sub.V1))
+                || _frozenEdges.Contains(Edge(sub.V1, sub.V2))
+                || _frozenEdges.Contains(Edge(sub.V2, sub.V0));
+
+            static (int, int) Edge(int a, int b) => a < b ? (a, b) : (b, a);
         }
 
         private void SplitSubTriangles(HashSet<int> doomed)
@@ -943,6 +1104,17 @@ public static class TetMesher
 /// <param name="VolumeResidual">Relative difference between the tet mesh's volume and the surface's.</param>
 /// <param name="InSphereEscalations">Exact-stage in-sphere evaluations during this mesh.</param>
 /// <param name="LocationFallbacks">Point locations that fell back to an exhaustive scan.</param>
+/// <param name="BoundaryLayer">
+/// What the boundary-layer stage did, or null when no layer was asked for. Its elements sit
+/// at the front of the mesh, so <c>[0, BoundaryLayer.ElementCount)</c> names them.
+/// </param>
+/// <param name="RefinementBlockedByFrozenBoundary">
+/// Quality-refinement points declined because they encroached a FROZEN boundary patch — the
+/// boundary layer's interface, which cannot be split without leaving the stack facing half a
+/// triangle. A large number means the interface triangulation, not the sizing field, is what
+/// sets the element size beside the layer: refine the WALL surface before meshing. Always
+/// zero without a boundary layer.
+/// </param>
 public readonly record struct TetMeshDiagnostics(
     int InputVertices,
     int InputTriangles,
@@ -956,11 +1128,20 @@ public readonly record struct TetMeshDiagnostics(
     double SurfaceVolume,
     double VolumeResidual,
     long InSphereEscalations,
-    int LocationFallbacks)
+    int LocationFallbacks,
+    BoundaryLayerReport? BoundaryLayer = null,
+    int RefinementBlockedByFrozenBoundary = 0)
 {
     /// <summary>A one-line human summary.</summary>
-    public override string ToString() =>
-        $"{InsideTets} tets from {InputTriangles} triangles / {SurfacePatches} patches / " +
-        $"{InputVertices} vertices; {BoundarySteinerPoints} boundary + {QualitySteinerPoints} quality " +
-        $"Steiner points, {RecoveryRounds} recovery round(s); volume residual {VolumeResidual:E2}.";
+    public override string ToString()
+    {
+        string core =
+            $"{InsideTets} tets from {InputTriangles} triangles / {SurfacePatches} patches / " +
+            $"{InputVertices} vertices; {BoundarySteinerPoints} boundary + {QualitySteinerPoints} quality " +
+            $"Steiner points, {RecoveryRounds} recovery round(s); volume residual {VolumeResidual:E2}.";
+        if (RefinementBlockedByFrozenBoundary > 0)
+            core += $" {RefinementBlockedByFrozenBoundary} refinement point(s) declined at the frozen " +
+                    "layer interface.";
+        return BoundaryLayer is { } layer ? $"{core} Boundary layer: {layer}" : core;
+    }
 }
