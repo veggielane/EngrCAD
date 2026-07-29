@@ -1267,13 +1267,26 @@ export — is recorded in CLAUDE.md):
   `kern` kerning; **CFF/OpenType-PostScript outlines ✅ landed** — `CffOutlines`, Type 2
   charstrings → cubic `BezierTo`, CID-keyed via FDArray/FDSelect, every `.otf` opens;
   **GPOS kerning ✅ landed** — `GposKerning`, PairPos 1+2 incl. Extension lookups, with
-  the spec's GPOS-over-legacy-`kern` precedence): **text on a curve/path**
-  (layout maps the pen position to a frame instead of a straight baseline); **variable
-  fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today); **`seac` accent
-  composition** (legacy CFF accents — rejected loudly today, needs charset + standard
-  encoding); **vertical alignment** for text blocks (horizontal-only today);
-  **`TextFeature`** as a parametric `Feature` (the parameter snapshot must cover the
-  font reference).
+  the spec's GPOS-over-legacy-`kern` precedence; **text on a curve ✅ landed** —
+  `Shape.TextOnPath`/`TextOutlines.SketchesOnPath` over a `GlyphPose`, glyphs placed
+  rigidly by mapping control points only (exact, because a Bézier is an affine
+  combination of them), arc-length spacing, mid-advance anchoring, left-normal "up",
+  closed paths wrapping and multi-line refused by name; **vertical alignment ✅ landed** —
+  `TextStyle.VerticalAlign`, measured from the font's ascender/descender rather than the
+  ink): **variable fonts** (`fvar`/`gvar`, incl. `CFF2` — rejected loudly today);
+  **`seac` accent composition** (legacy CFF accents — rejected loudly today, needs
+  charset + standard encoding); **`TextFeature`** as a parametric `Feature` (the
+  parameter snapshot must cover the font reference).
+- [ ] **Text on a path: bent glyphs, and per-glyph rotation control.** Deliberately NOT
+  built with the rigid placement (see CLAUDE.md for why bending costs exactness), but two
+  real requests remain. (a) An **upright** mode — every glyph translated along the path
+  and left un-rotated, the way a row of labels round a bolt circle is usually wanted;
+  cheap (it is `GlyphPose.At` at the path point) and the only open question is whether it
+  belongs on `TextStyle` or as an argument, since it is a property of the placement rather
+  than of the type. (b) **A second line via `Sketch.Offset`** as a convenience overload
+  that builds the offset curve itself — currently refused by name so the caller does it,
+  which is right while offsetting can self-intersect, but a helper that offsets and
+  REPORTS what it got would carry the honest failure.
 - [ ] **Heightmap follow-ups** (`surface()` ✅ landed — `Shape.Heightmap` +
   `Heightmap.Mesh/ReadDat/ReadPng`, grayscale-PNG reader dependency-free over BCL
   `ZLibStream`): color-PNG luminance mapping (deliberately not invented silently —
@@ -1314,7 +1327,12 @@ export — is recorded in CLAUDE.md):
   **variable offset along the outline** (per-vertex distances —
   trapezoid slabs + interpolated-radius joins on the same union construction; design
   question: how distances interpolate along an edge, linear-in-arclength being the
-  obvious rule).
+  obvious rule). **Scope note:** this is a `EngrCAD.Core.Geometry2` change —
+  `Region2dOffset`/`CurvedRegion2dOffset` own the slab-and-join union, and `Sketch.Offset`
+  is a thin delegation — so it cannot be built from the Modeling side without a second
+  copy of that construction. The curved tier landing has NOT made the item obsolete: it
+  retired the inscribed-arc contract (an exactly-offset arc IS the true offset), which is
+  about join FIDELITY, while this is about the distance VARYING along the outline.
 - [ ] **Twist-extrude follow-ups** (`Shape.Extrude(sketch, height, twist, scale, slices)`
   ✅ landed — taper = B-Rep-Native ruled loft, twist = direct mesh section sweep with
   twist-matched profile subdivision + collinear-chord-zip caps, implicit via mesh SDF):
@@ -1395,10 +1413,38 @@ export — is recorded in CLAUDE.md):
   with layers and an LTYPE table both ways, exact bulge arcs; `SvgDrawing`
   visible/hidden/section/thin line classes plus sheet-sized output and text over
   Section/Silhouette/Sketch/`DrawingSheet`; hidden-line classification is now COMPUTED
-  from the model by `HiddenLineRemoval`): DXF SPLINE entities (cubic béziers still
-  flatten on export), DXF units header ($INSUNITS), MTEXT for multi-line notes (a note
-  currently writes one TEXT entity per line), and SVG hatch as a `<pattern>` fill rather
-  than one path per hatch line (smaller files for a big section).
+  from the model by `HiddenLineRemoval`; **DXF SPLINE entities ✅ landed** both ways —
+  `DxfSpline` + `DxfCurveMode.Spline`, exact cubic round trip, reading narrowed to what
+  converts exactly with rational and general B-splines reported by name; **`$INSUNITS`
+  ✅ landed** both ways — declared on write, HONOURED (rescaled to mm) on read, `Unitless`
+  never scaled). **Two remain, and BOTH turn out to be changes to what the drafting layer
+  PRODUCES rather than to how a writer spells it** — which is why neither is the small job
+  its one-line description implies:
+  - [ ] **MTEXT for multi-line notes.** The filed framing ("a note currently writes one
+    TEXT entity per line") is the symptom; the cause is that `SheetAnnotations`'
+    `CenteredText` and `SheetNote` **split on `'\n'` inside `Compute()`**, so by the time
+    either writer runs there is no multi-line note left — only N single-line `SheetText`s
+    at stacked positions. Emitting MTEXT therefore means the content model carrying a note
+    as ONE object with its own breaks, after which the SVG writer has to do the stacking
+    itself — which breaks the recorded invariant that `ToSvg`/`ToDxf` consume one
+    `Compute()` **so the two writers cannot disagree**. Worth doing only alongside a
+    decision about where line breaking lives; a `DxfMText` entity read/written in
+    isolation is cheap but buys little, since `ToSketches` consumes no text at all.
+  - [ ] **SVG hatch as a `<pattern>` fill** rather than one path per hatch line (smaller
+    files for a big section). Same shape: `SheetHatch.Fill` returns clipped LINE SEGMENTS,
+    and a `<pattern>` needs the cut REGION plus a tile, so the hatch layer's output type
+    changes. The anchoring survives either way — `patternUnits="userSpaceOnUse"` is
+    origin-anchored exactly as the exact even-odd scan already is — so what is at stake is
+    the content model, not the geometry.
+- [ ] **DXF SPLINE follow-up: general B-spline decomposition.** Reading converts degree 1
+  and cubics ALREADY in Bézier form; a general (uniform, or unevenly-knotted) B-spline is
+  reported rather than sampled, which is right but leaves real third-party files on the
+  floor. The exact fix is knot insertion to full multiplicity (The NURBS Book A5.6 Bézier
+  decomposition) and it belongs in `EngrCAD.BRep` beside `BSplineBasis` — which is already
+  public — not in a file reader; the DXF side is then two lines. Rational splines stay
+  refused for a different reason: a sketch's `CubicSeg` is polynomial, so exactness would
+  need a rational segment type, which is a `Sketch` vocabulary change rather than an
+  import one.
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 

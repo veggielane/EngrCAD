@@ -14,6 +14,33 @@ public enum TextAlign
 }
 
 /// <summary>
+/// Vertical placement of the whole text BLOCK relative to y = 0.
+/// <para><b>Measured from the font's own metrics, never from the ink.</b> The block's top
+/// is the first line's baseline plus <see cref="TrueTypeFont.Ascender"/> and its bottom is
+/// the last line's baseline plus <see cref="TrueTypeFont.Descender"/> (which is negative),
+/// so two labels centred on the same point line up whether or not either happens to
+/// contain a descender or a capital. Aligning to the measured ink would make "AB" and
+/// "ay" sit at different heights, which is the failure mode this convention exists to
+/// avoid — <see cref="TextOutlines.Bounds"/> is still there for the caller who genuinely
+/// wants the ink.</para>
+/// </summary>
+public enum TextVerticalAlign
+{
+    /// <summary>y = 0 is the first line's baseline — the typographic origin, and the
+    /// default (a run placed this way is bit-for-bit what it always was).</summary>
+    Baseline,
+
+    /// <summary>y = 0 is the top of the block (first baseline + ascender).</summary>
+    Top,
+
+    /// <summary>y = 0 is halfway between the block's top and bottom.</summary>
+    Middle,
+
+    /// <summary>y = 0 is the bottom of the block (last baseline + descender).</summary>
+    Bottom,
+}
+
+/// <summary>
 /// How a run of text is laid out. All spacing is expressed as a multiple of the em
 /// <c>size</c>, never in absolute units, so one style stays correct at every size.
 /// <para>The defaults are the ordinary typographic ones: the font's own advance widths
@@ -39,6 +66,10 @@ public sealed record TextStyle
 
     /// <summary>Where x = 0 sits on each line (default <see cref="TextAlign.Left"/>).</summary>
     public TextAlign Align { get; init; } = TextAlign.Left;
+
+    /// <summary>Where y = 0 sits on the whole block (default
+    /// <see cref="TextVerticalAlign.Baseline"/>, the typographic origin).</summary>
+    public TextVerticalAlign VerticalAlign { get; init; } = TextVerticalAlign.Baseline;
 
     /// <summary>
     /// Apply the font's pair kerning (default true). Pairs come from the OpenType

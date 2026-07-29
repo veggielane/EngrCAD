@@ -3,6 +3,49 @@ using EngrCAD.Core;
 namespace EngrCAD.Modeling;
 
 /// <summary>
+/// Where one glyph goes: a rigid placement of the glyph's own (x along the writing
+/// direction, y up) frame into sketch coordinates.
+/// <para><b>Only the CONTROL POINTS are mapped, and that is exact.</b> A glyph outline is
+/// lines and Béziers, and a Bézier is an affine combination of its control points at
+/// every parameter — so the curve through mapped control points IS the mapped curve, with
+/// nothing sampled or refitted. (The same property makes
+/// <c>TransformedCurve(NurbsCurve)</c> a lossless STEP export.) It is also why text on a
+/// path <em>rotates</em> each glyph rather than bending it: a warp that followed the
+/// curve's curvature is not affine, so no exact Bézier image of a glyph exists under
+/// it.</para>
+/// <para>A translation-only pose evaluates the ORIGINAL expression
+/// <c>origin + point * scale</c> rather than a rotation that happens to be the identity,
+/// so every straight run of text is bit-for-bit what it was before poses existed.</para>
+/// </summary>
+internal readonly struct GlyphPose
+{
+    private readonly Vector2d _origin;
+    private readonly Vector2d _xAxis;
+    private readonly bool _rotated;
+
+    private GlyphPose(in Vector2d origin, in Vector2d xAxis, bool rotated)
+    {
+        _origin = origin;
+        _xAxis = xAxis;
+        _rotated = rotated;
+    }
+
+    /// <summary>Upright placement at <paramref name="origin"/> (x right, y up).</summary>
+    public static GlyphPose At(in Vector2d origin) => new(origin, Vector2d.UnitX, rotated: false);
+
+    /// <summary>Placement with the glyph's x axis along <paramref name="xAxis"/> (which
+    /// must be a unit vector) and its y axis the left perpendicular — so the map is a
+    /// proper rotation and a glyph can never come out mirrored.</summary>
+    public static GlyphPose Along(in Vector2d origin, in Vector2d xAxis) => new(origin, xAxis, rotated: true);
+
+    /// <summary>Maps a point already expressed in sketch units relative to the glyph
+    /// origin.</summary>
+    public Vector2d Map(in Vector2d local) => _rotated
+        ? _origin + _xAxis * local.X + new Vector2d(-_xAxis.Y, _xAxis.X) * local.Y
+        : _origin + local;
+}
+
+/// <summary>
 /// Glyph outlines to closed <see cref="Sketch"/>es. Two things happen here, both of
 /// them the reason modeled text is exact rather than a polygon soup:
 /// <list type="number">
@@ -35,10 +78,10 @@ internal static class GlyphOutlines
     /// <summary>
     /// The glyph as closed sketches with counters attached as holes, scaled from font
     /// units by <paramref name="scale"/> and placed with the glyph origin (on the
-    /// baseline, at the pen position) at <paramref name="origin"/>.
+    /// baseline, at the pen position) by <paramref name="pose"/>.
     /// Blank glyphs yield an empty list — never an exception.
     /// </summary>
-    public static List<Sketch> ToSketches(Glyph glyph, double scale, in Vector2d origin)
+    public static List<Sketch> ToSketches(Glyph glyph, double scale, in GlyphPose pose)
     {
         if (glyph.IsEmpty)
             return [];
@@ -46,7 +89,7 @@ internal static class GlyphOutlines
         var contours = new List<Contour>(glyph.Contours.Count);
         foreach (var source in glyph.Contours)
         {
-            var contour = BuildContour(source, scale, origin);
+            var contour = BuildContour(source, scale, pose);
             if (contour is not null)
                 contours.Add(contour);
         }
@@ -63,9 +106,9 @@ internal static class GlyphOutlines
     /// <summary>A built contour plus the points a containment test votes with.</summary>
     private sealed record Contour(Sketch Sketch, Vector2d[] Samples);
 
-    private static Contour? BuildContour(GlyphContour source, double scale, in Vector2d origin)
+    private static Contour? BuildContour(GlyphContour source, double scale, in GlyphPose pose)
     {
-        var points = Compact(source.Points, scale, origin, source.IsCubic);
+        var points = Compact(source.Points, scale, pose, source.IsCubic);
         if (points.Count < 2)
             return null;
         if (source.IsCubic)
@@ -240,12 +283,12 @@ internal static class GlyphOutlines
     /// (which would become zero-length segments). For cubic (CFF) contours only
     /// coincident <em>anchors</em> are dropped: a cubic's two control points may
     /// legitimately coincide with each other or with an anchor.</summary>
-    private static List<GlyphPoint> Compact(IReadOnlyList<GlyphPoint> points, double scale, in Vector2d origin, bool isCubic = false)
+    private static List<GlyphPoint> Compact(IReadOnlyList<GlyphPoint> points, double scale, in GlyphPose pose, bool isCubic = false)
     {
         var compacted = new List<GlyphPoint>(points.Count);
         foreach (var point in points)
         {
-            var mapped = new GlyphPoint(origin + point.Position * scale, point.OnCurve);
+            var mapped = new GlyphPoint(pose.Map(point.Position * scale), point.OnCurve);
             if (compacted.Count > 0 &&
                 compacted[^1].OnCurve == mapped.OnCurve &&
                 (!isCubic || mapped.OnCurve) &&

@@ -55,6 +55,7 @@ directions, axes), so a rotated-then-drilled B-Rep stays exact.
 | `Hull(...)` (convex hull) | ❌ mesh construction, no B-Rep import | 🔶 bridged (hull mesh → mesh SDF) | 🔶 quickhull over tessellated operand vertices (exact for polyhedral operands) |
 | `Remeshed(...)` (isotropic remesh) | ❌ a remesh is defined on a triangulation, and no mesh→B-Rep import | 🔶 bridged (remeshed triangles → mesh SDF, so the field carries their chord error) | ✅ native (`Remesher` over the child's mesh lowering, projected back onto it) |
 | `Text(...)` (TrueType outlines) | ✅ native (lines + quadratic Béziers → exact profiles) | ✅ **native** (exact 2D SDF per glyph) | ✅ native |
+| `TextOnPath(...)` (one line along a `Curve2d`) | ✅ native (a rigid map of the control points IS the mapped curve) | ✅ **native** | ✅ native |
 | `Translate` / `Rotate` / `Scale` (uniform) | ✅ baked into inputs | ✅ native SDF ops | ✅ |
 | `Scale(x, y, z)` / `Resized(newSize, auto?)` (OpenSCAD `scale`/`resize`; resize measures `Shape.Bounds(quality)` eagerly and scales about the origin) | per the affine row below | 🔶 bridged unless factors equal | ✅ / 🔶 |
 | `Mirror(point, normal)` | ✅ box/cylinder/extrude (any affine) + sphere/torus/cone (mirrored similarity) + revolve (axis negated: F·Rot(d,φ)·F = Rot(−F·d,φ), the LH-thread identity) + sweep (RMF transport is intrinsic — no fix needed) + rim/drill (isometry-commuting surgery/tools) + draft/shell/round-edges/loft/taper (each defined by LENGTHS and ANGLES alone, which every isometry preserves; draft takes the pull direction's linear image, un-negated — a pull is transported, not conjugated like a revolve's axis) · ❌ `SheetMetalBody` (a flange tree is ordered and edge-quoted, so a reflection would need it rebuilt the other way round, not re-placed) | ✅ native (query point reflected — exact) | ✅ (winding flipped; exact reflection of the tessellation) |
@@ -1060,9 +1061,16 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
 - **The origin is the baseline** at the start of the first line — x along the writing
   direction, y up. Descenders reach below y = 0, further lines sit below the first, and
   `TextStyle.Align` decides whether x = 0 is a line's start, middle or end.
+- **`TextStyle.VerticalAlign`** moves the whole block off that baseline (`Top`/`Middle`/
+  `Bottom`), measured from the **font's** ascender and descender rather than from the
+  ink — so two labels centred on one point line up whether or not either happens to
+  contain a descender or a capital, which an ink-measured centring would not. Default
+  `Baseline` adds nothing at all (an exact-zero test, not a zero addend), so every
+  existing layout is bit-for-bit what it was.
 - **`TextStyle`** carries `LetterSpacing` (tracking, inserted between glyphs only),
-  `LineSpacing` (baseline step, default 1.2), `Align` and `Kerning` — all spacing as a
-  multiple of the em size, so one style is correct at every size. Kerning comes from the
+  `LineSpacing` (baseline step, default 1.2), `Align`, `VerticalAlign` and `Kerning` —
+  all spacing as a multiple of the em size, so one style is correct at every size.
+  Kerning comes from the
   OpenType `GPOS` `kern` feature when the font has one (`Text/GposKerning.cs`: PairPos
   formats 1 and 2 — the class-pair matrix most fonts use — unwrapped through Extension
   lookups, both coverage and both class-definition formats, lookups accumulating), else
@@ -1080,6 +1088,41 @@ IReadOnlyList<Sketch> outlines = TextOutlines.Sketches("ENGRCAD", font, 9);  // 
   (space) draw nothing and still advance the pen.
 - `TextOutlines` also measures: `AdvanceWidth` (exact typographic width, never touches
   an outline), `Bounds` (the actual ink) and `LineHeight`.
+
+### Text on a curve
+
+`Shape.TextOnPath` / `TextOutlines.SketchesOnPath` lay ONE line along any `Curve2d` — the
+ring of lettering round a dial, a bezel, a curved nameplate. Four conventions carry it:
+
+- **Glyphs are placed RIGIDLY, not bent**, and only their control points are mapped —
+  which *is* the curve, because a Bézier is an affine combination of its control points at
+  every parameter (the same property that makes `TransformedCurve(NurbsCurve)` a lossless
+  STEP export). A warp following the curve's curvature is not affine, so no exact Bézier
+  image of a glyph exists under it: bending would mean flattening, and text on a path
+  would stop being native in all three representations. The rigid placement is what the
+  area oracle pins — a rotation preserves area exactly, so a curved glyph must enclose
+  exactly what the upright one does, an assertion a distortion cannot pass where "the
+  letters look right" would pass either.
+- **Pen positions are ARC LENGTHS** (via `ArcLengthTable2d`), so spacing is what the font
+  asked for however the curve happens to be parameterized. A glyph anchors at the
+  **middle** of its advance (SVG's text-on-path rule), so it leans about its own centre
+  rather than pivoting off its left edge.
+- **A glyph's "up" is the path's LEFT normal** — the unit tangent turned a quarter turn
+  counter-clockwise, the only choice that makes a straight left-to-right path reproduce
+  ordinary layout exactly. The consequence to state: a **counter-clockwise** circle's left
+  normal points at its centre, so lettering hangs inward; a dial's outward-standing rim
+  text wants a **clockwise** path (`new Arc2d(centre, r, start, -2 * Math.PI)`). Both
+  windings are pinned by test, because "which side does the text go" is exactly the
+  convention a one-sided test lets drift.
+- **A closed path is a ring** — a run may cross its seam — while an open one may not run
+  off either end (extrapolating a curve past its own domain is inventing geometry). Text
+  longer than the path is refused with both lengths named, and the fit test carries the
+  1e-9 weld tier so a run that exactly fills its path is not refused by an ulp of
+  subtraction round-off.
+
+**Multi-line on a path is refused by name**: a second line sits on an OFFSET of the path,
+which is a different curve and can self-intersect — the caller builds it (`Sketch.Offset`)
+and lays its line on it, rather than the layout inventing one.
 
 ### Embossing and engraving
 
@@ -2004,14 +2047,50 @@ flags; `ToText()` is the aligned table the viewer's **Check** button shows, and
 
 ## 2D interchange (DXF & SVG)
 
-`DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE with
-layers): `Add(sketch, layer)` writes lines and arcs **exactly** (LWPOLYLINE bulge =
-tan(sweep/4) is an exact arc encoding; full-circle loops become CIRCLE; cubic béziers
-flatten at a stated chord tolerance — the one lossy mapping), and `ToSketches(out
-diagnostics)` comes back: closed polylines and circles directly, loose LINE/ARC
-entities chained end-to-end at the weld tier, anything unclosable *reported*, never
-invented (the `MeshReadResult` convention). Loop nesting is deliberately the caller's
-decision on import. `SvgDrawing` writes drawings from `Shape.Section`/`Silhouette`
+`DxfDocument` reads and writes 2D profiles (LINE / ARC / CIRCLE / LWPOLYLINE / SPLINE /
+TEXT with layers): `Add(sketch, layer)` writes lines and arcs **exactly** (LWPOLYLINE
+bulge = tan(sweep/4) is an exact arc encoding; full-circle loops become CIRCLE), and
+`ToSketches(out diagnostics)` comes back: closed polylines and circles directly, loose
+LINE/ARC/SPLINE entities chained end-to-end at the weld tier, anything unclosable
+*reported*, never invented (the `MeshReadResult` convention). Loop nesting is deliberately
+the caller's decision on import.
+
+**Cubics have an exact route** (`DxfCurveMode.Spline`): a cubic Bézier IS a clamped
+degree-3 B-spline with four control points, so a SPLINE entity carries one with nothing
+approximated, and the area of a béziered profile survives a round trip to full precision
+where the default flattening manages the chord tolerance. The cost is structural rather
+than numerical and is stated instead of hidden: a loop containing a cubic arrives as a
+CHAIN (LWPOLYLINE runs plus one SPLINE per cubic) rather than one closed polyline, because
+DXF's polyline vocabulary has no cubic vertex — the reader re-closes it by endpoint. **A
+sketch with no cubics writes byte-for-byte the same file under either mode**, which is
+what makes the option safe to reach for and is asserted as a string comparison.
+
+Reading is deliberately NARROWER than writing: degree 1 (a polyline) and non-rational
+degree 3 already in Bézier form (clamped ends, interior knots of multiplicity 3 — so the
+control points split four at a time with nothing computed) convert exactly; a **rational**
+spline has no polynomial cubic form and a general B-spline needs knot-insertion Bézier
+decomposition, and both are REPORTED by name rather than sampled. The entity list is what
+the FILE says; the sketch list is what this kernel can carry exactly, and keeping the two
+apart is what keeps "sketches carry nothing flattened" true. Knot-multiplicity tests are
+**exact comparisons**, not tolerant ones: a knot vector is a list a writer either repeated
+or did not, and a tolerance would accept a curve merely NEARLY in Bézier form and then
+split it at the wrong places.
+
+**Units are declared and honoured** (`DxfDocument.Units`, `$INSUNITS`, default
+millimetres). This is the same duty the LTYPE table has, and it was learned the same way:
+a file that does not say what its numbers mean leaves every reader to guess. On load the
+declaration is honoured rather than merely reported — an inch file is scaled into
+millimetres and comes back LABELLED millimetres, so re-saving it is correct rather than
+declaring inches over millimetre coordinates, with the original unit and factor in
+`Diagnostics` (which is where "what the reader did" belongs; it is not a property that
+could round-trip). `Unitless` is the file's honest "no claim" and is never scaled —
+inventing a factor there would be the silent mis-scaling the feature exists to prevent,
+the `IgesReader` unit-flag lesson. One detail with teeth: a rescale moves VERTICES and
+leaves BULGES alone, because a bulge is tan(sweep/4) — an angle, invariant under a uniform
+scale — and scaling it too would reshape every arc; the test asserts the area scales by
+exactly the square of the factor, which only holds if the sweeps survived.
+
+`SvgDrawing` writes drawings from `Shape.Section`/`Silhouette`
 regions and exact sketches (SVG `A`/`C` commands — nothing flattened), with
 **line-class-driven styling** (`SvgLineClass.Visible`/`Hidden`/`Section` → solid /
 dashed / dash-dot groups per layer, the build123d edge-classification lesson);

@@ -1110,6 +1110,55 @@ public abstract class Shape
         return UnionTree(glyphs);
     }
 
+    /// <summary>
+    /// Modeled text laid along a curve — the ring of lettering round a dial face, a bezel
+    /// or a curved nameplate — extruded <paramref name="height"/> along the normal of
+    /// <paramref name="plane"/> and unioned. The <paramref name="path"/> is a
+    /// <see cref="Curve2d"/> in that plane's own 2D coordinates, exactly like a
+    /// <see cref="Sketch"/>; <c>sketch.ToCurves()</c> hands over an existing outline and
+    /// <c>Sketch.Circle(r).ToCurves()[0]</c> is the common case.
+    /// <para>Every glyph is placed RIGIDLY — rotated to the path's tangent, never bent to
+    /// its curvature — and only its control points are mapped, which is exactly the curve
+    /// because a Bézier is an affine combination of them. So text on a path is as exact as
+    /// straight text: Native in all three representations, nothing sampled. See
+    /// <see cref="TextOutlines.SketchesOnPath"/> for the anchoring, arc-length and
+    /// alignment conventions.</para>
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// var dial = Shape.Cylinder(radius: 30, height: 4);
+    /// var top = SketchPlane.At((0, 0, 2), Vector3d.UnitX, Vector3d.UnitY);
+    ///
+    /// // CLOCKWISE, so the letters stand OUTWARD and read right-way-up from outside the
+    /// // dial (a counter-clockwise ring hangs them inward — see TextOutlines.SketchesOnPath).
+    /// var ring = new Arc2d(Vector2d.Zero, 24, Math.PI, -2 * Math.PI);
+    /// var style = new TextStyle { Align = TextAlign.Center, VerticalAlign = TextVerticalAlign.Bottom };
+    ///
+    /// var marks = Shape.TextOnPath("ENGRCAD", font, size: 6, height: 0.8, ring, top, style,
+    ///                              startOffset: 24 * Math.PI / 2);   // a quarter turn along
+    /// var engraved = dial | marks;
+    /// </code>
+    /// </example>
+    /// <exception cref="ArgumentException">The text draws nothing, has more than one line,
+    /// contains a character the font lacks, or does not fit on the path.</exception>
+    public static Shape TextOnPath(
+        string text, TrueTypeFont font, double size, double height, Curve2d path,
+        SketchPlane? plane = null, TextStyle? style = null, double startOffset = 0)
+    {
+        if (height <= 0)
+            throw new ArgumentOutOfRangeException(nameof(height));
+
+        var sketches = TextOutlines.SketchesOnPath(text, font, size, path, style, startOffset);
+        if (sketches.Count == 0)
+            throw new ArgumentException(
+                $"\"{text}\" produces no geometry: it is empty or contains only blank glyphs.", nameof(text));
+
+        var glyphs = new List<Shape>(sketches.Count);
+        foreach (var sketch in sketches)
+            glyphs.Add(Extrude(sketch, height, plane));
+        return UnionTree(glyphs);
+    }
+
     // ---- Escape hatches: wrap existing engine geometry as leaves ----
 
     public static Shape From(BrepSolid solid) => new SourceShape(solid);
