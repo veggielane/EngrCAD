@@ -179,6 +179,40 @@ public sealed class StructuralModel
     public StructuralModel(QuadraticTetMesh mesh, Material material)
         : this(AnalysisMesh.Of(mesh), material) { }
 
+    /// <summary>
+    /// A multi-material model built from the SAME <see cref="AnalysisBody"/> list that was
+    /// meshed — region <c>i</c> takes <c>bodies[i].Material</c>, so nothing has to restate
+    /// a region id and the materials cannot drift from the geometry.
+    ///
+    /// <code>
+    /// var bodies = new[] { new AnalysisBody(steelHalf, Materials.Steel, "steel"),
+    ///                      new AnalysisBody(alloyHalf, Materials.Aluminium6061, "alloy") };
+    /// var model  = StructuralModel.For(TetMesher.Mesh(bodies), bodies);
+    /// </code>
+    ///
+    /// <para>Refuses, by name and before anything is assembled: a body with no material, a
+    /// mesh region no body declares, a declared body that contributed no elements, and (per
+    /// <see cref="SetMaterial"/>) a material with no Young's modulus.</para>
+    /// </summary>
+    public static StructuralModel For(AnalysisMesh mesh, IReadOnlyList<AnalysisBody> bodies)
+    {
+        AnalysisBodies.Require(mesh, bodies, "structural");
+        var model = new StructuralModel(mesh, bodies[0].Material!);
+        for (int b = 0; b < bodies.Count; b++)
+            model.SetMaterial(b, bodies[b].Material!);
+        return model;
+    }
+
+    /// <summary>The linear (4-node) spelling of
+    /// <see cref="For(AnalysisMesh, IReadOnlyList{AnalysisBody})"/>.</summary>
+    public static StructuralModel For(TetMesh mesh, IReadOnlyList<AnalysisBody> bodies) =>
+        For(AnalysisMesh.Of(mesh), bodies);
+
+    /// <summary>The quadratic (10-node) spelling of
+    /// <see cref="For(AnalysisMesh, IReadOnlyList{AnalysisBody})"/>.</summary>
+    public static StructuralModel For(QuadraticTetMesh mesh, IReadOnlyList<AnalysisBody> bodies) =>
+        For(AnalysisMesh.Of(mesh), bodies);
+
     /// <summary>The analysis mesh.</summary>
     public AnalysisMesh Mesh { get; }
 

@@ -93,10 +93,12 @@ public static class TetMesher
         var faces = new List<int[]>();
         var faceBody = new List<int>();
         var windings = new List<MeshWindingNumber>();
+        var bodyStart = new int[bodies.Count + 1];
         double surfaceVolume = 0;
 
         for (int b = 0; b < bodies.Count; b++)
         {
+            bodyStart[b] = positions.Count;
             var body = bodies[b] ?? throw new TetMeshException($"Body {b} is null.");
             if (!body.IsClosed)
                 throw new TetMeshException(
@@ -121,6 +123,10 @@ public static class TetMesher
                 faceBody.Add(b);
             }
         }
+        bodyStart[bodies.Count] = positions.Count;
+
+        if (bodies.Count > 1)
+            RequireBodiesDoNotTouch(positions, bodyStart);
 
         if (options.BoundaryLayer is { } layerSpec)
         {
@@ -131,6 +137,87 @@ public static class TetMesher
 
         var builder = new Builder([.. positions], faces, [.. faceBody], windings, options, progress);
         return builder.Run(surfaceVolume, out diagnostics);
+    }
+
+    /// <summary>
+    /// Refuses multi-body input whose surfaces share a vertex — two bodies MATING along a
+    /// face, which is the natural way to state a bi-material part and is precisely what v1
+    /// does not mesh.
+    ///
+    /// <para><b>The refusal is the honest answer here, and the reason is worth keeping.</b>
+    /// Welding the shared vertices would make the input tetrahedralizable, and the result
+    /// would look right and be wrong: <c>OffendingFaces</c> treats every inside-to-inside
+    /// face as interior, so an inter-body face is never recovered onto the input plane, and
+    /// a tetrahedron straddling the interface takes ONE region for its whole volume. The
+    /// material boundary would then be a jagged surface of the mesher's choosing rather
+    /// than the plane the design drew — a different geometry, not a coarser one. A
+    /// conforming multi-material mesh needs the inter-body face treated as a constrained
+    /// boundary (and a decision about whether a facet selector may name it, since it would
+    /// be visited from both sides), which is a feature rather than a weld.</para>
+    ///
+    /// <para>Without this the refusal still happened, deep in
+    /// <c>DelaunayTetrahedralization</c>, as "points N and M are exactly coincident - weld
+    /// the input surface" — true, and unhelpful, since welding is exactly what must not
+    /// happen. Cost is one dictionary over the input points, and only when there is more
+    /// than one body.</para>
+    /// </summary>
+    private static void RequireBodiesDoNotTouch(List<Vector3d> positions, int[] bodyStart)
+    {
+        var owner = new Dictionary<Vector3d, int>(positions.Count);
+        for (int b = 0; b + 1 < bodyStart.Length; b++)
+        {
+            for (int i = bodyStart[b]; i < bodyStart[b + 1]; i++)
+            {
+                if (owner.TryGetValue(positions[i], out int other) && other != b)
+                {
+                    throw new TetMeshException(
+                        $"Bodies {other} and {b} share the vertex {positions[i]}: their surfaces MATE. "
+                        + "TetMesher v1 meshes disjoint bodies only - a conforming interface between "
+                        + "two materials is not supported, because an inter-body face is never "
+                        + "recovered onto the input plane and an element straddling it would take one "
+                        + "material for its whole volume. Mesh the bodies separately, or state the "
+                        + "assembly as one closed surface with a single material.");
+                }
+                owner[positions[i]] = b;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Tetrahedralizes several <see cref="AnalysisBody"/>s — the same multi-body mesh as
+    /// the <see cref="HalfEdgeMesh"/> overload, over the list that also carries each
+    /// body's material. Region <c>i</c> is <c>bodies[i]</c>, and handing the SAME list to
+    /// <see cref="StructuralModel.For(TetMesh, IReadOnlyList{AnalysisBody})"/> (or
+    /// <see cref="ThermalModel.For(TetMesh, IReadOnlyList{AnalysisBody})"/>) is what stops
+    /// the materials drifting from the geometry they belong to.
+    /// <para>The materials are not read here: meshing does not need them, so a body whose
+    /// material is unstated meshes perfectly well and is refused later, by name, only if
+    /// an analysis needs a property it lacks.</para>
+    /// </summary>
+    public static TetMesh Mesh(
+        IReadOnlyList<AnalysisBody> bodies,
+        TetMeshOptions? options = null,
+        ProgressCancel? progress = null) =>
+        Mesh(bodies, options, out _, progress);
+
+    /// <summary><see cref="Mesh(IReadOnlyList{AnalysisBody}, TetMeshOptions?, ProgressCancel?)"/>
+    /// with the diagnostics report.</summary>
+    public static TetMesh Mesh(
+        IReadOnlyList<AnalysisBody> bodies,
+        TetMeshOptions? options,
+        out TetMeshDiagnostics diagnostics,
+        ProgressCancel? progress = null)
+    {
+        ArgumentNullException.ThrowIfNull(bodies);
+        if (bodies.Count == 0)
+            throw new TetMeshException("TetMesher needs at least one body.");
+        var surfaces = new HalfEdgeMesh[bodies.Count];
+        for (int b = 0; b < bodies.Count; b++)
+        {
+            surfaces[b] = (bodies[b] ?? throw new TetMeshException($"Body {b} is null.")).Surface
+                ?? throw new TetMeshException($"{bodies[b]!.Label(b)} carries no surface mesh.");
+        }
+        return Mesh(surfaces, options, out diagnostics, progress);
     }
 
     /// <summary>
