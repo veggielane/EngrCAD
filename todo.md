@@ -86,6 +86,19 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   only ever projects near-surface points, but it is why this must not be offered as a
   general closest-point query. A real one would need the field's own structure (a CSG walk
   that knows which branch is a real face there), not more iterations.
+  **Scoped** (assessed, not built): the walk is *candidate generation plus a membership
+  filter*, and it needs one new virtual rather than a new algorithm. Give `Sdf` a
+  `TryClosestPoint(p, out c)` that primitives answer in closed form (sphere, box, cylinder,
+  torus, capsule, half-space all have one) and that operators answer by UNIONING their
+  children's candidates rather than by combining distances; then keep only the candidates
+  that are real points of the composed solid — a candidate `c` is real iff the whole field
+  reads `|d(c)| ≈ 0` there, which is exactly what a fictitious face fails (it sits strictly
+  inside removed or kept material) — and take the nearest survivor. That is exact for hard
+  CSG over closed-form primitives, and `MeshSdf` already has an exact answer of its own
+  (BVH nearest triangle). It does NOT cover smooth blends or offsets, whose surface belongs
+  to no child, so those keep the iterated gradient step — and the API must then report
+  WHICH answer the caller got, since an exact closest point and a converged-ish one are
+  different contracts and must not share a return type silently.
 - ~~**Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.**~~ ✅ **done, but
   not the way this entry proposed.** The grid does NOT give twins for free: a dual edge is
   a grid FACE and matching its up-to-four claimants needs a face table the streaming
@@ -229,23 +242,16 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   - `TriangulateBandWithHoles`/`ZipSlabs` has no interior rows — irrelevant today
     because every reachable band-with-holes lives on a cylinder or extrusion (ruled in
     v, chords exact), but a revolved band with holes would want the same treatment.
-  Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
-  inscribed-ngon volume by ~5e-5 — the trimmed side-face triangulation differs from a
-  planar cap's (documented in `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`).
-- [ ] **A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by
-  ~5e-5, and the cause is now known: it is not the triangulation.** The bore's rim on
-  that face is a **57-sample `PolylineCurve3d` baked in by the marching tracer** at
-  boolean time, because plane-as-a-bounded-extrusion ∩ cylinder is not one of
-  `SurfaceIntersection`'s analytic pairs — while the same hole drilled into the top cap,
-  where the rim is an exact `Circle3d`, lands within **1e-13**. The fixed 57-gon is a
-  floor no sampling density can lower, so the error does not converge and even changes
-  sign as the analytic reference's n-gon crosses it: **−7.4e-4 / −5.3e-5 / +4.7e-5 /
-  +6.5e-5 at 32/64/128/256** segments (cap: 1.8e-14 / 1.6e-13 / 1.7e-13 / 6.4e-14). The
-  fix belongs in `SurfaceIntersection`, which already has the analytic plane∩cylinder
-  circle and simply does not recognise the plane when it arrives as an `ExtrudedSurface`
-  over a `Line3d` — the same promotion `TryPlanarPatch` does for the boolean's own
-  section curves. Documented in
-  `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`.
+  ~~Also (Frame3d work finding): bores drilled into extruded *side* faces miss the
+  inscribed-ngon volume by ~5e-5~~ ✅ **fixed and verified** — see below.
+- ~~**A bore drilled into an extruded SIDE face misses the inscribed-ngon volume by
+  ~5e-5.**~~ ✅ **done** — closed by the bounded conic-clipping tier (`TryPatchQuadric`),
+  and re-verified here: `SketchPlaneFrameTests.On_ExtrudedSideFace_DrillsIntoTheSide`
+  asserts the volume as an IDENTITY (`< 1e-12` against the inscribed-ngon value at 128
+  segments) and records the four densities as **7.1e-14 / 6.8e-14 / 4.3e-14 / −5.3e-14**
+  at 32/64/128/256, where the tracer-polyline rim used to give a non-converging,
+  sign-flipping −7.4e-4 / −5.3e-5 / +4.7e-5 / +6.5e-5. Two entries said this was still
+  open; both were stale.
 ## Core (EngrCAD.Core)
 
 - [ ] **`ShapeCompiler` coplanarity, and a finding under it** — the dot is now named
@@ -258,9 +264,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 - [ ] **`Fitting3d.MinVolumeBox`'s per-family angle is a sweep + golden section, not an
   algebraic root solve** (the OBB itself ✅ landed). O'Rourke derives the critical angle in
   closed form; worth doing if a hull ever shows a minimum hiding in a bracket narrower
-  than the 3.75° sweep. The box always contains every input point regardless. Also: a
-  convenience overload in EngrCAD.Mesh (`MinVolumeBox(HalfEdgeMesh hull)`) would spare
-  callers the `ConvexHull.Compute(...).Triangulated().ToIndexed()` dance.
+  than the 3.75° sweep. The box always contains every input point regardless. (~~a
+  convenience overload in EngrCAD.Mesh~~ ✅ **landed** as `MeshFitting.MinVolumeBox(hull)`
+  / `MinVolumeBoxOf(points)`, asserted bit-identical to the hand-written
+  `Compute(...).Triangulated().ToIndexed()` dance.)
   **Correction worth remembering**: this item used to state, and `Fitting3d`'s own doc
   comment used to assert, that the minimum-volume box has a face flush with a hull face
   (Freeman–Shapira). That is FALSE in 3D — the regular tetrahedron on alternate corners
@@ -293,31 +300,92 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch
   series** ✅ landed too; **general trimmed helical FACES and the coaxial analytic
   intersection family** ✅ landed as well — see below) — remaining:
-  - [ ] **(a) 45° end-chamfer cones in B-Rep.** Two of the three pieces are now in place:
-    the cone∩helical cut is EXACT (a conical `SpiralArc3d`, not a traced curve — so the
-    curved-corner `ExactOnly`/`AllowTraced` policy does not even come up), and the trimmed
-    bands it leaves tessellate. The remaining blocker is precisely located and is not
-    about threads at all: **`FaceSplitter.SplitByCurve` refuses an open curve that
-    terminates exactly ON the face boundary**, which the analytic cut does by construction
-    (it is clipped to v ∈ [0, 1], so its ends sit on the rails rather than crossing them).
-    Attempted end to end — `rod − revolve(outside-the-cone region)` — and it fails with
-    "Arrangement tracing did not close". Either the splitter learns to accept a curve whose
-    endpoint IS a boundary crossing (the mirror image of `SnapTracerEnds`, which extends
-    curves that stop SHORT), or the intersection gains a caller-requested overshoot; the
-    first is the honest fix, since the geometry really does terminate there.
+  - [ ] **(a) 45° end-chamfer cones in B-Rep — the standing diagnosis was WRONG, and the
+    real one is bigger.** This entry used to say the blocker was that
+    "`FaceSplitter.SplitByCurve` refuses an open curve that terminates exactly ON the face
+    boundary". **It does not, and never did.** Measured directly: a line from (0, 5) to
+    (10, 5) splits a 10×10 planar face into two, and the exact cone∩band `SpiralArc3d`
+    splits EVERY helical band of an M8 rod (all four, ends landing on v = 0 / v = 1 rails).
+    The refusal that actually fires is `Open splitting curves must start and end outside the
+    face` — raised on the TOOL's cone face, where the arc ends strictly INSIDE it.
+
+    **Root cause.** `SurfaceIntersection` intersects CARRIERS, and a `HelicalSurface` band's
+    parameter domain is the bounding RECTANGLE of its parallelogram-shaped face, so the
+    exact cone cut runs past both cap cuts. On the band that owns the overrun `SplitByCurve`
+    discards it by parity; on the cone face the same arc is a dangling edge ending in open
+    space, and an arrangement with a dangling edge cannot be traced. Measured on
+    `rod − revolve(outside-the-cone region)`: four of the five arcs on the cone face ran past
+    the rod's top cap and one lay ENTIRELY past it.
+
+    **The fix is to clip each intersection curve to the OTHER face's trim, and it was
+    prototyped end to end.** With clipping plus the three follow-on fixes below, the
+    boolean returns a `Validate`-clean, two-manifold **7-face solid** whose tessellation is
+    closed and whose volume converges: **245.73 / 246.94 / 247.23** at 32/64/128
+    segments-per-circle against the unchamfered rod's 246.56 / 247.76 / 248.06 — a stable
+    0.83 difference at every density, which is the chamfer.
+
+    **Why it is not landed: clipping is incompatible with the one-curve-at-a-time splitter.**
+    `BrepBoolean.SplitAll` applies each curve to the fragments separately, and every
+    `SplitByCurve` call needs ITS OWN arrangement to close. A clipped curve stops where the
+    other face's boundary crosses this face's INTERIOR, and the arrangement only closes once
+    the neighbouring face's curve is added too. The minimal counterexample is two offset
+    boxes: the clipped line stops at (1, 1, 2), the corner where the tool's edge pierces the
+    host face — 32 tests fail this way (offset boxes, sphere piercings, the notched block,
+    the drilled-sphere corpus member). Landing the clip therefore requires
+    `FaceSplitter.SplitByCurves(face, curves)` — one simultaneous arrangement over all of a
+    face's curves, which also needs curve–curve crossings inside the face, since sequential
+    splitting is what finds those today. That is the real remaining work, and it is a
+    boolean-core feature rather than a residual.
+
+    **Three follow-on fixes the prototype needed** (each correct in itself, none reachable
+    without the clip, all re-derivable from this entry):
+    - `SeamBreaks` must map a CLOSED curve's seam parameter into a clipped piece (both
+      sides otherwise build a different number of seam edges over the same geometry — three
+      single-use edges on the rod's top cap).
+    - `ExtractInteriorChains` must honour mandatory breaks BEFORE chaining: the chain path
+      builds one edge per curve and would span a break the other side has already split at.
+    - **`BrepBoolean.ProbePoint` decides "this loop wraps the band" by u-SPAN, and that is a
+      latent bug on its own.** A perfectly contractible loop may reach more than three
+      quarters of the way round: the chamfer facet on the cone spans **272°** and closes
+      (net drift 0.02 rad). A span test then sends it to the band path, whose probe walks
+      halfway to the surface's own domain edge and lands outside the fragment entirely, so
+      the facet is classified away. The right test is the net u DRIFT over the traversal
+      (which `FaceSplitter.TraceFaces` already computes for its own band pairing); the span
+      can stay as the cheap first half of an AND.
+    - `BRepTessellator.IsFullHelicalBand` admitted a 4-coedge band whose two rails came out
+      of the split with DIFFERENT spans, and its sheared grid pairs row j of one rail with
+      row j of the other — so it threw an internal "boundary polylines disagree in sample
+      count". It should check that pairing precondition, exactly as `IsRingPairedBand` does.
+
+    **Two further blockers beyond the clip**, both found by the prototype:
+    - The **default** `Shape.ExternalThread(chamferEnds: true)` sets the chamfer to the full
+      thread depth, which puts the cone's base radius exactly ON the minor diameter — the
+      cone is then TANGENT to every root band along the cap plane. That case fails earlier
+      with "Arrangement tracing did not close" and is a coincident/tangent curved-face
+      input, which the boolean refuses by design. A smaller chamfer (0.5 on M8×1.25) works.
+      So flipping the `Explain` classification needs the tangent case too, or the API needs
+      to admit sub-depth chamfers as the Native subset.
+    - Applying the SECOND chamfer (the other end) to boolean output produced
+      "An edge's two uses must have opposite sense" — a sense bug in cascaded chamfer
+      surgery, not yet diagnosed.
   - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
     needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
     it keeps each carrier in its own family and has no `HelicalSurface` case, and a
     helical band's offset is a helical band on an offset *generator*, which is what the
     arc-generator work has to build.
   - [ ] **(c) NON-coaxial helical intersections** — helical∩cross-hole-cylinder and
-    helical∩tilted-plane. These are genuinely transcendental (no v-linear-in-u
-    substitution exists), so they belong to the marching tracer, and **the tracer
-    under-seeds them badly at thread scale**: measured on an M8 rod cross-drilled Ø6, the
-    crest flat returns ONE branch of the five the drill cuts, and every branch found stops
-    up to 0.9 of the band's height short of the rails. A 13-turn band whose generator is
-    0.16 mm tall is an aspect ratio the (u, v) seed grid cannot resolve — the fix is
-    per-surface seed density (turns × segments in u), not a tessellation change.
+    helical∩tilted-plane. These are genuinely transcendental (no v-linear-in-u substitution
+    exists), so they belong to the marching tracer. **The SEEDING half is fixed**
+    (`SurfaceIntersection`'s anisotropic second pass — see the BRep README): an M8 crest
+    flat cross-drilled Ø6 went from **zero** branches to three, and its flank band from six
+    to nineteen, with the whole suite bit-identical because the isotropic pass still runs
+    first and `March` dedupes later seeds against traced branches. What remains is the
+    STEPPING half, and it is a different mechanism: the branches that are now found still
+    stop short of the band's rails, because the tracer breaks its step *after* `Correct`
+    leaves the domain (the same fact `SnapTracerEnds` exists to paper over on the boolean
+    side). Until a traced curve can terminate exactly on a bounded band's rail, a
+    cross-drilled thread cannot be split — so this is now a tracer-termination item, not a
+    seeding one.
   - [ ] **(d) Thread runout and cosmetic-thread annotation.** The runout half now has its
     geometry: a coaxial cylinder cuts a helical band in one complete iso-v helix, exactly
     (`SurfaceIntersection`'s coaxial case), which is the runout diameter. The annotation

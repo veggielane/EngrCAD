@@ -1082,6 +1082,14 @@ public static class SurfaceIntersection
         /// <summary>Samples per parameter direction when grid-seeding each surface.</summary>
         public int SeedResolution { get; init; }
 
+        /// <summary>
+        /// Model-space aspect ratio (long parameter direction / short one) at which a
+        /// surface earns a SECOND, anisotropic seed pass. Below it the isotropic grid is
+        /// the whole story; above it the grid's samples are so much finer across the
+        /// surface than along it that whole branches fall between columns.
+        /// </summary>
+        public double SeedAnisotropy { get; init; }
+
         /// <summary>Seed pairing radius as a multiple of the sample-cloud spacing.</summary>
         public double SeedSpacingFactor { get; init; }
 
@@ -1136,6 +1144,7 @@ public static class SurfaceIntersection
         public static TracerSettings Default => new()
         {
             SeedResolution = 24,
+            SeedAnisotropy = 4.0,
             SeedSpacingFactor = 1.5,
             StepDivisor = 150.0,
             SeedDedupeStepsSquared = 4.0,
@@ -1202,17 +1211,57 @@ public static class SurfaceIntersection
         return curves;
     }
 
-    /// <summary>Grid-samples both surfaces, pairs nearby samples via a BVH, and Newton-refines each pair onto the intersection.</summary>
+    /// <summary>
+    /// Grid-samples both surfaces, pairs nearby samples via a BVH, and Newton-refines each
+    /// pair onto the intersection.
+    ///
+    /// <para><b>Two passes, and the order is the whole safety argument.</b> The first is the
+    /// historical isotropic <c>resolution</c>×<c>resolution</c> grid, emitted in exactly the
+    /// order it always was. The second runs only for surfaces whose two parameter directions
+    /// differ in MODEL length by more than <see cref="TracerSettings.SeedAnisotropy"/>, and
+    /// re-grids them with the same sample budget redistributed to match the shape — so the
+    /// spacing is roughly equal in millimetres rather than in parameter units. Because
+    /// <see cref="March"/> traces seeds in order and skips any seed already covered by a
+    /// traced branch, every branch the old grid found is still traced FIRST and from the
+    /// SAME seed: its polyline is bit-identical, and the second pass can only add branches
+    /// that used to be missed entirely.</para>
+    ///
+    /// <para>The case it exists for is a thread band. An M8 crest flat wound over thirteen
+    /// turns is ~330 mm long and 0.16 mm tall — an aspect ratio near 2000 — so the isotropic
+    /// grid puts its columns 13 mm apart along the band while sampling 24 rows across a strip
+    /// a sixth of a millimetre wide. Measured against a Ø6 cross-drill, the isotropic grid
+    /// finds ZERO of the branches the drill cuts; the anisotropic pass finds them.</para>
+    /// </summary>
     private static List<double[]> FindSeeds(MarchState state, int resolution)
     {
-        var samplesB = new List<(double U, double V, Vector3d P)>();
-        var boxes = new List<Aabb>();
-        for (int i = 0; i <= resolution; i++)
+        var seeds = new List<double[]>();
+        CollectSeeds(state, resolution, resolution, resolution, resolution, isotropic: true, seeds);
+
+        var (nuA, nvA) = SeedCounts(state.A, state.Da, resolution, state.Settings.SeedAnisotropy);
+        var (nuB, nvB) = SeedCounts(state.B, state.Db, resolution, state.Settings.SeedAnisotropy);
+        if (nuA != resolution || nvA != resolution || nuB != resolution || nvB != resolution)
+            CollectSeeds(state, nuA, nvA, nuB, nvB, isotropic: false, seeds);
+        return seeds;
+    }
+
+    /// <summary>
+    /// One seeding pass at the given per-surface grid counts, appending whatever it refines.
+    /// <paramref name="isotropic"/> keeps the original pairing radius — the sample cloud's
+    /// diagonal over the resolution — bit-for-bit; the anisotropic pass cannot use that
+    /// (a cloud diagonal says nothing about spacing on a 2000:1 strip) and measures the
+    /// largest gap between adjacent B samples in each direction instead.
+    /// </summary>
+    private static void CollectSeeds(
+        MarchState state, int nuA, int nvA, int nuB, int nvB, bool isotropic, List<double[]> seeds)
+    {
+        var samplesB = new List<(double U, double V, Vector3d P)>((nuB + 1) * (nvB + 1));
+        var boxes = new List<Aabb>((nuB + 1) * (nvB + 1));
+        for (int i = 0; i <= nuB; i++)
         {
-            for (int j = 0; j <= resolution; j++)
+            for (int j = 0; j <= nvB; j++)
             {
-                double u = state.Db.U.ParameterAt((double)i / resolution);
-                double v = state.Db.V.ParameterAt((double)j / resolution);
+                double u = state.Db.U.ParameterAt((double)i / nuB);
+                double v = state.Db.V.ParameterAt((double)j / nvB);
                 var p = state.B.PointAt(u, v);
                 samplesB.Add((u, v, p));
                 boxes.Add(new Aabb(p, p));
@@ -1220,18 +1269,26 @@ public static class SurfaceIntersection
         }
         var bvh = Bvh.Build(boxes.ToArray().AsSpan());
 
-        var cloud = Aabb.Empty;
-        foreach (var s in samplesB)
-            cloud = cloud.Union(s.P);
-        double spacing = cloud.IsEmpty ? 0 : cloud.Size.Length / resolution;
-
-        var seeds = new List<double[]>();
-        for (int i = 0; i <= resolution; i++)
+        double spacing;
+        if (isotropic)
         {
-            for (int j = 0; j <= resolution; j++)
+            var cloud = Aabb.Empty;
+            foreach (var s in samplesB)
+                cloud = cloud.Union(s.P);
+            spacing = cloud.IsEmpty ? 0 : cloud.Size.Length / nuB;
+        }
+        else
+        {
+            var (lu, lv) = ParameterExtents(state.B, state.Db);
+            spacing = Math.Max(lu / nuB, lv / nvB);
+        }
+
+        for (int i = 0; i <= nuA; i++)
+        {
+            for (int j = 0; j <= nvA; j++)
             {
-                double ua = state.Da.U.ParameterAt((double)i / resolution);
-                double va = state.Da.V.ParameterAt((double)j / resolution);
+                double ua = state.Da.U.ParameterAt((double)i / nuA);
+                double va = state.Da.V.ParameterAt((double)j / nvA);
                 var pa = state.A.PointAt(ua, va);
                 if (!bvh.Nearest(pa, k => samplesB[k].P.DistanceTo(pa), out int nearest, out double distance))
                     continue;
@@ -1243,7 +1300,63 @@ public static class SurfaceIntersection
                     seeds.Add(parameters);
             }
         }
-        return seeds;
+    }
+
+    /// <summary>
+    /// Grid counts whose sample SPACING is roughly equal in model units, at the same total
+    /// budget as the isotropic grid (<c>nu·nv ≈ resolution²</c> with <c>nu/nv = aspect</c>).
+    /// Returns the isotropic counts unchanged whenever the surface is not extreme enough to
+    /// qualify, which is what keeps the second pass off for ordinary geometry.
+    /// </summary>
+    private static (int Nu, int Nv) SeedCounts(
+        Surface s, in ParamDomain d, int resolution, double anisotropyThreshold)
+    {
+        var (lu, lv) = ParameterExtents(s, d);
+        // Exact-zero guard on a division: a degenerate direction has no aspect to speak of.
+        if (!(lu > 0) || !(lv > 0))
+            return (resolution, resolution);
+        double aspect = lu / lv;
+        if (aspect < anisotropyThreshold && aspect > 1 / anisotropyThreshold)
+            return (resolution, resolution);
+        double root = Math.Sqrt(aspect);
+        // The budget is per-pass work, not accuracy: a 64x cap keeps the worst case
+        // (a many-turn thread band) at ~1500 samples along the long direction.
+        int nu = Math.Clamp((int)Math.Round(resolution * root), 1, resolution * 64);
+        int nv = Math.Clamp((int)Math.Round(resolution / root), 1, resolution * 64);
+        return (nu, nv);
+    }
+
+    /// <summary>
+    /// How far the surface's parameter box reaches in MODEL units along each direction:
+    /// the mean speed |∂P/∂u| over a coarse cross, times the domain length.
+    ///
+    /// <para><b>Not a chordal polyline</b>, which is the trap here. The surface this
+    /// measurement exists for is a thread band coiled through thirteen turns, and a chord
+    /// between two samples a few turns apart measures the distance across the coil rather
+    /// than along it — an 8-sample polyline reported 61 mm where the band is 327 mm long,
+    /// a number with no relation to either. The speed form is exact for helices, circles
+    /// and lines alike because their speed is constant, and it costs a handful of
+    /// evaluations rather than a fine sampling.</para>
+    /// </summary>
+    private static (double U, double V) ParameterExtents(Surface s, in ParamDomain d)
+    {
+        // Cell CENTRES, never the domain's own nodes: Eval clamps to the domain, so a
+        // central difference taken at a boundary node is silently one-sided and halves
+        // the speed it reports there.
+        const int samples = 4;
+        double speedU = 0, speedV = 0;
+        double hu = d.U.Length / 1024, hv = d.V.Length / 1024;
+        for (int i = 0; i < samples; i++)
+        {
+            double u = d.U.ParameterAt((i + 0.5) / samples);
+            for (int j = 0; j < samples; j++)
+            {
+                double v = d.V.ParameterAt((j + 0.5) / samples);
+                speedU += Eval(s, d, u + hu, v).DistanceTo(Eval(s, d, u - hu, v)) / (2 * hu);
+                speedV += Eval(s, d, u, v + hv).DistanceTo(Eval(s, d, u, v - hv)) / (2 * hv);
+            }
+        }
+        return (speedU / (samples * samples) * d.U.Length, speedV / (samples * samples) * d.V.Length);
     }
 
     /// <summary>Damped Gauss–Newton pulling a parameter 4-tuple onto S_a = S_b.</summary>
