@@ -177,6 +177,56 @@ public static class TetGeometry
     }
 
     /// <summary>
+    /// The smallest dihedral angle, in DEGREES, of the element after it has been un-stretched
+    /// along its own thinnest principal axis — "given that this element is deliberately thin,
+    /// is it otherwise well shaped?".
+    ///
+    /// <para>The element's second moment about its centroid,
+    /// <c>M = sum (p - c)(p - c)^T</c>, has eigenvalues lambda1 &gt;= lambda2 &gt;= lambda3;
+    /// the third eigenvector is the thin direction and the element is scaled along it by
+    /// <c>sqrt(lambda2 / lambda3)</c>, bringing that extent up to the middle one. <b>The
+    /// middle one, not the largest, and not a full whitening.</b> A full whitening
+    /// (<c>M^-1/2</c>) maps EVERY non-degenerate tetrahedron to a well-shaped one, so the
+    /// number it produces carries no signal at all; scaling only the thin axis restores a
+    /// boundary-layer element — which is thin in one direction and healthy in the other two —
+    /// while leaving a NEEDLE (long in one direction, thin in two) exactly as bad as it was,
+    /// which is the distinction worth keeping.</para>
+    ///
+    /// <para>Returns 0 for an element whose thinnest extent is zero relative to its largest
+    /// (the scale-free tier — an eigenvalue is a squared length, so the guard is squared too).
+    /// </para>
+    /// </summary>
+    public static double UnstretchedMinDihedralDegrees(
+        in Vector3d a, in Vector3d b, in Vector3d c, in Vector3d d)
+    {
+        var centroid = (a + b + c + d) * 0.25;
+        Span<Vector3d> offsets = [a - centroid, b - centroid, c - centroid, d - centroid];
+
+        double mxx = 0, myy = 0, mzz = 0, mxy = 0, mxz = 0, myz = 0;
+        foreach (var o in offsets)
+        {
+            mxx += o.X * o.X; myy += o.Y * o.Y; mzz += o.Z * o.Z;
+            mxy += o.X * o.Y; mxz += o.X * o.Z; myz += o.Y * o.Z;
+        }
+
+        var (values, vectors) = SymmetricEigen3.SolveDescending(mxx, mxy, mxz, myy, myz, mzz);
+        double largest = values[0];
+        if (!(largest > 0) || values[2] <= 1e-26 * largest)
+            return 0;
+
+        double scale = Math.Sqrt(values[1] / values[2]);
+        var axis = vectors[2];
+        Vector3d Stretch(in Vector3d p)
+        {
+            var o = p - centroid;
+            double along = o.Dot(axis);
+            return centroid + o + axis * (along * (scale - 1));
+        }
+
+        return MinDihedral(Stretch(a), Stretch(b), Stretch(c), Stretch(d)) * 180.0 / Math.PI;
+    }
+
+    /// <summary>
     /// Normalized aspect measure in (0, 1]: <c>(3 * inradius) / circumradius</c>, which is
     /// exactly 1 for a regular tetrahedron and tends to 0 as the element degenerates.
     /// Returns 0 for a flat element.
