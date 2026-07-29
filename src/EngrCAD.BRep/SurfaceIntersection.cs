@@ -129,6 +129,17 @@ public static class SurfaceIntersection
             (RevolvedSurface r, PlaneSurface p) when TrySphereCarrier(r, out var sphere) => PlaneSphere(p, sphere),
             (PlaneSurface p, HelicalSurface h) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
             (HelicalSurface h, PlaneSurface p) when IsPerpendicularToHelicalAxis(p, h) => PlaneHelical(p, h),
+            // A coaxial surface of revolution whose (radius, axial) profile is a straight
+            // LINE — a thread's end-chamfer cone, a coaxial cylinder, a coaxial disk —
+            // meets a helical band in an exact conical spiral. See CoaxialHelical.
+            (HelicalSurface h, RevolvedSurface r) when TryCoaxialProfileLine(r, h, out var line)
+                => CoaxialHelical(line, h),
+            (RevolvedSurface r, HelicalSurface h) when TryCoaxialProfileLine(r, h, out var line)
+                => CoaxialHelical(line, h),
+            (HelicalSurface h, CylinderSurface c) when TryCoaxialProfileLine(c, h, out var line)
+                => CoaxialHelical(line, h),
+            (CylinderSurface c, HelicalSurface h) when TryCoaxialProfileLine(c, h, out var line)
+                => CoaxialHelical(line, h),
             _ => March(a, b, region),
         };
     }
@@ -223,6 +234,189 @@ public static class SurfaceIntersection
         return
         [
             new SpiralArc3d(capFrame, r0 + dr * (zCap - z0) / dz, -dr * rate / dz, new Interval(uLo, uHi)),
+        ];
+    }
+
+    /// <summary>
+    /// A coaxial carrier expressed in the HELICAL band's own cylindrical coordinates:
+    /// radius = <paramref name="A"/> + <paramref name="B"/> · axial, valid over
+    /// <paramref name="AxialRange"/>. A cone has B ≠ 0, a coaxial cylinder B = 0.
+    /// </summary>
+    private readonly record struct CoaxialProfileLine(double A, double B, Interval AxialRange);
+
+    /// <summary>
+    /// Recognizes a surface of revolution COAXIAL with a helical band whose (radius,
+    /// axial) profile is a straight line — the cone of a thread's 45° end chamfer, a
+    /// coaxial cylinder, or (delegated elsewhere) a coaxial disk. Everything is measured
+    /// in the HELICAL frame, so a revolve axis pointing the other way needs no special
+    /// case. The generator is SAMPLED, never read off <see cref="Curve3d.Underlying"/>:
+    /// a translated or wrapped line's underlying curve sits somewhere else entirely.
+    /// <para>A profile with no axial spread is a coaxial DISK — a plane perpendicular to
+    /// the axis, which cannot be written radius = a + b·axial at all (its b is infinite).
+    /// It is refused here and handled by <see cref="PlaneHelical"/> after the caller
+    /// synthesizes the plane.</para>
+    /// </summary>
+    private static bool TryCoaxialProfileLine(
+        Surface carrier, HelicalSurface helical, out CoaxialProfileLine line)
+    {
+        line = default;
+        var frame = helical.Frame;
+        var axis = frame.Z;
+
+        double Axial(in Vector3d p) => (p - frame.Origin).Dot(axis);
+        double Radius(in Vector3d p)
+        {
+            var d = p - frame.Origin;
+            return (d - axis * d.Dot(axis)).Length;
+        }
+        static bool Coaxial(in Vector3d axisOrigin, in Vector3d axisDirection, in Frame3d f)
+        {
+            if (!axisDirection.IsParallelTo(f.Z, Tolerance.Default))
+                return false;
+            var d = axisOrigin - f.Origin;
+            return (d - f.Z * d.Dot(f.Z)).Length <= Tolerance.Default.Linear;
+        }
+
+        switch (carrier)
+        {
+            case CylinderSurface cylinder when Coaxial(cylinder.Origin, cylinder.Axis, frame):
+                // Unbounded in the axial direction, so nothing to clip against.
+                line = new CoaxialProfileLine(
+                    cylinder.Radius, 0,
+                    new Interval(double.NegativeInfinity, double.PositiveInfinity));
+                return true;
+
+            case RevolvedSurface revolved
+                when revolved.IsFullTurn && Coaxial(revolved.AxisOrigin, revolved.AxisDirection, frame):
+            {
+                var generator = revolved.Generator;
+                var domain = generator.Domain;
+                const int samples = 16;
+                Span<double> radii = stackalloc double[samples + 1];
+                Span<double> axials = stackalloc double[samples + 1];
+                for (int i = 0; i <= samples; i++)
+                {
+                    var p = generator.PointAt(domain.ParameterAt((double)i / samples));
+                    radii[i] = Radius(p);
+                    axials[i] = Axial(p);
+                }
+
+                double axialLo = double.PositiveInfinity, axialHi = double.NegativeInfinity;
+                double radiusLo = double.PositiveInfinity, radiusHi = double.NegativeInfinity;
+                for (int i = 0; i <= samples; i++)
+                {
+                    axialLo = Math.Min(axialLo, axials[i]);
+                    axialHi = Math.Max(axialHi, axials[i]);
+                    radiusLo = Math.Min(radiusLo, radii[i]);
+                    radiusHi = Math.Max(radiusHi, radii[i]);
+                }
+                double extent = Math.Max(axialHi - axialLo, radiusHi - radiusLo);
+                if (!(extent > 0))
+                    return false;
+                // Relative degeneracy guard (scale-free tier): a disk's axial spread is
+                // zero next to its radial one, and a fit through it would be meaningless.
+                if (axialHi - axialLo <= extent * 1e-12)
+                    return false;
+
+                double b = (radii[^1] - radii[0]) / (axials[^1] - axials[0]);
+                double a = radii[0] - b * axials[0];
+                double tolerance = Math.Max(Tolerance.Default.Linear, extent * 1e-12);
+                for (int i = 0; i <= samples; i++)
+                {
+                    if (Math.Abs(a + b * axials[i] - radii[i]) > tolerance)
+                        return false;
+                }
+                line = new CoaxialProfileLine(a, b, new Interval(axialLo, axialHi));
+                return true;
+            }
+
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
+    /// Coaxial straight-generator carrier ∩ helical band: an exact
+    /// <see cref="SpiralArc3d"/>, no marching.
+    /// <para>Write the band as r = r₀ + dr·v, z = z₀ + dz·v + rate·u and the carrier as
+    /// r = a + b·z. Substituting gives v·(dr − b·dz) = (a + b·z₀ − r₀) + b·rate·u, so
+    /// <b>v is LINEAR in u</b>, and therefore so are the radius and the axial coordinate:
+    /// the intersection is a conical spiral in the band's own frame, whose parameter IS
+    /// the band's u. That is what keeps the curve phase-aligned with the band's grid, and
+    /// it is why a thread's 45° end chamfer needs no traced curve and no opt-in policy —
+    /// exactly the same reason the cap cuts are <see cref="SpiralArc3d"/>s (they are the
+    /// b = 0-in-z member of this family).</para>
+    /// <para>Parallel profiles (dr = b·dz) never cross transversally: either the band
+    /// misses the carrier entirely or it lies ON it, and a tangential contact is not
+    /// reported here by contract. The u span is whatever survives clipping v to [0, 1],
+    /// the axial coordinate to the carrier's own generator extent, and u to the band's
+    /// domain.</para>
+    /// </summary>
+    private static List<Curve3d> CoaxialHelical(in CoaxialProfileLine line, HelicalSurface helical)
+    {
+        double r0 = helical.ProfileStart.X, z0 = helical.ProfileStart.Y;
+        double dr = helical.ProfileEnd.X - r0, dz = helical.ProfileEnd.Y - z0;
+        double rate = helical.AxialRate;
+        double denominator = dr - line.B * dz;
+
+        // Scale-free degeneracy guard: the profile directions are lengths in (r, z), so
+        // compare the cross term against their magnitudes rather than an absolute epsilon.
+        double scale = Math.Max(Math.Abs(dr), Math.Abs(line.B * dz));
+        if (!(Math.Abs(denominator) > scale * 1e-12))
+            return [];
+
+        double alpha = (line.A + line.B * z0 - r0) / denominator;
+        double beta = line.B * rate / denominator;
+
+        // v(u) = alpha + beta*u must run inside [0, 1].
+        double uLo = helical.DomainU.Start, uHi = helical.DomainU.End;
+        if (beta == 0)
+        {
+            // A coaxial CYLINDER: v is constant, so the whole band either misses the
+            // carrier or meets it along one complete iso-v helix.
+            if (alpha < 0 || alpha > 1)
+                return [];
+        }
+        else
+        {
+            double uAt0 = -alpha / beta, uAt1 = (1 - alpha) / beta;
+            uLo = Math.Max(uLo, Math.Min(uAt0, uAt1));
+            uHi = Math.Min(uHi, Math.Max(uAt0, uAt1));
+        }
+
+        double radiusAtZero = r0 + dr * alpha, radiusSlope = dr * beta;
+        double axialAtZero = z0 + dz * alpha, axialSlope = dz * beta + rate;
+
+        // Clip to the carrier's own axial extent (a cone's generator is a finite segment;
+        // a cylinder's range is infinite and clips nothing).
+        if (double.IsFinite(line.AxialRange.Start) && double.IsFinite(line.AxialRange.End))
+        {
+            if (axialSlope == 0)
+            {
+                if (axialAtZero < line.AxialRange.Start || axialAtZero > line.AxialRange.End)
+                    return [];
+            }
+            else
+            {
+                double uA = (line.AxialRange.Start - axialAtZero) / axialSlope;
+                double uB = (line.AxialRange.End - axialAtZero) / axialSlope;
+                uLo = Math.Max(uLo, Math.Min(uA, uB));
+                uHi = Math.Min(uHi, Math.Max(uA, uB));
+            }
+        }
+
+        if (!(uHi - uLo > 1e-12))
+            return [];
+        // The radius stays between the profile's own positive radii by construction, but
+        // clipping arithmetic can overshoot by an ulp; refuse rather than throw.
+        if (!(radiusAtZero + radiusSlope * uLo > 0) || !(radiusAtZero + radiusSlope * uHi > 0))
+            return [];
+
+        return
+        [
+            new SpiralArc3d(
+                helical.Frame, radiusAtZero, radiusSlope, axialAtZero, axialSlope,
+                new Interval(uLo, uHi)),
         ];
     }
 

@@ -115,8 +115,22 @@ public static class BRepTessellator
                         "parameter-space path can handle. " +
                         Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, cylinderFailure));
                 break;
-            case HelicalSurface helical:
+            case HelicalSurface helical when IsFullHelicalBand(face):
                 TessellateHelicalBand(face, helical, edgePolylines, polygons);
+                break;
+            case HelicalSurface:
+                // A thread band cut by anything other than its own cap planes — a
+                // cross-hole, an angled face, an end chamfer. u is NOT periodic here (z
+                // advances with every turn), so every loop has winding 0 and the trimmed
+                // path takes its non-wrapping tiers. There is nothing to fall back to: a
+                // helical surface has no natural grid either, its "grid" being the sheared
+                // rail-to-rail one the full-band path builds out of the face's own edges.
+                if (!TrimmedFaceTessellator.TryTessellate(
+                        face, edgePolylines, segmentsPerCircle, curveSamples, polygons, out string? helicalFailure))
+                    throw new NotSupportedException(
+                        "Helical faces must be full bands (two helix rails + two cap spiral cuts), or " +
+                        "trimmed regions the parameter-space path can handle. " +
+                        Diagnose(face, edgePolylines, segmentsPerCircle, curveSamples, helicalFailure));
                 break;
             case ExtrudedSurface or RevolvedSurface or SweptSurface or LoftedSurface:
             {
@@ -360,6 +374,30 @@ public static class BRepTessellator
     /// correctness condition, checked rather than assumed. The old test (two loops, one closed
     /// coedge each) admitted exactly the case it could not triangulate.</para>
     /// </summary>
+    /// <summary>
+    /// Whether this is the FULL helical band <see cref="TessellateHelicalBand"/>'s sheared
+    /// grid describes: one loop of four coedges — two <see cref="Helix3d"/> rails at
+    /// v = 0 and v = 1, and two PLANAR <see cref="SpiralArc3d"/> cap cuts at the ends of
+    /// u. That is every band <c>SolidFactory.MakeThreadedRod</c> builds, and the shape
+    /// whose interior columns can be interpolated linearly between exactly projected rail
+    /// corners. Anything else — a band a cross-hole, an angled face or an end chamfer has
+    /// trimmed — goes to <see cref="TrimmedFaceTessellator"/>.
+    /// <para><b>Planar is the load-bearing word</b>, and it is the same lesson
+    /// <see cref="IsRingPairedBand"/> records: a gate should BE the path's correctness
+    /// condition rather than a proxy for it. A coaxial CONE cuts a helical band in a
+    /// <see cref="SpiralArc3d"/> too — the conical spiral of a 45-degree end chamfer — so
+    /// counting spiral edges alone would send a chamfered band down a grid that assumes
+    /// its two cuts are the ends of u, and interpolate columns across a boundary that
+    /// runs diagonally instead.</para>
+    /// </summary>
+    private static bool IsFullHelicalBand(BrepFace face) =>
+        face.Loops.Count == 1 &&
+        face.OuterLoop.Coedges.Count == 4 &&
+        face.OuterLoop.Coedges.Where(c => c.Edge.Curve.Underlying is Helix3d)
+            .Select(c => c.Edge).Distinct().Count() == 2 &&
+        face.OuterLoop.Coedges.Where(c => c.Edge.Curve.Underlying is SpiralArc3d { IsPlanar: true })
+            .Select(c => c.Edge).Distinct().Count() == 2;
+
     private static bool IsRingPairedBand(BrepFace face, Dictionary<BrepEdge, List<Vector3d>> edgePolylines)
     {
         if (face.Loops.Count != 2 ||
@@ -564,13 +602,9 @@ public static class BRepTessellator
         Dictionary<BrepEdge, List<Vector3d>> edgePolylines,
         List<IReadOnlyList<Vector3d>> polygons)
     {
-        var coedges = face.Loops.Count == 1 ? face.OuterLoop.Coedges : null;
-        var railEdges = coedges?.Where(c => c.Edge.Curve.Underlying is Helix3d).Select(c => c.Edge).Distinct().ToList();
-        var cutEdges = coedges?.Where(c => c.Edge.Curve.Underlying is SpiralArc3d).Select(c => c.Edge).Distinct().ToList();
-        if (coedges is null || coedges.Count != 4 || railEdges!.Count != 2 || cutEdges!.Count != 2)
-            throw new NotSupportedException(
-                "Helical faces must be full bands (one loop: two helix rails + two cap spiral cuts); " +
-                "trimmed helical faces are not supported yet.");
+        var coedges = face.OuterLoop.Coedges;
+        var railEdges = coedges.Where(c => c.Edge.Curve.Underlying is Helix3d).Select(c => c.Edge).Distinct().ToList();
+        var cutEdges = coedges.Where(c => c.Edge.Curve.Underlying is SpiralArc3d).Select(c => c.Edge).Distinct().ToList();
 
         Vector2d Project(Vector3d p)
         {

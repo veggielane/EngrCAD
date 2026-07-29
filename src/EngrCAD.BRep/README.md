@@ -37,13 +37,24 @@ operations. Depends only on `EngrCAD.Core`.
   analytic derivative overrides (constant speed √(r² + (p/2π)²)), closed-form arc
   length turns·√((2πr)² + p²), lead angle, negative pitch descends; the origin+axis
   constructor delegates to `Frame3d.FromNormal` (the shared perpendicular convention).
-  `SpiralArc3d` is a planar Archimedean spiral arc, P(t) = O + X·r(t)·cos t +
-  Y·r(t)·sin t with r(t) linear in the angle t (zero slope = circular arc, kept in the
-  type so all helical cap cuts share one sampling rule); exact derivatives. It is
-  exactly the curve a plane ⊥ axis cuts from a `HelicalSurface` band — with a linear
-  generator, solving z(v) + pitch·u/2π = z_cap makes v (hence radius) linear in u —
-  and is always built on the band's own axis frame so its parameter IS the surface u
-  (phase alignment).
+  `SpiralArc3d` is a **conical spiral arc**: in the frame's cylindrical coordinates the
+  angle IS the parameter and both the radius and the axial coordinate are linear in it,
+  P(t) = O + X·r(t)·cos t + Y·r(t)·sin t + Z·z(t); exact derivatives. **This one shape is
+  every curve a coaxial straight-generator surface of revolution cuts from a
+  `HelicalSurface` band.** Substituting the band's r = r₀ + dr·v,
+  z = z₀ + dz·v + rate·u into the carrier's r = a + b·z gives
+  v·(dr − b·dz) = (a + b·z₀ − r₀) + b·rate·u, so v is linear in u and therefore so are
+  the radius and the axial coordinate. The special cases are members of the one family,
+  not separate types: a plane ⊥ the axis (the cap cuts of `MakeThreadedRod`) leaves
+  `AxialRate` zero and the arc **planar**; a coaxial CONE (a thread's 45° end chamfer)
+  is the general form; a zero `Slope` degenerates to a circular or helical arc. Always
+  built on the band's own axis frame so its parameter IS the surface u (phase alignment).
+  Two properties, and the difference between them earned its keep: `IsPlanar` is
+  `AxialRate == 0` — lies in a plane perpendicular to the axis, which is what a consumer
+  means and what the tessellator's full-band gate reads — while the arithmetic fast path
+  that omits the axial term entirely needs the *stricter* "in the frame's own X/Y plane",
+  because adding a zero VECTOR is not a no-op on a −0.0 coordinate and every threaded
+  rod's cap loop must stay bit-identical.
   `LoftRailCurve` is the curve a fixed section parameter traces across a `LoftedSurface`
   (the loft analogue of `SweptRailCurve`); it evaluates the surface itself rather than
   re-interpolating the junction points, so a rail edge and the face's u = 0 grid column are
@@ -526,7 +537,12 @@ operations. Depends only on `EngrCAD.Core`.
   common quadric pairs (lines, circles, exact ellipses), plane ⊥ helical-axis cuts
   (exact `SpiralArc3d` on the band's own frame — the SAME arithmetic
   `MakeThreadedRod`'s cap cuts use, so seams weld; a dz = 0 helicoid ramp cuts in an
-  exact radial line), **bounded planar carriers** (below), and a general marching tracer
+  exact radial line), **any COAXIAL surface of revolution with a straight (radius, axial)
+  profile against a helical band** — a 45° end-chamfer cone, a coaxial cylinder (whose
+  cut is one complete iso-v helix, the runout-diameter case) — as the exact conical
+  `SpiralArc3d` derived above, clipped to v ∈ [0, 1], to the carrier's own generator
+  extent and to the band's u domain, with parallel profiles (dr = b·dz) reporting nothing
+  since they never cross transversally; **bounded planar carriers** (below), and a general marching tracer
   (periodic-aware, multi-branch, closed-loop detection) returning `PolylineCurve3d` for
   everything else. See design.md §5 for the algorithm. Full-turn revolved surfaces whose
   sampled generator lies on a sphere centered on the axis (MakeSphere hemispheres) are

@@ -108,6 +108,24 @@ logging complements them, never replaces them.
     density-scaled floor (a Ø10 drill's rim carries 66 samples per turn and reads
     0.858 / 0.9995 / 0.9998 at 32/96/192, a Ø3 one carries 40 and reads
     0.974 / 0.949 / 0.565) — fold-free throughout, and volumes still converge.
+  - **`IsFullHelicalBand` — the same rule, one surface family along.** A helical face used
+    to go unconditionally to `TessellateHelicalBand`'s SHEARED grid, which interpolates
+    its interior columns linearly between two exactly projected rail corners and therefore
+    assumes the face's two `SpiralArc3d` cuts ARE the ends of u. That holds for every band
+    `MakeThreadedRod` builds and for nothing else, so a face trimmed by anything but its
+    own cap planes now goes to `TrimmedFaceTessellator`. **The gate reads `IsPlanar`, not
+    "is a `SpiralArc3d`"**: a coaxial cone cuts a helical band in a `SpiralArc3d` too — the
+    conical spiral of a 45° end chamfer — so counting spiral edges would send a chamfered
+    band down a grid whose columns interpolate across a boundary running diagonally.
+    Nothing periodic is needed here: a helical band's u is NOT periodic (z advances every
+    turn), so every loop has winding 0 and the non-wrapping tiers apply, with
+    `NaturalSteps` giving u the circle density (the same rule `SampleEdge`'s
+    `AngularSegments` gives the rails and cuts bounding the face, so rows and boundaries
+    agree by construction) and v an INFINITE step, since the generator is straight and
+    `PointAt` is affine in v — a v-chord lies exactly on the surface and never needs
+    refining. Covered by `TrimmedHelicalFaceTests` on hand-built faces whose trimming
+    curve comes from the production intersection; the constructions that would reach one
+    from the `Shape` API are blocked upstream and named there.
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:

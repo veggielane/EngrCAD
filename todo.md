@@ -263,12 +263,37 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 - [ ] **Threads follow-ups** (B-Rep-native external threads AND threaded holes ✅
   landed — `HelicalSurface`/`SpiralArc3d`/`MakeThreadedRod`, boolean-free lateral
   sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch
-  series** ✅ landed too) — remaining: (a) 45° end-chamfer cones in B-Rep
-  (cone∩helical via tracer + trimmed helical tessellation); (b) clearance profiles in
-  B-Rep (distance-field offsets round reflex corners — needs arc-generator helical
-  bands); (c) helical∩cylinder and helical∩tilted-plane intersections + general
-  trimmed helical faces (today only axis-perpendicular plane cuts of threads work,
-  others fail loudly); (d) thread runout and cosmetic-thread annotation.
+  series** ✅ landed too; **general trimmed helical FACES and the coaxial analytic
+  intersection family** ✅ landed as well — see below) — remaining:
+  - [ ] **(a) 45° end-chamfer cones in B-Rep.** Two of the three pieces are now in place:
+    the cone∩helical cut is EXACT (a conical `SpiralArc3d`, not a traced curve — so the
+    curved-corner `ExactOnly`/`AllowTraced` policy does not even come up), and the trimmed
+    bands it leaves tessellate. The remaining blocker is precisely located and is not
+    about threads at all: **`FaceSplitter.SplitByCurve` refuses an open curve that
+    terminates exactly ON the face boundary**, which the analytic cut does by construction
+    (it is clipped to v ∈ [0, 1], so its ends sit on the rails rather than crossing them).
+    Attempted end to end — `rod − revolve(outside-the-cone region)` — and it fails with
+    "Arrangement tracing did not close". Either the splitter learns to accept a curve whose
+    endpoint IS a boundary crossing (the mirror image of `SnapTracerEnds`, which extends
+    curves that stop SHORT), or the intersection gains a caller-requested overshoot; the
+    first is the honest fix, since the geometry really does terminate there.
+  - [ ] **(b) Clearance profiles in B-Rep** (distance-field offsets round reflex corners —
+    needs arc-generator helical bands). Unchanged, and note `SurfaceOffset` does NOT help:
+    it keeps each carrier in its own family and has no `HelicalSurface` case, and a
+    helical band's offset is a helical band on an offset *generator*, which is what the
+    arc-generator work has to build.
+  - [ ] **(c) NON-coaxial helical intersections** — helical∩cross-hole-cylinder and
+    helical∩tilted-plane. These are genuinely transcendental (no v-linear-in-u
+    substitution exists), so they belong to the marching tracer, and **the tracer
+    under-seeds them badly at thread scale**: measured on an M8 rod cross-drilled Ø6, the
+    crest flat returns ONE branch of the five the drill cuts, and every branch found stops
+    up to 0.9 of the band's height short of the rails. A 13-turn band whose generator is
+    0.16 mm tall is an aspect ratio the (u, v) seed grid cannot resolve — the fix is
+    per-surface seed density (turns × segments in u), not a tessellation change.
+  - [ ] **(d) Thread runout and cosmetic-thread annotation.** The runout half now has its
+    geometry: a coaxial cylinder cuts a helical band in one complete iso-v helix, exactly
+    (`SurfaceIntersection`'s coaxial case), which is the runout diameter. The annotation
+    half is still cheap — `ThreadCallout` exists.
 - [ ] **2D sketch engine residue** (the front door ✅ landed — `Region2d`
   polygon-with-holes with automatic nesting detection, `Region2dBoolean` over
   `Arrangement2d`, `Sketch.ToRegions`, `Profile.FromRegion`; **exact curved 2D

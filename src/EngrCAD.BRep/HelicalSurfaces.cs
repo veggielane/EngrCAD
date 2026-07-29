@@ -3,24 +3,49 @@ using EngrCAD.Core;
 namespace EngrCAD.BRep;
 
 /// <summary>
-/// Planar Archimedean spiral arc about the Z axis of <see cref="Frame"/>:
-/// P(t) = O + X·r(t)·cos t + Y·r(t)·sin t with r(t) = <see cref="RadiusAtZero"/> +
-/// <see cref="Slope"/>·t, where the parameter t is the angle from the frame's X axis.
-/// A zero slope degenerates to a circular arc (kept in this type so all cap-cut edges
-/// of helical bands share one sampling rule). This is exactly the curve a plane
-/// perpendicular to a <see cref="HelicalSurface"/>'s axis cuts from a helical band:
-/// with a linear generator, solving axial(v) + rate·u = z<sub>cap</sub> makes v — and
-/// hence the radius — linear in the angle u. Built on the surface's own axis frame so
-/// the spiral's parameter IS the surface's u (the phase-alignment rule: tessellation
-/// samples of the edge and of the surface grid coincide exactly).
-/// All derivatives are analytic (never finite differences).
+/// Conical spiral arc about the Z axis of <see cref="Frame"/>: in the frame's cylindrical
+/// coordinates the angle IS the parameter, and both the radius and the axial coordinate
+/// are LINEAR in it —
+/// P(t) = O + X·r(t)·cos t + Y·r(t)·sin t + Z·z(t), with
+/// r(t) = <see cref="RadiusAtZero"/> + <see cref="Slope"/>·t and
+/// z(t) = <see cref="AxialAtZero"/> + <see cref="AxialRate"/>·t.
+///
+/// <para><b>This one shape is every curve a coaxial straight-generator surface of
+/// revolution cuts from a <see cref="HelicalSurface"/>.</b> Write the band as
+/// r = r₀ + dr·v, z = z₀ + dz·v + rate·u and the carrier as r = a + b·z: substituting
+/// gives v·(dr − b·dz) = (a + b·z₀ − r₀) + b·rate·u, so v is linear in u, and therefore
+/// so are r and z. The special cases fall out of the one formula — a plane perpendicular
+/// to the axis (b = 0 in z, i.e. the cap cuts of <c>MakeThreadedRod</c>) leaves
+/// <see cref="AxialRate"/> zero and the arc planar; a coaxial CONE (a thread's 45° end
+/// chamfer) gives the general form; a zero <see cref="Slope"/> degenerates to a circular
+/// or helical arc. Keeping them one type is what lets every cap and chamfer edge of a
+/// thread share a single exact sampling rule.</para>
+///
+/// <para>Built on the surface's own axis frame so the spiral's parameter IS the surface's
+/// u (the phase-alignment rule: tessellation samples of the edge and of the surface grid
+/// coincide exactly). All derivatives are analytic (never finite differences).</para>
 /// </summary>
 public sealed class SpiralArc3d : Curve3d
 {
+    /// <summary>A PLANAR spiral arc in the frame's X/Y plane (no axial advance).</summary>
     public SpiralArc3d(in Frame3d frame, double radiusAtZero, double slope, Interval domain)
+        : this(frame, radiusAtZero, slope, 0, 0, domain)
+    {
+    }
+
+    /// <summary>
+    /// The general conical spiral: <paramref name="axialAtZero"/> and
+    /// <paramref name="axialRate"/> give the axial coordinate's own linear law in the
+    /// angle. Both zero reproduces the planar overload exactly.
+    /// </summary>
+    public SpiralArc3d(
+        in Frame3d frame, double radiusAtZero, double slope,
+        double axialAtZero, double axialRate, Interval domain)
     {
         if (!double.IsFinite(radiusAtZero) || !double.IsFinite(slope))
             throw new ArgumentOutOfRangeException(nameof(radiusAtZero), "Spiral coefficients must be finite.");
+        if (!double.IsFinite(axialAtZero) || !double.IsFinite(axialRate))
+            throw new ArgumentOutOfRangeException(nameof(axialAtZero), "Spiral coefficients must be finite.");
         if (!double.IsFinite(domain.Length) || domain.Length <= 0)
             throw new ArgumentOutOfRangeException(nameof(domain), "Spiral arcs need a finite, non-empty domain.");
         // The radius is linear in t, so positivity at both ends covers the whole arc.
@@ -30,19 +55,43 @@ public sealed class SpiralArc3d : Curve3d
         Frame = frame;
         RadiusAtZero = radiusAtZero;
         Slope = slope;
+        AxialAtZero = axialAtZero;
+        AxialRate = axialRate;
         _domain = domain;
     }
 
     private readonly Interval _domain;
 
-    /// <summary>The plane frame: the spiral lives in the X/Y plane, angle measured from X.</summary>
+    /// <summary>The axis frame: the angle is measured from X, the advance is along Z.</summary>
     public Frame3d Frame { get; }
 
     /// <summary>Radius extrapolated to t = 0 (which may lie outside <see cref="Domain"/>).</summary>
     public double RadiusAtZero { get; }
 
-    /// <summary>Radial growth per radian; 0 makes the arc circular.</summary>
+    /// <summary>Radial growth per radian; 0 makes the arc circular or helical.</summary>
     public double Slope { get; }
+
+    /// <summary>Axial coordinate extrapolated to t = 0.</summary>
+    public double AxialAtZero { get; }
+
+    /// <summary>Axial advance per radian; 0 keeps the arc in the frame's X/Y plane.</summary>
+    public double AxialRate { get; }
+
+    /// <summary>
+    /// Whether the arc lies in a plane PERPENDICULAR TO THE AXIS — the cap-cut case, and
+    /// the property a consumer actually needs (<c>BRepTessellator</c>'s full-helical-band
+    /// gate turns on it). Note this is a weaker condition than sitting in the frame's own
+    /// X/Y plane: a cut at a constant nonzero height is still planar.
+    /// </summary>
+    public bool IsPlanar => AxialRate == 0;
+
+    /// <summary>
+    /// The stricter condition, and it exists only to keep bits: the frame's X/Y plane
+    /// itself, where the axial term can be omitted from the arithmetic entirely. Adding a
+    /// zero VECTOR is not a no-op on a −0.0 coordinate, and every cap loop of every
+    /// threaded rod is built on that path.
+    /// </summary>
+    private bool InFramePlane => AxialAtZero == 0 && AxialRate == 0;
 
     public override Interval Domain => _domain;
     public override bool IsClosed => false;
@@ -50,20 +99,28 @@ public sealed class SpiralArc3d : Curve3d
     /// <summary>Radius at angle <paramref name="t"/>.</summary>
     public double RadiusAt(double t) => RadiusAtZero + Slope * t;
 
+    /// <summary>Axial coordinate at angle <paramref name="t"/>.</summary>
+    public double AxialAt(double t) => AxialAtZero + AxialRate * t;
+
     public override Vector3d PointAt(double t)
     {
         double r = RadiusAt(t);
-        return Frame.Origin + Frame.X * (r * Math.Cos(t)) + Frame.Y * (r * Math.Sin(t));
+        var p = Frame.Origin + Frame.X * (r * Math.Cos(t)) + Frame.Y * (r * Math.Sin(t));
+        // Exact-zero SEMANTIC test, not a tolerance — see InFramePlane.
+        return InFramePlane ? p : p + Frame.Z * AxialAt(t);
     }
 
     public override Vector3d DerivativeAt(double t)
     {
         double r = RadiusAt(t), c = Math.Cos(t), s = Math.Sin(t);
-        return Frame.X * (Slope * c - r * s) + Frame.Y * (Slope * s + r * c);
+        var d = Frame.X * (Slope * c - r * s) + Frame.Y * (Slope * s + r * c);
+        return InFramePlane ? d : d + Frame.Z * AxialRate;
     }
 
     public override Vector3d SecondDerivativeAt(double t)
     {
+        // The axial law is linear, so it contributes nothing to the second derivative —
+        // no branch needed and none possible to get wrong.
         double r = RadiusAt(t), c = Math.Cos(t), s = Math.Sin(t);
         return Frame.X * (-2 * Slope * s - r * c) + Frame.Y * (2 * Slope * c - r * s);
     }

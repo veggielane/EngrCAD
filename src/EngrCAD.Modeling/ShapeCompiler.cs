@@ -223,7 +223,7 @@ internal static class ShapeCompiler
                         "a sheared or non-uniformly scaled placement cannot re-place a helical thread exactly"));
                 else if (thread.ChamferLength > 0)
                     entries.Add(new ConversionEntry(shape.Describe(), NodeSupport.Impossible,
-                        "end chamfers have no B-Rep form yet (the 45° cone ∩ helical-band cut is future surface-intersection work) — pass chamferEnds: false, or use ToMesh/ToImplicit"));
+                        "end chamfers have no B-Rep form yet — the 45° cone ∩ helical-band cut is now EXACT (a conical SpiralArc3d) and the trimmed bands tessellate, but FaceSplitter cannot yet split a face along a curve that terminates exactly ON its boundary, which that cut does by construction; pass chamferEnds: false, or use ToMesh/ToImplicit"));
                 // Deliberate exact-zero test: "no clearance requested" is a user-parameter
                 // contract (any nonzero offset means distance-field clearance), not a
                 // geometric comparison.

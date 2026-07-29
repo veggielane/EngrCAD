@@ -2297,6 +2297,13 @@ internal static class TrimmedFaceTessellator
         return surface switch
         {
             CylinderSurface => (2 * Math.PI / segmentsPerCircle, double.PositiveInfinity),
+            // u IS the turning angle, so it takes the circle density — the same rule
+            // SampleEdge's AngularSegments applies to the helix rails and spiral cuts that
+            // bound these faces, so interior rows and boundary samples agree by
+            // construction. v is RULED: the generator is a straight (radius, axial)
+            // segment and PointAt is affine in v at every fixed u, so a v-chord lies
+            // exactly on the surface and needs no refinement at all.
+            HelicalSurface => (2 * Math.PI / segmentsPerCircle, double.PositiveInfinity),
             ExtrudedSurface e => (FromCurve(e.Generator), double.PositiveInfinity),
             RevolvedSurface r => (
                 r.DomainU.Length / (r.IsFullTurn ? segmentsPerCircle : curveSamples),

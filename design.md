@@ -822,6 +822,37 @@ closed curve whose pullback drifts a full period (a bore circle
 on a band) is recognized as non-contractible and handled by `SplitBandByWrapCurve`,
 which cuts the band into two bands with exactly reconstructed sub-surfaces.
 
+##### The analytic family of a helical band
+
+A thread's bands used to have exactly one exact intersection partner, the plane
+perpendicular to their axis, and everything else fell to the marching tracer. That reading
+was too narrow by three cases, and the derivation that widens it is two lines.
+
+Write a `HelicalSurface` as r = r₀ + dr·v, z = z₀ + dz·v + rate·u (θ = u), and a **coaxial**
+carrier whose (radius, axial) profile is a straight line as r = a + b·z. Substituting,
+
+  v·(dr − b·dz) = (a + b·z₀ − r₀) + b·rate·u,
+
+so **v is linear in u** — and therefore so are the radius and the axial coordinate. The cut
+is a *conical spiral*: angle as parameter, radius and height each affine in it. `SpiralArc3d`
+is now that shape, and the four cases are members of it rather than separate types:
+
+- a **plane ⊥ the axis** (b-in-z = 0) leaves the axial rate zero — the planar cap cuts
+  `MakeThreadedRod` has always built;
+- a **coaxial cone** is the general form — a thread's 45° end chamfer;
+- a **coaxial cylinder** (b = 0) makes v *constant*, so the cut is one complete iso-v
+  helix — the runout-diameter case;
+- **parallel profiles** (dr = b·dz) never cross transversally, and a tangential contact is
+  not reported here by contract.
+
+Two consequences worth stating. First, an end chamfer needs no traced curve at all, so the
+`CornerPolicy.ExactOnly`/`AllowTraced` question that governs curved corners simply does not
+arise for it. Second, the *non*-coaxial pairs — a cross-hole, a tilted face — are genuinely
+transcendental and stay with the tracer, which at thread scale under-seeds them: an M8 rod's
+crest flat is a 13-turn band 0.16 mm tall, and the (u, v) seed grid returns one branch of
+five with every branch stopping short of the rails. That is a seeding-density problem, not a
+trimming one, and it is filed as such.
+
 ##### A refusal that named the wrong stage
 
 `SplitBandByWrapCurve`'s non-planar branch — a cut whose v *varies*, which is what a
