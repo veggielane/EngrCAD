@@ -61,7 +61,10 @@ public static class DeformationTracks
     /// its own frequency, or 1 to see one period however long the clip is.</para>
     /// <para><b>Caveat to repeat wherever this is used</b>: a mode shape has no physical
     /// amplitude, and its sign is a convention. The animation's amplitude is a display
-    /// choice; what is physical is the shape and the frequency.</para>
+    /// choice; what is physical is the shape and the frequency. And a mode's DIRECTION is
+    /// well defined only when its frequency is simple — on a symmetric part the two
+    /// bending modes are degenerate, so what is animated is one valid member of a family
+    /// rather than the mode.</para>
     /// </summary>
     /// <param name="amplitude">Peak factor, in both directions.</param>
     /// <param name="cycles">Whole or fractional periods across the timeline.</param>

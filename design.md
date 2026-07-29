@@ -1775,16 +1775,85 @@ Design decisions:
   `uFieldColor` strength of 0 that makes `mix(uColor, vFieldColor, 0.0)` exactly
   `uColor`, so a part with no results renders **byte-identically** (the oracle is the
   docs suite: all 89 rendered PNGs unchanged across the shader change, which no unit
-  test could have shown). *A deformed shape is GEOMETRY, not a pose* — so it cannot ride
-  the matrices-only `SetInstancePoses` path the exploded view and the animation
-  transport share, it re-uploads deliberately, it is kept off the animation path, and its
-  facet normals are recomputed from the displaced positions (carrying the originals over
-  would make the deformed shape look exactly like the original, which is the entire point
-  of the plot). Two smaller rules earn their place: a zero-span range normalizes to
+  test could have shown). *A deformed shape looked like GEOMETRY and is now an attribute
+  too* — see the record below, which is where the animation of a structural result comes
+  from. Two smaller rules earn their place: a zero-span range normalizes to
   **0.5**, because a constant field has no position to report and an extreme colour would
   read as a hot spot; and a merged VTU fills a part's missing array with **NaN**, VTK's
   own "no value", since dropping the array loses the result that exists and zeros show a
   fake safe region.
+
+### Animating a deformed result — and the exception that turned out not to be one
+
+The animation layer's load-bearing rule is that **an animation must not touch geometry**:
+instance count and order are independent of t, so a viewer animates with matrices alone
+and picking keeps working. A deformed-shape plot looked like the counter-example — it is
+genuinely new vertex positions per frame — which is why the first version built the
+displaced mesh on the CPU, re-uploaded it, and was documented as *off* the animation path.
+
+**It does not have to be an exception.** Send the displacement ONCE as a vertex attribute
+and let the vertex shader apply `position + uDeformScale * displacement`; then a whole
+result animation changes **one float uniform per frame**. Three decisions carry it, and
+each was a real choice.
+
+**(a) The attribute, under the constant-when-absent rule — established twice already.**
+Slots 4–7 (offset plus three normal coefficients, one interleaved buffer), the same rule
+`aOcclusion` and `aFieldColor` follow: no buffer means zero, so `aPos + s*0` is `aPos` for
+*any* finite uniform and the normal expression takes its `aNormal` fallback. A part with
+no displacement result therefore renders byte-identically however the scale is driven —
+which is what let the change land with 102 of 103 rendered docs PNGs untouched. That
+precedent existing twice is why the design is credible rather than hopeful: the property
+was already proven at pixel scale before this used it.
+
+**(b) The CPU deformation path RETIRED from rendering rather than living on beside the
+shader one.** Two paths computing the same displaced shape would have disagreed in the
+last bits forever, and the verification bar — *an animated frame at t must equal a static
+render of the same configuration, byte for byte* — is only meaningful if there is one
+renderer. What made retiring it free is an identity worth keeping: a triangle whose
+vertices move linearly in `s` has edges `a + s·α` and `b + s·β`, so its facet normal
+`(a×b) + s(a×β + α×b) + s²(α×β)` is **exactly quadratic in s**. Three coefficient vectors
+therefore reproduce the displaced facet normal at every scale, which is precisely what the
+CPU path recomputed. Only the direction matters (the fragment shader normalizes), so the
+coefficients are scaled purely for float32 conditioning, and an all-zero result is the
+shader's signal to fall back to `aNormal` — the CPU path's own exact-zero rule for a
+collapsed facet.
+
+Reusing the source normals instead was the cheap alternative and was rejected on a
+measurement, not a feeling: a cantilever at its own 40× exaggeration turns its surface
+**9.9°**, matching the analytic tip slope `atan(40·3·tip/2L)` — a ~12% shading error under
+a 45° key light. Small enough that guessing would have got it wrong in either direction,
+which is why the test asserts the analytic value rather than a threshold. Cost of the
+switch, accounted honestly: exactly one committed render moved, the FEA bracket, by **11
+pixels of 1.79 million** (max channel delta 14) — float-vs-double rounding in the same
+formula, on the only committed deformed geometry with curved faces, where a face normal
+and a facet normal genuinely differ. The cantilever in `fields.md` is byte-identical.
+
+**(c) Picking deliberately does NOT follow the animation, and that is stated rather than
+discovered.** A pick is answered by a BVH over triangles; a spatial index cannot be a
+uniform, so it is built once at the part's own `DeformScale` — the animation's factor-1
+configuration. A click is therefore exact on a static plot and at a load ramp's peak, and
+off by the difference in exaggeration in between. Rebuilding a spatial index per frame is
+exactly the cost this design exists to avoid, so the mismatch is documented instead of
+paid for. `FieldRendering.Deform` survives for this one job, which is not a second render
+path but a different question asked of the same formula. The same reasoning fixes the
+feature-edge overlay to whether a part *carries* a displacement rather than to the current
+factor: the draw list must not depend on t, or a clip could not reuse one upload. The
+visible consequence is worth stating — the factor-0 frame of an animation is the
+undeformed *shape* without the undeformed part's chrome, so it is not the same picture as
+a still of a part whose own scale is 0.
+
+The legend follows the effective factor, because its title states the number: a bar
+reading `40X DEFORMED` over a frame drawn at 20× is exactly the lie the title exists to
+prevent. And a `DeformationTrack` returning a scalar is what keeps the no-geometry rule
+intact with nothing weakened — `LoadRamp` is honest for a **linear** solve (a linear
+result scales exactly, so intermediate frames are the answers rather than a tween) and
+`Oscillate` is the mode-shape law, with the caveat that a mode shape has no physical
+amplitude and its sign is a convention.
+
+**What deliberately did not ride along: transient thermal playback.** Temperature per time
+step is a *colour* animation, and colour has no single-uniform form — it needs the colour
+attribute re-uploaded per frame, or n attributes uploaded once and indexed. Assuming it
+rides along because displacement does would be the mistake; it is scoped separately.
 
 ### Sheet metal (`SheetMetal.cs`, `SheetMetalFeatures.cs`, `BRep/SheetMetalSurgery.cs`)
 

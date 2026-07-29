@@ -627,7 +627,11 @@ scrubbing, playback, export and docs. **Batched export + stills landed** since:
 set of uploaded buffers for a whole clip (24 frames at 480x360, win-x64: **1069 ms ->
 165 ms, 6.5x**, with the batched pixels asserted byte-identical to one `Render` per
 frame), and `EngrCad.RenderToImage(scene, animation, t, ...)` + the MCP `screenshot`
-`t` parameter both pose through the one `EngrCad.PoseAt` seam. What remains:
+`t` parameter both pose through the one `EngrCad.PoseAt` seam. **`DeformationTrack`
+landed** too, and the interesting part is that it did not weaken the rule: a deformed
+result looked like the exception (new vertex positions per frame) and became a THIRD kind
+of answer from `Animation.At` — a scalar — because the displacement now rides as a vertex
+attribute and the whole clip is one uniform per frame (design.md §6b). What remains:
 
 - [ ] **Web viewport transport** — the whole machine (`Animation`, `AnimationPlayback`)
   is UI-free in `Viewer.Core` precisely so the Blazor viewport can reuse it: a
@@ -915,48 +919,46 @@ Euler-Bernoulli, Kirsch/Howland within 0.44%. Residuals below.
     programs are flat-colour; a field-coloured part drawn in Points or Wireframe falls
     back to its part colour. The attribute is already uploaded, so this is a per-vertex
     colour varying in those two shaders.
-  - [ ] **A deformed part draws no feature edges** (they describe geometry that has
-    moved). Displacing the exact B-Rep edge samples by the same field would restore the
-    outline — the sampling is the same `SourceVertices` question as above, since an edge
-    sample is not a mesh vertex.
   - [ ] **MCP `export` does not offer `.vtu`.** `EngrCad.Run`'s `--export` does; the
     MCP tool's format switch needs the same case and its description updated.
   - [ ] **One legend per view.** The viewer shows the first visible part's display;
     several parts on genuinely different scales cannot each get a bar. Stacked legends,
     or a scene-level shared range, are the honest options.
-  - [ ] Time-varying results (a load step / frequency slider driving `Part.Results`),
-    and result persistence beside `FeatureHistory.SaveParameters`.
+  - (A deformed part's missing feature edges, and picking during an animation, moved to
+    their own item below now that the deformation rides a uniform.)
 
-- [ ] **Animating a structural result — and the one design decision that makes it cheap.**
-  The Animation section's load-bearing rule is that *an animation must not touch
-  geometry*: instance count and order are independent of t, so `SetInstancePoses` animates
-  with matrices alone and picking keeps working. A deformed shape looks like the exception
-  — it is genuinely new vertex positions per frame, which is why the landed deformed-shape
-  overlay re-uploads deliberately and is documented as **off** the animation path.
-  <br>**It does not have to be an exception.** Send the displacement field ONCE as a
-  vertex attribute beside `aOcclusion` and `aFieldColor` (the constant-when-absent
-  precedent is already established twice), and let the vertex shader apply
-  `position + uDeformScale * aDisplacement`. Then a result animation changes **one float
-  uniform per frame** — no buffer touched, no re-upload, the matrices-only rule intact,
-  and the web front end gets it for the same reason the explode slider did. That is the
-  whole item; everything below is what it then unlocks cheaply:
-  - A **load-ramp** track (scale 0 → 1 → 0), the obvious first demo, and the honest one
-    for a *linear* solver — a linear result scales exactly, so the intermediate frames are
-    not interpolation, they are the actual answers.
-  - **Mode shapes**, once modal analysis lands (above): animating eigenvector k at its own
-    frequency is the classic deliverable and needs nothing beyond this attribute. Note the
-    modal caveat worth stating in the docs — a mode shape has arbitrary sign and scale, so
-    the animation's amplitude is a display choice, not a physical displacement.
-  - **Transient thermal playback**, which is different in kind and must be said out loud:
-    temperature per time step is a *colour* animation, so it needs the field-colour
-    attribute re-uploaded per frame OR n attributes uploaded once. Unlike displacement it
-    has no single-uniform form, so scope it separately rather than assuming it rides along.
-  - Export falls out of the existing `AnimationExport` (APNG first, per that section's
-    ranking), and the EGL-context reuse that took a clip from 1069 → 165 ms already applies.
-  <br>**Verification bar**: the animated frames at t must equal a static
-  `RenderToImage` of the same scale factor, byte for byte — the same equality the batched
-  animation export already asserts against per-frame rendering. If that holds, the shader
-  path and the CPU path provably agree.
+- [ ] **Transient thermal playback** — the half of the animated-results item that
+  deliberately did NOT ride along when displacement became a vertex attribute, and the
+  reason is structural rather than effort. Temperature per time step is a **colour**
+  animation, and colour has no single-uniform form: a displacement animates because
+  `position + uDeformScale * displacement` puts the whole time dependence in one scalar,
+  whereas a colour ramp needs either the `aFieldColor` buffer re-uploaded per frame (which
+  puts it back on the re-upload path the deformation item exists to leave) or n colour
+  attributes uploaded once and selected by index (bounded frame count, n × the vertex
+  memory, and a new question about what a legend means mid-run). Decide which before
+  building; and note `Part.Results` already carries a `ThermalTransientResults` step as an
+  ordinary `MeshField`, so the DATA half needs nothing new — a step slider driving
+  `Part.FieldDisplay.Field` is the honest v1 and costs one re-upload per step, which is
+  fine for scrubbing and not for playback.
+  - A **frequency/load-step slider** driving `Part.Results` is the same shape of problem
+    and should be scoped with it; result persistence beside
+    `FeatureHistory.SaveParameters` is a third neighbour.
+
+- [ ] **A displaced part's feature edges and pick geometry** — the two things a
+  `DeformationTrack` deliberately does not move, both filed with their reasons in
+  design.md (§6b, "Animating a deformed result").
+  - **Feature edges**: a part carrying a displacement draws none at any factor, so a
+    deformed plot has no outline. Displacing the exact B-Rep edge samples by the same
+    field would restore it — the sampling is the `SourceVertices` question, since an edge
+    sample is not a mesh vertex — and the edges could then ride the same attribute path
+    (a line program with `aDeformOffset`), which would keep them free during an animation
+    rather than merely correct in a still.
+  - **Picking during an animation**: the pick BVH is built once at the part's own
+    `DeformScale`, so a click is exact at factor 1 and off by the difference in
+    exaggeration in between. A cheap fix is not obvious — rebuilding a spatial index per
+    frame is the cost the design avoids — but a *deformed-ray* trick may exist for small
+    displacements, and at minimum the viewer could refuse to hover-highlight while
+    playback is running rather than silently answering from stale geometry.
 
 - [ ] **CFD — assess honestly before starting, because it is not "FEA with different
   physics".** Structural and thermal share a shape: symmetric positive-definite operators,
