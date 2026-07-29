@@ -1,3 +1,4 @@
+using EngrCAD.BRep;
 using EngrCAD.Core;
 using EngrCAD.Implicit;
 using EngrCAD.Modeling;
@@ -45,6 +46,23 @@ public class SketchRegionKernelTests
         .LineTo(0, 6)
         .Close();
 
+    /// <summary>A rotated full ellipse with a second, counter-rotated one as a hole — the
+    /// segment kind whose distance is a scan-and-Newton rather than a closed form.</summary>
+    private static Sketch Ellipses() => Sketch.Ellipse(new Vector2d(0, 0), 18, 11, 27)
+        .WithHole(Sketch.Ellipse(new Vector2d(3, 1), 6, 3.5, -40));
+
+    /// <summary>
+    /// Elliptical ARCS rather than full ellipses: a closed outline of four SVG-style
+    /// elliptical arcs, so every one carries a partial sweep (both signs, both largeArc
+    /// branches) and the scan's endpoints are real segment joints shared with a neighbour.
+    /// </summary>
+    private static Sketch EllipseArcs() => Sketch.Start(-14, 0)
+        .EllipticalArcTo(new Vector2d(0, 9), 14, 9, 0, largeArc: false, clockwise: false)
+        .EllipticalArcTo(new Vector2d(14, 0), 16, 11, 20, largeArc: false, clockwise: false)
+        .EllipticalArcTo(new Vector2d(0, -7), 14, 7, 0, largeArc: false, clockwise: false)
+        .EllipticalArcTo(new Vector2d(-14, 0), 20, 13, -15, largeArc: false, clockwise: false)
+        .Close();
+
     private static Sketch Named(string name) => name switch
     {
         "plate" => Plate(),
@@ -52,6 +70,8 @@ public class SketchRegionKernelTests
         "slot" => Sketch.Slot(20, 8),
         "arcs" => Arcs(),
         "cusp" => Cusp(),
+        "ellipses" => Ellipses(),
+        "ellipsearcs" => EllipseArcs(),
         _ => throw new ArgumentOutOfRangeException(nameof(name)),
     };
 
@@ -92,6 +112,14 @@ public class SketchRegionKernelTests
     /// solve — were taken by routing the region back through <c>SketchSegment.Distance</c>
     /// and reading the hash off THAT. So they prove the transcriptions are term for term,
     /// which is the only reason the lane-wise forms are allowed to exist.
+    /// <para>
+    /// The two ellipse rows are the constants
+    /// <see cref="EllipseKernel_IsBitIdenticalToTheSharedCurveSolve"/> reads off the
+    /// <c>General</c> path. That test asserts the equality continuously, so these stay the
+    /// shared curve solve's answer by construction rather than only at the moment they were
+    /// taken — which is the difference the ellipse needed, its source living in another
+    /// project.
+    /// </para>
     /// </summary>
     [Theory]
     [InlineData("plate", -20992552982407019L)]
@@ -99,10 +127,127 @@ public class SketchRegionKernelTests
     [InlineData("slot", 9097049425223680080L)]
     [InlineData("arcs", 4040765462217916895L)]
     [InlineData("cusp", 4167966295857103130L)]
+    [InlineData("ellipses", 9065144379352060846L)]
+    [InlineData("ellipsearcs", -5214840631977865301L)]
     public void SignedDistance_MatchesTheGoldenBitPattern(string name, long fingerprint)
     {
         var sketch = Named(name);
         Assert.Equal(fingerprint, Fingerprint(new SketchRegion(sketch), sketch.Bounds));
+    }
+
+    // ------------------------------------------------------------------ elliptical arcs
+
+    /// <summary>
+    /// The ellipse kernel is the one transcription whose source lives in another project —
+    /// <c>EllipseSeg.Distance</c> is <c>EngrCAD.BRep</c>'s shared <c>Curve2d.NearestPoint</c>
+    /// — so the two paths are held bit-equal on the same binary rather than only against a
+    /// committed constant. That is what makes a future edit to the shared curve solve fail
+    /// HERE, naming the drift, instead of somewhere downstream as a moved number.
+    /// </summary>
+    [Theory]
+    [InlineData("ellipses")]
+    [InlineData("ellipsearcs")]
+    public void EllipseKernel_IsBitIdenticalToTheSharedCurveSolve(string name)
+    {
+        var sketch = Named(name);
+        Assert.Equal(
+            Fingerprint(new SketchRegion(sketch, forRevolution: false, ellipseKernel: false), sketch.Bounds),
+            Fingerprint(new SketchRegion(sketch), sketch.Bounds));
+    }
+
+    /// <summary>
+    /// The kernel's hostile points: the 65 scan parameters themselves (where the scan lands
+    /// exactly on the curve and Newton starts already converged), the bracket ends bestT ±
+    /// 1/64, the axis extremes, the shared segment joints, and the CENTRE — where the
+    /// nearest point is genuinely ambiguous and the Newton derivative is at its smallest.
+    /// </summary>
+    [Theory]
+    [InlineData("ellipses")]
+    [InlineData("ellipsearcs")]
+    public void EllipseStructuredPoints_AreBitIdenticalToScalar(string name)
+    {
+        var sketch = Named(name);
+        var region = new SketchRegion(sketch);
+        var reference = new SketchRegion(sketch, forRevolution: false, ellipseKernel: false);
+        var probes = new List<Vector2d>();
+        foreach (var (centre, a, b, start, sweep) in EllipseParameters(name))
+        {
+            probes.Add(centre);
+            // Every scan parameter, and the two bracket ends around it, on the curve and on
+            // a tight ring about it (the sign flips across the boundary).
+            for (int i = 0; i <= 64; i++)
+            {
+                foreach (double t in new[] { (double)i / 64, (i - 1.0) / 64, (i + 1.0) / 64 })
+                {
+                    if (t is < 0 or > 1)
+                        continue;
+                    double angle = start + sweep * t;
+                    var on = centre + a * Math.Cos(angle) + b * Math.Sin(angle);
+                    probes.Add(on);
+                    for (int k = 0; k < 4; k++)
+                    {
+                        double ring = 2 * Math.PI * k / 4;
+                        foreach (double radius in new[] { 1e-12, 1e-6, 1e-2, 0.5 })
+                            probes.Add(on + new Vector2d(Math.Cos(ring), Math.Sin(ring)) * radius);
+                    }
+                }
+            }
+        }
+
+        AssertProbesAgree(region, probes);
+        // And the kernel agrees with the shared curve solve at every one of them.
+        foreach (var probe in probes)
+            Assert.Equal(
+                BitConverter.DoubleToInt64Bits(reference.SignedDistance(probe)),
+                BitConverter.DoubleToInt64Bits(region.SignedDistance(probe)));
+    }
+
+    /// <summary>The ellipses each fixture builds, as (centre, semi-axis A, semi-axis B,
+    /// start, sweep) — the same parameters <c>Sketch.Ellipse</c> and
+    /// <c>EllipticalArcTo</c> put on the segments.</summary>
+    private static IEnumerable<(Vector2d Centre, Vector2d A, Vector2d B, double Start, double Sweep)>
+        EllipseParameters(string name)
+    {
+        if (name == "ellipses")
+        {
+            foreach (var (centre, semiX, semiY, degrees) in new[]
+                     {
+                         (new Vector2d(0, 0), 18.0, 11.0, 27.0),
+                         (new Vector2d(3, 1), 6.0, 3.5, -40.0),
+                     })
+            {
+                double radians = degrees * Math.PI / 180;
+                double cos = Math.Cos(radians), sin = Math.Sin(radians);
+                yield return (
+                    centre, new Vector2d(cos, sin) * semiX, new Vector2d(-sin, cos) * semiY, 0, 2 * Math.PI);
+            }
+            yield break;
+        }
+        // The arc fixture's segments carry solved centres, so read them off the sketch's own
+        // exact curves rather than restating the SVG endpoint solve here.
+        foreach (var curve in Named(name).ToCurves())
+        {
+            if (curve is Ellipse2d ellipse)
+                yield return (
+                    ellipse.Center, ellipse.SemiAxisX, ellipse.SemiAxisY,
+                    ellipse.StartAngle, ellipse.SweepAngle);
+        }
+    }
+
+    /// <summary>
+    /// A revolved elliptical profile: the kernel must survive the on-axis segment dropping
+    /// that <c>forRevolution</c> does, and the revolved node's batch entry.
+    /// </summary>
+    [Fact]
+    public void RevolvedEllipseRegion_IsBitIdenticalToScalar()
+    {
+        var profile = Sketch.Start(0, 0)
+            .LineTo(9, 0)
+            .EllipticalArcTo(new Vector2d(4, 14), 7, 9, 12, largeArc: false, clockwise: false)
+            .LineTo(0, 14)
+            .Close();
+        var field = Sdf.RevolvedRegion(new SketchRegion(profile, forRevolution: true));
+        AssertBatchMatchesScalar(field, profile.Bounds, runLength: 19);
     }
 
     private static (double[] X, double[] Y) SamplePoints(in Aabb bounds, int count, int seed)
@@ -129,6 +274,8 @@ public class SketchRegionKernelTests
     [InlineData("slot")]
     [InlineData("arcs")]
     [InlineData("cusp")]
+    [InlineData("ellipses")]
+    [InlineData("ellipsearcs")]
     public void BatchSignedDistance_IsBitIdenticalToScalar(string name)
     {
         var sketch = Named(name);

@@ -121,11 +121,22 @@ vectorized operands around them.
 
 The 2D side of the planar-region nodes *is* vectorized, one layer up: `SketchRegion`
 (EngrCAD.Modeling) implements the `IPlanarRegion` batch seam with lane-wise kernels for
-lines, full circles, partial arcs and cubic béziers, to the same bit-for-bit contract.
-Two of them could not be transcriptions — a partial arc's in-sweep test is `Math.Atan2`,
-and a bézier's Newton stage has a data-dependent `break` — so they carry their own
-exactness arguments (a certainty band that hands ambiguous lanes back to `Atan2`, and a
-masked write rather than a masked iteration). See that project's README.
+lines, full circles, partial arcs, cubic béziers and elliptical arcs, to the same
+bit-for-bit contract. Three of them could not be transcriptions — a partial arc's in-sweep
+test is `Math.Atan2`, a bézier's Newton stage has a data-dependent `break`, and an
+elliptical arc's distance is a scan-and-Newton over `Math.Cos`/`Math.Sin` — so they carry
+their own exactness arguments (a certainty band that hands ambiguous lanes back to
+`Atan2`, a masked write rather than a masked iteration, and a baked scan with a
+deliberately scalar refinement). See that project's README.
+
+**The ellipse kernel put a number on the standing "no vector transcendental" rule.**
+.NET 10 does ship `Vector.Cos`/`Vector.Sin` for `Vector<double>`, so the question is
+answered by measurement rather than by absence: against `Math.Cos`/`Math.Sin` over 200 000
+doubles on this machine (win-x64, `Vector<double>.Count` = 4), **11 858 differ for `Cos`
+and 19 172 for `Sin`, each by one ulp**. One ulp is more than any field here can spend —
+its *sign* drives boolean classification kernel-wide — so the same verdict that keeps the
+gyroid and the exponential falloff scalar covers the ellipse's Newton refinement, and what
+gets vectorized is only the part that is pure arithmetic.
 
 Measured on an 8-core win-arm64 box (`Vector<double>.Count == 2`, so the ceiling from
 lanes alone is 2×; the rest comes from batching away per-point virtual dispatch through

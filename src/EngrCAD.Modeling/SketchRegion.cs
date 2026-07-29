@@ -37,7 +37,24 @@ public sealed class SketchRegion : IPlanarRegion
     /// ray from any r ≥ 0 query never crosses x = 0.
     /// </param>
     public SketchRegion(Sketch sketch, bool forRevolution = false)
+        : this(sketch, forRevolution, ellipseKernel: true) { }
+
+    /// <summary>
+    /// Test seam. <paramref name="ellipseKernel"/> = false sends elliptical arcs down the
+    /// <see cref="SegmentKind.General"/> path — <c>EllipseSeg.Distance</c>, i.e.
+    /// <c>Curve2d.NearestPoint</c> itself — instead of the transcription in this file.
+    /// <para>
+    /// It exists because this is the one transcription whose source lives in ANOTHER
+    /// project: <see cref="ArcData"/> and <see cref="CubicData"/> mirror <c>ArcSeg</c> and
+    /// <c>CubicSeg</c> next door in <c>SketchSegments.cs</c>, but the ellipse's distance is
+    /// <c>EngrCAD.BRep</c>'s shared scan-and-Newton. A committed golden hash would catch a
+    /// drift there, but only as "the number moved"; holding the two paths bit-equal on the
+    /// same binary names it. <c>SketchRegionKernelTests</c> asserts both.
+    /// </para>
+    /// </summary>
+    internal SketchRegion(Sketch sketch, bool forRevolution, bool ellipseKernel)
     {
+        _ellipseKernel = ellipseKernel;
         Collect(sketch, forRevolution);
         foreach (var hole in sketch.Holes)
             Collect(hole, forRevolution);
@@ -46,6 +63,8 @@ public sealed class SketchRegion : IPlanarRegion
         BuildDistanceTables();
         BuildParityIndex();
     }
+
+    private readonly bool _ellipseKernel;
 
     private void Collect(Sketch sketch, bool forRevolution)
     {
@@ -99,6 +118,9 @@ public sealed class SketchRegion : IPlanarRegion
                 case SegmentKind.Cubic:
                     CubicMinimum(x, y, distances, s);
                     break;
+                case SegmentKind.Ellipse:
+                    EllipseMinimum(x, y, distances, s);
+                    break;
                 default:
                     GeneralMinimum(x, y, distances, s);
                     break;
@@ -125,6 +147,8 @@ public sealed class SketchRegion : IPlanarRegion
         Arc = 3,
         /// <summary>Cubic bézier: <see cref="CubicData"/>, sampled scan plus masked Newton.</summary>
         Cubic = 4,
+        /// <summary>Elliptical arc: <see cref="EllipseData"/>, baked scan plus scalar Newton.</summary>
+        Ellipse = 5,
     }
 
     private SegmentKind[] _kinds = [];
@@ -136,6 +160,7 @@ public sealed class SketchRegion : IPlanarRegion
     private int[] _slot = [];
     private ArcData[] _arcs = [];
     private CubicData[] _cubics = [];
+    private EllipseData[] _ellipses = [];
 
     /// <summary>
     /// Relative slack that makes the bounding-box reject provably conservative. The
@@ -164,6 +189,7 @@ public sealed class SketchRegion : IPlanarRegion
         _slot = new int[n];
         var arcs = new List<ArcData>();
         var cubics = new List<CubicData>();
+        var ellipses = new List<EllipseData>();
 
         for (int s = 0; s < n; s++)
         {
@@ -209,6 +235,11 @@ public sealed class SketchRegion : IPlanarRegion
                     _slot[s] = cubics.Count;
                     cubics.Add(new CubicData(cubic));
                     break;
+                case EllipseSeg ellipse when _ellipseKernel:
+                    _kinds[s] = SegmentKind.Ellipse;
+                    _slot[s] = ellipses.Count;
+                    ellipses.Add(new EllipseData(ellipse));
+                    break;
                 default:
                     _kinds[s] = SegmentKind.General;
                     break;
@@ -217,6 +248,7 @@ public sealed class SketchRegion : IPlanarRegion
 
         _arcs = [.. arcs];
         _cubics = [.. cubics];
+        _ellipses = [.. ellipses];
     }
 
     private double Distance(double px, double py)
@@ -239,6 +271,10 @@ public sealed class SketchRegion : IPlanarRegion
                 case SegmentKind.Cubic:
                     if (!Rejected(px, py, s, best))
                         best = Math.Min(best, CubicDistance(px, py, _cubics[_slot[s]]));
+                    break;
+                case SegmentKind.Ellipse:
+                    if (!Rejected(px, py, s, best))
+                        best = Math.Min(best, EllipseDistance(px, py, _ellipses[_slot[s]]));
                     break;
                 default:
                     if (!Rejected(px, py, s, best))
@@ -707,7 +743,20 @@ public sealed class SketchRegion : IPlanarRegion
             double gPrime = (d1x * d1x + d1y * d1y) + (offsetX * d2x + offsetY * d2y);
             if (Math.Abs(gPrime) < 1e-18)
                 break;
-            refined = Math.Clamp(refined - g / gPrime, 0, 1);
+            double next = Math.Clamp(refined - g / gPrime, 0, 1);
+            // An EXACT fixed point, so this early exit changes nothing: g and g′ are
+            // functions of `refined` alone, so an iteration reproducing it bit for bit makes
+            // every later one recompute the same value and take the same branch. Deliberately
+            // `==` and NOT a tolerance — a tolerant stop would move results and would need
+            // the golden hashes re-derived, which is the trade this deletes rather than
+            // makes. Measured: 50.0% of Newton iterations on an all-bézier outline and 35.1%
+            // on an engraving-shaped one are redundant this way (exact counts). End to end
+            // that is 1.09× on the former and 1.01–1.03× elsewhere — small, because Newton is
+            // under half of a kernel that is itself behind the bounding-box reject.
+            // The VECTOR kernel deliberately does NOT take this exit; see CubicMinimum.
+            if (next == refined)
+                break;
+            refined = next;
         }
 
         double ut = 1 - refined, tt = refined;
@@ -727,6 +776,18 @@ public sealed class SketchRegion : IPlanarRegion
     /// therefore keeps the value it stopped at, verbatim — the correctness does not rest on a
     /// converged Newton step being a fixed point (it is not: a vanishing g′ makes the step
     /// infinite, which the clamp would turn into 0 or 1).
+    /// <para>
+    /// <b>It deliberately does NOT take <see cref="CubicDistance"/>'s exact fixed-point
+    /// exit, and the asymmetry was measured rather than assumed.</b> The scalar loop exits
+    /// as soon as ITS parameter stops moving; a block can only exit when the SLOWEST of its
+    /// lanes does, and around 30% of solves never reach an exact fixed point within the
+    /// eight steps, so the maximum over four lanes is ~7.5 of 8 — about a 6% saving, to be
+    /// bought with three extra vector operations and a branch on every iteration. Measured
+    /// end to end at <b>0.99–1.03×</b>: nothing, and a slight loss in one case. Same shape
+    /// as the arc kernel's certainty-band finding — block granularity is what destroys a
+    /// per-lane saving, so an early exit that pays in scalar code usually does not
+    /// vectorize.
+    /// </para>
     /// </summary>
     private void CubicMinimum(ReadOnlySpan<double> x, ReadOnlySpan<double> y, Span<double> best, int s)
     {
@@ -834,6 +895,220 @@ public sealed class SketchRegion : IPlanarRegion
         {
             if (!Rejected(x[i], y[i], s, best[i]))
                 best[i] = Math.Min(best[i], CubicDistance(x[i], y[i], cubic));
+        }
+    }
+
+    // ------------------------------------------------------------------ elliptical arcs
+
+    /// <summary>
+    /// An elliptical arc flattened for <c>EllipseSeg.Distance</c>, which is
+    /// <c>Ellipse2d</c>'s inherited <c>Curve2d.NearestPoint</c>: a 65-point scan for the
+    /// basin, then a bracketed Newton on (C − p)·C′.
+    /// <para>
+    /// <b>The scan points are the same for every query</b>, exactly as
+    /// <see cref="CubicData"/>'s are, and that is the whole win here — the shared curve code
+    /// re-evaluates <c>PointAt</c> at i/64 on every call, and each of those is a
+    /// <c>Math.Cos</c> plus a <c>Math.Sin</c>. Baking them removes 65 of each per query and
+    /// leaves a scan that is pure arithmetic, hence vectorizable to the bit. Baking is exact
+    /// rather than approximate for the reason memoization always is: <c>Math.Cos</c> is a
+    /// function of its argument, so the value computed once at construction is the same
+    /// double the value computed per query would be.
+    /// </para>
+    /// </summary>
+    private sealed class EllipseData
+    {
+        public const int Samples = 64;
+        public const int NewtonSteps = 20;
+
+        /// <summary>Domain start and length, from <c>Ellipse2d.Domain</c> = <c>Interval.Unit</c>.
+        /// Named rather than inlined so the transcription reads against the source.</summary>
+        public const double DomainStart = 0;
+        public const double DomainEnd = 1;
+        public const double DomainLength = DomainEnd - DomainStart;
+
+        /// <summary>The scan parameters, exactly <c>Domain.ParameterAt((double)i / samples)</c>
+        /// as <c>Curve2d.NearestPoint</c> forms them.</summary>
+        public static readonly double[] SampleT = BuildSampleT();
+
+        public readonly double[] SampleX = new double[Samples + 1];
+        public readonly double[] SampleY = new double[Samples + 1];
+        public readonly double Cx, Cy, Ax, Ay, Bx, By;
+        public readonly double StartAngle, Sweep;
+
+        public EllipseData(EllipseSeg ellipse)
+        {
+            (Cx, Cy) = (ellipse.Center.X, ellipse.Center.Y);
+            (Ax, Ay) = (ellipse.SemiAxisX.X, ellipse.SemiAxisX.Y);
+            (Bx, By) = (ellipse.SemiAxisY.X, ellipse.SemiAxisY.Y);
+            StartAngle = ellipse.StartAngle;
+            Sweep = ellipse.Sweep;
+
+            for (int i = 0; i <= Samples; i++)
+            {
+                double angle = StartAngle + Sweep * SampleT[i];
+                double cos = Math.Cos(angle), sin = Math.Sin(angle);
+                // Ellipse2d.PointAt's association order: (C + A·cos) + B·sin.
+                SampleX[i] = (Cx + Ax * cos) + Bx * sin;
+                SampleY[i] = (Cy + Ay * cos) + By * sin;
+            }
+        }
+
+        private static double[] BuildSampleT()
+        {
+            var t = new double[Samples + 1];
+            for (int i = 0; i <= Samples; i++)
+                t[i] = DomainStart + (DomainEnd - DomainStart) * ((double)i / Samples);
+            return t;
+        }
+    }
+
+    /// <summary>
+    /// Term for term <c>Curve2d.NearestPoint</c> specialized to <c>Ellipse2d</c>, then its
+    /// caller <c>Curve2d.DistanceTo</c>'s final <c>.Length</c>. The scan runs over the baked
+    /// samples; the refinement is <see cref="EllipseRefine"/>, shared with the lane-wise form.
+    /// </summary>
+    private static double EllipseDistance(double px, double py, EllipseData e)
+    {
+        double best = double.PositiveInfinity, bestT = EllipseData.DomainStart;
+        for (int i = 0; i <= EllipseData.Samples; i++)
+        {
+            double dx = e.SampleX[i] - px, dy = e.SampleY[i] - py;
+            double d = dx * dx + dy * dy;
+            if (d < best)
+            {
+                best = d;
+                bestT = EllipseData.SampleT[i];
+            }
+        }
+        return EllipseRefine(px, py, best, bestT, e);
+    }
+
+    /// <summary>
+    /// The Newton half of <c>Curve2d.NearestPoint</c>, plus <c>DistanceTo</c>'s square root.
+    /// <para>
+    /// <b>This stays scalar, and the reason is measured rather than assumed.</b> Every
+    /// iteration needs <c>Math.Cos</c> and <c>Math.Sin</c> at a parameter that differs per
+    /// lane, and .NET 10's <c>Vector.Cos</c>/<c>Vector.Sin</c> are <em>not</em> bit-identical
+    /// to the scalar ones — measured on this machine, 11 858 of 200 000 doubles differ for
+    /// <c>Cos</c> and 19 172 for <c>Sin</c>, each by one ulp. One ulp is far more than this
+    /// field can spend: its sign drives boolean classification kernel-wide, so the same rule
+    /// that keeps the gyroid and the exponential falloff scalar applies here.
+    /// </para>
+    /// <para>
+    /// What the transcription <em>can</em> do for free is evaluate the angle's cosine and
+    /// sine ONCE per iteration. The shared curve code calls <c>PointAt</c>,
+    /// <c>DerivativeAt</c> and <c>SecondDerivativeAt</c> separately and each recomputes both
+    /// at the same angle, so hoisting them is three-for-one and bit-exact by the same
+    /// argument that lets the scan be baked.
+    /// </para>
+    /// </summary>
+    private static double EllipseRefine(double px, double py, double best, double bestT, EllipseData e)
+    {
+        const double window = EllipseData.DomainLength / EllipseData.Samples;
+        double lo = Math.Clamp(bestT - window, EllipseData.DomainStart, EllipseData.DomainEnd);
+        double hi = Math.Clamp(bestT + window, EllipseData.DomainStart, EllipseData.DomainEnd);
+        double parameter = bestT;
+        for (int iteration = 0; iteration < EllipseData.NewtonSteps; iteration++)
+        {
+            double angle = e.StartAngle + e.Sweep * parameter;
+            double cos = Math.Cos(angle), sin = Math.Sin(angle);
+            double deltaX = (e.Cx + e.Ax * cos) + e.Bx * sin - px;
+            double deltaY = (e.Cy + e.Ay * cos) + e.By * sin - py;
+            double d1x = (e.Ax * -sin + e.Bx * cos) * e.Sweep;
+            double d1y = (e.Ay * -sin + e.By * cos) * e.Sweep;
+            double d2x = (e.Ax * -cos + e.Bx * -sin) * (e.Sweep * e.Sweep);
+            double d2y = (e.Ay * -cos + e.By * -sin) * (e.Sweep * e.Sweep);
+            double f = deltaX * d1x + deltaY * d1y;
+            double df = (d1x * d1x + d1y * d1y) + (deltaX * d2x + deltaY * d2y);
+            // Near-underflow degenerate guard, transcribed from Curve2d.NearestPoint.
+            if (Math.Abs(df) < 1e-30)
+                break;
+            double next = Math.Clamp(parameter - f / df, lo, hi);
+            if (Math.Abs(next - parameter) <= EllipseData.DomainLength * 1e-15)
+            {
+                parameter = next;
+                break;
+            }
+            parameter = next;
+        }
+
+        double finalAngle = e.StartAngle + e.Sweep * parameter;
+        double fcos = Math.Cos(finalAngle), fsin = Math.Sin(finalAngle);
+        double rx = (e.Cx + e.Ax * fcos) + e.Bx * fsin - px;
+        double ry = (e.Cy + e.Ay * fcos) + e.By * fsin - py;
+        double refined = rx * rx + ry * ry;
+        // NearestPoint keeps the refined point only when it beat the scan, then DistanceTo
+        // takes the length. The losing branch's PointAt(bestT) is the baked sample bestT came
+        // from, so its squared distance IS `best` — the same expression on the same doubles.
+        return Math.Sqrt(refined <= best ? refined : best);
+    }
+
+    /// <summary>
+    /// Lane-wise <see cref="EllipseDistance"/>: the 65-point scan vectorizes exactly (pure
+    /// arithmetic, same order, and <c>d &lt; best</c> keeps first-wins per lane just as the
+    /// scalar loop does), and each lane's <see cref="EllipseRefine"/> then runs scalar
+    /// because there is no bit-exact vector cosine. So this is a partial kernel by
+    /// construction — and it is the scan that was worth vectorizing, being the part that is
+    /// 65 evaluations against the refinement's handful.
+    /// </summary>
+    private void EllipseMinimum(ReadOnlySpan<double> x, ReadOnlySpan<double> y, Span<double> best, int s)
+    {
+        var e = _ellipses[_slot[s]];
+        int n = x.Length;
+        int i = 0;
+        if (Accelerated)
+        {
+            int w = Vector<double>.Count;
+            var infinity = new Vector<double>(double.PositiveInfinity);
+            var vminX = new Vector<double>(_minX[s]);
+            var vmaxX = new Vector<double>(_maxX[s]);
+            var vminY = new Vector<double>(_minY[s]);
+            var vmaxY = new Vector<double>(_maxY[s]);
+            ref double xr = ref MemoryMarshal.GetReference(x);
+            ref double yr = ref MemoryMarshal.GetReference(y);
+            ref double br = ref MemoryMarshal.GetReference(best);
+            Span<double> scanned = stackalloc double[w];
+            Span<double> scannedT = stackalloc double[w];
+            for (; i <= n - w; i += w)
+            {
+                var px = Vector.LoadUnsafe(ref xr, (nuint)i);
+                var py = Vector.LoadUnsafe(ref yr, (nuint)i);
+                var b = Vector.LoadUnsafe(ref br, (nuint)i);
+                var rejected = RejectMask(px, py, b, vminX, vmaxX, vminY, vmaxY);
+                if (AllSet(rejected))
+                    continue;
+
+                var bestSquared = infinity;
+                var bestT = new Vector<double>(EllipseData.DomainStart);
+                for (int k = 0; k <= EllipseData.Samples; k++)
+                {
+                    var dx = new Vector<double>(e.SampleX[k]) - px;
+                    var dy = new Vector<double>(e.SampleY[k]) - py;
+                    var d = dx * dx + dy * dy;
+                    var closer = Vector.LessThan(d, bestSquared);
+                    bestSquared = Vector.ConditionalSelect(closer, d, bestSquared);
+                    bestT = Vector.ConditionalSelect(
+                        closer, new Vector<double>(EllipseData.SampleT[k]), bestT);
+                }
+                bestSquared.CopyTo(scanned);
+                bestT.CopyTo(scannedT);
+
+                for (int k = 0; k < w; k++)
+                {
+                    // The rejected lanes are skipped rather than blended with +∞ here: unlike
+                    // the fully lane-wise kernels this refinement is a scalar call, so "skip"
+                    // is available literally and matches the scalar path's own guard.
+                    if (Rejected(x[i + k], y[i + k], s, best[i + k]))
+                        continue;
+                    best[i + k] = Math.Min(
+                        best[i + k], EllipseRefine(x[i + k], y[i + k], scanned[k], scannedT[k], e));
+                }
+            }
+        }
+        for (; i < n; i++)
+        {
+            if (!Rejected(x[i], y[i], s, best[i]))
+                best[i] = Math.Min(best[i], EllipseDistance(x[i], y[i], e));
         }
     }
 

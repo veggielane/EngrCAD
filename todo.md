@@ -71,19 +71,50 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## Implicit engine (EngrCAD.Implicit)
 
-- [ ] **The bézier kernel's Newton stage is fixed at 8 iterations for every lane.** The
-  scalar code was too, so this is not a regression — but a lane-wise form makes the waste
-  visible: the sticky "active" mask already knows when every lane has stopped moving, and
-  the loop only exits early when every lane's derivative has *vanished*, not when every
-  lane has *converged*. A convergence exit would change results (the scalar path does the
-  full eight), so it needs the golden hashes re-derived deliberately, with a measurement
-  showing it is worth the churn — the reject in front already skips most cubics.
-- [ ] **The lane-wise arc kernel gives a whole block back to the scalar path when any one
-  lane is inside the wedge certainty band.** Per-lane blending would keep the other three
-  lanes vectorized. Almost certainly not worth it — the band is measure-zero against a
-  sample grid, so the fallback fires only on constructed inputs — but if a consumer ever
-  samples *along* a boundary ray (an iso-line trace on a sketch's own sweep boundary, say)
-  the whole trace would run scalar.
+- ~~**The bézier kernel's Newton stage is fixed at 8 iterations for every lane.**~~
+  ✅/❌ **half landed, half measured and declined** — and the entry's premise was wrong in a
+  useful way. It assumed "a convergence exit would change results ... so it needs the golden
+  hashes re-derived deliberately". An **exact fixed-point exit does not**: g and g′ are
+  functions of `refined` alone, so an iteration reproducing it bit for bit makes every later
+  one recompute the same value and take the same branch. Spelled `next == refined` rather
+  than as a tolerance (a tolerant stop *would* move results), it is provably identity, so
+  the golden churn the item was weighing does not exist. Every golden hash is unchanged, and
+  the batch-vs-scalar bit-identity test now independently verifies the argument, the two
+  paths running different iteration counts and still agreeing to the bit.
+  - **Landed on the scalar path**, where each solve exits as soon as its own parameter stops
+    moving: exact counts say **50.0%** of Newton iterations on an all-bézier outline and
+    **35.1%** on an engraving-shaped one are redundant. End to end that is only 1.09× and
+    1.01–1.03×, because Newton is under half of a kernel that is itself behind the
+    bounding-box reject — so the item's closing hint was right about the reject, just not
+    about the correctness cost.
+  - **Declined on the vector path.** A block exits only when its SLOWEST lane does, and ~30%
+    of solves never reach an exact fixed point within the eight steps, so the max over four
+    lanes is ~7.5 of 8 — about 6%, bought with three extra vector ops and a branch per
+    iteration. Measured **0.99–1.03×**: nothing, one case a slight loss.
+  - **The general lesson, which Item "arc certainty band" reached independently**: block
+    granularity destroys per-lane savings, so an early exit that pays in scalar code usually
+    does not vectorize. Worth reaching for before writing the next masked early-out.
+  - Measurement note worth keeping: the first A/B used a MEAN over two passes and the same
+    reject-dominated fixture measured **1.59× then 0.77×** on identical code — a 2× swing
+    *within one sitting*. A minimum over four passes is the right estimator for a
+    deterministic workload that scheduling noise can only slow down, and it collapsed that
+    column to a stable 1.01×.
+- ~~**The lane-wise arc kernel gives a whole block back to the scalar path when any one
+  lane is inside the wedge certainty band.**~~ ❌ **measured and declined** —
+  `SketchRegionBenchmark.ArcCertaintyBandCost` holds the measurement so nobody redoes it.
+  **The scenario this entry named as the reason to build it is the scenario per-lane
+  blending cannot help**: sampling *along* a boundary makes every lane uncertain for the arc
+  being traced, so there is nothing left to keep vectorized and blending recovers exactly
+  zero. Nor is it a cliff, because the fallback is per SEGMENT — only the traced arc
+  degrades while the rest of the sketch vectorizes as usual, measured `batch/scalar`
+  2.48× → **1.45×**, not → 1. Blending only pays on a block with SOME uncertain lanes, which
+  took deliberate construction to produce (sample stride aligned to the register width,
+  four arcs' boundaries visited in rotation: 1.05×) and which a scan line structurally
+  cannot generate, its consecutive samples being collinear and so meeting one boundary
+  rather than four. Detail worth keeping: the band covers the LINE through the centre, not
+  the forward ray (`c₀ = f × o` vanishes both ways), so a horizontal scan line at a rounded
+  rectangle's corner-centre height lands in two arcs' bands at once — that is the realistic
+  version, it is what the 1.45× row measures, and blending buys nothing in it either.
 
 ## Interop / meshing (EngrCAD.Interop)
 
@@ -465,13 +496,21 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     bézier's or an ellipse's nearest-point is itself a solve, so the residual would need
     its own foot parameter as a VARIABLE — which is the standard treatment and is real
     work rather than a reuse. Filed with the bézier tangency it shares a mechanism with.
-- [ ] **A lane-wise `SketchRegion` kernel for elliptical arcs.** Every other segment kind
-  has one; an ellipse lands in the `General` tier because its distance is `Curve2d`'s
-  64-sample scan plus bracketed Newton (point-to-ellipse is a quartic root, so there is
-  no closed form to transcribe). The batch contract is the strong one — bit-identical to
-  the scalar path — so a kernel here must reproduce that scan and its Newton stop exactly,
-  the way `CubicMinimum`'s sticky per-lane mask does. Measure before building: the
-  bounding-box reject already fronts it.
+- ~~**A lane-wise `SketchRegion` kernel for elliptical arcs.**~~ ✅ **done** —
+  `EllipseData`/`EllipseRefine`/`EllipseMinimum` in `SketchRegion.cs`. Measured
+  **5.4–6.5×** on the batch entry over two elliptical profiles (one-process A/B over the
+  new internal `ellipseKernel` seam). The interesting part is the split: the scalar column,
+  which contains no SIMD, carries **4.2–5.6×** of it purely from baking the 65 scan points
+  and hoisting the Newton step's cosine/sine pair, while SIMD adds only **1.18–1.24×** on
+  top — the scan vectorizes, the refinement cannot, and once the scan is baked the
+  refinement is most of what is left. It cannot, because `Vector.Cos`/`Vector.Sin` are not
+  bit-identical to the scalar ones (measured: 11 858 / 19 172 of 200 000 differ, one ulp).
+  - [ ] **The refinement is still scalar per lane, and only a bit-exact vector
+    cosine/sine would change that.** Not worth writing one: a correctly-rounded vector
+    `sin`/`cos` is a substantial numerics project, and the measurement above says the
+    ceiling it would buy is the ~1.2× the vectorized scan already demonstrates, on the one
+    segment kind that is rarest in real sketches. Filed so the next reader does not
+    re-derive the arithmetic — the barrier is exactness, not effort.
 - [ ] **Adopt biarc fits somewhere** (`BiArcFit.TryFitPolyline` ✅ landed and exercised,
   but nothing calls it). Candidates: an opt-in `SurfaceIntersection` post-pass (tracer
   polyline → arc chain when the deviation clears a caller tolerance), `StepWriter`

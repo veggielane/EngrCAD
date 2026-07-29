@@ -285,9 +285,13 @@ internal sealed class ArcSeg(Vector2d center, double radius, double startAngle, 
 /// so <see cref="Distance"/> delegates to the shared <see cref="Curve2d"/> scan-and-Newton
 /// rather than restating it — the segment and the 2D curve family then agree by
 /// construction, which is the rule the repo keeps re-learning the hard way. That makes an
-/// elliptical sketch's field the one member of the family whose per-sample cost is a
-/// 64-point scan, so it lands in <c>SketchRegion</c>'s <c>General</c> tier (behind the
-/// bounding-box reject) and is a documented follow-up for a lane kernel.</para>
+/// elliptical sketch's field the most expensive member of the family per sample, a 65-point
+/// scan plus a bracketed Newton. <c>SketchRegion</c> now carries its own kernel for it
+/// (<c>EllipseData</c>/<c>EllipseRefine</c>): the scan parameters are the same for every
+/// query, so it bakes their curve points and hoists the Newton step's cosine/sine pair,
+/// which is bit-exact memoization rather than a different method. That kernel transcribes
+/// <em>this</em> delegation, so the two are held bit-equal by test — if the shared solve
+/// changes, the transcription must follow.</para>
 /// </remarks>
 internal sealed class EllipseSeg : SketchSegment
 {
