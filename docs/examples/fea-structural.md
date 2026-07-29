@@ -285,9 +285,10 @@ That advisory helps the second run and not the first, so every solve entry point
 Core's optional trailing `ProgressCancel`:
 
 ```csharp
-using var source = new CancellationTokenSource();   // wire to a Cancel button
-var results = StructuralSolver.Solve(
-    model, null, new ProgressCancel(source.Token, fraction => bar.Value = fraction));
+using var source = new CancellationTokenSource();   // wire this to a Cancel button
+var watch = new ProgressCancel(source.Token, fraction => Console.WriteLine($"{fraction:P0}"));
+
+var results = StructuralSolver.Solve(model, null, watch);
 ```
 
 Cancellation reaches `SparseCholesky.Factorize`'s per-column elimination loop, which is the

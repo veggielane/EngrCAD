@@ -677,7 +677,9 @@ Every solve entry point takes Core's optional trailing `ProgressCancel`:
 
 ```csharp
 using var source = new CancellationTokenSource();
-var results = StructuralSolver.Solve(model, null, new ProgressCancel(source.Token, f => bar.Value = f));
+var watch = new ProgressCancel(source.Token, fraction => Console.WriteLine($"{fraction:P0}"));
+
+var results = StructuralSolver.Solve(model, null, watch);
 ```
 
 `StructuralSolver.Solve`, `ThermalSolver.Solve` / `SolveTransient`, `ModalSolver.Solve` and

@@ -718,7 +718,10 @@ public static class StructuralSolver
         // Whether ANY case prescribes a nonzero displacement, decided once: the whole inner
         // prescribed-column branch is dead for the overwhelmingly common model whose supports
         // are all at zero, and hoisting the question keeps a multi-case run from paying for
-        // a per-case gather it will not read.
+        // a per-case gather it will not read. Exact-zero comparison, deliberately and for the
+        // same reason the inner branch already used one: "was a value stated" is a semantic
+        // test, not a measurement, and a tolerance would decide that a 1e-12 mm prescribed
+        // settlement is no settlement at all.
         bool anyPrescribed = false;
         for (int c = 0; c < caseCount && !anyPrescribed; c++)
         {
