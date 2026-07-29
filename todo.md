@@ -86,6 +86,19 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   only ever projects near-surface points, but it is why this must not be offered as a
   general closest-point query. A real one would need the field's own structure (a CSG walk
   that knows which branch is a real face there), not more iterations.
+  **Scoped** (assessed, not built): the walk is *candidate generation plus a membership
+  filter*, and it needs one new virtual rather than a new algorithm. Give `Sdf` a
+  `TryClosestPoint(p, out c)` that primitives answer in closed form (sphere, box, cylinder,
+  torus, capsule, half-space all have one) and that operators answer by UNIONING their
+  children's candidates rather than by combining distances; then keep only the candidates
+  that are real points of the composed solid — a candidate `c` is real iff the whole field
+  reads `|d(c)| ≈ 0` there, which is exactly what a fictitious face fails (it sits strictly
+  inside removed or kept material) — and take the nearest survivor. That is exact for hard
+  CSG over closed-form primitives, and `MeshSdf` already has an exact answer of its own
+  (BVH nearest triangle). It does NOT cover smooth blends or offsets, whose surface belongs
+  to no child, so those keep the iterated gradient step — and the API must then report
+  WHICH answer the caller got, since an exact closest point and a converged-ish one are
+  different contracts and must not share a return type silently.
 - ~~**Surface Nets mesh ASSEMBLY is now the dominant cost, not sampling.**~~ ✅ **done, but
   not the way this entry proposed.** The grid does NOT give twins for free: a dual edge is
   a grid FACE and matching its up-to-four claimants needs a face table the streaming
@@ -251,9 +264,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 - [ ] **`Fitting3d.MinVolumeBox`'s per-family angle is a sweep + golden section, not an
   algebraic root solve** (the OBB itself ✅ landed). O'Rourke derives the critical angle in
   closed form; worth doing if a hull ever shows a minimum hiding in a bracket narrower
-  than the 3.75° sweep. The box always contains every input point regardless. Also: a
-  convenience overload in EngrCAD.Mesh (`MinVolumeBox(HalfEdgeMesh hull)`) would spare
-  callers the `ConvexHull.Compute(...).Triangulated().ToIndexed()` dance.
+  than the 3.75° sweep. The box always contains every input point regardless. (~~a
+  convenience overload in EngrCAD.Mesh~~ ✅ **landed** as `MeshFitting.MinVolumeBox(hull)`
+  / `MinVolumeBoxOf(points)`, asserted bit-identical to the hand-written
+  `Compute(...).Triangulated().ToIndexed()` dance.)
   **Correction worth remembering**: this item used to state, and `Fitting3d`'s own doc
   comment used to assert, that the minimum-volume box has a face flush with a hull face
   (Freeman–Shapira). That is FALSE in 3D — the regular tetrahedron on alternate corners
