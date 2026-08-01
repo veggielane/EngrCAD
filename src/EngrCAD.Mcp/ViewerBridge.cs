@@ -144,8 +144,25 @@ public sealed class ViewerTools(ViewerRpcClient client)
                 : "measure: no surface under one of the points");
 
     /// <summary>
+    /// Parks the running viewer's animation at a timeline position and pauses playback —
+    /// the live counterpart of the headless <c>screenshot</c> tool's <c>t</c>.
+    /// <para><b>Why a verb rather than a parameter on the capture.</b> The headless tool
+    /// re-evaluates <c>Animation.At(t)</c> for one instant and renders that; a running
+    /// window has its own playback position, so the only way to capture an instant is to
+    /// drive its transport there first. Splitting it also makes the two failures
+    /// distinguishable: "this window has no animation" and "the window produced no frame"
+    /// are different problems with different fixes.</para></summary>
+    public CallToolResult SetAnimationTime(
+        [Description("Timeline position 0..1 (clamped). Seeking pauses playback.")] double t) =>
+        Forward("set_animation_time", new JsonObject { ["t"] = t },
+            result => string.Create(CultureInfo.InvariantCulture,
+                $"viewer animation parked at t = {(double?)result?["t"] ?? t:G6} (playback paused)"));
+
+    /// <summary>
     /// Captures the running viewer's next rendered frame and returns it as an MCP
     /// <b>image block</b>, exactly as the headless <c>screenshot</c> tool does.
+    /// <para>An animation is driven by <see cref="SetAnimationTime"/> first — see there
+    /// for why the live capture cannot simply take a <c>t</c> of its own.</para>
     /// <para>This used to return a PATH and nothing else — a promise, since the window's
     /// capture happens on its next frame and the RPC handler had no edge to wait on. The
     /// endpoint now completes only once the PNG is on disk, so the bytes can simply be

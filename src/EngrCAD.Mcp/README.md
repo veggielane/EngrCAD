@@ -67,13 +67,24 @@ the model program runs separately with `--rpc <port>` (see the EngrCAD.Viewer RE
 — adding: `set_view`, `fit`, `set_section`, `set_view_style`, `set_display_mode`,
 `select_part`, `get_selection` (how an assistant learns what "this part" the user is
 pointing at means), `measure` (two viewport picks, returns the world points and
-distance, shows the transient dimension in the window), and `viewer_screenshot`
-(the window's own next-frame capture, returned as a PNG **image block** exactly as
-the headless `screenshot` does; the headless render stays `screenshot`).
+distance, shows the transient dimension in the window), `set_animation_time`, and
+`viewer_screenshot` (the window's own next-frame capture, returned as a PNG **image
+block** exactly as the headless `screenshot` does; the headless render stays
+`screenshot`).
 Without `--viewer` these tools are never advertised — a headless session does not
 offer tools it cannot honor. A dead or wrong endpoint is an `isError` naming the
 `--rpc` flag; connections are per-request, so a viewer restarted by `dotnet watch`
 just gets reconnected to.
+
+**An animation is DRIVEN, not passed as a parameter.** The headless `screenshot` takes a
+`t` and re-evaluates `Animation.At(t)` for that instant, which is exact by construction.
+A running window cannot work that way: it has its own playback position, and a capture
+arrives a frame later — so `set_animation_time` parks the window's transport at `t` and
+**pauses** it (reported as `"playing": false`), after which `viewer_screenshot` captures
+that instant. Splitting it into a verb also keeps two different failures apart: "this
+window has no animation" (the host never called `WithAnimation`) and "the window produced
+no frame" want opposite responses, and a `t` parameter on the capture would collapse them
+into one message.
 
 Failures come back as `isError` results with a readable message — "No part named
 'flage'. Parts in this scene: Model/flange, …" — never as protocol errors. An

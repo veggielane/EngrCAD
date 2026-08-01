@@ -976,9 +976,9 @@ Opt-in, off by default: `WithRemoteControl(port, token)` (or `--rpc [port]`, plu
 newline-delimited JSON-RPC 2.0 once the window opens — the actual port is reported in
 the log (event 70) and the status bar. Methods: `ping`, `list_parts`, `set_view`,
 `fit`, `set_section`, `set_display_mode`, `set_view_style`, `select_part`,
-`get_selection`, `measure`, `screenshot`. The MCP server bridges to it from a separate
-process (`EngrCadMcp.Run` with `--mcp --viewer <port>`), which is how an AI assistant
-drives the window the user is looking at.
+`get_selection`, `measure`, `set_animation_time`, `screenshot`. The MCP server bridges to
+it from a separate process (`EngrCadMcp.Run` with `--mcp --viewer <port>`), which is how
+an AI assistant drives the window the user is looking at.
 
 Three layers in `RemoteControl.cs`, separable on purpose: `RemoteControlServer`
 (transport: framing, the token gate, error envelopes — binds `IPAddress.Loopback`
@@ -986,9 +986,48 @@ with no way to bind wider), `RemoteViewerDispatcher` (the method vocabulary over
 `IRemoteViewer`, pure translation), and `ViewportRemoteViewer` (the only layer that
 knows Avalonia — **every call marshals through `Dispatcher.UIThread`**, and GL is
 never touched from the RPC thread: `screenshot` rides
-`ViewportControl.CaptureScreenshotAsync`'s capture-on-next-frame path). Transport and
-vocabulary are locked by headless tests over real sockets with a stub viewer; only the
-thin `ViewportRemoteViewer` wiring needs a live window.
+`ViewportControl.CaptureScreenshotAsync`'s capture-on-next-frame path).
+
+`set_animation_time` is the one verb a viewport cannot answer on its own: playback state
+lives on `SceneHost` (which owns the transport widgets and the timer), so the host passes
+`ViewportRemoteViewer` a **seek delegate** rather than the class reaching for a chrome
+type it is deliberately independent of. It is read through the static `EngrCad.Host` on
+every call and not captured, because a live reload re-arms the transport and a delegate
+bound to one `AnimationPlayback` would go on seeking a timeline the window has left. The
+seek **pauses**, and the answer says so — see the MCP README for why that is the point
+rather than a side effect.
+
+### Testing it: what is headless, and the one leg that is not
+
+Transport and vocabulary are locked over **real sockets with a stub viewer**
+(`ViewerBridgeTests`). `ViewportRemoteViewer`'s own contract is locked against a **real
+`ViewportControl`** (`ViewportRemoteViewerTests`) — which works because a control
+constructs perfectly well with no Avalonia application, no window and no GL context, and
+one that will never be rendered **is** the fixture the screenshot deadline exists for.
+That covers the arm-on-UI-thread / wait-off-it split, the deadline, an unwritable path
+surfacing its own failure rather than a timeout, and the armed capture being claimed
+exactly once (`ViewportControl.TakePendingScreenshot` is that claim, a method rather than
+an `Interlocked.Exchange` written inline in the render pass, so a test can play the render
+pass and hand the capture to `WriteCapture`).
+
+What genuinely needs a window is a real GL render pass reaching that claim, plus a live
+dispatcher servicing the marshaled calls. `WindowedRpcTests` in `EngrCAD.Mcp.Tests` drives
+exactly that: a child process running `--view --rpc 0`, the port read off the log line,
+the whole bridge exercised over its socket, and the frame returned as PNG bytes. It is
+**opt-in** (`ENGRCAD_WINDOWED_TESTS=1`) because it opens a desktop window and stealing
+focus on every `dotnet test` is a real cost for a leg that changes rarely:
+
+```
+$env:ENGRCAD_WINDOWED_TESTS = "1"
+dotnet test tests/EngrCAD.Mcp.Tests --filter WindowedRpcTests
+```
+
+One property it measured that no stub can show: **`list_parts` is empty until the first
+frame renders.** The instances a host hands to `SetInstances` are queued and swapped in by
+the render pass, while the port is announced from `OnViewportReady` — so a client
+connecting the instant it sees the port legitimately sees nothing. Reporting the *pending*
+list instead would desynchronize it from the indices `select_part` and `set_display_mode`
+address, so the test retries rather than the viewport lying.
 
 **`screenshot` waits for the frame, and the split of duties is deliberate.** Arming the
 capture is UI-thread work (it posts a render request); *waiting* is not, and must not be

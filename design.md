@@ -3116,6 +3116,34 @@ for `in`-parameters being illegal in expression trees.
   characteristic (including genus: torus 0, plate-with-two-holes −2).
 - Tolerances in tests are derived from the discretization (e.g. chord error), not
   hand-tuned magic numbers, so failures mean something.
+- **"It takes a concrete type, so there is nothing to substitute" is a claim about the
+  TYPE, and the thing to check is what an instance of it actually needs.** The viewer's
+  remote-control screenshot path carried that verdict for a long time —
+  `ViewportRemoteViewer` takes a `ViewportControl`, therefore only a real window could
+  exercise it — and it was wrong twice over. A `ViewportControl` constructs perfectly well
+  with no Avalonia application, no window and no GL context; and an instance that will
+  never be rendered is not a poor imitation of the real thing but *exactly* the fixture the
+  screenshot deadline exists for, since "no frame ever arrives" is precisely its state. The
+  arm-on-UI-thread / wait-off-it split, the deadline, an unwritable path surfacing its own
+  failure rather than a timeout, and the armed capture being claimed exactly once are all
+  headless as a result. **Before writing an interface to make something testable, construct
+  the concrete type and see what it does** — an extracted interface is a design change, and
+  it is the more expensive answer when the cheap one works.
+- **What genuinely needs the real thing should then be named narrowly, and driven by the
+  product's own vocabulary rather than by synthetic input.** What was left after the above
+  is a GL render pass and a live dispatcher, so the windowed test is a child process on
+  `--view --rpc 0` driven through the remote-control endpoint — which answers with values
+  instead of pixels, needs no window handles, and exercises the bridge on the way. This
+  repo's recorded `SendInput` harness (synthetic clicks reaching Avalonia's pointer stack)
+  is the right tool for the *pointer bindings*, and the wrong one for everything a verb can
+  express. Such a test is opt-in (`ENGRCAD_WINDOWED_TESTS=1`) because opening a desktop
+  window on every run is a real cost; the point is that "once per release, by hand" becomes
+  one command.
+- **A live-window test measures things an in-process one cannot, and that is its whole
+  value — expect it to find something.** It did: `list_parts` answers `[]` until the first
+  frame renders, because instances handed to `SetInstances` are queued and swapped in *by*
+  the render pass while the RPC port is announced from `OnViewportReady`. No stub can show
+  that, and no unit test was ever going to.
 
 ## 9. Further capabilities
 

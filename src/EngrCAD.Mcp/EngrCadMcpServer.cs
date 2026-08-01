@@ -365,6 +365,16 @@ public static class EngrCadMcpServer
                             + "both world points and their distance.",
                 ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
             }),
+            McpServerTool.Create(tools.SetAnimationTime, new McpServerToolCreateOptions
+            {
+                Name = "set_animation_time",
+                Title = "Park the viewer's animation",
+                Description = "Seeks the running viewer's animation to a timeline position "
+                            + "(t = 0..1) and pauses playback, so a following viewer_screenshot "
+                            + "captures that instant. The headless screenshot tool takes t "
+                            + "directly; a live window has its own clock, so it has to be driven.",
+                ReadOnly = false, Destructive = false, Idempotent = true, OpenWorld = false,
+            }),
             McpServerTool.Create(tools.Screenshot, new McpServerToolCreateOptions
             {
                 Name = "viewer_screenshot",

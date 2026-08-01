@@ -106,7 +106,12 @@ public static class EngrCad
         var log = EngrCadLoggers.Resolve(options);
         try
         {
-            var handler = RemoteViewerDispatcher.For(new ViewportRemoteViewer(viewport), options.Title);
+            // The seek is read through the static Host each call rather than captured:
+            // a live reload rebuilds the transport (ArmAnimation), so a delegate bound to
+            // one AnimationPlayback would go on seeking a timeline the window has left.
+            var remoteViewer = new ViewportRemoteViewer(
+                viewport, seekAnimation: t => Host?.SeekAnimation(t));
+            var handler = RemoteViewerDispatcher.For(remoteViewer, options.Title);
             var server = new RemoteControlServer(handler, rpc.Port, rpc.Token);
             int port = server.Start();
             Log.RemoteControlListening(log, port, rpc.Token is null ? "" : " (token required)");

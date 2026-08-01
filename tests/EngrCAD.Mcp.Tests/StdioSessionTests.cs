@@ -365,20 +365,5 @@ public class StdioSessionTests
     private static int CountResponses(List<string> lines) =>
         lines.Count(l => JsonNode.Parse(l) is JsonObject frame && frame["id"] is not null);
 
-    /// <summary>Locates the built test-model program. The tests project references it
-    /// with <c>ReferenceOutputAssembly="false"</c>, so it is built beside us but not
-    /// copied in.</summary>
-    private static string TestModelExecutable()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && directory.Name != "tests")
-            directory = directory.Parent;
-        Assert.NotNull(directory);
-
-        string name = OperatingSystem.IsWindows() ? "EngrCAD.Mcp.TestModel.exe" : "EngrCAD.Mcp.TestModel";
-        var candidates = Directory.GetFiles(
-            Path.Combine(directory.FullName, "EngrCAD.Mcp.TestModel"), name, SearchOption.AllDirectories);
-        Assert.True(candidates.Length > 0, $"'{name}' was not built under {directory.FullName}");
-        return candidates.OrderByDescending(File.GetLastWriteTimeUtc).First();
-    }
+    private static string TestModelExecutable() => TestModelProgram.Executable();
 }
