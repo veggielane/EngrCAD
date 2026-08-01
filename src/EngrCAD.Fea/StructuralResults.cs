@@ -47,6 +47,9 @@ public sealed class StructuralResults
     private readonly Vector3d[] _reaction;
     private SymmetricTensor3[]? _nodalStress;
     private double[]? _nodalVonMises;
+    private SymmetricTensor3[]? _averagedStress;
+    private SuperconvergentRecovery.RecoveredStress? _recovered;
+    private ErrorEstimate? _errorEstimate;
 
     // Not thread-safe: the two lazy caches below are unsynchronised, so a first read from
     // several threads would recompute rather than corrupt, but would waste the work. A
@@ -156,8 +159,34 @@ public sealed class StructuralResults
             field = value;
             _nodalStress = null;
             _nodalVonMises = null;
+            _averagedStress = null;
         }
     } = NodalAveraging.VolumeWeighted;
+
+    /// <summary>
+    /// Which recovery <see cref="NodalStress"/> reports. <see cref="StressRecovery.Direct"/>
+    /// is the default, so nothing about an existing result moves.
+    ///
+    /// <para><see cref="StressRecovery.Superconvergent"/> converges one order faster and
+    /// costs a small least-squares solve per corner node. It is not the default for the
+    /// reason `FeaSolveMethod.Direct` is not: every verification figure this project quotes
+    /// was measured through the simple path, and making the better answer the default would
+    /// silently change every one of them. It is also NOT better everywhere — a recovered
+    /// field is smooth by construction, so at a genuine discontinuity (a material interface,
+    /// a re-entrant corner) it smooths harder than averaging does.</para>
+    /// </summary>
+    public StressRecovery Recovery
+    {
+        get;
+        set
+        {
+            if (field == value)
+                return;
+            field = value;
+            _nodalStress = null;
+            _nodalVonMises = null;
+        }
+    } = StressRecovery.Direct;
 
     /// <summary>Strain at the centroid of one element. <b>Tensor</b> shear components
     /// (e_xy), not the engineering shear (g_xy = 2·e_xy) the Voigt form carries
@@ -196,8 +225,31 @@ public sealed class StructuralResults
         return StressAt(element, r, s, t);
     }
 
-    /// <summary>Averaged stress at every node.</summary>
-    public IReadOnlyList<SymmetricTensor3> NodalStress => _nodalStress ??= ComputeNodalStress();
+    /// <summary>The nodal stress field, by whichever <see cref="Recovery"/> is selected.</summary>
+    public IReadOnlyList<SymmetricTensor3> NodalStress =>
+        _nodalStress ??= Recovery == StressRecovery.Direct
+            ? AveragedStress
+            : RecoveredNodalStress.Stress;
+
+    /// <summary>The directly averaged nodal stress, whatever <see cref="Recovery"/> says —
+    /// the fallback the recovery itself uses, and the field the error estimator's residual
+    /// is measured against having replaced.</summary>
+    private SymmetricTensor3[] AveragedStress => _averagedStress ??= ComputeNodalStress();
+
+    private SuperconvergentRecovery.RecoveredStress RecoveredNodalStress =>
+        _recovered ??= SuperconvergentRecovery.Recover(this, AveragedStress);
+
+    /// <summary>
+    /// The Zienkiewicz-Zhu error estimate: the energy-norm distance between the element
+    /// stress field and its superconvergent recovery, per element and overall.
+    ///
+    /// <para>Always computed from the RECOVERED field, whatever <see cref="Recovery"/> is
+    /// set to, because that is what makes it an estimator: the recovered field is a better
+    /// approximation than the finite-element one, so the gap between them estimates the
+    /// error in the finite-element one. Using the averaged field instead is the older and
+    /// markedly weaker form of the same idea.</para>
+    /// </summary>
+    public ErrorEstimate ErrorEstimate => _errorEstimate ??= ComputeErrorEstimate();
 
     /// <summary>Averaged von Mises stress at every node — what a colour map shows.</summary>
     public IReadOnlyList<double> NodalVonMises
@@ -314,7 +366,7 @@ public sealed class StructuralResults
         Span<double> strain = stackalloc double[6];
         TetElement.StrainAt(Mesh.Order, positions, nodalDisplacements, r, s, t, strain);
         SubtractThermalStrain(element, r, s, t, strain);
-        Model.MaterialOf(element).Stress(strain, stress);
+        Model.ElasticityOf(element).Stress(strain, stress);
     }
 
     /// <summary>
@@ -339,10 +391,17 @@ public sealed class StructuralResults
     {
         if (Model.ThermalDeltaT is not { } deltaT)
             return;
+        var law = Model.ElasticityOf(element);
         double expansion = Model.MaterialOf(element).ThermalExpansion;
+        // The same two-part branch the LOAD takes: an expansion stated on the law wins over
+        // the material's scalar whether or not the law is elastically isotropic, and the
+        // scalar route is legal only for an isotropic law, whose Lame parameters ARE the
+        // material's. The anisotropic-law-with-a-material-scalar case is refused at the
+        // load, so it cannot reach here.
+        bool scalar = law.IsIsotropic && !law.StatesOwnThermalExpansion;
         // Exact-zero semantic test, matching the load: no stated expansion, no thermal
         // strain to remove.
-        if (expansion == 0)
+        if (scalar ? expansion == 0 : !law.HasThermalStrain)
             return;
 
         int perElement = Mesh.NodesPerElement;
@@ -351,12 +410,23 @@ public sealed class StructuralResults
         for (int i = 0; i < perElement; i++)
             values[i] = deltaT[nodes[i]];
 
-        double thermal = expansion
-            * ThermalElement.InterpolateAt(Mesh.Order, values[..perElement], r, s, t);
-        strain[0] -= thermal;
-        strain[1] -= thermal;
-        strain[2] -= thermal;
-        // Shear is untouched: an isotropic material's thermal strain is a pure dilatation.
+        double rise = ThermalElement.InterpolateAt(Mesh.Order, values[..perElement], r, s, t);
+        if (scalar)
+        {
+            double thermal = expansion * rise;
+            strain[0] -= thermal;
+            strain[1] -= thermal;
+            strain[2] -= thermal;
+            // Shear is untouched: an isotropic material's thermal strain is a pure dilatation.
+            return;
+        }
+
+        // A directional expansion rotated off its own axes has SHEAR components, so all six
+        // are subtracted. The law is asked for the vector rather than the vector being
+        // rebuilt here, so the strain removed and the load applied come from one number.
+        var free = law.ThermalStrainPerDegree;
+        for (int i = 0; i < 6; i++)
+            strain[i] -= free[i] * rise;
     }
 
     /// <summary>
@@ -397,6 +467,124 @@ public sealed class StructuralResults
         }
     }
 
+    private ErrorEstimate ComputeErrorEstimate()
+    {
+        var recovered = RecoveredNodalStress;
+        int perElement = Mesh.NodesPerElement;
+        // The integrand is the SQUARE of a difference between a degree-p field and a
+        // degree-(p-1) one, i.e. degree 2p; the rule is chosen to be exact for it rather
+        // than reused from the stiffness, whose 2(p-1) would under-integrate the estimate
+        // and make it look better than it is.
+        var rule = Mesh.Order == ElementOrder.Linear
+            ? TetQuadrature.Degree3
+            : TetQuadrature.Degree5;
+
+        var perElementError = new double[Mesh.ElementCount];
+        double totalError = 0, totalEnergy = 0;
+
+        Span<Vector3d> positions = stackalloc Vector3d[10];
+        Span<double> ue = stackalloc double[30];
+        Span<double> stress = stackalloc double[6];
+        Span<double> smooth = stackalloc double[6];
+        Span<double> shape = stackalloc double[10];
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+
+        for (int e = 0; e < Mesh.ElementCount; e++)
+        {
+            Gather(e, positions, ue);
+            var compliance = Model.ElasticityOf(e).ComplianceMatrix;
+            var nodes = Mesh.Element(e);
+            double error = 0, energy = 0;
+
+            for (int q = 0; q < rule.Count; q++)
+            {
+                var (r, s, t) = rule.Point(q);
+                if (!TetElement.ShapeGradients(
+                        Mesh.Order, positions[..perElement], r, s, t, grad, out double detJ))
+                    continue;
+                double weight = rule.Weight(q) * detJ;
+                TetElement.ShapeValues(Mesh.Order, r, s, t, shape);
+
+                VoigtStressAt(e, positions[..perElement], ue[..(3 * perElement)], r, s, t, stress);
+
+                // The recovered field INSIDE the element is its nodal values interpolated by
+                // the element's own shape functions, which is what makes the two fields
+                // comparable pointwise rather than only at the nodes.
+                smooth.Clear();
+                for (int i = 0; i < perElement; i++)
+                {
+                    var value = recovered.Stress[nodes[i]];
+                    double n = shape[i];
+                    smooth[0] += n * value.Xx;
+                    smooth[1] += n * value.Yy;
+                    smooth[2] += n * value.Zz;
+                    smooth[3] += n * value.Xy;
+                    smooth[4] += n * value.Yz;
+                    smooth[5] += n * value.Xz;
+                }
+
+                error += weight * ComplianceNorm(compliance, smooth, stress);
+                energy += weight * ComplianceNorm(compliance, stress, default);
+            }
+
+            perElementError[e] = Math.Sqrt(Math.Max(0, error));
+            totalError += error;
+            totalEnergy += energy;
+        }
+
+        double errorNorm = Math.Sqrt(Math.Max(0, totalError));
+        double energyNorm = Math.Sqrt(Math.Max(0, totalEnergy));
+        // The classical ZZ normalisation: the estimated error over the estimated norm of the
+        // EXACT solution, which is the finite-element norm plus the error rather than the
+        // finite-element norm alone. At the coarse end the difference is not small.
+        double denominator = Math.Sqrt(totalEnergy + totalError);
+        double relative = denominator > 0 ? errorNorm / denominator : 0;
+
+        // NOTHING was recovered, so the "error" is the distance from the finite-element
+        // field to itself. Reporting that as a number would say the mesh is perfect on
+        // exactly the mesh too coarse to assess — measured on a 24-element box with no
+        // interior corner node at all: 9.9e-15 against a true error of 0.31. NaN is the
+        // established spelling here for "not small, UNKNOWN" (HarmonicResponse's truncation
+        // error without a static solution), and it is the only answer that cannot be
+        // mistaken for good news.
+        if (recovered.FallbackNodes >= Mesh.NodeCount)
+        {
+            errorNorm = double.NaN;
+            relative = double.NaN;
+            Array.Fill(perElementError, double.NaN);
+        }
+
+        return new ErrorEstimate(
+            perElementError,
+            errorNorm,
+            energyNorm,
+            relative,
+            recovered.FallbackNodes,
+            recovered.RankDeficientPatches);
+    }
+
+    /// <summary>
+    /// <c>(a - b)' S (a - b)</c> with S the compliance — the energy inner product of a
+    /// stress difference. Passing an empty <paramref name="b"/> gives the norm of
+    /// <paramref name="a"/> itself, which is what the denominator wants.
+    /// </summary>
+    private static double ComplianceNorm(
+        ReadOnlySpan<double> compliance, ReadOnlySpan<double> a, ReadOnlySpan<double> b)
+    {
+        Span<double> d = stackalloc double[6];
+        for (int i = 0; i < 6; i++)
+            d[i] = b.IsEmpty ? a[i] : a[i] - b[i];
+        double sum = 0;
+        for (int i = 0; i < 6; i++)
+        {
+            double row = 0;
+            for (int j = 0; j < 6; j++)
+                row += compliance[i * 6 + j] * d[j];
+            sum += d[i] * row;
+        }
+        return sum;
+    }
+
     private SymmetricTensor3[] ComputeNodalStress()
     {
         int perElement = Mesh.NodesPerElement;
@@ -412,7 +600,7 @@ public sealed class StructuralResults
         {
             var nodes = Mesh.Element(e);
             Gather(e, positions, ue);
-            var material = Model.MaterialOf(e);
+            var law = Model.ElasticityOf(e);
             double weight = Averaging == NodalAveraging.VolumeWeighted ? Mesh.ElementVolume(e) : 1.0;
             if (!(weight > 0))
                 continue;
@@ -428,7 +616,7 @@ public sealed class StructuralResults
                 // asked for, not restated, which is what keeps nodal and element stress
                 // from disagreeing under a thermal load.
                 SubtractThermalStrain(e, r, s, t, strain);
-                material.Stress(strain, stress);
+                law.Stress(strain, stress);
                 accumulated[nodes[i]] += TetElement.ToTensor(stress, engineeringShear: false) * weight;
                 weights[nodes[i]] += weight;
             }

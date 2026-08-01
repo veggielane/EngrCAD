@@ -1023,14 +1023,27 @@ conditions within 0.05–0.70% of the shear-corrected load, refinement monotone 
 `omega²(P)/omega²(0) = 1 + P/P_cr` to 7.4e-10, resonant amplification 25.006 against 25.000,
 half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Residuals below.
 
-- [ ] **FEA: a DIRECT (per-frequency) harmonic solve.** `(K − omega²M + i·omega·C)·u = f`
+- [ ] **FEA: a DIRECT (per-frequency) harmonic solve. BLOCKED ON `EngrCAD.Core.Solvers`, and
+  the blocking reason has been checked rather than assumed.** `(K − omega²M + i·omega·C)·u = f`
   factorized per frequency — hundreds of times a modal sweep, and the only option in three
   cases modal superposition structurally cannot express: non-proportional damping (the modes
   stop diagonalising C), material properties that vary WITH frequency (the modal basis itself
-  would change per point), and a load whose spatial distribution changes with frequency. Needs
-  a complex sparse factorization `EngrCAD.Core.Solvers` does not have. File it as a second
-  method rather than a better one — `HarmonicSolver`'s docs already state which questions
-  belong to it.
+  would change per point), and a load whose spatial distribution changes with frequency.
+  <br>**The obvious escape does not work, which is the finding.** The equivalent REAL form of a
+  complex system looks like a way to reuse the real solvers, and it is not: writing
+  `(A + iB)(x + iy) = f` out gives `[[A, -B],[B, A]]`, which is not symmetric; negating the
+  second block row to symmetrise it — `[[A, -B],[-B, -A]]` with right-hand side
+  `[f_r; -f_i]` — makes it symmetric and **INDEFINITE by construction**, its eigenvalues coming
+  in plus/minus pairs. Both of Core's solvers refuse it by name and correctly:
+  `SparseCholesky` needs positive definiteness (it throws on a nonpositive pivot, deliberately
+  a sign test rather than a tolerance) and `SparseSymmetricCG` needs it too. So this needs one
+  of three genuinely new pieces in Core — a real symmetric-indefinite `LDL^T` with
+  Bunch–Kaufman pivoting, a complex symmetric `LDL^T`, or an iterative method for complex
+  symmetric systems (COCG/QMR) — and it is a **Core item filed from Fea**, like
+  `Predicates3d.InSphere`'s allocation. Note also that the value is confined to the three cases
+  above: under PROPORTIONAL damping the direct solve and the modal one answer the same
+  question, so it buys nothing there, and the first of the three (non-proportional damping)
+  overlaps the quadratic-eigenproblem item below.
 - [ ] **FEA: non-proportional damping — the quadratic eigenproblem.** A discrete dashpot, two
   materials with different loss factors in one model, viscoelasticity or hysteretic damping all
   leave `phi' C phi` with off-diagonal terms, at which point the damped modes are no longer the
@@ -1043,10 +1056,25 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static
   response orthogonalised against the kept modes and added to the basis as a pseudo-mode, which
   also improves the response at non-zero frequencies rather than only at DC.
-- [ ] **FEA: base-acceleration (support motion) excitation for the harmonic sweep.** The modal
-  participation factors `ModalResults` already carries are exactly the modal forces of a unit
-  base acceleration, so this is a load-vector spelling rather than new mathematics; v1 takes
-  nodal forces only and says so.
+- [ ] **FEA: base-acceleration (support motion) excitation for the harmonic sweep.** The
+  central claim was CHECKED and holds: `VibrationMode.ParticipationFactor` is documented and
+  computed as `Gamma_d = phi' M iota_d` over the free degrees of freedom, and the modal force
+  of a unit base acceleration in RELATIVE coordinates is exactly `-Gamma_d`, so the sweep needs
+  a load-vector spelling and no new mathematics. Three things the entry did not say, all of
+  which have to be decided rather than discovered:
+  - **The answer is RELATIVE displacement, not absolute.** `M u'' + C u' + K u = -M·iota·a_g`
+    is written in coordinates measured from the moving support, which is the right quantity for
+    STRESS (a rigid ground motion carries none) and the wrong one for a plotted displacement.
+    Absolute is relative plus the rigid ground field, so both are available — but a
+    `HarmonicResponse` whose displacement silently changed meaning would be the worst outcome,
+    so the two must be named apart.
+  - **The influence vector is a rigid translation only when every support moves TOGETHER.**
+    With supports on different foundations it is the quasi-static response to a unit motion of
+    one support group, which is a static solve per group rather than a constant vector. v1
+    should take the uniform case and refuse the other by name.
+  - **A displacement-stated input scales as omega²**, so the vocabulary has to say whether the
+    caller is giving an acceleration, a velocity or a displacement amplitude; naming the method
+    after the acceleration and offering the other two as conversions is the honest shape.
 - [ ] **FEA: the buckling residual FLOOR, and whether a better residual measure removes it.**
   The measured relative residual is a total cancellation of `K phi` against `lambda Kg phi`, so
   its floor is `eps·kappa(K)` — worse than a modal solve's because `K^-1 Kg` does not SMOOTH
@@ -1097,18 +1125,69 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   that number, and finding out needs an arc-length (Riks) continuation over a geometrically
   nonlinear solve — a different solver, and the honest scope statement is already in
   `BucklingSolver`'s limitations rather than implied away.
-- [ ] **FEA: orthotropic and anisotropic materials.** `Material` is isotropic and the
-  assembly reads `Lambda`/`Mu` directly, which is the right inner loop for the common
-  case; a general law needs the full 6x6 constitutive matrix plus a material FRAME per
-  region (a laminate, a rolled plate, a printed part's layer direction — `Materials.Pla`
-  already carries the caveat that a printed part is not isotropic). The index-form
-  stiffness would fall back to `B' D B` for those elements only.
-- [ ] **FEA: superconvergent stress recovery.** Quadratic stress is evaluated directly AT
-  the nodes rather than extrapolated from the integration points, where it is
-  superconvergent. Measured effect on this project's verification cases is small (Kirsch
-  lands at -0.44% as it is), so it is a refinement rather than a defect; the natural form
-  is Zienkiewicz-Zhu patch recovery, which would also give a per-element error estimator
-  for free — and an error estimator is worth more than the accuracy it buys.
+- [ ] **FEA: laminate theory and directional failure criteria.** `ElasticLaw` landed
+  (orthotropic / transversely isotropic / fully anisotropic, with a material frame; see
+  design.md §3h), and it deliberately stops at the constitutive law. Two things a composite
+  user reaches for next, neither of which the law can supply. **(a) A LAMINATE is a stack of
+  plies at different angles**, and today that is either several mesh regions (which needs a
+  ply-thick element through the stack — expensive, and the mesher would have to be told to
+  put layers there) or a homogenised law the CALLER computes with classical lamination
+  theory. Doing it here means an `A`/`B`/`D` matrix vocabulary and a decision about whether a
+  solid element can represent bending-extension coupling at all, which it cannot without
+  through-thickness resolution — so the honest first step is a `LaminateStack` that produces
+  a homogenised `ElasticLaw` and SAYS what it dropped. **(b) `MaxVonMises` on a composite
+  part is a number with no engineering meaning** — a directional material fails by Tsai-Wu,
+  Hashin or maximum strain against per-direction allowables, all of which want the stress
+  resolved in the MATERIAL frame, which `ElasticLaw` knows and `StructuralResults` does not
+  ask it for. That is a post-processing vocabulary (`ElasticLaw.ToMaterialFrame(stress)` plus
+  a `FailureCriterion` with its allowables) rather than a solver change, and it is the more
+  valuable of the two.
+- [ ] **FEA: an anisotropic region's thermal CONDUCTIVITY is still a scalar.** `ElasticLaw`
+  carries directional stiffness and directional expansion, but `ThermalElement.Conductivity`
+  reads `Material.ThermalConductivity`, so a carbon laminate conducts isotropically in a
+  conduction solve while straining orthotropically in a structural one — the two halves of
+  one part disagreeing about what it is made of. The fix has the same shape as the elastic
+  one and is much smaller (a 3x3 conductivity tensor rotated once at construction, and the
+  element integrand becomes `grad N_a · k · grad N_b` instead of `k · grad N_a · grad N_b`),
+  but it wants a decision first: a *thermal* law is a different object from an elastic one
+  and putting both on `ElasticLaw` would make the name a lie, while a second per-region
+  dictionary is a second place a frame can be stated inconsistently. Probably one
+  `MaterialLaw` carrying both, with `ElasticLaw` as its elastic half.
+- [ ] **FEA: ADAPTIVE refinement, now that there is something to refine against.**
+  `StructuralResults.ErrorEstimate` gives a per-element energy-norm error (design.md §3i),
+  which is exactly the map an adaptive loop consumes — and the loop itself is the thing
+  nobody has built: solve, estimate, choose a target size field from the element errors
+  (the standard rule is `h_new = h_old · (target/e_local)^(1/p)` for an equidistributed
+  error), re-mesh, repeat until the global figure is under a stated tolerance. Two things
+  make it more than a for-loop here. **(a) `TetMesher` re-meshes from the SURFACE**, so
+  every pass throws away the volume mesh and its boundary recovery rather than refining in
+  place; a `SizingField` from the previous pass's errors is the cheap route and it needs the
+  errors mapped from the old elements onto a spatial field (an `Sdf`-shaped
+  `Func<Vector3d,double>` over a BVH of the old mesh, which is a small piece of work). **(b)
+  The stopping rule wants a decision**: a global 5% target is the textbook one, but a model
+  with a genuine singularity — a re-entrant corner, a point load — never reaches it and the
+  honest loop caps the passes and REPORTS the figure it stalled at rather than refining
+  forever. That is the same shape as the boundary-recovery non-convergence detection.
+- [ ] **FEA: superconvergent recovery on tetrahedra does not reach full p+1, and the cap is
+  unmeasured.** The quadratic recovered rate settles at **2.76** against a theory of 3
+  (linear reaches 2.30 against 2), reported honestly rather than rounded up. Two candidate
+  causes and no measurement separating them: the boundary FILL extrapolates a patch
+  polynomial to nodes outside its own elements, which is second-order accurate in the
+  extrapolation distance and could plausibly cost the difference; and the superconvergence
+  theory itself is weaker on simplices than on hexahedra, where SPR was developed — on a
+  tetrahedral mesh the Gauss points are not the tensor-product Barlow points and the p+1
+  claim is asymptotic at best. Separating them is a measurement, not a redesign: run the
+  same study on a mesh whose boundary is far from the region being measured (an interior
+  sub-domain norm), and if the rate rises to 3 the fill is the cap.
+- [ ] **FEA: recovery-based smoothing for a MATERIAL INTERFACE is wrong and is not refused.**
+  A recovered field is smooth by construction, so a patch straddling two regions fits one
+  polynomial across a genuine stress discontinuity and reports a value that is wrong on both
+  sides. Direct averaging has the same defect and the README says so, but recovery makes it
+  worse, and the fix is standard and small: assemble patches PER REGION, so a patch never
+  spans a material boundary and an interface node gets one value per region it touches. That
+  needs a decision about what a single nodal value then means (`NodalStress` is indexed by
+  node, so two values per node has nowhere to go) — most likely per-region nodal fields, the
+  same shape as the per-region laws.
 - [ ] **FEA: the factorization is the wall, and it is Core's to move.** In Release the
   cost is overwhelmingly `SparseCholesky`: at 46 800 DOF a linear solve measures 323 ms to
   assemble, **79 009 ms to factor**, 249 ms to substitute and 45 ms to recover stress. The

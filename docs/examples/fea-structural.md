@@ -157,6 +157,125 @@ elements.
 > a bonded bi-material part is meshed as one surface with one material, and `AnalysisBody`
 > serves genuinely separate bodies analysed together.
 
+## Directional materials — orthotropic and anisotropic
+
+A laminate, a rolled plate and a printed part are all stiffer in one direction than
+another, and `Material` cannot say so: it is an *isotropic* description, and it lives in
+`EngrCAD.Core` because a bill of materials and a viewer need it too. **`ElasticLaw` sits
+beside it rather than replacing it** — the law supplies the elasticity (and, if it states
+one, the directional thermal expansion), while density, name and the thermal transport
+properties still come from the `Material`, so a modal solve of a composite part integrates
+the same density a BOM weighs it with.
+
+The frame is the other half of the statement, and it is deliberately an input to the law
+rather than a property of the material: *which way the fibres run in this part* is not a
+property of the stuff.
+
+```csharp run:fea-orthotropic-lamina
+// A unidirectional carbon/epoxy lamina - nominal figures, verify against a datasheet.
+const double e1 = 135_000, e2 = 9_000, nu12 = 0.30, nu23 = 0.45, g12 = 4_800;
+
+// Fibres at 30 degrees to the bar's axis, in the XY plane.
+double angle = 30 * Math.PI / 180;
+var fibreFrame = Frame3d.FromOrthonormal(
+    Vector3d.Zero,
+    new Vector3d(Math.Cos(angle), Math.Sin(angle), 0),
+    new Vector3d(-Math.Sin(angle), Math.Cos(angle), 0));
+
+var lamina = ElasticLaw.TransverselyIsotropic(fibreFrame, e1, e2, nu12, nu23, g12, "carbon UD");
+
+var bar = new Part("bar", Shape.Box(40, 10, 4).Translate(20, 0, 0));   // x from 0 to 40
+var tets = TetMesher.Mesh(bar.GetMesh(), new TetMeshOptions { RefineQuality = true, MaxElementSize = 3.0 });
+
+// The Material still carries the density and the name; the law carries the stiffness.
+var carrier = new Material("carbon UD", e1, 0.30, 1.6e-9);
+var model = new StructuralModel(tets, carrier);
+model.SetElasticity(0, lamina);
+
+// Statically determinate: the whole end face held axially, then just enough more to
+// remove the two transverse translations and the roll. A uniform uniaxial STRESS state
+// satisfies all of it exactly, whatever the anisotropy.
+const double sigma = 25.0;                       // MPa, a uniform end pull
+model.Fix(Facets.OnPlane(Vector3d.Zero, Vector3d.UnitX), Dof.X);
+
+int Corner(double y, double z)
+{
+    int best = -1;
+    double bestScore = double.MaxValue;
+    for (int n = 0; n < model.Mesh.NodeCount; n++)
+    {
+        var p = model.Mesh.Position(n);
+        if (Math.Abs(p.X) > 1e-9) continue;
+        double score = Math.Abs(p.Y - y) + Math.Abs(p.Z - z);
+        if (score < bestScore) { bestScore = score; best = n; }
+    }
+    return best;
+}
+
+model.FixNode(Corner(-5, -2), Dof.Y | Dof.Z);
+model.FixNode(Corner(+5, -2), Dof.Z);
+model.Traction(Facets.OnPlane(new Vector3d(40, 0, 0), Vector3d.UnitX), new Vector3d(sigma, 0, 0));
+
+var results = StructuralSolver.Solve(model);
+var strain = results.ElementStrain(0);
+double apparent = sigma / strain.Xx;
+
+// The classical off-axis modulus: 1/Ex = c^4/E1 + s^4/E2 + (1/G12 - 2 nu12/E1) s^2 c^2.
+double c2 = Math.Cos(angle) * Math.Cos(angle), s2 = Math.Sin(angle) * Math.Sin(angle);
+double classical = 1.0 / (c2 * c2 / e1 + s2 * s2 / e2 + (1.0 / g12 - 2.0 * nu12 / e1) * s2 * c2);
+
+// 20 267 MPa - a seventh of the fibre-direction stiffness, at 30 degrees off axis.
+if (Math.Abs(apparent - classical) > 1e-6 * classical)
+    throw new Exception($"expected {classical:F1} MPa, got {apparent:F1}");
+
+// And the bar SHEARS under a pure pull, which is the behaviour no isotropic law has.
+if (Math.Abs(strain.Xy) < 1e-3 * Math.Abs(strain.Xx))
+    throw new Exception("an off-axis lamina must show shear-extension coupling");
+```
+
+Three factories, in increasing generality:
+
+| | states | for |
+| --- | --- | --- |
+| `ElasticLaw.TransverselyIsotropic` | 5 constants + frame | a unidirectional lamina, a drawn bar, a printed part's layer stack |
+| `ElasticLaw.Orthotropic` | 9 constants + frame | a woven laminate, a rolled plate, wood |
+| `ElasticLaw.Anisotropic` | the 6x6 matrix + frame | anything else, including a homogenised microstructure |
+
+The **minor** Poisson's ratios are derived from the symmetry `nu_ji / E_j = nu_ij / E_i`
+rather than taken as inputs — supplying both is how a datasheet transcription comes to
+contradict itself, and the contradiction would make the matrix non-symmetric with nothing
+to catch it. What *is* checked, by name, is that the compliance matrix is **positive
+definite**: the classical restriction `|nu_ij| < sqrt(E_i / E_j)` plus a determinant
+condition coupling all three *is* that statement, and a Cholesky is the statement rather
+than a re-derivation of it. Without the check a plausible-looking transcription gives a
+material that releases energy when strained, and the symptom is a factorization failure
+deep in the solver rather than a message about the material.
+
+Thermal expansion is directional too, and it is stated on the **law**:
+
+```csharp
+var withExpansion = lamina.WithThermalExpansion(fibreFrame, -0.5e-6, 28e-6, 28e-6);
+```
+
+An expansion stated on the law always wins over the `Material`'s scalar coefficient, and a
+*directional* region that states none is **refused by name** rather than inheriting one —
+the scalar route builds its load from the material's Lamé parameters, which are not that
+region's stiffness at all, so the inherited number would have no well-defined meaning.
+Rotating a directional expansion off its own axes produces genuine **shear** terms (a heated
+off-axis lamina shears), which is why the free strain is carried as a six-component vector
+rather than three numbers.
+
+> [!NOTE]
+> An isotropic model is untouched by all of this, deliberately and provably: the assembly
+> branches on `ElasticLaw.IsIsotropic`, so a model that states no law assembles through
+> exactly the arithmetic it did before — bit for bit, asserted — while the general `B'DB`
+> path is separately asserted to agree with the index form to round-off on an isotropic
+> law. Anisotropy costs nothing until it is asked for, and cannot silently change what a
+> plain steel bracket reports.
+
+Modal, buckling, harmonic and transient solves all read the same law, because they all
+assemble their stiffness through `FeaAssembly`.
+
 ## Reading the answer
 
 ```csharp run:fea-structural-report
@@ -197,6 +316,57 @@ volume-weighted average of the elements meeting at a node, which is what a colou
 wants and what converges — and it also smooths a genuine discontinuity at a material
 interface or a re-entrant corner. The jump between neighbouring elements is the standard
 error indicator, and averaging is the standard way to hide a mesh that is too coarse.
+
+## Is the mesh good enough? Stress recovery and the error estimate
+
+A solve returns a number whatever the mesh. `StructuralResults.ErrorEstimate` is the answer
+to whether that number is worth anything — the energy-norm gap between the element stress
+field and its **superconvergent recovery**, per element and overall.
+
+The premise is where the stress is sampled. A displacement-based element's stress is one
+order lower than its displacement and jumps across faces, and inside the element it is most
+accurate at the Gauss points and *least* accurate at the nodes — which is where a colour map
+reads it. `StressRecovery.Superconvergent` fits a polynomial to the good points over each
+patch of elements and evaluates it at the nodes.
+
+```csharp run:fea-error-estimate
+var part = new Part("bracket", Shape.Box(60, 20, 8).Subtract(Shape.Cylinder(4, 40)));
+var tets = TetMesher.Mesh(part.GetMesh(), new TetMeshOptions { RefineQuality = true, MaxElementSize = 4.0 });
+
+var model = new StructuralModel(tets, Materials.Steel);
+model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -400));
+
+var results = StructuralSolver.Solve(model);
+
+double direct = results.MaxVonMises;
+results.Recovery = StressRecovery.Superconvergent;
+double recovered = results.MaxVonMises;
+
+var estimate = results.ErrorEstimate;
+Console.WriteLine(estimate);                       // "estimated error 12.4% (...)"
+Console.WriteLine($"peak {direct:F1} -> {recovered:F1} MPa");
+
+// The per-element map is what an adaptive refinement loop would consume.
+int worst = estimate.WorstElement;
+Console.WriteLine($"worst element {worst}, error {estimate.ElementError[worst]:E3}");
+
+if (estimate.ElementError.Count != model.Mesh.ElementCount) throw new Exception("one value per element");
+if (!(estimate.RelativeError > 0)) throw new Exception("a coarse mesh should report some error");
+```
+
+`Direct` remains the default: every verification figure in this project was measured through
+it, and a recovered field is smooth by construction, so at a *genuine* discontinuity — a
+material interface, a re-entrant corner — it smooths harder than averaging does. Recovery is
+a better answer for the common case, not a better answer.
+
+> [!IMPORTANT]
+> **The estimate reports `NaN`, not zero, when it cannot estimate.** A mesh with no interior
+> corner node has no patch to fit, so the "recovered" field *is* the finite-element field and
+> the arithmetic gives the distance from something to itself — measured on a 24-element box,
+> 9.9e-15 against a true error of 0.313. That would call the mesh perfect on exactly the mesh
+> too coarse to assess. `ErrorEstimate.FallbackNodes` counts the partial case for the same
+> reason: a recovery that quietly did not happen must not look like one that did.
 
 ## Elements
 
@@ -396,6 +566,46 @@ polynomial fit (Chart 4.1), against the **net** section stress, is
 **2.4324** — equivalently 3.2432 against the gross section, nearly 8% above the textbook 3.
 The far-field stress is recovered to 0.03% on the finest quadratic mesh and 0.37% on the
 coarsest linear one, which is the check that makes every K_t above mean anything.
+
+**Stress recovery** — the claim is a rate, so it is measured as an L2 norm of the nodal
+stress field against the exact one, integrated inside the elements over a refinement
+sequence on the same manufactured solution:
+
+| | direct | recovered | direct rate | recovered rate |
+| --- | ---: | ---: | ---: | ---: |
+| linear, 12 288 el | 2.302e-2 | **1.599e-3** | 1.418 | **2.300** |
+| quadratic, 1 536 el | 2.669e-3 | **2.348e-4** | 2.000 | **2.761** |
+
+against theory 1/2 and 2/3 — **14.4× and 11.4× more accurate**, at a clearly higher rate.
+The quadratic rate settling near 2.76 rather than 3.00 is reported as measured: full p+1
+recovery on tetrahedra is weaker than on hexahedra. The **effectivity index** (estimated over
+true error, energy norm) runs 0.9544 → 0.9848 → **0.9955** for linear elements and
+1.0187 → 1.0150 → **1.0128** for quadratic — monotone toward 1 from below and above — and a
+linear stress field is recovered **exactly** (1.1e-12 of 3.2e2) with the estimated error
+0.00%.
+
+**Directional materials**, all exact rather than converging — a uniform stress state in a
+prismatic bar is a constant strain, hence a linear displacement field, which is *in* the
+linear-tetrahedron space:
+
+| | measured | reference |
+| --- | ---: | --- |
+| off-axis lamina at 0° | 135 000.00 MPa | E1 exactly |
+| at 30° | 20 267.42 MPa | classical `1/Ex = c⁴/E1 + s⁴/E2 + (1/G12 - 2ν12/E1)s²c²` |
+| at 45° | 12 406.66 MPa | same, agreeing to 1e-12 relative |
+| at 90° | 9 000.00 MPa | E2 exactly |
+
+with the whole strain tensor reproduced to **4.4e-17 against a 2.0e-3 scale** and the
+uniform stress state to 1.4e-12 of 25 MPa. The expected strain is built by **3x3 tensor
+rotation** — rotate the stress into the material frame, apply the compliance there, rotate
+the strain back — which shares nothing with the production path's Voigt stress
+transformation but the physics; the classical modulus formula is then a third reading of
+the same number. The **shear-extension coupling** is asserted separately (−7.9e-4 at 30°,
+exactly zero on axis), because it is the one behaviour no isotropic law can produce and the
+one a transposed rotation would lose. Directional expansion: a free bar strains by exactly
+`alpha_i·dT` (1.1e-17 of 1.7e-3) with residual stress at 1.2e-13 of the 15.12 MPa a
+restrained bar would carry, and a fully restrained bar carries σ = (−12.72, −27.95, −27.95)
+MPa — three genuinely different numbers — to 3.6e-15.
 
 **Rigid-body and equilibrium** properties, all satisfied to round-off:
 

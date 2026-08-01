@@ -359,6 +359,33 @@ internal static class TetElement
     }
 
     /// <summary>
+    /// The element stiffness matrix for a constitutive law, row-major, of size <c>(3n)²</c>.
+    /// Cleared on entry.
+    ///
+    /// <para><b>An isotropic law takes the index form and an anisotropic one takes
+    /// <c>B'DB</c>.</b> The branch is on <see cref="ElasticLaw.IsIsotropic"/> rather than on
+    /// the shape of D, so an isotropic model assembles through exactly the arithmetic it did
+    /// before this overload existed — bit for bit, which is what makes anisotropy safe to add
+    /// under a verification suite quoting twelve digits. Feeding an isotropic D through the
+    /// general path agrees to round-off and is asserted, so the two cannot drift in meaning
+    /// while staying separate in arithmetic.</para>
+    /// </summary>
+    public static void Stiffness(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        ElasticLaw law,
+        in TetQuadrature rule,
+        Span<double> ke)
+    {
+        if (law.IsIsotropic)
+        {
+            IsotropicStiffness(order, nodePositions, law.Lambda, law.Mu, rule, ke);
+            return;
+        }
+        GeneralStiffness(order, nodePositions, law.StiffnessMatrix, rule, ke);
+    }
+
+    /// <summary>
     /// The element stiffness matrix, row-major, of size <c>(3n)²</c> for an element of n
     /// nodes. Cleared on entry.
     /// </summary>
@@ -367,13 +394,21 @@ internal static class TetElement
         ReadOnlySpan<Vector3d> nodePositions,
         Material material,
         in TetQuadrature rule,
+        Span<double> ke) =>
+        IsotropicStiffness(order, nodePositions, material.Lambda, material.Mu, rule, ke);
+
+    private static void IsotropicStiffness(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        double lambda,
+        double mu,
+        in TetQuadrature rule,
         Span<double> ke)
     {
         int n = nodePositions.Length;
         int dofs = 3 * n;
         ke[..(dofs * dofs)].Clear();
 
-        double lambda = material.Lambda, mu = material.Mu;
         Span<Vector3d> grad = stackalloc Vector3d[10];
 
         for (int q = 0; q < rule.Count; q++)
@@ -404,6 +439,72 @@ internal static class TetElement
                         ke[row + 1] += weight * (lambda * gia * gjy + mu * gja * giy);
                         ke[row + 2] += weight * (lambda * gia * gjz + mu * gja * giz);
                         ke[row + a] += dot;
+                    }
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The element stiffness for a general 6x6 constitutive matrix: the textbook
+    /// <c>integral(B' D B dV)</c>.
+    ///
+    /// <para>B is never materialised. A node's block of B is 6x3 with nine non-zeros in a
+    /// fixed pattern, so <c>B_i' D</c> is built as three rows of six directly from the
+    /// shape-function gradient, and the contraction against <c>B_j</c> reads the same three
+    /// entries per column. That is the same reason the isotropic path is written in index
+    /// form — the difference is only that with 21 independent constants there is nothing
+    /// left to collapse.</para>
+    /// </summary>
+    private static void GeneralStiffness(
+        ElementOrder order,
+        ReadOnlySpan<Vector3d> nodePositions,
+        ReadOnlySpan<double> d,
+        in TetQuadrature rule,
+        Span<double> ke)
+    {
+        int n = nodePositions.Length;
+        int dofs = 3 * n;
+        ke[..(dofs * dofs)].Clear();
+
+        Span<Vector3d> grad = stackalloc Vector3d[10];
+        // Row a of B_i' D, for a = 0, 1, 2 — eighteen numbers per node per quadrature point.
+        Span<double> btd = stackalloc double[18];
+
+        for (int q = 0; q < rule.Count; q++)
+        {
+            var (r, s, t) = rule.Point(q);
+            if (!ShapeGradients(order, nodePositions, r, s, t, grad, out double detJ))
+                continue;
+            double weight = rule.Weight(q) * detJ;
+
+            for (int i = 0; i < n; i++)
+            {
+                var gi = grad[i];
+                double gix = gi.X, giy = gi.Y, giz = gi.Z;
+
+                // Voigt rows are (xx, yy, zz, xy, yz, zx), so node i's x displacement enters
+                // rows 0, 3 and 5; y enters 1, 3 and 4; z enters 2, 4 and 5.
+                for (int c = 0; c < 6; c++)
+                {
+                    btd[c] = gix * d[c] + giy * d[3 * 6 + c] + giz * d[5 * 6 + c];
+                    btd[6 + c] = giy * d[6 + c] + gix * d[3 * 6 + c] + giz * d[4 * 6 + c];
+                    btd[12 + c] = giz * d[2 * 6 + c] + giy * d[4 * 6 + c] + gix * d[5 * 6 + c];
+                }
+
+                for (int j = 0; j < n; j++)
+                {
+                    var gj = grad[j];
+                    double gjx = gj.X, gjy = gj.Y, gjz = gj.Z;
+                    for (int a = 0; a < 3; a++)
+                    {
+                        int at = a * 6;
+                        double r0 = btd[at], r1 = btd[at + 1], r2 = btd[at + 2];
+                        double r3 = btd[at + 3], r4 = btd[at + 4], r5 = btd[at + 5];
+                        int row = (3 * i + a) * dofs + 3 * j;
+                        ke[row] += weight * (r0 * gjx + r3 * gjy + r5 * gjz);
+                        ke[row + 1] += weight * (r1 * gjy + r3 * gjx + r4 * gjz);
+                        ke[row + 2] += weight * (r2 * gjz + r4 * gjy + r5 * gjx);
                     }
                 }
             }

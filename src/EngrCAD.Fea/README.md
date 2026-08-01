@@ -41,9 +41,11 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `AnalysisMesh` | The analysis view of a tet mesh: nodes, elements, tagged facets, linear or quadratic |
 | `AnalysisBody` | One body of a multi-material model: a closed surface **and what it is made of** — the list `TetMesher.Mesh` and `StructuralModel.For` / `ThermalModel.For` BOTH read, so a region id is never restated |
 | `Material` / `Materials` | **Lives in `EngrCAD.Core`**, not here — see below |
+| `ElasticLaw` | The constitutive law: isotropic (from a `Material`), transversely isotropic, orthotropic or fully anisotropic, with a material FRAME applied once at construction — the directional half `Material` deliberately cannot carry |
 | `StructuralModel` / `Facets` / `Dof` | The model: materials per region, supports and loads over facet selectors |
 | `StructuralSolver` / `StructuralSolveOptions` / `FeaSolveReport` | Assembly, restraint checking, the solve, and what it did |
-| `StructuralResults` / `NodalAveraging` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
+| `StructuralResults` / `NodalAveraging` / `StressRecovery` | Displacements, strain, stress, von Mises, publishing and `.vtu` |
+| `ErrorEstimate` | The Zienkiewicz-Zhu error estimate: per element and overall, in the energy norm — the answer to "is this mesh good enough", which a solve otherwise never gives |
 | `ThermalModel` | Conduction: held temperatures, flux, generation and convection over the SAME facet selectors |
 | `ThermalSolver` / `ThermalSolveOptions` / `ThermalSolveReport` | Steady and theta-scheme transient solves, and the energy balance |
 | `ThermalTransientOptions` / `ThermalTimeScheme` / `ThermalTransientReport` | Step, count, scheme, initial condition; one factorization per run |
@@ -254,6 +256,157 @@ treated as a constrained boundary, plus a decision about whether a facet selecto
 is a feature, and it is filed as one; until it lands, a bonded bi-material part is meshed as
 one surface with one material, and `AnalysisBody` serves genuinely separate bodies in one
 analysis.
+
+## Directional materials: `ElasticLaw`
+
+`Material` is isotropic and cannot say otherwise — it lives in `EngrCAD.Core` because a
+bill of materials and a viewer need it too, and those consumers have no use for a
+21-constant elasticity tensor. **`ElasticLaw` sits beside it rather than replacing it**:
+the law supplies the elasticity and, optionally, a directional thermal expansion, while
+density, name and the thermal transport properties still come from the `Material` — so a
+modal solve of a composite part integrates the same density a BOM weighs it with.
+
+That split is not a compromise, it is where the boundary genuinely falls. A material
+**frame** — which way the fibres run, which way the plate was rolled, which way the layers
+were printed — is a property of how the stuff was laid into *this part*, not of the stuff.
+It is per-region analysis data, which is exactly what this project is.
+
+```csharp
+var lamina = ElasticLaw.TransverselyIsotropic(fibreFrame, 135_000, 9_000, 0.30, 0.45, 4_800);
+var carrier = new Material("carbon UD", 135_000, 0.30, 1.6e-9);  // density, name
+var model = new StructuralModel(tets, carrier);
+model.SetElasticity(0, lamina);                                  // stiffness, and its frame
+```
+
+Three factories, in increasing generality: `TransverselyIsotropic` (five constants — a
+unidirectional lamina, a drawn bar, a printed layer stack, with the transverse shear
+modulus *derived* because in an isotropic plane it is not free), `Orthotropic` (nine — a
+woven laminate, a rolled plate, wood), and `Anisotropic` (the full 6x6, for a homogenised
+microstructure or anything else). All three take a `Frame3d`.
+
+**Four decisions carry it.**
+
+**(a) The frame is applied ONCE, at construction.** D is stored rotated into global
+coordinates, so the element loop never sees a frame and an anisotropic element costs
+exactly one `B'DB` more than an isotropic one — the same "invert the basis once" call
+`LoftedSurface` makes about its cardinal basis. Laws are derived and cached per REGION, so
+the 6x6 inversion and the rotation are paid once per model rather than once per element.
+
+**(b) An isotropic model is untouched, bit for bit.** `TetElement.Stiffness` branches on
+`ElasticLaw.IsIsotropic`, which only `FromMaterial` sets, so a model that states no law
+assembles through exactly the index-form arithmetic it always did — asserted as a bitwise
+comparison, which is what makes this feature safe to add under a verification suite whose
+headline numbers are quoted to twelve digits. The general path is *separately* asserted to
+agree with the index form to round-off on an isotropic law, so the two cannot drift in
+MEANING while staying deliberately separate in ARITHMETIC. The thermal-load path makes the
+identical split for the identical reason (and measures 0.0 difference on the fixture, which
+was better than the argument required).
+
+**(c) The minor Poisson's ratios are DERIVED, not inputs.** `nu_ji / E_j = nu_ij / E_i` is
+the symmetry of the compliance matrix and the only relation there is; letting a caller
+supply both is how a datasheet transcription comes to contradict itself, and the
+contradiction would make the matrix non-symmetric with nothing to catch it.
+
+**(d) Positive definiteness is checked by a Cholesky, because the Cholesky IS the
+statement.** The classical orthotropic restrictions — `|nu_ij| < sqrt(E_i / E_j)` plus a
+determinant condition coupling all three — are precisely "the compliance matrix is positive
+definite", and testing them one at a time re-derives that in a form easy to get subtly
+wrong. Note that the pairwise bounds are *not* sufficient: the fixture that pins this has
+three equal moduli and `nu = 0.7`, where every pairwise bound holds (`sqrt(1) = 1`) and the
+determinant is still negative. Without the check, a plausible transcription gives a
+material that releases energy under some strain and the symptom is a factorization failure
+deep in the solver rather than a message about the material. The same routine checks a
+supplied 6x6, alongside a symmetry check that names the offending pair.
+
+**Thermal expansion is stated on the LAW, and the branch needs BOTH halves of its
+condition.** An expansion stated on the law wins over the `Material`'s scalar whether or not
+the law is elastically isotropic — an elastically isotropic, thermally directional material
+is unusual but real, and a stated coefficient with no effect is the worst failure mode. And
+the scalar route is legal only for an *isotropic* law, whose Lamé parameters are the
+material's: a directional region stating no expansion of its own is **refused by name**
+rather than inheriting one, because the scalar load would be built from parameters that are
+not that region's stiffness. (Both halves are pinned by test; the first version branched on
+`IsIsotropic` alone and would have silently ignored the first case, the second on
+`StatesOwnThermalExpansion` alone and would have quietly mis-built the second.)
+`WithThermalExpansion(frame, a1, a2, a3)` rotates the expansion TENSOR with the same frame,
+which produces genuine **shear** components off-axis (a heated off-axis lamina shears); that
+is why the free strain is carried as a six-component Voigt vector rather than three numbers,
+and why the stress recovery subtracts all six.
+
+The law reaches modal, buckling, harmonic and transient solves for free, because every one
+of them assembles its stiffness through `FeaAssembly`.
+
+**Not covered, and stated rather than implied**: `Materials` carries no composite entries
+(the catalogue is isotropic engineering metals and plastics, and a lamina's constants are a
+layup decision rather than a stock number); a *laminate* — a stack of plies at different
+angles — is several regions or a homogenised law the caller supplies, not something this
+computes; and failure criteria for directional materials (Tsai-Wu, Hashin, maximum strain)
+are a post-processing vocabulary that does not exist here, so `MaxVonMises` on a composite
+part is a number with no engineering meaning.
+
+## Stress recovery, and the error estimate that comes with it
+
+A displacement-based element's stress is one order lower than its displacement and jumps
+across faces, and **its accuracy is not uniform inside the element**: at the Gauss points of
+the element's own rule it is *superconvergent* — as accurate as the displacement rather than
+one order worse — while at the nodes, where a colour map most wants it, it is at its worst.
+`StressRecovery.Direct` (the default) reads the nodes and averages;
+`StressRecovery.Superconvergent` samples the good points and interpolates to the bad ones.
+
+```csharp
+results.Recovery = StressRecovery.Superconvergent;
+var peak = results.MaxVonMises;                  // one order more accurate
+Console.WriteLine(results.ErrorEstimate);        // "estimated error 4.31% (...)"
+```
+
+Zienkiewicz–Zhu patch recovery, with four decisions.
+
+**(a) Vertex patches, evaluated at every node they touch.** A patch is the elements meeting
+at one corner node; a polynomial of the displacement's own degree is fitted to its samples
+by least squares and evaluated at every node of every element in the patch, each node
+averaging the patches that reached it. That is the textbook rule, and it means a mid-side
+node takes its value from the adjacent vertex patches rather than from a smaller,
+worse-conditioned patch of its own.
+
+**(b) Patches are assembled at INTERIOR corners only, and that was measured rather than
+assumed.** A one-sided boundary patch is poorly conditioned, and including them **caps the
+convergence rate**: the quadratic sequence read 2.77 then 2.47 — drifting down, away from
+the theoretical 3 — and excluding them put it on 3.08/2.91. The signature is worth
+recognising: a boundary layer of elements is an O(h) volume fraction, so a boundary error
+one order worse shows up as a half-order loss in a global L2 norm, and a rate heading for
+2.5 rather than 3 is what that looks like.
+
+**(c) The boundary is then filled from the NEAREST patch, because skipping it costs the
+whole point.** Excluding boundary patches leaves the nodes near a box's edges and corners
+with no value at all — 228 of ~2 000 on the fixture — and those are exactly where a peak
+stress usually sits. A breadth-first walk over the share-an-element graph gives each of them
+the polynomial of the nearest patch, extrapolated a short way outside its own elements,
+which is sound for the same reason the fit is: the polynomial approximates the stress over a
+neighbourhood, not only over the sample hull.
+
+**(d) The fit is in LOCAL coordinates.** Sample positions are shifted to the patch node and
+scaled by the patch radius, so the normal equations are O(1) and their conditioning is a
+property of the patch's SHAPE rather than of where the part sits in space. It also makes the
+answer free — the recovered value at the patch node is exactly the fitted constant term.
+
+**The error estimate is the more valuable half.** `StructuralResults.ErrorEstimate` is the
+energy-norm distance between the element stress field and its recovery: per element (the map
+an adaptive scheme refines against) and globally (the answer to "is this mesh good enough",
+which a solve otherwise never gives). It is always computed from the *recovered* field
+whatever `Recovery` is set to, because that is what makes it an estimator rather than a
+smoothness measure.
+
+**And it reports UNKNOWN rather than zero when it cannot estimate.** With no interior corner
+node there is no patch, the recovered field *is* the finite-element field, and the arithmetic
+gives the distance from something to itself: measured on a 24-element box, **9.9e-15 against
+a true error of 0.313** — a number that calls the mesh perfect on exactly the mesh too coarse
+to assess. `RelativeError` is `NaN` there, following the same "not small, unknown" spelling
+`HarmonicResponse.TruncationError` uses.
+
+`Direct` stays the default. Every verification figure this project quotes was measured
+through it, so promoting the better answer would silently move all of them; and recovery is
+not better *everywhere* — a recovered field is smooth by construction, so at a genuine
+discontinuity (a material interface, a re-entrant corner) it smooths harder than averaging.
 
 ## Contracts
 
@@ -1006,6 +1159,71 @@ measurement* of the discretization error rather than an estimate of it, and the 
 claim ("the peak is on the perpendicular diameter") is held to exactly that bar — a
 self-calibrating threshold, since a claim about where a peak is cannot be sharper than the
 discretization measuring it.
+
+**Directional materials**, exact rather than converging — a uniform stress state in a
+prismatic bar is a constant strain, hence a linear displacement field, which is *in* the
+linear-tetrahedron space, so the solve reproduces the closed form at any density and the
+constitutive law is the only thing under test:
+
+| lamina angle | apparent E_x | reference |
+| ---: | ---: | --- |
+| 0° | 135 000.00 MPa | E1 exactly |
+| 30° | 20 267.42 MPa | classical off-axis modulus, 1e-12 relative |
+| 45° | 12 406.66 MPa | same |
+| 90° | 9 000.00 MPa | E2 exactly |
+
+with the whole strain tensor at **4.4e-17 against a 2.0e-3 scale** and the uniform stress
+state at 1.4e-12 of 25 MPa. **The oracle is built by 3x3 TENSOR rotation** — rotate the
+stress into the material frame, apply the compliance there from the engineering constants,
+rotate the strain tensor back — which shares nothing with the production path's Voigt
+stress transformation but the physics; agreement between two derivations is evidence, where
+a test re-running the same rotation would agree with a broken one just as happily. The
+classical formula `1/Ex = c⁴/E1 + s⁴/E2 + (1/G12 - 2ν12/E1)s²c²` is then a *third* reading
+of the same number. **Shear-extension coupling** is asserted separately (−7.9e-4 at 30°,
+exactly zero on axis): it is the one behaviour no isotropic law can produce, and the one a
+transposed rotation would lose while leaving every symmetric measure intact.
+
+Directional thermal expansion: a free bar strains by exactly `alpha_i·dT` (1.1e-17 of
+1.7e-3) with residual stress at 1.2e-13 of the 15.12 MPa a restrained bar would carry, and a
+fully restrained bar carries σ = (−12.72, −27.95, −27.95) MPa — three genuinely different
+numbers, so a law quietly collapsing to one scalar fails even at the right magnitude — to
+3.6e-15.
+
+**Stress recovery** — the claim is a RATE, not a value, so it is measured as an L2 norm of
+the nodal stress field against the exact one, integrated INSIDE the elements over a
+refinement sequence on the same manufactured solution:
+
+| | direct | recovered | direct rate | recovered rate |
+| --- | ---: | ---: | ---: | ---: |
+| linear, 192 el | 1.540e-1 | 3.957e-2 | — | — |
+| linear, 1 536 el | 6.151e-2 | 7.875e-3 | 1.324 | 2.329 |
+| linear, 12 288 el | 2.302e-2 | **1.599e-3** | 1.418 | **2.300** |
+| quadratic, 192 el | 1.068e-2 | 1.589e-3 | — | — |
+| quadratic, 648 el | 4.745e-3 | 5.197e-4 | 2.000 | 2.756 |
+| quadratic, 1 536 el | 2.669e-3 | **2.348e-4** | 2.000 | **2.761** |
+
+against theory 1 and 2 (linear) and 2 and 3 (quadratic) — so **14.4x and 11.4x more accurate
+at the finest mesh**, at a rate clearly above the direct one in both. The quadratic recovered
+rate settling near 2.76 rather than 3.00 is reported as measured rather than rounded up: full
+p+1 recovery on TETRAHEDRA is weaker than on hexahedra, and the boundary fill's extrapolation
+is one cap on it.
+
+The **effectivity index** (estimated over true error, in the energy norm) is the measurement
+that says the estimator estimates the error rather than merely shrinking:
+
+| | 192 el | 1 536 el | 12 288 el |
+| --- | ---: | ---: | ---: |
+| linear | 0.9544 | 0.9848 | **0.9955** |
+
+| | 192 el | 648 el | 1 536 el |
+| --- | ---: | ---: | ---: |
+| quadratic | 1.0187 | 1.0150 | **1.0128** |
+
+monotone toward 1 from below and above respectively — and both halves are asserted, since a
+constant offset would satisfy a band alone. A **linear stress field is recovered exactly**
+(1.1e-12 of 3.2e2 linear, 1.9e-11 of 1.7e3 quadratic) with the estimated error 0.00%, which
+is the consistency check every recovery scheme must pass and the identity that keeps the
+estimator from being a smoothness measure.
 
 **Rigid body and equilibrium**, all to round-off: a rigid motion prescribed on the
 boundary produces a rigid motion inside (strain at 1e-14 of the field's own scale, energy
