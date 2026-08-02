@@ -1058,7 +1058,15 @@ rod. The only face pairs the boolean sees are helical-band ∩ drilled-plane: ex
 spiral arcs that chain into a closed loop the plane face splits along
 (`FaceSplitter.SplitByClosedCurveChain`). Nonzero clearance keeps B-Rep Impossible
 with the same distance-field report, so thread features stay honest about what they
-can and cannot represent. One boundary: downstream B-Rep booleans may cut modeled
+can and cannot represent. **A MIRRORED threaded hole is Native too**, riding the same
+FlipY identity as the rod, applied per placed point: the tool's improper placement
+`effective∘flipDown` factors as a proper frame times FlipY, and FlipY of a rod is the
+opposite-handed rod, so the lowering flips the per-point frame's Y axis back to proper
+and XORs the spec's handedness (verified cross-representation: every vertex of the
+mirrored tessellation reads ≤ 2.4e-15 against the mirrored implicit field, while the
+handedness-slipped construction reads up to 0.47 at the same points). What stays
+refused is the genuinely different case — a sheared or non-uniformly scaled placement
+cannot re-place a helix at all. One boundary: downstream B-Rep booleans may cut modeled
 threads only with planes perpendicular to the thread axis (the exact spiral case) —
 cuts along the threads fail loudly; use clearance or the implicit route for those.
 
@@ -2043,9 +2051,63 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   local angle with the running lift added — the chain's slope and curvature are the
   segments' own analytic derivatives, never a difference of the assembled lift.
   Continuity across a joint is the SEGMENTS' business: smoothing it centrally would hide
-  the very property the catalogue exists to let a designer choose. Still open (filed):
-  roller-follower radius compensation and offset followers, which are curve-offset and
-  root-find problems rather than law factories — see todo.md for the shape of both.
+  the very property the catalogue exists to let a designer choose.
+- **Roller and offset followers** (`CamFollower` +
+  `CamLaw.FromSketch(profile, follower)` + `CamLaw.PressureAngle`): a roller follower's
+  centre traces the profile's **planar offset** at the roller radius, and a planar
+  offset is not a radial one — r(θ) + R is wrong by O(R·r′²/r²), worst exactly where
+  the cam is steepest (measured 0.12 on the eccentric-circle fixture at θ = π/2,
+  three orders above the law's fidelity). The filed framing expected a parametric
+  offset curve plus a root find with implicit-function derivatives; neither is needed,
+  because the sketch's signed distance is a true planar distance OUTSIDE the profile,
+  so the offset curve IS the isolevel sd = R and the roller centre is the outermost
+  crossing of that isolevel along the follower's travel line — the same outside-in
+  march and bisection the point follower always got, with slope and curvature still
+  the C² spline's own calculus. An OFFSET follower moves the travel line off the pivot
+  (positive to the RIGHT of the travel direction — the one sign convention, stated on
+  `CamFollower` and shared by placement and analysis); `CamLaw.PressureAngle(angle,
+  follower, baseDistance)` reports the number the offset exists to improve, from the
+  instant-centre relation tan φ = (slope − offset)/distance — for a `FromSketch` law
+  the value already IS the centre distance, a zero-based catalogue rise adds
+  baseDistance = √(Rp² − offset²). Verified on the eccentric circle, whose every
+  quantity is closed-form (the offset of a circle is a circle): roller and offset
+  laws to 1e-6, and the pressure angle against an INDEPENDENT oracle — the contact
+  normal of a roller on a circle passes through both centres, so cos φ =
+  |t̂·(p − c)|/(a + R) — which is what pins the sign conventions as consistent, plus
+  the textbook property that a positive offset reduces the rise-side pressure angle.
+  A roller of radius 0 is bit-identical to the point follower (reach + 0.0 and an
+  isolevel of 0.0 change no bits in the incumbent march).
+- **Mechanism persistence** (`MechanismPersistence.cs`:
+  `Mechanism.SaveMechanism()`/`LoadMechanism(json, resolveOpaqueLaw?)`): one JSON
+  envelope for the layer a `MateSet` file loses — grounds, the raw mates OUTSIDE the
+  joints, the joints, the couplings — following `MateSet.SaveMates`' conventions
+  (warnings back in, never exceptions; only a bad envelope or unknown version throws).
+  **Joint mates are derived, not restated**: a joint's mates are a deterministic
+  function of its ends, so the file stores the two ends exactly as mates do (path +
+  pinned coordinates + query descriptor, re-resolved eagerly with pinned fallback)
+  and loading re-runs the constructor. What CANNOT be re-derived rounds trip as
+  data: an axis joint's **perpendicular reference directions** (derived once at
+  construction — re-deriving at load would move the angle's zero; the `MateRef`
+  ctor keeps already-unit directions verbatim, so they round-trip bit-for-bit) and
+  its **sweep state** (`AccumulatedAngle` is a HISTORY — how many turns the crank has
+  taken — that no pose can recover; a crank saved at 4π reloads at 4π and keeps
+  counting). **Loading re-ADDS each joint**, re-asserting nominal DOF against the
+  solver's measured rank, so a load can legitimately fail on a file that was valid
+  when written — a warning naming the joint, the joint skipped, and couplings
+  referencing it skipped by index (saved indices are kept, so a skipped joint never
+  shifts its neighbours under a coupling). **Couplings save their FACTORY, not their
+  implementation** (a gear as `gear [20, 40]`, a rack-and-pinion as itself rather
+  than the straight-law cam it is built as), and their construction ZEROS are
+  deliberately not saved: each constrains the CHANGE since construction, and for any
+  pose that satisfies it — which a saved converged pose does — re-zeroing at load is
+  exactly the same constraint. **Cam laws follow `Feature.SaveInputs`**: catalogue
+  laws save kind + args and re-run the factory, `Segments` recurses, `FromSketch`
+  saves its sampled lifts (the law IS the samples; the spline rebuild is
+  deterministic, so the loaded law evaluates bit-identically), and a `FromFunction`
+  lambda saves an `opaque` marker that loads as a warning naming the coupling unless
+  the `resolveOpaqueLaw` hook supplies the instance. Save→load→save is a
+  byte-identical fixed point; a file carrying an opaque record is smaller the SECOND
+  time by exactly the record the warning named, then a fixed point.
 - **Interference & swept volume** (`MotionInterference.cs`):
   `study.CheckInterference()` — instance-bounds broad phase, `MeshIntersection.Crosses`
   narrow phase (transversal only: resting contact is not a clash), ranges per pair,

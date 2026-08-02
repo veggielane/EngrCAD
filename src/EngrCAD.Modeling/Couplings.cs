@@ -106,6 +106,16 @@ internal sealed class JointSweepState
         LastMeasuredAngle = measured;
     }
 
+    /// <summary>Restores a saved unwrap history verbatim — mechanism persistence's
+    /// seam. The accumulated angle is a HISTORY (how many turns the crank has taken),
+    /// which no re-derivation from the current pose can recover, so it round-trips as
+    /// data.</summary>
+    public void Restore(double accumulatedAngle, double lastMeasuredAngle)
+    {
+        AccumulatedAngle = accumulatedAngle;
+        LastMeasuredAngle = lastMeasuredAngle;
+    }
+
     /// <summary>Wraps an angle to (−π, π].</summary>
     public static double WrapPi(double angle)
     {

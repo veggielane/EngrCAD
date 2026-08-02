@@ -132,6 +132,13 @@ public abstract class Joint
 
     private static string Plural(int count) => count == 1 ? "" : "s";
 
+    /// <summary>Persistence's spelling of <see cref="WithDirection"/>: rebuilds a
+    /// reference with a saved perpendicular-reference direction, keeping its occurrence
+    /// chain and point. The <see cref="MateRef"/> constructor keeps an already-unit
+    /// direction verbatim, so a saved direction round-trips bit-for-bit.</summary>
+    internal static MateRef Redirect(in MateRef reference, in Vector3d direction) =>
+        WithDirection(reference, direction);
+
     /// <summary>Rebuilds a reference with a different local direction, keeping its
     /// occurrence chain and point (used for derived perpendicular references, which
     /// are geometric bookkeeping rather than semantic queries).</summary>
@@ -280,6 +287,15 @@ public abstract class AxisJoint : Joint
         State.Commit(JointArithmetic.Angle(axisA, refA, refB));
     }
 
+    /// <summary>Restores a saved sweep state verbatim (mechanism persistence): the
+    /// unwrapped-angle history and the construction-slide reference, which together
+    /// are what make the joint's coordinates mean what they meant when saved.</summary>
+    internal void RestoreState(double accumulatedAngle, double lastMeasuredAngle, double referenceSlide)
+    {
+        State.Restore(accumulatedAngle, lastMeasuredAngle);
+        State.ReferenceSlide = referenceSlide;
+    }
+
     internal (EndValue AxisA, EndValue AxisB, EndValue RefA, EndValue RefB) EvaluateNow() => (
         MateRefWorld.Evaluate(A),
         MateRefWorld.Evaluate(B),
@@ -318,12 +334,19 @@ public abstract class AxisJoint : Joint
 public sealed class RevoluteJoint : AxisJoint
 {
     internal RevoluteJoint(in MateRef a, in MateRef b, string name)
+        : this(a, b, name, DeriveReferences(a, b))
+    {
+    }
+
+    /// <summary>The restore path: mechanism persistence supplies the SAVED perpendicular
+    /// references instead of re-deriving them, so the angle's zero keeps its meaning.</summary>
+    internal RevoluteJoint(in MateRef a, in MateRef b, string name, in (MateRef RefA, MateRef RefB) references)
         : base(name, 1, a, b,
             [
                 Mate.Concentric(a, b, $"{name} axis"),
                 Mate.Coincident(a, b, $"{name} origin"),
             ],
-            DeriveReferences(a, b))
+            references)
     {
     }
 
@@ -346,7 +369,7 @@ public sealed class PrismaticJoint : AxisJoint
     {
     }
 
-    private PrismaticJoint(in MateRef a, in MateRef b, string name, in (MateRef RefA, MateRef RefB) references)
+    internal PrismaticJoint(in MateRef a, in MateRef b, string name, in (MateRef RefA, MateRef RefB) references)
         : base(name, 1, a, b,
             [
                 Mate.Concentric(a, b, $"{name} axis"),
@@ -370,9 +393,14 @@ public sealed class PrismaticJoint : AxisJoint
 public sealed class CylindricalJoint : AxisJoint
 {
     internal CylindricalJoint(in MateRef a, in MateRef b, string name)
+        : this(a, b, name, DeriveReferences(a, b))
+    {
+    }
+
+    internal CylindricalJoint(in MateRef a, in MateRef b, string name, in (MateRef RefA, MateRef RefB) references)
         : base(name, 2, a, b,
             [Mate.Concentric(a, b, $"{name} axis")],
-            DeriveReferences(a, b))
+            references)
     {
     }
 }
@@ -381,9 +409,15 @@ public sealed class CylindricalJoint : AxisJoint
 public sealed class ScrewJoint : AxisJoint
 {
     internal ScrewJoint(in MateRef a, in MateRef b, double pitch, string name)
+        : this(a, b, pitch, name, DeriveReferences(a, b))
+    {
+    }
+
+    internal ScrewJoint(
+        in MateRef a, in MateRef b, double pitch, string name, in (MateRef RefA, MateRef RefB) references)
         : base(name, 1, a, b,
             [Mate.Concentric(a, b, $"{name} axis")],
-            DeriveReferences(a, b))
+            references)
     {
         if (pitch == 0)   // exact-zero semantic test: a zero pitch is a revolute, not a screw
             throw new ArgumentOutOfRangeException(nameof(pitch),
@@ -409,7 +443,7 @@ public sealed class FixedJoint : AxisJoint
     {
     }
 
-    private FixedJoint(in MateRef a, in MateRef b, string name, in (MateRef RefA, MateRef RefB) references)
+    internal FixedJoint(in MateRef a, in MateRef b, string name, in (MateRef RefA, MateRef RefB) references)
         : base(name, 0, a, b,
             [
                 Mate.Concentric(a, b, $"{name} axis"),

@@ -22,7 +22,7 @@ namespace EngrCAD.Modeling;
 /// </summary>
 public sealed partial class MateSet
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    internal static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>This mate set as JSON: grounded occurrence paths plus one entry per
     /// mate (kind, name, value, and both ends per the class notes). Angle values are
@@ -32,13 +32,32 @@ public sealed partial class MateSet
     {
         var document = new Dictionary<string, object?>
         {
-            ["grounded"] = _grounded
-                .Select(o => Assembly.PathTo(o) ?? o.Name)
-                .OrderBy(p => p, StringComparer.Ordinal)   // a stable file, whatever the set order
-                .ToArray(),
+            ["grounded"] = GroundedPaths(),
             ["mates"] = _mates.Select(SaveMate).ToArray(),
         };
         return JsonSerializer.Serialize(document, JsonOptions);
+    }
+
+    /// <summary>The grounded occurrences as sorted paths — a stable file, whatever the
+    /// set order. Shared with mechanism persistence so the two files spell grounds
+    /// identically.</summary>
+    internal string[] GroundedPaths() => _grounded
+        .Select(o => Assembly.PathTo(o) ?? o.Name)
+        .OrderBy(p => p, StringComparer.Ordinal)
+        .ToArray();
+
+    /// <summary>Resolves and adds one saved ground path, warning instead of throwing —
+    /// the shared half of <see cref="LoadMates"/> mechanism persistence also reads.</summary>
+    internal void LoadGround(string path, List<string> warnings)
+    {
+        try
+        {
+            _grounded.Add(Assembly.ResolvePath(path)[^1]);
+        }
+        catch (ArgumentException exception)
+        {
+            warnings.Add($"ground '{path}': {exception.Message}");
+        }
     }
 
     /// <summary>
@@ -58,46 +77,42 @@ public sealed partial class MateSet
         if (root.TryGetProperty("grounded", out var grounded))
         {
             foreach (var entry in grounded.EnumerateArray())
-            {
-                string path = entry.GetString() ?? "";
-                try
-                {
-                    _grounded.Add(Assembly.ResolvePath(path)[^1]);
-                }
-                catch (ArgumentException exception)
-                {
-                    warnings.Add($"ground '{path}': {exception.Message}");
-                }
-            }
+                LoadGround(entry.GetString() ?? "", warnings);
         }
 
         if (!root.TryGetProperty("mates", out var mates))
             return warnings;
         foreach (var entry in mates.EnumerateArray())
-        {
-            string name = entry.TryGetProperty("name", out var n) ? n.GetString() ?? "mate" : "mate";
-            try
-            {
-                var kind = Enum.Parse<MateKind>(entry.GetProperty("kind").GetString()
-                    ?? throw new FormatException("mate kinds are strings"));
-                double value = entry.TryGetProperty("value", out var v) ? v.GetDouble() : 0;
-                var a = LoadEnd(entry.GetProperty("a"), name, "A", warnings);
-                var b = LoadEnd(entry.GetProperty("b"), name, "B", warnings);
-                if (a is not { } endA || b is not { } endB)
-                    continue;   // the end's warning already says why
-                Add(Mate.Restore(kind, endA, endB, value, name));
-            }
-            catch (Exception exception) when (
-                exception is ArgumentException or FormatException or KeyNotFoundException
-                          or InvalidOperationException)
-            {
-                warnings.Add($"mate '{name}': {exception.Message}");
-            }
-        }
+            LoadMateEntry(entry, warnings);
         return warnings;
     }
 
-    private Dictionary<string, object?> SaveMate(Mate mate)
+    /// <summary>Loads one saved mate entry into this set, warning instead of throwing —
+    /// the per-mate half of <see cref="LoadMates"/>, shared with mechanism persistence
+    /// so the mate vocabulary stays here.</summary>
+    internal void LoadMateEntry(JsonElement entry, List<string> warnings)
+    {
+        string name = entry.TryGetProperty("name", out var n) ? n.GetString() ?? "mate" : "mate";
+        try
+        {
+            var kind = Enum.Parse<MateKind>(entry.GetProperty("kind").GetString()
+                ?? throw new FormatException("mate kinds are strings"));
+            double value = entry.TryGetProperty("value", out var v) ? v.GetDouble() : 0;
+            var a = LoadEnd(entry.GetProperty("a"), $"mate '{name}'", "A", warnings);
+            var b = LoadEnd(entry.GetProperty("b"), $"mate '{name}'", "B", warnings);
+            if (a is not { } endA || b is not { } endB)
+                return;   // the end's warning already says why
+            Add(Mate.Restore(kind, endA, endB, value, name));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or FormatException or KeyNotFoundException
+                      or InvalidOperationException)
+        {
+            warnings.Add($"mate '{name}': {exception.Message}");
+        }
+    }
+
+    internal Dictionary<string, object?> SaveMate(Mate mate)
     {
         var entry = new Dictionary<string, object?>
         {
@@ -112,7 +127,7 @@ public sealed partial class MateSet
         return entry;
     }
 
-    private static Dictionary<string, object?> SaveEnd(in MateRef reference)
+    internal static Dictionary<string, object?> SaveEnd(in MateRef reference)
     {
         var end = new Dictionary<string, object?>();
         if (reference.Path is { } path)
@@ -128,7 +143,12 @@ public sealed partial class MateSet
         return end;
     }
 
-    private MateRef? LoadEnd(JsonElement element, string mateName, string label, List<string> warnings)
+    /// <param name="element">The saved end.</param>
+    /// <param name="owner">The owning record for messages ("mate 'lid hinge'",
+    /// "joint 'crank pin'") — mechanism persistence loads joint ends through here too.</param>
+    /// <param name="label">Which end ("A"/"B").</param>
+    /// <param name="warnings">Accumulates the not-thrown failures.</param>
+    internal MateRef? LoadEnd(JsonElement element, string owner, string label, List<string> warnings)
     {
         var point = ReadVector(element, "point");
         var direction = ReadVector(element, "direction");
@@ -145,7 +165,7 @@ public sealed partial class MateSet
             {
                 // No occurrence, no mate end: unlike a failed query there is nothing to
                 // pin the coordinates TO, so the whole mate is skipped.
-                warnings.Add($"mate '{mateName}' end {label}: {exception.Message}");
+                warnings.Add($"{owner} end {label}: {exception.Message}");
                 return null;
             }
         }
@@ -161,7 +181,7 @@ public sealed partial class MateSet
                 exception is FormatException or ArgumentException or GeometryInputException)
             {
                 warnings.Add(
-                    $"mate '{mateName}' end {label}: could not re-resolve '{query}' " +
+                    $"{owner} end {label}: could not re-resolve '{query}' " +
                     $"({exception.Message}); loaded from its pinned coordinates");
             }
         }

@@ -160,6 +160,53 @@ public class LeftHandThreadTests
     }
 
     [Fact]
+    public void MirroringAThreadedHoleLowersAsTheLeftHandOne()
+    {
+        // The hole's tool is the same helical rod clipped at the pilot radius, so the
+        // FlipY identity applies per placed point: Explain says Native, the lowering
+        // XORs the handedness, and the per-point placement and the depth validation
+        // both ride through the reflection (the hole is off-centre in x AND y so the
+        // mirror genuinely moves it).
+        var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+        var plate = Shape.Box(20, 20, 8);
+        var mirrored = plate.ThreadedHole(Right(), [new(4.5, 3)], depth: 6, top)
+            .Mirror(Vector3d.UnitX);
+        Assert.Contains("Native", mirrored.Explain(TargetRep.Brep).ToString());
+
+        var solid = mirrored.ToBrep();
+        solid.Validate();
+        var mesh = BRepTessellator.Tessellate(solid, 64, 24);
+        Assert.True(mesh.IsClosed, "mirrored tapped plate must tessellate closed");
+
+        // Cross-representation, the LH-rod verification rather than a shape check:
+        // every vertex the B-Rep tessellation produces is an exact surface point, so
+        // the mirrored implicit field must read ~zero there — while the field of the
+        // handedness-slipped construction (the mirror of the LEFT-hand hole, which is
+        // exactly what forgetting the XOR would produce) reads large on the flanks.
+        var field = mirrored.ToImplicit();
+        var wrongHand = plate.ThreadedHole(Left(), [new(4.5, 3)], depth: 6, top)
+            .Mirror(Vector3d.UnitX).ToImplicit();
+        double worst = 0, wrongWorst = 0;
+        foreach (var vertex in mesh.Vertices)
+        {
+            worst = Math.Max(worst, Math.Abs(field.Evaluate(vertex.Position)));
+            wrongWorst = Math.Max(wrongWorst, Math.Abs(wrongHand.Evaluate(vertex.Position)));
+        }
+        Assert.True(worst < 1e-12, $"mirrored B-Rep is off its own field by {worst:E3}");
+        Assert.True(wrongWorst > 0.1, "the check must be able to see a handedness slip");
+    }
+
+    [Fact]
+    public void MirroringAThreadedHoleTwiceReturnsTheRightHandOne()
+    {
+        var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+        var twice = Shape.Box(20, 20, 8).ThreadedHole(Right(), [new(4.5, 3)], depth: 6, top)
+            .Mirror(Vector3d.UnitX).Mirror(Vector3d.UnitX);
+        Assert.Contains("Native", twice.Explain(TargetRep.Brep).ToString());
+        twice.ToBrep().Validate();
+    }
+
+    [Fact]
     public void AShearedPlacementIsStillRefused()
     {
         // The refusal that remains, and it is a different one: a non-uniform scale
@@ -168,5 +215,12 @@ public class LeftHandThreadTests
             .Transform(Matrix4d.CreateScale(new Vector3d(1, 2, 1)));
         Assert.Contains("Impossible", sheared.Explain(TargetRep.Brep).ToString());
         Assert.DoesNotContain("left-handed", sheared.Explain(TargetRep.Brep).ToString());
+
+        // Same for the threaded hole, whose refusal used to blame the mirror.
+        var top = SketchPlane.At((0, 0, 4), Vector3d.UnitX, Vector3d.UnitY);
+        var shearedHole = Shape.Box(20, 20, 8).ThreadedHole(Right(), [new(0, 0)], 6, top)
+            .Transform(Matrix4d.CreateScale(new Vector3d(1, 2, 1)));
+        Assert.Contains("Impossible", shearedHole.Explain(TargetRep.Brep).ToString());
+        Assert.DoesNotContain("left-handed", shearedHole.Explain(TargetRep.Brep).ToString());
     }
 }

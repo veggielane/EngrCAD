@@ -2936,6 +2936,65 @@ Design decisions:
   chain laws without knowing anything about them, and continuity across a joint stays
   the segments' business: smoothing it in the composer would hide the property the
   catalogue exists to let a designer choose.
+  *Roller and offset followers needed no offset curve and no root find, because the
+  signed distance already IS the offset* (`CamFollower`,
+  `CamLaw.FromSketch(profile, follower)`, `CamLaw.PressureAngle`). The filed shape of
+  the problem was parametric: build the profile's planar offset q(θ) at the roller
+  radius, then solve arg(q(θ)) = ψ per query with implicit-function derivatives of the
+  root. All of that dissolves against the machinery `FromSketch` already stands on —
+  the sketch's signed distance is a TRUE planar distance outside the profile, so the
+  roller-centre curve is exactly the isolevel sd = R, and the follower's position is
+  the outermost crossing of that isolevel along its travel line: the same outside-in
+  march and bisection as the point follower (which is literally the isolevel-0 member,
+  bit-identical since reach + 0.0 and an isolevel of 0.0 change no bits), with slope
+  and curvature still the C² spline's own calculus. An offset follower is the same
+  march along a line that misses the pivot; what it buys is the PRESSURE ANGLE, so
+  that is reported too — tan φ = (slope − offset)/(centre distance), from the
+  instant-centre construction, with ONE sign convention stated on `CamFollower`
+  (offset positive to the RIGHT of travel, cam angle counterclockwise — the choice
+  that makes the textbook "positive offset reduces the rise-side pressure angle"
+  hold) and shared by placement and analysis. The verification is the eccentric
+  circle, where everything is closed-form because the offset of a circle is a circle,
+  and the pressure angle gets an INDEPENDENT oracle — the contact normal of a roller
+  on a circle passes through both centres, so cos φ = |t̂·(p − c)|/(a + R) — sharing
+  nothing with the formula but the physics, which is what pins the two conventions
+  as consistent (the formula misreads by the full offset term if either sign flips).
+  The measured reason the feature exists: the radial shortcut r(θ) + R misses the
+  true roller law by 0.12 on that fixture at θ = π/2, three orders above the law's
+  own fidelity, and the discriminating test asserts the shortcut DOES miss — without
+  that half, the fixture would pass a roller law wired to the shortcut.
+  *Mechanism persistence restates nothing that is derived, and saves everything that
+  is history* (`MechanismPersistence.cs`). A joint's mates are a deterministic
+  function of its two ends, so the file stores the ends (the mate-end vocabulary
+  verbatim — path, pinned coordinates, query descriptor — through the same
+  `MateSet.SaveEnd`/`LoadEnd`, so the two files cannot drift) and loading re-runs the
+  constructor. Two things are NOT re-derivable and ride as data: the axis joints'
+  perpendicular reference directions, whose re-derivation at load would move the
+  angle coordinate's zero (the `MateRef` constructor keeps an already-unit direction
+  verbatim, so they round-trip bit-for-bit), and `JointSweepState` — the unwrapped
+  accumulated angle is a history of how many turns the crank has taken, which no
+  pose can recover. Loading re-ADDS each joint through the ordinary `Add`, which
+  re-asserts its nominal DOF against the solver's measured rank: a file valid when
+  written can legitimately fail on a changed model, and that is a load WARNING
+  naming the joint (the joint skipped, couplings referencing it skipped by their
+  SAVED index — the index list keeps nulls so a skipped joint never shifts its
+  neighbours under a coupling). Couplings save their FACTORY and arguments rather
+  than their implementation — a gear as tooth counts, a rack-and-pinion as itself
+  rather than the straight-law cam it is built as — and their construction zeros are
+  deliberately absent: a coupling constrains the CHANGE since its construction, and
+  for any pose that satisfies it (a saved converged pose does, by the solver's own
+  contract) re-zeroing at load is algebraically the same constraint, so saving the
+  zeros would be storing a number the arithmetic already implies. Cam laws follow
+  the `Feature.SaveInputs` precedent: catalogue factories stamp their kind + args on
+  the law they return (`FunctionCamLaw.Identity`), `Segments` recurses,
+  `FromSketch` saves its sampled lifts — the law IS the samples, and the spline
+  rebuild is deterministic so the loaded law evaluates bit-identically — and a
+  `FromFunction` lambda writes an `opaque` marker that loads as a warning naming
+  the coupling unless the caller's `resolveOpaqueLaw` hook supplies the instance.
+  The oracle is the byte-identical save→load→save fixed point, with the
+  FeatureHistory rider asserted separately: a file carrying an opaque record is
+  smaller the second time by exactly the record the warning named, then a fixed
+  point.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

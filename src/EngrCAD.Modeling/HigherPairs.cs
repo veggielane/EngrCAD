@@ -23,20 +23,23 @@ public abstract class CamLaw
         return new FunctionCamLaw(
             angle => amplitude / 2 * (1 - Math.Cos(lobes * angle)),
             angle => amplitude / 2 * lobes * Math.Sin(lobes * angle),
-            angle => amplitude / 2 * lobes * lobes * Math.Cos(lobes * angle));
+            angle => amplitude / 2 * lobes * lobes * Math.Cos(lobes * angle))
+        { Identity = ("harmonic", [amplitude, lobes]) };
     }
 
     /// <summary>No motion: the follower dwells. The building block a
     /// <see cref="Segments"/> profile spends most of its cycle in.</summary>
     public static CamLaw Dwell(double lift = 0) =>
-        new FunctionCamLaw(_ => lift, static _ => 0, static _ => 0);
+        new FunctionCamLaw(_ => lift, static _ => 0, static _ => 0)
+        { Identity = ("dwell", [lift]) };
 
     /// <summary>
     /// Constant velocity: lift = rate·θ. Not periodic, and that is the point — it is
     /// what makes <see cref="Coupling.RackAndPinion"/> a cam pair with a straight law.
     /// </summary>
     public static CamLaw Linear(double rate) =>
-        new FunctionCamLaw(angle => rate * angle, _ => rate, static _ => 0);
+        new FunctionCamLaw(angle => rate * angle, _ => rate, static _ => 0)
+        { Identity = ("linear", [rate]) };
 
     // ---- the dwell–rise–dwell catalogue ----
     //
@@ -70,10 +73,12 @@ public abstract class CamLaw
     {
         RequireSpan(span);
         double w = Math.Tau / span;
-        return Clamped(span, rise,
+        var law = Clamped(span, rise,
             angle => rise * (angle / span - Math.Sin(w * angle) / Math.Tau),
             angle => rise / span * (1 - Math.Cos(w * angle)),
             angle => rise / span * w * Math.Sin(w * angle));
+        law.Identity = ("cycloidal", [rise, span]);
+        return law;
     }
 
     /// <summary>
@@ -86,10 +91,12 @@ public abstract class CamLaw
     {
         RequireSpan(span);
         double w = Math.PI / span;
-        return Clamped(span, rise,
+        var law = Clamped(span, rise,
             angle => rise / 2 * (1 - Math.Cos(w * angle)),
             angle => rise / 2 * w * Math.Sin(w * angle),
             angle => rise / 2 * w * w * Math.Cos(w * angle));
+        law.Identity = ("harmonicRise", [rise, span]);
+        return law;
     }
 
     /// <summary>
@@ -158,10 +165,12 @@ public abstract class CamLaw
                  - C * (Math.Sin(4 * Math.PI * (x - 0.25)) - 1) / (4 * Math.PI);
         }
 
-        return Clamped(span, rise,
+        var law = Clamped(span, rise,
             angle => rise * Lift(angle / span),
             angle => rise / span * Velocity(angle / span),
             angle => rise / (span * span) * Accel(angle / span));
+        law.Identity = ("modifiedTrapezoid", [rise, span]);
+        return law;
     }
 
     /// <summary>
@@ -204,7 +213,7 @@ public abstract class CamLaw
     /// <paramref name="rise"/> after, with zero slope and curvature there. That is what
     /// makes a rise composable — a segment asked for its value past its end returns the
     /// dwell it becomes, rather than continuing a sine off into the next segment.</summary>
-    private static CamLaw Clamped(
+    private static FunctionCamLaw Clamped(
         double span, double rise,
         Func<double, double> lift, Func<double, double> slope, Func<double, double> curvature) =>
         new FunctionCamLaw(
@@ -233,9 +242,30 @@ public abstract class CamLaw
     /// are the interpolant's own calculus. <paramref name="samples"/> is the fidelity
     /// knob (error O(h⁴) in the sample spacing).
     /// </summary>
-    public static CamLaw FromSketch(Sketch profile, double followerAngle = 0, int samples = 720)
+    public static CamLaw FromSketch(Sketch profile, double followerAngle = 0, int samples = 720) =>
+        FromSketch(profile, CamFollower.Point(followerAngle), samples);
+
+    /// <summary>
+    /// <see cref="FromSketch(Sketch, double, int)"/> for a general translating
+    /// follower: a roller of <see cref="CamFollower.RollerRadius"/> and/or a travel
+    /// line offset from the pivot by <see cref="CamFollower.Offset"/>.
+    /// <para><b>The roller compensation is exact, not the radial shortcut.</b> A roller
+    /// centre traces the profile's PLANAR offset at the roller radius, and a planar
+    /// offset is not a radial one — r(θ) + R is wrong by O(R·r′²/r²), worst exactly
+    /// where the cam is steepest. No parametric offset curve is ever built: the sketch's
+    /// signed distance is a true planar distance outside the profile, so the offset
+    /// curve IS the isolevel sd = R, and the outermost crossing of that isolevel along
+    /// the follower's travel line — the same outside-in march and bisection the point
+    /// follower gets — is the roller centre exactly.</para>
+    /// <para>The law's value is the follower centre's distance along its travel line
+    /// from the foot of the pivot perpendicular (for the default radial line, the
+    /// centre's distance from the pivot) — the same absolute convention as the point
+    /// overload, so <see cref="Coupling.Cam"/> consumes either interchangeably.</para>
+    /// </summary>
+    public static CamLaw FromSketch(Sketch profile, CamFollower follower, int samples = 720)
     {
         ArgumentNullException.ThrowIfNull(profile);
+        ArgumentNullException.ThrowIfNull(follower);
         if (samples < 8)
             throw new ArgumentOutOfRangeException(nameof(samples), "A sketch cam law needs at least 8 samples.");
         var region = new SketchRegion(profile);
@@ -258,16 +288,53 @@ public abstract class CamLaw
         for (int k = 0; k < samples; k++)
         {
             // The profile rotates with the cam: at cam angle θ the follower reads the
-            // profile's local direction followerAngle − θ.
-            lifts[k] = Radius(region, followerAngle - k * h, reach);
+            // profile's local direction followerAngle − θ. Exact-zero semantic test on
+            // the offset: a radial follower keeps the incumbent ray arithmetic
+            // bit-for-bit (reach + 0.0 and an isolevel of 0.0 change no bits).
+            double local = follower.Angle - k * h;
+            lifts[k] = follower.Offset == 0
+                ? Radius(region, local, reach + follower.RollerRadius, follower.RollerRadius)
+                : OffsetLift(region, local, follower, reach);
         }
         return new SplineCamLaw(lifts);
     }
 
-    /// <summary>The OUTERMOST boundary crossing along a ray from the pivot: a coarse
-    /// outside-in march finds the first inside sample, then bisection on the exact
-    /// signed distance pins the crossing.</summary>
-    private static double Radius(SketchRegion region, double angle, double reach)
+    /// <summary>
+    /// The pressure angle of a translating follower riding this law at
+    /// <paramref name="angle"/> — the angle between the follower's travel direction and
+    /// the contact normal, the number a designer offsets the follower to improve.
+    /// Signed: tan φ = (slope − offset) / (value + <paramref name="baseDistance"/>),
+    /// from the instant-centre construction with the cam angle increasing
+    /// counterclockwise, so a POSITIVE <see cref="CamFollower.Offset"/> reduces the
+    /// rise-side pressure angle (the textbook relation; the sign flips on the return).
+    /// <para>The denominator must be the follower centre's distance along its travel
+    /// line from the foot of the pivot perpendicular. A <see cref="FromSketch(Sketch,
+    /// CamFollower, int)"/> law already IS that distance (leave
+    /// <paramref name="baseDistance"/> at 0); a zero-based rise law from the catalogue
+    /// needs the prime-circle geometry added: baseDistance = √(Rp² − offset²).</para>
+    /// <para>The roller radius does not enter: the contact normal passes through the
+    /// roller's centre whatever its radius, so φ is the centre's, exactly.</para>
+    /// </summary>
+    public double PressureAngle(double angle, CamFollower follower, double baseDistance = 0)
+    {
+        ArgumentNullException.ThrowIfNull(follower);
+        Evaluate(angle, out double lift, out double slope, out _);
+        double distance = lift + baseDistance;
+        if (!(distance > 0))
+            throw new InvalidOperationException(
+                $"The pressure angle needs the follower centre's distance from the pivot foot, but this " +
+                $"law's value plus baseDistance is {distance:g4} at angle {angle:g4}. For a zero-based " +
+                "rise law over a prime circle, pass baseDistance = sqrt(primeRadius^2 - offset^2).");
+        return Math.Atan2(slope - follower.Offset, distance);
+    }
+
+    /// <summary>The OUTERMOST crossing of the isolevel sd = <paramref name="isolevel"/>
+    /// along a ray from the pivot: a coarse outside-in march finds the first sample
+    /// inside the (dilated) profile, then bisection on the exact signed distance pins
+    /// the crossing. Isolevel 0 is the profile itself (a point follower); a roller
+    /// radius dilates it exactly, since the signed distance is a true planar distance
+    /// outside the profile.</summary>
+    private static double Radius(SketchRegion region, double angle, double reach, double isolevel)
     {
         var direction = new Vector2d(Math.Cos(angle), Math.Sin(angle));
         const int coarse = 1024;
@@ -277,7 +344,7 @@ public abstract class CamLaw
         for (int i = 1; i <= coarse; i++)
         {
             double r = reach - i * step;
-            if (region.SignedDistance(direction * r) < 0)
+            if (region.SignedDistance(direction * r) < isolevel)
             {
                 inside = r;
                 outside = r + step;
@@ -287,11 +354,58 @@ public abstract class CamLaw
         if (double.IsNaN(inside))
             throw new ArgumentException(
                 $"The cam profile has no material along the ray at {angle:g4} rad — a radial cam " +
-                "profile must surround its pivot at every angle.");
+                "profile must surround its pivot at every angle." +
+                (isolevel > 0 ? $" (The profile is read grown by the roller radius {isolevel:g4}.)" : ""));
         for (int i = 0; i < 100; i++)
         {
             double middle = 0.5 * (inside + outside);
-            if (region.SignedDistance(direction * middle) < 0)
+            if (region.SignedDistance(direction * middle) < isolevel)
+                inside = middle;
+            else
+                outside = middle;
+        }
+        return 0.5 * (inside + outside);
+    }
+
+    /// <summary>
+    /// <see cref="Radius"/> for an OFFSET travel line: the follower centre moves along
+    /// p(s) = s·t̂ + offset·n̂ (n̂ the right normal of the travel direction), mapped
+    /// into the cam's local frame at this angle, and the outermost crossing of
+    /// sd = roller radius along it is the centre's distance s from the perpendicular
+    /// foot. Same march, same bisection — a different line, not a different algorithm.
+    /// </summary>
+    private static double OffsetLift(SketchRegion region, double localAngle, CamFollower follower, double reach)
+    {
+        var travel = new Vector2d(Math.Cos(localAngle), Math.Sin(localAngle));
+        // Offset is positive to the RIGHT of the travel direction (see CamFollower) —
+        // the convention that makes a positive offset reduce the rise-side pressure
+        // angle for a counterclockwise cam, i.e. the textbook one.
+        var origin = new Vector2d(travel.Y, -travel.X) * follower.Offset;
+        double start = reach + follower.RollerRadius;
+        const int coarse = 1024;
+        double step = start / coarse;
+        double outside = start;
+        double inside = double.NaN;
+        for (int i = 1; i <= coarse; i++)
+        {
+            double s = start - i * step;
+            if (region.SignedDistance(origin + travel * s) < follower.RollerRadius)
+            {
+                inside = s;
+                outside = s + step;
+                break;
+            }
+        }
+        if (double.IsNaN(inside))
+            throw new ArgumentException(
+                $"The cam profile has no material along the follower's travel line at cam-local angle " +
+                $"{localAngle:g4} rad (offset {follower.Offset:g4}" +
+                (follower.RollerRadius > 0 ? $", roller radius {follower.RollerRadius:g4}" : "") +
+                ") — an offset follower's line must meet the profile at every cam angle.");
+        for (int i = 0; i < 100; i++)
+        {
+            double middle = 0.5 * (inside + outside);
+            if (region.SignedDistance(origin + travel * middle) < follower.RollerRadius)
                 inside = middle;
             else
                 outside = middle;
@@ -300,9 +414,72 @@ public abstract class CamLaw
     }
 }
 
+/// <summary>
+/// A translating cam follower's geometry, for <see cref="CamLaw.FromSketch(Sketch,
+/// CamFollower, int)"/> and <see cref="CamLaw.PressureAngle"/>: the travel direction's
+/// angle in the cam's construction pose, the roller radius (0 = a point/knife-edge
+/// follower), and the travel line's signed perpendicular offset from the cam pivot.
+/// <para><b>Offset sign convention, stated once and shared by placement and
+/// analysis</b>: positive is to the RIGHT of the travel direction (looking along it,
+/// with the cam angle increasing counterclockwise) — the choice that makes the
+/// textbook pressure-angle relation tan φ = (v − offset)/s hold with a positive
+/// offset reducing the rise-side pressure angle.</para>
+/// </summary>
+public sealed class CamFollower
+{
+    private CamFollower(double angle, double rollerRadius, double offset)
+    {
+        Angle = angle;
+        RollerRadius = rollerRadius;
+        Offset = offset;
+    }
+
+    /// <summary>The travel direction's angle (radians) in the cam's construction pose.</summary>
+    public double Angle { get; }
+
+    /// <summary>The roller radius; 0 is a point (knife-edge) follower.</summary>
+    public double RollerRadius { get; }
+
+    /// <summary>The travel line's signed perpendicular offset from the pivot
+    /// (positive = right of the travel direction; see the class notes).</summary>
+    public double Offset { get; }
+
+    /// <summary>A point (knife-edge) follower, optionally on an offset travel line.</summary>
+    public static CamFollower Point(double angle = 0, double offset = 0) =>
+        Create(angle, 0, offset);
+
+    /// <summary>A roller follower of <paramref name="radius"/>, optionally on an
+    /// offset travel line. Radius 0 is exactly <see cref="Point"/>.</summary>
+    public static CamFollower Roller(double radius, double angle = 0, double offset = 0) =>
+        Create(angle, radius, offset);
+
+    private static CamFollower Create(double angle, double rollerRadius, double offset)
+    {
+        if (!double.IsFinite(angle))
+            throw new ArgumentOutOfRangeException(nameof(angle), "A follower needs a finite travel angle.");
+        if (!(rollerRadius >= 0) || !double.IsFinite(rollerRadius))
+            throw new ArgumentOutOfRangeException(nameof(rollerRadius),
+                "A roller radius must be finite and non-negative (0 = a point follower).");
+        if (!double.IsFinite(offset))
+            throw new ArgumentOutOfRangeException(nameof(offset), "A follower offset must be finite.");
+        return new CamFollower(angle, rollerRadius, offset);
+    }
+
+    public override string ToString() =>
+        (RollerRadius > 0 ? $"roller r={RollerRadius:g4}" : "point follower") +
+        (Offset != 0 ? $" offset {Offset:g4}" : "") +
+        (Angle != 0 ? $" at {Angle:g4} rad" : "");
+}
+
 internal sealed class FunctionCamLaw(
     Func<double, double> lift, Func<double, double> slope, Func<double, double> curvature) : CamLaw
 {
+    /// <summary>Which catalogue factory built this law and with what arguments — the
+    /// <c>Feature.SaveInputs</c> convention, so mechanism persistence re-runs the same
+    /// deterministic constructor. Null = an opaque lambda law
+    /// (<see cref="CamLaw.FromFunction"/>), which saves a marker and loads as a warning.</summary>
+    public (string Kind, double[] Args)? Identity { get; set; }
+
     public override void Evaluate(double angle, out double liftValue, out double slopeValue, out double curvatureValue)
     {
         liftValue = lift(angle);
@@ -354,6 +531,20 @@ internal sealed class SegmentedCamLaw : CamLaw
         _cycleLift = _offset[n];
     }
 
+    /// <summary>The segments as authored (declared spans + laws) — persistence re-runs
+    /// <see cref="CamLaw.Segments"/> with exactly these, so the chain rebuilds through
+    /// the same deterministic constructor.</summary>
+    public (double Span, CamLaw Law)[] SavedSegments
+    {
+        get
+        {
+            var segments = new (double, CamLaw)[_laws.Length];
+            for (int i = 0; i < _laws.Length; i++)
+                segments[i] = (_declared[i], _laws[i]);
+            return segments;
+        }
+    }
+
     public override void Evaluate(double angle, out double lift, out double slope, out double curvature)
     {
         // Whole cycles carry their net lift, so a chain that does NOT return to its
@@ -388,6 +579,12 @@ internal sealed class SplineCamLaw : CamLaw
     private readonly double[] _values;
     private readonly double[] _moments;
     private readonly double _spacing;
+
+    /// <summary>The sampled lifts the spline interpolates — the law's DATA, which is
+    /// how a <see cref="CamLaw.FromSketch(Sketch, CamFollower, int)"/> law persists
+    /// (the sketch itself need not round-trip: the law IS the samples, and rebuilding
+    /// the spline from them is deterministic, so the moments come back bit-identical).</summary>
+    public IReadOnlyList<double> Values => _values;
 
     public SplineCamLaw(double[] values)
     {
@@ -490,6 +687,13 @@ public sealed class Coupling
 
     internal AuxiliaryConstraint Constraint { get; }
 
+    /// <summary>Which factory built this coupling and with what arguments — the
+    /// <c>Feature.SaveInputs</c> convention for mechanism persistence. Each public
+    /// factory stamps its OWN record (a gear is saved as a gear, not as the ratio it
+    /// computed; a rack and pinion as itself, not the straight-law cam it is built as),
+    /// so a load re-runs the same factory with the same arguments.</summary>
+    internal CouplingData? SaveData { get; set; }
+
     /// <summary>The joints this coupling ties together (validation and reporting).</summary>
     public IReadOnlyList<AxisJoint> Joints { get; }
 
@@ -505,7 +709,9 @@ public sealed class Coupling
         if (teethA <= 0 || teethB <= 0)
             throw new ArgumentOutOfRangeException(nameof(teethA), "Gear tooth counts must be positive.");
         double ratio = (internalMesh ? 1 : -1) * teethA / teethB;
-        return Ratio(a, b, ratio, name ?? $"gear {teethA:g0}:{teethB:g0}");
+        var coupling = Ratio(a, b, ratio, name ?? $"gear {teethA:g0}:{teethB:g0}");
+        coupling.SaveData = new CouplingData("gear", [teethA, teethB, internalMesh ? 1 : 0], null);
+        return coupling;
     }
 
     /// <summary>An open belt or chain drive: Δθ_b = (radiusA/radiusB)·Δθ_a (both
@@ -516,7 +722,9 @@ public sealed class Coupling
         if (radiusA <= 0 || radiusB <= 0)
             throw new ArgumentOutOfRangeException(nameof(radiusA), "Belt pitch radii must be positive.");
         double ratio = (crossed ? -1 : 1) * radiusA / radiusB;
-        return Ratio(a, b, ratio, name ?? $"belt {radiusA:g4}:{radiusB:g4}");
+        var coupling = Ratio(a, b, ratio, name ?? $"belt {radiusA:g4}:{radiusB:g4}");
+        coupling.SaveData = new CouplingData("belt", [radiusA, radiusB, crossed ? 1 : 0], null);
+        return coupling;
     }
 
     /// <summary>The raw scalar spin coupling Δθ_b = ratio·Δθ_a.</summary>
@@ -528,7 +736,8 @@ public sealed class Coupling
         RequireFreeSpin(b);
         if (ReferenceEquals(a, b))
             throw new ArgumentException("A ratio coupling needs two different joints.", nameof(b));
-        return new Coupling(new RatioCoupling(a, b, ratio, name ?? $"ratio {ratio:g4}"), [a, b]);
+        return new Coupling(new RatioCoupling(a, b, ratio, name ?? $"ratio {ratio:g4}"), [a, b])
+        { SaveData = new CouplingData("ratio", [ratio], null) };
     }
 
     /// <summary>
@@ -547,8 +756,10 @@ public sealed class Coupling
         if (!double.IsFinite(pitchRadius) || pitchRadius == 0)   // exact-zero: a zero radius transmits nothing
             throw new ArgumentOutOfRangeException(nameof(pitchRadius),
                 "A rack and pinion needs a non-zero pitch radius.");
-        return Cam(pinion, rack, CamLaw.Linear(pitchRadius),
+        var coupling = Cam(pinion, rack, CamLaw.Linear(pitchRadius),
             name ?? $"rack and pinion r={pitchRadius:g4}");
+        coupling.SaveData = new CouplingData("rackAndPinion", [pitchRadius], null);
+        return coupling;
     }
 
     /// <summary>A cam-follower pair: the follower's slide tracks
@@ -564,7 +775,8 @@ public sealed class Coupling
             throw new ArgumentException(
                 $"Joint '{follower.Name}' pins its slide, so it cannot be a cam follower — use a " +
                 "prismatic or cylindrical joint.", nameof(follower));
-        return new Coupling(new CamCoupling(cam, follower, law, name ?? "cam"), [cam, follower]);
+        return new Coupling(new CamCoupling(cam, follower, law, name ?? "cam"), [cam, follower])
+        { SaveData = new CouplingData("cam", [], law) };
     }
 
     private static void RequireFreeSpin(AxisJoint joint)
@@ -575,6 +787,10 @@ public sealed class Coupling
                 "revolute, cylindrical, or screw joint.");
     }
 }
+
+/// <summary>A coupling's construction record: which factory, its scalar arguments, and
+/// (for a cam) the law. What mechanism persistence writes and re-runs.</summary>
+internal sealed record CouplingData(string Kind, double[] Args, CamLaw? Law);
 
 /// <summary>Δθ_b = ratio·Δθ_a as one residual row, angles unwrapped through each
 /// joint's sweep state and measured from the coupling's OWN construction pose.</summary>
