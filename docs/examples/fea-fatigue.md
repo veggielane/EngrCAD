@@ -265,10 +265,10 @@ the producer, and the legend renders what it says rather than printing raw logar
 The colour mapping itself stays linear over the log values, which is exactly what a
 log-scale colour axis means; a decade tick sits at the linear position of its
 logarithm, which is where its colour is. Where a log field's range spans **less than
-two decades** the even five-tick layout stays (an interval that short holds at most
-one interior decade, which cannot describe a range), still labelled with anti-logged
-values; and the two end ticks always print the true range, whatever the decades do —
-a legend that hides its endpoints lies about its range.
+two decades** the even five-tick layout stays (an interval that short may hold as few
+as no interior decades — too few ticks to describe a range), still labelled with
+anti-logged values; and the two end ticks always print the true range, whatever the
+decades do — a legend that hides its endpoints lies about its range.
 
 ## What this deliberately is not
 

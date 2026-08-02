@@ -207,9 +207,9 @@ public static class FieldLegend
     /// <c>log10(…)</c> — see <see cref="TryLogUnits"/>) labels ticks with the
     /// ANTI-LOGGED values, and places them on the integer decades when the range spans
     /// at least two of them: round powers of ten are the whole point of a log legend,
-    /// where an interval under two decades holds at most one interior decade — which
-    /// cannot describe a range — so it falls back to the even spacing with anti-logged
-    /// labels. The two END ticks always print the range's true (anti-logged) min and
+    /// while an interval under two decades may hold as few as NO interior decades —
+    /// too few ticks to describe a range — so it falls back to the even spacing with
+    /// anti-logged labels. The two END ticks always print the range's true (anti-logged) min and
     /// max, and an interior decade within <see cref="LogEndClearanceDip"/> of an end is
     /// dropped so the labels cannot overlap.</para>
     /// <para>Tick POSITIONS are honest either way: a decade tick at

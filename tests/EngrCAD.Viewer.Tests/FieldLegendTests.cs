@@ -221,8 +221,8 @@ public class FieldLegendTests
     [Fact]
     public void TickMarks_LogDisplay_UnderTwoDecades_FallsBackToEvenSpacing()
     {
-        // An interval under two decades holds at most one interior decade, which cannot
-        // describe a range — so the even five-tick layout stays, with anti-logged labels.
+        // An interval under two decades may hold as few as no interior decades — too few
+        // ticks to describe a range — so the even five-tick layout stays, anti-logged.
         var ticks = FieldLegend.TickMarks(LogDisplay(4.2, 5.8));
 
         Assert.Equal(FieldLegend.Ticks, ticks.Length);
