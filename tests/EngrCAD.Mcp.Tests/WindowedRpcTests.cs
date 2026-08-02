@@ -56,16 +56,19 @@ public partial class WindowedRpcTests
         //    reads `_instances`, which the RENDER PASS swaps in from `_pending`, so a
         //    client connecting the instant the port is announced legitimately sees an
         //    EMPTY list (measured: it does, every run — the port is reported from
-        //    OnViewportReady, before the first frame). Retried rather than slept on, and
-        //    filed rather than patched: reporting the pending list instead would desync it
-        //    from the INDICES select_part and set_display_mode address.
-        var parts = await Retry(() =>
-        {
-            var listed = viewer.Client.SendAsync("list_parts").GetAwaiter().GetResult()!
-                .AsArray().Select(p => (string?)p).OfType<string>().ToList();
-            Assert.Contains("bracket", listed);
-            return listed;
-        });
+        //    OnViewportReady, before the first frame). The readiness probe that
+        //    measurement forced is what a client polls now: ping carries "ready"
+        //    (ViewportControl.InstancesDisplayed — true once the render pass has
+        //    adopted the swap), and the list read AFTER ready is complete with no
+        //    blind retry. Reporting the pending list instead was rejected because it
+        //    would desync the paths from the INDICES select_part and set_display_mode
+        //    address.
+        await Retry(() => Assert.True(
+            (bool?)viewer.Client.SendAsync("ping").GetAwaiter().GetResult()!["ready"],
+            "the window has not adopted its instances yet"));
+        var parts = viewer.Client.SendAsync("list_parts").GetAwaiter().GetResult()!
+            .AsArray().Select(p => (string?)p).OfType<string>().ToList();
+        Assert.Contains("bracket", parts);
         Assert.Contains("pin", parts);
 
         // 3. Mutations marshal onto a live dispatcher and stick.

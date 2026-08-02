@@ -81,6 +81,21 @@ public class ViewportRemoteViewerTests
     }
 
     [Fact]
+    public void Readiness_is_false_until_the_render_pass_adopts_instances()
+    {
+        // The measured startup race: the RPC port is announced from OnViewportReady
+        // while instances handed to SetInstances wait for the render pass to swap them
+        // in. A control that never renders IS that gap, held open — so the headless
+        // half of the fixture pins the FALSE readings, and WindowedRpcTests (a live
+        // render pass) covers ready flipping true.
+        var control = new ViewportControl();
+        Assert.False(control.InstancesDisplayed);   // nothing has ever been displayed
+
+        control.SetInstances([], frame: false);
+        Assert.False(control.InstancesDisplayed);   // queued, not adopted — still the gap
+    }
+
+    [Fact]
     public void A_claimed_capture_is_claimed_exactly_once()
     {
         // The render pass runs on every frame; a capture that could be claimed twice would

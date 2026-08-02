@@ -596,6 +596,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 update = _pending;
                 _pending = null;
                 _pendingPoses = null;   // the full swap supersedes any queued re-pose
+                _displayedInstances = true;   // the swap the readiness probe waits for
             }
             else if (_pendingPoses is not null)
             {
@@ -1382,6 +1383,35 @@ public sealed class ViewportControl : OpenGlControlBase
         {
             lock (_sceneLock)
                 return [.. _instances.Select(i => i.Path)];
+        }
+    }
+
+    // Set true (render thread, under _sceneLock) when a pending SetInstances swap is
+    // adopted — never cleared, because "has this viewport ever displayed a scene"
+    // only moves one way.
+    private bool _displayedInstances;
+
+    /// <summary>
+    /// True once the render pass has adopted an instance list AND nothing newer is
+    /// queued — i.e. <see cref="InstancePaths"/> reflects what is actually drawn.
+    /// <para>This is the honest answer to the measured startup race: the RPC endpoint
+    /// announces its port from <c>OnViewportReady</c>, while instances handed to
+    /// <see cref="SetInstances"/> are only swapped in BY the render pass — so a client
+    /// connecting the instant it sees the port legitimately reads an empty
+    /// <see cref="InstancePaths"/>. Reporting the PENDING list instead would
+    /// desynchronize the paths from the indices <see cref="Select"/> and
+    /// <see cref="SetDisplayMode"/> address; a readiness probe lets a client poll
+    /// (<c>ping</c> carries it) and lets a refusal say "not yet" instead of "this
+    /// model has no parts". Note the honest scope: with lazy tab meshing the list is
+    /// a growing prefix, so ready means "what is drawn", not "the document is fully
+    /// loaded".</para>
+    /// </summary>
+    public bool InstancesDisplayed
+    {
+        get
+        {
+            lock (_sceneLock)
+                return _displayedInstances && _pending is null;
         }
     }
 

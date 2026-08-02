@@ -23,6 +23,8 @@ public class ViewerBridgeTests
         public Task<IReadOnlyList<string>> ListPartsAsync() =>
             Task.FromResult<IReadOnlyList<string>>(["Model/bracket", "Model/pin"]);
 
+        public Task<bool> IsReadyAsync() => Task.FromResult(true);
+
         public Task SetViewAsync(string view) { Calls.Add($"view:{view}"); return Task.CompletedTask; }
 
         public Task FitAsync() { Calls.Add("fit"); return Task.CompletedTask; }

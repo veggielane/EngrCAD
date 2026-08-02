@@ -143,8 +143,18 @@ internal sealed class StubViewer : IRemoteViewer
     public Task<IReadOnlyList<string>> ListPartsAsync()
     {
         Calls.Add("list");
-        return Task.FromResult<IReadOnlyList<string>>(["Model/bracket", "Model/pin"]);
+        return Task.FromResult<IReadOnlyList<string>>(Parts);
     }
+
+    /// <summary>What list_parts answers; empty models the startup gap when
+    /// <see cref="Ready"/> is also false.</summary>
+    public IReadOnlyList<string> Parts = ["Model/bracket", "Model/pin"];
+
+    /// <summary>False models the measured startup race: the port announced, the first
+    /// instance list not yet adopted by the render pass.</summary>
+    public bool Ready = true;
+
+    public Task<bool> IsReadyAsync() => Task.FromResult(Ready);
 
     public Task SetViewAsync(string view) { Calls.Add($"view:{view}"); return Task.CompletedTask; }
 
@@ -168,7 +178,7 @@ internal sealed class StubViewer : IRemoteViewer
     {
         Calls.Add($"select:{path ?? "null"}");
         Selection = path;
-        return Task.FromResult(path is null || path == "Model/pin");
+        return Task.FromResult(path is null || (path == "Model/pin" && Parts.Contains(path)));
     }
 
     public Task<string?> GetSelectionAsync() => Task.FromResult(Selection);
@@ -220,6 +230,37 @@ public class RemoteViewerDispatcherTests
         var result = await Call(new StubViewer(), "ping");
         Assert.Equal("test title", (string?)result!["title"]);
         Assert.Contains("measure", result["methods"]!.AsArray().Select(m => (string?)m));
+    }
+
+    [Fact]
+    public async Task Ping_reports_readiness_so_a_client_can_poll_the_startup_gap()
+    {
+        // The measured race: the RPC port is announced from OnViewportReady while the
+        // first instance list is still waiting for the render pass — so ping carries
+        // "ready" and a client polls it instead of reading [] as "no parts".
+        var viewer = new StubViewer { Ready = false };
+        Assert.False((bool?)(await Call(viewer, "ping"))!["ready"]);
+
+        viewer.Ready = true;
+        Assert.True((bool?)(await Call(viewer, "ping"))!["ready"]);
+    }
+
+    [Fact]
+    public async Task UnknownPart_before_readiness_says_not_yet_instead_of_no_parts()
+    {
+        // An empty part list has two causes with opposite fixes; the refusal must not
+        // read as "this model has no parts" during the startup gap.
+        var viewer = new StubViewer { Ready = false, Parts = [] };
+        var raced = await Assert.ThrowsAsync<RemoteMethodException>(() =>
+            Call(viewer, "select_part", new JsonObject { ["part"] = "Model/pin" }));
+        Assert.Contains("not displayed its parts yet", raced.Message);
+        Assert.Contains("ping", raced.Message);
+
+        // A ready viewer with a genuinely empty model keeps the incumbent message.
+        var empty = new StubViewer { Ready = true, Parts = [] };
+        var refused = await Assert.ThrowsAsync<RemoteMethodException>(() =>
+            Call(empty, "select_part", new JsonObject { ["part"] = "Model/pin" }));
+        Assert.Contains("displayed parts:", refused.Message);
     }
 
     [Fact]
