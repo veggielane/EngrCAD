@@ -2284,13 +2284,34 @@ as a ratio to its text height, and those ratios ARE the viewer's `AnnotationGeom
 pixel constants over its own 12-px text height — a viewer test asserts it by reading
 both sides.
 
-**Export** (`SheetWriter.ToSvg`/`ToDxf`/`SaveSvg`/`SaveDxf`) consumes one
-`DrawingSheet.Compute()` result, so the two writers cannot disagree about what a drawing
-looks like. Line CLASS drives everything: visible solid and wide, hidden narrow and
-dashed, cut chain-dashed, furniture narrow and continuous, each on its own layer. The
-DXF writer emits an **LTYPE table** for every pattern its layers name — a file that
+**Export** (`SheetWriter.ToSvg`/`ToDxf`/`ToPdf`/`SaveSvg`/`SaveDxf`/`SavePdf`) consumes
+one `DrawingSheet.Compute()` result, so the three writers cannot disagree about what a
+drawing looks like. Line CLASS drives everything: visible solid and wide, hidden narrow
+and dashed, cut chain-dashed, furniture narrow and continuous, each on its own layer.
+The DXF writer emits an **LTYPE table** for every pattern its layers name — a file that
 names a line type without defining it shows solid lines in every reader, and the
-classification is lost in transit. Docs: `docs/examples/drawings.md`.
+classification is lost in transit.
+
+**PDF is the deliverable format** (`PdfDrawing` + `SheetWriter.ToPdf`), hand-written and
+dependency-free like every format here. The design decisions, each stated in the code:
+the file is **uncompressed ASCII with no /Info and no /ID**, so writing the same sheet
+twice is byte-identical (a drawing revision diffs like its model — the `BrepArchive`
+text argument); **there is no y-flip**, because PDF's page origin is already the sheet's
+bottom-left-y-up convention, so the one transform is the mm→point scale
+(`PdfDrawing.PointsPerMillimetre`, the single 72/25.4 constant) and every coordinate in
+the content stream is the sheet's own millimetre value verbatim; **pens are
+`SvgDrawing.SvgPen`'s own table** (one pen table, two vector writers); and **text is the
+standard-14 Helvetica over WinAnsi** — the same non-embedded-system-font choice the SVG
+writer makes, with anchor shifts measured from transcribed Helvetica AFM widths.
+Characters outside WinAnsi are refused by name (a dimension that silently lost its
+symbol is a wrong drawing), with ONE deliberate substitution: the drafting diameter sign
+U+2300 travels as O-stroke (U+00D8), its standard typographic stand-in, pinned by test.
+There is deliberately no `PdfDrawing.Add(Sketch)`: PDF paths are lines and cubics only,
+so a circular arc has no exact PDF form and an overload would silently flatten — the
+caller flattens at a tolerance they state. Verified by an independently written PDF
+parser in the test suite (xref offsets checked against their objects, content stream
+tokenized, polyline coordinates asserted bit-identical) and by Poppler's `pdftotext`
+recovering every text run. Docs: `docs/examples/drawings.md`.
 
 ## Quality
 

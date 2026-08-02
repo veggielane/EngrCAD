@@ -7,7 +7,8 @@ A model becomes a **drawing** in three steps, and EngrCAD owns all three:
 2. A **sheet** (`DrawingSheet`) places those views on paper with a border and a title
    block, at a standard scale, in first- or third-angle projection.
 3. **Export** writes the sheet as SVG or DXF, with every line class on its own layer,
-   so the file opens in a drafting package looking the way a drawing should.
+   so the file opens in a drafting package looking the way a drawing should — or as
+   PDF, the format a drawing is actually sent in.
 
 The result is a document you can send to a machinist.
 
@@ -116,9 +117,9 @@ bounds).
 
 ## Exporting a sheet
 
-Both writers consume the same `DrawingSheet.Compute()` result, so they cannot disagree
-about what a drawing looks like — they differ only in how a polyline, a dash pattern and
-a piece of text are spelled.
+All three writers — SVG, DXF and PDF — consume the same `DrawingSheet.Compute()`
+result, so they cannot disagree about what a drawing looks like — they differ only in
+how a polyline, a dash pattern and a piece of text are spelled.
 
 | Class | Layer | SVG | DXF |
 | --- | --- | --- | --- |
@@ -154,8 +155,63 @@ if (!titles.Contains("PLATE") || !titles.Contains("EC-0001"))
     throw new Exception("the title block did not survive the round trip");
 ```
 
-`sheet.SaveSvg(path)` and `sheet.SaveDxf(path)` write files; `sheet.ToSvg()` and
-`sheet.ToDxf()` hand back the document if you would rather post-process it.
+### PDF — the deliverable format
+
+What actually gets *sent* to a manufacturer is usually a PDF, so the sheet has a third
+writer over the same `Compute()` result: `sheet.ToPdf()` / `sheet.SavePdf(path)`.
+It is hand-written and dependency-free like every format here, and three choices are
+worth knowing:
+
+- **The file is uncompressed ASCII with no timestamp and no /ID**, so writing the same
+  sheet twice produces byte-identical files — you can diff a drawing revision the way
+  you diff its model. (Both fields are optional per the PDF spec; their natural values
+  are exactly what would break that property.)
+- **There is no y-flip.** PDF's page origin is the bottom-left with y up — the sheet's
+  own convention — so the one transform in the file is the millimetre-to-point scale,
+  and every coordinate in the content stream is the sheet's own millimetre value.
+- **Text is the built-in Helvetica** (the same non-embedded system-font choice the SVG
+  writer makes), encoded as WinAnsi. The drafting diameter sign U+2300, which WinAnsi
+  lacks, is carried as Ø — the standard typographic stand-in; any other character with
+  no WinAnsi form is refused by name rather than silently replaced.
+
+Line classes keep their SVG pens — hidden detail is dashed with exactly the SVG dash
+pattern, from the same table, so the two exports cannot disagree. This fence verifies
+the round-trip properties on every docs build:
+
+```csharp run:drawing-pdf
+var plate = new Part("plate", Shape.Box(60, 40, 12)
+    .Drill(HoleSpec.Simple(10), [new Vector2d(0, 0)], depth: 14,
+        SketchPlane.At((0, 0, 6), Vector3d.UnitX, Vector3d.UnitY)));
+
+var sheet = DrawingSheet.StandardLayout(plate, SheetFormat.A4);
+sheet.Title = sheet.Title with { Title = "PLATE", DrawingNumber = "EC-0001" };
+var path = Path.Combine(Scratch, "plate-drawing.pdf");
+sheet.SavePdf(path);
+
+// Writing the same sheet twice is a byte fixed point — no timestamps, no random IDs.
+byte[] first = File.ReadAllBytes(path);
+if (!first.SequenceEqual(sheet.ToPdf()))
+    throw new Exception("the PDF is not a deterministic function of the sheet");
+
+// The file is uncompressed ASCII, so its properties are visible to a plain read:
+// header and trailer, the hidden line class's dash pattern, and the title text.
+string text = System.Text.Encoding.ASCII.GetString(first);
+if (!text.StartsWith("%PDF-1.4") || !text.TrimEnd().EndsWith("%%EOF"))
+    throw new Exception("not a well-formed PDF envelope");
+if (!text.Contains("[1.2 0.8] 0 d"))
+    throw new Exception("hidden detail lost its dash pattern");
+if (!text.Contains("(PLATE)"))
+    throw new Exception("the title block did not reach the PDF");
+```
+
+(A PDF cannot render as a docs image the way an SVG can, so this fence verifies the
+file rather than showing it; the tests go further, re-reading the file through an
+independently written PDF parser and asserting every polyline's coordinates round-trip
+bit for bit.)
+
+`sheet.SaveSvg(path)`, `sheet.SaveDxf(path)` and `sheet.SavePdf(path)` write files;
+`sheet.ToSvg()`, `sheet.ToDxf()` and `sheet.ToPdf()` hand back the document if you
+would rather post-process it.
 
 ## What the projection is honest about
 

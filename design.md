@@ -3358,11 +3358,49 @@ A drawing is a *document*, not a picture, and the whole design follows from that
   the 3D PMI overlay rather than re-invented: `SheetStyle` states each length as a ratio
   to its text height, and those ratios are `AnnotationGeometry`'s pixel constants over
   its own text height, asserted by a test that reads both.
-- **One `Compute()`, two writers.** The SVG and DXF writers consume the same
+- **One `Compute()`, three writers.** The SVG, DXF and PDF writers consume the same
   `SheetContent` and differ only in spelling. The DXF side carries one rule worth
   stating: a file that NAMES a line type its layers use must also DEFINE it, or every
   reader falls back to solid lines and the visible/hidden classification — the entire
   point of the exercise — is silently lost in transit.
+- **The PDF writer is built for the byte fixed point, and every choice follows from
+  it.** A drawing revision should diff like its model, so the file is uncompressed
+  ASCII (legal PDF; the `BrepArchive` text argument — Flate would buy kilobytes and
+  cost the inspectability every assertion here rests on) and deliberately carries **no
+  /Info dictionary and no /ID**: both are optional per the spec, and their natural
+  values — a CreationDate, an MD5 salted with the clock — are precisely the fields
+  that would make two writes of one sheet differ. Three other decisions carry
+  reasons. **(a) No y-flip exists**, because PDF user space has its origin at the
+  bottom-left with y up — the sheet's own convention — so the SVG writer's whole
+  flip apparatus (text-outside-the-flip included) simply does not apply; the one
+  transform in the file is a single `cm` mapping millimetres to points
+  (`PdfDrawing.PointsPerMillimetre`, the ONE 72/25.4 constant), which keeps every
+  coordinate in the content stream the model's own millimetre value verbatim.
+  A transform you do NOT need is worth recording. **(b) Text is the standard-14
+  Helvetica over WinAnsi, not the stroke font** — the stroke font lives in
+  EngrCAD.Viewer.Core, which Modeling cannot reference, and duplicating its glyph
+  table would be the two-copies drift `SheetStyle`'s ratio convention exists to
+  avoid; the SVG sheet writer's real precedent is system-Helvetica `<text>`
+  elements, and PDF's standard 14 are the same idea with a spec guarantee (every
+  conforming reader carries them, so naming /Helvetica satisfies the
+  name-it-define-it rule without embedding). Anchoring needs advance widths, which
+  PDF delegates to no one — they are transcribed from the Adobe Helvetica AFM,
+  flagged verify-against-datasheet. **(c) Characters outside WinAnsi are REFUSED by
+  name, with one deliberate substitution**: a silent `?` in a dimension is a wrong
+  drawing (the descriptor sanitization rule), but the drafting diameter sign U+2300 —
+  which the dimension layer itself emits — travels as O-stroke (U+00D8), its
+  standard typographic stand-in, documented and pinned by test. The verification is
+  the OFF/LZW twin-decoder pattern: an independently written parser in the test
+  suite walks the xref (verifying every offset points at its object), follows the
+  object graph to the page, tokenizes the content stream, and asserts every
+  polyline's coordinates round-trip BIT-identically ("R" is a bijection on finite
+  doubles; the one formatting caveat is that PDF's number grammar has no exponent
+  form, so sub-1e-4 magnitudes take fixed notation — a grammar constraint, not a
+  tolerance). Poppler's `pdftotext` independently recovers every text run.
+  Deliberately absent: `Add(Sketch)` (PDF paths are lines + cubics, so a circular
+  arc has no exact form and an overload would silently flatten), layers (PDF needs
+  optional-content groups for those; filed), and a CLI route (sheets are produced by
+  code and docs fences, not by `--export`, for SVG and DXF alike).
 
 ## 7. Query layer
 

@@ -2,12 +2,13 @@ using EngrCAD.Core;
 
 namespace EngrCAD.Modeling;
 
-// Writing a sheet out. Both writers consume DrawingSheet.Compute()'s SheetContent and
-// nothing else, so they cannot disagree about what a drawing looks like — they differ
-// only in how a polyline, a dash pattern and a piece of text are spelled.
+// Writing a sheet out. All three writers (SVG, DXF, PDF) consume
+// DrawingSheet.Compute()'s SheetContent and nothing else, so they cannot disagree about
+// what a drawing looks like — they differ only in how a polyline, a dash pattern and a
+// piece of text are spelled.
 
 /// <summary>
-/// SVG and DXF output for a <see cref="DrawingSheet"/>.
+/// SVG, DXF and PDF output for a <see cref="DrawingSheet"/>.
 ///
 /// <para><b>Line CLASS drives everything.</b> A drawing is only usable if visible edges
 /// are solid and wide, hidden detail is narrow and dashed, cut boundaries are marked and
@@ -85,8 +86,39 @@ public static class SheetWriter
         sheet.ToDxf().SaveFile(path);
     }
 
+    /// <summary>
+    /// The sheet as a PDF file — the deliverable format, over the SAME
+    /// <see cref="DrawingSheet.Compute"/> content the SVG and DXF writers consume, so
+    /// the three cannot disagree about what a drawing looks like. Line classes keep
+    /// their SVG pens (one pen table), the page is the sheet's paper in points, and the
+    /// content stream stays in millimetres behind one mm-to-point transform (see
+    /// <see cref="PdfDrawing"/> for the whole design, including why there is no y-flip
+    /// here and how text is carried).
+    /// </summary>
+    public static byte[] ToPdf(this DrawingSheet sheet)
+    {
+        ArgumentNullException.ThrowIfNull(sheet);
+        var content = sheet.Compute();
+        var pdf = new PdfDrawing { Sheet = (content.Format.Width, content.Format.Height) };
+
+        foreach (var run in content.Runs)
+        {
+            var (lineClass, _) = ClassOf(run);
+            pdf.AddPolyline(run.Points, closed: false, lineClass);
+        }
+        pdf.AddSegments(content.Hatch);
+        pdf.AddSegments(content.Lines.Select(l => (l.A, l.B)));
+        foreach (var text in content.Texts)
+            pdf.AddText(text.Position, text.Text, text.Height, text.Anchor);
+        return pdf.ToPdf();
+    }
+
+    /// <summary>Writes the sheet's PDF to a file.</summary>
+    public static void SavePdf(this DrawingSheet sheet, string path) =>
+        File.WriteAllBytes(path, sheet.ToPdf());
+
     /// <summary>One rule mapping a classified run onto a line class and a layer, read by
-    /// both writers so they cannot drift.</summary>
+    /// all three writers so they cannot drift.</summary>
     private static (SvgLineClass Class, string Layer) ClassOf(HiddenLineRun run) =>
         run.Visibility == EdgeVisibility.Hidden
             ? (SvgLineClass.Hidden, SheetLayers.Hidden)
