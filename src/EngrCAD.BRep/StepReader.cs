@@ -1022,6 +1022,27 @@ public static class StepReader
                 }
             }
 
+            // A partial revolve of a SINGLE closed profile curve (an elbow with a
+            // one-curve tube section) leaves NO angle source at all: the profile has no
+            // segment junctions, so the sweep traces no axis-centered arc anywhere, and
+            // the face's whole boundary is the generator plus its rotated copy. The old
+            // behaviour was the silent worst case — angle null fell through to 2π, so a
+            // 1.2 rad elbow came back as a FULL TURN with zero diagnostics and the
+            // tessellator's full-domain gate refused it three stages later. The angle is
+            // recovered in closed form as the azimuthal rotation carrying the generator
+            // onto the other boundary curve (corresponding samples, congruence checked
+            // in (radius, axial) profile coordinates — a root-free exact read, never a
+            // fit). The generator legitimately spans its whole period here, so the
+            // closed-generator diagnostic below must NOT fire for this case.
+            bool angleFromRotatedCopy = false;
+            if (angle is null && rims.Count == 0 && generator.IsClosed
+                && TryAngleFromRotatedCopy(generator, bounds, origin, axis, ProfileOf)
+                    is { } rotated)
+            {
+                angle = rotated;
+                angleFromRotatedCopy = true;
+            }
+
             // A partial revolution whose generator is a CLOSED curve and whose boundary
             // offered no rim to trim against: the rails fixed the swept angle, but the
             // generator still spans its whole period, so the face's domain covers far
@@ -1031,8 +1052,11 @@ public static class StepReader
             // generator recovers from them exactly (each meridian is a rotated copy of
             // the generator, so the trim is read in closed form); anything else keeps the
             // honest diagnostic, because tessellation is domain-driven and meshing an
-            // untrimmed closed generator silently produces a non-manifold mesh.
+            // untrimmed closed generator silently produces a non-manifold mesh. The
+            // rotated-copy case above is exempt: there the face genuinely covers the
+            // whole generator, so the untrimmed domain is the face.
             if (angle is { } sweptAngle && rims.Count == 0 && generator.IsClosed
+                && !angleFromRotatedCopy
                 && ReferenceEquals(trimmed, generator))
             {
                 if (generator is Circle3d genCircle
@@ -1049,6 +1073,78 @@ public static class StepReader
             }
 
             return new RevolvedSurface(trimmed, origin, axis, angle ?? 2 * Math.PI);
+        }
+
+        /// <summary>
+        /// The swept angle of a partial revolve whose only boundary is the closed
+        /// generator and its rotated copy (a single-closed-curve profile has no segment
+        /// junctions, so nothing else exists to read the angle from). Corresponding
+        /// samples — the copy is the transported curve, so the parameterization carries
+        /// over; a reversed copy is tried the other way — must agree pointwise in
+        /// (radius, axial) profile coordinates AND in their azimuthal delta, at the
+        /// 1e-6 angular-agreement tier (the reconstruction error of text-parsed
+        /// coordinates, three decades above what a genuine mismatch produces). Null when
+        /// no boundary curve is such a copy, which leaves the caller's honest fallback.
+        /// </summary>
+        private static double? TryAngleFromRotatedCopy(
+            Curve3d generator,
+            List<(bool IsOuter, List<(BrepEdge Edge, bool Sense)> Pairs)> bounds,
+            Vector3d origin, Vector3d axis,
+            Func<Vector3d, (double Radius, double Axial)> profileOf)
+        {
+            const int samples = 8;
+            var radial = axis.ArbitraryPerpendicular(Tolerance.Default);
+            var around = axis.Cross(radial);
+            double Azimuth(in Vector3d p)
+            {
+                var d = p - origin;
+                return Math.Atan2(d.Dot(around), d.Dot(radial));
+            }
+
+            foreach (var (edge, _) in bounds.SelectMany(b => b.Pairs))
+            {
+                var candidate = edge.Curve;
+                if (ReferenceEquals(candidate.Underlying, generator.Underlying)
+                    || ReferenceEquals(candidate, generator))
+                    continue;
+                foreach (bool reversed in (ReadOnlySpan<bool>)[false, true])
+                {
+                    double? delta = null;
+                    bool matches = true;
+                    for (int i = 0; i < samples && matches; i++)
+                    {
+                        double t = (double)i / samples;
+                        var mine = generator.PointAt(generator.Domain.ParameterAt(t));
+                        var theirs = candidate.PointAt(
+                            candidate.Domain.ParameterAt(reversed ? 1 - t : t));
+                        var (radiusA, axialA) = profileOf(mine);
+                        var (radiusB, axialB) = profileOf(theirs);
+                        double scale = Math.Max(1, Math.Max(radiusA, Math.Abs(axialA)));
+                        if (Math.Abs(radiusA - radiusB) > 1e-6 * scale
+                            || Math.Abs(axialA - axialB) > 1e-6 * scale
+                            || radiusA <= 1e-6 * scale)
+                        {
+                            matches = false;
+                            break;
+                        }
+                        double here = Azimuth(theirs) - Azimuth(mine);
+                        here -= 2 * Math.PI * Math.Floor(here / (2 * Math.PI)); // [0, 2π)
+                        if (delta is { } known)
+                        {
+                            double wrap = Math.Abs(here - known);
+                            if (Math.Min(wrap, 2 * Math.PI - wrap) > 1e-6)
+                                matches = false;
+                        }
+                        else
+                        {
+                            delta = here;
+                        }
+                    }
+                    if (matches && delta is { } sweep && sweep > 1e-6 && sweep < 2 * Math.PI - 1e-6)
+                        return sweep;
+                }
+            }
+            return null;
         }
 
         /// <summary>
