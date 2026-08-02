@@ -2242,6 +2242,110 @@ diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limi
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".
 
+### Straight bevel gears (`BevelGears.cs`)
+
+`BevelPair` solves the pitch cone angles from the two tooth counts and the shaft
+angle — `tan δ₁ = sin Σ / (z₂/z₁ + cos Σ)`, reducing to `z₁/z₂` at the usual 90° —
+and `δ₁ + δ₂ = Σ` is asserted rather than assumed. `BevelGears.Straight` generates
+the heel cross-section with every derived cone dimension; `StraightGear` lofts it.
+
+- **The solid is exact given its section.** Every straight bevel flank is a ruled
+  surface through the pitch apex, so the body is a two-section `LoftStyle.Ruled`
+  loft whose toe section is the heel section scaled ARITHMETICALLY about the apex
+  — identical segment count by construction, which is what the loft's index
+  correspondence needs (a re-fit at a scaled tolerance could spend a different
+  number of arcs).
+- **What is approximate is only the section, and it is Tredgold's back-cone
+  approximation, STATED.** The virtual spur gear on the back cone has
+  `z_v = z/cos δ` teeth at the same module — generally NOT an integer, which is
+  why it is a construction and cannot be handed to `Gears.Spur` — and its involute
+  is wrapped onto the back cone and projected CENTRALLY from the pitch apex onto
+  the section plane, which is what a ruled-to-the-apex tooth does by definition.
+  The radial map is `R(w) = r·w·cos²δ / (1 − w·sin²δ)` with `w` the back-cone
+  slant over `r_v`; azimuths scale by `1/cos δ`, so arc tooth thickness at the
+  pitch circle is exactly `πm/2` and the tooth pitch is exactly `2π/z`.
+- **The projection choice was settled by measurement, and two cheaper candidates
+  lost.** Central projection reproduces the standard cone angles
+  `δ_a = δ + atan(h_a/R_e)` and `δ_f = δ − atan(h_f/R_e)` as an IDENTITY (3e-16
+  rad, read back off the section's own radii) and measures **7.2e-4 … 2.9e-2
+  module** from the true spherical involute over nine gears (m 1–5, z 12–60,
+  δ 20–70°). Projecting along the AXIS instead — which reproduces the textbook
+  `d_ae = d + 2h_a·cos δ` directly — measures 5e-3 … 3.7e-2, and an "equivalent
+  planar gear" (z teeth at `arctan(tan α / cos δ)` with proportions scaled by
+  cos δ, which `Gears.Spur` would draw verbatim) measures 1.4e-2 … 7.5e-2, i.e.
+  2–8× Tredgold's own error — a second approximation dominating the first.
+- The flank is biarc-fitted at module·1e-4 with `MaxFitDeviation` REPORTED, two
+  orders below the method's own error. Tip and root arcs map to exact arcs
+  (constant radius) and the sub-base radial stretch to an exact radial line, so
+  only the flank is fitted; the root fillet is CONSTRUCTED in the section at
+  `ρ_f*·m` unscaled, because the map is anisotropic (radial and tangential lengths
+  scale differently, by 2× at δ = 63°) so there is no single stretch to carry.
+- **Two limits are reported rather than hidden.** The end faces are PLANES, not
+  the back and front cones (a loft section must be planar), so the heel section is
+  deeper than the real back-cone tooth — ×1.0 at δ = 10°, ×2.4 at 65° — and both
+  `SectionTipRadius` and the standard `BackConeTipRadius` are properties. That
+  depth also caps the cone angle near 68° with the ISO 53 profile-A fillet, and
+  the refusal names the cause AND the remedy (`RootFilletCoefficient` 0.30 reaches
+  75°, 0.20 reaches 80°) — verified, so a 3:1 (71.6°) or 4:1 (76.0°) wheel is a
+  setting away rather than a dead end.
+- Undercut is decided by the VIRTUAL tooth count, so a bevel tolerates FEWER real
+  teeth than a spur gear: 13 teeth is undercut as a spur at 20° and fine on a 45°
+  cone. **Spiral bevel and hypoid are refused BY NAME** — a spiral flank is the
+  envelope of a cutter under a generating machine's motion rather than a
+  closed-form curve, and a hypoid has no common apex at all.
+- Verification: the solid is checked against the EXACT volume of the cone over its
+  own exact section area, `A·H·(1 − k³)/3`, which converges with tessellation and
+  separates the along-cone face width from an axially measured one by 9.75%; the
+  flank is measured against a projected involute the test computes from the spec
+  alone, with a 2° pressure-angle mutation the instrument sees as >50×.
+
+### Planetary (epicyclic) sets (`PlanetaryGears.cs`)
+
+`PlanetarySet` is an ARRANGEMENT, not a tooth form: every member is an ordinary
+involute gear and what the type owns is the arithmetic making them fit.
+
+- **`z_ring = z_sun + 2·z_planet` is DERIVED, never accepted**, so an inconsistent
+  set cannot be spelled. The equal-spacing assembly condition
+  (`(z_sun + z_ring)` divisible by the planet count) and the neighbour clearance
+  (`2·a·sin(π/N)` against the planet tip diameter) both refuse by name — and the
+  clearance test earns its place, since 12/36/6 passes divisibility and only the
+  chord test catches it.
+- **The internal ring needs no boolean.** An internal gear's tooth SPACE is
+  bounded by involutes of the same base circle as an external gear of the same
+  module, tooth count and pressure angle, with the same arc thickness at the pitch
+  circle — only tip and root swap roles. So the ring's bore is exactly the outline
+  of a "cutter" gear whose addendum is the ring's dedendum and vice versa, and
+  `PlanetaryGears.RingProfile` is `Sketch.Circle(od).WithHole(that)`: lines and
+  arcs, hence exact in all three representations. Stated rather than hidden — the
+  ring's tooth TIPS carry the cutter's root fillet (rounded), its ROOTS are sharp
+  (no internal root fillet in v1), and the undercut check that fires is the
+  CUTTER's, which is conservative for a ring and is NOT the internal-mesh
+  interference check (tip/involute/trimming), which v1 does not do.
+- **The phasing is the substance and it is verified from CONTACT.** Each mesh
+  fixes a phase relation — a tooth opposite a space for the external mesh, one
+  apart for the internal — and solving the pair gives
+  `γ_k = ψ_k − z_ring(ψ_k − ρ)/z_planet` with `ρ = (z_planet − 1)·π/z_ring`; the
+  `(z_planet − 1)` is a parity term nothing special-cases. Measured with the
+  sketches' own exact signed distance, every planet touches the sun at +4.5e-5 and
+  the ring at −3.5e-5 (inside the flank fit deviation) and all three agree to nine
+  decimals, while a quarter-pitch phase error reads −1.476 — 33 000× apart.
+- **The Willis relation is EMERGENT, which is what makes asserting it a real
+  test.** `PlanetaryGears.Mechanism` adds one `Coupling.Gear` per MESH and states
+  no train ratio anywhere; the sun and ring pin to the **CARRIER**, not the
+  housing, so every coupling is written on angles already relative to the rotating
+  line of centres (pinning the sun to the housing would constrain ω_sun where the
+  mesh constrains ω_sun − ω_carrier, and the set would run and return a plausible
+  wrong ratio rather than fail). The solver then reproduces
+  `(ω_s − ω_c)/(ω_r − ω_c) = −z_r/z_s`, the held-ring `1 + z_r/z_s` and the
+  carrier-held `−z_s/z_r` to nine decimals, with Kutzbach predicting −6 DOF
+  against a measured 1 (three planets carry one relation three times, which is how
+  a planetary shares load).
+- One solver characterization is pinned because the failure looks like a modelling
+  error: a gear coupling constrains the CHANGE in each coordinate, so a cold
+  Levenberg–Marquardt step must cross the LARGEST change in the train rather than
+  the driven one. The planet turns 3.33× the carrier, so driving the carrier
+  0.8 rad converges and 1.0 rad fails — while `Sweep` reaches it by continuation.
+
 ## Debug modifiers & the validation report
 
 Part-level debug flags (the OpenSCAD `%`/`*`/`!` analog): `Part.Ghost` (rendered
