@@ -772,6 +772,47 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
   - **Helical pair conjugate test** — the spur pair's contact instrument is 2D; a
     helical pair adds axial overlap, and the transverse-section argument says the 2D
     test at every section is sufficient — worth asserting once on the twisted mesh.
+  - **The full gear taxonomy** (requested 2026-08-02), each with its honest scope:
+    - **Herringbone / double-helical** — two opposite-hand helicals in one solid; the
+      twisted-extrude machinery does each half today, and the work is the mid-plane
+      junction (the apex section is the shared spur profile, so the two twists meet in
+      a plane of exact mirror symmetry — a weld by construction, verify by the mirror
+      identity). Optional apex gap (real hobbed herringbones relieve the middle).
+    - **Straight bevel** — via Tredgold's back-cone approximation, STATED as such: the
+      virtual spur gear on the back cone (z_v = z/cos δ) gives the profile, teeth loft
+      toward the apex (the loft machinery exists; a pure taper is B-Rep-Native as a
+      ruled two-section loft — but toothed sections have no holes, so check the
+      loft-sections gate first). Verification: the virtual-gear identities plus the
+      shaft-angle sum δ₁+δ₂ = Σ. Spiral bevel and hypoid are REFUSED by name — Gleason
+      spiral bevel geometry is machine-tool kinematics, not a closed-form profile, and
+      a transcription would be a guess wearing a standard's name.
+    - **Worm and worm wheel** — the worm IS a thread: `MakeThreadedRod`'s helical
+      sweep with a trapezoid (ZA) profile is the exact worm body, one axis-touching
+      revolve family this kernel already speaks. The WHEEL is the honest problem: a
+      true throated wheel is the envelope of the worm's motion (no closed form —
+      that is gashing-and-hobbing kinematics), so v1 is a helical gear at the worm's
+      lead angle (the crossed-helical approximation, stated, with its point-contact
+      caveat named) and the throated envelope is filed as assessed-not-promised.
+    - **Cycloidal profiles** — clock/instrument gears and cycloidal-drive discs: the
+      epicycloid/hypocycloid are closed-form parametric curves, so they enter exactly
+      as the involute did (fit with reported deviation); BS 978-2 clock-gear
+      addenda are a transcription with the verify-against-datasheet flag. The
+      cycloidal-drive disc (pin-wheel reducer) is the same curve family offset by the
+      roller radius — the cam roller-follower machinery already owns that offset.
+    - **Planetary / epicyclic sets** — an ARRANGEMENT, not a tooth form: a factory
+      checking the assembly conditions (z_ring = z_sun + 2·z_planet; the meshing
+      constraint (z_sun + z_ring) divisible by planet count; neighbour clearance) and
+      placing sun/planets/ring with the right phases, plus `Coupling.Gear` chains for
+      the kinematics — the Willis equation as a TEST against the mechanism solver's
+      measured ratio, which is not circular here because the couplings compose and
+      the assembled ratio (1 + z_ring/z_sun for held ring) is an emergent check.
+    - **Crossed helical (screw) gears** — the geometry already exists (two helicals
+      at skew shafts); what is missing is only the pairing arithmetic (shaft angle =
+      β₁+β₂, matching normal modules) — arithmetic on `GearSpec`, plus the
+      point-contact caveat stated.
+    - **Non-circular/elliptical gears** — refuse by name for now: conjugacy for a
+      stated centre-distance function is an integral condition, a different problem
+      from fitting a known curve; file only if a consumer appears.
 
 Mechanisms v1 landed (`Joints.cs`/`Mechanism.cs`/`Couplings.cs`/`HigherPairs.cs`/
 `MateSolverRates.cs`/`MotionInterference.cs`; docs `examples/mechanisms.md`): joints as
