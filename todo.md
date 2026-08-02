@@ -914,14 +914,23 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
   × nodes) or at caller-selected hot spots first; and how a half-cycle at the history's
   open end is closed (E1049 names the options). The mean-stress correction composes per
   counted cycle, so `EquivalentAlternating` is reused verbatim.
-- [ ] **Log-scale colour mapping for `FieldDisplay`.** `FatigueResults` publishes life
-  as log10(cycles) with the units string saying so, because `FieldRange.Normalize` is
-  linear and raw cycles would spend the whole legend on the longest-lived node. A
-  first-class `FieldDisplay.LogScale` (or a `FieldColorMap` variant) would let the field
-  carry real cycles and the LEGEND print 10^k ticks — the legend is the whole point,
-  since a linear legend over log10 values prints "5.1" where a user wants "1.3e5".
-  Touches Viewer.Core's `FieldLegend`/colour path and the web frame build; the document
-  format needs the flag to round-trip (write-only-when-set, the persistence rule).
+- [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
+  reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints
+  anti-logged decade ticks, end ticks stating the true range, title in the base units
+  tagged LOG SCALE; docs `fields.md`/`fea-fatigue.md`, design.md §6b's field-display
+  bullet records why the units string and not a boolean is the opt-in). Remaining:
+  **(a)** the first-class `FieldDisplay.LogScale` for a field carrying REAL cycles —
+  `FieldRange.Normalize` goes logarithmic for the colour mapping itself, the flag
+  round-trips write-only-when-set, and the properties-panel min/max readout follows;
+  Modeling-owned (`Results.cs` + `DocumentFile.cs`), deliberately not landed from the
+  viewer fence. It composes with the landed half: such a display prints the same decade
+  ticks. **(b)** **NaN colours as the map's FIRST stop** — `FieldRange.Normalize(NaN)`
+  is NaN and `ColorMaps.Sample`'s `!(t > 0)` catches it — so an infinite-life node
+  (NaN = "no value" by the VTU convention) paints as the BOTTOM of the ramp,
+  indistinguishable from the shortest finite life: the honest render is a distinct
+  neutral (grey), which touches `SourceColors` and possibly the legend (a "no value"
+  swatch). The fatigue docs page sidesteps it today by plotting an aluminium life
+  field, where every node is finite — that choice is documented on the page.
 - [ ] **Marin modification factors on `SnCurve`.** The catalogue's constants are
   polished-specimen values, stated as such; a machined/as-forged surface, a size effect
   and a reliability level each knock the ENDURANCE end down (classically multiplying

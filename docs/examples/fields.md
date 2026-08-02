@@ -179,6 +179,31 @@ than to an end, because a field with no variation has no position to report and 
 extreme colour would read as a hot spot. And **NaN is skipped** when ranging, so one
 undefined value does not collapse a legend.
 
+### Log-scale fields
+
+A field whose values are **base-10 logarithms** declares it in its units string —
+`log10(cycles)`, the convention the [fatigue life field](fea-fatigue.md) established —
+and the legend reads that declaration: tick labels print the **anti-logged** values,
+ticks sit on the integer decades where the range spans at least two of them (with the
+end ticks always printing the true range), and the title states the base units with a
+`LOG SCALE` tag. The units string is the one opt-in, made by the field's producer and
+carried by the field itself, so it round-trips wherever the field does; the colour
+mapping stays linear over the log values, which is exactly what a log colour axis is.
+
+```csharp run:field-log-legend
+var life = MeshField.Scalar("life", "log10(cycles)", [2.0, 6.5, 10.0]);
+if (!FieldLegend.TryLogUnits(life.Units, out var baseUnits) || baseUnits != "cycles")
+    throw new Exception("the units string declares the log transform");
+
+var display = new ResolvedFieldDisplay(
+    life, new FieldRange(2, 10), FieldColorMap.Viridis, null, 1, true);
+var ticks = FieldLegend.TickMarks(display);
+if (ticks[0].Label != "100" || ticks[^1].Label != "1E+10")
+    throw new Exception("ticks must print anti-logged values");
+if (FieldLegend.Title(display) != "LIFE [CYCLES, LOG SCALE]")
+    throw new Exception("the title must state the base units and the scale");
+```
+
 ```csharp run:field-range
 if (new FieldRange(4, 4).Normalize(4) != 0.5) throw new Exception("a constant field sits mid-map");
 if (!FieldRange.Of([1, double.NaN, 5]).Equals(new FieldRange(1, 5)))

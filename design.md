@@ -3242,7 +3242,20 @@ Design decisions:
   **0.5**, because a constant field has no position to report and an extreme colour would
   read as a hot spot; and a merged VTU fills a part's missing array with **NaN**, VTK's
   own "no value", since dropping the array loses the result that exists and zeros show a
-  fake safe region.
+  fake safe region. *A LOG-SCALE field is declared by its producer in the units string,
+  and the legend renders the declaration* — `log10(cycles)` (the `FatigueResults`
+  convention) makes `FieldLegend` print anti-logged tick labels on integer decades
+  (`TickMarks`/`TryLogUnits`), with the end ticks always stating the true range and a
+  title in the base units tagged `LOG SCALE`. Deliberately the units string and NOT a
+  `FieldDisplay.LogScale` boolean beside it: a flag next to a units string that also
+  says log10 is two spellings of one fact, free to drift (the units-consolidation
+  lesson), whereas the declaration already round-trips through the document format so
+  persistence comes free. And it does not violate the `SymmetricAboutZero`
+  never-apply-silently rule, because no colour moves — linear colour over log values IS
+  log-colour — the legend is typesetting what the field itself states, where re-centring
+  a range changes what the numbers mean. The residual first-class mode (the field
+  carrying REAL cycles with `FieldRange.Normalize` going logarithmic) stays filed in
+  todo.md; it composes with this — such a display would print the same decade ticks.
 
 ### Animating a deformed result — and the exception that turned out not to be one
 

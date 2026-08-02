@@ -14,6 +14,19 @@ namespace EngrCAD.Viewer;
 // drawn as a run of flat-coloured BANDS rather than an interpolated gradient, because
 // the line program is flat-colour and a legend of discrete steps is arguably more
 // readable anyway -- a value lands in a band you can point at.
+//
+// LOG-SCALE fields. A producer that publishes base-10 logarithms declares it in the
+// field's own units string -- "log10(cycles)", the convention FatigueResults
+// established -- and the legend READS that declaration (TryLogUnits): tick labels print
+// the anti-logged values ("1E+05 cycles", not "5.1 log10(cycles)") and, where the range
+// spans at least two decades, ticks sit on the integer decades. Nothing about the
+// COLOURS changes -- linear colour over log values IS log-colour -- and nothing is
+// applied silently: the transform being rendered is the one the field itself states, so
+// this is typesetting a declaration, not a second FieldRange.SymmetricAboutZero. One
+// declaration rather than a boolean flag beside it, deliberately: a LogScale flag next
+// to a units string that also says log10 would be two spellings of one fact, which is
+// the drift the units-consolidation lesson exists to prevent -- and the units string
+// already round-trips through the document format, so persistence comes free.
 
 /// <summary>
 /// The legend's geometry for one frame: the colour bar as flat-coloured bands, the
@@ -88,8 +101,20 @@ public static class FieldLegend
     public const int VerticesPerBand = 6;
 
     /// <summary>Labelled ticks, evenly spaced from the bottom of the bar to the top
-    /// (min, quarters, max).</summary>
+    /// (min, quarters, max). Log-scale displays whose range spans at least two decades
+    /// use decade ticks instead — see <see cref="TickMarks"/>.</summary>
     public const int Ticks = 5;
+
+    /// <summary>Most interior decade ticks a log-scale bar carries. Beyond it every
+    /// n-th decade is kept — at the bar's fixed height more labels than this collide.</summary>
+    public const int MaxLogDecadeTicks = 6;
+
+    /// <summary>Clearance, in DIPs along the bar, an interior decade tick must keep from
+    /// each END tick. The ends always print the range's true min and max (a legend that
+    /// hides its endpoints lies about its range), so a decade landing on top of one
+    /// would overlap its label — at <see cref="TextHeightDip"/>-tall text, 12 DIPs is
+    /// one label height plus a small gap.</summary>
+    public const double LogEndClearanceDip = 12;
 
     /// <summary>The bar's outline and tick colour — the dim chrome grey the rest of the
     /// viewport furniture uses.</summary>
@@ -155,13 +180,11 @@ public static class FieldLegend
         AppendSegment(frame, x0, y1, x0, y0);
 
         var labels = new List<(Vector3d A, Vector3d B)>();
-        for (int t = 0; t < Ticks; t++)
+        foreach (var (f, label) in TickMarks(display))
         {
-            double f = Ticks == 1 ? 0 : (double)t / (Ticks - 1);
             double y = y0 + barHeight * f;
             AppendSegment(frame, x1, y, x1 + tick, y);
-            double value = display.Range.Min + display.Range.Span * f;
-            StrokeFont.AppendText(labels, Format(value),
+            StrokeFont.AppendText(labels, label,
                 new Vector3d(x1 + tick + labelGap, y - textHeight / 2, 0),
                 Vector3d.UnitX, Vector3d.UnitY, textHeight);
         }
@@ -177,13 +200,95 @@ public static class FieldLegend
     }
 
     /// <summary>
+    /// The tick marks the bar carries for a display: fraction along the bar (0 = bottom,
+    /// 1 = top) and the printed label, bottom to top.
+    /// <para>A linear display gets <see cref="Ticks"/> evenly spaced ticks labelled with
+    /// their values. A LOG-SCALE display (the field's units declare
+    /// <c>log10(…)</c> — see <see cref="TryLogUnits"/>) labels ticks with the
+    /// ANTI-LOGGED values, and places them on the integer decades when the range spans
+    /// at least two of them: round powers of ten are the whole point of a log legend,
+    /// where an interval under two decades holds at most one interior decade — which
+    /// cannot describe a range — so it falls back to the even spacing with anti-logged
+    /// labels. The two END ticks always print the range's true (anti-logged) min and
+    /// max, and an interior decade within <see cref="LogEndClearanceDip"/> of an end is
+    /// dropped so the labels cannot overlap.</para>
+    /// <para>Tick POSITIONS are honest either way: a decade tick at
+    /// <c>log10 = k</c> sits at the linear position of the value k, which is exactly
+    /// where the colour for k is — the colour mapping stays linear over the log values,
+    /// which is what log-colour means.</para>
+    /// </summary>
+    public static (double Fraction, string Label)[] TickMarks(in ResolvedFieldDisplay display)
+    {
+        var range = display.Range;
+        bool log = TryLogUnits(display.Field.Units, out _);
+
+        if (log && range.Span >= 2)
+        {
+            var ticks = new List<(double, string)> { (0, Format(Math.Pow(10, range.Min))) };
+            int first = (int)Math.Ceiling(range.Min);
+            int last = (int)Math.Floor(range.Max);
+            int step = Math.Max(1, (int)Math.Ceiling((last - first + 1) / (double)MaxLogDecadeTicks));
+            double clearance = LogEndClearanceDip / BarHeightDip;
+            for (int k = first; k <= last; k += step)
+            {
+                double f = (k - range.Min) / range.Span;
+                if (f >= clearance && f <= 1 - clearance)
+                    ticks.Add((f, Format(Math.Pow(10, k))));
+            }
+            ticks.Add((1, Format(Math.Pow(10, range.Max))));
+            return [.. ticks];
+        }
+
+        var even = new (double, string)[Ticks];
+        for (int t = 0; t < Ticks; t++)
+        {
+            double f = Ticks == 1 ? 0 : (double)t / (Ticks - 1);
+            double value = range.Min + range.Span * f;
+            even[t] = (f, Format(log ? Math.Pow(10, value) : value));
+        }
+        return even;
+    }
+
+    /// <summary>
+    /// Whether a field's units string declares its values to be base-10 logarithms —
+    /// the <c>"log10(cycles)"</c> convention <c>FatigueResults</c> established — and if
+    /// so, of what (<paramref name="baseUnits"/> = the inner units, e.g. "cycles").
+    /// <para>The units string is the ONE declaration of the transform (it already
+    /// round-trips through the document format), and the legend renders what it says:
+    /// anti-logged tick labels and a title in the base units. A separate boolean flag
+    /// beside it would be a second spelling of the same fact, free to drift.</para>
+    /// </summary>
+    public static bool TryLogUnits(string? units, out string baseUnits)
+    {
+        baseUnits = string.Empty;
+        const string prefix = "log10(";
+        if (units is null
+            || !units.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || !units.EndsWith(')'))
+        {
+            return false;
+        }
+        string inner = units[prefix.Length..^1].Trim();
+        if (inner.Length == 0)
+            return false;
+        baseUnits = inner;
+        return true;
+    }
+
+    /// <summary>
     /// The legend's title: the field's name and units, plus the deformation scale when
     /// the shape is displaced (a deformed plot whose exaggeration is not stated is a
     /// picture of a shape that does not exist). Uppercased for the stroke font.
+    /// <para>A log-scale field (units <c>log10(X)</c>) titles as
+    /// <c>NAME [X, LOG SCALE]</c>: the ticks print anti-logged values in X, so a title
+    /// still saying <c>log10(X)</c> would make a "1E+05" tick read as 10 to the
+    /// 100000th; "LOG SCALE" states the spacing.</para>
     /// </summary>
     public static string Title(in ResolvedFieldDisplay display)
     {
-        string title = display.Label;
+        string title = TryLogUnits(display.Field.Units, out string baseUnits)
+            ? $"{display.Field.Name} [{baseUnits}, LOG SCALE]"
+            : display.Label;
         if (display.Deform is not null && display.DeformScale != 0)
         {
             // Plain "X" rather than the multiplication sign: this string is uppercased

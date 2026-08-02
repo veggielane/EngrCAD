@@ -192,9 +192,12 @@ Four fields publish per node (`FatigueResults.Fields()` /
   NaN — the no-value spelling — rather than an infinity that would poison the legend.
 - **`Fatigue life`** as **log10(cycles)** — published as the logarithm because lives
   spread over many decades and the colour pipeline's range mapping is linear, so raw
-  cycles would spend the whole legend on the longest-lived node (a native log-scale
-  display mode is filed in todo.md; the units string says what the numbers are
-  meanwhile). **Infinite life is NaN** — at or below the endurance limit, or zero
+  cycles would spend the whole legend on the longest-lived node. The units string
+  **declares** the transform, and the legend reads that declaration: a field whose
+  units say `log10(…)` gets tick labels in the **anti-logged** values (`1E+05`, not
+  `5.1`), decade tick placement where the range spans at least two decades, and a
+  title in the base units — see the plot below. **Infinite life is NaN** — at or
+  below the endurance limit, or zero
   amplitude — the same "no value" convention the [VTU writer](fields.md) uses, which
   the ranging machinery already skips, so a part that mostly lives forever still gets
   a usable legend over the nodes that do not. A life below **one cycle** (including
@@ -203,6 +206,69 @@ Four fields publish per node (`FatigueResults.Fields()` /
   Basquin's validity anyway.
 - **`Alternating stress`** and **`Mean stress`** (MPa) — the decomposition itself,
   published so the inputs to the correction are inspectable beside its output.
+
+### A life plot, on a log legend
+
+```csharp render:fea-fatigue-life
+// The same bracket and duty cycle in 6061-T6 aluminium, coloured by LIFE. Aluminium
+// deliberately: it has no endurance limit, so EVERY node carries a finite life - a
+// steel life plot is mostly the infinite-life no-value (NaN). The life field
+// publishes log10(cycles) and SAYS so in its units string, which is the declaration
+// the legend reads: ticks sit on the integer decades and print the cycle counts.
+var bracket = Shape.Box(60, 40, 10)
+    .Subtract(Shape.Cylinder(6, 40).Translate(0, 0, 20));
+var part = new Part("bracket", bracket);
+
+var surface = part.GetMesh();
+var tets = TetMesher.Mesh(surface, new TetMeshOptions
+{
+    RefineQuality = true,
+    MaxElementSize = 14,
+});
+var mesh = AnalysisMesh.Quadratic(tets);
+
+StructuralModel Case(double load)
+{
+    var model = new StructuralModel(mesh, Materials.Aluminium6061);
+    model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
+    model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX),
+        new Vector3d(0, 0, load));
+    return model;
+}
+var cases = StructuralSolver.SolveAll([Case(-1800), Case(600)]);
+
+// A no-endurance-limit material has no infinite-life strength for the safety factor
+// to measure against, so a design life is REQUIRED (refused by name without one).
+var fatigue = FatigueAnalysis.Evaluate(cases[0], cases[1],
+    FatigueMaterials.Aluminium6061T6, new FatigueOptions { DesignLife = 1e7 });
+
+foreach (var field in fatigue.SampleOnto(surface))
+    part.AddResult(field);
+part.FieldDisplay = new FieldDisplay
+{
+    Field = FatigueResults.FieldNames.Life,
+    // The actionable decades. Lightly stressed nodes carry astronomic lives; an
+    // explicit range keeps the legend on the band a decision would read, and the
+    // top colour honestly means "10^10 or more".
+    Range = new FieldRange(2, 10),
+};
+
+var scene = new Scene();
+scene.Add(part);
+```
+
+![The bracket coloured by fatigue life, with a log-scale legend](images/fea-fatigue-life.png)
+
+The legend's ticks sit on the integer decades — `100` through `1E+10` — because the
+field's units string is `log10(cycles)`: the declaration is the opt-in, made once by
+the producer, and the legend renders what it says rather than printing raw logarithms.
+The colour mapping itself stays linear over the log values, which is exactly what a
+log-scale colour axis means; a decade tick sits at the linear position of its
+logarithm, which is where its colour is. Where a log field's range spans **less than
+two decades** the even five-tick layout stays (an interval that short holds at most
+one interior decade, which cannot describe a range), still labelled with anti-logged
+values; and the two end ticks always print the true range, whatever the decades do —
+a legend that hides its endpoints lies about its range.
 
 ## What this deliberately is not
 
