@@ -816,16 +816,32 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
 
 ## Simulation
 
-- [ ] **Fatigue post-processing: S-N and Goodman over the stress results that already
-  exist.** Arithmetic, not a solver: alternating/mean decomposition from two load
-  cases (`SolveAll` returns them from one factorization), a transcribed S-N catalogue
-  carrying the verify-against-datasheet flag, Goodman/Gerber mean-stress corrections,
-  and damage published as a `MeshField` the viewer already colours. Refuse by name:
-  welds (hot-spot and nominal-stress methods are their own discipline) and multiaxial
-  criteria beyond von Mises equivalence — named, not approximated.
-  - Verification: single-element hand checks, and the published S-N line reproduced at
-    its own knee points exactly — a transcription test, which is the only honest claim
-    a catalogue can make.
+- [ ] **Rainflow counting over `TransientResults` — the variable-amplitude fatigue the
+  static pair cannot express.** `FatigueAnalysis` (landed) takes exactly two load cases
+  because that is what a proportional min/max history is; a variable-amplitude history
+  needs ASTM E1049 rainflow over a per-node stress TIME SERIES plus Miner's-rule
+  accumulation against the same `SnCurve`, and the transient solver's stored states are
+  the natural input (each `TransientState` is a full `StructuralResults`, so the signed
+  von Mises per node per instant already exists). Two design questions to settle at
+  build time, not before: whether the series is extracted at every node (memory: states
+  × nodes) or at caller-selected hot spots first; and how a half-cycle at the history's
+  open end is closed (E1049 names the options). The mean-stress correction composes per
+  counted cycle, so `EquivalentAlternating` is reused verbatim.
+- [ ] **Log-scale colour mapping for `FieldDisplay`.** `FatigueResults` publishes life
+  as log10(cycles) with the units string saying so, because `FieldRange.Normalize` is
+  linear and raw cycles would spend the whole legend on the longest-lived node. A
+  first-class `FieldDisplay.LogScale` (or a `FieldColorMap` variant) would let the field
+  carry real cycles and the LEGEND print 10^k ticks — the legend is the whole point,
+  since a linear legend over log10 values prints "5.1" where a user wants "1.3e5".
+  Touches Viewer.Core's `FieldLegend`/colour path and the web frame build; the document
+  format needs the flag to round-trip (write-only-when-set, the persistence rule).
+- [ ] **Marin modification factors on `SnCurve`.** The catalogue's constants are
+  polished-specimen values, stated as such; a machined/as-forged surface, a size effect
+  and a reliability level each knock the ENDURANCE end down (classically multiplying
+  the limit, not sigma'_f). A `WithFactors(surface, size, reliability)` derivation
+  would keep the transcribed row pristine (the derived-vs-stored rule the endurance
+  limit already follows) while making the numbers honest for real parts. Needs the
+  standard Marin correlations transcribed with the same verify-against-datasheet flag.
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh

@@ -58,6 +58,8 @@
   href: fea-buckling.md
 - name: Transient dynamics (FEA)
   href: fea-transient.md
+- name: Fatigue (FEA)
+  href: fea-fatigue.md
 - name: Three representations
   href: representations.md
 - name: Saving documents
