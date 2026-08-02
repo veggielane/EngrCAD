@@ -717,6 +717,19 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 
 ## Mechanisms (kinematics)
 
+- [ ] **Involute gears — the geometry for the couplings that already exist.**
+  `Coupling.Gear` constrains ratios but nothing draws a tooth. The involute is
+  closed-form; the profile enters the sketch vocabulary as an exact-tolerance fit with
+  the deviation REPORTED (the `BiArcFit` convention), or as a first-class 2D curve if
+  the fit tier proves inadequate — measure before deciding. Module / pressure angle /
+  tooth count / profile shift as the vocabulary; root fillets are the sketch's own
+  arcs; spur first, then helical via the twisted-extrude machinery that already exists
+  (`Shape.Extrude(twist:)`, whose profile-subdivision lesson applies verbatim).
+  - Verification: base-circle identities (base pitch = π·m·cos α) as arithmetic, and
+    **conjugate action as a TEST** — mesh two generated gears in the mechanism solver
+    and assert the transmission ratio stays constant through a rotation to stated
+    tolerance, which is the law of gearing asked rather than assumed.
+
 Mechanisms v1 landed (`Joints.cs`/`Mechanism.cs`/`Couplings.cs`/`HigherPairs.cs`/
 `MateSolverRates.cs`/`MotionInterference.cs`; docs `examples/mechanisms.md`): joints as
 a vocabulary over mates with DOF asserted against the solver's rank, drivers +
@@ -841,6 +854,17 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
   watch).
 
 ## Simulation
+
+- [ ] **Fatigue post-processing: S-N and Goodman over the stress results that already
+  exist.** Arithmetic, not a solver: alternating/mean decomposition from two load
+  cases (`SolveAll` returns them from one factorization), a transcribed S-N catalogue
+  carrying the verify-against-datasheet flag, Goodman/Gerber mean-stress corrections,
+  and damage published as a `MeshField` the viewer already colours. Refuse by name:
+  welds (hot-spot and nominal-stress methods are their own discipline) and multiaxial
+  criteria beyond von Mises equivalence — named, not approximated.
+  - Verification: single-element hand checks, and the published S-N line reproduced at
+    its own knee points exactly — a transcription test, which is the only honest claim
+    a catalogue can make.
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
@@ -1641,6 +1665,28 @@ export — is recorded in CLAUDE.md):
 
 ## OpenCASCADE (OCCT) feature parity (open items)
 
+- [ ] **Direct editing: offset, move and delete a face on a history-less solid** —
+  what makes imported STEP editable. `Shelling.Offset` already offsets EVERY face with
+  exact corner re-solves and takes a per-face wall thickness, so offsetting ONE face is
+  the same machinery under a selective law; a face MOVE is the offset's rigid cousin;
+  delete-face-and-heal is extend-the-neighbours through the same three-plane/Newton
+  corner solves. Selection through the existing `FaceSetRef` vocabulary; provenance
+  inherits (the six-site rule); refusals BY NAME exactly where the corner machinery
+  already refuses (>3-valent vertices, carriers with no same-family offset).
+  - Verification: offsetting a box face by d changes the volume by exactly A·d;
+    deleting a boss's faces restores the base solid bit-for-bit when the neighbours
+    are planar and it does not merely "look removed".
+- [ ] **PDF drawing export — the deliverable format.** Sheets end at SVG/DXF today;
+  what gets sent to a manufacturer is PDF. A vector writer for line work plus
+  stroke-font text is a small dependency-free format job (PDF content streams are
+  plainer than TrueType, PNG, glTF or STEP, all hand-rolled here), consuming the SAME
+  `Compute()` the SVG and DXF writers share so three writers cannot disagree. Line
+  classes map to dash arrays; sheet size to a MediaBox in points, with the one
+  25.4/72 mm-per-point constant stated once.
+  - Verification: coordinates round-trip through an independently written reader (the
+    OFF/LZW twin-decoder precedent), and rewriting the same sheet is a byte fixed
+    point.
+
 What remains against the reference B-Rep kernel (covered: primitives,
 extrude/revolve/sweep, booleans, rim fillets/chamfers, drilled holes, conics + offset
 curves, curve interpolation, projection/extrema, surface intersection, STEP
@@ -2077,6 +2123,21 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## build123d / CadQuery parity (open items)
 
+- [ ] **Frames and weldments: profiles swept along an edge skeleton with mitred
+  joints, and BOM cut lists.** (The reference is SolidWorks weldments; neither
+  build123d nor CadQuery has it first-class, which is part of the opportunity.) A
+  skeleton is a list of straight runs; each member is one extrusion of a catalogue
+  profile (box, angle, channel — transcribed with the verify-against-datasheet flag);
+  a joint is the exact bisector plane between two members, which is the chamfer/miter
+  plane machinery again; cut length per member lands on `BomLine`, giving the cut
+  list for free from the BOM that exists.
+  - Verification: total volume = Σ member volumes − exact miter wedges (closed form
+    for rectangular sections); cut-list lengths against the skeleton's own arithmetic;
+    a welded rectangular frame's mass against the closed form through `Materials`.
+  - Scope honestly: straight members first. Coped tube joints (tube-on-tube saddle
+    cuts) are transcendental cylinder∩cylinder pairs for the tracer and should be
+    ASSESSED against its known thread-scale seeding limits, not assumed.
+
 Both are **OCCT front ends**, so unlike the OpenSCAD and OCCT sections above this one is
 almost entirely about **API design, not kernel capability** — their contribution is how a
 model is *expressed*, and the underlying operations are ones we largely have. Read them
@@ -2427,6 +2488,45 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 
 ## App layer / infrastructure
 
+- [ ] **Design studies: drive `[Param]` values by an optimizer against a measured
+  objective.** Everything below the loop exists and is verified: `FeatureHistory`
+  regenerates with prefix caching, `[Param(Min=, Max=)]` already declares the box
+  constraints, the FEA suite answers mass/stress/deflection/frequency, and `SolveAll`
+  amortises multi-case solves. The feature is the loop — minimize mass subject to a
+  stress or deflection limit, report the trajectory and the binding constraint.
+  Derivative-free first (regeneration is not differentiable); a failed regeneration
+  mid-search is REPORTED and the study continues from the last feasible point, the
+  regeneration failure culture applied to a new consumer.
+  - Verification: the cantilever gives closed forms — the minimum-mass depth for a
+    stated tip-deflection limit is analytic, and the study must land on it to a stated
+    tolerance rather than merely improve.
+- [ ] **Configurations / design tables: one `FeatureHistory`, N named parameter
+  sets.** A configuration is a name plus a `[Param]` value dictionary through the SAME
+  JSON seam as `SaveParameters` (one seam, so spellings cannot drift); the document
+  carries the set and the active one; the BOM rolls up per configuration. An M4…M12
+  family of one bracket is the acceptance case.
+  - Verification: save→load→save stays a byte fixed point with configurations present,
+    and switching away and back regenerates bit-identical geometry — the cache-key
+    property the undo stack already asserts, asked of a new consumer.
+- [ ] **Manufacturability checks: draft angles, wall thickness, overhangs.** Three legs
+  riding machinery that exists, one entry because the deliverable is one shape — a
+  per-part report plus a `FieldDisplay` colouring. Draft: per-face angle against a pull
+  direction (planar faces exact via `BrepQueries`, curved sampled and said so). Wall
+  thickness: the SDF answers it locally already (the section isolines); a global
+  minimum-thickness field wants an honest estimator assessed before a number is
+  promised. Overhangs: facet normal against a build direction below a threshold,
+  area totalled — pure mesh arithmetic.
+  - Verification: closed forms — a drafted block's walls read exactly the drafted
+    angle, a shelled box reads its wall thickness exactly, and a 45° cone at a 45°
+    threshold reports zero overhang area on either side of the tie.
+- [ ] **ISO 286 fits and tolerance stackups along a mate chain.** The fit tables
+  (H7/g6 and friends) are a transcription carrying the verify-against-datasheet flag
+  (`StandardHoles`' convention); a stackup is a walk along the existing mate graph
+  summing dimensions worst-case and RSS. This is where mechanical engineers actually
+  lose time — the same argument the ECAD assessment makes for the MCAD boundary.
+  - Verification: table rows asserted in the form a human checks (micrometres straight
+    from the standard), and a textbook stackup reproduced both worst-case and RSS.
+
 - [ ] **Parametric features follow-ups** (`FeatureHistory` landed; typed geometry
   inputs landed — `GeometryRefs.cs`: `PlaneRef`/`FaceRef`/`FaceSetRef`/`EdgeSetRef`/
   `AxisRef` with cardinality in the type, descriptor-as-cache-key-as-serialized-form,
@@ -2667,6 +2767,26 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 
 ## Future work (whole domains, not scheduled)
 
+- [ ] **2.5D CAM — pocketing, profiling, drilling cycles and a G-code writer.** The
+  nearest-term of the domains here, because the hard part shipped without ever being
+  called CAM: `Region2dOffset` IS toolpath offsetting, successive inward offsets ARE
+  pocket clearing, `Stroke` is documented as toolpath footprints, and
+  `Shape.Section`/`Silhouette` produce the 2D input from any solid. What is missing is
+  the thin layer on top: pass linking (climb vs conventional ordering), lead-in/out
+  arcs, depth stepping, a drilling-cycle vocabulary that reads `HoleTable.For(part)`
+  (the holes already know their specs and depths), and a dependency-free G-code
+  writer — a text format plainer than four formats already hand-rolled here.
+  - **Verification bar, in the house style**: path-length and swept-area identities
+    against closed forms the 2D engine already answers; "no gouging" as an EXACT
+    claim — every path point at least the tool radius from the region boundary, which
+    the exact 2D signed distance can assert point by point; and machined-stock
+    simulation by successive 2D boolean subtraction, its residual against the target
+    region measured rather than eyeballed.
+  - **Honest sequencing**: pocket/profile passes over a `Region2d` → depth stepping
+    and linking → G-code out → drilling cycles from the hole table. 3D surfacing is a
+    DIFFERENT problem (scallop height over meshes) and should be assessed separately,
+    not assumed to follow.
+
 Each of these is its own product-sized campaign rather than a backlog item, and each sits
 here because the honest assessment says so — not because nobody got to it. They are kept
 in this file, with their reasoning intact, so that a future decision to start one begins
@@ -2779,6 +2899,11 @@ from what was already understood rather than from scratch.
 
 ## Not worth adopting (deliberate)
 
+- Raytraced/PBR rendering, a GUI sketcher, and freeform surface-modeling studios —
+  each is a different product on the same data model (the "second company" argument
+  the ECAD assessment makes), and each is served by mature tools a mesh export away.
+  The viewer stays an engineering viewport; sketches stay code; surfacing waits for a
+  need the `Shape` vocabulary cannot meet.
 - g3's mesh structure itself (index+edge-list) — our half-edge with explicit boundary
   half-edges is a deliberate different choice; adopt its *editability mechanisms*, not
   the structure.
