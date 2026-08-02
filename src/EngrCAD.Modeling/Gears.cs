@@ -167,8 +167,13 @@ internal readonly record struct GearToothGeometry(
 /// <see cref="Sketch"/>, <see cref="SpurGear"/> and <see cref="HelicalGear"/> wrap it
 /// into solids. The geometry counterpart of <c>Coupling.Gear</c>, which constrains the
 /// ratio but draws nothing.
+/// <para>Also here: <see cref="Rack"/>/<see cref="RackBar"/> (the z→∞ limit, whose
+/// straight flanks make it the DEFINITION of the tooth system rather than another
+/// member of it) and <see cref="Worm"/>/<see cref="WormWheel"/> (the worm IS a thread,
+/// so it rides the helical-sweep machinery; the wheel is a crossed-helical
+/// approximation with its point-contact caveat stated).</para>
 /// </summary>
-public static class Gears
+public static partial class Gears
 {
     /// <summary>
     /// Generates the involute spur gear profile for <paramref name="spec"/> as a closed
