@@ -2239,6 +2239,60 @@ diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limi
   outline's exact Green's-theorem area (the involute term is r_b²·t³/6), held
   against `Sketch.Area()` in tests.
 
+### Helical arithmetic, herringbone and crossed helical
+
+- **`HelicalGearGeometry`** carries the transverse ↔ normal conversions both forms
+  need: m_n = m_t·cos β, tan α_n = tan α_t·cos β, axial pitch, lead, the section
+  twist for a height, and `FromNormal(...)` for a gear ordered the way a cutter is.
+  **Every per-module coefficient scales by cos β and that includes the profile
+  shift** — the addendum, dedendum, root fillet radius and rack datum shift are
+  RADIAL LENGTHS, so a `GearSpec` reading them against the transverse module must
+  take them divided by m_t/m_n. It is not cosmetic: unscaled, a 0.38·m_n fillet
+  reads 1.34× too large at β = 45° and a 24-tooth member is REFUSED by `Gears.Spur`
+  for adjacent root fillets overlapping. The conversion is checked by identities
+  (the transverse tooth thickness comes back as the normal one over cos β; the
+  undercut limit as the classical 2·h_a*_n·cos β/sin²α_t), not by inspection.
+- **`HerringboneGears.Herringbone(spec, faceWidth, helixAngleDegrees, bore?)`** —
+  two opposite-hand helical halves in one solid, whose axial thrusts cancel. **The
+  apex is a WELD, not a boolean**: both halves share the apex section (the twist
+  law is Λ-shaped in z), so the mid-plane is a plane of exact mirror symmetry, the
+  lower half is swept by the ordinary twisted extrusion — inheriting the recorded
+  twist-matched profile subdivision — and reflected, and the two are welded BY
+  INDEX because the apex ring's vertices are exact fixed points of z → W − z. The
+  two coincident cap facets are the only ones lying entirely in that plane, so
+  "every vertex is at the apex" is an exact test for what to drop; reflected faces
+  keep vertex 0 in place per the fan-diagonal rule. Mesh-only (the twisted-extrude
+  contract), so the mesh is built EAGERLY at the stated quality and wrapped by
+  `Shape.From` — the `Bounds`/`Resized` policy. `SectionAngleAt`/`HalfTwist` state
+  the law as arithmetic. **No apex relief groove yet, for a measured reason**: a
+  groove is material genuinely removed, so it wants a boolean, and subtracting an
+  axial band from a gear fails in BOTH engines (the exact mesh boolean's imprint at
+  every relief diameter/width/density tried; the B-Rep boolean as an unclosed solid
+  with 1522 unpaired edges for the same band against a spur gear). Filed with the
+  figures; it wants a mixed-section ring stack.
+- **`CrossedHelicalPair.Create(m_n, z₁, z₂, β₁, β₂, α_n?)`** — two helical gears on
+  SKEW shafts. The geometry is nothing new, so what it carries is the pairing
+  arithmetic (shared normal module and pressure angle as the meshing condition;
+  **shaft angle Σ = β₁ + β₂ over SIGNED helix angles**, which is one rule where the
+  textbook states two; centre distance = r₁ + r₂) and the placement (`FirstAxis`,
+  `SecondAxis`, `SecondFrame`, `ContactPoint`, `FirstGear`/`SecondGear`).
+  Construction VERIFIES what it placed — the two tooth traces must be the same line
+  at the contact point, the geometric content of Σ and the one thing a sign slip
+  breaks. **`Ratio` is z₂/z₁ and NOT the pitch-radius ratio**: on skew axes those
+  differ by cos β₁/cos β₂ (46% for a 20°/50° pair). **Contact is a POINT**, so these
+  are light-drive and instrument gears; the tooth PHASE is not solved (that is a
+  mate or a driver, and inventing one would guess which flank drives). Parallel
+  shafts (Σ = 0) are refused by name — that is an ordinary helical pair with line
+  contact.
+- **The helical pair's conjugate test** rides the transverse-section argument: at
+  every section the pair IS a spur pair (each member's section is its spur profile
+  rotated by ψ(z), and rotating both rigidly moves the phase of contact and not the
+  ratio), so the spur pair's contact-measured conjugacy carries over and what the
+  tests measure is the half that could be wrong — that a real transverse section,
+  rotated back by ψ(z), lands on the exact spur region's zero level, within a bound
+  DERIVED from arc flattening + wall-panel chord + biarc fit, mutation-checked
+  against a 5% twist error.
+
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".
 
