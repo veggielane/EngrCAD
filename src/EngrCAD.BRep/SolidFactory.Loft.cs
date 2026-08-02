@@ -233,7 +233,17 @@ public static partial class SolidFactory
         // An exactly-matching pair (the common case: identical or coaxial sections) needs
         // no wrapper at all — exact zero is a semantic test, not a tolerance.
         if (lowest > 0)
+        {
             bestShift = RefineShift(Cost, bestShift, 1.0 / scan);
+            // Derivative-free minimization of a smooth quadratic stalls at √ε ≈ 1e-8 of
+            // the shift — the recorded distance-minimization trap (root solves, never
+            // distance minimization). Measured: two coaxial circles, whose true optimum
+            // is EXACTLY zero, came back with a 1.09e-8 phase, which is a twist every
+            // ruled quad carries. Newton on dJ/ds = 0 with the curve's exact derivatives
+            // lands the true optimum; an exactly-aligned pair then falls to the
+            // wrapper-free guard below.
+            bestShift = PolishShift(curve, sectionCentre, referencePoints, bestShift, Cost);
+        }
 
         bestShift -= Math.Floor(bestShift);
         // Sub-ulp shifts would only add a wrapper without moving anything.
@@ -251,6 +261,67 @@ public static partial class SolidFactory
         centre /= points.Length;
         for (int i = 0; i < points.Length; i++)
             points[i] -= centre;
+    }
+
+    /// <summary>
+    /// Newton on the seam-shift objective's DERIVATIVE — the root solve that finishes what
+    /// golden section starts. J(s) = Σ|C(θᵢ(s)) − c − Rᵢ|² is smooth with exact curve
+    /// derivatives available, so
+    /// g(s) = dJ/ds = 2·Σ (C − c − Rᵢ)·C′·L and g′(s) = 2·Σ (C′·C′·L² + (C − c − Rᵢ)·C″·L²)
+    /// converge quadratically from the golden-section result. Every guard errs toward
+    /// KEEPING the golden answer (a curve without exact second derivatives, a vanishing
+    /// g′, a step that does not reduce the cost), so this can polish but never worsen.
+    /// </summary>
+    private static double PolishShift(
+        Curve3d curve, in Vector3d sectionCentre, Vector3d[] referencePoints,
+        double seed, Func<double, double> cost)
+    {
+        var domain = curve.Domain;
+        double length = domain.Length;
+        int scan = referencePoints.Length;
+        var centre = sectionCentre;
+
+        (double G, double Slope) Derivatives(double s)
+        {
+            double g = 0, slope = 0;
+            for (int i = 0; i < scan; i++)
+            {
+                double t = (double)i / scan + s;
+                t -= Math.Floor(t);
+                double parameter = domain.ParameterAt(t);
+                var residual = curve.PointAt(parameter) - centre - referencePoints[i];
+                var first = curve.DerivativeAt(parameter) * length;
+                var second = curve.SecondDerivativeAt(parameter) * (length * length);
+                g += 2 * residual.Dot(first);
+                slope += 2 * (first.Dot(first) + residual.Dot(second));
+            }
+            return (g, slope);
+        }
+
+        double best = seed;
+        double bestCost = cost(seed);
+        double shift = seed;
+        for (int i = 0; i < 8; i++)
+        {
+            var (g, slope) = Derivatives(shift);
+            if (!double.IsFinite(g) || !double.IsFinite(slope) || Math.Abs(slope) <= 0)
+                break;
+            double step = g / slope;
+            shift -= step;
+            shift -= Math.Floor(shift);
+            double c = cost(shift);
+            // <= on purpose: near the optimum the quadratic well is flatter than the
+            // cost's own round-off, so the polished shift and the golden one measure
+            // EQUAL costs — a tie must go to the root solve or the √ε stall survives.
+            if (c <= bestCost)
+            {
+                bestCost = c;
+                best = shift;
+            }
+            if (Math.Abs(step) <= 1e-15)
+                break;
+        }
+        return best;
     }
 
     /// <summary>Golden-section minimization of a unimodal cost on [centre − h, centre + h].</summary>

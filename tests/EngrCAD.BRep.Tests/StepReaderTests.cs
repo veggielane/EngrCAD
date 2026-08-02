@@ -505,4 +505,43 @@ public class StepReaderTests
         Assert.Empty(result.Solids);
         Assert.Contains(result.Diagnostics, d => d.Contains("No MANIFOLD_SOLID_BREP"));
     }
+
+    /// <summary>
+    /// A partial revolve of a SINGLE closed profile curve — an elbow with a one-curve
+    /// tube section. The profile has no segment junctions, so the sweep traces no
+    /// axis-centered arc anywhere and nothing on the boundary carries the angle the way
+    /// multi-segment profiles' rail arcs do; the whole boundary is the generator plus its
+    /// rotated copy. This used to come back SILENTLY as a FULL TURN (angle 2π for a
+    /// 1.2 rad sweep, zero diagnostics), which the tessellator's full-domain gate then
+    /// refused three stages later — the exact silent-wrong-surface shape the reader's
+    /// culture forbids. The angle is now read in closed form as the azimuthal rotation
+    /// between corresponding samples of the two congruent boundary curves.
+    /// </summary>
+    [Fact]
+    public void PartialRevolveOfASingleClosedNurbsProfile_RecoversItsAngle()
+    {
+        var points = new List<Vector3d>();
+        for (int i = 0; i < 8; i++)
+        {
+            double a = 2 * Math.PI * i / 8;
+            double r = 2 + 0.3 * Math.Cos(3 * a); // non-circular, so no meridian rule applies
+            points.Add(new Vector3d(10 + r * Math.Cos(a), 0, r * Math.Sin(a)));
+        }
+        var profile = NurbsCurve.InterpolatePoints(points, closed: true);
+        var original = SolidFactory.Revolve(
+            new Profile([profile]), Vector3d.Zero, Vector3d.UnitZ, 1.2);
+        original.Validate();
+
+        var read = ReadSingle(StepWriter.Write(original, "elbow"), out var diagnostics);
+        Assert.Empty(diagnostics);
+        read.Validate();
+        AssertSameCounts(original, read);
+
+        var band = (RevolvedSurface)read.Faces.Single(f => f.Surface is RevolvedSurface).Surface;
+        Assert.Equal(1.2, band.Angle, 9);
+        // The generator legitimately spans its whole closed period (the tube section),
+        // so no trim may be invented and no closed-generator diagnostic may fire.
+        Assert.True(band.Generator.IsClosed);
+        Assert.Equal(profile.Domain.Length, band.Generator.Domain.Length, 9);
+    }
 }

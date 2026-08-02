@@ -123,9 +123,13 @@ public static class GeometryTransform
                 nurbs.Knots),
 
             // Chord lengths are preserved by an isometry, so the cumulative parameterization
-            // — and therefore every edge domain that refers to it — is unchanged.
+            // — and therefore every edge domain that refers to it — is unchanged. The tracer
+            // carriers move with the points: they are either face surfaces (whose own
+            // transform succeeds, or the solid walk has already refused) or promoted
+            // cylinders/spheres, all of which Apply answers in-family.
             PolylineCurve3d polyline => new PolylineCurve3d(
-                [.. polyline.Points.Select(p => m.TransformPoint(p))], polyline.IsClosed),
+                [.. polyline.Points.Select(p => m.TransformPoint(p))], polyline.IsClosed,
+                polyline.Carriers is { } pair ? (Apply(pair.A, m), Apply(pair.B, m)) : null),
 
             ReversedCurve reversed => Apply(reversed.Base, m).Reversed(),
 

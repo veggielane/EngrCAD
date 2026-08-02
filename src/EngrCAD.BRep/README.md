@@ -84,6 +84,15 @@ operations. Depends only on `EngrCAD.Core`.
   parameterized, so the domain shortens and anything holding parameters into the curve — a
   `CurveSegment`, a pulled face loop, a boolean's mandatory break — must be rebuilt. That is
   why nothing in the pipeline simplifies implicitly.
+  **`PolylineCurve3d.Carriers`** is the two exact surfaces a marching-traced intersection
+  curve was marched on (attached by `SurfaceIntersection`'s tracer, preserved by
+  `Simplified`, the boolean's end-snapping and `GeometryTransform`, and serialized by
+  `BrepArchive` as two optional trailing surface refs): a traced curve's sample count is
+  fixed at boolean time, and the carrier pair is what lets the tessellator refine its
+  chords back onto the EXACT intersection at whatever density the caller asks for
+  (`BRepTessellator.SampleEdge` → `SurfaceCorner.TrySolvePoint`). The failure direction
+  is safe by construction — a derivation that cannot carry the pair drops it, and the
+  curve samples at its baked vertices exactly as before.
   `NurbsCurve.InterpolatePoints(points, closed)` builds a cubic B-spline passing exactly
   through the points (`GeomAPI_PointsToBSpline`-style): chord-length parameterization;
   open curves use clamped knots + natural end conditions via a tridiagonal collocation
@@ -200,6 +209,18 @@ operations. Depends only on `EngrCAD.Core`.
   curves bit-for-bit (they are also the shared cap and neighbour edges). `NaturalUSegments`
   mirrors `BRepTessellator.SampleEdge`'s rules for the sections that ARE the face's u
   boundaries — the rule lives on the surface because only it knows what its sections are.
+  **`IsAffineInV`** states the property a degree-1 TWO-section loft has and others do not:
+  P(u, v) = (1 − v)·C₀(u) + v·C₁(u), so a v-chord at any fixed u lies EXACTLY on the
+  surface and interior v samples buy nothing — the helical band's infinite-v-step rule,
+  stated by the surface that satisfies it. The tessellator's natural grid collapses such
+  a loft's v to the two section rows and samples its `LoftRailCurve` rails as the exact
+  straight segments they are (one condition, both sides, so grid and edge polylines agree
+  by construction). The rule earned its place by a measured defect: a variable fillet
+  band's rail sampled at 25 near-collinear points forced the neighbouring planar face's
+  ear clipping into sliver ears (18 of 23 facets degenerate at 48/24, non-manifold at
+  128/96); with the collapse the rail is a 2-point segment and the slivers are zero.
+  A degree-1 loft of MORE sections is only piecewise affine and deliberately does not
+  qualify.
   Exact analytic `DerivativeU`/`DerivativeV`/`NormalAt`.
   Exact analytic normals and exact
   closed-form `TryProjectPoint` (the point's angle fixes u up to whole turns, the axial
@@ -410,6 +431,13 @@ operations. Depends only on `EngrCAD.Core`.
     squared corner travel (leaving the sections' separation in that objective makes it a
     large constant plus a tiny quadratic well, which measurably cost eight digits: a seam
     shift resolved to only ~3e-9, i.e. 3e-8 of positional twist, past weld tolerance).
+    The continuous shift is FINISHED by Newton on dJ/ds = 0 with the curve's exact
+    derivatives — derivative-free minimization of a smooth quadratic stalls at √ε ≈ 1e-8
+    of the shift (the recorded distance-minimization trap: root solves, never distance
+    minimization), and the measured cost was two coaxial circles, whose true optimum is
+    EXACTLY zero, coming back with a 1.09e-8 phase that put a twist into every ruled quad;
+    the polish lands the true optimum and an exactly-aligned pair then takes the
+    wrapper-free path, restoring loft-vs-cone tessellation identity to nine decimals.
     The v parameterization is global to the loft (mean chord length), never per strip.
   - `MakeThreadedRod(pitchProfile, pitch, length[, frame])` — a helically threaded rod
     whose entire lateral boundary is ONE co-rotating sweep of a per-pitch profile
@@ -1062,6 +1090,17 @@ operations. Depends only on `EngrCAD.Core`.
     to `FilletAllEdges`, and is refused naming it. Removed volumes are closed form (the
     prism terminates flush at the end planes): one chamfered edge removes exactly
     `c²/2·L`, an L-run `c²/2·(L₁+L₂) − c³/3`.
+    **Variable laws work on runs too** (`FilletEdges`/`ChamferEdges` law overloads now
+    resolve rims AND runs; `OpenRun` takes the law with the full-rim machinery — per-corner
+    values anchored at the run's corners INCLUDING its end vertices, `VariableTopCorner`
+    miters, ruled-skin bands between the corner sections with `LoftRailCurve` rails,
+    highest-corner neighbour trims). A termination is exact at ANY law value — the band's
+    end cross-section is a planar quarter arc of whatever radius the law gives at the stop
+    vertex — so a run under a linear law removes exactly
+    `(1 − π/4)·L·(r₀² + r₀r₁ + r₁²)/3` (asserted through tessellation, converging at
+    ratio exactly 4.0). The full-rim refusals carry over with one run-specific way out
+    named in the message: a sharp corner between different radii may simply STOP the run
+    before the corner, since the termination takes any value where the miter cannot.
   - Numerical rules the surgery depends on (all learned from real cracks): rim circles come
     from EDGE SAMPLES (`ActualCircle`), never from `Underlying` — a translated extrusion
     top's underlying circle sits at the base; every new rim edge is built in the top face's
@@ -1104,7 +1143,15 @@ operations. Depends only on `EngrCAD.Core`.
   exact derivatives for B-splines), and `SURFACE_OF_REVOLUTION` — which stores
   neither our swept angle nor generator trims — recovers the angle from rail arcs and
   re-trims generators from rim circles by bisection on the exact (radius, axial)
-  profile (root solves, never distance minimization, which stalls near √ε). The
+  profile (root solves, never distance minimization, which stalls near √ε). A partial
+  revolve of a SINGLE closed profile curve (an elbow with a one-curve tube section) has
+  no junction rails at all, so nothing on its boundary carries the angle — it used to
+  come back SILENTLY as a full turn with zero diagnostics, refused by the tessellator's
+  full-domain gate three stages later; `TryAngleFromRotatedCopy` now reads the angle in
+  closed form as the azimuthal rotation between corresponding samples of the generator
+  and its rotated boundary copy (congruence checked in (radius, axial) profile
+  coordinates, reversed correspondence tried), and the closed-generator diagnostic is
+  exempted there because the face genuinely covers the whole generator. The
   rim-circle off-axis rejection floor scales with the coordinate magnitude (foreign
   files carry rounding noise proportional to their coordinates — an absolute 1e-6
   floor silently rejected slightly-off-axis rims on large geometry, leaving generators

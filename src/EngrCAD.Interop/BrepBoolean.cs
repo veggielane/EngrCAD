@@ -333,7 +333,7 @@ public static class BrepBoolean
             points.Add(atEnd);
             changed = true;
         }
-        return changed ? new PolylineCurve3d(points, false) : curve;
+        return changed ? new PolylineCurve3d(points, false, polyline.Carriers) : curve;
     }
 
     /// <summary>
@@ -1008,6 +1008,13 @@ public static class BrepBoolean
         }
         if (best is { } found)
             return found;
-        throw new InvalidOperationException("Could not find a probe point on a face fragment.");
+        // Name the fragment (the refusal culture): which carrier, where it sits, and the
+        // uv shape the probe search saw — without these the failure reads the same for
+        // every face of every boolean.
+        throw new InvalidOperationException(
+            $"Could not find a probe point on a face fragment: {face.Surface.GetType().Name}" +
+            $"{(face.IsReversed ? " (reversed)" : "")} with {loops.Count} loop(s), pulled uv " +
+            $"u [{uMin:G6}, {uMax:G6}] x v [{vMin:G6}, {vMax:G6}], anchored at " +
+            $"{face.Surface.PointAt(uMin, vMin)}; no grid sample inside the trim contained a point.");
     }
 }

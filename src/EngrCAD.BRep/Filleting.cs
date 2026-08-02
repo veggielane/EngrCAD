@@ -122,15 +122,26 @@ public static class Filleting
         return RimSurgeon.ApplyVariable(solid, face, radiusAt, 1.0, fillet: true);
     }
 
-    /// <summary>Variable-radius fillet of a set of EDGES; the selection resolves to complete
-    /// rims exactly as <see cref="FilletEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>.</summary>
+    /// <summary>Variable-radius fillet of a set of EDGES; the selection resolves to
+    /// complete rims and contiguous partial RUNS exactly as
+    /// <see cref="FilletEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>. A run's
+    /// terminations are exact at any law value — the band's end cross-section is a planar
+    /// quarter arc of whatever radius the law gives at the stop vertex — while sharp
+    /// interior corners demand a locally constant law and arcs a law constant along the
+    /// arc, as on full rims.</summary>
     public static BrepSolid FilletEdges(
         BrepSolid solid, IEnumerable<BrepEdge> edges, Func<Vector3d, double> radiusAt)
     {
         ArgumentNullException.ThrowIfNull(radiusAt);
+        var (rims, runs) = ResolveSelection(solid, edges);
         var solidUnderConstruction = solid;
-        foreach (var face in RimFacesFor(solid, edges))
+        foreach (var face in rims)
             solidUnderConstruction = FilletRim(solidUnderConstruction, face, radiusAt);
+        foreach (var run in runs)
+        {
+            solidUnderConstruction = RimSurgeon.OpenRun(
+                solidUnderConstruction, run, 0, 0, fillet: true, radiusAt, sideRatio: 1.0);
+        }
         return solidUnderConstruction;
     }
 
@@ -152,14 +163,23 @@ public static class Filleting
     }
 
     /// <summary>Variable-setback chamfer of a set of EDGES; the selection resolves to
-    /// complete rims exactly as <see cref="ChamferEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>.</summary>
+    /// complete rims and contiguous partial RUNS exactly as
+    /// <see cref="ChamferEdges(BrepSolid, IEnumerable{BrepEdge}, double)"/>, with the
+    /// run terminations exact at any law value (a chamfer's cross-section is a planar
+    /// segment whatever the setback).</summary>
     public static BrepSolid ChamferEdges(
         BrepSolid solid, IEnumerable<BrepEdge> edges, Func<Vector3d, double> setbackAt)
     {
         ArgumentNullException.ThrowIfNull(setbackAt);
+        var (rims, runs) = ResolveSelection(solid, edges);
         var solidUnderConstruction = solid;
-        foreach (var face in RimFacesFor(solid, edges))
+        foreach (var face in rims)
             solidUnderConstruction = ChamferRim(solidUnderConstruction, face, setbackAt);
+        foreach (var run in runs)
+        {
+            solidUnderConstruction = RimSurgeon.OpenRun(
+                solidUnderConstruction, run, 0, 0, fillet: false, setbackAt, sideRatio: 1.0);
+        }
         return solidUnderConstruction;
     }
 
@@ -1395,9 +1415,19 @@ public static class Filleting
         /// its cylindrical neighbor would need periodic-band re-trimming that nothing
         /// exercises; refused by name until something does). Cliff and vertex-blend
         /// terminations remain refused — each is a different surface.</para>
+        /// <para>A non-null <paramref name="topLaw"/> is the variable-law form, anchored at
+        /// the run's corners exactly as <see cref="PolygonRim"/> anchors it at rim corners
+        /// — including the run's own END vertices, so a termination is the planar quarter
+        /// cross-section of whatever radius the law gives there (exact for any value: the
+        /// cross-section is planar whatever the radius). The same variable-band machinery
+        /// applies: straight stretches become ruled skins between their end sections,
+        /// sharp interior corners demand a locally constant law (two variable-radius bands
+        /// are cones with no common inscribed sphere), and arcs demand a law constant
+        /// along the arc (a circle offset by a varying amount is a spiral).</para>
         /// </summary>
         public static BrepSolid OpenRun(
-            BrepSolid solid, IReadOnlyList<BrepEdge> runEdges, double top, double side, bool fillet)
+            BrepSolid solid, IReadOnlyList<BrepEdge> runEdges, double top, double side, bool fillet,
+            Func<Vector3d, double>? topLaw = null, double sideRatio = 1)
         {
             // Locate the carrying face NOW (an earlier run's surgery may have rebuilt
             // it): the planar, non-reversed face whose OUTER loop carries every run
@@ -1462,6 +1492,38 @@ public static class Filleting
                     "is exact, but its periodic cylindrical neighbor cannot be re-trimmed yet. Extend the " +
                     "selection to the arc's full tangent-continuous chain, or stop before the arc.");
 
+            // Per-corner amounts: corner i is the START of edge i, corner n the run's END
+            // vertex. A null law fills the arrays with the caller's constants, so every
+            // shared expression below computes bit-identical values to the pre-law code.
+            bool variable = topLaw is not null;
+            var topAt = new double[n + 1];
+            var sideAt = new double[n + 1];
+            for (int i = 0; i <= n; i++)
+            {
+                var corner = i < n ? edges[i].Start : edges[^1].End;
+                topAt[i] = topLaw is null ? top : topLaw(corner);
+                if (topAt[i] <= 0 || !double.IsFinite(topAt[i]))
+                    throw new ArgumentOutOfRangeException(nameof(topLaw),
+                        $"The {(fillet ? "radius" : "setback")} law must be positive and finite at every " +
+                        $"run corner; it returned {topAt[i]} at {corner}.");
+                sideAt[i] = topLaw is null ? side : topAt[i] * sideRatio;
+            }
+            if (variable)
+            {
+                for (int i = 0; i < n; i++)
+                {
+                    if (edges[i].Arc is null)
+                        continue;
+                    // Weld tier: the concentric offset arc exists only for one value.
+                    if (Math.Abs(topAt[i] - topAt[i + 1]) > Tolerance.Default.Linear)
+                        throw new NotSupportedException(
+                            $"An arc rim edge's {(fillet ? "radius" : "setback")} must be constant along " +
+                            $"the arc (a circle offset by a varying amount is a spiral, not a circle); the " +
+                            $"law returned {topAt[i]} and {topAt[i + 1]} at the ends of the arc starting " +
+                            $"at {edges[i].Start}.");
+                }
+            }
+
             // Interior corners classify exactly as on a full rim.
             var mitered = new bool[n + 1]; // ends stay false: terminations, not miters
             for (int i = 1; i < n; i++)
@@ -1471,6 +1533,26 @@ public static class Filleting
                     throw new NotSupportedException(
                         $"The rim corner at {edges[i].Start} joins an arc sharply — not a conic; see the " +
                         "full-rim refusal for the exact ways out.");
+                // A sharp corner's miter needs the two bands to be equal-radius CYLINDERS
+                // (the bicylinder ellipse); a variable-radius band is a cone, and two cones
+                // meet in a quartic with no conic to weld on — the full-rim rule, with the
+                // run-specific way out that a run may simply STOP before the corner.
+                if (variable && fillet && mitered[i]
+                    && (Math.Abs(topAt[i - 1] - topAt[i]) > Tolerance.Default.Linear
+                        || Math.Abs(topAt[i] - topAt[i + 1]) > Tolerance.Default.Linear))
+                    throw new NotSupportedException(
+                        $"The run corner at {edges[i].Start} is sharp and its two edges carry different " +
+                        "radii, so there is no exact miter: two variable-radius bands are cones that do " +
+                        "not circumscribe a common sphere, and their intersection is a quartic rather " +
+                        "than a conic. Keep the radius constant across the corner, or stop the run " +
+                        "before it (a termination takes any radius exactly).");
+                if (variable && !fillet && mitered[i]
+                    && (edges[i - 1].Arc is not null || edges[i].Arc is not null))
+                    throw new NotSupportedException(
+                        "A variable chamfer's sharp corners must join two straight edges: the miter of a " +
+                        "tilted inset line against a concentric offset arc is not the arc's own endpoint, " +
+                        "so the corner has no exact closure. Make the rim tangent-continuous there, use a " +
+                        "constant setback, or stop the run before the corner.");
             }
 
             var topPoints = new Vector3d[n + 1];
@@ -1478,19 +1560,22 @@ public static class Filleting
             for (int i = 1; i < n; i++)
             {
                 var corner = edges[i].Start;
-                topPoints[i] = TopOffsetCorner(edges[i - 1], edges[i], corner, top, up, mitered[i]);
-                var dropA = corner + edges[i - 1].DownDir * side;
-                var dropB = corner + edges[i].DownDir * side;
+                topPoints[i] = variable
+                    ? VariableTopCorner(edges[i - 1], edges[i], corner,
+                        topAt[i - 1], topAt[i], topAt[i + 1], up, mitered[i])
+                    : TopOffsetCorner(edges[i - 1], edges[i], corner, top, up, mitered[i]);
+                var dropA = corner + edges[i - 1].DownDir * sideAt[i];
+                var dropB = corner + edges[i].DownDir * sideAt[i];
                 if (dropA.DistanceTo(dropB) > 1e-9)
                     throw new NotSupportedException(
                         "Rim corners must descend consistently on both neighbors (uniform side geometry).");
                 bottomPoints[i] = dropB;
             }
             // Terminal offsets: the perpendicular inset/drop at the run's end vertices.
-            topPoints[0] = edges[0].Start + up.Cross(TangentAtStart(edges[0])).Normalized() * top;
-            bottomPoints[0] = edges[0].Start + edges[0].DownDir * side;
-            topPoints[n] = edges[^1].End + up.Cross(TangentAtEnd(edges[^1])).Normalized() * top;
-            bottomPoints[n] = edges[^1].End + edges[^1].DownDir * side;
+            topPoints[0] = edges[0].Start + up.Cross(TangentAtStart(edges[0])).Normalized() * topAt[0];
+            bottomPoints[0] = edges[0].Start + edges[0].DownDir * sideAt[0];
+            topPoints[n] = edges[^1].End + up.Cross(TangentAtEnd(edges[^1])).Normalized() * topAt[n];
+            bottomPoints[n] = edges[^1].End + edges[^1].DownDir * sideAt[n];
 
             for (int i = 0; i < n; i++)
             {
@@ -1513,22 +1598,46 @@ public static class Filleting
                 topVertices[i] = new BrepVertex(topPoints[i]);
                 bottomVertices[i] = new BrepVertex(bottomPoints[i]);
             }
-            var topEdges = new BrepEdge[n];
-            var bottomEdges = new BrepEdge[n];
-            for (int i = 0; i < n; i++)
-            {
-                topEdges[i] = OffsetEdge(edges[i], topPoints[i], topPoints[i + 1], top, up, atTop: true,
-                    topVertices[i], topVertices[i + 1]);
-                bottomEdges[i] = OffsetEdge(edges[i], bottomPoints[i], bottomPoints[i + 1], side, up, atTop: false,
-                    bottomVertices[i], bottomVertices[i + 1]);
-            }
+            // Corner cross-sections FIRST (the full-rim variable rule): a variable-radius
+            // band is the ruled skin between the two of them, and its top and bottom
+            // boundaries are then rails ON that surface rather than free-standing lines.
             var cornerEdges = new BrepEdge[n + 1];
             for (int i = 0; i <= n; i++)
             {
                 cornerEdges[i] = fillet
-                    ? JunctionCurve(topPoints[i], bottomPoints[i], top, up, topVertices[i], bottomVertices[i])
+                    ? JunctionCurve(topPoints[i], bottomPoints[i], topAt[i], up, topVertices[i], bottomVertices[i])
                     : new BrepEdge(new Line3d(topPoints[i], bottomPoints[i]), Interval.Unit,
                         topVertices[i], bottomVertices[i]);
+            }
+            var bandSurfaces = new Surface[n];
+            for (int i = 0; i < n; i++)
+            {
+                bandSurfaces[i] = BandSurface(
+                    edges[i], topPoints[i], bottomPoints[i], topPoints[i + 1], bottomPoints[i + 1],
+                    topAt[i], topAt[i + 1], up, fillet, mitered[i], mitered[i + 1], variable,
+                    cornerEdges[i].Curve, cornerEdges[i + 1].Curve);
+            }
+            var topEdges = new BrepEdge[n];
+            var bottomEdges = new BrepEdge[n];
+            for (int i = 0; i < n; i++)
+            {
+                if (bandSurfaces[i] is LoftedSurface skin)
+                {
+                    // The rails EVALUATE the band, so the shared edge and the face's first
+                    // and last grid columns are the same points by construction (the loft
+                    // rule — see PolygonRim).
+                    topEdges[i] = new BrepEdge(
+                        new LoftRailCurve(skin, skin.DomainU.Start), Interval.Unit,
+                        topVertices[i], topVertices[i + 1]);
+                    bottomEdges[i] = new BrepEdge(
+                        new LoftRailCurve(skin, skin.DomainU.End), Interval.Unit,
+                        bottomVertices[i], bottomVertices[i + 1]);
+                    continue;
+                }
+                topEdges[i] = OffsetEdge(edges[i], topPoints[i], topPoints[i + 1], topAt[i], up, atTop: true,
+                    topVertices[i], topVertices[i + 1]);
+                bottomEdges[i] = OffsetEdge(edges[i], bottomPoints[i], bottomPoints[i + 1], sideAt[i], up, atTop: false,
+                    bottomVertices[i], bottomVertices[i + 1]);
             }
 
             // Termination link segments: run vertex → inset top point (in the top
@@ -1627,9 +1736,7 @@ public static class Filleting
                     new BrepCoedge(bottomEdges[i], true),
                     new BrepCoedge(cornerEdges[i + 1], false),
                 ]);
-                bands.Add(new BrepFace(
-                    BandSurface(edges[i], topPoints[i], bottomPoints[i], topPoints[i + 1], bottomPoints[i + 1],
-                        top, top, up, fillet, mitered[i], mitered[i + 1]), [loop]));
+                bands.Add(new BrepFace(bandSurfaces[i], [loop]));
             }
 
             // Termination faces: planar cross-sections perpendicular to the terminal
@@ -1664,15 +1771,41 @@ public static class Filleting
 
             // Domain-driven neighbor surfaces: only interior neighbors (both of whose
             // run corners are interior miters) are uniformly lowered and may be trimmed;
-            // terminal neighbors keep their full height at the run vertex.
+            // terminal neighbors keep their full height at the run vertex. A VARIABLE
+            // side drop tilts the lowered rim, so the trim keeps the HIGHEST remaining
+            // corner (the full-rim rule); the uniform loop is the pre-law code verbatim.
             var trims = new Dictionary<BrepFace, BrepFace>();
-            for (int i = 1; i < n - 1; i++)
+            if (variable)
             {
-                if (!ReferenceEquals(edges[i].Neighbor, edges[0].Neighbor)
-                    && !ReferenceEquals(edges[i].Neighbor, edges[^1].Neighbor)
-                    && !trims.ContainsKey(edges[i].Neighbor)
-                    && TrimNeighborBand(edges[i].Neighbor, bottomPoints[i]) is { } trimmedNeighbor)
-                    trims[edges[i].Neighbor] = trimmedNeighbor;
+                var highest = new Dictionary<BrepFace, Vector3d>();
+                for (int i = 1; i < n - 1; i++)
+                {
+                    if (ReferenceEquals(edges[i].Neighbor, edges[0].Neighbor)
+                        || ReferenceEquals(edges[i].Neighbor, edges[^1].Neighbor))
+                        continue;
+                    foreach (var candidate in new[] { bottomPoints[i], bottomPoints[i + 1] })
+                    {
+                        if (!highest.TryGetValue(edges[i].Neighbor, out var current)
+                            || candidate.Dot(up) > current.Dot(up))
+                            highest[edges[i].Neighbor] = candidate;
+                    }
+                }
+                foreach (var (neighbor, point) in highest)
+                {
+                    if (TrimNeighborBand(neighbor, point) is { } trimmedNeighbor)
+                        trims[neighbor] = trimmedNeighbor;
+                }
+            }
+            else
+            {
+                for (int i = 1; i < n - 1; i++)
+                {
+                    if (!ReferenceEquals(edges[i].Neighbor, edges[0].Neighbor)
+                        && !ReferenceEquals(edges[i].Neighbor, edges[^1].Neighbor)
+                        && !trims.ContainsKey(edges[i].Neighbor)
+                        && TrimNeighborBand(edges[i].Neighbor, bottomPoints[i]) is { } trimmedNeighbor)
+                        trims[edges[i].Neighbor] = trimmedNeighbor;
+                }
             }
 
             var faces = solid.Faces

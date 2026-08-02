@@ -112,7 +112,14 @@ logging complements them, never replaces them.
   ear-clip via `PolygonTriangulator`; cylinder bands and full-domain generated faces
   (extruded/revolved/swept) tessellate as parameter grids whose samples match the shared
   edge polylines exactly; everything is welded (with seam zipping to repair T-junctions
-  from earcut's collinear filtering).
+  from earcut's collinear filtering). A `LoftedSurface` that is AFFINE in v (a ruled
+  two-section loft — every variable fillet band, every two-section loft solid) collapses
+  its grid's v to the two section rows and its `LoftRailCurve` rails sample as the exact
+  2-point segments they are (`LoftedSurface.IsAffineInV`, one condition on both sides):
+  a v-chord lies exactly on such a surface, and the 25-point near-collinear rail runs the
+  dense sampling used to hand the neighbouring planar faces forced their ear clipping
+  into sliver ears (18 of 23 facets degenerate on a variable run's front face,
+  non-manifold at 128/96 — now zero, with the volume convergence unchanged at ratio 4.0).
   - **`IsRingPairedBand` — the ring path checks its own precondition.** A plain
     `CylinderSurface` has no parameter grid at all: `TessellateCylinderBand` emits one
     quad per sample index j joining `bottom[j]` to `top[j]`, which is the right band
@@ -164,6 +171,26 @@ logging complements them, never replaces them.
     is the third occurrence of one rule: **`Underlying` is a TYPE hint and says nothing
     about the parameter mapping** — the same reason `FaceGeometry.ExactSampleParameters`
     exists on the polyline side.
+
+    **Traced polylines refine against their exact carriers at tessellation time**
+    (`RefineTracerChords`). A marching-tracer curve's sample count is fixed at boolean
+    time, so the facets straddling it used to disagree MORE with the exact surface as
+    the density rose — measured 0.9988 → 0.9460 → 0.3229 worst facet-vs-surface
+    agreement at 32/96/192 on a bore crossing a whole-solid fillet's bands. The curve
+    now carries the two surfaces it was traced on (`PolylineCurve3d.Carriers`), and
+    `SampleEdge` inserts midpoints solved onto BOTH exact carriers
+    (`SurfaceCorner.TrySolvePoint`, minimum-norm Newton, weld-tier acceptance) until
+    every chord subtends at most one natural angular step (the osculating identity
+    θ ≈ 8·sagitta/length makes "sagitta above length·π/(4n)" the same statement as
+    "subtends more than 2π/n"). Refinement INSERTS only — baked vertices pass through
+    bit-for-bit, so a coarse density, a carrier with no implicit form, or a
+    non-converged solve all reproduce today's polyline exactly. The bore now measures
+    0.9988 / 0.9999 / 1.0000. **Scope is measured, not assumed**: only OPEN branches
+    whose every use sits in its face's OUTER loop refine, because the paired strip/slab
+    tiers absorb the density while `TriangulateBandWithHoles` does not (a plane-cut
+    torus's bore rim — a chain forming a HOLE loop — went 0 → 3 base folds at 48/24 and
+    refused outright at 192/96 when refined); hole rims keep their baked density until
+    that tier grows a row path that can anchor on a dense rim (filed in todo.md).
   - **Trimmed faces** (loops not covering the surface's grid domain — `FaceSplitter`
     fragments such as a bore wall cut through by a slot, and every mitered rim-fillet
     band) go through `TrimmedFaceTessellator`, which picks a path in this order:
