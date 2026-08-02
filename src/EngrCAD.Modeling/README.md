@@ -2051,9 +2051,32 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   local angle with the running lift added — the chain's slope and curvature are the
   segments' own analytic derivatives, never a difference of the assembled lift.
   Continuity across a joint is the SEGMENTS' business: smoothing it centrally would hide
-  the very property the catalogue exists to let a designer choose. Still open (filed):
-  roller-follower radius compensation and offset followers, which are curve-offset and
-  root-find problems rather than law factories — see todo.md for the shape of both.
+  the very property the catalogue exists to let a designer choose.
+- **Roller and offset followers** (`CamFollower` +
+  `CamLaw.FromSketch(profile, follower)` + `CamLaw.PressureAngle`): a roller follower's
+  centre traces the profile's **planar offset** at the roller radius, and a planar
+  offset is not a radial one — r(θ) + R is wrong by O(R·r′²/r²), worst exactly where
+  the cam is steepest (measured 0.12 on the eccentric-circle fixture at θ = π/2,
+  three orders above the law's fidelity). The filed framing expected a parametric
+  offset curve plus a root find with implicit-function derivatives; neither is needed,
+  because the sketch's signed distance is a true planar distance OUTSIDE the profile,
+  so the offset curve IS the isolevel sd = R and the roller centre is the outermost
+  crossing of that isolevel along the follower's travel line — the same outside-in
+  march and bisection the point follower always got, with slope and curvature still
+  the C² spline's own calculus. An OFFSET follower moves the travel line off the pivot
+  (positive to the RIGHT of the travel direction — the one sign convention, stated on
+  `CamFollower` and shared by placement and analysis); `CamLaw.PressureAngle(angle,
+  follower, baseDistance)` reports the number the offset exists to improve, from the
+  instant-centre relation tan φ = (slope − offset)/distance — for a `FromSketch` law
+  the value already IS the centre distance, a zero-based catalogue rise adds
+  baseDistance = √(Rp² − offset²). Verified on the eccentric circle, whose every
+  quantity is closed-form (the offset of a circle is a circle): roller and offset
+  laws to 1e-6, and the pressure angle against an INDEPENDENT oracle — the contact
+  normal of a roller on a circle passes through both centres, so cos φ =
+  |t̂·(p − c)|/(a + R) — which is what pins the sign conventions as consistent, plus
+  the textbook property that a positive offset reduces the rise-side pressure angle.
+  A roller of radius 0 is bit-identical to the point follower (reach + 0.0 and an
+  isolevel of 0.0 change no bits in the incumbent march).
 - **Interference & swept volume** (`MotionInterference.cs`):
   `study.CheckInterference()` — instance-bounds broad phase, `MeshIntersection.Crosses`
   narrow phase (transversal only: resting contact is not a clash), ranges per pair,

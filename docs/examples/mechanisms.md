@@ -202,6 +202,56 @@ scene.AddTab("cam").Add(rig);
 
 ![An eccentric circular cam lifting a point follower](images/mechanism-cam.png)
 
+### Roller and offset followers, and the pressure angle
+
+A real follower is rarely a knife edge. A **roller** follower's centre does not ride
+the profile — it rides the profile's *planar offset* at the roller radius, and a
+planar offset is not a radial one: the shortcut r(θ) + R is wrong by O(R·r′²/r²),
+worst exactly where the cam is steepest. `CamLaw.FromSketch` takes a `CamFollower`
+and reads the offset **exactly**, with no offset curve ever built: the sketch's
+signed distance is a true planar distance outside the profile, so the roller centre
+is the outermost crossing of the isolevel `sd = R` along the follower's travel line —
+the same march and bisection the point follower gets. An **offset** follower moves
+the travel line off the pivot (positive to the *right* of the travel direction),
+which is the knob a designer turns to improve the **pressure angle** — reported by
+`CamLaw.PressureAngle` from the law's own slope via the instant-centre relation
+tan φ = (slope − offset)/distance.
+
+The eccentric circle makes every claim checkable in closed form, because the offset
+of a circle is a circle:
+
+```csharp run:mechanism-cam-followers
+var profile = Sketch.Circle(new Vector2d(3, 0), 8);        // radius 8, centre 3 off the pivot
+const double a = 8, e = 3, r = 2;
+
+// Roller compensation: the centre rides the circle of radius a + r, so the law is
+// e·cosθ + √((a+r)² − e²·sin²θ) — NOT the point law plus r, which misses by 0.12
+// at θ = π/2 on this very fixture.
+var roller = CamLaw.FromSketch(profile, CamFollower.Roller(r));
+roller.Evaluate(Math.PI / 2, out double lift, out _, out _);
+if (Math.Abs(lift - Math.Sqrt((a + r) * (a + r) - e * e)) > 1e-6)
+    throw new Exception("the roller centre rides the planar offset");
+var point = CamLaw.FromSketch(profile);
+point.Evaluate(Math.PI / 2, out double radial, out _, out _);
+if (Math.Abs(radial + r - lift) < 0.1)
+    throw new Exception("the radial shortcut should measurably disagree here");
+
+// An offset follower: travel line 2.5 to the right of the pivot, and the pressure
+// angle from the law's own slope. On the rise, the offset earns its keep.
+var follower = CamFollower.Roller(r, angle: 0, offset: 2.5);
+var offsetLaw = CamLaw.FromSketch(profile, follower);
+double theta = 4.5;                                        // on the rise (slope > 0)
+double improved = Math.Abs(offsetLaw.PressureAngle(theta, follower));
+double plain = Math.Abs(roller.PressureAngle(theta, CamFollower.Roller(r)));
+if (improved >= plain)
+    throw new Exception("a positive offset reduces the rise-side pressure angle");
+```
+
+The roller radius never enters the pressure angle (the contact normal passes through
+the roller's centre whatever its radius); for a zero-based catalogue rise over a
+prime circle, pass `baseDistance: Math.Sqrt(primeRadius * primeRadius - offset * offset)`
+so the denominator is the follower centre's true distance.
+
 ## Limits, dead centres, honest stops
 
 `WithLimits` puts hard stops on a revolute (degrees) or prismatic (length)
@@ -412,3 +462,4 @@ and curvature at both), which is exactly what lets `Segments` chain it without t
 composer having to know anything about the laws it is chaining. Continuity across a
 joint stays the segments' business: smoothing it centrally would hide the very property
 the catalogue exists to let you choose.
+

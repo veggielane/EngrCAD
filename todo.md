@@ -753,25 +753,6 @@ follow-ups:
   by name) or trust the file; re-asserting is right, and it means a load can legitimately
   FAIL on a file that was valid when written, which is a load-result warning rather than
   an exception. Roughly a day, mostly test.
-- [ ] **Cam refinements: roller-follower radius compensation and offset followers.**
-  The dwell-rise-dwell catalogue landed (`CamLaw.Cycloidal`/`HarmonicRise`/
-  `ModifiedTrapezoid`/`Dwell`/`Linear` + `CamLaw.Segments`, peak-acceleration factors
-  2π / π²/2 / 8π/(2+π) asserted). These two did NOT, and the reason is that neither is a
-  law factory — **both are curve problems wearing a law's clothes**:
-  - A translating **roller** follower's centre traces the cam profile's PLANAR OFFSET at
-    the roller radius, and a planar offset is not a radial one. For a profile in polar
-    form r(θ) the offset point is p + R·n with
-    n = (r·cosθ + r′·sinθ, r·sinθ − r′·cosθ)/√(r² + r′²), whose polar ANGLE is not θ — so
-    the follower's lift at cam angle ψ needs the θ with arg(q(θ)) = ψ, a root find per
-    query, and the law's slope/curvature then need the implicit-function derivatives of
-    that root. Doable and exact; it is a small solver, not a formula, and it wants the
-    same care `FromSketch`'s bisection already got.
-  - An **offset** (non-radial) translating follower is the same shape of problem with
-    the contact condition moved off the centre line; it also changes the pressure angle,
-    which is the number the offset exists to improve, so the useful version reports that
-    too rather than only moving the lift.
-  Filed rather than approximated: r(θ) + R is wrong by O(R·r′²/r²), which is exactly
-  where a cam is steepest and the answer matters most.
 - [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
   the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts
   a `BrepBoolean.Intersection` of the posed solids would report the exact volume, at
