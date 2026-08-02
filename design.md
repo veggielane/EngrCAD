@@ -3460,6 +3460,44 @@ the genuinely new work is a **model**, not new surface types.
   wall an earlier flange already reshaped, are both the corner case in disguise — the
   four-sided-wall check catches the second, and an explicit both-ends test the first.
 
+Frames & weldments (`Frames.cs`) follow the same doctrine — a declaration (profile +
+skeleton) from which the members, the trims and the cut list are all derived — and
+four decisions carry it:
+
+- **The miter plane's normal is `a − b` and nothing is ever divided.** For unit
+  leave-directions `a`, `b` at a joint, the plane with that normal through the joint
+  contains both the bisector (`(a+b)·(a−b) = 0`) and the axes' common normal — so the
+  recorded miter-apex trap (`sum.LengthSquared`, never `sum.Length` squared) is avoided
+  STRUCTURALLY rather than carefully: there is no apex arithmetic at all. Both members
+  read one canonical joint point and one normal (an exact negation apart, and
+  normalization commutes with negation bit-for-bit), so the two cut faces lie in the
+  bit-identical plane.
+- **Every joint cut is a transversal boolean by construction** (the `Drill` overshoot
+  doctrine): the member extrudes overlong past the joint by the cut plane's exact reach
+  across its own section — an affine functional of the profile point, whose extremes
+  over a line/arc outline are closed form — and a box tool whose base face lies exactly
+  ON the plane subtracts the stub. No boolean ever sees coplanar or tangent input, the
+  two halves of a joint are separate parts that merely meet, and the cut curves are all
+  analytic (plane∩plane; plane∩cylinder ellipses on mitred tube, verified to CONVERGE
+  on the closed form where a tracer polyline would be a fixed floor).
+- **The volume oracle is the prism-cut identity**: a prism cut by end planes has volume
+  `A · (axial distance between the planes' crossings of the CENTROID fiber)` — exact
+  for any section because the crossing is affine over the section. It is stronger than
+  the rectangular-wedge closed form (which drops out as a special case), it makes a
+  closed frame exactly `A · perimeter`, and it has teeth on the angle profile, whose
+  heel-datumed run line puts the centroid OFF the run so a wrong functional would miss
+  by the centroid offset.
+- **One part per member, and the rollup key is the NAME.** Sharing a `Part` between
+  "identical" members would need an equality judgement over cut planes expressed in
+  local frames that differ by rotation round-off — a near-tie the codebase refuses to
+  let ulps decide — so each member is its own part and identical members share the name
+  `designation x cut length`, which is exactly the `Bom.ByItem()` contract. The cut
+  length rides `Part.CutLength` → `BomLine.CutLength` (the `Material` follow-the-part
+  pattern), write-only-when-stated in the document envelope. Coped tube-on-tube saddles
+  are refused with the tracer under-seeding reason on `FrameJointStyle.Cope`; T-joints,
+  multi-member joints, zero-angle joints, consumed members and Bézier-outline trims are
+  refused by name.
+
 ## 6c. Drawings (hidden lines, sheets, drafting)
 
 A drawing is a *document*, not a picture, and the whole design follows from that.
