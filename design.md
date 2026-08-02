@@ -3304,6 +3304,27 @@ for `in`-parameters being illegal in expression trees.
 
 ## 9. Further capabilities
 
+- **A matcap is PROCEDURAL here, and the reason is the parity rule, not the look.**
+  A matcap shades by sampling a lit-sphere image at the view-space normal; the classic
+  implementation is a texture, and this render stack has no texture machinery at all —
+  no sampler uniforms, no colour image decode — and the one-shader-set rule means any
+  texture would have to reach three front ends (window GL, offscreen EGL, WebGL2
+  through `engrcad-gl.js`). An **analytic** matcap needs none of that: Gaussian lobes
+  over the view-space normal, evaluated in `ViewerShaders.MeshFragment` behind an
+  `uMatcap` int selector, with the lobe constants — which ARE the material — living in
+  the one file all three front ends compile. Three riders carry the safety argument:
+  `ShadingStyle.Lit = 0` because a linked program's uniforms initialize to 0, so a
+  front end that says nothing gets the incumbent look (the committed docs PNGs are the
+  oracle that the default moved nothing); the selector is deliberately NOT a
+  `ViewStyle` member (the style says what is drawn — points, lines, fills — shading
+  says how a fill is lit, and the two compose); and there is no per-part override,
+  because a scene lit two ways reads as a rendering bug. The view-space normal costs
+  no new plumbing: `uView` is a program-wide uniform every front end already sets, so
+  the fragment shader just declares it too. Interactions stay orthogonal by
+  construction — AO multiplies the matcap sample exactly as it multiplies
+  ambient+diffuse, the section cut-face flat material returns before the lighting
+  model, and the selection blend is folded into the surface colour before either
+  lighting path reads it.
 - **A BVH build's node numbering is not observable; its item permutation is.** Query
   results are appended in leaf-visit order, `Nearest` breaks distance ties by traversal
   order, and the imprint boolean interns seam points in `QueryOverlap` order — so a build

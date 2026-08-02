@@ -65,6 +65,12 @@ Dark-themed layout around one shared GL viewport:
   source), a
   perspective/**orthographic** toggle (the ortho frustum keeps the target plane's
   apparent size, so toggling doesn't jump), the **view-style dropdown** (see below),
+  a **Shading dropdown** (Lit / Clay / Metal — how fills are LIT, deliberately not a
+  view-style member since the style is about what is drawn: the non-default entries
+  are the analytic matcaps in `ViewerShaders.MeshFragment`, one `uMatcap` int uniform
+  per frame driving `ViewportControl.Shading`, seeded from `EngrCadOptions.Shading` /
+  `.WithShading(...)`; no per-part override, because a scene lit two ways reads as a
+  rendering bug),
   an **AO** toggle (ambient occlusion, on by default — see below), a **Section**
   toggle with an **X/Y/Z axis cycler** button beside it (see below), a **Cut@View**
   button (an *oblique* section plane from the current view: through the orbit target,
@@ -979,6 +985,18 @@ the log (event 70) and the status bar. Methods: `ping`, `list_parts`, `set_view`
 `get_selection`, `measure`, `set_animation_time`, `screenshot`. The MCP server bridges to
 it from a separate process (`EngrCadMcp.Run` with `--mcp --viewer <port>`), which is how
 an AI assistant drives the window the user is looking at.
+
+`ping` carries **`ready`** — `ViewportControl.InstancesDisplayed`, true once the render
+pass has adopted the instance list and nothing newer is queued. It exists for a measured
+startup race: the port is announced from `OnViewportReady` while instances handed to
+`SetInstances` are only swapped in BY the render pass, so a client connecting the
+instant it sees the port legitimately reads an empty `list_parts` — which used to read
+as "this model has no parts". A client polls `ping` until `ready`; a part-not-found
+refusal during the gap now says "not yet" and names the poll. Reporting the PENDING
+list instead was rejected because it would desynchronize the paths from the indices
+`select_part` and `set_display_mode` address; and note the honest scope — under lazy
+tab meshing the list is a growing prefix, so `ready` means "what is drawn", not "the
+document is fully loaded".
 
 Three layers in `RemoteControl.cs`, separable on purpose: `RemoteControlServer`
 (transport: framing, the token gate, error envelopes — binds `IPAddress.Loopback`
