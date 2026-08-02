@@ -3048,6 +3048,41 @@ Design decisions:
   FeatureHistory rider asserted separately: a file carrying an opaque record is
   smaller the second time by exactly the record the warning named, then a fixed
   point.
+  *Involute gears draw the teeth the couplings already constrain* (`Gears.cs`), and
+  four calls carry the design. **The flank is a fit, not a new curve type, because
+  the measurement said so**: the todo entry left the door open for a first-class
+  involute `Curve2d` if the fit tier proved inadequate, and it did not — a biarc
+  chain (recursive bisection over `BiArcFit.TryFit` with EXACT endpoint tangents,
+  which the involute supplies in closed form: the tangent at roll t is the base
+  radial at θ₀+t) meets a module·1e-4 tolerance in ~16 arcs per flank, with the
+  deviation measured at 512 samples and REPORTED (`GearProfile.MaxFitDeviation`).
+  Arcs also keep the profile in the vocabulary every representation is exact for,
+  where an involute segment would have joined the bézier's "General" distance tier.
+  **The root fillet tangency is a closed form, found by writing |C|² out**: with
+  fillet centre C = P(t) + ρ·n̂, the cross term P·n̂ is exactly r_b·t, so
+  |C|² = (r_b·t + ρ)² + r_b² and |C| = r_f + ρ inverts to
+  t* = (√((r_f+ρ)² − r_b²) − ρ)/r_b — no root find, and the case split falls out of
+  the same expression (t* < 0 means the tangency would sit below the base circle, so
+  the flank continues as a RADIAL line, which is tangent-continuous with the
+  involute because the involute's cusp tangent IS radial). **Undercut is refused,
+  not trochoid-trimmed**: below z_min = 2(h_a* − x)/sin²α a generating cutter eats
+  into the involute, a mating tooth physically sweeps through the region this
+  factory would have drawn, and an honest refusal naming z_min and the clearing
+  x_min beats an unverified flank (the message teaches the way out — teeth, pressure
+  angle, or shift). **Conjugate action is verified from CONTACT, and deliberately
+  not from the mechanism solver**: `Coupling.Gear` ENFORCES the ratio, so a
+  solver-based "test" would assert its own constraint — instead two generated gears
+  sit at an EXTENDED centre distance (real backlash makes drive-flank contact a
+  transversal zero of the clearance, where the zero-backlash standard mounting
+  touches both flanks at once and leaves nothing to bisect; the involute's ratio is
+  centre-distance-invariant, so the extension costs no correctness) and the wheel is
+  rotated into contact by bisecting the minimum of the pinion sketch's exact signed
+  distance over the wheel's sampled outline. Measured: 9.3e-6 rad of transmission
+  variation through tooth handover against an asserted 6e-5 derived from the fit
+  tolerances; and the instrument is mutation-checked — a 25° wheel against a 20°
+  pinion reads 5.6e-3 rad (wrong base circle), a 5e-2-tolerance flank reads
+  5.6e-4 ≈ deviation/r_b (the textbook transmission-error relation), so it can see
+  a bad FLANK, not just a bad ratio.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

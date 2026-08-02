@@ -717,18 +717,29 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
 
 ## Mechanisms (kinematics)
 
-- [ ] **Involute gears — the geometry for the couplings that already exist.**
-  `Coupling.Gear` constrains ratios but nothing draws a tooth. The involute is
-  closed-form; the profile enters the sketch vocabulary as an exact-tolerance fit with
-  the deviation REPORTED (the `BiArcFit` convention), or as a first-class 2D curve if
-  the fit tier proves inadequate — measure before deciding. Module / pressure angle /
-  tooth count / profile shift as the vocabulary; root fillets are the sketch's own
-  arcs; spur first, then helical via the twisted-extrude machinery that already exists
-  (`Shape.Extrude(twist:)`, whose profile-subdivision lesson applies verbatim).
-  - Verification: base-circle identities (base pitch = π·m·cos α) as arithmetic, and
-    **conjugate action as a TEST** — mesh two generated gears in the mechanism solver
-    and assert the transmission ratio stays constant through a rotation to stated
-    tolerance, which is the law of gearing asked rather than assumed.
+- [ ] **Gear follow-ups** (involute spur/helical landed as `Gears.Spur/SpurGear/
+  HelicalGear` — the fit tier was adequate: 16 arcs/flank at module·1e-4, so no new 2D
+  curve type; conjugate action is measured from CONTACT via the sketch's exact signed
+  distance, because `Coupling.Gear` in the mechanism solver ENFORCES the ratio it
+  would be asserting):
+  - **Backlash allowance** — a circumferential thinning parameter on `GearSpec`
+    (thin each tooth by j/2), so a real pair at standard centre distance has running
+    clearance; today's teeth are the zero-backlash nominal.
+  - **Trochoid root for low tooth counts** — `Gears.Spur` refuses below
+    z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
+    admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
+    measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
+  - **Internal gears and racks** — a rack is the z→∞ limit (straight flanks, trivially
+    a sketch); an internal gear inverts the material side and the tip/root roles.
+  - **Keyway on the bore** (DIN 6885 parallel key seat as a sketch boolean on the
+    blank), set screw boss, web/spoke lightening.
+  - **Measurement identities** — span measurement over k teeth W = m·cos α·((k−½)π +
+    z·inv α) and measurement over pins, as arithmetic on `GearSpec` plus a
+    measured-off-the-sketch check (the tooth-thickness bisection pattern in
+    `GearTests` generalizes).
+  - **Helical pair conjugate test** — the spur pair's contact instrument is 2D; a
+    helical pair adds axial overlap, and the transverse-section argument says the 2D
+    test at every section is sufficient — worth asserting once on the twisted mesh.
 
 Mechanisms v1 landed (`Joints.cs`/`Mechanism.cs`/`Couplings.cs`/`HigherPairs.cs`/
 `MateSolverRates.cs`/`MotionInterference.cs`; docs `examples/mechanisms.md`): joints as
@@ -741,10 +752,13 @@ and the single-driver overload is sugar over it; a sweep is a straight line thro
 driver space so the continuation logic is unchanged; the same coordinate driven twice
 is refused by name), `Coupling.RackAndPinion` (a cam pair with a straight law, so it
 reads the unwrapped angle and a rack driven through three turns keeps advancing), the
-dwell-rise-dwell `CamLaw` catalogue with `Segments`, and adaptive `SweptVolume(path,
+dwell-rise-dwell `CamLaw` catalogue with `Segments`, adaptive `SweptVolume(path,
 maxTravel)` (rigidly interpolated placements bounded by exact bounding-box-corner
-travel; 97%+ of the analytic disk from a 9-frame full-turn sweep). Remaining
-follow-ups:
+travel; 97%+ of the analytic disk from a 9-frame full-turn sweep), and **involute gear
+geometry** (`Gears.cs`: `GearSpec` + `Gears.Spur/SpurGear/HelicalGear`, biarc-fitted
+flanks with the deviation reported, undercut/pointed/fillet refusals by name,
+conjugate action verified from contact — see the gear follow-ups item above).
+Remaining follow-ups:
 
 - [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
   the exact MESH boolean of the meshes that flagged the clash; for B-Rep-backed parts

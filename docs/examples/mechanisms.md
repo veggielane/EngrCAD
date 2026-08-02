@@ -463,6 +463,68 @@ composer having to know anything about the laws it is chaining. Continuity acros
 joint stays the segments' business: smoothing it centrally would hide the very property
 the catalogue exists to let you choose.
 
+## Involute gear geometry
+
+`Coupling.Gear` constrains a ratio; `Gears.Spur` draws the teeth. A `GearSpec` is
+the standard vocabulary — module, tooth count, pressure angle (20° default),
+profile shift — with the ISO 53 basic rack (profile A) proportions as overridable
+coefficients, and its derived properties state the base-circle identities as
+arithmetic: base pitch = π·m·cos α, base diameter = z·m·cos α, tooth thickness
+= m·(π/2 + 2x·tan α).
+
+The flank is the closed-form involute of the base circle, entered into the sketch
+vocabulary as a tangent-continuous **biarc chain with the deviation reported**
+(`GearProfile.MaxFitDeviation`, `BiArcFit`'s convention) — at the default
+tolerance of module·10⁻⁴ a flank costs about 16 arcs. Everything else in the
+outline is exact by construction: the tip and root arcs, the root fillets (whose
+involute tangency is a closed form), and the radial stretch below the base circle,
+which meets the involute's cusp tangent-continuously because that cusp tangent
+*is* radial. What the factory cannot stand behind it refuses by name: tooth
+counts below the rack undercut limit z_min = 2(h_a* − x)/sin²α (where a
+generating cutter would trochoid-trim the root), pointed teeth, and fillets that
+do not fit their gap.
+
+```csharp render:mechanism-involute
+var pinionSpec = new GearSpec(module: 2, teeth: 18);
+var wheelSpec = new GearSpec(module: 2, teeth: 28);
+
+var pinion = Gears.Spur(pinionSpec);          // the profile, deviation reported
+if (pinion.MaxFitDeviation > pinion.FitTolerance)
+    throw new Exception("the fit must honor its stated tolerance");
+if (Math.Abs(pinionSpec.BasePitch - Math.PI * pinionSpec.BaseDiameter / 18) > 1e-12)
+    throw new Exception("base pitch is an identity");
+
+// Standard centre distance; a wheel gap centred on the line of centres meshes
+// with the pinion tooth on it.
+double a = (pinionSpec.PitchDiameter + wheelSpec.PitchDiameter) / 2;
+var pinionShape = Gears.SpurGear(pinionSpec, faceWidth: 8, boreDiameter: 8);
+var wheelShape = Gears.SpurGear(wheelSpec, faceWidth: 8, boreDiameter: 12)
+    .RotateZ(Math.PI - Math.PI / wheelSpec.Teeth)
+    .Translate(a, 0, 0);
+
+var scene = new Scene();
+var tab = scene.AddTab("gears");
+tab.Add(new Part("pinion", pinionShape, Palette.Coral));
+tab.Add(new Part("wheel", wheelShape, Palette.Sky));
+```
+
+![An 18-tooth pinion meshing a 28-tooth wheel at standard centre distance](images/mechanism-involute.png)
+
+The verification behind it is the law of gearing *asked rather than assumed*: two
+generated gears are mounted at an extended centre distance (which an involute pair
+tolerates — the ratio is set by the base circles, not the mounting) and rotated
+into drive-flank contact by bisecting the pinion sketch's exact signed distance
+over the wheel's outline. Through a sweep long enough to hand contact from tooth
+pair to tooth pair, the measured transmission stays constant to ~9×10⁻⁶ rad —
+and the same instrument reads 5.6×10⁻³ rad for a 25° wheel forced against a 20°
+pinion, so it can see a wrong flank, not just a wrong ratio.
+
+Because the tooth profile is lines and circular arcs, a spur gear is exact in all
+three representations. `Gears.HelicalGear(spec, faceWidth, helixAngleDegrees)`
+rides the twisted extrusion (the spur profile as the *transverse* section — mesh
+and implicit only, `Explain` says so), and a bore is one `boreDiameter` argument;
+keyways, internal gears and racks are filed follow-ups.
+
 ## Saving a mechanism
 
 `Mechanism.SaveMechanism()` writes the whole joint layer as one JSON envelope —
