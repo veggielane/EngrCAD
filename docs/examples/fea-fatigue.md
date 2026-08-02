@@ -209,7 +209,7 @@ Four fields publish per node (`FatigueResults.Fields()` /
 
 ### A life plot, on a log legend
 
-```csharp render:fea-fatigue-life
+```csharp render:fea-fatigue-life-log
 // The same bracket and duty cycle in 6061-T6 aluminium, coloured by LIFE. Aluminium
 // deliberately: it has no endurance limit, so EVERY node carries a finite life - a
 // steel life plot is mostly the infinite-life no-value (NaN). The life field
@@ -257,7 +257,7 @@ var scene = new Scene();
 scene.Add(part);
 ```
 
-![The bracket coloured by fatigue life, with a log-scale legend](images/fea-fatigue-life.png)
+![The bracket coloured by fatigue life, with a log-scale legend](images/fea-fatigue-life-log.png)
 
 The legend's ticks sit on the integer decades — `100` through `1E+10` — because the
 field's units string is `log10(cycles)`: the declaration is the opt-in, made once by

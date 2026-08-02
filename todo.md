@@ -1482,19 +1482,44 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - (A deformed part's missing feature edges, and picking during an animation, moved to
     their own item below now that the deformation rides a uniform.)
 
-- [ ] **Transient thermal playback** — the half of the animated-results item that
-  deliberately did NOT ride along when displacement became a vertex attribute, and the
-  reason is structural rather than effort. Temperature per time step is a **colour**
-  animation, and colour has no single-uniform form: a displacement animates because
-  `position + uDeformScale * displacement` puts the whole time dependence in one scalar,
-  whereas a colour ramp needs either the `aFieldColor` buffer re-uploaded per frame (which
-  puts it back on the re-upload path the deformation item exists to leave) or n colour
-  attributes uploaded once and selected by index (bounded frame count, n × the vertex
-  memory, and a new question about what a legend means mid-run). Decide which before
-  building; and note `Part.Results` already carries a `ThermalTransientResults` step as an
-  ordinary `MeshField`, so the DATA half needs nothing new — a step slider driving
-  `Part.FieldDisplay.Field` is the honest v1 and costs one re-upload per step, which is
-  fine for scrubbing and not for playback.
+- [ ] **Transient thermal playback — DECIDED by measurement, not yet built.** The filed
+  question was which of three shapes a colour animation takes, and the entry said decide
+  before building; measured (win-x64, Release, best-of-9 after a 1.5 s warm-up budget,
+  scalar field on a uv-sphere; "typical" = 12k render verts, "heavy" = 195k; committed
+  as `FieldPlaybackBenchmark` in EngrCAD.Viewer.Tests, `ENGRCAD_BENCH`-gated):
+  **(a) colours-only rebuild** (`FieldRendering.Colors` for the new step's field, then
+  one `glBufferData` of the existing aFieldColor VBO) costs **0.042 / 0.68 ms per
+  frame** plus a **140 KB / 2.3 MB** upload; **(c) the existing publish path**
+  (`PartUploads.Build All` per step) costs **2.2 / 27.4 ms per frame** — 40–50× more,
+  busting a 30 fps budget on the heavy mesh exactly as the entry guessed ("fine for
+  scrubbing and not for playback"); **(b) n colour buffers uploaded once** costs
+  n × 2.3 MB of GPU memory on the heavy mesh (60 stored steps = 137 MB) plus new
+  attribute-selection machinery in three front ends — disqualified as the default by the
+  memory alone. **So the design is (a), desktop + offscreen first, and the pieces are
+  scoped**: a `FieldSequenceTrack` in Viewer.Core (steps = ordered (field name, real
+  seconds) pairs; `t` maps linearly in REAL time with hold-last-step semantics — the
+  stored states ARE the answers at their own instants, so holding is honest where
+  tweening colours is not), a fourth `Animation` slot whose sample answers a **result
+  SELECTION** — which is a real CONTRACT EXTENSION to "matrices, a camera or a scalar"
+  and must be stated in design.md §6b's animation section WHEN BUILT, with its cost
+  model attached (applying a selection re-uploads one colour buffer; nothing else the
+  contract protects moves: instance count/order, meshes, the pick BVH untouched).
+  Three design points settled in advance: the **mid-run legend question dissolves under
+  the existing one-legend rule** — ONE range for the whole clip (the display's explicit
+  `Range`, else the union of the step fields' own ranges), since a legend that rescales
+  per frame lies; the **application seam needs no Modeling change** — resolve the
+  part's own display once and swap two fields per step
+  (`resolved with { Field = stepField, Range = runRange }` over
+  `Part.TryResolveFieldDisplay`), with participation = the part carries ALL the track's
+  step names (the `PoseByPath` lesson: a track saying nothing about a part leaves it
+  alone); and **`OffscreenRenderer.RenderSequence`'s upload-once optimization is
+  conditioned on "an animation moves poses"**, which a colour track invalidates — the
+  batched exporter must re-upload aFieldColor per frame, the measured cost above, a
+  stated price rather than a blocker. Time-scale honesty follows the modal slowdown
+  precedent: the legend states the displayed instant (step fields named with their
+  times make the existing title do it), and the docs state the slowdown factor.
+  Web parity rides `FrameDescription` colour re-upload and should be filed as its own
+  rung when the desktop half lands.
   - A **frequency/load-step slider** driving `Part.Results` is the same shape of problem
     and should be scoped with it; result persistence beside
     `FeatureHistory.SaveParameters` is a third neighbour.
