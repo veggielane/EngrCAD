@@ -173,6 +173,23 @@ public sealed class LoftedSurface : Surface
         return allStraight ? 1 : curveSamples;
     }
 
+    /// <summary>
+    /// Whether the blend is AFFINE in v: a degree-1 loft of exactly two sections is
+    /// <c>P(u, v) = (1 − v)·C₀(u) + v·C₁(u)</c>, so a v-chord at any fixed u lies EXACTLY
+    /// on the surface and interior v samples buy nothing — the helical band's
+    /// infinite-v-step rule, stated by the surface that satisfies it. A degree-1 loft of
+    /// MORE sections is only piecewise affine (a chord across a section knot leaves the
+    /// surface), so it deliberately does not qualify.
+    /// <para>Consumers: the tessellator's natural grid collapses v to the two section
+    /// rows, and <c>SampleEdge</c> samples a <see cref="LoftRailCurve"/> on such a loft
+    /// as the exact straight segment it is — one condition, both sides, so the grid and
+    /// the shared edge polylines agree by construction. It also removes the
+    /// near-collinear many-sample rail runs that used to reach planar neighbours' ear
+    /// clipping (a ruled fillet band's rail sampled at 25 points is 23 sliver ears in
+    /// the face next door).</para>
+    /// </summary>
+    public bool IsAffineInV => Degree == 1 && _sections.Length == 2;
+
     // ---- blending ----
 
     private void Blend(double v, Span<double> alpha)
