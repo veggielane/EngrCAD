@@ -525,6 +525,145 @@ rides the twisted extrusion (the spur profile as the *transverse* section — me
 and implicit only, `Explain` says so), and a bore is one `boreDiameter` argument;
 keyways, internal gears and racks are filed follow-ups.
 
+## Cycloidal gear geometry
+
+The clock and instrument tooth form. Above the pitch circle the flank is an
+**epicycloid** — the trace of a point on a circle rolling *outside* the pitch
+circle — and below it a **hypocycloid**, the same circle rolling *inside*. Both
+curves leave the pitch circle at a cusp whose tangent is exactly radial, so face
+and flank meet tangent-continuously there with nothing to arrange. Each enters the
+sketch vocabulary the way the involute does: a biarc chain against the closed form
+with the deviation reported.
+
+What a cycloidal system carries instead of a pressure angle is the **generating
+(describing) circle**, and it belongs to the *pair* rather than to one gear: a
+wheel's epicycloidal face rolls against a pinion's hypocycloidal flank only if one
+circle traced both, so `CycloidalGears.Mesh` refuses two gears whose circles differ.
+`CycloidalGears.Pair` defaults to the classic clock choice — half the pinion's pitch
+diameter — which is the ρ = r/2 identity that makes the pinion's hypocycloidal
+flanks **exactly straight radial lines**, the leaves a clockmaker cuts. Nothing in
+the factory special-cases that: the general cycloid formula and the general biarc
+fit reach it on their own, and the test measures it off the generated sketch (the
+boundary crossings sit on one ray to better than 10⁻¹² rad, and the fitted pieces
+come back as literal straight segments).
+
+```csharp render:mechanism-cycloidal
+var mesh = CycloidalGears.Pair(module: 2, pinionTeeth: 10, wheelTeeth: 30);
+if (!mesh.Pinion.HasRadialFlanks || mesh.Wheel.HasRadialFlanks)
+    throw new Exception("the classic choice gives the PINION radial leaves, not the wheel");
+
+var pinion = CycloidalGears.Spur(mesh.Pinion);   // the profile, deviation reported
+if (pinion.MaxFitDeviation > pinion.FitTolerance)
+    throw new Exception("the fit must honor its stated tolerance");
+
+// A cycloidal pair runs at its DESIGN centre distance, and only there.
+var pinionShape = CycloidalGears.SpurGear(mesh.Pinion, faceWidth: 8, boreDiameter: 8);
+var wheelShape = CycloidalGears.SpurGear(mesh.Wheel, faceWidth: 8, boreDiameter: 16)
+    .RotateZ(Math.PI - Math.PI / mesh.Wheel.Teeth)
+    .Translate(mesh.CentreDistance, 0, 0);
+
+var scene = new Scene();
+var tab = scene.AddTab("cycloidal");
+tab.Add(new Part("pinion", pinionShape, Palette.Brass));
+tab.Add(new Part("wheel", wheelShape, Palette.Sky));
+
+// Near-overhead: the tooth FORM is the subject, and it is a plane curve.
+var camera = new CameraState(-Math.PI / 2, 1.35, 100, (26, 0, 4));
+```
+
+![A 10-leaf cycloidal pinion with radial flanks meshing a 30-tooth wheel](images/mechanism-cycloidal.png)
+
+Conjugate action is asked rather than assumed, and by the same instrument the
+involute uses — the pinion sketch's exact signed distance over the wheel's outline,
+bisected to the touching angle — but at the **design** centre distance, with
+backlash coming from *thinning* the teeth instead of from mounting the pair long.
+Thinning is exact here: rotating a cycloid about its own pitch circle's centre is
+the same cycloid at another phase. Through a sweep long enough to hand contact from
+tooth pair to tooth pair the measured transmission stays constant to ~4×10⁻⁶ rad,
+and a wheel cut with a 1.6× describing circle reads ~300× that on the same
+instrument.
+
+And here is the honest contrast with the involute, measured rather than warned
+about. An involute pair is centre-distance invariant, because its ratio is set by
+the base circles rather than by the mounting; a cycloidal pair's describing circle
+has to roll on *both* pitch circles at once, so it is not. Mounted 0.3 mm long, the
+same 10/30 pair still runs and its transmission ripples by 1.3×10⁻³ rad — three
+hundred times the design-distance figure. That is a property of the tooth form, and
+it is why cycloidal gearing wants accurate centres and involute gearing forgives
+them.
+
+`ClockGearProportions` supplies the BS 978-2 horological addendum table (⚠ a
+transcription — verify against the current standard). Only the addendum columns are
+stored: each member's dedendum is *derived* as its mate's addendum plus a clearance,
+since a second stored column could only drift from that.
+
+## Cycloidal drives
+
+The same curve family, offset. A cycloidal drive's disc has one lobe fewer than the
+ring has pins, rides an eccentric, and rolls backwards one lobe per input turn.
+
+The curve the pin *centres* ride in the disc's own frame is derived rather than
+transcribed, and the derivation pays for itself three times: with the disc centre at
+`e·(cos φ, sin φ)` and the disc turning at `λφ`, pin *j* appears at
+`Rot(−λφ)(P_j − O(φ))`, which collapses to `C(s) = R(cos s, sin s) − e(cos Ns, sin Ns)`
+for **every pin at once** exactly when `λ = −1/(N−1)`. Out of that fall the lobe
+count `N − 1`, a peak-to-valley depth of exactly `2e`, and the counter-rotating rate
+— none of them asserted. It also settles the scope: repeat the derivation for a lobe
+difference *d* and the pin phase is `2πj/d`, a whole number of turns for every pin
+only at *d* = 1, so any other difference is refused by name as structural rather than
+as a v1 gap.
+
+The cut profile is that curve offset by the pin radius, and it reuses the cam
+machinery's finding — an offset curve's unit tangent *is* the base curve's, since
+`D′ = (1 − R_r·κ)·C′`. So the biarc fit gets exact tangents for nothing, and the same
+factor states the validity condition: the pin must be smaller than the lobe tip's
+radius of curvature `(R + eN)²/(R + eN²)`, or the offset cusps and the disc
+self-intersects.
+
+```csharp render:cycloidal-drive
+var drive = new CycloidalDiscSpec(pins: 11, pinCircleRadius: 50, pinRadius: 3, eccentricity: 1.5);
+if (drive.Lobes != 10 || drive.ReductionRatio != 10 || drive.RingOutputRatio != 11)
+    throw new Exception("the two arrangements give different ratios off one geometry");
+if (drive.DiscTurnsPerInputTurn >= 0)
+    throw new Exception("the disc counter-rotates - the sign is the trap");
+
+var profile = CycloidalDrives.Disc(drive);
+if (Math.Abs(drive.LobeDepth - 2 * drive.Eccentricity) > 1e-12)
+    throw new Exception("lobe depth is exactly twice the eccentricity");
+
+// The construction pose: input angle 0 puts the disc centre on the eccentric.
+var disc = CycloidalDrives.DiscShape(drive, thickness: 8, boreDiameter: 20)
+    .Translate(drive.Eccentricity, 0, 0);
+
+var scene = new Scene();
+var tab = scene.AddTab("reducer");
+tab.Add(new Part("disc", disc, Palette.Coral));
+var pins = CycloidalDrives.PinShapes(drive, length: 8);
+for (int j = 0; j < pins.Count; j++)
+    tab.Add(new Part($"pin {j + 1}", pins[j], Palette.Steel));
+
+var camera = new CameraState(-Math.PI / 2, 1.35, 145, (0, 0, 4));
+```
+
+![An 11-pin cycloidal drive disc with ten lobes, shown at input angle zero](images/cycloidal-drive.png)
+
+The verification is the derivation's own identity and it is exact: because every pin
+lies *on* the roller-centre curve at every input angle, the disc sketch's signed
+distance reads exactly the pin radius at every pin through a full input rotation.
+The measured residual is 3.06×10⁻⁴ against a fit deviation of 3.06×10⁻⁴ — the pose
+relation contributes nothing — and that one number is simultaneously the clash check
+(no pin ever reads *less*) and the ratio measurement: sweeping candidate rates −1/8,
+−1/9, −1/11, −1/12 and +1/10 drives the pins hundreds of times the fit deviation into
+the disc, so only the derived rate holds contact.
+
+Two ratios are named rather than one being called *the* ratio, because the same
+geometry gives different numbers in the two classic arrangements: pins fixed with the
+disc as output is `z_lobes/(z_pins − z_lobes)` = 10, counter-rotating, and the disc
+held with the ring as output is `z_pins/(z_pins − z_lobes)` = 11, co-rotating.
+
+v1 draws the lobe profile and an optional central bore; output roller holes, a
+running clearance and the eccentric shaft are filed follow-ups.
+
 ## Saving a mechanism
 
 `Mechanism.SaveMechanism()` writes the whole joint layer as one JSON envelope —
