@@ -914,14 +914,23 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
   × nodes) or at caller-selected hot spots first; and how a half-cycle at the history's
   open end is closed (E1049 names the options). The mean-stress correction composes per
   counted cycle, so `EquivalentAlternating` is reused verbatim.
-- [ ] **Log-scale colour mapping for `FieldDisplay`.** `FatigueResults` publishes life
-  as log10(cycles) with the units string saying so, because `FieldRange.Normalize` is
-  linear and raw cycles would spend the whole legend on the longest-lived node. A
-  first-class `FieldDisplay.LogScale` (or a `FieldColorMap` variant) would let the field
-  carry real cycles and the LEGEND print 10^k ticks — the legend is the whole point,
-  since a linear legend over log10 values prints "5.1" where a user wants "1.3e5".
-  Touches Viewer.Core's `FieldLegend`/colour path and the web frame build; the document
-  format needs the flag to round-trip (write-only-when-set, the persistence rule).
+- [ ] **Log-scale colour mapping residuals** (the LEGEND half ✅ landed: `FieldLegend`
+  reads the `log10(…)` units declaration — `TryLogUnits`/`TickMarks` — and prints
+  anti-logged decade ticks, end ticks stating the true range, title in the base units
+  tagged LOG SCALE; docs `fields.md`/`fea-fatigue.md`, design.md §6b's field-display
+  bullet records why the units string and not a boolean is the opt-in). Remaining:
+  **(a)** the first-class `FieldDisplay.LogScale` for a field carrying REAL cycles —
+  `FieldRange.Normalize` goes logarithmic for the colour mapping itself, the flag
+  round-trips write-only-when-set, and the properties-panel min/max readout follows;
+  Modeling-owned (`Results.cs` + `DocumentFile.cs`), deliberately not landed from the
+  viewer fence. It composes with the landed half: such a display prints the same decade
+  ticks. **(b)** **NaN colours as the map's FIRST stop** — `FieldRange.Normalize(NaN)`
+  is NaN and `ColorMaps.Sample`'s `!(t > 0)` catches it — so an infinite-life node
+  (NaN = "no value" by the VTU convention) paints as the BOTTOM of the ramp,
+  indistinguishable from the shortest finite life: the honest render is a distinct
+  neutral (grey), which touches `SourceColors` and possibly the legend (a "no value"
+  swatch). The fatigue docs page sidesteps it today by plotting an aluminium life
+  field, where every node is finite — that choice is documented on the page.
 - [ ] **Marin modification factors on `SnCurve`.** The catalogue's constants are
   polished-specimen values, stated as such; a machined/as-forged surface, a size effect
   and a reliability level each knock the ENDURANCE end down (classically multiplying
@@ -1473,19 +1482,44 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - (A deformed part's missing feature edges, and picking during an animation, moved to
     their own item below now that the deformation rides a uniform.)
 
-- [ ] **Transient thermal playback** — the half of the animated-results item that
-  deliberately did NOT ride along when displacement became a vertex attribute, and the
-  reason is structural rather than effort. Temperature per time step is a **colour**
-  animation, and colour has no single-uniform form: a displacement animates because
-  `position + uDeformScale * displacement` puts the whole time dependence in one scalar,
-  whereas a colour ramp needs either the `aFieldColor` buffer re-uploaded per frame (which
-  puts it back on the re-upload path the deformation item exists to leave) or n colour
-  attributes uploaded once and selected by index (bounded frame count, n × the vertex
-  memory, and a new question about what a legend means mid-run). Decide which before
-  building; and note `Part.Results` already carries a `ThermalTransientResults` step as an
-  ordinary `MeshField`, so the DATA half needs nothing new — a step slider driving
-  `Part.FieldDisplay.Field` is the honest v1 and costs one re-upload per step, which is
-  fine for scrubbing and not for playback.
+- [ ] **Transient thermal playback — DECIDED by measurement, not yet built.** The filed
+  question was which of three shapes a colour animation takes, and the entry said decide
+  before building; measured (win-x64, Release, best-of-9 after a 1.5 s warm-up budget,
+  scalar field on a uv-sphere; "typical" = 12k render verts, "heavy" = 195k; committed
+  as `FieldPlaybackBenchmark` in EngrCAD.Viewer.Tests, `ENGRCAD_BENCH`-gated):
+  **(a) colours-only rebuild** (`FieldRendering.Colors` for the new step's field, then
+  one `glBufferData` of the existing aFieldColor VBO) costs **0.042 / 0.68 ms per
+  frame** plus a **140 KB / 2.3 MB** upload; **(c) the existing publish path**
+  (`PartUploads.Build All` per step) costs **2.2 / 27.4 ms per frame** — 40–50× more,
+  busting a 30 fps budget on the heavy mesh exactly as the entry guessed ("fine for
+  scrubbing and not for playback"); **(b) n colour buffers uploaded once** costs
+  n × 2.3 MB of GPU memory on the heavy mesh (60 stored steps = 137 MB) plus new
+  attribute-selection machinery in three front ends — disqualified as the default by the
+  memory alone. **So the design is (a), desktop + offscreen first, and the pieces are
+  scoped**: a `FieldSequenceTrack` in Viewer.Core (steps = ordered (field name, real
+  seconds) pairs; `t` maps linearly in REAL time with hold-last-step semantics — the
+  stored states ARE the answers at their own instants, so holding is honest where
+  tweening colours is not), a fourth `Animation` slot whose sample answers a **result
+  SELECTION** — which is a real CONTRACT EXTENSION to "matrices, a camera or a scalar"
+  and must be stated in design.md §6b's animation section WHEN BUILT, with its cost
+  model attached (applying a selection re-uploads one colour buffer; nothing else the
+  contract protects moves: instance count/order, meshes, the pick BVH untouched).
+  Three design points settled in advance: the **mid-run legend question dissolves under
+  the existing one-legend rule** — ONE range for the whole clip (the display's explicit
+  `Range`, else the union of the step fields' own ranges), since a legend that rescales
+  per frame lies; the **application seam needs no Modeling change** — resolve the
+  part's own display once and swap two fields per step
+  (`resolved with { Field = stepField, Range = runRange }` over
+  `Part.TryResolveFieldDisplay`), with participation = the part carries ALL the track's
+  step names (the `PoseByPath` lesson: a track saying nothing about a part leaves it
+  alone); and **`OffscreenRenderer.RenderSequence`'s upload-once optimization is
+  conditioned on "an animation moves poses"**, which a colour track invalidates — the
+  batched exporter must re-upload aFieldColor per frame, the measured cost above, a
+  stated price rather than a blocker. Time-scale honesty follows the modal slowdown
+  precedent: the legend states the displayed instant (step fields named with their
+  times make the existing title do it), and the docs state the slowdown factor.
+  Web parity rides `FrameDescription` colour re-upload and should be filed as its own
+  rung when the desktop half lands.
   - A **frequency/load-step slider** driving `Part.Results` is the same shape of problem
     and should be scoped with it; result persistence beside
     `FeatureHistory.SaveParameters` is a third neighbour.
