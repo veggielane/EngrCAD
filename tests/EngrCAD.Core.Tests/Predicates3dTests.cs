@@ -305,6 +305,204 @@ public class Predicates3dTests
         Predicates3d.ResetEscalationCounters();
     }
 
+    // ---- the exact stage, locked against the BigInteger ground truth ----
+    // (ExactReference is an independent BigInteger evaluation written as a different
+    // cofactor expansion, so agreement is evidence rather than tautology. These fixtures
+    // exist because the exact stage's arithmetic moved from BigInteger to span-based
+    // fixed-width integers, and each targets a branch of that arithmetic.)
+
+    /// <summary>The 30 integer points with |p|² = 25 — a lattice sphere every CAD
+    /// tessellation's cospherical structure is a scaled cousin of. Exactly cospherical
+    /// at every power-of-two scale, since scaling by 2^t is exact on doubles.</summary>
+    private static List<Vector3d> LatticeSphere(double scale)
+    {
+        // Every permutation of (±3, ±4, 0), plus (±5, 0, 0) and its permutations.
+        var points = new List<Vector3d>();
+        foreach (var (x, y, z) in new (int, int, int)[]
+        {
+            (3, 4, 0), (3, 0, 4), (4, 3, 0), (4, 0, 3), (0, 3, 4), (0, 4, 3),
+        })
+        {
+            for (int signs = 0; signs < 4; signs++)
+            {
+                int s1 = (signs & 1) == 0 ? 1 : -1;
+                int s2 = (signs & 2) == 0 ? 1 : -1;
+                // Apply the two signs to the two NONZERO slots in order.
+                int[] v = [x, y, z];
+                var w = new double[3];
+                int applied = 0;
+                for (int i = 0; i < 3; i++)
+                {
+                    if (v[i] == 0)
+                    {
+                        w[i] = 0;
+                        continue;
+                    }
+                    w[i] = v[i] * (applied++ == 0 ? s1 : s2) * scale;
+                }
+                points.Add(new Vector3d(w[0], w[1], w[2]));
+            }
+        }
+        points.Add(new Vector3d(5 * scale, 0, 0));
+        points.Add(new Vector3d(-5 * scale, 0, 0));
+        points.Add(new Vector3d(0, 5 * scale, 0));
+        points.Add(new Vector3d(0, -5 * scale, 0));
+        points.Add(new Vector3d(0, 0, 5 * scale));
+        points.Add(new Vector3d(0, 0, -5 * scale));
+        return points;
+    }
+
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(9.094947017729282e-13)] // 2^-40
+    [InlineData(2.037035976334486e90)]  // 2^300
+    public void InSphere_CosphericalLatticeFamilies_AreExactlyZeroAtEveryScale(double scale)
+    {
+        var points = LatticeSphere(scale);
+        Predicates3d.ResetEscalationCounters();
+        int tested = 0;
+        // A deterministic strided subset of quintuples — every one an exact tie the
+        // filter cannot settle, with exact zeros scattered through the coordinates
+        // (which is what exercises the min-exponent-over-NONZERO rule).
+        for (int i = 0; i < points.Count; i += 3)
+            for (int j = i + 1; j < points.Count; j += 2)
+                for (int k = j + 1; k < points.Count; k += 5)
+                    for (int l = k + 1; l < points.Count; l += 7)
+                    {
+                        if (Predicates3d.Orient3dSign(points[i], points[j], points[k], points[l]) == 0)
+                            continue;
+                        int m = (l + 11) % points.Count;
+                        if (m == i || m == j || m == k || m == l)
+                            m = (m + 1) % points.Count;
+                        Assert.Equal(0.0, Predicates3d.InSphere(points[i], points[j], points[k], points[l], points[m]));
+                        tested++;
+                    }
+
+        Assert.True(tested > 200, $"expected many cospherical quintuples, got {tested}");
+        Assert.True(Predicates3d.InSphereEscalations >= tested, "exact ties must all have escalated");
+        Predicates3d.ResetEscalationCounters();
+    }
+
+    [Theory]
+    [InlineData(1.0)]
+    [InlineData(9.094947017729282e-13)]
+    [InlineData(2.037035976334486e90)]
+    public void InSphere_UlpPerturbedCospherical_MatchesBigIntegerGroundTruth(double scale)
+    {
+        var points = LatticeSphere(scale);
+        var random = new Random(20260802);
+        int compared = 0;
+        for (int trial = 0; trial < 400; trial++)
+        {
+            var a = points[random.Next(points.Count)];
+            var b = points[random.Next(points.Count)];
+            var c = points[random.Next(points.Count)];
+            var d = points[random.Next(points.Count)];
+            var e = Jitter(points[random.Next(points.Count)], random);
+            if (Predicates3d.Orient3dSign(a, b, c, d) == 0)
+                continue;
+
+            Assert.Equal(ExactReference.InSphereSign(a, b, c, d, e), Predicates3d.InSphereSign(a, b, c, d, e));
+            compared++;
+        }
+        Assert.True(compared > 200, $"only {compared} non-degenerate trials");
+    }
+
+    /// <summary>
+    /// A subnormal coordinate beside coordinates at 2^400 spreads the exponents ~1400
+    /// bits, which is past the exact stage's stackalloc budget — the pooled branch. The
+    /// counter assertion is what keeps this fixture honest: if the budget ever grows past
+    /// the spread, the test would silently stop testing the pooled path.
+    /// </summary>
+    [Fact]
+    public void InSphere_WideExponentSpread_TakesThePooledPathAndMatchesGroundTruth()
+    {
+        double big = Math.Pow(2, 400);
+        var a = new Vector3d(big, 0, 0);
+        var b = new Vector3d(-big, 0, 0);
+        var c = new Vector3d(0, big, 0);
+        var d = new Vector3d(0, 0, big);
+        Assert.True(Predicates3d.Orient3d(a, b, c, d) != 0);
+
+        Predicates3d.ResetEscalationCounters();
+        // e sits on the sphere except for one subnormal x — outside it by s², an amount
+        // the filter provably cannot settle, so the call must escalate.
+        var e = new Vector3d(double.Epsilon, 0, -big);
+        int sign = Predicates3d.InSphereSign(a, b, c, d, e);
+        Assert.Equal(1, (int)Predicates3d.InSphereEscalations);
+        Assert.Equal(1, (int)Predicates3d.InSpherePooledEscalations);
+        Assert.Equal(ExactReference.InSphereSign(a, b, c, d, e), sign);
+        Assert.Equal(-1, sign); // strictly outside, positively-oriented base
+
+        // ... and exactly ON the sphere at the same spread — still the pooled path, still
+        // an exact tie.
+        var onSphere = new Vector3d(0, -big, 0);
+        Assert.Equal(0.0, Predicates3d.InSphere(a, b, c, d, onSphere));
+
+        // Subnormals in several coordinates, against the ground truth.
+        var random = new Random(77);
+        for (int trial = 0; trial < 50; trial++)
+        {
+            var p = new Vector3d(
+                double.Epsilon * random.Next(1, 9),
+                -double.Epsilon * random.Next(1, 9),
+                -big);
+            Assert.Equal(ExactReference.InSphereSign(a, b, c, d, p), Predicates3d.InSphereSign(a, b, c, d, p));
+        }
+        Predicates3d.ResetEscalationCounters();
+    }
+
+    [Fact]
+    public void InSphere_AllZeroCoordinates_ReturnsExactlyZero()
+    {
+        // Degenerate on purpose: every minor of the all-zero configuration is zero, and
+        // the exact stage's all-zero early-out must agree with what the BigInteger stage
+        // computed for it (a zero determinant).
+        var zero = Vector3d.Zero;
+        Assert.Equal(0.0, Predicates3d.InSphere(zero, zero, zero, zero, zero));
+    }
+
+    /// <summary>
+    /// The point of the rewrite: the exact stage allocates NOTHING. Measured over the
+    /// exactly-cospherical octahedron (the always-escalating configuration, on the
+    /// stackalloc path) and over the wide-spread fixture (the pooled path, which
+    /// allocates nothing once the pool is warm).
+    /// </summary>
+    [Fact]
+    public void InSphere_EscalatedCalls_DoNotAllocate()
+    {
+        var a = new Vector3d(1, 0, 0);
+        var b = new Vector3d(0, 1, 0);
+        var c = new Vector3d(-1, 0, 0);
+        var d = new Vector3d(0, 0, -1);
+        var e = new Vector3d(0, -1, 0);
+
+        // Warm-up: JIT the path (and, for the pooled twin below, warm the pool).
+        for (int i = 0; i < 16; i++)
+            Predicates3d.InSphere(a, b, c, d, e);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 1000; i++)
+            Predicates3d.InSphere(a, b, c, d, e);
+        long stackPathBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, stackPathBytes);
+
+        double big = Math.Pow(2, 400);
+        var wa = new Vector3d(big, 0, 0);
+        var wb = new Vector3d(-big, 0, 0);
+        var wc = new Vector3d(0, big, 0);
+        var wd = new Vector3d(0, 0, big);
+        var we = new Vector3d(double.Epsilon, 0, -big);
+        for (int i = 0; i < 16; i++)
+            Predicates3d.InSphere(wa, wb, wc, wd, we);
+
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (int i = 0; i < 200; i++)
+            Predicates3d.InSphere(wa, wb, wc, wd, we);
+        long pooledPathBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.Equal(0, pooledPathBytes);
+    }
+
     // ---- helpers ----
 
     private static double NaiveOrient3d(Vector3d a, Vector3d b, Vector3d c, Vector3d d)

@@ -42,15 +42,32 @@ concerns.
   grid (all eight corners of a cube are cospherical) as a *tie* rather than as noise.
   **The two exact stages are built differently, deliberately**: `Orient3d` escalates to
   Shewchuk's `orient3dexact` — expansion arithmetic in `stackalloc` spans, longest
-  intermediate 96 doubles, zero heap allocation — while `InSphere` escalates to a
-  `BigInteger` evaluation of the same determinant, because the expansion form of
-  `insphereexact` needs ~6000-component intermediates and several hundred lines of
-  hand-unrolled sign bookkeeping (a liability, not an asset, when the BigInteger form is
-  *visibly* the determinant). The filter carries everything that is not within its own
-  error bound of degenerate; `InSphereEscalations` counts the allocating stage so a
-  consumer can report its rate instead of guessing. Shewchuk's expansion macros are
-  shared with `Predicates2d` via internal `ShewchukExpansions` — one copy, because two
-  copies of a numerical routine drift.
+  intermediate 96 doubles — while `InSphere` escalates to an exact INTEGER evaluation of
+  the same determinant over exactly-decomposed doubles, in sign-magnitude big integers on
+  `stackalloc` `ulong` buffers (pooled when coordinates spread over hundreds of orders of
+  magnitude, which `InSpherePooledEscalations` counts so the pooled fixture can assert it
+  still fires) — so **neither predicate allocates**. The integer form is kept over a
+  transcription of `insphereexact` because that expansion form needs ~6000-component
+  intermediates and several hundred lines of hand-unrolled sign bookkeeping (a liability,
+  not an asset, when the integer form is *visibly* the determinant). It used to run on
+  `System.Numerics.BigInteger` — measured (win-x64, Release, minima over interleaved
+  runs) at **9 125 ns and 5 698 bytes per escalated call**, against **515 ns and 0 bytes**
+  now (~18×) — and the reason that mattered is that **cospherical input is the NORMAL
+  case for a CAD tessellation**, not the hostile one: the exact stage was 58% of a sphere
+  mesh's total allocation, and `TetMesher` on a Ø20 r10 48×24 sphere went **478.7 →
+  25.8 MB** allocated (a 20³ box at h = 2: 191.6 → 37.7 MB), escalation counts identical.
+  Buffer sizing is a proof, not a guess (per-tier bit bounds from the determinant's
+  degree, documented at the implementation), the minimum exponent is taken over NONZERO
+  coordinates only (a zero would widen every operand by ~1000 bits while scaling cannot
+  change the sign), and the exact stage is locked against the test-side `ExactReference`
+  BigInteger ground truth — an independent cofactor expansion, so agreement is evidence
+  rather than tautology — over cospherical lattice-sphere families at three scales,
+  ulp-perturbed cousins, subnormal/wide-exponent (pooled-path) fixtures and zero-heavy
+  configurations, plus an asserted-zero-allocation test on both paths. The filter carries
+  everything that is not within its own error bound of degenerate; `InSphereEscalations`
+  counts the exact stage so a consumer can report its rate instead of guessing.
+  Shewchuk's expansion macros are shared with `Predicates2d` via internal
+  `ShewchukExpansions` — one copy, because two copies of a numerical routine drift.
   **Note the sign convention trap**: `Orient3d` follows Shewchuk (positive when `d` is
   *below* the plane `abc`), which is **minus** six times the signed tetrahedron volume —
   hence the separately named `SignedVolume6`.
