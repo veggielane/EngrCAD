@@ -381,6 +381,22 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   open; both were stale.
 ## Core (EngrCAD.Core)
 
+- [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
+  one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
+  L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
+  three-way weighing), and its REAL path is deliberately unpivoted: it factors iff every
+  leading principal minor is nonsingular, which holds for shifted `K − ω²M` away from a
+  measure-zero set of ω and for saddle systems with constraints ordered last, and it
+  refuses an exactly-zero pivot loudly — but a NEAR-singular minor still amplifies
+  round-off with nothing to repair it (`SmallestPivotMagnitude` is the tell). A real
+  Bunch–Kaufman with magnitude-searched 2×2 pivots cannot ride the up-looking machinery:
+  a 2×2 pivot merges two columns' patterns, so the precomputed symbolic structure and the
+  AMD counts both go stale, and the honest version is a multifrontal/supernodal solver
+  with delayed pivots (MA57's shape) — a project of a different order. File a consumer
+  first: nothing in the repo today produces a real indefinite system that the unpivoted
+  form plus the constraints-last convention cannot factor. (An interim half-step if one
+  appears: one round of iterative refinement on the caller's side, which the
+  pivot-magnitude report already supports deciding.)
 - [x] ~~**`ShapeCompiler` coplanarity, and a finding under it**~~ ✅ **landed** — the
   companion `CoplanarFaceDistance` check now measures a genuine point-to-PLANE distance
   (`ShapeCompiler.BottomLiesInFacePlane`, one shared rule for `Drill` and `ThreadedHole`),
@@ -408,14 +424,27 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   a decision about singular Jacobians (poles). This is the change worth making instead of
   routing the tracing through `Arrangement2d` — see the assessment in design.md §5 for why
   that one is a no.
-- [ ] **`Region2dBoolean.ContainedIn` is still O(cells × operand vertices)** — the next
-  quadratic term after the clearance scan (now BVH-backed: a union of 120 overlapping
-  32-gons went 436.2 → 93.6 ms, its classification phase 367.7 → 8.8 ms) and the
-  arrangement's insertion, though an order of magnitude smaller in the cases measured.
-  A per-operand `Region2d` point-location index would close it. **Still owed**:
-  re-benchmark the arrangement broad phase on a quiet machine — the candidate-pair
-  reduction is a solid 9.1%, but the wall-clock numbers were taken under load and
-  disagreed by 3×.
+- [ ] **`Region2dBoolean.ContainedIn` is O(cells × operand vertices) — and a
+  point-location index was BUILT, MEASURED and DECLINED, so the next attempt has a bar.**
+  The filed premise ("a per-operand `Region2d` point-location index would close it") was
+  implemented in full — a per-operand y-bucket edge index asking Region2d's own per-edge
+  rules (`OnSegment`/`RayCrossesEdge` extracted as shared single-edge predicates), result-
+  identical by construction since parity is an order-free count over edges no skipped edge
+  can pass, `Region2dGoldenTests` byte-for-byte — and measured NOTHING on the very
+  workload this entry cited: the now-committed `Region2dBooleanBenchmark` (120 and 480
+  overlapping 32-gons) read 40.1 → 41.8 ms and 135.7 → 137.8 ms (win-x64, i9-9900K,
+  minima over interleaved runs of both binaries). The reason is structural: an
+  overlap-heavy union's balanced fold keeps the CELL count tiny exactly where the operand
+  vertex counts grow (two half-union blobs merge into a handful of cells), so the C·V
+  product never gets large and the classification cost is under the ~5% noise floor of
+  the whole union. **The term is real and the workload that would feel it is different**:
+  an operation whose result KEEPS many cells against many-vertex operands — two
+  interleaved combs intersected, a grid of crossing strips — which nothing in the repo
+  currently produces at scale. Re-attempt only with such a consumer measured first, and
+  hold it to the committed benchmark plus a new fixture that provably carries the C·V
+  term. **Still owed**: re-benchmark the arrangement broad phase on a quiet machine — the
+  candidate-pair reduction is a solid 9.1%, but the wall-clock numbers were taken under
+  load and disagreed by 3×.
 - [ ] **`Bvh.Build` follow-ups** (the build ✅ landed 4.9× faster and bit-identical) —
   reusing a hierarchy across a boolean cascade is untried, and after the fix the broad
   phase is 10.0 ms of a ~199 ms exact union, so the remaining wins are elsewhere.
@@ -558,7 +587,10 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
     tangency is always a touch) but its pairwise sweep is O(n²) with only a box reject
     in front of it, where the polygonal validator has a `Bvh` above 24 segments.
   - [ ] **`ContainedIn` is O(cells × operand edges)** here as well — the curved twin of
-    the open item below.
+    the open item below, and that item's measured verdict applies here first: a
+    point-location index was built for the polygonal twin and DECLINED at 1.0× on the
+    filed workload, so do not build the curved one without a fixture that provably
+    carries the cells × edges product.
 - [ ] **Sketch constraint follow-ups** (the variational solver ✅ landed —
   `Sketch.Constrain()`/`ConstrainedSketch`, full coincident/tangent/parallel/dimension
   vocabulary, analytic-Jacobian LM with rank-revealing DOF reports, drawn config as seed
@@ -996,32 +1028,6 @@ multi-body input, per-facet source-triangle tags, 10-node elements. Residuals be
   meet at an angle, which is exactly why the current layer is deliberately
   straight-sided; and coincident interfaces between bodies (v1 meshes disjoint bodies
   only, and refuses overlapping ones by name).
-- [ ] **`Predicates3d.InSphere`'s exact stage allocates, and it MEASURABLY matters** — the
-  profiling this entry asked for has now been done (`TetMesherBenchmark.InSphereExactStage_CostAndHowOftenItIsPaid`,
-  win-x64, Release). The exact stage escalates to `BigInteger`, unlike `Orient3d`'s
-  stack-allocated expansion form — a deliberate trade recorded in the class doc, since the
-  expansion form of `insphereexact` needs ~6000-component intermediates and hundreds of lines
-  of hand-unrolled sign bookkeeping. **Per call**: an escalated `InSphere` costs **9 229 ns and
-  5 698 bytes** against **73 ns and 0.1 bytes** for one the filter settles — 126× slower, and
-  the only allocation in either. **Per mesh**, using `TetMeshDiagnostics.InSphereEscalations`:
-
-  | mesh | tets | escalations | per tet | total alloc | est. from the exact stage |
-  | --- | ---: | ---: | ---: | ---: | ---: |
-  | box 20³ conforming | 6 | 29 | 4.83 | 0.6 MB | 0.2 MB |
-  | box 20³, h = 2 | 40 593 | 12 054 | 0.30 | 191.6 MB | **65.5 MB (34%)** |
-  | sphere r10, 48×24, h = 2.5 | 14 583 | 50 690 | 3.48 | 478.9 MB | **275.4 MB (58%)** |
-
-  So on a SPHERE — whose tessellation vertices are all exactly cospherical, i.e. the documented
-  degenerate case rather than an exotic one — the exact stage is **more than half the mesher's
-  total allocation** and roughly 0.47 s of pure escalation. Every CAD sphere and cylinder
-  tessellation has this shape, so it is the normal case, not the hostile one. The estimate
-  column is escalations × the lattice's measured bytes-per-escalation and is an ESTIMATE:
-  `BigInteger` size follows the operands' exponent range, so a model at a different scale will
-  differ. Two fixes, in increasing order of work: an `ArrayPool`-backed or `stackalloc`
-  fixed-width big-integer for the 15 decomposed mantissas (the allocation is 15 `BigInteger`s
-  plus the determinant's products, all of bounded width once the inputs are known finite), or
-  Shewchuk's `insphereexact` expansion form. **Note this is an `EngrCAD.Core` item**; it is
-  filed from Fea because the tet mesher is what pays it.
 - [ ] **Feed the mesher from the model, not just from a mesh.** `TetMesher` takes a
   `HalfEdgeMesh`, so B-Rep face identity reaches it only if the caller threads a
   per-triangle tag array through. `BRepTessellator` knows the provenance; exposing it
@@ -1063,27 +1069,25 @@ conditions within 0.05–0.70% of the shear-corrected load, refinement monotone 
 `omega²(P)/omega²(0) = 1 + P/P_cr` to 7.4e-10, resonant amplification 25.006 against 25.000,
 half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Residuals below.
 
-- [ ] **FEA: a DIRECT (per-frequency) harmonic solve. BLOCKED ON `EngrCAD.Core.Solvers`, and
-  the blocking reason has been checked rather than assumed.** `(K − omega²M + i·omega·C)·u = f`
-  factorized per frequency — hundreds of times a modal sweep, and the only option in three
-  cases modal superposition structurally cannot express: non-proportional damping (the modes
-  stop diagonalising C), material properties that vary WITH frequency (the modal basis itself
-  would change per point), and a load whose spatial distribution changes with frequency.
-  <br>**The obvious escape does not work, which is the finding.** The equivalent REAL form of a
-  complex system looks like a way to reuse the real solvers, and it is not: writing
-  `(A + iB)(x + iy) = f` out gives `[[A, -B],[B, A]]`, which is not symmetric; negating the
-  second block row to symmetrise it — `[[A, -B],[-B, -A]]` with right-hand side
-  `[f_r; -f_i]` — makes it symmetric and **INDEFINITE by construction**, its eigenvalues coming
-  in plus/minus pairs. Both of Core's solvers refuse it by name and correctly:
-  `SparseCholesky` needs positive definiteness (it throws on a nonpositive pivot, deliberately
-  a sign test rather than a tolerance) and `SparseSymmetricCG` needs it too. So this needs one
-  of three genuinely new pieces in Core — a real symmetric-indefinite `LDL^T` with
-  Bunch–Kaufman pivoting, a complex symmetric `LDL^T`, or an iterative method for complex
-  symmetric systems (COCG/QMR) — and it is a **Core item filed from Fea**, like
-  `Predicates3d.InSphere`'s allocation. Note also that the value is confined to the three cases
-  above: under PROPORTIONAL damping the direct solve and the modal one answer the same
-  question, so it buys nothing there, and the first of the three (non-proportional damping)
-  overlaps the quadratic-eigenproblem item below.
+- [ ] **FEA: a DIRECT (per-frequency) harmonic solve — the Core blocker is LANDED and only
+  the Fea consumer remains.** `(K − omega²M + i·omega·C)·u = f` factorized per frequency —
+  the only option in three cases modal superposition structurally cannot express:
+  non-proportional damping (the modes stop diagonalising C), material properties that vary
+  WITH frequency (the modal basis itself would change per point), and a load whose spatial
+  distribution changes with frequency. **`SparseLdlt` in `EngrCAD.Core.Solvers` is the
+  factorization this entry was blocked on** — complex symmetric L·D·Lᵀ over the union
+  pattern of the two parts, sharing `SparseCholesky`'s symbolic pass verbatim (AMD included),
+  chosen over a real Bunch–Kaufman with the weighing recorded in design.md §2(d) and the
+  class doc; verified against independent dense complex solves at backward residuals
+  < 1e-13, including a Rayleigh-damped bar AT its first resonance and a dashpot whose
+  pattern the stiffness does not cover. The Fea-side hookup is per frequency:
+  `SparseLdlt.Factorize(Combine(K, 1, M, −omega²), scaled C, Amd)` + one complex `Solve`
+  with the load split as (Re, Im) — plus an assembled non-proportional `C` (a dashpot/
+  per-region loss vocabulary on `StructuralModel`, which does not exist yet and is the
+  actual remaining work), and the sweep loop with its per-frequency refactor cost stated
+  honestly against the modal route. Note the value stays confined to the three cases above:
+  under PROPORTIONAL damping the direct solve and the modal one answer the same question,
+  and the non-proportional case overlaps the quadratic-eigenproblem item below.
 - [ ] **FEA: non-proportional damping — the quadratic eigenproblem.** A discrete dashpot, two
   materials with different loss factors in one model, viscoelasticity or hysteretic damping all
   leave `phi' C phi` with off-diagonal terms, at which point the damped modes are no longer the

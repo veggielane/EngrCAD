@@ -1,4 +1,3 @@
-using System.Numerics;
 using static EngrCAD.Core.ShewchukExpansions;
 
 namespace EngrCAD.Core;
@@ -17,17 +16,20 @@ namespace EngrCAD.Core;
 ///
 /// <para><b>The two exact stages are built differently, deliberately.</b> <see cref="Orient3d"/>
 /// escalates to Shewchuk's <c>orient3dexact</c>: expansion arithmetic in <c>stackalloc</c>
-/// spans whose longest intermediate is 96 doubles, so the whole predicate never allocates.
-/// <see cref="InSphere"/> escalates to a <see cref="BigInteger"/> evaluation of the same
-/// determinant over exactly-decomposed doubles. The reason is size: the expansion form of
-/// <c>insphereexact</c> needs ~6000-component intermediates and several hundred lines of
-/// hand-unrolled sign bookkeeping, and a transcription of that is a liability rather than
-/// an asset — whereas the BigInteger form is *visibly* the determinant and is the same
-/// ground truth the tests would check it against anyway. The cost is confined to the
-/// escalation path: the filter carries every configuration that is not within its own error
-/// bound of degenerate, and a degenerate one is exactly where a wrong answer is fatal.
-/// (Filed in todo.md: an <c>ArrayPool</c>-backed expansion form if profiling ever shows the
-/// escalation rate matters.)</para>
+/// spans whose longest intermediate is 96 doubles. <see cref="InSphere"/> escalates to an
+/// exact INTEGER evaluation of the same determinant over exactly-decomposed doubles —
+/// sign-magnitude big integers in <c>stackalloc</c> (or, for coordinates spread over
+/// hundreds of orders of magnitude, pooled) <c>ulong</c> buffers, so neither predicate
+/// allocates. The integer form is kept over a transcription of Shewchuk's
+/// <c>insphereexact</c> because that expansion form needs ~6000-component intermediates and
+/// several hundred lines of hand-unrolled sign bookkeeping — a liability rather than an
+/// asset — whereas the integer evaluation is *visibly* the determinant. It used to run on
+/// <c>System.Numerics.BigInteger</c>, which was measured at 5 698 bytes and 9 229 ns per
+/// escalated call — and cospherical input is the NORMAL case for CAD tessellations (58% of
+/// a sphere mesh's total allocation), which is what paid for the span form. The
+/// independent BigInteger evaluation lives on as the test suite's ground truth
+/// (<c>ExactReference</c>), written as a different cofactor expansion so agreement is
+/// evidence rather than tautology.</para>
 ///
 /// <para>Correctness of the expansion arithmetic requires IEEE-754 double semantics with
 /// round-to-nearest and NO fused multiply-add contraction — see
@@ -191,16 +193,29 @@ public static class Predicates3d
     // ---- escalation diagnostics ----
 
     private static long _inSphereEscalations;
+    private static long _inSpherePooledEscalations;
 
     /// <summary>
-    /// How many <see cref="InSphere"/> calls have escalated to the exact (allocating)
-    /// stage in this process. Diagnostic only — it lets a mesher report the escalation
-    /// rate honestly instead of guessing at it.
+    /// How many <see cref="InSphere"/> calls have escalated to the exact stage in this
+    /// process. Diagnostic only — it lets a mesher report the escalation rate honestly
+    /// instead of guessing at it.
     /// </summary>
     public static long InSphereEscalations => Interlocked.Read(ref _inSphereEscalations);
 
-    /// <summary>Resets <see cref="InSphereEscalations"/> (for benchmarks and tests).</summary>
-    public static void ResetEscalationCounters() => Interlocked.Exchange(ref _inSphereEscalations, 0);
+    /// <summary>
+    /// How many of those escalations had coordinates spread so widely in exponent that the
+    /// exact stage's arena outgrew its stackalloc and rented from the pool instead —
+    /// zero for ordinary CAD input. Diagnostic, and what lets the pooled path's regression
+    /// fixture assert it still CARRIES the configuration it exists to test.
+    /// </summary>
+    public static long InSpherePooledEscalations => Interlocked.Read(ref _inSpherePooledEscalations);
+
+    /// <summary>Resets the escalation counters (for benchmarks and tests).</summary>
+    public static void ResetEscalationCounters()
+    {
+        Interlocked.Exchange(ref _inSphereEscalations, 0);
+        Interlocked.Exchange(ref _inSpherePooledEscalations, 0);
+    }
 
     // ---- orient3d exact stage (orient3dexact) ----
 
@@ -293,7 +308,8 @@ public static class Predicates3d
     // ---- insphere exact stage ----
 
     /// <summary>
-    /// The exact sign of the in-sphere determinant, computed in <see cref="BigInteger"/>.
+    /// The exact sign of the in-sphere determinant, computed in fixed-width integer
+    /// arithmetic over <c>stackalloc</c> (or pooled) buffers — no heap allocation.
     ///
     /// <para>Every finite double is exactly M·2^E with a 53-bit integer M. Rewriting all
     /// fifteen input coordinates over one common exponent 2^Emin turns them into exact
@@ -301,7 +317,25 @@ public static class Predicates3d
     /// has total degree 5 in the coordinates (three degree-1 entries from the difference
     /// columns and one degree-2 entry from the lift column), so the determinant scales as
     /// s^5 &gt; 0 and the sign is unaffected — which is why the scale never has to be
-    /// tracked. The BigInteger arithmetic that follows is then exact by construction.</para>
+    /// tracked. The integer arithmetic that follows is then exact by construction, and the
+    /// computation below reads exactly like the determinant it is (the same grouping the
+    /// filter stage evaluates in doubles).</para>
+    ///
+    /// <para>Emin is taken over the NONZERO coordinates only — a zero scales to zero
+    /// whatever the shift, while its stored exponent is −1074 and would otherwise widen
+    /// every operand by ~1000 bits whenever any coordinate is exactly zero (a constant
+    /// occurrence in CAD input). Skipping zeros changes only the positive scale factor, so
+    /// the sign is untouched.</para>
+    ///
+    /// <para><b>Buffer sizing is a proof, not a guess.</b> With S the largest exponent
+    /// spread among nonzero coordinates, every scaled coordinate is below 2^B for
+    /// B = 53 + S, so differences are below 2^(B+1), the 2×2 minors below 2^(2B+3), the
+    /// 3×3 face minors below 2^(3B+6), the lifts below 2^(2B+4) and the determinant below
+    /// 2^(5B+12) — each tier's word count is that bound plus a margin word. For ordinary
+    /// CAD coordinates (S a few dozen bits) the whole arena is a few hundred words and
+    /// lives on the stack; coordinates spread over hundreds of orders of magnitude push it
+    /// to an <see cref="System.Buffers.ArrayPool{T}"/> rental, which allocates nothing
+    /// once the pool is warm.</para>
     ///
     /// <para>Returned as a double (-1, 0 or +1) so the caller's <c>Math.Sign</c> is
     /// unchanged; the magnitude carries no information on this path, which is true of the
@@ -317,51 +351,147 @@ public static class Predicates3d
         raw[9] = d.X; raw[10] = d.Y; raw[11] = d.Z;
         raw[12] = e.X; raw[13] = e.Y; raw[14] = e.Z;
 
-        Span<int> exponents = stackalloc int[15];
+        Span<long> mantissa = stackalloc long[15];
+        Span<int> exponent = stackalloc int[15];
         int minExponent = int.MaxValue;
         for (int i = 0; i < 15; i++)
         {
-            Decompose(raw[i], out _, out int exponent);
-            exponents[i] = exponent;
-            if (exponent < minExponent)
-                minExponent = exponent;
+            Decompose(raw[i], out mantissa[i], out exponent[i]);
+            if (mantissa[i] != 0 && exponent[i] < minExponent)
+                minExponent = exponent[i];
         }
+        if (minExponent == int.MaxValue)
+            return 0.0; // all fifteen coordinates are exactly zero — every minor is zero
 
-        var scaled = new BigInteger[15];
+        Span<int> shift = stackalloc int[15];
+        int maxShift = 0;
         for (int i = 0; i < 15; i++)
         {
-            Decompose(raw[i], out BigInteger mantissa, out _);
-            scaled[i] = mantissa << (exponents[i] - minExponent);
+            shift[i] = mantissa[i] == 0 ? 0 : exponent[i] - minExponent;
+            if (shift[i] > maxShift)
+                maxShift = shift[i];
         }
 
-        BigInteger aex = scaled[0] - scaled[12], aey = scaled[1] - scaled[13], aez = scaled[2] - scaled[14];
-        BigInteger bex = scaled[3] - scaled[12], bey = scaled[4] - scaled[13], bez = scaled[5] - scaled[14];
-        BigInteger cex = scaled[6] - scaled[12], cey = scaled[7] - scaled[13], cez = scaled[8] - scaled[14];
-        BigInteger dex = scaled[9] - scaled[12], dey = scaled[10] - scaled[13], dez = scaled[11] - scaled[14];
+        // Word budget per tier, from the bit bounds in the summary (Words(bits) + 1 margin,
+        // with the composite tiers stated directly in words so a product provably fits its
+        // destination: a k-word by m-word product writes at most k + m words).
+        int bitsB = 53 + maxShift;
+        int wordsScaled = ((bitsB + 63) >> 6) + 1;
+        int wordsDiff = ((bitsB + 1 + 63) >> 6) + 1;
+        int wordsPair = 2 * wordsDiff + 1;
+        int wordsFace = wordsDiff + wordsPair + 2;
+        int wordsLift = 2 * wordsDiff + 2;
+        int wordsDet = wordsLift + wordsFace + 2;
+        int wordsTemp = wordsLift + wordsFace + 1;
+        int total = 2 * wordsScaled + 12 * wordsDiff + 6 * wordsPair + 4 * wordsFace
+                  + 4 * wordsLift + wordsDet + wordsTemp;
 
-        BigInteger ab = aex * bey - bex * aey;
-        BigInteger bc = bex * cey - cex * bey;
-        BigInteger cd = cex * dey - dex * cey;
-        BigInteger da = dex * aey - aex * dey;
-        BigInteger ac = aex * cey - cex * aey;
-        BigInteger bd = bex * dey - dex * bey;
+        ulong[]? rented = null;
+        if (total > StackArenaWords)
+        {
+            rented = System.Buffers.ArrayPool<ulong>.Shared.Rent(total);
+            Interlocked.Increment(ref _inSpherePooledEscalations);
+        }
+        try
+        {
+            Span<ulong> buffer = rented is null ? stackalloc ulong[StackArenaWords] : rented;
+            var arena = new ExactArena(buffer);
 
-        BigInteger abc = aez * bc - bez * ac + cez * ab;
-        BigInteger bcd = bez * cd - cez * bd + dez * bc;
-        BigInteger cda = cez * da + dez * ac + aez * cd;
-        BigInteger dab = dez * ab + aez * bd + bez * da;
+            var t1 = arena.Take(wordsScaled);
+            var t2 = arena.Take(wordsScaled);
+            var tmp = arena.Take(wordsTemp);
 
-        BigInteger alift = aex * aex + aey * aey + aez * aez;
-        BigInteger blift = bex * bex + bey * bey + bez * bez;
-        BigInteger clift = cex * cex + cey * cey + cez * cez;
-        BigInteger dlift = dex * dex + dey * dey + dez * dez;
+            // Differences against e — the translated coordinates the determinant is in.
+            var aex = arena.Take(wordsDiff);
+            var aey = arena.Take(wordsDiff);
+            var aez = arena.Take(wordsDiff);
+            var bex = arena.Take(wordsDiff);
+            var bey = arena.Take(wordsDiff);
+            var bez = arena.Take(wordsDiff);
+            var cex = arena.Take(wordsDiff);
+            var cey = arena.Take(wordsDiff);
+            var cez = arena.Take(wordsDiff);
+            var dex = arena.Take(wordsDiff);
+            var dey = arena.Take(wordsDiff);
+            var dez = arena.Take(wordsDiff);
+            ScaledDifference(ref aex, ref t1, ref t2, mantissa[0], shift[0], mantissa[12], shift[12]);
+            ScaledDifference(ref aey, ref t1, ref t2, mantissa[1], shift[1], mantissa[13], shift[13]);
+            ScaledDifference(ref aez, ref t1, ref t2, mantissa[2], shift[2], mantissa[14], shift[14]);
+            ScaledDifference(ref bex, ref t1, ref t2, mantissa[3], shift[3], mantissa[12], shift[12]);
+            ScaledDifference(ref bey, ref t1, ref t2, mantissa[4], shift[4], mantissa[13], shift[13]);
+            ScaledDifference(ref bez, ref t1, ref t2, mantissa[5], shift[5], mantissa[14], shift[14]);
+            ScaledDifference(ref cex, ref t1, ref t2, mantissa[6], shift[6], mantissa[12], shift[12]);
+            ScaledDifference(ref cey, ref t1, ref t2, mantissa[7], shift[7], mantissa[13], shift[13]);
+            ScaledDifference(ref cez, ref t1, ref t2, mantissa[8], shift[8], mantissa[14], shift[14]);
+            ScaledDifference(ref dex, ref t1, ref t2, mantissa[9], shift[9], mantissa[12], shift[12]);
+            ScaledDifference(ref dey, ref t1, ref t2, mantissa[10], shift[10], mantissa[13], shift[13]);
+            ScaledDifference(ref dez, ref t1, ref t2, mantissa[11], shift[11], mantissa[14], shift[14]);
 
-        BigInteger det = (dlift * abc - clift * dab) + (blift * cda - alift * bcd);
-        return det.Sign;
+            // 2×2 minors of the (x, y) columns.
+            var ab = arena.Take(wordsPair);
+            var bc = arena.Take(wordsPair);
+            var cd = arena.Take(wordsPair);
+            var da = arena.Take(wordsPair);
+            var ac = arena.Take(wordsPair);
+            var bd = arena.Take(wordsPair);
+            ProductDifference(ref ab, ref tmp, aex, bey, bex, aey);
+            ProductDifference(ref bc, ref tmp, bex, cey, cex, bey);
+            ProductDifference(ref cd, ref tmp, cex, dey, dex, cey);
+            ProductDifference(ref da, ref tmp, dex, aey, aex, dey);
+            ProductDifference(ref ac, ref tmp, aex, cey, cex, aey);
+            ProductDifference(ref bd, ref tmp, bex, dey, dex, bey);
+
+            // det3 of the (x, y, z) rows of each face, expanded along the z column —
+            // the filter stage's grouping, verbatim.
+            var abc = arena.Take(wordsFace);
+            var bcd = arena.Take(wordsFace);
+            var cda = arena.Take(wordsFace);
+            var dab = arena.Take(wordsFace);
+            SignedTriple(ref abc, ref tmp, aez, bc, 1, bez, ac, -1, cez, ab, 1);
+            SignedTriple(ref bcd, ref tmp, bez, cd, 1, cez, bd, -1, dez, bc, 1);
+            SignedTriple(ref cda, ref tmp, cez, da, 1, dez, ac, 1, aez, cd, 1);
+            SignedTriple(ref dab, ref tmp, dez, ab, 1, aez, bd, 1, bez, da, 1);
+
+            var alift = arena.Take(wordsLift);
+            var blift = arena.Take(wordsLift);
+            var clift = arena.Take(wordsLift);
+            var dlift = arena.Take(wordsLift);
+            SumOfSquares(ref alift, ref tmp, aex, aey, aez);
+            SumOfSquares(ref blift, ref tmp, bex, bey, bez);
+            SumOfSquares(ref clift, ref tmp, cex, cey, cez);
+            SumOfSquares(ref dlift, ref tmp, dex, dey, dez);
+
+            // det = (dlift·abc − clift·dab) + (blift·cda − alift·bcd) — exact, so the
+            // association is free and the sequential accumulation below is the same value.
+            var det = arena.Take(wordsDet);
+            Multiply(dlift, abc, ref tmp);
+            Accumulate(ref det, tmp, 1);
+            Multiply(clift, dab, ref tmp);
+            Accumulate(ref det, tmp, -1);
+            Multiply(blift, cda, ref tmp);
+            Accumulate(ref det, tmp, 1);
+            Multiply(alift, bcd, ref tmp);
+            Accumulate(ref det, tmp, -1);
+            return det.Sign;
+        }
+        finally
+        {
+            if (rented is not null)
+                System.Buffers.ArrayPool<ulong>.Shared.Return(rented);
+        }
     }
 
-    /// <summary>Exact decomposition of a finite double into mantissa * 2^exponent.</summary>
-    private static void Decompose(double value, out BigInteger mantissa, out int exponent)
+    /// <summary>
+    /// The exponent spread (in 64-bit words of arena) below which the whole exact stage
+    /// fits in one 8 KB stackalloc — ordinary CAD coordinates use a few hundred words of
+    /// it; anything wider (coordinates hundreds of orders of magnitude apart) rents from
+    /// the shared pool instead, which allocates nothing once the pool is warm.
+    /// </summary>
+    private const int StackArenaWords = 1024;
+
+    /// <summary>Exact decomposition of a finite double into mantissa · 2^exponent
+    /// (|mantissa| &lt; 2^53, so it is exactly a long).</summary>
+    private static void Decompose(double value, out long mantissa, out int exponent)
     {
         long bits = BitConverter.DoubleToInt64Bits(value);
         int biased = (int)((bits >> 52) & 0x7FF);
@@ -380,5 +510,297 @@ public static class Predicates3d
         }
         if (bits < 0)
             mantissa = -mantissa;
+    }
+
+    // ---- exact integer arithmetic on spans (sign-magnitude, little-endian ulong words) ----
+    //
+    // The invariant throughout: Len counts significant words (no leading zero word), and
+    // Sign == 0 exactly when Len == 0. Buffers are NOT zero-initialized beyond what an
+    // operation writes — every routine defines its output words explicitly and reads only
+    // up to Len, so the arithmetic is independent of stackalloc zeroing.
+
+    /// <summary>A bump allocator over one contiguous buffer: each intermediate takes its
+    /// slice once, sized by the proven tier bound.</summary>
+    private ref struct ExactArena(Span<ulong> buffer)
+    {
+        private readonly Span<ulong> _buffer = buffer;
+        private int _used;
+
+        public Big Take(int words)
+        {
+            var slice = _buffer.Slice(_used, words);
+            _used += words;
+            return new Big(slice);
+        }
+    }
+
+    /// <summary>A signed arbitrary-precision integer over a caller-owned span.</summary>
+    private ref struct Big(Span<ulong> mag)
+    {
+        public readonly Span<ulong> Mag = mag;
+        public int Len;
+        public int Sign;
+    }
+
+    /// <summary>dst = mantissaA·2^shiftA − mantissaB·2^shiftB, via two scratch loads.</summary>
+    private static void ScaledDifference(
+        ref Big dst, ref Big t1, ref Big t2, long mantissaA, int shiftA, long mantissaB, int shiftB)
+    {
+        SetShiftedMantissa(ref t1, mantissaA, shiftA);
+        SetShiftedMantissa(ref t2, mantissaB, shiftB);
+        dst.Len = 0;
+        dst.Sign = 0;
+        Accumulate(ref dst, t1, 1);
+        Accumulate(ref dst, t2, -1);
+    }
+
+    /// <summary>dst = x1·y1 − x2·y2 (a 2×2 minor), products staged through tmp.</summary>
+    private static void ProductDifference(
+        ref Big dst, ref Big tmp, in Big x1, in Big y1, in Big x2, in Big y2)
+    {
+        dst.Len = 0;
+        dst.Sign = 0;
+        Multiply(x1, y1, ref tmp);
+        Accumulate(ref dst, tmp, 1);
+        Multiply(x2, y2, ref tmp);
+        Accumulate(ref dst, tmp, -1);
+    }
+
+    /// <summary>dst = s1·(z1·m1) + s2·(z2·m2) + s3·(z3·m3) (a face's 3×3 minor).</summary>
+    private static void SignedTriple(
+        ref Big dst, ref Big tmp,
+        in Big z1, in Big m1, int s1, in Big z2, in Big m2, int s2, in Big z3, in Big m3, int s3)
+    {
+        dst.Len = 0;
+        dst.Sign = 0;
+        Multiply(z1, m1, ref tmp);
+        Accumulate(ref dst, tmp, s1);
+        Multiply(z2, m2, ref tmp);
+        Accumulate(ref dst, tmp, s2);
+        Multiply(z3, m3, ref tmp);
+        Accumulate(ref dst, tmp, s3);
+    }
+
+    /// <summary>dst = x² + y² + z² (a lift).</summary>
+    private static void SumOfSquares(ref Big dst, ref Big tmp, in Big x, in Big y, in Big z)
+    {
+        dst.Len = 0;
+        dst.Sign = 0;
+        Multiply(x, x, ref tmp);
+        Accumulate(ref dst, tmp, 1);
+        Multiply(y, y, ref tmp);
+        Accumulate(ref dst, tmp, 1);
+        Multiply(z, z, ref tmp);
+        Accumulate(ref dst, tmp, 1);
+    }
+
+    /// <summary>v = mantissa · 2^shift, exactly (|mantissa| &lt; 2^53, shift ≥ 0).</summary>
+    private static void SetShiftedMantissa(ref Big v, long mantissa, int shift)
+    {
+        if (mantissa == 0)
+        {
+            v.Len = 0;
+            v.Sign = 0;
+            return;
+        }
+        v.Sign = mantissa > 0 ? 1 : -1;
+        ulong m = mantissa > 0 ? (ulong)mantissa : (ulong)(-mantissa);
+        int wordShift = shift >> 6;
+        int bitShift = shift & 63;
+        var mag = v.Mag;
+        for (int i = 0; i < wordShift; i++)
+            mag[i] = 0;
+        if (bitShift == 0)
+        {
+            mag[wordShift] = m;
+            v.Len = wordShift + 1;
+        }
+        else
+        {
+            mag[wordShift] = m << bitShift;
+            ulong hi = m >> (64 - bitShift);
+            if (hi != 0)
+            {
+                mag[wordShift + 1] = hi;
+                v.Len = wordShift + 2;
+            }
+            else
+            {
+                v.Len = wordShift + 1;
+            }
+        }
+    }
+
+    /// <summary>acc += sign · term, in place. acc's capacity covers the result by the tier
+    /// bounds (an in-place add only extends when the value genuinely grows).</summary>
+    private static void Accumulate(ref Big acc, in Big term, int sign)
+    {
+        int termSign = term.Sign * sign;
+        if (termSign == 0)
+            return;
+        if (acc.Sign == 0)
+        {
+            term.Mag[..term.Len].CopyTo(acc.Mag);
+            acc.Len = term.Len;
+            acc.Sign = termSign;
+            return;
+        }
+        if (acc.Sign == termSign)
+        {
+            AddMagnitudeInPlace(ref acc, term);
+            return;
+        }
+        int compare = CompareMagnitude(acc, term);
+        if (compare == 0)
+        {
+            acc.Len = 0;
+            acc.Sign = 0;
+            return;
+        }
+        if (compare > 0)
+        {
+            SubtractMagnitudeInPlace(ref acc, term);
+        }
+        else
+        {
+            SubtractMagnitudeReversedInPlace(ref acc, term);
+            acc.Sign = termSign;
+        }
+    }
+
+    private static int CompareMagnitude(in Big a, in Big b)
+    {
+        if (a.Len != b.Len)
+            return a.Len > b.Len ? 1 : -1;
+        for (int i = a.Len - 1; i >= 0; i--)
+        {
+            if (a.Mag[i] != b.Mag[i])
+                return a.Mag[i] > b.Mag[i] ? 1 : -1;
+        }
+        return 0;
+    }
+
+    private static void AddMagnitudeInPlace(ref Big acc, in Big term)
+    {
+        var accMag = acc.Mag;
+        var termMag = term.Mag;
+        int n = Math.Max(acc.Len, term.Len);
+        ulong carry = 0;
+        for (int i = 0; i < n; i++)
+        {
+            ulong x = i < acc.Len ? accMag[i] : 0;
+            ulong y = i < term.Len ? termMag[i] : 0;
+            ulong partial = x + y;
+            ulong carry1 = partial < x ? 1UL : 0UL;
+            ulong sum = partial + carry;
+            ulong carry2 = sum < partial ? 1UL : 0UL;
+            accMag[i] = sum;
+            carry = carry1 + carry2;
+        }
+        if (carry != 0)
+        {
+            accMag[n] = carry;
+            acc.Len = n + 1;
+        }
+        else
+        {
+            acc.Len = n;
+        }
+    }
+
+    /// <summary>acc = |acc| − |term|, requiring |acc| &gt; |term|; sign unchanged.</summary>
+    private static void SubtractMagnitudeInPlace(ref Big acc, in Big term)
+    {
+        var accMag = acc.Mag;
+        var termMag = term.Mag;
+        ulong borrow = 0;
+        for (int i = 0; i < acc.Len; i++)
+        {
+            ulong x = accMag[i];
+            ulong y = i < term.Len ? termMag[i] : 0;
+            ulong partial = x - y;
+            ulong borrow1 = x < y ? 1UL : 0UL;
+            ulong difference = partial - borrow;
+            ulong borrow2 = partial < borrow ? 1UL : 0UL;
+            accMag[i] = difference;
+            borrow = borrow1 + borrow2;
+        }
+        int len = acc.Len;
+        while (len > 0 && accMag[len - 1] == 0)
+            len--;
+        acc.Len = len;
+    }
+
+    /// <summary>acc = |term| − |acc|, requiring |term| &gt; |acc| (the reversed direction
+    /// reads each of acc's words before overwriting it, so it is safe in place).</summary>
+    private static void SubtractMagnitudeReversedInPlace(ref Big acc, in Big term)
+    {
+        var accMag = acc.Mag;
+        var termMag = term.Mag;
+        ulong borrow = 0;
+        for (int i = 0; i < term.Len; i++)
+        {
+            ulong x = termMag[i];
+            ulong y = i < acc.Len ? accMag[i] : 0;
+            ulong partial = x - y;
+            ulong borrow1 = x < y ? 1UL : 0UL;
+            ulong difference = partial - borrow;
+            ulong borrow2 = partial < borrow ? 1UL : 0UL;
+            accMag[i] = difference;
+            borrow = borrow1 + borrow2;
+        }
+        int len = term.Len;
+        while (len > 0 && accMag[len - 1] == 0)
+            len--;
+        acc.Len = len;
+    }
+
+    /// <summary>dst = a · b (schoolbook; dst must not alias a or b). The carry chain is the
+    /// standard one — a·b + word + carry fits 128 bits exactly, so the per-step carry
+    /// cannot overflow.</summary>
+    private static void Multiply(in Big a, in Big b, ref Big dst)
+    {
+        if (a.Sign == 0 || b.Sign == 0)
+        {
+            dst.Len = 0;
+            dst.Sign = 0;
+            return;
+        }
+        var aMag = a.Mag;
+        var bMag = b.Mag;
+        var dMag = dst.Mag;
+        int n = a.Len + b.Len;
+        for (int i = 0; i < n; i++)
+            dMag[i] = 0;
+        for (int i = 0; i < a.Len; i++)
+        {
+            ulong ai = aMag[i];
+            if (ai == 0)
+                continue;
+            ulong carry = 0;
+            for (int j = 0; j < b.Len; j++)
+            {
+                ulong high = Math.BigMul(ai, bMag[j], out ulong low);
+                ulong partial = dMag[i + j] + low;
+                ulong carry1 = partial < low ? 1UL : 0UL;
+                ulong sum = partial + carry;
+                ulong carry2 = sum < partial ? 1UL : 0UL;
+                dMag[i + j] = sum;
+                carry = high + carry1 + carry2;
+            }
+            int k = i + b.Len;
+            while (carry != 0)
+            {
+                ulong sum = dMag[k] + carry;
+                carry = sum < carry ? 1UL : 0UL;
+                dMag[k] = sum;
+                k++;
+            }
+        }
+        int len = n;
+        while (len > 0 && dMag[len - 1] == 0)
+            len--;
+        dst.Len = len;
+        dst.Sign = a.Sign * b.Sign;
     }
 }
