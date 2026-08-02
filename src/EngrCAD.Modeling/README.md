@@ -855,6 +855,55 @@ louvres, two flanges sharing a stretch of edge, flanges on a flange's side edges
 multi-body sheets. Spring-back is out of scope (a property of the press, not the
 geometry).
 
+## Frames & weldments (`Frames.cs`)
+
+`Weldment.Build(profile, runs)` / `Weldment.Path(profile, points, closed)` puts
+straight structural members on a skeleton — the SolidWorks-weldments capability over
+machinery that already exists: a `FrameProfile` is a designation plus an exact section
+`Sketch` (factories for flat bar, SHS/RHS, equal angle, channel and round tube, with a
+small ⚠-verify-against-datasheet `StandardSections` catalogue; a hollow section is the
+outer loop `WithHole` the inner, so wall thickness is exact), each member is one
+`Shape.Extrude` of it along its run, and the cut list is the BOM reading
+`Part.CutLength`. The run line passes through the profile sketch's ORIGIN (centred
+sections make it the centroid axis; the angle's heel sits on it), and the roll rule is
+stated: profile +y follows `WeldmentOptions.Up` projected, with a documented +Z/+Y/+X
+fallback for runs parallel to it.
+
+- **Joints** are detected where exactly two runs share an endpoint (weld tier). Under
+  `FrameJointStyle.Miter` both members are cut by the exact bisector plane — normal
+  `a − b` for unit leave-directions `a`, `b`, which contains the bisector and the axes'
+  common normal with NO division (so there is no apex arithmetic to get wrong), built
+  from one canonical joint point so the two cut planes are bit-identical. `Butt` trims
+  the later run back to the earlier member's flat facing wall.
+- **Every cut is a transversal boolean by construction**: the member extrudes OVERLONG
+  past the joint by the cut plane's exact reach across its own section (an affine
+  functional whose extremes are closed-form per outline segment — line endpoints, arc
+  stationary angles), then a box tool whose base face lies exactly ON the plane
+  subtracts the stub — the `Drill` overshoot lesson, so no boolean ever sees coplanar
+  input, and every cut curve is analytic (plane∩plane lines; the exact plane∩cylinder
+  ellipse on a mitred tube, verified to CONVERGE on A·L rather than sit on a tracer
+  floor).
+- **The volume oracle is the prism-cut identity**: a prism cut by planes at both ends
+  has volume `A · (axial distance between the planes' centroid-fiber crossings)` —
+  exact for any section — so mitred members of centred profiles measure exactly `A·L`,
+  a closed rectangular frame exactly `A · perimeter` (the mass closed form through
+  `Materials`), and the heel-datumed angle its rational closed form.
+- **One part per member, deliberately**: "the same member" would be a tolerance
+  judgement over cut planes in local frames differing by rotation round-off, so
+  identical members instead share their NAME (`designation x cut length`), which is
+  exactly `Bom.ByItem()`'s documented rollup key; `CutLength` is also the member's
+  stock length (to a miter's longest point) and rides the document envelope
+  write-only-when-stated.
+- **Refusals, each by name**: coped (saddle) tube-on-tube joints — the
+  `FrameJointStyle.Cope` message carries the reason (a transcendental
+  cylinder∩cylinder pair the marching tracer under-seeds at structural-section
+  scales), and butting onto a round tube reaches the same refusal; three or more
+  members at a point; T-joints against a run's interior; zero-angle joints; members
+  consumed by their own end cuts; joint trims of Bézier/elliptical-outline profiles.
+  Mixed profiles per skeleton and curved members are future work.
+
+Docs: `docs/examples/frames.md`.
+
 ## Patterns
 
 `shape.PatternLinear(count, step)` and
@@ -1487,6 +1536,12 @@ File.WriteAllText("bom.csv", bom.ToCsv());
   unstated material gives a null mass, printed `-` and written as an *empty* CSV cell
   rather than a zero a spreadsheet would silently sum — and the footer total names how many
   of the items it actually covers.
+- **Cut lengths.** `BomLine.CutLength` projects `Part.CutLength` (the same
+  follow-the-part pattern as `Material`): `Weldment` stamps every frame member with its
+  exact stock length, a **CUT (mm)** column plus a total-stock footer appear whenever any
+  line states one (the MATERIAL-column rule — scenes without frames print byte-identical
+  output), and identical members share their name (`designation x cut length`) so
+  `ByItem()` rolls the cut list up. Unknown = `-` in text and an *empty* CSV cell.
 - `Bom.Structured(assembly)` is the indented BOM: one `BomNode` per item per level,
   with `Quantity` per parent and `TotalQuantity` multiplied down the tree, so a
   sub-assembly placed twice doubles everything inside it. The leaf totals agree with

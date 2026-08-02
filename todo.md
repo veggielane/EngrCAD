@@ -2204,20 +2204,29 @@ export+import, volume/area, tessellation — see CLAUDE.md):
 
 ## build123d / CadQuery parity (open items)
 
-- [ ] **Frames and weldments: profiles swept along an edge skeleton with mitred
-  joints, and BOM cut lists.** (The reference is SolidWorks weldments; neither
-  build123d nor CadQuery has it first-class, which is part of the opportunity.) A
-  skeleton is a list of straight runs; each member is one extrusion of a catalogue
-  profile (box, angle, channel — transcribed with the verify-against-datasheet flag);
-  a joint is the exact bisector plane between two members, which is the chamfer/miter
-  plane machinery again; cut length per member lands on `BomLine`, giving the cut
-  list for free from the BOM that exists.
-  - Verification: total volume = Σ member volumes − exact miter wedges (closed form
-    for rectangular sections); cut-list lengths against the skeleton's own arithmetic;
-    a welded rectangular frame's mass against the closed form through `Materials`.
-  - Scope honestly: straight members first. Coped tube joints (tube-on-tube saddle
-    cuts) are transcendental cylinder∩cylinder pairs for the tracer and should be
-    ASSESSED against its known thread-scale seeding limits, not assumed.
+- [ ] **Weldment follow-ups** (`Weldment`/`FrameProfile` ✅ landed — skeleton runs,
+  exact bisector-plane miters via overlong-extrude + on-plane box tools, butt joints,
+  `Part.CutLength` → `BomLine.CutLength` cut lists, prism-cut-identity verification,
+  coped saddles refused with the tracer reason; design.md §6b). Open, in rough order
+  of value:
+  - [ ] **T-joints trimmed to the through member's wall.** v1 refuses an endpoint on
+    another run's interior by name; the trim is the SAME plane-cut machinery as the
+    butt joint (cut plane = the through member's facing wall), so the work is joint
+    DETECTION at a mid-run point plus deciding what the through member does (nothing).
+  - [ ] **Mixed profiles per skeleton** (legs SHS, rails angle). The miter still cuts
+    both members with one plane; what changes is that the butt wall offset and the
+    per-member reach read per-member profiles, and `Weldment.Build` takes a profile
+    per run (or a default + overrides).
+  - [ ] **Multi-member joints** (three members at a corner): which pair miters and
+    what closes the third is a real drafting convention, not a formula — SolidWorks
+    asks per-joint trim order. Wants a per-joint override vocabulary, not a guess.
+  - [ ] **Coped (saddle) tube joints** stay refused pending the tracer's thread-scale
+    seeding limits (the recorded M8 measurement); if `SurfaceIntersection` ever gains
+    an analytic or robust cylinder∩cylinder tier at these aspect ratios, the refusal
+    on `FrameJointStyle.Cope` names exactly what to relax.
+  - [ ] **Corner reliefs / end caps / gussets**, curved members, and profile
+    placement offsets (locate the run on a section corner or face rather than the
+    factory datum) — all future work, none blocked.
 
 Both are **OCCT front ends**, so unlike the OpenSCAD and OCCT sections above this one is
 almost entirely about **API design, not kernel capability** — their contribution is how a
@@ -2226,7 +2235,8 @@ for ergonomics, and copy capability rather than syntax: CadQuery's stringly-type
 selectors (`">Z"`, `"|Z and >Y"`) are the part to learn from and *not* imitate, because
 `BrepQueries` + LINQ gives the same power type-safely. Landed from this section:
 `BrepSelection` (the ordering/grouping layer + GeometryRef spellings), `LocationSet`,
-`ExtrudeUntil`/`CutUntil`, `Packing`, and the builder-form prototype whose verdict (an
+`ExtrudeUntil`/`CutUntil`, `Packing`, frames & weldments (`Weldment`, docs
+`examples/frames.md`), and the builder-form prototype whose verdict (an
 honest no) is recorded in design.md §6b with the comparison committed as
 `BuilderPrototypeTests`.
 
