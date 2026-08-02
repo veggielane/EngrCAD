@@ -62,16 +62,50 @@ public static class HelicalGearGeometry
     }
 
     /// <summary>
-    /// The transverse <see cref="GearSpec"/> for a gear ordered in NORMAL terms — the
-    /// way a cutter is specified. The profile shift is dimensionless and carries across
-    /// unchanged (it is quoted in modules, and both modules describe the same rack datum
-    /// shift measured along the same radial).
+    /// The transverse <see cref="GearSpec"/> for a gear ordered in NORMAL terms — the way
+    /// a cutter is specified.
     /// </summary>
+    /// <remarks>
+    /// <para><b>Every per-module coefficient scales by cos β, and that includes the
+    /// profile shift.</b> The addendum, the dedendum, the root fillet radius and the rack
+    /// datum shift are RADIAL LENGTHS — a hob cutting 1.00·m_n of addendum leaves the same
+    /// millimetres of tooth height whichever section you measure the module in — so their
+    /// coefficients, which <see cref="GearSpec"/> reads against the TRANSVERSE module,
+    /// must be divided by m_t/m_n = 1/cos β. Everything downstream then falls out
+    /// consistently: the transverse tooth thickness comes back as
+    /// m_t(π/2 + 2·x_n·tan α_n), which is the normal thickness over cos β as it must be,
+    /// and the undercut limit as 2·h_a*_n·cos β/sin²α_t, the classical helical form.</para>
+    /// <para>The scaling is not cosmetic. At β = 45° a 0.38·m_n root fillet becomes
+    /// 0.2687·m_t; left unscaled it reads 0.38·m_t = 1.34× too large, and an 18-tooth
+    /// member is REFUSED outright by <see cref="Gears.Spur"/> for adjacent root fillets
+    /// overlapping — a plausible-looking pair that cannot be drawn.</para>
+    /// </remarks>
+    /// <param name="normalModule">m_n, the cutter's module.</param>
+    /// <param name="teeth">Tooth count.</param>
+    /// <param name="helixAngleDegrees">Signed helix angle (positive = right hand).</param>
+    /// <param name="normalPressureAngleDegrees">α_n (20° standard).</param>
+    /// <param name="profileShift">x_n, the rack datum shift in NORMAL modules.</param>
+    /// <param name="normalAddendumCoefficient">h_a*_n (ISO 53 profile A: 1.00).</param>
+    /// <param name="normalDedendumCoefficient">h_f*_n (1.25).</param>
+    /// <param name="normalRootFilletCoefficient">ρ_f*_n (0.38).</param>
     public static GearSpec FromNormal(
         double normalModule, int teeth, double helixAngleDegrees,
-        double normalPressureAngleDegrees = 20, double profileShift = 0) =>
-        new(TransverseModule(normalModule, helixAngleDegrees), teeth,
-            TransversePressureAngleDegrees(normalPressureAngleDegrees, helixAngleDegrees), profileShift);
+        double normalPressureAngleDegrees = 20, double profileShift = 0,
+        double normalAddendumCoefficient = 1.00,
+        double normalDedendumCoefficient = 1.25,
+        double normalRootFilletCoefficient = 0.38)
+    {
+        double cos = Math.Cos(Radians(helixAngleDegrees));
+        return new GearSpec(
+            TransverseModule(normalModule, helixAngleDegrees), teeth,
+            TransversePressureAngleDegrees(normalPressureAngleDegrees, helixAngleDegrees),
+            profileShift * cos)
+        {
+            AddendumCoefficient = normalAddendumCoefficient * cos,
+            DedendumCoefficient = normalDedendumCoefficient * cos,
+            RootFilletCoefficient = normalRootFilletCoefficient * cos,
+        };
+    }
 
     /// <summary>Pitch radius r = m_n·z/(2·cos β) — equivalently m_t·z/2.</summary>
     public static double PitchRadiusFromNormal(double normalModule, int teeth, double helixAngleDegrees) =>
