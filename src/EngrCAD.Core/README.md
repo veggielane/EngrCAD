@@ -577,6 +577,52 @@ chain's parity is consistent across every joint.
     are a constant fraction of all the work and form a *chain*. Tree parallelism cannot pay;
     the same table's longest column (1 400–3 748 entries under AMD) says the work is in a
     few nearly-dense columns, which is what a supernodal BLAS-3 kernel exists for.
+  - **`SparseLdlt`** — the symmetric-INDEFINITE factorization A = L·D·Lᵀ (L unit lower,
+    D diagonal), real or complex symmetric, for exactly the systems `SparseCholesky`
+    correctly refuses. The consumer it unblocks is the direct per-frequency harmonic solve
+    `(K − ω²M + iωC)·u = f`, whose matrix is complex SYMMETRIC (not Hermitian) and whose
+    equivalent real form is symmetric indefinite by construction (eigenvalues in ±pairs).
+    <br>**The backlog named three candidates and the weighing is the deliverable.**
+    COCG/QMR was rejected because the item asks for a DIRECT solve — a shifted system near
+    resonance is precisely where a Krylov method's convergence goes unpredictable, and
+    re-importing that is what the direct solve exists to remove. A real Bunch–Kaufman LDLᵀ
+    on the 2n×2n real form was rejected on STRUCTURE: a magnitude-searched 2×2 pivot merges
+    two columns' patterns, so the symbolic pass stops predicting the numeric structure and
+    AMD's counts go stale — which is why production sparse indefinite solvers (MA57,
+    PARDISO) are multifrontal machines with delayed pivots, a different order of project
+    (filed, for real indefinite systems that genuinely need pivoting). **The complex
+    spelling wins because for this family the "2×2 pivots" are fixed by structure, never
+    searched**: a complex pivot r + is is invertible whenever (r, s) ≠ (0, 0) — the
+    robustness a Bunch–Kaufman block buys on the real form's paired ±structure, where the
+    real form's leading block is K − ω²M alone and an unpivoted real factorization of it
+    breaks down near every resonance. Because the pivots are structurally 1×1 in the
+    complex field, the elimination structure IS the Cholesky one on the union pattern of
+    the two parts, so **the symbolic pass is `SparseCholesky`'s internals verbatim (shared,
+    not copied), `SparseOrdering.Amd` applies unchanged, and `SparseCholesky.Analyze`
+    predicts this factorization too**.
+    <br>**When it provably exists**: write Z = R + iS; a singular leading minor Z_k forces
+    a vector annihilated by BOTH R_k and S_k (from uᵀS_k·u + vᵀS_k·v = 0 with S PSD), so
+    with any positive-definite damping present — Rayleigh damping is, whenever either
+    coefficient is nonzero — no pivot can vanish at ANY frequency, resonances included;
+    breakdown requires an entirely undamped subsystem exactly at one of its own resonances,
+    where the physical steady state is unbounded too and the loud refusal is the right
+    answer. The REAL overload is unpivoted with the caveat stated: it factors iff every
+    leading minor is nonsingular — true of shifted K − ω²M away from a measure-zero set of
+    ω, and of a saddle system `[[A, B],[Bᵀ, 0]]` with constraints ordered LAST (the Schur
+    complement is negative definite) — refuses an exactly-zero pivot naming the caller's
+    column (an exact-zero division guard, not a tolerance), and reports
+    `SmallestPivotMagnitude`/`LargestPivotMagnitude` so near-breakdown growth is visible.
+    The documented AMD hazard: AMD reads the pattern and not the values, so it can reorder
+    a saddle system's structurally-zero diagonal ahead of its constraints and turn a
+    factorable matrix into a refusal — natural stays the default; AMD is right for the
+    shifted-Helmholtz family, whose diagonal is structurally full. Verified against an
+    independent dense partial-pivoting solve (real and complex) at backward residuals
+    < 1e-13, an analytic saddle solution, the hand-assembled steel bar's K − ω²M above its
+    first resonance (Cholesky's refusal asserted on the same matrix), Rayleigh-damped and
+    dashpot-damped (union-pattern) harmonic systems, and `[[0, 1],[1, 0]] + i·I` — the
+    smallest matrix where the complex pivot succeeds and the real part alone breaks down.
+    Deterministic (bit-identical repeat factorizations), cancellable with the same
+    exact-update-count progress convention as `SparseCholesky`.
   - **`AmdOrdering`** — approximate minimum degree (Amestoy–Davis–Duff 1996): quotient
     graph with element absorption (including the aggressive form), approximate external
     degrees, mass elimination, hash-detected supervariables, and an assembly-tree

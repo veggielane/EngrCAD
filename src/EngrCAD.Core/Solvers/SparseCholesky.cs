@@ -302,9 +302,12 @@ public sealed class SparseCholesky
     /// <see cref="Factorize(PackedSparseMatrix, SparseOrdering, ProgressCancel?)"/> and
     /// <see cref="Analyze"/> so the prediction and the run cannot disagree about what the
     /// factorization is — the "ask the same code rather than restating it" rule, which this
-    /// project has paid for three times elsewhere.
+    /// project has paid for three times elsewhere. Internal rather than private because
+    /// <see cref="SparseLdlt"/> is the SAME symbolic factorization with a different numeric
+    /// pass (its pivots are structurally 1×1, so the Cholesky pattern is its pattern) —
+    /// a second copy of the elimination-tree machinery would drift.
     /// </summary>
-    private static (
+    internal static (
         int N, int[] ColStart, int[] RowIndex, double[] Values, int[]? Permutation,
         int[] Parent, int[] Counts, int[] Stamp, int[] Reach, int[] PathStack)
         Symbolic(PackedSparseMatrix a, SparseOrdering ordering, ProgressCancel? progress)
@@ -492,7 +495,7 @@ public sealed class SparseCholesky
     /// <paramref name="reach"/>[top..n) lists the row's columns in topological order
     /// (Davis's cs_ereach). Stamps double as the visited marks, reset by value k.
     /// </summary>
-    private static int Ereach(
+    internal static int Ereach(
         int k, int[] colStart, int[] rowIndex, int[] parent, int[] stamp, int[] reach, int[] pathStack)
     {
         int n = parent.Length;
@@ -525,7 +528,7 @@ public sealed class SparseCholesky
     /// the diagonal by scanning for <c>i == k</c> and the rest of this class documents
     /// its columns as sorted — an unsorted CSC would work today and rot silently.</para>
     /// </summary>
-    private static (int[] ColStart, int[] RowIndex, double[] Values) SymmetricPermute(
+    internal static (int[] ColStart, int[] RowIndex, double[] Values) SymmetricPermute(
         int n, int[] colStart, int[] rowIndex, double[] values, int[] permutation)
     {
         var inverse = new int[n];
@@ -575,7 +578,7 @@ public sealed class SparseCholesky
     }
 
     /// <summary>The stored upper triangle re-indexed by column (CSC), rows ascending per column.</summary>
-    private static (int[] ColStart, int[] RowIndex, double[] Values) UpperCsc(PackedSparseMatrix upper)
+    internal static (int[] ColStart, int[] RowIndex, double[] Values) UpperCsc(PackedSparseMatrix upper)
     {
         int n = upper.Rows;
         var colCount = new int[n];

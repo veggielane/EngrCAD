@@ -381,6 +381,22 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   open; both were stale.
 ## Core (EngrCAD.Core)
 
+- [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
+  one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
+  L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
+  three-way weighing), and its REAL path is deliberately unpivoted: it factors iff every
+  leading principal minor is nonsingular, which holds for shifted `K − ω²M` away from a
+  measure-zero set of ω and for saddle systems with constraints ordered last, and it
+  refuses an exactly-zero pivot loudly — but a NEAR-singular minor still amplifies
+  round-off with nothing to repair it (`SmallestPivotMagnitude` is the tell). A real
+  Bunch–Kaufman with magnitude-searched 2×2 pivots cannot ride the up-looking machinery:
+  a 2×2 pivot merges two columns' patterns, so the precomputed symbolic structure and the
+  AMD counts both go stale, and the honest version is a multifrontal/supernodal solver
+  with delayed pivots (MA57's shape) — a project of a different order. File a consumer
+  first: nothing in the repo today produces a real indefinite system that the unpivoted
+  form plus the constraints-last convention cannot factor. (An interim half-step if one
+  appears: one round of iterative refinement on the caller's side, which the
+  pivot-magnitude report already supports deciding.)
 - [x] ~~**`ShapeCompiler` coplanarity, and a finding under it**~~ ✅ **landed** — the
   companion `CoplanarFaceDistance` check now measures a genuine point-to-PLANE distance
   (`ShapeCompiler.BottomLiesInFacePlane`, one shared rule for `Drill` and `ThreadedHole`),
@@ -1033,27 +1049,25 @@ conditions within 0.05–0.70% of the shear-corrected load, refinement monotone 
 `omega²(P)/omega²(0) = 1 + P/P_cr` to 7.4e-10, resonant amplification 25.006 against 25.000,
 half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Residuals below.
 
-- [ ] **FEA: a DIRECT (per-frequency) harmonic solve. BLOCKED ON `EngrCAD.Core.Solvers`, and
-  the blocking reason has been checked rather than assumed.** `(K − omega²M + i·omega·C)·u = f`
-  factorized per frequency — hundreds of times a modal sweep, and the only option in three
-  cases modal superposition structurally cannot express: non-proportional damping (the modes
-  stop diagonalising C), material properties that vary WITH frequency (the modal basis itself
-  would change per point), and a load whose spatial distribution changes with frequency.
-  <br>**The obvious escape does not work, which is the finding.** The equivalent REAL form of a
-  complex system looks like a way to reuse the real solvers, and it is not: writing
-  `(A + iB)(x + iy) = f` out gives `[[A, -B],[B, A]]`, which is not symmetric; negating the
-  second block row to symmetrise it — `[[A, -B],[-B, -A]]` with right-hand side
-  `[f_r; -f_i]` — makes it symmetric and **INDEFINITE by construction**, its eigenvalues coming
-  in plus/minus pairs. Both of Core's solvers refuse it by name and correctly:
-  `SparseCholesky` needs positive definiteness (it throws on a nonpositive pivot, deliberately
-  a sign test rather than a tolerance) and `SparseSymmetricCG` needs it too. So this needs one
-  of three genuinely new pieces in Core — a real symmetric-indefinite `LDL^T` with
-  Bunch–Kaufman pivoting, a complex symmetric `LDL^T`, or an iterative method for complex
-  symmetric systems (COCG/QMR) — and it is a **Core item filed from Fea**, like
-  `Predicates3d.InSphere`'s allocation. Note also that the value is confined to the three cases
-  above: under PROPORTIONAL damping the direct solve and the modal one answer the same
-  question, so it buys nothing there, and the first of the three (non-proportional damping)
-  overlaps the quadratic-eigenproblem item below.
+- [ ] **FEA: a DIRECT (per-frequency) harmonic solve — the Core blocker is LANDED and only
+  the Fea consumer remains.** `(K − omega²M + i·omega·C)·u = f` factorized per frequency —
+  the only option in three cases modal superposition structurally cannot express:
+  non-proportional damping (the modes stop diagonalising C), material properties that vary
+  WITH frequency (the modal basis itself would change per point), and a load whose spatial
+  distribution changes with frequency. **`SparseLdlt` in `EngrCAD.Core.Solvers` is the
+  factorization this entry was blocked on** — complex symmetric L·D·Lᵀ over the union
+  pattern of the two parts, sharing `SparseCholesky`'s symbolic pass verbatim (AMD included),
+  chosen over a real Bunch–Kaufman with the weighing recorded in design.md §2(d) and the
+  class doc; verified against independent dense complex solves at backward residuals
+  < 1e-13, including a Rayleigh-damped bar AT its first resonance and a dashpot whose
+  pattern the stiffness does not cover. The Fea-side hookup is per frequency:
+  `SparseLdlt.Factorize(Combine(K, 1, M, −omega²), scaled C, Amd)` + one complex `Solve`
+  with the load split as (Re, Im) — plus an assembled non-proportional `C` (a dashpot/
+  per-region loss vocabulary on `StructuralModel`, which does not exist yet and is the
+  actual remaining work), and the sweep loop with its per-frequency refactor cost stated
+  honestly against the modal route. Note the value stays confined to the three cases above:
+  under PROPORTIONAL damping the direct solve and the modal one answer the same question,
+  and the non-proportional case overlaps the quadratic-eigenproblem item below.
 - [ ] **FEA: non-proportional damping — the quadratic eigenproblem.** A discrete dashpot, two
   materials with different loss factors in one model, viscoelasticity or hysteretic damping all
   leave `phi' C phi` with off-diagonal terms, at which point the damped modes are no longer the

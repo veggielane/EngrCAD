@@ -139,7 +139,39 @@ Each engine uses the data structure its mathematics wants:
   instead of dividing by it, Cholesky throws naming the offending pivot column — the
   repo's report-what-happened convention applied to numerics. The library is
   deliberately dependency-free and mesh-agnostic (doubles + int indices), so the mesh
-  engine adapts to it, never the reverse.
+  engine adapts to it, never the reverse. (d) **The symmetric-INDEFINITE factorization is
+  a complex-capable LDLᵀ (`SparseLdlt`), and choosing it over a real Bunch–Kaufman was
+  the design decision.** The consumer is the direct per-frequency harmonic solve
+  `(K − ω²M + iωC)·u = f` — complex SYMMETRIC, its equivalent real form
+  `[[A, −B],[−B, −A]]` symmetric indefinite by construction — which both incumbent
+  solvers refuse correctly. Three candidates were weighed. COCG/QMR: rejected, the item
+  asks for a DIRECT solve and a shifted system near resonance is exactly where Krylov
+  convergence goes unpredictable. Real Bunch–Kaufman with 2×2 pivots: rejected on
+  STRUCTURE rather than taste — a magnitude-searched 2×2 pivot merges two columns'
+  patterns, so the symbolic pass stops predicting the numeric structure and the AMD
+  ordering's counts go stale, which is why production sparse indefinite solvers are
+  multifrontal machines with delayed pivots (a different order of project; filed for
+  real systems that genuinely need pivoting). The complex spelling wins because **for
+  this family the "2×2 pivots" are fixed by structure, never searched**: a complex pivot
+  r + is is invertible whenever (r, s) ≠ (0, 0) — exactly the robustness a
+  Bunch–Kaufman block buys on the real form's paired ±structure, where the real form's
+  leading n×n block is K − ω²M alone and unpivoted elimination of it breaks down near
+  every resonance, the regime a harmonic sweep operates in. Structurally-1×1 pivots are
+  what let the elimination structure BE the Cholesky one on the union pattern: the
+  symbolic pass (elimination tree, ereach, column counts) is `SparseCholesky`'s
+  internals shared verbatim, AMD applies unchanged, and `Analyze` predicts this
+  factorization too. Solvability is a four-line kernel argument recorded in the class
+  doc: a singular leading minor of R + iS forces a vector annihilated by BOTH R_k and
+  S_k, so with any positive-definite damping (Rayleigh damping is) no pivot can vanish
+  at any frequency including resonances, and the remaining breakdown case — an entirely
+  undamped subsystem exactly at one of its own resonances — is one where the physical
+  steady state is unbounded too, so the loud refusal is the right answer. The real
+  overload stays unpivoted with the caveat stated (factors iff every leading minor is
+  nonsingular; a saddle system needs its constraints ordered last; AMD can reorder a
+  structurally-zero diagonal early and turn a factorable matrix into a refusal —
+  documented, natural default), refuses exactly-zero pivots by caller column, and
+  reports its pivot-magnitude extremes so near-breakdown growth is visible rather than
+  silent.
 
 ## 3. Mesh engine
 
