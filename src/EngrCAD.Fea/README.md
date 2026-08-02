@@ -751,7 +751,17 @@ results.WriteVtu("bracket.vtu");                                 // or ParaView
 `AnalysisMesh` is the one type assembly, boundary conditions, load integration, stress
 recovery and publishing are written against, so the linear/quadratic difference is two
 integers rather than two implementations. It wraps a `TetMesh` or a `QuadraticTetMesh` and
-copies nothing but index arrays.
+copies nothing but index arrays. Three API-hygiene rules it and `StructuralResults` share:
+derived summaries (`Regions`, `FacetTags`, `Bounds`, `Volume`, the lazy stress caches) are
+computed once and published lock-free by CompareExchange — legal because each is a pure
+function of immutable data, so a racing first read computes an identical value and the loser
+is discarded; every `IReadOnlyList` property is a read-only VIEW, never the internal array
+castable back to `T[]` (the array behind `Nodes` is what every solver assembles from, and the
+one behind `Displacement` feeds every derived stress pass); and a mesh whose index arithmetic
+would overflow `int` (~215 M quadratic elements, ~716 M nodes) is refused at `Of` by name
+rather than failing as a bare `OverflowException` from a negative array length. What is still
+NOT safe is mutating `Averaging`/`Recovery` while another thread reads — the setters clear
+the caches, and that is stated on the type.
 
 - **Stiffness is assembled in index form, not as B'DB.** For an isotropic material the
   integrand collapses to `K_ij^ab = L·N_i,a·N_j,b + M·N_i,b·N_j,a + M·(gradN_i · gradN_j)·d_ab`,

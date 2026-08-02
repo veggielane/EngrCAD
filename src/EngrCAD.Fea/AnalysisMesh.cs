@@ -38,6 +38,17 @@ public sealed class AnalysisMesh
     private readonly int[] _facets;     // NodesPerFacet indices per facet
     private readonly int[] _facetTags;
     private readonly int[] _facetElement;
+    private readonly IReadOnlyList<Vector3d> _nodesView;
+
+    // Lazy caches, published lock-free by CompareExchange: each is a pure deterministic
+    // function of the immutable arrays above, so a racing first read computes an identical
+    // value and the losing copy is discarded — the same first-publish-wins pattern the
+    // sampled SDF grids use. The two scalar results are BOXED because an object reference
+    // publishes atomically where a Nullable<double>/Nullable<Aabb> write can tear.
+    private IReadOnlyList<int>? _regionsView;
+    private IReadOnlyList<int>? _facetTagsView;
+    private object? _bounds;
+    private object? _volume;
 
     private AnalysisMesh(
         ElementOrder order,
@@ -55,6 +66,7 @@ public sealed class AnalysisMesh
         _facets = facets;
         _facetTags = facetTags;
         _facetElement = facetElement;
+        _nodesView = Array.AsReadOnly(nodes);
     }
 
     /// <summary>Linear or quadratic.</summary>
@@ -66,8 +78,10 @@ public sealed class AnalysisMesh
     /// <summary>3 for linear facets, 6 for quadratic.</summary>
     public int NodesPerFacet => Order == ElementOrder.Linear ? 3 : 6;
 
-    /// <summary>Node positions.</summary>
-    public IReadOnlyList<Vector3d> Nodes => _nodes;
+    /// <summary>Node positions. A read-only VIEW, not the internal array: the arrays behind
+    /// this type are what every solver assembles from, so handing one out castable back to
+    /// <c>Vector3d[]</c> would let any consumer silently move the mesh under a solve.</summary>
+    public IReadOnlyList<Vector3d> Nodes => _nodesView;
 
     /// <summary>Number of nodes (the analysis has 3 displacement degrees of freedom each).</summary>
     public int NodeCount => _nodes.Length;
@@ -101,22 +115,49 @@ public sealed class AnalysisMesh
     /// <summary>The element carrying one boundary facet.</summary>
     public int FacetElement(int facet) => _facetElement[facet];
 
-    /// <summary>Distinct region ids present, ascending.</summary>
-    public IReadOnlyList<int> Regions => _regions.Distinct().Order().ToArray();
+    /// <summary>Distinct region ids present, ascending. Computed once and cached — the
+    /// backing arrays never change — so <c>Regions.Contains(x)</c> in a loop costs a scan of
+    /// the distinct ids, not a fresh sort of every element's region per call.</summary>
+    public IReadOnlyList<int> Regions =>
+        Publish(ref _regionsView, static self => Array.AsReadOnly(
+            self._regions.Distinct().Order().ToArray()), this);
 
-    /// <summary>Distinct facet tags present, ascending — what a boundary condition can name.</summary>
-    public IReadOnlyList<int> FacetTags => _facetTags.Distinct().Order().ToArray();
+    /// <summary>Distinct facet tags present, ascending — what a boundary condition can name.
+    /// Cached like <see cref="Regions"/>.</summary>
+    public IReadOnlyList<int> FacetTags =>
+        Publish(ref _facetTagsView, static self => Array.AsReadOnly(
+            self._facetTags.Distinct().Order().ToArray()), this);
 
-    /// <summary>Axis-aligned bounds of the nodes.</summary>
+    /// <summary>Axis-aligned bounds of the nodes. Cached like <see cref="Regions"/>.</summary>
     public Aabb Bounds
     {
         get
         {
-            var bounds = Aabb.Empty;
-            foreach (var p in _nodes)
-                bounds = bounds.Union(p);
-            return bounds;
+            var boxed = Publish(ref _bounds, static self =>
+            {
+                var bounds = Aabb.Empty;
+                foreach (var p in self._nodes)
+                    bounds = bounds.Union(p);
+                return (object)bounds;
+            }, this);
+            return (Aabb)boxed;
         }
+    }
+
+    /// <summary>
+    /// First-publish-wins lazy initialization: compute on a miss, install by
+    /// <see cref="Interlocked.CompareExchange{T}(ref T, T, T)"/>, and return whichever copy
+    /// won. Sound because every compute here is a pure function of immutable arrays, so a
+    /// racing loser's value is identical to the winner's.
+    /// </summary>
+    private static T Publish<T>(ref T? field, Func<AnalysisMesh, T> compute, AnalysisMesh self)
+        where T : class
+    {
+        var current = field;
+        if (current is not null)
+            return current;
+        var computed = compute(self);
+        return Interlocked.CompareExchange(ref field, computed, null) ?? computed;
     }
 
     /// <summary>
@@ -146,22 +187,62 @@ public sealed class AnalysisMesh
         return (_nodes[f[0]] + _nodes[f[1]] + _nodes[f[2]]) / 3.0;
     }
 
-    /// <summary>Total volume: the sum of the elements' volumes.</summary>
+    /// <summary>Total volume: the sum of the elements' volumes. Cached like
+    /// <see cref="Regions"/>.</summary>
     public double Volume
     {
         get
         {
-            double sum = 0;
-            for (int e = 0; e < ElementCount; e++)
-                sum += ElementVolume(e);
-            return sum;
+            var boxed = Publish(ref _volume, static self =>
+            {
+                double sum = 0;
+                for (int e = 0; e < self.ElementCount; e++)
+                    sum += self.ElementVolume(e);
+                return (object)sum;
+            }, this);
+            return (double)boxed;
         }
+    }
+
+    /// <summary>
+    /// Refuses a mesh whose index arithmetic would overflow <see cref="int"/>, up front and
+    /// by name. Without it the failure is a bare <see cref="OverflowException"/> from a
+    /// negative array length deep inside the copy — loud, but naming nothing. The binding
+    /// limits are <c>elements·nodesPerElement</c> for the element table and <c>3·nodes</c>
+    /// for the degree-of-freedom numbering every solver builds on top.
+    /// <para>Internal rather than private so the tests can exercise the refusal with plain
+    /// counts — a 215-million-element mesh is not a fixture anyone can build.</para>
+    /// </summary>
+    internal static void RequireAddressable(
+        int elementCount, int facetCount, int nodeCount, ElementOrder order)
+    {
+        int perElement = order == ElementOrder.Linear ? 4 : 10;
+        int perFacet = order == ElementOrder.Linear ? 3 : 6;
+        if (elementCount > int.MaxValue / perElement)
+            throw new FeaException(
+                $"The mesh has {elementCount:N0} elements, past the "
+                + $"{int.MaxValue / perElement:N0} an AnalysisMesh of {order} order can index "
+                + $"(the element table holds {perElement} node indices per element in one "
+                + "int-addressed array).");
+        if (facetCount > int.MaxValue / perFacet)
+            throw new FeaException(
+                $"The mesh has {facetCount:N0} boundary facets, past the "
+                + $"{int.MaxValue / perFacet:N0} an AnalysisMesh of {order} order can index "
+                + $"(the facet table holds {perFacet} node indices per facet in one "
+                + "int-addressed array).");
+        if (nodeCount > int.MaxValue / 3)
+            throw new FeaException(
+                $"The mesh has {nodeCount:N0} nodes, past the {int.MaxValue / 3:N0} the "
+                + "solvers can address (three displacement degrees of freedom per node are "
+                + "numbered in one int-addressed array).");
     }
 
     /// <summary>Wraps a linear tet mesh (4-node elements).</summary>
     public static AnalysisMesh Of(TetMesh mesh)
     {
         ArgumentNullException.ThrowIfNull(mesh);
+        RequireAddressable(
+            mesh.TetCount, mesh.BoundaryFacetCount, mesh.VertexCount, ElementOrder.Linear);
 
         var nodes = new Vector3d[mesh.VertexCount];
         for (int v = 0; v < nodes.Length; v++)
@@ -200,6 +281,8 @@ public sealed class AnalysisMesh
     public static AnalysisMesh Of(QuadraticTetMesh mesh)
     {
         ArgumentNullException.ThrowIfNull(mesh);
+        RequireAddressable(
+            mesh.TetCount, mesh.BoundaryFacets.Count, mesh.NodeCount, ElementOrder.Quadratic);
 
         var nodes = new Vector3d[mesh.NodeCount];
         for (int v = 0; v < nodes.Length; v++)

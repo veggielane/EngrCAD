@@ -360,4 +360,91 @@ public class FeaBenchmark(ITestOutputHelper output)
                 + $"{solveMs + stressMs,9:F0}");
         }
     }
+
+    [Fact]
+    public void WhetherAKInverseNormResidualEscapesTheBucklingFloor()
+    {
+        if (!Enabled)
+            return;
+
+        // The open question filed against the buckling residual floor: the ACCEPTED measure
+        // |K phi - lambda Kg phi| / (|K phi| + |lambda||Kg phi|) is a total cancellation with
+        // an eps·kappa(K) floor, and the entry asks whether measuring in the K^-1 norm —
+        // |K^-1(K phi - lambda Kg phi)|, one extra back-substitution through the
+        // factorization that already exists — escapes it. Note what that quantity IS:
+        // K^-1·r = -lambda·(T phi - theta phi) for the shift-invert operator T = K^-1(-Kg),
+        // i.e. the OPERATOR residual, the very quantity the textbook beta·|y| bound
+        // describes and LanczosEigen deliberately declined to accept on.
+        //
+        // Method: the same pinned-pinned column as the floor test, three refinements. For
+        // each, assemble K and -Kg once, factor K once, and run the eigensolver at
+        // descending tolerances; each accepted pair's vector is measured BOTH ways, plus the
+        // eigenvalue drift against the tightest acceptance, which is what says whether a
+        // tighter default would buy accuracy or only a smaller number.
+        foreach (var (nx, across) in new[] { (24, 2), (36, 3), (48, 4) })
+        {
+            var (model, _) = BucklingFixtures.Column(
+                ColumnEnds.PinnedPinned, 120.0, 6.0, nx, across, ElementOrder.Quadratic);
+            var statics = StructuralSolver.Solve(model);
+
+            var stiffnessRule = TetQuadrature.For(ElementOrder.Quadratic);
+            var geometricRule = TetQuadrature.ForGeometric(ElementOrder.Quadratic);
+            var reduced = FeaAssembly.ReducedIndices(model, out int freeCount);
+            var k = FeaAssembly.Reduce(
+                FeaAssembly.Stiffness(model, stiffnessRule), reduced, freeCount);
+            var b = FeaAssembly.Reduce(
+                FeaAssembly.Geometric(statics, geometricRule, -1.0), reduced, freeCount);
+            var factor = SparseCholesky.Factorize(k, SparseOrdering.Amd);
+
+            output.WriteLine($"-- {nx}x{across}x{across} quadratic, {freeCount:N0} free DOF --");
+            output.WriteLine(
+                $"{"tolerance",10} {"steps",6} {"standard",12} {"K^-1 norm",12} "
+                + $"{"lambda",16} {"drift",10}");
+
+            // Tightest first, so the drift column is measured against the most converged
+            // acceptance the mesh allows rather than against the loosest.
+            double? reference = null;
+            foreach (double tolerance in new[] { 1e-10, 1e-9, 3e-9, 1e-7, 1e-5, 1e-3, 1e-2 })
+            {
+                var eigen = LanczosEigen.Solve(
+                    k, b, k, factor, 0.0, [], 1, tolerance, 60, maxRestarts: 1);
+                if (eigen.Pairs.Count == 0)
+                {
+                    output.WriteLine(
+                        $"{tolerance,10:E0} {eigen.Iterations,6} refused; candidate stalled at "
+                        + $"{eigen.Candidate?.Residual:E2} (lambda {eigen.Candidate?.Eigenvalue:G12})");
+                    continue;
+                }
+
+                var pair = eigen.Pairs[0];
+                var phi = pair.Vector;
+                double lambda = pair.Eigenvalue;
+
+                var kPhi = k.Multiply(phi);
+                var bPhi = b.Multiply(phi);
+                var r = new double[freeCount];
+                for (int i = 0; i < freeCount; i++)
+                    r[i] = kPhi[i] - lambda * bPhi[i];
+                double standard = Norm(r) / (Norm(kPhi) + Math.Abs(lambda) * Norm(bPhi));
+
+                // One extra back-substitution: s = K^-1 r, reported relative to |phi|.
+                var s = factor.Solve(r);
+                double kInverse = Norm(s) / Norm(phi);
+
+                reference ??= lambda;
+                double drift = Math.Abs(lambda - reference.Value) / Math.Abs(reference.Value);
+                output.WriteLine(
+                    $"{tolerance,10:E0} {eigen.Iterations,6} {standard,12:E2} {kInverse,12:E2} "
+                    + $"{lambda,16:G12} {drift,10:E2}");
+            }
+        }
+    }
+
+    private static double Norm(double[] v)
+    {
+        double sum = 0;
+        foreach (double x in v)
+            sum += x * x;
+        return Math.Sqrt(sum);
+    }
 }

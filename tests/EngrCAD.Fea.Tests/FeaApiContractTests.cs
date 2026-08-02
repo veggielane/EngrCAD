@@ -1,4 +1,5 @@
 using EngrCAD.Core;
+using EngrCAD.Mesh;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -385,5 +386,174 @@ public class FeaApiContractTests(ITestOutputHelper output)
             $"only {interpolated} of {display.VertexCount} vertices exercised the fallback");
         Assert.True(distance <= 1e-9 * Size.Length, $"sampling distance {distance:E3}");
         Assert.True(worst <= 1e-9 * scale, $"interpolated displacement error {worst:E3}");
+    }
+
+    // ---- API hygiene: cached derived properties, read-only views, index limits -------
+
+    [Fact]
+    public void DerivedMeshProperties_AreCached_NotRecomputedPerGet()
+    {
+        // Regions/FacetTags used to run Distinct().Order().ToArray() on EVERY get, which
+        // invites `for (…) if (mesh.Regions.Contains(x))` at O(n log n) per iteration.
+        // Reference equality across gets is the direct statement that the work happened
+        // once; the values are checked against a fresh computation so the cache cannot be
+        // "fast because it is wrong".
+        var mesh = Block();
+        Assert.Same(mesh.Regions, mesh.Regions);
+        Assert.Same(mesh.FacetTags, mesh.FacetTags);
+        Assert.Same(mesh.Nodes, mesh.Nodes);
+        Assert.Equal(mesh.Volume, mesh.Volume);
+        Assert.Equal(mesh.Bounds.Min, mesh.Bounds.Min);
+        Assert.Equal(mesh.Bounds.Max, mesh.Bounds.Max);
+
+        var expectedTags = Enumerable.Range(0, mesh.FacetCount)
+            .Select(mesh.FacetTag).Distinct().Order().ToArray();
+        Assert.Equal(expectedTags, mesh.FacetTags);
+        var expectedRegions = Enumerable.Range(0, mesh.ElementCount)
+            .Select(mesh.RegionOf).Distinct().Order().ToArray();
+        Assert.Equal(expectedRegions, mesh.Regions);
+        double expectedVolume = Enumerable.Range(0, mesh.ElementCount)
+            .Sum(mesh.ElementVolume);
+        Assert.Equal(expectedVolume, mesh.Volume);
+    }
+
+    [Fact]
+    public void ListProperties_AreReadOnlyViews_NotTheInternalArrays()
+    {
+        // An IReadOnlyList backed directly by the internal array is castable back to T[]
+        // and then mutable by any consumer — for AnalysisMesh.Nodes that is "any consumer
+        // can move the mesh under a solve", and for StructuralResults.Displacement it is
+        // "any consumer can change the answer". The views must not down-cast.
+        var mesh = Block();
+        Assert.Null(mesh.Nodes as Vector3d[]);
+        Assert.Null(mesh.Regions as int[]);
+        Assert.Null(mesh.FacetTags as int[]);
+
+        var model = new StructuralModel(mesh, Steel);
+        model.Fix(StructuredTetMesh.XMin);
+        model.Force(Facets.Tag(StructuredTetMesh.XMax), new Vector3d(0, 0, -100));
+        var results = StructuralSolver.Solve(model);
+        Assert.Null(results.Displacement as Vector3d[]);
+        Assert.Null(results.Reactions as Vector3d[]);
+        Assert.Null(results.NodalStress as SymmetricTensor3[]);
+        Assert.Null(results.NodalVonMises as double[]);
+    }
+
+    [Fact]
+    public async Task ConcurrentReadsOfLazyResults_AgreeWithASerialRead()
+    {
+        // The lazy caches publish by CompareExchange over deterministic computations, so
+        // racing first reads must all land on one bit-identical answer. A race test cannot
+        // prove absence of a race, but it pins the contract the caches now claim — and the
+        // serial twin is the oracle, computed on an identical model so nothing is shared.
+        var mesh = Block();
+        StructuralResults SolveOne()
+        {
+            var model = new StructuralModel(mesh, Steel);
+            model.Fix(StructuredTetMesh.XMin);
+            model.Force(Facets.Tag(StructuredTetMesh.XMax), new Vector3d(0, 0, -100));
+            return StructuralSolver.Solve(model);
+        }
+
+        var serial = SolveOne();
+        var expectedVonMises = serial.NodalVonMises.ToArray();
+        double expectedError = serial.ErrorEstimate.ErrorNorm;
+
+        var shared = SolveOne();
+        var readers = new Task<(double[] VonMises, double Error)>[8];
+        using var gate = new ManualResetEventSlim(false);
+        for (int i = 0; i < readers.Length; i++)
+        {
+            readers[i] = Task.Run(() =>
+            {
+                gate.Wait();
+                return (shared.NodalVonMises.ToArray(), shared.ErrorEstimate.ErrorNorm);
+            });
+        }
+        gate.Set();
+        foreach (var (vonMises, error) in await Task.WhenAll(readers))
+        {
+            Assert.Equal(expectedVonMises, vonMises);
+            Assert.Equal(expectedError, error);
+        }
+    }
+
+    [Fact]
+    public void ChangingAveraging_InvalidatesTheSuperconvergentRecoveryToo()
+    {
+        // The recovery consumes AveragedStress (a node no patch reaches falls back to it),
+        // so a changed averaging must clear it as well — the first version cleared only the
+        // averaged caches, and a later superconvergent read paired a fresh average with a
+        // recovery computed under the old one. The fixture has to CARRY the configuration
+        // twice over, and both halves are asserted: it needs fallback nodes (a mesh with
+        // interior corners recovers every node from patch fits, which never read the
+        // average), so it is a conforming-only mesh whose nodes are all on the surface; and
+        // it needs UNEQUAL element volumes (Kuhn subdivision makes every element the same
+        // volume, which makes VolumeWeighted and Unweighted identical), so it is a 5-gon
+        // prism whose cap fans give unequal tetrahedra rather than a box.
+        var tets = TetMesher.Mesh(MeshPrimitives.Cylinder(1.0, 2.0, 5));
+        var mesh = AnalysisMesh.Of(tets);
+
+        StructuralResults SolveOne()
+        {
+            var model = new StructuralModel(mesh, Steel);
+            model.Fix(Facets.OnPlane(Vector3d.Zero, new Vector3d(0, 0, 1)));
+            model.Force(
+                Facets.OnPlane(new Vector3d(0, 0, 2.0), new Vector3d(0, 0, 1)),
+                new Vector3d(30, 0, -50));
+            var results = StructuralSolver.Solve(model);
+            results.Recovery = StressRecovery.Superconvergent;
+            return results;
+        }
+
+        var stale = SolveOne();
+        _ = stale.NodalStress;                       // populate under VolumeWeighted
+        Assert.True(stale.ErrorEstimate.FallbackNodes > 0,
+            "every node was patch-recovered, so the recovery never reads the average here "
+            + "and the staleness this test exists to catch is invisible");
+        stale.Averaging = NodalAveraging.Unweighted; // must clear the recovery as well
+        var staleStress = stale.NodalStress;
+
+        var fresh = SolveOne();
+        fresh.Averaging = NodalAveraging.Unweighted; // set BEFORE anything is read
+        var freshStress = fresh.NodalStress;
+
+        // The fixture carries the configuration: the two averagings genuinely differ.
+        var weighted = SolveOne();
+        double spread = 0;
+        for (int v = 0; v < mesh.NodeCount; v++)
+            spread = Math.Max(
+                spread, Math.Abs(weighted.NodalStress[v].Xx - freshStress[v].Xx));
+        Assert.True(spread > 0, "volume-weighted and unweighted averaging coincide on this "
+            + "mesh, so the staleness this test exists to catch is invisible here");
+
+        for (int v = 0; v < mesh.NodeCount; v++)
+            Assert.Equal(freshStress[v], staleStress[v]);
+    }
+
+    [Fact]
+    public void OversizedMeshes_AreRefusedByName_NotByOverflowException()
+    {
+        // Nobody can build a 215-million-element fixture, so the guard is exercised with
+        // plain counts through the internal seam AnalysisMesh.Of asks. Without it the
+        // failure is a bare OverflowException from a negative array length — loud, but
+        // naming nothing.
+        var elements = Assert.Throws<FeaException>(() => AnalysisMesh.RequireAddressable(
+            int.MaxValue / 10 + 1, 0, 0, ElementOrder.Quadratic));
+        Assert.Contains("elements", elements.Message);
+        Assert.Contains($"{int.MaxValue / 10:N0}", elements.Message);
+
+        var facets = Assert.Throws<FeaException>(() => AnalysisMesh.RequireAddressable(
+            0, int.MaxValue / 6 + 1, 0, ElementOrder.Quadratic));
+        Assert.Contains("facets", facets.Message);
+
+        var nodes = Assert.Throws<FeaException>(() => AnalysisMesh.RequireAddressable(
+            0, 0, int.MaxValue / 3 + 1, ElementOrder.Linear));
+        Assert.Contains("nodes", nodes.Message);
+        Assert.Contains("degrees of freedom", nodes.Message);
+
+        // The linear limits are looser (4 and 3 indices per row) and legal counts pass.
+        AnalysisMesh.RequireAddressable(
+            int.MaxValue / 10 + 1, int.MaxValue / 6 + 1, int.MaxValue / 3, ElementOrder.Linear);
     }
 }
