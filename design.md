@@ -1273,6 +1273,102 @@ family as §3g's probe-point traps and §3d's graded-mesh one: **a manufactured 
 manufactured, including the load that makes it exact, and the case that needs no load is the
 one that hides the omission.**
 
+## 3j. Fatigue post-processing (`EngrCAD.Fea`)
+
+S-N life and Goodman/Gerber safety factors over two static load cases — filed as
+"arithmetic, not a solver", and built as exactly that: `FatigueAnalysis.Evaluate` consumes
+two `StructuralResults`, an `SnCurve` and an options record, and touches no matrix. The
+two cases are the extremes of one PROPORTIONAL load history, which is the pair
+`StructuralSolver.SolveAll` returns from one factorization — the consumer that entry
+point was built for, arriving.
+
+### The scalar is the signed von Mises, and its blind spot is structural
+
+A proportional history collapses to one scalar per node only if the scalar is SIGNED —
+a magnitude reads a fully reversed load as pulsating and halves its severity. The sign
+convention is the hydrostatic TRACE, chosen over the sign of the absolutely largest
+principal for two reasons recorded on the method: the principal convention needs an
+eigensolve and JUMPS when two nearly equal principals of opposite sign swap magnitude
+under a smoothly varying load, while the trace is linear in the stress components (its
+sign boundary is a fixed plane in stress space); and in the uniaxial state the S-N data
+was measured in, the two conventions agree exactly.
+
+The case no convention can serve is the finding worth keeping: **a reversed pure shear
+cycle is invisible to ANY scalar signed equivalent**, because negating a pure shear
+tensor is a rotation of it — s and −s have identical principal values, so no invariant
+can tell the two halves of the cycle apart and the decomposition reads zero amplitude.
+That is not a defect of the trace convention but the structural boundary of scalar
+equivalence, i.e. precisely where critical-plane methods (Findley, Fatemi–Socie) begin —
+so the multiaxial refusal is a named non-goal with a proof attached, not a caveat.
+
+### The catalogue derives its endurance limit from its own line
+
+`SnCurve` is Basquin (`sigma_a = sigma'_f·(2N)^b`) plus the ultimate strength the
+corrections anchor on. A steel's endurance limit is NOT stored beside the line — it is
+the line evaluated at its own 10⁶-cycle knee, and the curve is flat beyond it. Storing
+both would be the fine-pitch tap-drill mistake: a second column that can drift with
+nothing to catch it. The aluminium rows state no knee at all, because the material has
+no endurance limit — a metallurgical fact the API keeps rather than smoothing over, with
+a consequence downstream: a safety factor against infinite life does not exist for
+aluminium, so `FatigueOptions.DesignLife` is required there and refused by name without.
+
+The constants are stored in datasheet form (MPa — which is also the model unit, so
+unlike the density lesson there is no conversion for a transcription test to hide
+behind), flagged verify-against-datasheet like `StandardHoles`' Trisert rows. The
+transcription tests pin the line at its own anchors bit-exactly (`StressAt(0.5)` IS
+`sigma'_f`, since `Math.Pow(1, b)` is exactly 1; the knee is on the line), and the
+checks with independent teeth are physics-flavoured: the derived steel endurance/UTS
+ratios land in the classical band, which four independent transcriptions must conspire
+to hit.
+
+### The spellings are the design: NaN, a floor, and a log
+
+Three publishing decisions, each forced by a consumer's actual behaviour rather than
+taste. **Infinite life is NaN** — the VTU writer's established "no value" spelling,
+which `FieldRange.Of` already skips — so a part that mostly lives forever still ranges a
+usable legend over the nodes that do not. **A sub-cycle life floors at one cycle**
+(log10 = 0): the ranging machinery skips only NaN, so a −∞ from `log10(0)` would poison
+the legend's minimum, and anything below ~10³ cycles is outside Basquin's high-cycle
+validity anyway — the floor errs conservative and covers the static-failure branch
+(mean at or beyond S_ut, where the corrected amplitude is +infinity). **Life publishes
+as log10(cycles), stated in the units string**, because lives spread over decades and
+`FieldRange.Normalize` is linear — raw cycles would spend the whole legend on the
+longest-lived node. A native log-scale display mode is filed rather than half-built.
+
+The corrections carry their own exactness anchors: zero mean is the identity EXACTLY
+(the non-tensile branch returns the amplitude verbatim — no division that happens to be
+by one), the allowable amplitude at a mean of exactly S_ut is EXACTLY zero (S_ut/S_ut
+is 1.0), and a compressive mean takes no benefit by default — compression genuinely
+retards crack growth, but crediting it requires confidence the mean stays compressive at
+the crack-starting surface for the whole service life, which is why every standard tool
+defaults to none and the default is stated rather than silently safe.
+
+### The safety factor's definition is its own oracle
+
+The factor is the RADIAL (load-multiplier) form: under proportional loading, amplitude
+and mean scale together, so n solves `n·amp/strength + n·mean/S_ut = 1` (Goodman;
+Gerber's mean term is squared and solved as the quadratic's positive root). Because the
+definition is "the multiplier that reaches the line", the verification is to APPLY it:
+re-solve both cases with the loads scaled by the measured factor, and the critical node
+must land exactly ON the line — the minimum factor reads 1.0 to 1e-9, and the scaled
+amplitude equals the allowable at the scaled mean. An independently restated formula
+would agree with a broken implementation that made the same transcription mistake; the
+definition cannot. (The R = −1 test's mean measures exactly 0.0, and the reason is worth
+keeping: negating a load negates every solve and recovery output bit for bit — IEEE
+round-to-nearest commutes with negation — and the signed von Mises is odd in the stress,
+so the two halves cancel identically rather than to round-off.)
+
+### Refused by name
+
+Welds (hot-spot / nominal-stress category methods are their own discipline — a weld's
+life is governed by its detail class, not the parent metal's line), multiaxial criteria
+beyond von Mises equivalence (above), and variable amplitude (rainflow needs a time
+history two static cases cannot carry; `TransientResults`' stored states are the natural
+input, filed). Mixed inputs refuse loudly: results on different `AnalysisMesh` instances
+would pair unrelated nodes, and results answering with different `Recovery`/`Averaging`
+settings would book the recovery gap between two fields of different accuracy as
+alternating stress.
+
 ## 4. Implicit engine
 
 - A model is an **AST of `Sdf` nodes**; every node reports conservative `Bounds`

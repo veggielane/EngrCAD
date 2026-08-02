@@ -450,6 +450,10 @@ checked and refused by name. That matters more than it sounds: pushing one case'
 through another's factorization returns a displacement field that converges, passes its own
 residual check, and is the answer to a different model.
 
+A `SolveAll` pair is also exactly what [fatigue post-processing](fea-fatigue.md)
+consumes: the two extremes of a duty cycle, decomposed into per-node alternating and
+mean stress.
+
 ### Watching, and stopping
 
 That advisory helps the second run and not the first, so every solve entry point also takes

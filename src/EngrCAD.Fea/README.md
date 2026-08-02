@@ -4,8 +4,9 @@ Simulation: **tetrahedral meshing**, **linear-static structural analysis**, **he
 conduction** (steady and transient, with thermal-expansion coupling back into the structural
 solve), **modal analysis** (natural frequencies and mode shapes, with or without stress
 stiffening), **linear buckling** (critical load factors from a prior static solve's stress
-field) and **frequency response** (steady-state harmonic sweeps by modal superposition, with
-Rayleigh or per-mode damping). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
+field), **frequency response** (steady-state harmonic sweeps by modal superposition, with
+Rayleigh or per-mode damping) and **fatigue post-processing** (S-N life and Goodman/Gerber
+safety factors over two static load cases). Takes a closed manifold surface mesh (which every EngrCAD representation reaches —
 `Shape.ToMesh()`, `BRepTessellator`, Surface Nets, an imported STL), fills it with tetrahedra,
 and solves on them.
 
@@ -60,6 +61,9 @@ assembly, thermal, results fields), and this is where it grows. The rationale is
 | `TimeIntegration` | The Newmark / HHT scheme as ONE value — beta, gamma and alpha together, with both stability conditions enforced at construction |
 | `TransientSolver` / `TransientSolveOptions` / `TransientSolveReport` | Direct time integration of `M·a + C·v + K·u = f(t)` at a constant step, and the energy balance |
 | `TransientResults` / `TransientState` | Every stored instant: a full `StructuralResults` plus velocity, acceleration and energies |
+| `SnCurve` / `FatigueMaterials` | The Basquin S-N line (endurance limit DERIVED from its own knee) and a transcribed, verify-against-datasheet catalogue |
+| `FatigueAnalysis` / `FatigueOptions` / `MeanStressCorrection` | Two load cases → per-node alternating/mean via signed von Mises, Goodman/Gerber corrected |
+| `FatigueResults` | Per-node safety factor and log10 life, published and sampled like every other result |
 | `TetElement` / `TetQuadrature` | Internal: shape functions, element stiffness, consistent MASS, GEOMETRIC stiffness, consistent loads, quadrature |
 | `FeaAssembly` | Internal: the DOF index map, whole-model stiffness, MASS and geometric-stiffness assembly, reduction and weighted matrix sums — shared so the modal, buckling and transient solvers cannot build different `K` or `M` |
 | `ThermalElement` / `TriangleQuadrature` | Internal: conductivity, capacity, convection surface matrix, expansion load |
@@ -2213,3 +2217,106 @@ offset to six digits. The formula was right; the estimator was not.
 - **Consistent mass only.** `MassLumping` exists for the modal solver, where consistent and
   lumped bracket the truth; a diagonal M buys nothing on this path because the effective
   stiffness carries K and has to be factored whatever M looks like.
+
+# Fatigue (S-N life and safety factors)
+
+Stress-life post-processing over two static load cases — **arithmetic over results that
+already exist, not a solver**. Docs page: `docs/examples/fea-fatigue.md`.
+
+```csharp
+var cases = StructuralSolver.SolveAll([maxCase, minCase]);      // ONE factorization
+var fatigue = FatigueAnalysis.Evaluate(cases[0], cases[1], FatigueMaterials.Steel1045);
+Console.WriteLine(fatigue);          // min safety factor, where, how many finite lives
+foreach (var field in fatigue.SampleOnto(surface))
+    part.AddResult(field);           // safety factor + log10 life + the decomposition
+```
+
+## The loading model, and the scalar it stands on
+
+The two cases are the **extremes of one proportional load history**, which is what makes a
+scalar equivalent stress per node capture the cycle; `SolveAll` returns exactly such a pair
+from one assembly and one factorization. The scalar is the **signed von Mises** — the
+magnitude carrying the sign of the hydrostatic trace — so equal-and-opposite cases read
+R = −1 rather than a pulsating magnitude. The convention is a decision with its reasons
+recorded on `FatigueAnalysis.SignedVonMises`: the first-principal alternative needs an
+eigensolve and JUMPS when two nearly equal principals of opposite sign swap magnitude,
+the trace is linear in the stress so its sign boundary is a fixed plane, and in the
+uniaxial state the S-N data was measured in the two agree exactly. Its blind spot is
+structural rather than a defect: a reversed **pure shear** cycle is invisible to ANY
+scalar signed equivalent (negating a pure shear tensor is a rotation of it), which is
+precisely the case critical-plane methods exist for — see the refusals below.
+
+Results on different meshes, or answering with different `Recovery`/`Averaging`
+settings, are refused by name: differencing a `Direct` field against a `Superconvergent`
+one would book the recovery gap as alternating stress.
+
+## The catalogue: `SnCurve` / `FatigueMaterials`
+
+The Basquin line `sigma_a = sigma'_f·(2N)^b` plus the ultimate strength the mean-stress
+corrections anchor on. Six rows transcribed from the SAE J1099 / Dowling compilations,
+**flagged verify-against-datasheet** exactly as `StandardHoles`' Trisert table is —
+polished-specimen constants, no Marin surface/size/reliability factors, and the authority
+is the datasheet for your material condition. Two decisions:
+
+- **The endurance limit is DERIVED, never stored beside the line** — a steel's limit is
+  the line at its own 10⁶-cycle knee, so the two cannot drift (the fine-pitch tap-drill
+  rule), and beyond the knee the curve is flat at that value.
+- **The aluminium rows carry no endurance limit because the material has none** — a real
+  metallurgical distinction the API keeps: below its limit a steel node lives forever,
+  while a safety factor for aluminium needs a stated `FatigueOptions.DesignLife`,
+  refused by name without one.
+
+Constants are stored in the form a human can check — MPa, which is both the datasheet
+unit and the model unit, so unlike the density lesson there is no conversion for a
+transcription test to hide behind.
+
+## Mean-stress corrections, life, and the spellings
+
+`MeanStressCorrection.Goodman` (default, the conservative line), `Gerber` (the parabola),
+`None`. Three structural behaviours, pinned by test: at zero mean both are the identity
+EXACTLY; at a mean of exactly S_ut the allowable alternating stress is EXACTLY zero; a
+compressive mean takes **no benefit by default** (crediting compression requires
+confidence it survives at the crack-starting surface for the whole service life, so every
+standard tool defaults to none). A mean at or beyond S_ut is STATIC failure and lands on
+the life floor.
+
+The published fields each carry a deliberate spelling:
+
+- **Safety factor** — the radial (load-multiplier) factor: scale the whole history by it
+  and the node sits exactly ON the line, which is also how it is verified (re-solve with
+  the loads scaled by the measured factor; the minimum reads 1.0 to 1e-9). NaN where
+  there is no fatigue mechanism at all (zero amplitude, no tensile mean) — the no-value
+  spelling, never an infinity that would poison a legend's range.
+- **Life as log10(cycles)** — the log because lives spread over decades and the colour
+  pipeline's range mapping is linear (a native log display is filed in todo.md).
+  **Infinite life is NaN** (the VTU no-value convention `FieldRange.Of` already skips);
+  a sub-cycle life — including static failure — floors at one cycle (log10 = 0), since
+  ranging skips only NaN and a −∞ would poison the minimum.
+- **Alternating and mean stress** (MPa) — the decomposition itself, inspectable beside
+  its consumers.
+
+## Verification
+
+On the nu = 0 bar whose uniaxial state is exact in the element space (the
+`AnalysisBody` trick), oracles built independently of the path under test:
+
+| check | measured |
+| --- | --- |
+| sigma_a/sigma_m vs an oracle from the DISPLACEMENT solution | 40 / 60 MPa, ≤ 1e-10 relative at every node |
+| equal-and-opposite loads read R = −1 | mean ≤ 1e-13 of the amplitude (measures exactly 0 — negation commutes with IEEE rounding) |
+| the line at one reversal is sigma'_f; the knee is on the line; flat beyond it | **bit-exact** |
+| SAE 1045 endurance vs the hand-worked 948·(2·10⁶)^(−0.092) | 249.53 MPa; steel endurance/UTS ratios 0.40/0.40/0.34 inside the asserted 0.30–0.55 band |
+| life/stress inverse round-trip below the knee | ≤ 1e-12 relative |
+| zero-mean identity (both corrections); allowable at S_ut | bit-exact; exactly zero |
+| loads scaled by the measured safety factor | the critical node lands ON the line, min factor 1.0 to 1e-9 (Goodman AND Gerber) |
+| R = −1 at 400 MPa, full pipeline vs the hand-computed life | 5.92e3 cycles, log10 within 1e-6 of the Basquin inversion |
+
+## Refused by name, not approximated
+
+- **Welds** — hot-spot / nominal-stress category methods (IIW, Eurocode) are their own
+  discipline; a weld's life is governed by its detail class, not the parent metal's line.
+- **Multiaxial criteria beyond von Mises equivalence** — non-proportional paths need
+  critical-plane methods (Findley, Fatemi–Socie): a different computation over a
+  different input, with the reversed-pure-shear case above as the structural tell.
+- **Variable amplitude / rainflow** — needs a time history two static cases cannot
+  carry; `TransientResults`' stored states are the natural input, filed in todo.md.
