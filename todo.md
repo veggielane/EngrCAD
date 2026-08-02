@@ -381,7 +381,66 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
   open; both were stale.
 ## Core (EngrCAD.Core)
 
-- [ ] **A PIVOTED real sparse symmetric-indefinite factorization, if a consumer ever needs
+- [ ] **Space-filling curves, and a way to lay one over a model** (requested 2026-08-02).
+  A finite-order Hilbert / Moore / Peano / Gosper / Z-order generator over a
+  `Region2d`, plus the three consumers that make it worth having. The generator is
+  Core's (it is a curve family over a region, beside `Region2dOffset` and
+  `Arrangement2d`); the consumers are Modeling's.
+  - **Say what it is up front, because the name overpromises**: a true space-filling
+    curve is the LIMIT of a sequence and has infinite length, so what is built is a
+    finite-order approximation and the ORDER is the parameter. A caller asks for a
+    spacing and gets the order whose cell size is at or under it, with the achieved
+    spacing REPORTED (the `BiArcFit.MaxDeviation` convention) rather than the asked
+    one echoed back.
+  - **Choose the family by what the consumer needs, not by fame.** Hilbert has no
+    long straight runs (good for infill stiffness isotropy, bad for machining time);
+    Moore is Hilbert's CLOSED variant and is the one a toolpath wanting to return to
+    its start should use; Peano is the odd-radix member whose runs are longer; Gosper
+    tiles hexagonally, so it fills a hex lattice the square families cannot; and
+    **Z-order is already half-present** — `PlanarSection.SilhouetteGrid` Morton-sorts
+    faces, so that curve's index arithmetic exists and only its polyline does not.
+  - **Reuse story, which is why this is small**: the exact 2D signed distance
+    (`SketchRegion`) answers containment exactly, so clipping the curve to a region
+    needs no tolerance; `CurvedRegion2dOffset.Stroke` turns the clipped path into its
+    footprint (already documented as the toolpath-footprint operation) so an infill's
+    covered area is measurable rather than assumed; and a clipped curve breaks into
+    RUNS whose linking is the same problem the 2.5D CAM entry names, so the two
+    should share one linker rather than growing two.
+  - **The three consumers**, each with a different honest limit:
+    - **2D infill / toolpath** — the direct case. Verification below is exact.
+    - **Solid infill** — clip the 2D curve per layer against the solid's own field
+      (an `Sdf` is sign-exact, so a layer's inside/outside test costs nothing), or a
+      genuine 3D Hilbert curve through the volume. The 3D form is the interesting
+      one: it is a single connected path through the whole interior, which is what a
+      one-extrusion-path print or a single-channel cooling passage wants, and no
+      lattice in the implicit engine can express it (a gyroid is a SURFACE, not a
+      path).
+    - **Surface decoration** — a curve laid ON a doubly-curved surface, for
+      engraving or texture. This one has a real limit and it must be stated:
+      `MeshLocalParam`'s discrete exp map is exact on planes, ≤2% on a developable
+      tube and ≤5% radially on a 35° sphere cap, so a curve conforming to a
+      doubly-curved surface carries that distortion into its spacing. Report it;
+      do not average it away.
+  - **Verification bar — this is the entry's best feature, because almost everything
+    about these curves is EXACT and combinatorial rather than tolerance-bound:**
+    - **Adjacency**: consecutive points of an order-n curve differ by exactly one
+      grid step. An identity on integers, no epsilon anywhere.
+    - **Bijectivity**: the curve visits every one of its 4^n (or 9^n, 7^n) cells
+      exactly once — a counting identity, and the check that catches a wrong
+      recursion orientation, which is the classic way these are got wrong.
+    - **Length**: closed form per family and order (the order-n Hilbert curve on a
+      unit square has length (4^n − 1)/2^n), asserted exactly.
+    - **Closure**: a Moore curve's last point is adjacent to its first — the
+      property that distinguishes it from Hilbert, so assert it rather than
+      trusting the construction.
+    - **Coverage**: stroke the clipped curve at width = spacing and measure the
+      region's UNCOVERED area, which should fall to zero with order; and the total
+      clipped length against area/spacing, which is the classic infill identity and
+      converges rather than being exact (the boundary runs are the residual).
+  - **Refuse by name**: a region whose thinnest feature is under the achieved
+    spacing (the curve would miss it entirely, and silently — the one failure a
+    fill must not have), and a self-intersecting or open input chain, since
+    "inside" is what the clip is asking.
   one.** `SparseLdlt` ✅ landed the symmetric-indefinite family (real + complex symmetric
   L·D·Lᵀ over `SparseCholesky`'s shared symbolic pass — see design.md §2(d) for the
   three-way weighing), and its REAL path is deliberately unpivoted: it factors iff every
