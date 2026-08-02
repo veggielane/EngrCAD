@@ -2359,6 +2359,32 @@ On the nu = 0 bar whose uniaxial state is exact in the element space (the
 | loads scaled by the measured safety factor | the critical node lands ON the line, min factor 1.0 to 1e-9 (Goodman AND Gerber) |
 | R = −1 at 400 MPa, full pipeline vs the hand-computed life | 5.92e3 cycles, log10 within 1e-6 of the Basquin inversion |
 
+## Marin factors: `SnCurve.WithFactors`
+
+The catalogue rows are polished-specimen fits — upper bounds for a real part — and
+`WithFactors(surface, diameter, reliability)` derives the corrected curve without the
+transcribed row ever being edited (the derived-vs-stored rule the endurance limit itself
+follows). The classical correlations live in `MarinFactors`, transcribed
+verify-against-datasheet with the textbook worked values as the transcription tests
+(machined at 690 MPa → 0.798, 32 mm → 0.858, 99% reliability → 0.814): `Surface` is the
+`a·S_ut^b` finish rows clamped at 1 (the polished specimen IS the baseline, and the
+ground fit crosses 1 below ~215 MPa), `Size` the rotating-bending diameter effect (1
+below the 2.79 mm data, refused past the 254 mm data — the classical 0.6 floor is an
+assumption this library does not make silently; omit the diameter for axial loading),
+and `Reliability` the tabulated 8%-scatter shifts, standard levels only (interpolating a
+quantile through the table would invent precision the scatter assumption does not have).
+
+**The factors multiply the ENDURANCE LIMIT, not sigma'_f** — finish, size and scatter
+govern crack initiation, which dominates at long life — so the derived curve is the
+two-anchor re-fit through the pristine line's own 10³-cycle point (Basquin's validity
+floor, where the factors classically do not apply) and `k·S_e` at the unchanged knee:
+Shigley's construction with the curve's own low-cycle value as the anchor rather than a
+second transcribed constant. S_ut and the knee are untouched, exactly-1 returns the
+pristine curve verbatim, and the refusals are named: aluminium (no limit to anchor on),
+a knee at or below the pivot, out-of-data diameters, off-table reliabilities. The
+derived curve is an ordinary `SnCurve`, so the safety-factor and life machinery — and
+the rainflow path below — consume it with nothing special-cased.
+
 ## Variable amplitude: rainflow over `TransientResults`
 
 `Rainflow.Count` is ASTM E1049's three-point algorithm verbatim (X/Y/S rules; the

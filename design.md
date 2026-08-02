@@ -1439,6 +1439,35 @@ keeping: negating a load negates every solve and recovery output bit for bit —
 round-to-nearest commutes with negation — and the signed von Mises is odd in the stress,
 so the two halves cancel identically rather than to round-off.)
 
+### Marin factors: a derivation with a pivot, not an edit and not a scale
+
+`SnCurve.WithFactors` makes the polished-specimen rows honest for a real part, and two
+shapes of the feature were rejected before the one that landed. Editing the catalogue
+(a "machined 1045" row) is the fine-pitch tap-drill mistake — a second stored column
+that drifts with nothing to catch it — so the transcription stays pristine and the
+corrected curve is DERIVED. And scaling the whole line (multiplying sigma'_f) is wrong
+physics wearing simpler arithmetic: surface finish, size and scatter govern crack
+INITIATION, which dominates at long life, while at 10³ cycles plastic strain dominates
+and the factors classically do not apply. So the construction is the classical
+two-anchor re-fit — through the pristine line's own 10³-cycle value (Basquin's own
+validity floor, already stated in the class remarks, now load-bearing as the pivot) and
+through `k·S_e` at the unchanged knee — which is Shigley's construction with the
+curve's own low-cycle point as the anchor rather than a second transcribed constant
+(`f·S_ut` would be one more datasheet number to verify). S_ut is untouched because a
+finish does not change a static failure; a factor of exactly 1 returns the pristine
+object verbatim (re-deriving would move the coefficients by ulps for nothing — the
+exact-zero-semantic-test tier); and the refusals are named: aluminium (no limit to
+anchor on — a knee-less material needs a stated reference life, a different
+construction), a knee at or below the pivot, diameters past the correlation's 254 mm
+data (the classical 0.6 floor is an assumption, not a fit, and this library does not
+assume it silently), and reliabilities off the standard table, since interpolating a
+normal quantile through it would invent precision the underlying 8%-scatter assumption
+does not have. The transcription tests are the textbook's own worked values (0.798 /
+0.858 / 0.814), not the formulas re-typed — a re-typed formula agrees with its own
+transcription mistake — and the first run caught exactly that: three hand-approximated
+expected values were off in the third decimal and the worked-value anchors (690 MPa
+machined, 32 mm) were not.
+
 ### Rainflow over a transient run, and the two design questions it answered in code
 
 Variable amplitude landed as `Rainflow.Count` — ASTM E1049's three-point algorithm

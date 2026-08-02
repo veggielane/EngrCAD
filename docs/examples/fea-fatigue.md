@@ -219,9 +219,51 @@ Named rather than approximated, the discipline's own boundaries:
   signed equivalent, because negating a pure shear tensor is a rotation of it — no
   invariant can tell the two halves apart. That is precisely the case critical-plane
   methods exist for.
-- **Surface and size effects.** The catalogue's constants are polished-specimen
-  values; Marin-style surface-finish, size and reliability factors are not applied,
-  so these are upper bounds for a machined part.
+- **Surface and size effects applied silently.** The catalogue's constants are
+  polished-specimen values and stay that way; `WithFactors` (below) is how a real
+  part's surface, size and reliability knock the endurance end down — a derivation
+  the caller asks for, never a default.
+
+## Marin factors: the corrected curve is derived, the row stays pristine
+
+The catalogue rows are polished-specimen fits, which makes them upper bounds for any
+real part. `SnCurve.WithFactors(surface, diameter, reliability)` derives a corrected
+curve from the classical Marin correlations — `MarinFactors.Surface` (the
+`a·S_ut^b` finish rows), `MarinFactors.Size` (the rotating-bending diameter effect;
+omit the diameter for axial loading, which has none) and `MarinFactors.Reliability`
+(the tabulated 8%-scatter shifts) — **without the transcribed row ever being edited**,
+the same derived-vs-stored rule the endurance limit itself follows.
+
+```csharp run:fea-fatigue-marin
+var pristine = FatigueMaterials.Steel1045;
+var machined = pristine.WithFactors(
+    SurfaceFinish.Machined, diameterMm: 25, reliability: 0.99);
+
+Console.WriteLine(pristine);
+Console.WriteLine(machined);
+
+// The construction pivots at 10^3 cycles (where plastic strain dominates and the
+// factors classically do not apply) and scales the endurance end exactly.
+if (Math.Abs(machined.StressAt(1e3) - pristine.StressAt(1e3)) > 1e-9 * pristine.StressAt(1e3))
+    throw new Exception("the 10^3-cycle pivot must be unchanged");
+if (machined.EnduranceLimit! >= pristine.EnduranceLimit!)
+    throw new Exception("the corrected endurance must fall");
+```
+
+The **factors multiply the endurance limit, not σ'_f**: surface finish, size and
+scatter govern crack *initiation*, which dominates at long life, so the corrected line
+passes through the pristine line's own 10³-cycle point (Basquin's validity floor) and
+through `k·S_e` at the unchanged knee — Shigley's two-anchor construction with the
+curve's own low-cycle value as the anchor rather than a second transcribed constant.
+The ultimate strength is untouched (a finish does not change a static failure), a
+factor of exactly 1 returns the pristine curve verbatim, and the correlations refuse
+what they cannot answer by name: aluminium (no endurance limit to anchor on — a
+knee-less material needs a stated reference life, a different construction), diameters
+past the 254 mm data, and reliabilities off the standard table (interpolating a
+quantile through it would invent precision the 8%-scatter assumption does not have).
+The correlations themselves are transcribed **verify-against-datasheet** like every
+constant table here — the classic worked values (machined at 690 MPa → 0.798, 32 mm →
+0.858, 99% → 0.814) are the transcription tests.
 
 ## Variable amplitude: rainflow over a transient run
 

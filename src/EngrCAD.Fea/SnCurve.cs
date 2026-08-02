@@ -143,11 +143,212 @@ public sealed class SnCurve
         return 0.5 * Math.Pow(amplitude / FatigueStrengthCoefficient, 1.0 / FatigueStrengthExponent);
     }
 
+    /// <summary>
+    /// A DERIVED curve for a real part: the endurance limit knocked down by the combined
+    /// Marin factor while the transcribed row stays pristine — the derived-vs-stored rule
+    /// the endurance limit itself already follows.
+    ///
+    /// <para><b>The construction is the classical two-anchor re-fit, and the pivot has a
+    /// physical reason.</b> The factors multiply the ENDURANCE LIMIT, not sigma'_f
+    /// (surface finish, size and scatter govern crack INITIATION, which dominates at long
+    /// life; at 10³ cycles plastic strain dominates and the factors classically do not
+    /// apply), so the corrected line passes through the pristine line's own 10³-cycle
+    /// point and through <c>factor·(endurance limit)</c> at the unchanged knee — exactly
+    /// Shigley's construction with the curve's own 10³ value as the low-cycle anchor
+    /// rather than a second transcribed constant. The ultimate strength is untouched: a
+    /// surface finish does not change a static failure.</para>
+    ///
+    /// <para>A factor of exactly 1 returns THIS curve verbatim (re-deriving would move
+    /// the coefficients by ulps for nothing). A material with no endurance limit is
+    /// refused by name — the factors anchor on the limit, and a knee-less material needs
+    /// a stated reference life, which is a different construction.</para>
+    /// </summary>
+    /// <param name="enduranceFactor">The combined Marin factor in (0, 1] — typically
+    /// <c>MarinFactors.Surface(...) · MarinFactors.Size(...) ·
+    /// MarinFactors.Reliability(...)</c>, or use
+    /// <see cref="WithFactors(SurfaceFinish, double?, double)"/>.</param>
+    /// <param name="note">What the factor accounts for, appended to the name (e.g.
+    /// "machined, d 25, R99"). Null keeps a generated "xK" suffix.</param>
+    public SnCurve WithEnduranceFactor(double enduranceFactor, string? note = null)
+    {
+        if (!(enduranceFactor > 0) || enduranceFactor > 1)
+            throw new FeaException(
+                $"'{Name}': the combined Marin factor must be in (0, 1]; {enduranceFactor} was "
+                + "given. A factor above one would claim the part outlasts the polished "
+                + "laboratory specimen its own data came from.");
+        if (EnduranceLife is not { } knee)
+            throw new FeaException(
+                $"'{Name}' has no endurance limit for a Marin factor to knock down. The "
+                + "classical correction anchors on the limit; a material without one "
+                + "(aluminium) needs the factor applied at a stated reference life, which is "
+                + "a different construction and is not offered as a silent default.");
+        if (knee <= MarinPivotLife)
+            throw new FeaException(
+                $"'{Name}': the endurance knee ({knee:G3} cycles) is at or below the 10³-cycle "
+                + "pivot the correction turns about, so the corrected line would tilt inside "
+                + "the low-cycle regime Basquin does not describe. Marin factors assume a "
+                + "high-cycle knee (the catalogue's steels put it at 10⁶).");
+        // Exact-1 identity: no arithmetic, so the pristine curve comes back verbatim.
+        if (enduranceFactor == 1.0)
+            return this;
+
+        // The corrected line through (1e3, this line's own value) and
+        // (knee, factor·limit): b' from the two anchors, sigma'_f' from the pivot.
+        double pivotStress = BasquinStress(MarinPivotLife);
+        double correctedLimit = enduranceFactor * BasquinStress(knee);
+        double b = Math.Log(correctedLimit / pivotStress) / Math.Log(knee / MarinPivotLife);
+        double coefficient = pivotStress / Math.Pow(2 * MarinPivotLife, b);
+        string name = note is null
+            ? $"{Name} (x{enduranceFactor:G4} endurance)"
+            : $"{Name} ({note})";
+        return new SnCurve(name, coefficient, b, UltimateStrength, knee);
+    }
+
+    /// <summary>
+    /// <see cref="WithEnduranceFactor"/> with the factor built from the standard Marin
+    /// correlations: <c>Surface(finish, S_ut) · Size(diameter) ·
+    /// Reliability(reliability)</c>. See <see cref="MarinFactors"/> for what each
+    /// correlation is and its validity limits.
+    /// </summary>
+    /// <param name="finish">The part's surface condition at the crack-starting surface.</param>
+    /// <param name="diameterMm">Section diameter in mm for the size effect (rotating
+    /// bending/torsion), or null for no size effect (axial loading, or the test-specimen
+    /// scale).</param>
+    /// <param name="reliability">The survival probability the numbers should hold at
+    /// (default 0.5 — the median, which is what the raw data is). Must be one of the
+    /// standard tabulated levels; see <see cref="MarinFactors.Reliability"/>.</param>
+    public SnCurve WithFactors(
+        SurfaceFinish finish, double? diameterMm = null, double reliability = 0.5)
+    {
+        double ka = MarinFactors.Surface(finish, UltimateStrength);
+        double kb = diameterMm is { } d ? MarinFactors.Size(d) : 1.0;
+        double ke = MarinFactors.Reliability(reliability);
+        string note = $"{finish}"
+            + (diameterMm is { } dd ? $", d {dd:G3}" : "")
+            + (reliability != 0.5 ? $", R {reliability:G6}" : "");
+        return WithEnduranceFactor(ka * kb * ke, note);
+    }
+
+    /// <summary>The pivot the Marin correction turns about: 10³ cycles, Basquin's own
+    /// high-cycle validity floor (below it plastic strain dominates and the surface/size
+    /// factors classically do not apply).</summary>
+    internal const double MarinPivotLife = 1e3;
+
     /// <inheritdoc/>
     public override string ToString() =>
         $"{Name}: sigma'_f {FatigueStrengthCoefficient:G6} MPa, b {FatigueStrengthExponent:G4}, "
         + $"S_ut {UltimateStrength:G6} MPa"
         + (EnduranceLimit is { } e ? $", endurance {e:G4} MPa at {EnduranceLife:G2} cycles" : ", no endurance limit");
+}
+
+/// <summary>The surface condition at the crack-starting surface — the rows of the
+/// Marin surface-factor correlation.</summary>
+public enum SurfaceFinish
+{
+    /// <summary>Ground. The gentlest penalty; at low ultimate strengths the correlation
+    /// crosses 1 and is clamped there (the polished specimen IS the baseline).</summary>
+    Ground,
+
+    /// <summary>Machined or cold-drawn — one row in the classical table.</summary>
+    Machined,
+
+    /// <summary>Cold-drawn: the same correlation row as <see cref="Machined"/>.</summary>
+    ColdDrawn,
+
+    /// <summary>Hot-rolled, scale and decarburization included.</summary>
+    HotRolled,
+
+    /// <summary>As-forged — the heaviest penalty.</summary>
+    AsForged,
+}
+
+/// <summary>
+/// The classical Marin endurance-limit modification factors. <b>Transcribed from the
+/// standard machine-design correlations (Shigley/Mischke's fits to Lipson–Noll and the
+/// 8%-standard-deviation reliability transform) and flagged verify-against-datasheet</b>,
+/// exactly as <c>FatigueMaterials</c>' rows are: the correlations are fits to scattered
+/// mid-century data, published sources disagree in the last digits, and the authority for
+/// a real part is its own test programme. Each factor multiplies the ENDURANCE LIMIT —
+/// see <see cref="SnCurve.WithEnduranceFactor"/> for how a corrected curve is derived
+/// without touching the transcribed row.
+/// </summary>
+public static class MarinFactors
+{
+    /// <summary>
+    /// The surface factor <c>k_a = a·S_ut^b</c> (Shigley table 6-2 constants, S_ut in
+    /// MPa), clamped at 1: the polished specimen is the baseline, and the ground
+    /// correlation crosses 1 below about 215 MPa — extrapolation noise, not a real
+    /// strengthening.
+    /// </summary>
+    public static double Surface(SurfaceFinish finish, double ultimateStrengthMpa)
+    {
+        if (!(ultimateStrengthMpa > 0))
+            throw new FeaException(
+                $"The surface factor needs a positive ultimate strength; {ultimateStrengthMpa} "
+                + "MPa was given.");
+        var (a, b) = finish switch
+        {
+            SurfaceFinish.Ground => (1.58, -0.085),
+            SurfaceFinish.Machined or SurfaceFinish.ColdDrawn => (4.51, -0.265),
+            SurfaceFinish.HotRolled => (57.7, -0.718),
+            SurfaceFinish.AsForged => (272.0, -0.995),
+            _ => throw new ArgumentOutOfRangeException(nameof(finish), finish, null),
+        };
+        return Math.Min(1.0, a * Math.Pow(ultimateStrengthMpa, b));
+    }
+
+    /// <summary>
+    /// The size factor for a round section in rotating bending or torsion:
+    /// <c>(d/7.62)^-0.107</c> for 2.79–51 mm, <c>1.51·d^-0.157</c> for 51–254 mm
+    /// (the two branches agree at the 51 mm seam to the correlations' own fit accuracy).
+    /// Below 2.79 mm the part IS the specimen scale and the factor is 1; above 254 mm
+    /// the correlation has no data and is refused rather than extrapolated. Axial
+    /// loading has no size effect — pass no diameter at all
+    /// (<see cref="SnCurve.WithFactors"/>'s null).
+    /// </summary>
+    public static double Size(double diameterMm)
+    {
+        if (!(diameterMm > 0))
+            throw new FeaException(
+                $"The size factor needs a positive diameter; {diameterMm} mm was given.");
+        if (diameterMm > 254)
+            throw new FeaException(
+                $"The size correlation stops at 254 mm and {diameterMm} mm was asked for; "
+                + "beyond it there is no data to extrapolate, and a large shaft's endurance "
+                + "wants its own test programme (0.6 is the classical floor engineers assume, "
+                + "and assuming it silently is not this library's call).");
+        if (diameterMm < 2.79)
+            return 1.0;
+        return diameterMm <= 51
+            ? Math.Pow(diameterMm / 7.62, -0.107)
+            : 1.51 * Math.Pow(diameterMm, -0.157);
+    }
+
+    /// <summary>
+    /// The reliability factor <c>k_e = 1 - 0.08·z_R</c> — the endurance limit shifted
+    /// down its own assumed 8%-of-mean scatter to the stated survival probability. The
+    /// standard tabulated levels only; anything else is refused naming them, because
+    /// interpolating a normal quantile through a table would invent precision the
+    /// 8%-scatter assumption does not have.
+    /// </summary>
+    /// <param name="reliability">0.5, 0.9, 0.95, 0.99, 0.999, 0.9999, 0.99999 or
+    /// 0.999999.</param>
+    public static double Reliability(double reliability) => reliability switch
+    {
+        0.5 => 1.000,
+        0.9 => 0.897,
+        0.95 => 0.868,
+        0.99 => 0.814,
+        0.999 => 0.753,
+        0.9999 => 0.702,
+        0.99999 => 0.659,
+        0.999999 => 0.620,
+        _ => throw new FeaException(
+            $"No reliability factor is tabulated for {reliability}. The standard levels are "
+            + "0.5, 0.9, 0.95, 0.99, 0.999, 0.9999, 0.99999 and 0.999999 — interpolating "
+            + "between them would invent precision the underlying 8%-scatter assumption "
+            + "does not have."),
+    };
 }
 
 /// <summary>
@@ -158,8 +359,10 @@ public sealed class SnCurve
 /// finishes and specimen geometries, published sources genuinely disagree (a 6061-T6
 /// rotating-beam figure and its strain-life fit differ by tens of percent), and the
 /// authority is the datasheet for your material condition, not this file. Polished
-/// laboratory specimens throughout — no surface-finish, size or reliability (Marin)
-/// factors are applied, so these are upper bounds for a machined part.
+/// laboratory specimens throughout — the rows are upper bounds for a machined part, and
+/// <see cref="SnCurve.WithFactors(SurfaceFinish, double?, double)"/> is how a real part's
+/// surface, size and reliability knock the endurance end down without the transcription
+/// ever being edited.
 ///
 /// <para>The steel rows carry the conventional 10⁶-cycle endurance knee; the aluminium
 /// rows carry none, because the material has none.</para>

@@ -922,13 +922,12 @@ attribute and the whole clip is one uniform per frame (design.md §6b). What rem
   since a linear legend over log10 values prints "5.1" where a user wants "1.3e5".
   Touches Viewer.Core's `FieldLegend`/colour path and the web frame build; the document
   format needs the flag to round-trip (write-only-when-set, the persistence rule).
-- [ ] **Marin modification factors on `SnCurve`.** The catalogue's constants are
-  polished-specimen values, stated as such; a machined/as-forged surface, a size effect
-  and a reliability level each knock the ENDURANCE end down (classically multiplying
-  the limit, not sigma'_f). A `WithFactors(surface, size, reliability)` derivation
-  would keep the transcribed row pristine (the derived-vs-stored rule the endurance
-  limit already follows) while making the numbers honest for real parts. Needs the
-  standard Marin correlations transcribed with the same verify-against-datasheet flag.
+- [ ] **Marin-style correction for knee-less (aluminium) curves.** `WithEnduranceFactor`
+  (landed) refuses a curve with no endurance limit by name, because the classical
+  construction anchors on the limit; the honest version for aluminium applies the
+  factor at a STATED reference life (5e8 is the rotating-beam convention) and re-fits
+  through the same 10³ pivot — one more parameter, but it must be required rather than
+  defaulted, since the reference life IS the claim being made.
 
 FEA as a first-class citizen of the hybrid kernel: the CAD model (any representation)
 feeds the mesher, results feed back into the viewer as fields on the mesh. The mesh
