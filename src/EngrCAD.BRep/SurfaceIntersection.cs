@@ -1312,7 +1312,11 @@ public static class SurfaceIntersection
             if (points.Count < 3)
                 continue;
 
-            curves.Add(new PolylineCurve3d(points, closed));
+            // The pair actually traced on (post-promotion) rides on the curve, so the
+            // tessellator can later refine chords back onto the exact intersection —
+            // consistent by construction, since these are the surfaces the baked
+            // vertices themselves were corrected against.
+            curves.Add(new PolylineCurve3d(points, closed, (a, b)));
             traced.AddRange(points);
         }
         return curves;

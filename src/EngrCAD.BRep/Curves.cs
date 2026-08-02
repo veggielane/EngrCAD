@@ -721,7 +721,23 @@ public sealed class PolylineCurve3d : Curve3d
     /// </summary>
     public IReadOnlyList<double> VertexParameters => _cumulative;
 
-    public PolylineCurve3d(IReadOnlyList<Vector3d> points, bool isClosed = false)
+    /// <summary>
+    /// The two exact surfaces this polyline was traced on, when it is a marching-tracer
+    /// surface–surface intersection curve (null otherwise). A traced polyline's sample
+    /// count is fixed at boolean time, so without the carriers the facets beside it
+    /// disagree MORE with the exact surface as the tessellation density rises (measured
+    /// 0.9988 → 0.3229 worst normal agreement at 32 → 192 segments per circle on a
+    /// band-crossing bore); carrying the pair lets the tessellator refine chords back
+    /// onto the exact intersection (<c>BRepTessellator.SampleEdge</c> via
+    /// <c>SurfaceCorner.TrySolvePoint</c>).
+    /// <para>The failure direction is safe by construction: a derivation that cannot
+    /// carry the pair simply drops it, and the polyline samples at its baked vertices
+    /// exactly as before.</para>
+    /// </summary>
+    public (Surface A, Surface B)? Carriers { get; }
+
+    public PolylineCurve3d(
+        IReadOnlyList<Vector3d> points, bool isClosed = false, (Surface A, Surface B)? carriers = null)
     {
         if (points.Count < 2)
             throw new ArgumentException("A polyline needs at least 2 points.");
@@ -730,6 +746,7 @@ public sealed class PolylineCurve3d : Curve3d
             ? [.. points, points[0]]
             : [.. points];
         _isClosed = isClosed;
+        Carriers = carriers;
         _cumulative = new double[_points.Length];
         for (int i = 1; i < _points.Length; i++)
             _cumulative[i] = _cumulative[i - 1] + _points[i].DistanceTo(_points[i - 1]);
@@ -767,7 +784,7 @@ public sealed class PolylineCurve3d : Curve3d
         var points = _isClosed
             ? PolylineSimplify.SimplifyLoop(input, tolerance)
             : PolylineSimplify.Simplify(input, tolerance);
-        return points.Count == input.Length ? this : new PolylineCurve3d(points, _isClosed);
+        return points.Count == input.Length ? this : new PolylineCurve3d(points, _isClosed, Carriers);
     }
 
     public override Vector3d PointAt(double t)

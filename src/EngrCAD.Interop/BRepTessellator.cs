@@ -262,6 +262,31 @@ public static class BRepTessellator
             var points = new List<Vector3d>(parameters.Count);
             foreach (double t in parameters)
                 points.Add(edge.Curve.PointAt(t));
+            // A tracer polyline's sample count was fixed at boolean time, so at high
+            // densities the grid outpaces it and the facets straddling it degrade
+            // (measured 0.9988 → 0.3229 worst normal agreement at 32 → 192 on a
+            // band-crossing bore). When the curve carries its two exact carriers,
+            // refine each chord back onto the exact intersection at this density.
+            // `Underlying` is used as the TYPE hint it is — every refined POINT is
+            // solved on the exact surfaces, and the baked vertices pass through
+            // verbatim, so a coarse density (or a carrier with no implicit form)
+            // reproduces today's polyline bit for bit.
+            // <para>Scoped to the consumers measured able to absorb a denser boundary:
+            // refinement engages only for an OPEN traced branch whose every use sits in
+            // its face's OUTER loop — a crossing curve, consumed by the paired
+            // strip/slab tiers (measured clean at 32/96/192, worst agreement 1.0000 at
+            // 192 on a band-crossing bore, against 0.3229 unrefined). A branch bounding
+            // a HOLE loop (or a closed branch — a winding-band boundary) feeds
+            // TriangulateBandWithHoles, whose chain handling measurably cannot take the
+            // density: a plane-cut torus with a bore went 0 → 3 base folds at 48/24 and
+            // refused outright at 192/96 the moment its bore rim refined — the recorded
+            // narrow-column-at-the-rim residual surfacing as inversions. Until the row
+            // path that tier needs lands (filed in todo.md), those rims keep their baked
+            // density, which is exactly today's behaviour. Both faces sharing the edge
+            // must agree, which is why the gate quantifies over EVERY use.</para>
+            if (edge.Curve.Underlying is PolylineCurve3d { IsClosed: false, Carriers: { } carriers }
+                && edge.Uses.All(use => ReferenceEquals(use.Loop, use.Loop.Face.OuterLoop)))
+                return RefineTracerChords(points, carriers, segmentsPerCircle);
             return points;
         }
 
@@ -291,10 +316,77 @@ public static class BRepTessellator
         if (edge.Curve.Underlying is Line3d)
             return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
 
+        // A rail of a loft that is AFFINE in v is an exact straight segment (the lerp of
+        // its two sections' endpoints), and the band's own grid collapses its v columns to
+        // the two section rows (GridParams asks the same IsAffineInV) — so the pair agrees
+        // by one rule. Sampling it densely instead hands every planar neighbour a
+        // near-collinear run its ear clipping degenerates on (measured: 18 of 23 facets
+        // on a variable run's front face were forced sliver ears).
+        if (edge.Curve.Underlying is LoftRailCurve rail && rail.Surface.IsAffineInV)
+            return [edge.Curve.PointAt(domain.Start), edge.Curve.PointAt(domain.End)];
+
         var samples = new List<Vector3d>(curveSamples + 1);
         for (int i = 0; i <= curveSamples; i++)
             samples.Add(edge.Curve.PointAt(domain.ParameterAt((double)i / curveSamples)));
         return samples;
+    }
+
+    /// <summary>
+    /// Inserts refined samples between a traced polyline's baked vertices wherever a
+    /// chord subtends more than one natural angular step (<c>2π/segmentsPerCircle</c>) of
+    /// the exact intersection of the two carriers. Every inserted point is solved onto
+    /// BOTH exact surfaces by <see cref="SurfaceCorner.TrySolvePoint"/>'s minimum-norm
+    /// Newton and accepted only at the weld tier, so refined rims weld exactly like baked
+    /// vertices do; both adjacent faces share the one refined list because
+    /// <see cref="SampleEdge"/> fills the edge-polyline table once per tessellation.
+    /// <para>Every guard errs toward KEEPING the chord — a chord kept reproduces the
+    /// pre-refinement tessellation, while a bad midpoint accepted would be invented
+    /// geometry: the solve must converge to 1e-9 (weld tier), the midpoint must project
+    /// strictly between the chord's ends, and its sagitta may not exceed the chord (a
+    /// solve that jumped to another intersection branch). The split criterion is the
+    /// osculating-circle identity θ ≈ 8·sagitta/length, so "sagitta above
+    /// length·π/(4n)" IS "the chord subtends more than 2π/n"; a straight stretch
+    /// measures a weld-tier sagitta and never splits.</para>
+    /// </summary>
+    private static List<Vector3d> RefineTracerChords(
+        List<Vector3d> points, (Surface A, Surface B) carriers, int segmentsPerCircle)
+    {
+        Surface[] pair = [carriers.A, carriers.B];
+        var refined = new List<Vector3d>(points.Count);
+        for (int i = 0; i + 1 < points.Count; i++)
+        {
+            refined.Add(points[i]);
+            AppendRefined(points[i], points[i + 1], pair, segmentsPerCircle, 6, refined);
+        }
+        refined.Add(points[^1]);
+        return refined;
+    }
+
+    private static void AppendRefined(
+        in Vector3d from, in Vector3d to, Surface[] carriers,
+        int segmentsPerCircle, int depth, List<Vector3d> refined)
+    {
+        if (depth == 0)
+            return;
+        var chord = to - from;
+        double length = chord.Length;
+        // Weld tier: below it there is nothing a finer sample could express.
+        if (length <= Tolerance.Default.Linear)
+            return;
+        if (!SurfaceCorner.TrySolvePoint(carriers, (from + to) * 0.5, out var corner, out _)
+            || corner.Residual > Tolerance.Default.Linear)
+            return; // no implicit form, or not a weld-grade point: keep the chord
+        var offset = corner.Point - from;
+        double along = offset.Dot(chord) / chord.LengthSquared;
+        var deviation = offset - chord * along;
+        double sagitta = deviation.Length;
+        if (sagitta <= Math.Max(Tolerance.Default.Linear, length * (Math.PI / (4 * segmentsPerCircle))))
+            return; // flat enough for this density
+        if (along <= 0 || along >= 1 || sagitta > length)
+            return; // the solve left the chord's own span: another branch, keep the chord
+        AppendRefined(from, corner.Point, carriers, segmentsPerCircle, depth - 1, refined);
+        refined.Add(corner.Point);
+        AppendRefined(corner.Point, to, carriers, segmentsPerCircle, depth - 1, refined);
     }
 
     /// <summary>
@@ -361,11 +453,17 @@ public static class BRepTessellator
             swept.Generator.IsClosed, false),
         // A loft's u boundaries ARE its section curves and its v boundaries its rails, so
         // the surface owns the u rule (see LoftedSurface.NaturalUSegments, which mirrors
-        // SampleEdge) and v takes the generic curve density the rails are sampled at.
+        // SampleEdge) and v takes the generic curve density the rails are sampled at —
+        // EXCEPT where the blend is affine in v (a ruled two-section loft), where a
+        // v-chord lies exactly on the surface and the grid collapses to the two section
+        // rows, matching SampleEdge's straight-segment rail sampling (one rule, both
+        // sides — the helical band's infinite-v-step precedent).
         LoftedSurface lofted => (
             EvenParams(lofted.DomainU, lofted.NaturalUSegments(segmentsPerCircle, curveSamples),
                 includeEnd: !lofted.IsClosedU),
-            EvenParams(lofted.DomainV, curveSamples, includeEnd: true),
+            lofted.IsAffineInV
+                ? [lofted.DomainV.Start, lofted.DomainV.End]
+                : EvenParams(lofted.DomainV, curveSamples, includeEnd: true),
             lofted.IsClosedU, false),
         _ => throw new NotSupportedException($"No grid sampling for {surface.GetType().Name}."),
     };

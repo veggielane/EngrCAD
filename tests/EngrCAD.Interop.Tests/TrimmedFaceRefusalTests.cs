@@ -154,9 +154,12 @@ public class TrimmedFaceRefusalTests
         // It builds — so it must also tessellate, through tiers that already exist. The bar is
         // the CORPUS floor, cos(3 · 2π/n) — three natural grid steps of surface normal — not a
         // number fitted to these cases: the two original entries measure 0.9994 against it,
-        // while "cap cut low with bore" measures 0.9200 (its bore rim is a tracer polyline
-        // baked in at boolean time, and does not refine with the grid). Recording both numbers
-        // beats moving the bar to whichever one is worse.
+        // while "cap cut low with bore" measures 0.8668 (its bore rim is a tracer polyline;
+        // open branches now REFINE against their exact carriers at tessellation time, which
+        // moved this case's worst facet from 0.9200 — the denser rim leaves skinnier facets
+        // against the band's rows, fold-free and above the floor, while the band-crossing
+        // family the refinement exists for went 0.3229 → 1.0000 at 192). Recording both
+        // numbers beats moving the bar to whichever one is worse.
         var solid = Build();
         var report = TessellationQuality.Audit(solid, 32, 24);
         Assert.Equal(0, report.Folds);
@@ -187,8 +190,8 @@ public class TrimmedFaceRefusalTests
     /// rather than one being allowed to stand for the other.</b> The solid is Validate-clean at
     /// genus 1 and its volume converges monotonically upward on the exact Pappus value —
     /// 2π²·12·16 less the segment above z = 2 (2π·12·(16·acos(½) − 2√12)) less the bore's slice
-    /// of the tube — measured 2916.5 / 2998.7 / 3009.4 / 3014.5 / 3018.4 / 3019.6 / 3020.5 at
-    /// 16/32/48/64/96/128/192 segments per circle against 3021.1.</para>
+    /// of the tube — measured 3009.4 / 3018.2 / 3020.5 at 48/96/192 segments per circle
+    /// against 3021.1.</para>
     ///
     /// <para><b>The folds are gone, and the diagnosis they were filed under was wrong.</b> The
     /// entry blamed the periodic-band tier pairing its chains by u and falling to the merge walk
@@ -199,14 +202,16 @@ public class TrimmedFaceRefusalTests
     /// turned 53 facets inside out. `Refine` now refuses a split that would flip a facet the
     /// parent had right, so the count is 0 at every density above.</para>
     ///
-    /// <para><b>The residual that remains is fidelity, not orientation, and it is filed as open
-    /// work</b>: the bore's rim is a marching-tracer polyline baked in at boolean time with 15–17
-    /// samples however fine the grid around it becomes, so near it the base carries facets the
-    /// rows cannot level and refinement can only decline to split. Worst facet-vs-surface
-    /// agreement at 192/96 is ~0.009 refined against ~0.18 unrefined — no longer inverted, still
-    /// near-perpendicular, and notably WORSE than leaving it alone, which is the sign that the
-    /// real fix is a row path covering the coarse-rim region rather than anything in `Refine`.
-    /// The bounds below are a RECORD of today's behaviour, not a bar to sit at.</para>
+    /// <para><b>The residual that remains is the BORE rim, and its boundary is now a
+    /// decision rather than a limitation.</b> Tessellation-time refinement of tracer curves
+    /// (<see cref="RefinedTracerRimTests"/>) reaches the plane-cut rims here — open branches
+    /// in outer loops — which took the worst 48/24 agreement to 0.9669; the bore's rim is a
+    /// chain forming a HOLE loop, which feeds <c>TriangulateBandWithHoles</c>, and that tier
+    /// measurably cannot take a denser rim (refined: 0 → 3 base folds at 48/24 and an
+    /// outright refusal at 192/96), so hole rims deliberately keep their baked 15–17 samples
+    /// until the tier grows the row path filed in todo.md. Worst facet-vs-surface agreement
+    /// at 192/96 is ~0.0198 — near-perpendicular beside the coarse rim, not inverted. The
+    /// bounds below are a RECORD of today's behaviour, not a bar to sit at.</para>
     /// </summary>
     [Fact]
     public void TorusCutWithABore_BuildsWithARecordedTessellationResidual()

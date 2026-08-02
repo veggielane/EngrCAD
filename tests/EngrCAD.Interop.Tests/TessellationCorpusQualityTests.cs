@@ -52,7 +52,7 @@ public class TessellationCorpusQualityTests
         "drafted boss", "drafted cylinder",
         "filleted box", "filleted L", "filleted hexagon", "chamfered box", "variable chamfer",
         "variable fillet",
-        "rounded box", "rounded tetrahedron", "partial fillet run",
+        "rounded box", "rounded tetrahedron", "partial fillet run", "variable fillet run",
         "revolved vase", "partial revolve", "swept tube", "torus", "cone",
         "sketch pocket", "engraved plate", "wedge",
     ];
@@ -217,6 +217,18 @@ public class TessellationCorpusQualityTests
                         .Where(e => e.IsLinear(out var a, out var b)
                             && (a.Y + b.Y < -19 || a.X + b.X > 29)))
                     .ToBrep();
+            case "variable fillet run":
+            {
+                // A single-edge partial run under a RADIUS law (1 at x = −15 rising to 2
+                // at x = +15): the ruled-skin band between two law-valued planar setback
+                // terminations. Kernel API, deliberately — the Shape edge-set law
+                // overload still resolves complete rims only (filed in todo.md).
+                var runBox = SolidFactory.MakeBox(new Aabb((-15, -10, 0), (15, 10, 6)));
+                var runEdge = runBox.PlanarFacesWithNormal(Vector3d.UnitZ).Single()
+                    .OuterLoop.Coedges.Select(c => c.Edge)
+                    .Single(e => e.IsLinear(out var a, out var b) && a.Y + b.Y < -19);
+                return Filleting.FilletEdges(runBox, [runEdge], p => 1 + (p.X + 15) / 30);
+            }
             case "rounded tetrahedron":
                 // Every corner is a GENERAL trihedral one: four trimmed spherical
                 // corner patches through the pole-grid tier.
@@ -419,6 +431,11 @@ public class TessellationCorpusQualityTests
             // The napkin ring: a sphere of radius R with a through-hole of radius r
             // keeps 4 pi/3 (R^2 - r^2)^(3/2).
             { "drilled sphere", 4 * Math.PI / 3 * Math.Pow(100 - 9, 1.5) },
+            // 30 x 20 x 6 less the variable band's corner material: the cross-section at
+            // arc length s is r(s)^2 (1 - pi/4) with r linear 1 -> 2, and the setback
+            // terminations are flush planar cuts at the run's ends, so the removal is
+            // exactly (1 - pi/4) * L * (r0^2 + r0 r1 + r1^2) / 3.
+            { "variable fillet run", 30.0 * 20 * 6 - (1 - Math.PI / 4) * 30 * (1 + 2 + 4) / 3 },
             // A quadratic-NURBS-path sweep of a radius-5 circle: Pappus does not apply to
             // a curved path, so the reference is the finest tessellation and only the
             // RATIO is asserted (see the test).

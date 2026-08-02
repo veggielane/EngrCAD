@@ -291,7 +291,7 @@ public static class BrepArchive
                     $"Hyperbola({Vec(c.Center)}, {Vec(c.SemiAxisX)}, {Vec(c.SemiAxisY)}, {Range(c.Domain)})"),
                 NurbsCurve c => Emit(c,
                     $"Nurbs({c.Degree}, {Points(c.ControlPoints)}, {Numbers(c.Weights)}, {Numbers(c.Knots)})"),
-                PolylineCurve3d c => Emit(c, $"Polyline({Bool(c.IsClosed)}, {Points(c.Points)})"),
+                PolylineCurve3d c => PolylineEntity(c),
                 Helix3d c => Emit(c,
                     $"Helix({Frame(c.Frame)}, {N(c.Radius)}, {N(c.Pitch)}, {N(c.Turns)})"),
                 SpiralArc3d c => Emit(c,
@@ -319,6 +319,25 @@ public static class BrepArchive
         {
             int surface = Surface(c.Surface);
             return Emit(c, $"LoftRail(#{surface}, {N(c.U)})");
+        }
+
+        /// <summary>
+        /// A traced polyline's carrier pair travels as two OPTIONAL trailing surface
+        /// references — the tessellator refines chords against them, so dropping the pair
+        /// would make a reloaded solid tessellate coarser than the one that was saved
+        /// (the boolean corpus holds reload volumes to 1e-12 relative). A carrier-less
+        /// polyline writes exactly the two-argument form it always did, so existing files
+        /// stay byte-identical and load unchanged.
+        /// </summary>
+        private int PolylineEntity(PolylineCurve3d c)
+        {
+            if (c.Carriers is { } pair)
+            {
+                int a = Surface(pair.A);
+                int b = Surface(pair.B);
+                return Emit(c, $"Polyline({Bool(c.IsClosed)}, {Points(c.Points)}, #{a}, #{b})");
+            }
+            return Emit(c, $"Polyline({Bool(c.IsClosed)}, {Points(c.Points)})");
         }
 
         private int SweptRailEntity(SweptRailCurve c)
@@ -514,7 +533,11 @@ public static class BrepArchive
             "Parabola" => new Parabola3d(Vec(a, 0), Vec(a, 1), Vec(a, 2), Num(a, 3), Range(a, 4)),
             "Hyperbola" => new Hyperbola3d(Vec(a, 0), Vec(a, 1), Vec(a, 2), Range(a, 3)),
             "Nurbs" => new NurbsCurve(Int(a, 0), Points(a, 1), Numbers(a, 2), Numbers(a, 3)),
-            "Polyline" => new PolylineCurve3d(Points(a, 1), Bool(a, 0)),
+            // The two trailing surface references are the tracer's carrier pair, written
+            // only when the curve has one — pre-carrier files carry two arguments and
+            // load exactly as before.
+            "Polyline" => new PolylineCurve3d(Points(a, 1), Bool(a, 0),
+                a.Count >= 4 ? (Ref<Surface>(a, 2), Ref<Surface>(a, 3)) : null),
             "Helix" => new Helix3d(Frame(a, 0), Num(a, 1), Num(a, 2), Num(a, 3)),
             "SpiralArc" => new SpiralArc3d(Frame(a, 0), Num(a, 1), Num(a, 2), Range(a, 3)),
             "Offset" => new OffsetCurve3d(Ref<Curve3d>(a, 0), Vec(a, 1), Num(a, 2)),
