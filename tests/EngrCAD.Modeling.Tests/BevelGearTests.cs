@@ -179,17 +179,24 @@ public class BevelGearTests
         var region = profile.Sketch.ToRegion();
         double r = 3 * z / 2.0;
 
+        // Sample [0, 2*pi) and close the cycle explicitly, never evaluating at 2*pi:
+        // sin(2*pi) is -2.4e-16, which puts that sample a hair below the +X axis where a
+        // full circle in the sketch would have its parity seam (see the note in
+        // PlanetaryGearTests - SketchRegion returns the wrong sign in that band).
+        bool Inside(double theta) =>
+            region.SignedDistance(new Vector2d(r * Math.Cos(theta), r * Math.Sin(theta))) < 0;
+
         int transitions = 0;
-        bool previous = region.SignedDistance(new Vector2d(r, 0)) < 0;
-        const int samples = 20000;
-        for (int i = 1; i <= samples; i++)
+        const int samples = 19997;
+        bool first = Inside(0), previous = first;
+        for (int i = 1; i < samples; i++)
         {
-            double theta = 2 * Math.PI * i / samples;
-            bool inside = region.SignedDistance(new Vector2d(r * Math.Cos(theta), r * Math.Sin(theta))) < 0;
+            bool inside = Inside(2 * Math.PI * i / samples);
             if (inside != previous)
                 transitions++;
             previous = inside;
         }
+        if (previous != first) transitions++;
         Assert.Equal(2 * z, transitions);   // one entry and one exit per tooth
     }
 
