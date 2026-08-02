@@ -1555,7 +1555,15 @@ Three implementation rules, each of which cost something:
   Converged modes therefore join the deflation set and a fresh start vector is orthogonalized
   against them, so the next run's extreme eigenvalue is the second copy. The solver also
   targets **one more mode than asked for** and returns the lowest `wanted`, which is what
-  gives a missed copy a run to appear in before the extra one is discarded.
+  gives a missed copy a run to appear in before the extra one is discarded. That machinery
+  recovers a double (now MEASURED on a synthetic exact double, not merely reasoned) and
+  provably stops one copy short of a triple; `ModalSolveOptions.BlockSize` is the answer past
+  it — b vectors advanced per step carry a multiplicity up to b by construction, with the
+  extra targeting scaled to b because an UNCONVERGED copy's Ritz value hides high in the
+  spectrum, past the next distinct eigenvalues, where the contiguous prefix cannot shield it
+  (measured: a block of four on a synthetic quadruple stopped at `{1, 1, 1, 2}` believing
+  itself done, four iterations short of its own budget, until the target learned to carry b
+  extras).
 - **A CONTIGUOUS converged prefix, never "whatever has converged".** Ritz values converge from
   the extreme end inwards but not in lock step, so a run can have the second eigenvalue
   converged while the first is still moving. Accepting out of order returns eigenvalues 2 and
@@ -1677,8 +1685,12 @@ square root of round-off.
   enters per mode where it is used (see `ModalDamping`), never as a matrix here.
 - **No transient dynamics.** Frequency response is covered by `HarmonicSolver`; direct
   time integration needs a different stepping loop.
-- **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the second
-  member of a degenerate pair; a triple root wants a block method.
+- **Multiplicity three and above wants `ModalSolveOptions.BlockSize`.** Locking and restarting
+  recovers the second member of a degenerate pair and provably stops one copy short of a
+  triple (pinned on a synthetic exact triple: `{f1, f1, f2}` for a truth of `{f1, f1, f1}`,
+  every returned mode a genuine eigenpair); a block of size b carries a multiplicity up to b
+  by construction. The default stays 1 — the incumbent path byte for byte — because real
+  meshes split their theoretical multiplicities.
 - **A near-critical prestress raises the residual floor**, because `K + s·Kg` is nearly singular
   by construction: measured on the pinned-pinned column, 2.99e-10 unloaded and 3.09e-9 at 90% of
   the critical load. The mode is right either way — its frequency lands on the closed-form law
@@ -1901,9 +1913,9 @@ still 32% high at 3 550 DOF, where the quadratic answer converged to 0.2% with 4
   ReferenceLoad` test pins.
 - **Positive factors only** (see above); a load case that buckles only when reversed is refused
   rather than reported with a negative number nobody asked for.
-- **Multiplicity three and above** inherits the modal solver's limitation — locking and
-  restarting recovers the second member of a degenerate pair, and a triple root wants a block
-  method.
+- **Multiplicity three and above** takes the modal solver's answer —
+  `BucklingSolveOptions.BlockSize`, the same block iteration through the same `LanczosEigen`,
+  since axisymmetric parts buckle in degenerate families exactly as they vibrate in them.
 
 ---
 

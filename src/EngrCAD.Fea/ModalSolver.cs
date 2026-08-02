@@ -108,6 +108,44 @@ public sealed record ModalSolveOptions
     } = 8;
 
     /// <summary>
+    /// Vectors the Lanczos iteration advances per step (default 1). Set it to the largest
+    /// eigenvalue multiplicity the model's symmetry can produce — 2 to 4 covers the
+    /// axisymmetric cases — and leave it at 1 everywhere else.
+    ///
+    /// <para><b>What it exists for: multiplicity THREE and above.</b> A single-vector
+    /// Krylov space contains one vector from each eigenspace, so one run finds one copy of
+    /// a repeated eigenvalue; locking and restarting finds the next copy per restart, and
+    /// the solver's one-extra targeting is what makes an exactly degenerate PAIR come out
+    /// right. A triple is beyond that machinery's guarantee: with an exact triple lowest
+    /// eigenvalue, run one locks one copy plus the next DISTINCT eigenvalues, the target is
+    /// reached before a third restart, and the answer contains an eigenvalue that does not
+    /// belong (the failure is pinned by test on an exact synthetic triple, where three
+    /// modes come back as {lambda1, lambda1, lambda2}). A block of size b spans up to b
+    /// vectors of each eigenspace in one run, so a multiplicity up to b is recovered by
+    /// construction; beyond b, copies can still arrive through round-off re-seeding, which
+    /// is common and not a guarantee. A block also SPENDS the Krylov budget b vectors per
+    /// step, so a large block against a small <see cref="MaxKrylovDimension"/> trades
+    /// convergence room for eigenspace coverage.</para>
+    ///
+    /// <para><b>Why 1 stays the default.</b> Real meshes of symmetric parts usually SPLIT
+    /// a theoretical multiplicity into close-but-distinct eigenvalues (this project's
+    /// square-section beam pairs split by 0.04–0.13%), which single-vector locking handles;
+    /// a block costs b back-substitutions per step and a b-times-wider basis for the same
+    /// Krylov cap. The default is the incumbent path byte for byte — the neutrality rule
+    /// every optional feature here carries.</para>
+    /// </summary>
+    public int BlockSize
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, 8);
+            field = value;
+        }
+    } = 1;
+
+    /// <summary>
     /// A completed static solve whose stress field STIFFENS the model — the guitar string,
     /// the spinning blade, the bolted joint. Null (the default) is the ordinary unstressed
     /// modal analysis, and the solve is then bit-for-bit what it always was.
@@ -215,6 +253,11 @@ public sealed record ModalSolveReport
     /// </summary>
     public required int Iterations { get; init; }
 
+    /// <summary>Vectors advanced per Lanczos step — <see cref="ModalSolveOptions.BlockSize"/>
+    /// as applied. 1 is the scalar recursion; part of the answer's provenance because a
+    /// multiplicity above the block size is not guaranteed complete.</summary>
+    public int BlockSize { get; init; } = 1;
+
     /// <summary>How many times the Krylov space was rebuilt from a fresh start vector.</summary>
     public required int Restarts { get; init; }
 
@@ -247,6 +290,7 @@ public sealed record ModalSolveReport
             + (PrestressScale != 0 ? $", stress-stiffened by {PrestressScale:G6}·Kg" : ""),
         $"{(Converged ? "converged" : "NOT CONVERGED")}: {ModeCount} modes from "
             + $"{Iterations} Lanczos steps through ONE factorization"
+            + $"{(BlockSize > 1 ? $" (block size {BlockSize})" : "")}"
             + $"{(Restarts > 0 ? $" and {Restarts} restart{(Restarts == 1 ? "" : "s")}" : "")}, "
             + $"worst residual {WorstResidual:E2}",
         $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, eigen {EigenMs:F1} ms");
@@ -399,7 +443,7 @@ public static class ModalSolver
         // documents at length — its right-hand matrix is indefinite.)
         var eigen = LanczosEigen.Solve(
             k, m, m, factor, usedShift, deflation, options.ModeCount,
-            options.Tolerance, krylov, options.MaxRestarts, progress);
+            options.Tolerance, krylov, options.MaxRestarts, options.BlockSize, progress);
         double eigenMs = stopwatch.Elapsed.TotalMilliseconds;
 
         if (eigen.Pairs.Count == 0)
@@ -436,6 +480,7 @@ public static class ModalSolver
             RigidBodyModeCount = rigidModes.Length,
             PrestressScale = prestressScale,
             Iterations = eigen.Iterations,
+            BlockSize = options.BlockSize,
             Restarts = eigen.Restarts,
             Converged = eigen.Converged,
             ModeCount = modes.Length,

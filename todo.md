@@ -1075,12 +1075,13 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - **A displacement-stated input scales as omega²**, so the vocabulary has to say whether the
     caller is giving an acceleration, a velocity or a displacement amplitude; naming the method
     after the acceleration and offering the other two as conversions is the honest shape.
-- [ ] **FEA: block Lanczos, for multiplicity three and above.** Locking and restarting
-  recovers the SECOND member of a degenerate pair, and the solver targets one extra mode so a
-  missed copy has a run to appear in — but neither is a proof of completeness for a triple
-  root, and axisymmetric parts have them. A block method (block size 2–4) finds a whole
-  eigenspace at once and is the standard answer; it is filed rather than pretended, and the
-  limitation is stated in `ModalResults`' docs and the README.
+- [ ] **FEA: adaptive block shrink on Lanczos QR rank deficiency.** Block Lanczos landed
+  (`ModalSolveOptions.BlockSize`/`BucklingSolveOptions.BlockSize`; design.md §3e carries the
+  three measured findings) and treats a rank-deficient residual block as a BREAKDOWN — return
+  what converged, restart — because restarting is slower and never wrong. The standard
+  refinement is to drop the collapsed column and continue with a narrower block, which saves
+  the restart's re-convergence; deliberately not built until a fixture wants it, since no
+  case in the suite reaches the breakdown path other than by exhausting a small space.
 - [ ] **FEA: transient dynamics — several load patterns with independent histories.**
   `TransientSolveOptions.LoadFactor` scales the model's ONE spatial load pattern by one scalar
   law, which covers a step, an impulse, a ramp, a harmonic drive and a measured trace. What it

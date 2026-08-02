@@ -746,6 +746,36 @@ bending mode of 834.9 Hz. And convergence is **measured** (`K phi − lambda M p
 taken from the `beta_m·|y_m|` bound, which describes the shifted, inverted operator's residual
 — one transformation away from what a caller cares about.
 
+**Multiplicity three and above is BLOCK Lanczos (`ModalSolveOptions.BlockSize`, buckling
+likewise), and building it produced three measured findings.** The scalar machinery's limits
+were measured for the first time on synthetic exact-multiplicity pencils (no mesh fixture can
+carry one — real meshes SPLIT their theoretical multiplicities, this project's beam pairs by
+0.04–0.13%): lock-and-restart plus the one-extra target recovers an exact DOUBLE — the
+recorded claim, previously reasoned, now measured — and stops exactly one copy short of a
+TRIPLE, returning `{1, 1, 2}` for a truth of `{1, 1, 1}` with every returned pair a genuine
+eigenpair, which is why nothing inside the iteration can notice. A block of size b carries up
+to b vectors of each eigenspace in its start block's exact-arithmetic span, so a multiplicity
+up to b is recovered by construction; b = 1 takes the incumbent scalar path byte for byte
+(the neutrality rule). The findings: **(a) an unconverged COPY hides high in the spectrum,
+where the contiguous prefix cannot shield it** — its Rayleigh quotient mixes toward the
+complement, so it surfaces beyond the next DISTINCT eigenvalues, the walk accepts those, and
+a +1 target fills while a copy is still buried (a block of four on a quadruple stopped at
+`{1, 1, 1, 2}` believing itself done, four iterations short of its own budget) — hence the
+extra targeting scales with the block: one extra per vector advanced per step, which reduces
+to the incumbent +1 at b = 1. **(b) A block start must not come from the scalar pattern
+family**: the pattern is piecewise AFFINE in the index with one shared slope, so any few
+consecutive components of every seed lie in span{constant, ramp} plus a wrap jump, and a
+block's projections onto a coordinate-concentrated eigenspace are structurally near
+rank-deficient however the seeds are chosen — block starts use a 64-bit LCG stream instead,
+deterministic and well mixed. **(c) The stream must be CENTERED**: a first draft mapped
+components to [0.5, 1.5) so none could vanish, which put every column near the all-ones
+direction (pairwise cosine ~0.9) and starved the block's later principal directions — the
+quadruple's fourth copy started with a factor-20 component penalty and missed the tolerance
+at the run cap. Orthogonality to an eigenvector, the thing a start vector must actually
+avoid, is measure-zero for a mixed stream either way. Rank deficiency in the block QR is a
+BREAKDOWN (return what converged, restart), not an adaptive block-shrink — restarting is
+slower, never wrong, and the refinement waits for a fixture that wants it.
+
 **Rigid-body modes are separated, not refused.** The static solver refuses an unrestrained
 body because its answer is not unique; a modal analysis of one is well posed and its six
 zero-frequency modes are part of the answer. `RigidBodyModes.Surviving` was extracted from

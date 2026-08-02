@@ -189,7 +189,9 @@ it explains the restart count in the report. A single-vector Krylov space contai
 vector from each eigenspace, so a genuine multiplicity — a square shaft's two identical
 bending modes, every axisymmetric part — is invisible to it. Converged modes are therefore
 *locked*: they join the deflation set, a fresh start vector is orthogonalized against them,
-and the next run's extreme eigenvalue is the second copy.
+and the next run's extreme eigenvalue is the second copy. For multiplicity three and above,
+`ModalSolveOptions.BlockSize` advances a whole block of vectors per step so up to that many
+copies are carried by construction (see the limitations below).
 
 ## Verification
 
@@ -344,8 +346,14 @@ wherever the spectrum is degenerate.
 - **Prestress is available but off by default.** A spinning or preloaded part's frequencies
   shift, and `ModalSolveOptions.Prestress` adds the geometric stiffness a static solve's
   stress field produces — see [stress stiffening](fea-buckling.md#stress-stiffening-the-frequencies-of-a-preloaded-part).
-- **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the
-  second member of a degenerate pair; a triple root would want a block method, and that is
-  filed rather than pretended.
+- **Multiplicity three and above wants a BLOCK, and there is one.**
+  `ModalSolveOptions.BlockSize` (default 1, the incumbent scalar path byte for byte) advances
+  b vectors per Lanczos step, so a repeated eigenvalue of multiplicity up to b is recovered by
+  construction — measured on synthetic exact triples and quadruples, where the scalar path
+  returns `{f1, f1, f2}` for a truth of `{f1, f1, f1}` with every returned mode carrying a
+  tiny residual (each IS an eigenpair, which is why nothing inside the iteration can notice a
+  copy is missing). Set it to the largest multiplicity the model's symmetry can produce;
+  real meshes usually SPLIT their theoretical multiplicities, which is why 1 stays the
+  default.
 - **Sliver elements are the real constraint, and they belong to the mesher** — refused by
   name here by the same shared guard both other solvers ask.

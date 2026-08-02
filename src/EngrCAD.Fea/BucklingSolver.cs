@@ -87,6 +87,22 @@ public sealed record BucklingSolveOptions
         }
     } = 8;
 
+    /// <summary>Vectors the Lanczos iteration advances per step (default 1) — the same
+    /// knob, for the same reason, as <see cref="ModalSolveOptions.BlockSize"/>, whose
+    /// remarks carry the argument: a multiplicity above the block size is not guaranteed
+    /// complete, and axisymmetric parts buckle in degenerate families exactly as they
+    /// vibrate in them.</summary>
+    public int BlockSize
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, 8);
+            field = value;
+        }
+    } = 1;
+
     /// <summary>Quadrature rule override for the elastic stiffness, for tests that check the
     /// production rule is exact. Null uses the cheapest exact rule for the element order.</summary>
     internal int? StiffnessQuadratureDegree { get; init; }
@@ -142,6 +158,11 @@ public sealed record BucklingSolveReport
     /// factorization of K.</summary>
     public required int Iterations { get; init; }
 
+    /// <summary>Vectors advanced per Lanczos step — <see cref="BucklingSolveOptions.BlockSize"/>
+    /// as applied. 1 is the scalar recursion; part of the answer's provenance because a
+    /// multiplicity above the block size is not guaranteed complete.</summary>
+    public int BlockSize { get; init; } = 1;
+
     /// <summary>How many times the Krylov space was rebuilt from a fresh start vector.</summary>
     public required int Restarts { get; init; }
 
@@ -174,7 +195,8 @@ public sealed record BucklingSolveReport
         $"shift {Shift:G6} (always zero on this path - the metric is K, not Kg)",
         $"{(Converged ? "converged" : "NOT CONVERGED")}: {ModeCount} mode"
             + $"{(ModeCount == 1 ? "" : "s")} from {Iterations} Lanczos steps through ONE "
-            + $"factorization{(Restarts > 0 ? $" and {Restarts} restart{(Restarts == 1 ? "" : "s")}" : "")}, "
+            + $"factorization{(BlockSize > 1 ? $" (block size {BlockSize})" : "")}"
+            + $"{(Restarts > 0 ? $" and {Restarts} restart{(Restarts == 1 ? "" : "s")}" : "")}, "
             + $"worst residual {WorstResidual:E2}",
         $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, eigen {EigenMs:F1} ms");
 
@@ -318,7 +340,7 @@ public static class BucklingSolver
         // is zero, so `factor` really is a factorization of `K - 0·B`.
         var eigen = LanczosEigen.Solve(
             k, b, k, factor, 0.0, [], options.ModeCount,
-            options.Tolerance, krylov, options.MaxRestarts, progress);
+            options.Tolerance, krylov, options.MaxRestarts, options.BlockSize, progress);
         double eigenMs = stopwatch.Elapsed.TotalMilliseconds;
 
         if (eigen.Pairs.Count == 0)
@@ -338,6 +360,7 @@ public static class BucklingSolver
             Ordering = options.Ordering,
             Shift = 0.0,
             Iterations = eigen.Iterations,
+            BlockSize = options.BlockSize,
             Restarts = eigen.Restarts,
             Converged = eigen.Converged,
             ModeCount = modes.Length,
