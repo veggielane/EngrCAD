@@ -330,12 +330,12 @@ reads it. `StressRecovery.Superconvergent` fits a polynomial to the good points 
 patch of elements and evaluates it at the nodes.
 
 ```csharp run:fea-error-estimate
-var part = new Part("bracket", Shape.Box(60, 20, 8).Subtract(Shape.Cylinder(4, 40)));
-var tets = TetMesher.Mesh(part.GetMesh(), new TetMeshOptions { RefineQuality = true, MaxElementSize = 4.0 });
+var part = new Part("bracket", Shape.Box(50, 30, 8));
+var tets = TetMesher.Mesh(part.GetMesh(), new TetMeshOptions { RefineQuality = true, MaxElementSize = 6 });
 
 var model = new StructuralModel(tets, Materials.Steel);
-model.Fix(Facets.OnPlane(new Vector3d(-30, 0, 0), Vector3d.UnitX));
-model.Force(Facets.OnPlane(new Vector3d(30, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -400));
+model.Fix(Facets.OnPlane(new Vector3d(-25, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(25, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -400));
 
 var results = StructuralSolver.Solve(model);
 
@@ -352,6 +352,7 @@ int worst = estimate.WorstElement;
 Console.WriteLine($"worst element {worst}, error {estimate.ElementError[worst]:E3}");
 
 if (estimate.ElementError.Count != model.Mesh.ElementCount) throw new Exception("one value per element");
+if (double.IsNaN(estimate.RelativeError)) throw new Exception("this mesh has interior nodes, so it must estimate");
 if (!(estimate.RelativeError > 0)) throw new Exception("a coarse mesh should report some error");
 ```
 
