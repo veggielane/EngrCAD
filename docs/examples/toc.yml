@@ -80,6 +80,8 @@
   href: components.md
 - name: Mechanisms
   href: mechanisms.md
+- name: Gears
+  href: gears.md
 - name: Animation
   href: animation.md
 - name: Viewer
