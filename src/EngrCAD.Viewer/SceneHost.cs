@@ -206,6 +206,27 @@ internal sealed class SceneHost
         };
         toolbar.Children.Add(viewStyle);
 
+        // Shading (how fills are LIT — deliberately not a ViewStyle member, which is
+        // about what is drawn): the standard light or an analytic matcap. Order matches
+        // the ShadingStyle enum so the index maps directly; the host options seed it.
+        Viewport.Shading = EngrCad.CurrentOptions.Shading;
+        var shading = new ComboBox
+        {
+            ItemsSource = new[] { "Lit", "Clay", "Metal" },
+            SelectedIndex = (int)Viewport.Shading,
+            FontSize = 12,
+            MinWidth = 76,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        ToolTip.SetTip(shading,
+            "Shading: the standard light, or an analytic matcap (clay / polished metal).");
+        shading.SelectionChanged += (_, _) =>
+        {
+            if (shading.SelectedIndex >= 0)
+                Viewport.Shading = (ShadingStyle)shading.SelectedIndex;
+        };
+        toolbar.Children.Add(shading);
+
         // Ambient occlusion (baked per part): on unless the host options say otherwise.
         Viewport.AmbientOcclusion = EngrCad.CurrentOptions.AmbientOcclusion;
         var occlusion = new ToggleButton

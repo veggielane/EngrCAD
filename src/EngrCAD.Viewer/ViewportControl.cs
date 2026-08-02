@@ -26,7 +26,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale;
+    private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale, _uMatcap;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
     private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
@@ -267,6 +267,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
         _uFieldColor = _gl.GetUniformLocation(_program, "uFieldColor");
         _uDeformScale = _gl.GetUniformLocation(_program, "uDeformScale");
+        _uMatcap = _gl.GetUniformLocation(_program, "uMatcap");
         // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
         // the GL default for a disabled attribute is 0, which would shade parts black.
         RenderUploads.SetDefaultOcclusion(_gl);
@@ -677,6 +678,9 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.Uniform3(_uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
         _meshSection.Write(gl, activePlanes, _sectionCombine);
         gl.Uniform1(_uAmbientOcclusion, _ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
+        // The shading selector is frame-constant (no per-part override in v1 — a scene
+        // lit two ways reads as a rendering bug); an INT uniform, matching the shader.
+        gl.Uniform1(_uMatcap, (int)_shading);
 
         // Section mode relies on face culling staying OFF (the GL default; nothing here
         // enables CullFace): clipping a closed solid exposes its interior, and the
@@ -1628,6 +1632,26 @@ public sealed class ViewportControl : OpenGlControlBase
         set
         {
             _viewStyle = value;
+            RequestNextFrameRendering();
+        }
+    }
+
+    private ShadingStyle _shading = ShadingStyle.Lit;
+
+    /// <summary>
+    /// How fills are lit (default <see cref="ShadingStyle.Lit"/> — the standard
+    /// directional light). The non-default members are the analytic matcaps evaluated
+    /// in the shared mesh shader; one uniform per frame, so switching costs nothing
+    /// and touches no buffer. Deliberately separate from <see cref="ViewStyle"/>: the
+    /// style is about what is drawn, shading about how a fill is lit — see
+    /// <see cref="Viewer.ShadingStyle"/>.
+    /// </summary>
+    public ShadingStyle Shading
+    {
+        get => _shading;
+        set
+        {
+            _shading = value;
             RequestNextFrameRendering();
         }
     }

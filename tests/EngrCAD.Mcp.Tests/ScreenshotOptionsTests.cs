@@ -35,6 +35,13 @@ public class ScreenshotOptionValidationTests
     }
 
     [Fact]
+    public void UnknownShading_is_refusedByName()
+    {
+        string error = ErrorText(Tools().Screenshot(shading: "sparkly"));
+        Assert.Contains("lit, clay, or metal", error);
+    }
+
+    [Fact]
     public void SectionPlanes_and_axis_offset_are_mutually_exclusive()
     {
         string error = ErrorText(Tools().Screenshot(

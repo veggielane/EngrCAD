@@ -181,6 +181,27 @@ public class ViewportFrameTests
         // discipline uHighlight follows: an unset uniform is already 0.
         Assert.DoesNotContain("uSectionPlanes", shared.Keys);
         Assert.DoesNotContain("uSectionUnion", shared.Keys);
+        // The shading selector defaults to Lit = 0, the value a linked program's
+        // uniforms initialize to — the incumbent look — and it is an int uniform, so
+        // the typed marker, for the same reason uSectionCount is.
+        Assert.Equal(new IntUniform(0), shared["uMatcap"]);
+    }
+
+    [Fact]
+    public void ShadingChangesExactlyOneSharedUniform()
+    {
+        // A matcap is one frame-constant uniform: nothing per draw, nothing uploaded.
+        var lit = Build([Instance("a", (0, 0, 0))]);
+        var clay = ViewportFrame.Build([Instance("a", (0, 0, 0))], Camera, Bounds,
+            aspect: 1.6, shading: ShadingStyle.Clay);
+
+        Assert.Equal(new IntUniform((int)ShadingStyle.Clay), clay.Shared!["uMatcap"]);
+        foreach (var key in lit.Shared!.Keys)
+        {
+            if (key != "uMatcap")
+                Assert.Equal(lit.Shared[key], clay.Shared[key]);
+        }
+        Assert.Equal(lit.Draws.Count, clay.Draws.Count);
     }
 
     [Fact]

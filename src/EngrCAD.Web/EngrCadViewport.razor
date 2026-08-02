@@ -64,6 +64,14 @@
     /// </summary>
     [Parameter] public ViewStyle ViewStyle { get; set; } = ViewStyle.ShadedWithEdges;
 
+    /// <summary>
+    /// How fills are lit: the standard directional light (default) or one of the
+    /// analytic matcaps — the same <c>uMatcap</c> selector the desktop passes write,
+    /// evaluated in the shared mesh shader, so the three front ends agree by
+    /// construction. One uniform per frame; changing it re-uploads nothing.
+    /// </summary>
+    [Parameter] public ShadingStyle Shading { get; set; } = ShadingStyle.Lit;
+
     /// <summary>Click picking and the hover highlight (on). Turning it off leaves drags
     /// working and stops the raycast entirely.</summary>
     [Parameter] public bool Picking { get; set; } = true;
@@ -234,6 +242,7 @@
     private object? _loadedFrom;
     private bool _showingFurniture = true;
     private ViewStyle _shownStyle = ViewStyle.ShadedWithEdges;
+    private ShadingStyle _shownShading = ShadingStyle.Lit;
     private int _generation;
     private bool _rendering;
     private bool _dirty;
@@ -291,6 +300,18 @@
     {
         ViewStyle = style;
         _shownStyle = style;
+        return PumpAsync();
+    }
+
+    /// <summary>
+    /// Applies a shading style (standard light or an analytic matcap) and draws — a
+    /// method for the same read-back reason as <see cref="SetViewStyleAsync"/>. One
+    /// uniform changes; nothing is re-uploaded.
+    /// </summary>
+    public Task SetShadingAsync(ShadingStyle shading)
+    {
+        Shading = shading;
+        _shownShading = shading;
         return PumpAsync();
     }
 
@@ -697,6 +718,7 @@
             _loadedFrom = Content;
             _showingFurniture = Furniture;
             _shownStyle = ViewStyle;
+            _shownShading = Shading;
             _shownSection = (SectionEnabled, SectionAxis, SectionOffset, SectionPlanes, SectionCombine);
             _shownAnnotations = ShowAnnotations;
             _shownViewCube = ShowViewCube;

@@ -268,7 +268,8 @@ public static class ViewportFrame
         ViewportCube? cube = null,
         ViewportAnnotations? annotations = null,
         ViewportLegend? legend = null,
-        double deformFactor = 1)
+        double deformFactor = 1,
+        ShadingStyle shading = ShadingStyle.Lit)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -315,6 +316,10 @@ public static class ViewportFrame
             ["uSectionEnabled"] = sectionActive ? 1f : 0f,
             ["uSectionCount"] = new IntUniform(sectionCount),
             ["uPointSize"] = PointSize * (float)pixelScale,
+            // The shading selector (standard light or an analytic matcap) — an int
+            // uniform, so the typed marker, and frame-constant: no per-part override,
+            // exactly as the desktop passes write it once per frame.
+            ["uMatcap"] = new IntUniform((int)shading),
         };
         if (sectionActive)
         {

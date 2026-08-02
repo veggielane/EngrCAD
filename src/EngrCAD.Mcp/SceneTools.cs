@@ -248,6 +248,8 @@ public sealed class SceneTools(SceneSession session)
     /// mechanism at t = 0.3". Requires the model to declare one
     /// (<c>EngrCad.Configure().WithAnimation(...)</c>); the frame comes from the same
     /// pure <c>Animation.At(t)</c> the window scrubs and every export samples.</param>
+    /// <param name="shading">How fills are lit: lit (default), clay, or metal — the
+    /// analytic matcaps, the same <c>ShadingStyle</c> the window's toolbar offers.</param>
     public CallToolResult Screenshot(
         [Description("Standard view: iso (default), front, back, left, right, top, bottom.")]
         string? view = null,
@@ -283,7 +285,10 @@ public sealed class SceneTools(SceneSession session)
         bool ambientOcclusion = true,
         [Description("Animation timeline position in [0, 1] — renders the model posed at that instant. "
                    + "Only for models that declare an animation (WithAnimation).")]
-        double? t = null)
+        double? t = null,
+        [Description("How fills are lit: lit (the standard directional light, default), clay, or "
+                   + "metal (analytic matcaps).")]
+        string? shading = null)
     {
         // Arguments are validated before the GL check so a typo is reported as a typo
         // even on a machine with no GPU (and so the validation is testable there).
@@ -291,6 +296,8 @@ public sealed class SceneTools(SceneSession session)
             return Error("width and height must be between 16 and 4096 pixels.");
         if (!TryResolveStyle(style, out var viewStyle, out string? styleError))
             return Error(styleError);
+        if (!TryResolveShading(shading, out var shadingStyle, out string? shadingError))
+            return Error(shadingError);
         bool explicitCamera = cameraYaw is not null || cameraPitch is not null
             || cameraDistance is not null || cameraTarget is not null || cameraEye is not null;
         if (view is not null && explicitCamera)
@@ -380,7 +387,8 @@ public sealed class SceneTools(SceneSession session)
                     // poses, so it has to be passed alongside the posed instances or a
                     // still at t would show the model at the wrong exaggeration — the
                     // same value EngrCad.RenderToImage(scene, animation, t) sends.
-                    deformFactor: animation?.At(t!.Value).DeformFactor ?? 1);
+                    deformFactor: animation?.At(t!.Value).DeformFactor ?? 1,
+                    shading: shadingStyle);
             }
             png = File.ReadAllBytes(temporary);
         }
@@ -948,6 +956,21 @@ public sealed class SceneTools(SceneSession session)
             default:
                 result = ViewStyle.ShadedWithEdges;
                 error = $"Unknown style '{style}' — use shaded-edges, shaded, wireframe, or points.";
+                return false;
+        }
+    }
+
+    private static bool TryResolveShading(string? shading, out ShadingStyle result, out string? error)
+    {
+        error = null;
+        switch (shading?.ToLowerInvariant())
+        {
+            case null or "" or "lit": result = ShadingStyle.Lit; return true;
+            case "clay": result = ShadingStyle.Clay; return true;
+            case "metal": result = ShadingStyle.Metal; return true;
+            default:
+                result = ShadingStyle.Lit;
+                error = $"Unknown shading '{shading}' — use lit, clay, or metal.";
                 return false;
         }
     }

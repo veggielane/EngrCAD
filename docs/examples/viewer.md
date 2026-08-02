@@ -51,6 +51,37 @@ rule, alongside a global view style (`ViewportControl.ViewStyle`, or
 left at the default follow the global style, explicitly non-default parts keep
 their own mode.
 
+## Matcap shading
+
+The **Shading** dropdown (or `EngrCad.Configure().WithShading(...)`, or the
+`shading:` parameter on headless renders and the MCP `screenshot` tool) swaps the
+standard directional light for an **analytic matcap** — a studio lit-sphere look
+evaluated procedurally in the shared mesh shader, so no texture ever has to reach
+the window, the offscreen renderer or the browser client. `ShadingStyle.Clay` is
+the matte studio sphere; `ShadingStyle.Metal` the polished-metal one. Shading is
+deliberately separate from the view *style*: the style says what is drawn (points,
+lines, fills), shading says how a fill is lit, and the two compose. It is global
+per pass — there is no per-part override, because a scene lit two ways reads as a
+rendering bug.
+
+```csharp render:shading-metal
+// A render: snippet declares `shading` the way it declares `camera` or `explode`.
+var shading = ShadingStyle.Metal;
+
+var scene = new Scene(new MeshQuality { SegmentsPerCircle = 64 });
+scene.Add(new Part("plate", Shape.Box(60, 40, 10) - Shape.Cylinder(6, 30), Palette.Steel));
+scene.Add(new Part("dome", Shape.Sphere(12), Palette.Brass,
+    Matrix4d.CreateTranslation((18, 0, 14))));
+```
+
+![A plate and dome under the polished-metal analytic matcap](images/shading-metal.png)
+
+Ambient occlusion multiplies the matcap sample exactly as it multiplies the
+standard ambient+diffuse product, section cut faces keep their flat cut material,
+and selection gold blends the same way — a matcap changes how a fill is lit and
+nothing else. The default (`ShadingStyle.Lit`) is pixel-identical to the viewer
+before the feature existed.
+
 ## Debug modifiers (ghost, hide, isolate)
 
 Three part-level flags — the OpenSCAD `%`/`*`/`!` analog — mark parts while you

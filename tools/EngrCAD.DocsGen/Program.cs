@@ -311,6 +311,7 @@ foreach (var s in snippets)
         || !TryReadVariable<SectionCombine?>(state, "sectionCombine", s, errors, out var declaredCombine)
         || !TryReadVariable<CameraState>(state, "camera", s, errors, out var declaredCamera)
         || !TryReadVariable<double?>(state, "explode", s, errors, out var declaredExplode)
+        || !TryReadVariable<ShadingStyle?>(state, "shading", s, errors, out var declaredShading)
         || !TryReadVariable<ConstructionPreviewRequest?>(state, "preview", s, errors, out var declaredPreview))
         continue;
 
@@ -335,7 +336,8 @@ foreach (var s in snippets)
                 sectionPlanes: planes,
                 sectionCombine: declaredCombine ?? SectionCombine.Intersection,
                 preview: declaredPreview,
-                explode: declaredExplode ?? 0);
+                explode: declaredExplode ?? 0,
+                shading: declaredShading ?? ShadingStyle.Lit);
             rendered++;
         }
         catch (Exception ex)
