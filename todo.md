@@ -753,7 +753,10 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
   HelicalGear` — the fit tier was adequate: 16 arcs/flank at module·1e-4, so no new 2D
   curve type; conjugate action is measured from CONTACT via the sketch's exact signed
   distance, because `Coupling.Gear` in the mechanism solver ENFORCES the ratio it
-  would be asserting):
+  would be asserting. Since then the **rack** (`Gears.Rack`/`RackBar` — the
+  straight-line limit, hence exact, hence no fit deviation to report) and the
+  **worm and crossed-helical wheel** (`Gears.Worm`/`WormPair`/`WormWheel` — the worm
+  is a thread and rides `MakeThreadedRod`) have landed too):
   - **Backlash allowance** — a circumferential thinning parameter on `GearSpec`
     (thin each tooth by j/2), so a real pair at standard centre distance has running
     clearance; today's teeth are the zero-backlash nominal.
@@ -761,8 +764,8 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
     z_min = 2(h_a* − x)/sin²α by name; drawing the actual generated trochoid would
     admit z ≥ ~12 if it can be VERIFIED (the conjugate-contact instrument exists and
     measurably sees a 5e-2 flank error as 5.6e-4 rad of transmission wobble).
-  - **Internal gears and racks** — a rack is the z→∞ limit (straight flanks, trivially
-    a sketch); an internal gear inverts the material side and the tip/root roles.
+  - **Internal gears** — invert the material side and the tip/root roles (the RACK
+    half of this item landed as `Gears.Rack`/`RackBar`).
   - **Keyway on the bore** (DIN 6885 parallel key seat as a sketch boolean on the
     blank), set screw boss, web/spoke lightening.
   - **Measurement identities** — span measurement over k teeth W = m·cos α·((k−½)π +
@@ -786,13 +789,30 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
       shaft-angle sum δ₁+δ₂ = Σ. Spiral bevel and hypoid are REFUSED by name — Gleason
       spiral bevel geometry is machine-tool kinematics, not a closed-form profile, and
       a transcription would be a guess wearing a standard's name.
-    - **Worm and worm wheel** — the worm IS a thread: `MakeThreadedRod`'s helical
-      sweep with a trapezoid (ZA) profile is the exact worm body, one axis-touching
-      revolve family this kernel already speaks. The WHEEL is the honest problem: a
-      true throated wheel is the envelope of the worm's motion (no closed form —
-      that is gashing-and-hobbing kinematics), so v1 is a helical gear at the worm's
-      lead angle (the crossed-helical approximation, stated, with its point-contact
-      caveat named) and the throated envelope is filed as assessed-not-promised.
+    - **Throated (globoid) worm wheel** — the residual of the worm work, which landed
+      as `Gears.Worm`/`WormPair`/`WormWheel` with the crossed-helical wheel and its
+      point-contact caveat stated. What is missing is the wheel whose teeth WRAP the
+      worm, and it is assessed rather than merely deferred: the throat flank is the
+      ENVELOPE of the worm's motion, so there is no profile to fit — it is a swept
+      subtraction (the worm's solid swept through the wheel's rotation, removed from
+      the blank), which the kernel can already spell as `Shape.SweptOver` +
+      `MotionStudy.SweptVolume` in the IMPLICIT representation only (that node is
+      implicit-Native and B-Rep-Impossible by construction). So a v2 is reachable
+      today at mesh/implicit fidelity and would need (a) a `Mechanism` posing the
+      worm against the wheel blank at the correct ratio, (b) enough sweep frames that
+      the scalloping is under the print/mesh tolerance — the adaptive `maxTravel`
+      rule already bounds that — and (c) an honest statement that the result is the
+      GENERATED wheel rather than an exact surface. What it cannot give is a B-Rep,
+      and no amount of work here changes that: the envelope of a helicoid under
+      rotation is not in this kernel's surface vocabulary. Worth doing when a
+      consumer wants a load-carrying reducer rather than a motion drive.
+    - **Worm follow-ups (smaller)** — the ZI (involute-helicoid) and ZN worm forms
+      beside ZA (each is a different straight-generator placement, so each is another
+      `MakeThreadedRod` profile plus its own axial-section identity); a worm's own
+      end chamfers/runout; and a conjugate-contact instrument for a crossed-helical
+      pair, which is genuinely 3D where the spur and rack instruments are 2D — point
+      contact means bisecting a clearance over two independent rotations rather than
+      one, so it is a real piece of work rather than the existing helper reused.
     - **Cycloidal profiles** — clock/instrument gears and cycloidal-drive discs: the
       epicycloid/hypocycloid are closed-form parametric curves, so they enter exactly
       as the involute did (fit with reported deviation); BS 978-2 clock-gear
@@ -806,10 +826,12 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
       the kinematics — the Willis equation as a TEST against the mechanism solver's
       measured ratio, which is not circular here because the couplings compose and
       the assembled ratio (1 + z_ring/z_sun for held ring) is an emergent check.
-    - **Crossed helical (screw) gears** — the geometry already exists (two helicals
-      at skew shafts); what is missing is only the pairing arithmetic (shaft angle =
-      β₁+β₂, matching normal modules) — arithmetic on `GearSpec`, plus the
-      point-contact caveat stated.
+    - **Crossed helical (screw) gears at a GENERAL shaft angle** — the 90° case
+      landed as `WormPair` (β₁ + β₂ = Σ with Σ = 90, matching normal modules, the
+      point-contact caveat stated). What remains is the general Σ, which is the same
+      arithmetic with the sum no longer forcing β₂ = γ, plus the centre-distance and
+      sliding-velocity relations that only matter once the two members are ordinary
+      helicals rather than a worm and its wheel.
     - **Non-circular/elliptical gears** — refuse by name for now: conjugacy for a
       stated centre-distance function is an integral condition, a different problem
       from fitting a known curve; file only if a consumer appears.

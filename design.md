@@ -3335,6 +3335,58 @@ Design decisions:
   pinion reads 5.6e-3 rad (wrong base circle), a 5e-2-tolerance flank reads
   5.6e-4 ≈ deviation/r_b (the textbook transmission-error relation), so it can see
   a bad FLANK, not just a bad ratio.
+- **The rack is not one more gear, it is the DEFINITION** (`Gears.Rack.cs`). As z→∞
+  the base circle recedes and the involute flattens into a straight line at the
+  pressure angle, which is why ISO 53 defines the whole tooth system by a basic
+  RACK. So the rack is the one member with no fit tier at all — straight `Line2d`
+  flanks, exact `Arc2d` root fillets — and `RackProfile` deliberately carries **no**
+  `MaxFitDeviation` for there to be, where `GearProfile` must report what the biarc
+  chain cost. That flows into the assertions rather than only the prose: the
+  pitch-line thickness and the flank angle are held to 1e-9 off the sketch's own
+  region and the area is an EQUALITY against the closed form at 1e-12, where the
+  spur gear's equivalents carry the fit deviation as a band. `RackSpec.MatingGear`/
+  `RackSpec.For` convert both ways so a pair cannot claim one tooth system and mean
+  two; the profile shift does not travel, because it says where a GEAR sits against
+  this rack rather than what the rack is. Conjugate action is measured the same way
+  as the gear pair's and for the same reason (`Coupling.RackAndPinion` would enforce
+  what the test asserts), with the pinion LIFTED to open backlash — legal because an
+  involute against a straight rack transmits the same ratio at any mounting height,
+  the flank normal being fixed so its supporting line is tangent to the base circle
+  and translates by exactly r_b·dφ. Measured 6.94e-5 mm of advance variation over
+  1.2 tooth pitches against 1.21e-1 mm for a 25° rack on a 20° pinion — a 1740×
+  separation, so the instrument reads flank FORM.
+- **The worm is a thread; the wheel is honestly an approximation** (`Gears.Worm.cs`).
+  A ZA-form worm is straight-sided in the AXIAL plane, which makes its body one
+  helical sweep of a trapezoidal (radius, axial) profile — the family
+  `SolidFactory.MakeThreadedRod` already builds every modelled thread from — so it is
+  exact and boolean-free for the thread's own reason: the root lands are part of the
+  sweep, so no core cylinder and no coaxial tangent seam exists. **Multi-start needed
+  no new machinery at all**, which is the finding worth keeping: a helical sweep
+  repeats every LEAD, so the profile handed over covers one lead and simply contains
+  z₁ teeth. The WHEEL is where the honesty is spent. A true worm wheel is throated,
+  and its flank is the ENVELOPE of the worm's motion — hobbing kinematics with no
+  closed form to draw — so what is offered is a helical gear at the worm's LEAD
+  angle: the exact geometry of a crossed-helical pair, which meshes, transmits the
+  stated ratio, and touches at a POINT rather than along a line. That is stated in
+  the API docs, the type remarks and the docs page rather than buried, because the
+  difference between point and line contact is the difference between a motion drive
+  and a load-carrying reducer. The throated envelope is filed as
+  assessed-not-promised. **Two verification decisions are worth recording.** The
+  worm's geometry is measured from its own FIELD, and the tessellation's chord bias
+  is DERIVED rather than allowed for — the helical bands are chorded in PHASE only
+  (the generator is straight, so a v-chord is exactly on the surface), so a measured
+  axial thickness is narrowed by 2·r(1 − cos(π/n))·tan α, 0.0267 mm predicted against
+  0.0275 measured. The consequence is the pretty part: a tooth CENTRE is the mean of
+  two flank crossings, so that bias cancels EXACTLY and the lead reads to 1e-14,
+  while a thickness is their difference and doubles it. And the handedness
+  cross-check earns its keep because the worm is a helical sweep in the B-Rep kernel
+  while the wheel is a twisted extrusion in the modelling layer: two independent
+  constructions that must agree about what "right-handed" means, or a correctly
+  specified pair would be BUILT meshing the wrong way (the standing lesson that
+  handedness cannot enter through a pose and has to enter the arithmetic). Both are
+  read off the geometry — the worm by the sign of its quarter-turn advance, the wheel
+  by ONE probe on the pitch cylinder at +twist, inside for a right-hand wheel and
+  outside for a left-hand one because twice the twist exceeds the tooth half-angle.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

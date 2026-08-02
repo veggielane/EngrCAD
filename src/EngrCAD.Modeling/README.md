@@ -2239,6 +2239,66 @@ diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limi
   outline's exact Green's-theorem area (the involute term is r_b²·t³/6), held
   against `Sketch.Area()` in tests.
 
+### Racks (`Gears.Rack.cs`)
+
+The involute's straight-line limit, and so the DEFINITION of the tooth system
+rather than one more member of it. `Gears.Rack(RackSpec, teeth, backHeight?)` →
+`RackProfile` (a closed CCW `Sketch`: pitch line y = 0, teeth +Y, spanning a whole
+number of pitches from one tooth-SPACE centre to another, so bars tile);
+`Gears.RackBar(…, faceWidth)` extrudes it. Straight `Line2d` flanks and exact
+`Arc2d` root fillets, so there is **no fit deviation and no `MaxFitDeviation`** —
+its absence is the statement, where `GearProfile` must report what the involute's
+biarc chain cost.
+
+- `RackSpec` carries the same ISO 53 profile A coefficients `GearSpec` does, with
+  `MatingGear(teeth, shift?)`/`RackSpec.For(gear)` converting both ways so a pair
+  cannot drift apart in the tooth system it claims to share. The profile shift does
+  NOT travel: it says where a *gear* sits against this rack, not what the rack is.
+- `MaximumRootFilletRadius` is ISO 53's ρ_fP,max = (π·m/4 − h_f·tan α)·cos α/(1 − sin α)
+  — 0.4719·m at the standard 20°/1.25 pair, which is why 0.38·m fits and why the
+  same 0.38 is refused by name at 25°, where the maximum falls to 0.318·m.
+- `ClosedFormArea` = L·backHeight + per tooth the flank trapezoid (a + b)(h_a + h_f)
+  plus its two fillet corner FILLS ρ²[(1 − sin α)/cos α − (π/2 − α)/2] — a fillet
+  rounds a REFLEX corner here, so it adds material. Held against `Sketch.Area()` as
+  an EQUALITY (1e-12), not a bound.
+- Refusals by name: a pointed tooth, a fillet larger than the space admits (naming
+  the maximum), a non-positive back height.
+
+### Worm and worm wheel (`Gears.Worm.cs`)
+
+**The worm IS a thread.** A ZA-form worm is straight-sided in the AXIAL plane, so
+its body is one boolean-free helical sweep of a trapezoidal (radius, axial) profile
+through `SolidFactory.MakeThreadedRod` — the root lands are part of the sweep, so no
+core cylinder and no coaxial tangent seam ever exists. Multi-start is not a different
+construction: a helical sweep repeats every LEAD, so the profile covers one lead and
+simply contains z₁ teeth. `Gears.Worm(WormSpec, length)` → `Shape` (B-Rep-Native;
+mesh and implicit bridged through the tessellation; not STEP-exportable, since
+helical surfaces have no AP214 entity — `BrepArchive` round-trips it).
+
+- `WormSpec` keeps STARTS and teeth apart deliberately: `AxialPitch` = π·m_x is the
+  tooth-to-tooth spacing, `Lead` = z₁·p_x the advance per turn, and the ratio is the
+  wheel's teeth over the STARTS (a two-start worm on 40 teeth is 20:1, not 40:1).
+  The pitch diameter is a free choice — it sets tan γ = lead/(π·d₁) = z₁/q, hence the
+  efficiency and self-locking — given directly with `DiameterFactor` derived, or via
+  `FromDiameterFactor`. `NormalModule`/`NormalPressureAngleDegrees` project through γ.
+- `VolumeOfLength` is Pappus over the sweep: averaging the axial section over a full
+  turn recovers one complete period, so V = L·(2π/lead)·∫½R² dz and **any** length
+  works, whole turns or not.
+- `Gears.WormPair(worm, wheelTeeth)` → `WormPair` does the matching arithmetic once.
+  **The wheel is the CROSSED-HELICAL approximation and the caveat is the design**: a
+  true worm wheel is throated and its flank is the ENVELOPE of the worm's motion —
+  hobbing kinematics, no closed form — so `Gears.WormWheel` builds an ordinary
+  `HelicalGear` at the worm's LEAD angle, which meshes and transmits the stated ratio
+  and touches at a POINT rather than along a line. Right for a motion drive, a print
+  or a layout; wrong for a load-carrying reducer.
+- Two identities carry the pairing: the worm's AXIAL pitch is the wheel's TRANSVERSE
+  circular pitch, and at a 90° shaft angle the worm's axial plane IS the wheel's
+  transverse plane at the central point, so the wheel's transverse pressure angle is
+  the worm's axial one with nothing to convert. β₁ + β₂ = 90° is why the wheel's
+  helix angle is the worm's LEAD angle; both members take the same hand.
+- Refusals by name: a non-positive root diameter (naming the diameter factor), a
+  pointed thread, adjacent starts overlapping at the root cylinder.
+
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".
 
