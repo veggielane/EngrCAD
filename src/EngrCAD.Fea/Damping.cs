@@ -33,9 +33,12 @@ namespace EngrCAD.Fea;
 /// eigenvalues and eigenvectors are complex and whose standard solution linearises it into a
 /// <c>2n</c>-dimensional state-space problem in a non-symmetric matrix pair. That is a
 /// different solver, not a bigger version of this one, and nothing in this project attempts
-/// it. Rayleigh damping remains the right model for the case it fits — material damping
-/// spread uniformly through a single-material body — and a deliberate approximation
-/// everywhere else.</para>
+/// it. The steady-state RESPONSE under such damping needs no damped modes at all, though:
+/// <see cref="DirectHarmonicSolver"/> factors the full complex system per frequency with the
+/// model's own damping (<see cref="StructuralModel.Dashpot(int, Vector3d, double)"/>,
+/// <see cref="StructuralModel.SetDamping(int, RayleighDamping)"/>) assembled. Rayleigh
+/// damping remains the right model for the case it fits — material damping spread uniformly
+/// through a single-material body — and a deliberate approximation everywhere else.</para>
 /// </summary>
 /// <param name="Alpha">The mass-proportional coefficient, in 1/time.</param>
 /// <param name="Beta">The stiffness-proportional coefficient, in time.</param>
@@ -152,8 +155,11 @@ public readonly record struct RayleighDamping(double Alpha, double Beta)
 /// <see cref="RayleighDamping"/> for exactly what that means and what it excludes), the matrix
 /// <c>C</c> never has to be assembled at all: every consumer wants
 /// <c>zeta_n</c>, and forming C in order to project it back down to the same numbers would be
-/// arithmetic with nothing to show for it. So no damping matrix exists in this project, and
-/// that is a design statement rather than an omission.</para>
+/// arithmetic with nothing to show for it. So a damping matrix exists in exactly ONE place in
+/// this project — <c>FeaAssembly.Damping</c>, for the direct per-frequency harmonic solve,
+/// whose factorization consumes the VALUES of <c>i·omega·C</c> rather than any product of it
+/// and whose non-proportional damping is geometry-attached data no ratio can carry — and
+/// nowhere else, which is a design statement rather than an omission.</para>
 /// </summary>
 public abstract class ModalDamping
 {

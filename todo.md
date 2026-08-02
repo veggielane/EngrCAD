@@ -1110,32 +1110,31 @@ conditions within 0.05–0.70% of the shear-corrected load, refinement monotone 
 `omega²(P)/omega²(0) = 1 + P/P_cr` to 7.4e-10, resonant amplification 25.006 against 25.000,
 half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Residuals below.
 
-- [ ] **FEA: a DIRECT (per-frequency) harmonic solve — the Core blocker is LANDED and only
-  the Fea consumer remains.** `(K − omega²M + i·omega·C)·u = f` factorized per frequency —
-  the only option in three cases modal superposition structurally cannot express:
-  non-proportional damping (the modes stop diagonalising C), material properties that vary
-  WITH frequency (the modal basis itself would change per point), and a load whose spatial
-  distribution changes with frequency. **`SparseLdlt` in `EngrCAD.Core.Solvers` is the
-  factorization this entry was blocked on** — complex symmetric L·D·Lᵀ over the union
-  pattern of the two parts, sharing `SparseCholesky`'s symbolic pass verbatim (AMD included),
-  chosen over a real Bunch–Kaufman with the weighing recorded in design.md §2(d) and the
-  class doc; verified against independent dense complex solves at backward residuals
-  < 1e-13, including a Rayleigh-damped bar AT its first resonance and a dashpot whose
-  pattern the stiffness does not cover. The Fea-side hookup is per frequency:
-  `SparseLdlt.Factorize(Combine(K, 1, M, −omega²), scaled C, Amd)` + one complex `Solve`
-  with the load split as (Re, Im) — plus an assembled non-proportional `C` (a dashpot/
-  per-region loss vocabulary on `StructuralModel`, which does not exist yet and is the
-  actual remaining work), and the sweep loop with its per-frequency refactor cost stated
-  honestly against the modal route. Note the value stays confined to the three cases above:
-  under PROPORTIONAL damping the direct solve and the modal one answer the same question,
-  and the non-proportional case overlaps the quadratic-eigenproblem item below.
 - [ ] **FEA: non-proportional damping — the quadratic eigenproblem.** A discrete dashpot, two
   materials with different loss factors in one model, viscoelasticity or hysteretic damping all
   leave `phi' C phi` with off-diagonal terms, at which point the damped modes are no longer the
   undamped ones and `(lambda²M + lambda·C + K)phi = 0` needs a `2n` state-space linearization
   in a NON-SYMMETRIC matrix pair — so neither `SparseCholesky` nor `LanczosEigen` applies and
   the modes come out complex. Scoped separately on purpose; `RayleighDamping`'s docs say
-  precisely what is and is not covered.
+  precisely what is and is not covered. Note the steady-state RESPONSE under such damping no
+  longer waits on this: `DirectHarmonicSolver` factors the full complex system per frequency
+  with the model's own damping assembled — what remains open here is the damped NATURAL MODES.
+- [ ] **FEA: transient integration of model-carried damping.** `StructuralModel` now carries a
+  damping vocabulary (`SetDamping` per region, `Dashpot`) that only `DirectHarmonicSolver`
+  consumes; `TransientSolver` REFUSES a model carrying it rather than silently ignoring it.
+  Landing it there is mechanical — the effective stiffness gains `(1+alpha)·a1·C` with C from
+  `FeaAssembly.Damping`, and the right-hand-side C·x products become matrix products against
+  the assembled C — but it needs its own verification (a dashpot's decay envelope against the
+  2-DOF closed form, and the energy-balance identity re-derived with the C term), so it is
+  filed rather than bolted on.
+- [ ] **FEA: hysteretic (structural) damping for the direct harmonic solve.** A loss factor
+  eta enters the steady state as a frequency-INDEPENDENT imaginary stiffness `i·eta·K` (the
+  complex modulus), not as `i·omega·C` — at the direct solve's seam that is one more term in
+  the imaginary part (`eta_r·K_r` per region beside `omega·C`), and it is the classic direct-
+  solve-only damping model. Needs its own 1-DOF closed-form oracle
+  (`|u| = f/sqrt((k − omega²m)² + (eta·k)²)`) and a decision about whether `SetDamping` grows
+  a loss-factor overload or a separate `SetLossFactor` — the vocabulary should not let one
+  region state both without saying what the sum means.
 - [ ] **FEA: residual-VECTOR basis augmentation.** `HarmonicSolveOptions.StaticCorrection`
   handles the static part of what truncated modes miss (mode acceleration), which is most of it
   — 3.079% → 1.8e-16 at zero frequency on the cantilever. The remainder wants the static

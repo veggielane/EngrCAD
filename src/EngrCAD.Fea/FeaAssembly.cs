@@ -212,6 +212,149 @@ internal static class FeaAssembly
     }
 
     /// <summary>
+    /// The FULL damping matrix <c>C = sum_e (alpha_e·M_e + beta_e·K_e) + dashpots</c> over
+    /// every degree of freedom (symmetric upper) — the model's own damping declarations,
+    /// assembled.
+    ///
+    /// <para><b>This is the ONE place in the project a damping matrix exists, and the
+    /// design statement that none does needed exactly this qualification.</b> Everywhere a
+    /// C's only uses are matrix-vector products or scalar multiples folded into another
+    /// matrix (the modal ratios, the transient's effective stiffness), forming it buys a
+    /// slower operation — that finding stands. The direct per-frequency harmonic solve is
+    /// different in kind: its factorization consumes the VALUES of <c>i·omega·C</c> as a
+    /// matrix, there is no product to decompose into, and a non-proportional C (per-region
+    /// coefficients, dashpots) is geometry-attached DATA no per-mode ratio can carry. So
+    /// the matrix is assembled here, for that consumer, and nowhere else.</para>
+    ///
+    /// <para>Per-element proportional terms use the SAME element matrices the stiffness and
+    /// mass assemblies build (<see cref="TetElement.Stiffness"/> /
+    /// <see cref="TetElement.ConsistentMass"/>), so a model whose regions all state one
+    /// value assembles the same C as <c>alpha·M + beta·K</c> to round-off — and per-region
+    /// values that happen to be equal are bit-identical to the uniform statement, because
+    /// there is only one assembly path. A dashpot adds <c>c·a·a'</c> blocks: on the node's
+    /// diagonal block for a grounded one, the <c>[[+c, -c], [-c, +c]]</c> pattern for a
+    /// pair — which may land OUTSIDE the stiffness pattern when the two nodes share no
+    /// element (the union-pattern case <c>SparseLdlt</c> exists to factor).</para>
+    /// </summary>
+    public static PackedSparseMatrix Damping(
+        StructuralModel model, in TetQuadrature stiffnessRule, in TetQuadrature massRule)
+    {
+        var mesh = model.Mesh;
+        int perElement = mesh.NodesPerElement;
+        int elementDofs = 3 * perElement;
+        var builder = new SparseMatrixBuilder(3 * mesh.NodeCount, 3 * mesh.NodeCount);
+        var ke = new double[elementDofs * elementDofs];
+        var me = new double[perElement * perElement];
+        var positions = new Vector3d[perElement];
+        var dofs = new int[elementDofs];
+
+        for (int e = 0; e < mesh.ElementCount; e++)
+        {
+            var damping = model.DampingOf(e);
+            double alpha = damping.Alpha, beta = damping.Beta;
+            // Exact-zero skip: an undamped element contributes no entries at all, so a
+            // model damped only by dashpots assembles a C of exactly the dashpot pattern.
+            if (alpha == 0 && beta == 0)
+                continue;
+
+            var nodes = mesh.Element(e);
+            for (int i = 0; i < perElement; i++)
+            {
+                positions[i] = mesh.Position(nodes[i]);
+                for (int a = 0; a < 3; a++)
+                    dofs[3 * i + a] = 3 * nodes[i] + a;
+            }
+
+            if (beta != 0)
+            {
+                TetElement.Stiffness(mesh.Order, positions, model.ElasticityOf(e), stiffnessRule, ke);
+                for (int i = 0; i < elementDofs; i++)
+                {
+                    int ri = dofs[i];
+                    int row = i * elementDofs;
+                    for (int j = 0; j < elementDofs; j++)
+                    {
+                        double v = beta * ke[row + j];
+                        if (v == 0)
+                            continue;
+                        int rj = dofs[j];
+                        if (ri <= rj)
+                            builder.Add(ri, rj, v);
+                    }
+                }
+            }
+
+            if (alpha != 0)
+            {
+                TetElement.ConsistentMass(
+                    mesh.Order, positions, model.MaterialOf(e).Density, massRule, me);
+                for (int i = 0; i < perElement; i++)
+                {
+                    int row = i * perElement;
+                    for (int j = 0; j < perElement; j++)
+                    {
+                        double v = alpha * me[row + j];
+                        if (v == 0)
+                            continue;
+                        for (int a = 0; a < 3; a++)
+                        {
+                            int ri = 3 * nodes[i] + a, rj = 3 * nodes[j] + a;
+                            if (ri <= rj)
+                                builder.Add(ri, rj, v);
+                        }
+                    }
+                }
+            }
+        }
+
+        foreach (var dashpot in model.Dashpots)
+        {
+            var axis = dashpot.Axis;
+            Span<double> a = [axis.X, axis.Y, axis.Z];
+            for (int i = 0; i < 3; i++)
+            {
+                for (int j = 0; j < 3; j++)
+                {
+                    double v = dashpot.Coefficient * a[i] * a[j];
+                    if (v == 0)
+                        continue;
+                    // The diagonal block(s), +c·a·a' on each end.
+                    int ri = 3 * dashpot.NodeA + i, rj = 3 * dashpot.NodeA + j;
+                    if (ri <= rj)
+                        builder.Add(ri, rj, v);
+                    if (dashpot.IsGrounded)
+                        continue;
+                    ri = 3 * dashpot.NodeB + i;
+                    rj = 3 * dashpot.NodeB + j;
+                    if (ri <= rj)
+                        builder.Add(ri, rj, v);
+                    // The coupling block, -c·a·a', stored once (upper triangle).
+                    int lo = Math.Min(dashpot.NodeA, dashpot.NodeB);
+                    int hi = Math.Max(dashpot.NodeA, dashpot.NodeB);
+                    builder.Add(3 * lo + i, 3 * hi + j, -v);
+                }
+            }
+        }
+
+        return builder.ToSymmetricUpper();
+    }
+
+    /// <summary><c>s·a</c> — one pass over the entries, for the per-frequency
+    /// <c>omega·C</c> the direct harmonic solve factors.</summary>
+    public static PackedSparseMatrix Scaled(PackedSparseMatrix a, double s)
+    {
+        var builder = new SparseMatrixBuilder(a.Rows, a.Columns);
+        for (int row = 0; row < a.Rows; row++)
+        {
+            var columns = a.RowColumns(row);
+            var values = a.RowValues(row);
+            for (int e = 0; e < columns.Length; e++)
+                builder.Add(row, columns[e], s * values[e]);
+        }
+        return builder.ToSymmetricUpper();
+    }
+
+    /// <summary>
     /// The FULL mass matrix over every degree of freedom, and the body's total mass.
     ///
     /// <para><b>The scalar integral is asked, not restated.</b>

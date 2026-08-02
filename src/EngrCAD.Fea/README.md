@@ -1958,9 +1958,12 @@ matrix pair. **That is a different solver, not a bigger version of this one**, a
 attempts it. `ModalDamping` also takes a flat ratio (`Uniform`) or a measured table
 (`PerMode`), both of which are proportional by construction.
 
-**No damping matrix is ever assembled.** Every consumer wants `zeta_n`, and forming `C` in
-order to project it back down to the same numbers would be arithmetic with nothing to show for
-it. That is a design statement, not an omission.
+**A damping matrix exists in exactly ONE place.** Wherever a C's only uses are products or
+scalar multiples folded into another matrix — the modal ratios, the transient's effective
+stiffness — forming it buys a slower operation and nothing is assembled; that finding stands.
+The exception is `FeaAssembly.Damping`, assembled for `DirectHarmonicSolver` alone, because
+its factorization consumes the VALUES of `i·omega·C` (there is no product to decompose into)
+and a non-proportional C is geometry-attached data no ratio can carry.
 
 ## Frequency response by modal superposition
 
@@ -2003,13 +2006,56 @@ kept, and the missing modes' static flexibility is carried at every other freque
 `TruncationError` reports what the plain sum would have missed, and is **NaN without a static
 solve**, because then it is not small, it is unknown.
 
-**What a DIRECT solve buys, and when it is actually needed** (filed, not built): factorizing
-`(K - W²M + i·W·C)` at every frequency costs a complex factorization per point — hundreds of
-times this — and is the only option in three cases, none of which this can express. Damping
-that is not proportional (the modes stop diagonalising C, and the eigenproblem becomes
-quadratic); material properties that vary WITH frequency (a viscoelastic modulus — the modal
-basis itself would change per point); and a load whose spatial distribution changes with
-frequency.
+## The direct per-frequency solve: `DirectHarmonicSolver`
+
+Factorizes the full complex system `(K - W²M + i·W·C)` at every sweep point over Core's
+`SparseLdlt` (complex symmetric LDLᵀ, the union pattern of the two parts, AMD by default —
+the shifted family its own remarks name as the one AMD serves). **The value is fidelity, not
+speed**: one complex factorization per frequency, hundreds of times a modal sweep, and
+nothing amortises across points because the matrix carries the frequency — the amortisation
+here is per-frequency, one factor serving every right-hand side AT that frequency, of which
+a sweep has exactly one. What it buys is what modal superposition structurally cannot
+express: **non-proportional damping**, stated on the MODEL because it is geometry-attached
+data no per-mode ratio can carry —
+
+```csharp
+model.SetDamping(new RayleighDamping(alpha, beta));      // model-wide material damping
+model.SetDamping(1, new RayleighDamping(0, betaRubber)); // a lossier region — already
+                                                         // non-proportional if it differs
+model.Dashpot(node, new Vector3d(0, 0, 1), 0.05);        // a discrete damper to ground
+model.Dashpot(nodeA, nodeB, 0.02);                       // between two nodes, along their chord
+
+var response = DirectHarmonicSolver.Solve(model, new DirectHarmonicOptions
+{
+    Frequencies = HarmonicSweep.Logarithmic(10, 5000, 60),
+});
+```
+
+A pair dashpot's coupling block can land where the stiffness pattern has no entry at all
+(two nodes sharing no element), which is precisely the union-pattern case `SparseLdlt`
+factors. The response type mirrors `HarmonicResponse`'s accessors (`ResponseAt`,
+`DisplacementAt`, `AmplitudeAt`, `Fields` under the SAME field names) minus the modal
+coordinates there are no modes to have; the report carries the worst backward residual
+`|Zu - f|/|f|` over the sweep and the smallest pivot met, because an unpivoted
+factorization's accuracy is a property of each frequency's conditioning rather than a
+guarantee. Three decided behaviours: an **undamped model is accepted** (real response,
+unbounded toward resonance — and EXACTLY at an undamped resonance the factorization refuses
+loudly, since there is no steady state to report), a **non-zero prescribed offset is
+refused** (a static answer riding on the oscillation; an oscillating support is base
+excitation, filed), and an **unrestrained body is accepted** (`K - W²M` is nonsingular at
+almost every frequency; the low-frequency answer is the rigid `|u| = F/(W²·m)`, verified
+against exactly that closed form). The modal and transient routes REFUSE a model carrying
+its own damping rather than silently ignoring it — one statement per model.
+
+Verified: agreement with the corrected modal route to **3.5e-6 relative** over a sweep
+bracketing the first resonance of a quadratic cantilever (the gap is modal truncation);
+**1e-9 agreement** on a 1x1-reduced model whose single mode is the complete basis; a
+hand-built complex 2x2 Cramer oracle for a dashpot between unconnected nodes and for
+per-region coefficients (each region its own closed-form oscillator — the oracle that
+catches a per-region map applied to the wrong region); resonant amplification exactly
+`1/(2·zeta)` to 1e-6 with the -90° phase; equal per-region values bit-identical to the
+uniform statement (one assembly path); and the exact-resonance refusal driven through a
+frequency scan that reproduces the solver's own pivot arithmetic verbatim.
 
 ## Verification
 
@@ -2040,13 +2086,15 @@ frequency.
 
 ## Limitations
 
-- **Proportional damping only** (above). Non-proportional damping is a quadratic eigenproblem
-  and a different solver.
+- **The MODAL route is proportional-damping only** (above); the non-proportional steady state
+  is `DirectHarmonicSolver`'s job. What remains outside both are the damped NATURAL MODES
+  under non-proportional damping — the quadratic eigenproblem, a different solver — and
+  frequency-dependent moduli / frequency-dependent load shapes, which the direct solve could
+  express but which have no vocabulary here yet.
 - **Harmonic (steady-state) response only** on this path. Direct time integration is a separate
   solver - see [Transient dynamics](#transient-dynamics-direct-time-integration) below.
 - **Nodal-force excitation only.** Base acceleration would ride the participation factors the
-  modal results already carry; a load whose spatial shape changes with frequency needs the
-  direct solve.
+  modal results already carry.
 - **No residual-vector basis augmentation.** The mode-acceleration correction handles the
   static part of what the truncated modes miss, which is most of it; a residual VECTOR (the
   static response orthogonalised against the kept modes, added to the basis) would handle the

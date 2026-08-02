@@ -961,8 +961,55 @@ sweep is one dot product per mode plus a complex division per (mode, frequency) 
 assembled, nothing factorized. The DIRECT alternative factorizes `(K − W²M + i·W·C)` per
 frequency and is the only option in three cases, none of which this can express: damping that is
 not proportional, material properties that vary WITH frequency (the modal basis itself would
-change per point), and a load whose spatial distribution changes with frequency. So it is filed
-as a second METHOD rather than a better one.
+change per point), and a load whose spatial distribution changes with frequency. It is a second
+METHOD rather than a better one, and it is now built — the next subsection.
+
+### The direct per-frequency solve, and where the damping vocabulary had to live
+
+`DirectHarmonicSolver` factors `(K − W²M + i·W·C)` at every sweep point over Core's
+`SparseLdlt` (complex symmetric LDLᵀ — built for exactly this system; its class doc records
+why the complex spelling beat a real Bunch–Kaufman). Three decisions are worth recording.
+
+**The damping lives on the MODEL, and that is the deliverable rather than a convenience.**
+The modal route's damping is a per-mode RATIO (a property of a modal basis) and the
+transient's a run option; what neither can carry is damping attached to GEOMETRY — a
+dashpot at a node, a lossier region — which is precisely the case the direct solve exists
+for. So `StructuralModel` gained the vocabulary (`SetDamping` model-wide and per region,
+`Dashpot` grounded and node-to-node), the direct solver reads ONLY the model, and the two
+solvers that cannot integrate a model-carried C — the modal harmonic route and the
+transient — REFUSE a model that carries one, naming `DirectHarmonicSolver`, rather than
+silently ignoring it: one statement per model, and no consumer that quietly drops it. A
+node-pair dashpot's coupling block can land where the stiffness pattern has no entry at all
+(two nodes sharing no element), which is the union-pattern case `SparseLdlt` factors and
+the test fixture exercises deliberately.
+
+**The "no damping matrix" statement gained its one exception, and the exception proves the
+rule.** §3g's finding — everywhere a C's uses are products or scalar folds, assembling it
+buys a slower operation — stands untouched. This factorization is different in KIND: it
+consumes the VALUES of `i·omega·C` as a matrix, there is no product to decompose into, and
+a non-proportional C is data rather than a projection of ratios. So `FeaAssembly.Damping`
+is the one place a damping matrix exists, built per-element (`sum_e alpha_e·M_e +
+beta_e·K_e` + dashpot blocks) through ONE assembly path — which is what makes "every region
+states the same value" bit-identical to "the default states it once", asserted rather than
+hoped.
+
+**An undamped model is accepted, and the refusal at an exact resonance is the physics.**
+The modal route requires an explicit damping statement because `None` makes every resonance
+infinite; here the model's damping state IS the statement, an undamped sweep is the
+standard real FRF, and an undamped model driven exactly at a natural frequency hits
+`SparseLdlt`'s exactly-zero pivot — wrapped naming the frequency and the fact that no
+steady state exists there (the response grows linearly in time forever). Reaching that
+refusal in a test took reproducing the solver's own pivot arithmetic VERBATIM — the
+assembled matrix entries through the hertz→omega→coefficient chain, scanned over a family
+of fixtures because one ulp of hertz moves the pivot by ~5–9 ulps of the stiffness (the
+measured stiffness `probe/deflection`, ulps away from the assembled entry, found no refusal
+at all: the recomputation-must-be-bit-reproducible lesson, in a test fixture). Verification
+is three-way: agreement with the corrected modal route at 3.5e-6 relative on a real mesh
+(the gap IS the truncation), 1e-9 on a 1×1-reduced model whose one mode is the whole basis,
+and hand-built complex Cramer oracles for the dashpot and per-region cases — each free DOF
+of the per-region fixture its own closed-form oscillator, so a per-region map applied to
+the wrong region fails at the right magnitude where any total-only assertion would agree
+with the regions swapped.
 
 **Truncation is turned into a correction rather than left as a caveat.** The mode-acceleration
 form `u(W) = u_static + sum_n phi_n F_n [1/D_n − 1/w_n²]` has a bracket that vanishes at

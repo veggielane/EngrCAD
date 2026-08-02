@@ -105,14 +105,16 @@ public sealed record HarmonicSolveOptions
 /// and nothing is assembled: a 500-point sweep over 10 modes is 5 000 divisions.</para>
 ///
 /// <para><b>What the alternative buys, and when it is actually needed.</b> A DIRECT solve
-/// factorizes <c>(K - W²M + i·W·C)</c> at every frequency — a complex factorization per
-/// point, hundreds of times the cost — and is the only option in three cases, none of which
-/// apply here: damping that is NOT proportional (see <see cref="RayleighDamping"/>, where the
-/// modes stop diagonalising C and the eigenproblem becomes quadratic), material properties
-/// that vary WITH frequency (viscoelastic moduli, frequency-dependent stiffness — the modal
-/// basis itself would change per point), and a load whose spatial distribution changes with
-/// frequency. It is filed rather than built for exactly that reason: it is not a better
-/// version of this, it answers questions this cannot express.</para>
+/// (<see cref="DirectHarmonicSolver"/>) factorizes <c>(K - W²M + i·W·C)</c> at every
+/// frequency — a complex factorization per point, hundreds of times the cost — and is the
+/// only option in three cases, none of which apply here: damping that is NOT proportional
+/// (see <see cref="RayleighDamping"/>, where the modes stop diagonalising C — the model's
+/// own dashpots and per-region coefficients, which are exactly what that solver consumes),
+/// material properties that vary WITH frequency (viscoelastic moduli, frequency-dependent
+/// stiffness — the modal basis itself would change per point), and a load whose spatial
+/// distribution changes with frequency. It is not a better version of this, it answers
+/// questions this cannot express — on a proportionally damped model the two agree to the
+/// truncation correction's own error, which is the cross-check the tests run.</para>
 ///
 /// <para><b>The load comes from the modal model's own applied forces.</b> Every load type
 /// reduces to consistent nodal forces at the moment it is applied (a pressure, a traction, a
@@ -153,6 +155,7 @@ public static class HarmonicSolver
 
         var model = modes.Model;
         RequireLoad(model);
+        RequireNoModelDamping(model);
         RequireNoRigidModes(modes);
         var correction = options.StaticCorrection;
         if (correction is not null)
@@ -256,7 +259,9 @@ public static class HarmonicSolver
         return peak > 0 ? worst / peak : 0;
     }
 
-    private static void RequireLoad(StructuralModel model)
+    // Internal so DirectHarmonicSolver asks the SAME rule rather than restating it —
+    // restating a shared test is how three recorded defects happened.
+    internal static void RequireLoad(StructuralModel model)
     {
         if (model.ThermalDeltaT is not null)
             throw new FeaException(
@@ -283,6 +288,29 @@ public static class HarmonicSolver
             + "structure - so a model built for one often has none; apply the excitation "
             + "(Force, Pressure, Traction or NodalForce) to the SAME model, which is the model "
             + "this response reads its load from.");
+    }
+
+    /// <summary>
+    /// Refuses a model carrying its own damping declarations — silently ignoring them
+    /// would be worse than either honest answer. If the model's damping is
+    /// non-proportional (a dashpot, differing per-region values), this route structurally
+    /// CANNOT integrate it: the undamped modes stop diagonalising C and the per-mode
+    /// scalar oscillators this method is made of no longer exist. If it is proportional,
+    /// the caller has stated damping in two places (the model and
+    /// <see cref="HarmonicSolveOptions.Damping"/>) and this method would apply only one of
+    /// them. Either way the refusal names the solver that reads the model's own damping.
+    /// </summary>
+    private static void RequireNoModelDamping(StructuralModel model)
+    {
+        if (!model.HasDamping)
+            return;
+        throw new FeaException(
+            $"The model carries its own damping ({model.DampingDescription}), and modal "
+            + "superposition cannot integrate a model-carried C: this route's damping is the "
+            + "per-mode ratios in HarmonicSolveOptions.Damping, which is complete only for "
+            + "proportional damping stated nowhere else. Solve this model with "
+            + "DirectHarmonicSolver, which assembles and factors the model's own damping — "
+            + "or state ratios on a model that carries no damping declarations of its own.");
     }
 
     private static void RequireNoRigidModes(ModalResults modes)

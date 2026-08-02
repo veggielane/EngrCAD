@@ -289,20 +289,74 @@ frequency rather than at the sweep's peak sample: those are two steps apart at t
 and detuning by 0.04% of the frequency rotates the phase 1.15° at 2% damping, so probing the
 peak sample would measure the sweep instead of the response.
 
-### When a direct solve is actually needed
+## The direct per-frequency solve
 
-Factorizing `(K - W²M + i·W·C)` at every frequency costs a complex factorization per point —
-hundreds of times a modal sweep — and it is the only option in three cases, none of which modal
-superposition can express:
+`DirectHarmonicSolver` factorizes the full complex system `(K - W²M + i·W·C)` at every sweep
+point over `SparseLdlt`'s complex symmetric LDLᵀ. **Its value is fidelity, not speed** — the
+cost is one complex factorization per frequency, hundreds of times a modal sweep, and nothing
+amortises across sweep points because the matrix carries the frequency — so reach for it where
+modal superposition structurally cannot go: **non-proportional damping**, where `phi' C phi`
+has off-diagonal terms and the per-mode scalar oscillators the modal method is made of no
+longer exist.
 
-- **damping that is not proportional**, where the modes stop diagonalising `C` and the
-  eigenproblem becomes quadratic;
-- **material properties that vary with frequency** (a viscoelastic modulus), where the modal
-  basis itself would change from point to point;
-- **a load whose spatial distribution changes with frequency**.
+That damping lives on the **model**, not on the solve options, because it is geometry-attached
+data no per-mode ratio can carry: `SetDamping` states Rayleigh coefficients model-wide or per
+region (two regions with different values are already non-proportional), and `Dashpot` places
+a discrete viscous damper at a node or between two — whose coupling block can land where the
+stiffness pattern has no entry at all, the union-pattern case the factorization exists for.
 
-None of them is a bigger version of what is here, which is why the modal method is the first
-implementation rather than a stopgap.
+```csharp run:fea-harmonic-direct
+var tets = TetMesher.Mesh(
+    new Part("beam", Shape.Box(80, 12, 8)).GetMesh(),
+    new TetMeshOptions { RefineQuality = true, MaxElementSize = 12 });
+
+var model = new StructuralModel(AnalysisMesh.Quadratic(tets), Materials.Steel);
+model.Fix(Facets.OnPlane(new Vector3d(-40, 0, 0), Vector3d.UnitX));
+model.Force(Facets.OnPlane(new Vector3d(40, 0, 0), Vector3d.UnitX), new Vector3d(0, 0, -50));
+
+// Damping on the MODEL: material damping everywhere, plus a discrete damper to ground at
+// the tip — the non-proportional combination no per-mode ratio can express.
+model.SetDamping(new RayleighDamping(0, 2 * 0.02 / (2 * Math.PI * 900)));
+int tip = 0;
+for (int v = 0; v < model.Mesh.NodeCount; v++)
+    if (model.Mesh.Position(v).X > model.Mesh.Position(tip).X) tip = v;
+model.Dashpot(tip, new Vector3d(0, 0, 1), 0.05);
+
+var response = DirectHarmonicSolver.Solve(model, new DirectHarmonicOptions
+{
+    Frequencies = HarmonicSweep.Logarithmic(50, 5000, 12),
+});
+
+if (!response.Report.NonProportional)
+    throw new Exception("a dashpot beside material damping is non-proportional");
+if (response.Report.WorstRelativeResidual > 1e-7)
+    throw new Exception($"backward residual {response.Report.WorstRelativeResidual:E1}");
+Console.WriteLine(response.ToText());
+```
+
+Three behaviours are decided rather than discovered. **An undamped model is accepted** — the
+response is real and grows without bound toward each resonance, which is the true answer —
+but driven *exactly* at a resonance the factorization refuses loudly, naming the physics: an
+undamped structure at its own natural frequency has no steady state to report. **A non-zero
+prescribed support offset is refused** (it is a static answer riding on the oscillation —
+superpose a static solve; an oscillating support is base excitation, filed). **An
+unrestrained body is accepted**: `K - W²M` is nonsingular at almost every frequency, and the
+low-frequency answer is the rigid body's own `|u| = F/(W²·m)` — verified against exactly that
+closed form.
+
+The two methods check each other where both apply: on a proportionally damped model the
+direct solve and the corrected modal sweep agree to **3.5e-6 relative** over a six-point
+sweep bracketing the first resonance (the gap is the modal truncation the correction cannot
+carry at non-zero frequency), exactly (1e-9) on a model whose one mode is the complete basis,
+and against a hand-built complex 2x2 oracle for a dashpot coupling two nodes that share no
+element. The report carries the worst backward residual `|Zu - f|/|f|` over the sweep —
+7.4e-9 measured near resonance, the honest figure for an unpivoted factorization — and the
+smallest pivot magnitude met, which is the conditioning tell.
+
+What still needs the modal route's vocabulary but not its basis is filed: frequency-dependent
+moduli and frequency-dependent load distributions have no vocabulary here yet, and the damped
+NATURAL MODES under non-proportional damping remain the quadratic eigenproblem — a different
+solver this one deliberately is not.
 
 ## What this does not do
 
