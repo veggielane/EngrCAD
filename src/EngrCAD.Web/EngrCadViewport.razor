@@ -197,7 +197,7 @@
     private (bool Enabled, SectionAxis Axis, double? Offset,
              IReadOnlyList<SectionPlane>? Planes, SectionCombine Combine) _shownSection =
         (false, SectionAxis.Z, null, null, SectionCombine.Intersection);
-    private ViewportContours? _contours;
+    private IReadOnlyList<ViewportContours>? _contours;
 
     // View cube state: the hovered direction (drives the face brighten), whether the
     // current drag started on the cube's screen region (arms rotate-snap on release),
@@ -397,9 +397,9 @@
     //
     // The clip rule itself is never restated here: the shaders carry it
     // (ViewerShaders.SectionClip), picking asks SectionClip.Hides through ScenePick,
-    // and this component only decides WHICH plane is active — one axis-aligned plane,
-    // like the desktop toolbar (custom hosts wanting quarter cuts drive
-    // ViewportFrame.Build directly with more planes).
+    // and this component only decides WHICH planes are active — the toolbar's one
+    // axis-aligned plane, or the explicit SectionPlanes list (quarter/octant cuts),
+    // which the isoline overlay follows plane by plane.
 
     /// <summary>The offset actually in use: the parameter, or the scene-bounds centre
     /// along the active axis (the desktop's default when the toggle goes on).</summary>
@@ -450,6 +450,28 @@
             SectionOffset = o;
         return ApplySectionAsync();
     }
+
+    /// <summary>
+    /// Supplies the explicit section-plane set directly (the multi-plane twin of
+    /// <see cref="SetSectionAsync"/>, and how a host or self-check reaches a quarter or
+    /// octant cut without a parameter flow). A non-empty set enables sectioning; null
+    /// or empty returns to the single-plane toolbar spelling without changing whether
+    /// sectioning is on.
+    /// </summary>
+    public Task SetSectionPlanesAsync(
+        IReadOnlyList<SectionPlane>? planes,
+        SectionCombine combine = SectionCombine.Intersection)
+    {
+        SectionPlanes = planes;
+        SectionCombine = combine;
+        if (planes is { Count: > 0 })
+            SectionEnabled = true;
+        return ApplySectionAsync();
+    }
+
+    /// <summary>The union bounds of everything currently drawn — what a host placing
+    /// explicit <see cref="SectionPlanes"/> centres them with.</summary>
+    public Aabb SceneBounds => _bounds;
 
     /// <summary>Moves the section plane by 2% of the scene extent along the active axis
     /// per step — the desktop's <c>[</c>/<c>]</c> nudge.</summary>
@@ -735,6 +757,11 @@
         if (_shownStyle != ViewStyle)
         {
             _shownStyle = ViewStyle;
+            redraw = true;
+        }
+        if (_shownShading != Shading)
+        {
+            _shownShading = Shading;
             redraw = true;
         }
         if (_shownSection != (SectionEnabled, SectionAxis, SectionOffset, SectionPlanes, SectionCombine))
@@ -1048,19 +1075,26 @@
     }
 
     /// <summary>
-    /// Recomputes and uploads the section-plane SDF isolines. The extraction is the
-    /// shared <c>SectionContours.Build</c> — the same marching squares, the same cached
-    /// <c>Part.TryGetSdf</c> route, the same lift below the plane and the same level
-    /// spacing the desktop renderer uses — so this component only decides WHEN to
+    /// Recomputes and uploads the section-plane SDF isolines, one build per ACTIVE
+    /// plane — the desktop worker's exact loop, so a quarter cut gets each cut face's
+    /// own contours and the frame clips each set by its sibling planes. The extraction
+    /// is the shared <c>SectionContours.Build</c> — the same marching squares, the same
+    /// cached <c>Part.TryGetSdf</c> route, the same lift below the plane and the same
+    /// level spacing the desktop renderer uses — so this component only decides WHEN to
     /// rebuild: on a section change, a visibility change, or a load, never per frame.
+    /// A plane whose build found no SDF-routed parts keeps an EMPTY entry rather than
+    /// being dropped: its plane still bounds its siblings' cut faces, so it must stay
+    /// in the list the frame computes sibling sets from.
     /// </summary>
     private async Task RebuildContoursAsync()
     {
         var gl = _gl;
         if (gl is null)
             return;
-        if (!SectionEnabled || _drawnInstances.Count == 0)
+        var planes = ActiveSectionPlanes();
+        if (planes is null || _drawnInstances.Count == 0)
         {
+            await ReleaseContoursAsync(gl, 0);
             _contours = null;
             return;
         }
@@ -1073,29 +1107,60 @@
         // deduped per part: the lowering failure itself is cached on the Part, so
         // without the dedupe every rebuild would repeat the same status line.
         List<string>? failures = null;
-        var geometry = SectionContours.Build(
-            _drawnInstances, visible,
-            SectionContours.PlaneFrame(SectionAxis.Direction(), EffectiveSectionOffset),
-            (part, message) =>
+        var built = new List<ViewportContours>(planes.Count);
+        int contributing = 0;
+        for (int p = 0; p < planes.Count; p++)
+        {
+            var geometry = SectionContours.Build(
+                _drawnInstances, visible,
+                SectionContours.PlaneFrame(planes[p].Normal.Normalized(), planes[p].Offset),
+                (part, message) =>
+                {
+                    if (_reportedSectionFailures.Add(part))
+                        (failures ??= []).Add($"{part.Name}: {message}");
+                });
+            if (geometry.PartCount > 0)
             {
-                if (_reportedSectionFailures.Add(part))
-                    (failures ??= []).Add($"{part.Name}: {message}");
-            });
+                await gl.UploadLineVerticesAsync($"@contours{p}.zero", geometry.ZeroVertices);
+                await gl.UploadLineVerticesAsync($"@contours{p}.positive", geometry.PositiveVertices);
+                await gl.UploadLineVerticesAsync($"@contours{p}.negative", geometry.NegativeVertices);
+                contributing++;
+            }
+            else
+            {
+                // Drop any previous build's uploads under this plane's keys (a release
+                // for a key never uploaded is a guarded no-op in the JS): the entry's
+                // zero counts already keep them undrawn, this keeps them unRETAINED.
+                await gl.ReleaseGeometryAsync($"@contours{p}.zero");
+                await gl.ReleaseGeometryAsync($"@contours{p}.positive");
+                await gl.ReleaseGeometryAsync($"@contours{p}.negative");
+            }
+            // An empty plane's entry keeps zero counts (nothing was uploaded under its
+            // keys, and zero-count draws are skipped) but keeps its PLANE for siblings.
+            built.Add(new ViewportContours(planes[p],
+                $"@contours{p}.zero", geometry.PartCount > 0 ? geometry.ZeroVertices.Length / 3 : 0,
+                $"@contours{p}.positive", geometry.PartCount > 0 ? geometry.PositiveVertices.Length / 3 : 0,
+                $"@contours{p}.negative", geometry.PartCount > 0 ? geometry.NegativeVertices.Length / 3 : 0));
+        }
         if (failures is not null)
             await ReportAsync(string.Join("\n", failures));
+        await ReleaseContoursAsync(gl, planes.Count);
+        _contours = contributing > 0 ? built : null;
+    }
 
-        if (geometry.PartCount == 0)
+    /// <summary>How many planes' contour uploads currently exist, so a shrinking plane
+    /// set releases the stale keys instead of leaking them until page teardown.</summary>
+    private int _contourUploads;
+
+    private async Task ReleaseContoursAsync(WebGlContext gl, int keep)
+    {
+        for (int p = keep; p < _contourUploads; p++)
         {
-            _contours = null;
-            return;
+            await gl.ReleaseGeometryAsync($"@contours{p}.zero");
+            await gl.ReleaseGeometryAsync($"@contours{p}.positive");
+            await gl.ReleaseGeometryAsync($"@contours{p}.negative");
         }
-        await gl.UploadLineVerticesAsync("@contours.zero", geometry.ZeroVertices);
-        await gl.UploadLineVerticesAsync("@contours.positive", geometry.PositiveVertices);
-        await gl.UploadLineVerticesAsync("@contours.negative", geometry.NegativeVertices);
-        _contours = new ViewportContours(
-            "@contours.zero", geometry.ZeroVertices.Length / 3,
-            "@contours.positive", geometry.PositiveVertices.Length / 3,
-            "@contours.negative", geometry.NegativeVertices.Length / 3);
+        _contourUploads = keep;
     }
 
     // ---- drawing ----
@@ -1245,7 +1310,8 @@
                 annotations: annotations, legend: legend,
                 // A deformation track reaches the frame as one scalar, exactly as the
                 // pose track reaches it as matrices. Nothing is re-uploaded.
-                deformFactor: deformFactor));
+                deformFactor: deformFactor,
+                shading: Shading));
         }
         catch (JSDisconnectedException)
         {
