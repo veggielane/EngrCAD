@@ -1630,16 +1630,28 @@ export — is recorded in CLAUDE.md):
   - Verification: offsetting a box face by d changes the volume by exactly A·d;
     deleting a boss's faces restores the base solid bit-for-bit when the neighbours
     are planar and it does not merely "look removed".
-- [ ] **PDF drawing export — the deliverable format.** Sheets end at SVG/DXF today;
-  what gets sent to a manufacturer is PDF. A vector writer for line work plus
-  stroke-font text is a small dependency-free format job (PDF content streams are
-  plainer than TrueType, PNG, glTF or STEP, all hand-rolled here), consuming the SAME
-  `Compute()` the SVG and DXF writers share so three writers cannot disagree. Line
-  classes map to dash arrays; sheet size to a MediaBox in points, with the one
-  25.4/72 mm-per-point constant stated once.
-  - Verification: coordinates round-trip through an independently written reader (the
-    OFF/LZW twin-decoder precedent), and rewriting the same sheet is a byte fixed
-    point.
+- [ ] **PDF export follow-ups** (the writer landed: `PdfDrawing` +
+  `SheetWriter.ToPdf`, byte-fixed-point, twin-decoder-verified — see design.md §6c;
+  each item below was declined in v1 with its reason and would be additive):
+  - [ ] **Embedded font.** The standard-14 Helvetica over WinAnsi refuses the drafting
+    symbols beyond the diameter sign (depth U+21A7, cbore U+2334, csk U+2335) and all
+    non-Latin text. The TrueType reader already parses `glyf`; a subset embedder
+    (FontFile2 + a CIDFont or a symbolic TrueType with a cmap) is the honest fix and
+    removes the ⌀→Ø substitution too. Note the fixed point: an embedded subset must be
+    a deterministic function of the used glyph set.
+  - [ ] **PDF layers via optional content groups.** SVG and DXF carry the sheet's
+    layers; PDF needs /OCProperties + `/OC BDC ... EMC` marked content to give Acrobat
+    toggleable layers. Cheap, but every OCG is another object — keep the xref writer's
+    object numbering a function of content so the fixed point survives.
+  - [ ] **Opt-in Flate compression** for very large sheets (the BCL has `ZLibStream`).
+    Declined as default: a sheet's stream is tens of KB and uncompressed ASCII is what
+    the docs fence and the committed assertions read directly. If added, note zlib
+    output is deterministic for a fixed level/strategy, so the fixed point can hold.
+  - [ ] **Loose-profile/sketch PDF export** (`PdfDrawing.Add(Sketch)`): PDF paths are
+    lines + cubic Béziers, so circular/elliptical arcs need flattening or the standard
+    kappa cubic approximation — either way NOT exact, which is why the overload was
+    refused rather than shipped silently lossy. Offer it with a stated tolerance
+    parameter, mirroring `DxfCurveMode`'s honesty about what survives.
 
 What remains against the reference B-Rep kernel (covered: primitives,
 extrude/revolve/sweep, booleans, rim fillets/chamfers, drilled holes, conics + offset
