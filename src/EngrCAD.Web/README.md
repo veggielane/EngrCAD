@@ -211,6 +211,21 @@ below the plane that keeps the fragment discard from eating the lines, the same
 section/visibility/load change, never per frame, and drawn signed-families-first so the
 gold d = 0 cross-section wins overdraw.
 
+**Multi-plane isolines have full desktop parity**: `RebuildContoursAsync` runs one
+`SectionContours.Build` per ACTIVE plane (the desktop worker's exact loop), each
+`ViewportContours` entry carries the plane it was built for, and the frame clips each
+plane's contours by its **sibling** planes — `SectionClip.Siblings`, always applied
+with Union, so a quarter cut shows each cut face's isolines only where that face is
+actually exposed instead of across the plane's full extent. A single plane has no
+siblings and its draws opt out of the clip entirely (the incumbent behaviour, bit for
+bit); a plane whose own build found no SDF-routed parts keeps an EMPTY entry, because
+its plane still bounds its siblings' cut faces. The sibling set comes from the planes
+the drawn geometry was BUILT for — the desktop renderer's self-consistency rule — and
+the per-draw override packs the sibling planes exactly as the shared uniforms are
+packed, typed markers included, since the interop lets a call's own uniforms win.
+`SetSectionPlanesAsync(planes, combine)` is the direct-call path for quarter/octant
+cuts, and `SceneBounds` is what a host centres the planes with.
+
 ## Poses: exploded views, animation playback, and the measure tool
 
 Three affordances, one mechanism. `Explode` (0..1), `Animation` + `AnimationTime`, and
@@ -570,8 +585,9 @@ model tree with subtree visibility, client-side picking, two-way selection sync,
 hover highlight, **section planes with picking parity and SDF isolines on the cut, the
 view cube, 3D annotations, the toolbar, the properties panel and the BOM button** are in
 place, and so are **the measure tool, exploded views, animation playback, the
-multi-plane section surface and debug-modifier parity**. Still to build:
-construction-tree rows and their rollback previews. The parity ladder is in `todo.md`.
+multi-plane section surface — now including per-plane, sibling-clipped SDF isolines —
+and debug-modifier parity**. Still to build: construction-tree rows and their rollback
+previews. The parity ladder is in `todo.md`.
 
 The `?report` self-check covers the new rungs as pixel relationships (cube and
 annotations start OFF under `?report`, like the furniture, because their near-white
@@ -590,12 +606,16 @@ Notes for whoever takes the next rung:
 - There is no ambient-occlusion bake in the browser. `uAmbientOcclusion` is 0, which
   makes the factor exactly 1.0 and *is* the AO-off shading rather than an approximation
   of it — the same property that lets the desktop stream bakes in behind a live scene.
-- `EngrCadViewport.SectionPlanes` + `SectionCombine` now carry quarter and octant cuts
-  through to the shaders AND to picking (`ScenePick` takes the same combine), clamped to
-  `ViewerShaders.MaxSectionPlanes`; the *toolbar* still drives the one-plane
-  axis/offset spelling, which is the desktop's scope too. Multi-plane isolines still
-  want `SectionClip.Siblings` per plane (the single-plane case has no siblings, so
-  contour draws opt out of the clip entirely).
+- `EngrCadViewport.SectionPlanes` + `SectionCombine` carry quarter and octant cuts
+  through to the shaders, to picking (`ScenePick` takes the same combine) AND to the
+  isoline overlay (per-plane builds, sibling-clipped — see the section above), clamped
+  to `ViewerShaders.MaxSectionPlanes`; the *toolbar* still drives the one-plane
+  axis/offset spelling, while the desktop toolbar also has a plane-count cycler —
+  a browser toolbar affordance for the plane set is the remaining gap.
+- `EngrCadViewport.Shading` / `SetShadingAsync` select the analytic matcap
+  (`ShadingStyle` — Lit / Clay / Metal), one `uMatcap` int uniform in the shared
+  frame; the shader is `ViewerShaders.MeshFragment`, the same string the desktop
+  compiles, so the three front ends cannot light a fill differently.
 - Frame-constant uniforms ride on `FrameDescription.Shared` so they travel once instead
   of once per instance. For a scene of any size that is most of the interop payload, and
   it is the first place to look if a large assembly feels heavy during a drag.

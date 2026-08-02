@@ -32,9 +32,13 @@ public class SectionFrameTests
         SectionCombine combine = SectionCombine.Intersection,
         ViewportFurniture? furniture = null,
         ViewStyle style = ViewStyle.ShadedWithEdges,
-        ViewportContours? contours = null) =>
+        IReadOnlyList<ViewportContours>? contours = null) =>
         ViewportFrame.Build(instances, Camera, Bounds, aspect: 1.6, furniture, style,
             sectionPlanes: planes, sectionCombine: combine, contours: contours);
+
+    private static ViewportContours Contours(SectionPlane plane, string prefix,
+        int zero = 10, int positive = 20, int negative = 30) =>
+        new(plane, prefix + ".zero", zero, prefix + ".pos", positive, prefix + ".neg", negative);
 
     [Fact]
     public void ActivePlaneSetsTheSharedSectionUniforms()
@@ -147,9 +151,8 @@ public class SectionFrameTests
     [Fact]
     public void ContoursDrawLastInTheSharedPalette()
     {
-        var contours = new ViewportContours("@c.zero", 10, "@c.pos", 20, "@c.neg", 30);
-        var frame = Build([Instance("a")], [SectionPlane.On(SectionAxis.Z, 1)],
-            contours: contours);
+        var plane = SectionPlane.On(SectionAxis.Z, 1);
+        var frame = Build([Instance("a")], [plane], contours: [Contours(plane, "@c")]);
 
         // Signed families first, d = 0 LAST so the gold cross-section wins overdraw —
         // the desktop renderer's order. The colours are read FROM SectionContours, so a
@@ -167,18 +170,86 @@ public class SectionFrameTests
         Assert.Equal(ToRgb(SectionContours.ZeroColor), (float[])zero.Uniforms!["uColor"]);
 
         // The geometry already sits below the plane, but a single plane has no sibling
-        // clip set (SectionClip.Siblings is empty), so the draws opt out entirely.
-        Assert.All(new[] { positive, negative, zero },
-            call => Assert.Equal(0f, call.Uniforms!["uSectionEnabled"]));
+        // clip set (SectionClip.Siblings is empty), so the draws opt out entirely —
+        // and carry no per-draw plane uniforms, so this is the incumbent behaviour.
+        Assert.All(new[] { positive, negative, zero }, call =>
+        {
+            Assert.Equal(0f, call.Uniforms!["uSectionEnabled"]);
+            Assert.DoesNotContain("uSectionPlanes", call.Uniforms!.Keys);
+        });
     }
 
     [Fact]
     public void ContoursAreAbsentWhileSectionsAreOff()
     {
-        var contours = new ViewportContours("@c.zero", 10, "@c.pos", 20, "@c.neg", 30);
-        var frame = Build([Instance("a")], planes: null, contours: contours);
+        var plane = SectionPlane.On(SectionAxis.Z, 1);
+        var frame = Build([Instance("a")], planes: null, contours: [Contours(plane, "@c")]);
 
-        Assert.DoesNotContain(frame.Draws, d => d.Geometry?.StartsWith("@c.") == true);
+        Assert.DoesNotContain(frame.Draws, d => d.Geometry?.StartsWith("@c") == true);
+    }
+
+    [Theory]
+    [InlineData(SectionCombine.Intersection)]
+    [InlineData(SectionCombine.Union)]
+    public void MultiPlaneContoursClipEachPlaneByItsSiblings(SectionCombine combine)
+    {
+        // A quarter cut: each plane's isolines must be clipped by its SIBLING planes
+        // (flipped under Intersection, verbatim under Union), ALWAYS applied with the
+        // Union rule — the expectation is read FROM SectionClip.Siblings, never
+        // restated, because a copied rule agrees with a broken implementation as
+        // happily as with a correct one.
+        var planes = new[] { SectionPlane.On(SectionAxis.X, 2), SectionPlane.On(SectionAxis.Y, 3) };
+        var frame = Build([Instance("a")], planes, combine,
+            contours: [Contours(planes[0], "@c0"), Contours(planes[1], "@c1")]);
+
+        var expected = new List<SectionPlane>();
+        for (int i = 0; i < planes.Length; i++)
+        {
+            SectionClip.Siblings(planes, i, combine, expected);
+            var draws = frame.Draws.Where(d => d.Geometry?.StartsWith($"@c{i}") == true).ToList();
+            Assert.Equal(3, draws.Count);
+            foreach (var draw in draws)
+            {
+                // The sibling set REPLACES the frame's plane uniforms for these draws
+                // (the interop lets a call's own uniforms win), under Union whatever
+                // the model's combine is.
+                Assert.Equal(new IntUniform(expected.Count), draw.Uniforms!["uSectionCount"]);
+                Assert.Equal(1f, draw.Uniforms!["uSectionUnion"]);
+                var packed = Assert.IsType<Vec4ArrayUniform>(draw.Uniforms!["uSectionPlanes"]);
+                for (int j = 0; j < expected.Count; j++)
+                {
+                    Assert.Equal((float)expected[j].Normal.X, packed.Values[j * 4]);
+                    Assert.Equal((float)expected[j].Normal.Y, packed.Values[j * 4 + 1]);
+                    Assert.Equal((float)expected[j].Normal.Z, packed.Values[j * 4 + 2]);
+                    Assert.Equal((float)expected[j].Offset, packed.Values[j * 4 + 3]);
+                }
+                // Clipped draws do NOT opt out of the clip.
+                Assert.DoesNotContain("uSectionEnabled", draw.Uniforms!.Keys);
+            }
+        }
+    }
+
+    [Fact]
+    public void EmptyPlaneEntryStillBoundsItsSiblings()
+    {
+        // A plane whose own build found no SDF-routed parts contributes no draws, but
+        // its PLANE still bounds the other plane's cut face — dropping it from the
+        // sibling set would draw the neighbour's isolines through remaining material.
+        var planes = new[] { SectionPlane.On(SectionAxis.X, 2), SectionPlane.On(SectionAxis.Y, 3) };
+        var frame = Build([Instance("a")], planes,
+            contours:
+            [
+                Contours(planes[0], "@c0"),
+                Contours(planes[1], "@c1", zero: 0, positive: 0, negative: 0),
+            ]);
+
+        Assert.DoesNotContain(frame.Draws, d => d.Geometry?.StartsWith("@c1") == true);
+        var drawn = frame.Draws.Where(d => d.Geometry?.StartsWith("@c0") == true).ToList();
+        Assert.Equal(3, drawn.Count);
+        var expected = new List<SectionPlane>();
+        SectionClip.Siblings(planes, 0, SectionCombine.Intersection, expected);
+        Assert.All(drawn, draw =>
+            Assert.Equal(new IntUniform(expected.Count), draw.Uniforms!["uSectionCount"]));
     }
 
     private static float[] ToRgb((float R, float G, float B) color) =>

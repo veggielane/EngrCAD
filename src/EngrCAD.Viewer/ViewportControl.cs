@@ -26,7 +26,7 @@ public sealed class ViewportControl : OpenGlControlBase
     private GL? _gl;
     private uint _program;
     private int _uModel, _uView, _uProj, _uColor, _uLightDir, _uEyePos, _uHighlight;
-    private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale;
+    private int _uAlpha, _uAmbientOcclusion, _uFieldColor, _uDeformScale, _uMatcap;
     private uint _lineProgram;
     private int _uLineModel, _uLineView, _uLineProj, _uLineColor;
     private int _uLineSectionEnabled;   // raw handle for the cube/annotation overlays
@@ -267,6 +267,7 @@ public sealed class ViewportControl : OpenGlControlBase
         _uAmbientOcclusion = _gl.GetUniformLocation(_program, "uAmbientOcclusion");
         _uFieldColor = _gl.GetUniformLocation(_program, "uFieldColor");
         _uDeformScale = _gl.GetUniformLocation(_program, "uDeformScale");
+        _uMatcap = _gl.GetUniformLocation(_program, "uMatcap");
         // Mesh VAOs without a baked-occlusion buffer read this context-wide constant;
         // the GL default for a disabled attribute is 0, which would shade parts black.
         RenderUploads.SetDefaultOcclusion(_gl);
@@ -595,6 +596,7 @@ public sealed class ViewportControl : OpenGlControlBase
                 update = _pending;
                 _pending = null;
                 _pendingPoses = null;   // the full swap supersedes any queued re-pose
+                _displayedInstances = true;   // the swap the readiness probe waits for
             }
             else if (_pendingPoses is not null)
             {
@@ -677,6 +679,9 @@ public sealed class ViewportControl : OpenGlControlBase
         gl.Uniform3(_uEyePos, (float)eye.X, (float)eye.Y, (float)eye.Z);
         _meshSection.Write(gl, activePlanes, _sectionCombine);
         gl.Uniform1(_uAmbientOcclusion, _ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
+        // The shading selector is frame-constant (no per-part override in v1 — a scene
+        // lit two ways reads as a rendering bug); an INT uniform, matching the shader.
+        gl.Uniform1(_uMatcap, (int)_shading);
 
         // Section mode relies on face culling staying OFF (the GL default; nothing here
         // enables CullFace): clipping a closed solid exposes its interior, and the
@@ -1381,6 +1386,35 @@ public sealed class ViewportControl : OpenGlControlBase
         }
     }
 
+    // Set true (render thread, under _sceneLock) when a pending SetInstances swap is
+    // adopted — never cleared, because "has this viewport ever displayed a scene"
+    // only moves one way.
+    private bool _displayedInstances;
+
+    /// <summary>
+    /// True once the render pass has adopted an instance list AND nothing newer is
+    /// queued — i.e. <see cref="InstancePaths"/> reflects what is actually drawn.
+    /// <para>This is the honest answer to the measured startup race: the RPC endpoint
+    /// announces its port from <c>OnViewportReady</c>, while instances handed to
+    /// <see cref="SetInstances"/> are only swapped in BY the render pass — so a client
+    /// connecting the instant it sees the port legitimately reads an empty
+    /// <see cref="InstancePaths"/>. Reporting the PENDING list instead would
+    /// desynchronize the paths from the indices <see cref="Select"/> and
+    /// <see cref="SetDisplayMode"/> address; a readiness probe lets a client poll
+    /// (<c>ping</c> carries it) and lets a refusal say "not yet" instead of "this
+    /// model has no parts". Note the honest scope: with lazy tab meshing the list is
+    /// a growing prefix, so ready means "what is drawn", not "the document is fully
+    /// loaded".</para>
+    /// </summary>
+    public bool InstancesDisplayed
+    {
+        get
+        {
+            lock (_sceneLock)
+                return _displayedInstances && _pending is null;
+        }
+    }
+
     /// <summary>Sets the selection programmatically (tree clicks); does not raise
     /// <see cref="SelectionChanged"/>.</summary>
     public void Select(int index)
@@ -1628,6 +1662,26 @@ public sealed class ViewportControl : OpenGlControlBase
         set
         {
             _viewStyle = value;
+            RequestNextFrameRendering();
+        }
+    }
+
+    private ShadingStyle _shading = ShadingStyle.Lit;
+
+    /// <summary>
+    /// How fills are lit (default <see cref="ShadingStyle.Lit"/> — the standard
+    /// directional light). The non-default members are the analytic matcaps evaluated
+    /// in the shared mesh shader; one uniform per frame, so switching costs nothing
+    /// and touches no buffer. Deliberately separate from <see cref="ViewStyle"/>: the
+    /// style is about what is drawn, shading about how a fill is lit — see
+    /// <see cref="Viewer.ShadingStyle"/>.
+    /// </summary>
+    public ShadingStyle Shading
+    {
+        get => _shading;
+        set
+        {
+            _shading = value;
             RequestNextFrameRendering();
         }
     }

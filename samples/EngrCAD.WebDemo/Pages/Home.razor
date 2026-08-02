@@ -443,10 +443,33 @@
         await Viewport.SetSectionAsync(true, SectionAxis.X);
         var cut = await Viewport.CapturePixelsAsync();
         counts["bodySectioned"] = Body(cut);
-        counts["goldContours"] = Count(cut,
-            (r, g, b) => r > 200 && g > 170 && b < 170 && r > b + 60);
+        counts["goldContours"] = Count(cut, IsGold);
+        // The second single-plane reading (Y alone), for the quarter-cut bound below.
+        await Viewport.SetSectionAsync(true, SectionAxis.Y);
+        var cutY = await Viewport.CapturePixelsAsync();
+        counts["goldContoursY"] = Count(cutY, IsGold);
+
+        // The quarter cut: X and Y planes through the scene centre, Intersection. The
+        // relationships that prove the per-plane sibling clip: a quarter cut removes
+        // LESS material than either half cut (bodySectioned < bodyQuarter < bodyWhole),
+        // each plane still shows gold isolines on its exposed cut face
+        // (goldQuarter > 0), and each plane's isolines are CLIPPED to that exposed
+        // half, so the total is strictly under the two full-extent readings summed
+        // (goldQuarter < goldContours + goldContoursY — unclipped multi-plane overlays
+        // would draw both planes' full extents and break that bound).
+        var centre = Viewport.SceneBounds.Center;
+        await Viewport.SetSectionPlanesAsync(
+            [SectionPlane.On(SectionAxis.X, centre.X), SectionPlane.On(SectionAxis.Y, centre.Y)]);
+        var quarter = await Viewport.CapturePixelsAsync();
+        counts["bodyQuarter"] = Body(quarter);
+        counts["goldQuarter"] = Count(quarter, IsGold);
+        await Viewport.SetSectionPlanesAsync(null);
         await Viewport.SetSectionAsync(false);
     }
+
+    /// <summary>The d = 0 isoline's gold — a colour nothing else in the report frame
+    /// produces (amber fails the green floor, cut material the red one).</summary>
+    private static bool IsGold(byte r, byte g, byte b) => r > 200 && g > 170 && b < 170 && r > b + 60;
 
     /// <summary>Annotations, as a relationship between two states of one canvas: the
     /// flange carries a real dimension, so toggling the overlay must change pixels.</summary>

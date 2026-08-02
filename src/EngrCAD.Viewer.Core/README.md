@@ -41,6 +41,7 @@ prevent. Hence: extract, don't copy.
 | Type | What a front end uses it for |
 | --- | --- |
 | `ViewStyle` | The global view-style selector (Points / Wireframe / Shaded / ShadedWithEdges). |
+| `ShadingStyle` | How a FILL is lit (Lit / Clay / Metal) — deliberately not a `ViewStyle` member, because the style is about what is drawn and shading about how a fill is lit. The non-default members are **analytic matcaps**: procedural Gaussian lobes over the view-space normal, evaluated in `ViewerShaders.MeshFragment` behind the `uMatcap` int selector, so no texture machinery has to reach three front ends and the material constants live in the one shader file they all compile. `Lit = 0` is load-bearing: a linked program's uniforms initialize to 0, so a front end that says nothing renders the incumbent look byte-identically. Global per pass, no per-part override (a scene lit two ways reads as a rendering bug). |
 | `SectionAxis`, `SectionAxisExtensions` | The three axis-aligned cuts a toolbar or CLI exposes. |
 | `SectionPlane` | One clip plane (general normal + offset), with `On(axis, offset)`, `On(frame)`, `Through(point, normal)`, `Flipped()`. |
 | `SectionCombine` | Intersection (quarter cut / octant) vs Union (each plane cuts independently). |

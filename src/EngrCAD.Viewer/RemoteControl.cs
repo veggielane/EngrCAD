@@ -193,6 +193,14 @@ public interface IRemoteViewer
     /// <summary>Displayed instances' occurrence paths, in instance order.</summary>
     Task<IReadOnlyList<string>> ListPartsAsync();
 
+    /// <summary>Whether the viewer has displayed its instances — false in the window's
+    /// measured startup gap, where the RPC port is announced from <c>OnViewportReady</c>
+    /// while the first instance list is still waiting for the render pass to adopt it
+    /// (<c>ViewportControl.InstancesDisplayed</c>). <c>ping</c> reports it so a client
+    /// that connects the instant it sees the port can poll instead of reading an empty
+    /// part list as "this model has no parts".</summary>
+    Task<bool> IsReadyAsync();
+
     /// <summary>Snap to a standard view (a <c>ViewCubeMath.StandardViewNames</c> name).</summary>
     Task SetViewAsync(string view);
 
@@ -258,7 +266,16 @@ public static class RemoteViewerDispatcher
         switch (method)
         {
             case "ping":
-                return new JsonObject { ["title"] = title, ["methods"] = new JsonArray([.. Methods.Select(m => (JsonNode)m)]) };
+                // "ready" answers the measured startup race: the port is announced
+                // before the render pass has adopted the first instance list, so a
+                // client that connects immediately should poll ping until ready rather
+                // than read an empty list_parts as "this model has no parts".
+                return new JsonObject
+                {
+                    ["title"] = title,
+                    ["ready"] = await viewer.IsReadyAsync().ConfigureAwait(false),
+                    ["methods"] = new JsonArray([.. Methods.Select(m => (JsonNode)m)]),
+                };
 
             case "list_parts":
                 return new JsonArray([.. (await viewer.ListPartsAsync().ConfigureAwait(false)).Select(p2 => (JsonNode)p2)]);
@@ -386,6 +403,13 @@ public static class RemoteViewerDispatcher
     private static async Task<RemoteMethodException> UnknownPart(IRemoteViewer viewer, string part)
     {
         var paths = await viewer.ListPartsAsync().ConfigureAwait(false);
+        // An empty list has two unrelated causes with opposite fixes — the model has
+        // no parts, or the window has not displayed them yet (the startup race ping's
+        // "ready" answers) — and a refusal must say which, not read as the first.
+        if (paths.Count == 0 && !await viewer.IsReadyAsync().ConfigureAwait(false))
+            return new RemoteMethodException(-32602,
+                $"no part '{part}' — the viewer has not displayed its parts yet; "
+                + "poll ping until it reports ready: true, then retry");
         return new RemoteMethodException(-32602,
             $"no part '{part}' — displayed parts: {string.Join(", ", paths)}");
     }
@@ -446,6 +470,8 @@ public sealed class ViewportRemoteViewer(
     private Task OnUi(Action work) => _invoke(() => { work(); return null; });
 
     public Task<IReadOnlyList<string>> ListPartsAsync() => OnUi(() => viewport.InstancePaths);
+
+    public Task<bool> IsReadyAsync() => OnUi(() => viewport.InstancesDisplayed);
 
     public Task SetViewAsync(string view) => OnUi(() =>
     {

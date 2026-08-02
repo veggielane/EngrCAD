@@ -74,10 +74,10 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1) =>
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit) =>
         Render([.. parts.Select(p => new PartInstance(p, p.Transform, p.Name))],
             width, height, camera, furniture, style, sectionAxis, sectionOffset, ambientOcclusion,
-            sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor);
+            sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor, shading);
 
     /// <summary>
     /// Renders posed part instances (<c>Tab.Instances()</c> / <c>Scene.AllInstances</c>
@@ -94,7 +94,7 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1)
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
         ArgumentOutOfRangeException.ThrowIfLessThan(height, 1);
@@ -109,7 +109,7 @@ public static class OffscreenRenderer
         var cache = new PassCache(gl);
         var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera, furniture,
             style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine, supersample,
-            preview, previewWorld, fields, deformFactor);
+            preview, previewWorld, fields, deformFactor, shading);
         return Downsample(oversized, width, height, supersample);
     }
 
@@ -134,7 +134,7 @@ public static class OffscreenRenderer
         bool ambientOcclusion = EngrCadOptions.AmbientOcclusionDefault,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        bool fields = true)
+        bool fields = true, ShadingStyle shading = ShadingStyle.Lit)
     {
         ArgumentNullException.ThrowIfNull(frames);
         ArgumentOutOfRangeException.ThrowIfLessThan(width, 1);
@@ -152,7 +152,7 @@ public static class OffscreenRenderer
         {
             var oversized = Draw(gl, cache, instances, width * supersample, height * supersample, camera,
                 furniture, style, sectionAxis, sectionOffset, ambientOcclusion, sectionPlanes, sectionCombine,
-                supersample, preview: null, previewWorld: null, fields, deformFactor);
+                supersample, preview: null, previewWorld: null, fields, deformFactor, shading);
             pixels.Add(Downsample(oversized, width, height, supersample));
         }
         return pixels;
@@ -204,10 +204,11 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1)
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit)
     {
         var pixels = Render(parts, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor,
+            shading);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -222,10 +223,11 @@ public static class OffscreenRenderer
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview = null, Matrix4d? previewWorld = null,
-        bool fields = true, double deformFactor = 1)
+        bool fields = true, double deformFactor = 1, ShadingStyle shading = ShadingStyle.Lit)
     {
         var pixels = Render(instances, width, height, camera, furniture, style, sectionAxis, sectionOffset,
-            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor);
+            ambientOcclusion, sectionPlanes, sectionCombine, preview, previewWorld, fields, deformFactor,
+            shading);
         PngWriter.Write(path, pixels, width, height);
     }
 
@@ -286,7 +288,7 @@ public static class OffscreenRenderer
         ViewStyle style, SectionAxis sectionAxis, double? sectionOffset, bool ambientOcclusion,
         IReadOnlyList<SectionPlane>? sectionPlanes, SectionCombine sectionCombine, int supersample,
         IReadOnlyList<(Vector3d A, Vector3d B)>? preview, Matrix4d? previewWorld, bool fields,
-        double deformFactor)
+        double deformFactor, ShadingStyle shading)
     {
         uint meshProgram = cache.MeshProgram;
         uint lineProgram = cache.LineProgram;
@@ -469,6 +471,9 @@ public static class OffscreenRenderer
         meshSection.Write(gl, planes, sectionCombine);
         gl.Uniform1(gl.GetUniformLocation(meshProgram, "uAmbientOcclusion"),
             ambientOcclusion ? Viewer.AmbientOcclusion.Strength : 0f);
+        // Frame-constant shading selector (analytic matcap or the standard lighting),
+        // an INT uniform — the same value the window writes, so the two passes agree.
+        gl.Uniform1(gl.GetUniformLocation(meshProgram, "uMatcap"), (int)shading);
         int uFieldColor = gl.GetUniformLocation(meshProgram, "uFieldColor");
         int uDeformScale = gl.GetUniformLocation(meshProgram, "uDeformScale");
         gl.Uniform1(uAlpha, 1f);

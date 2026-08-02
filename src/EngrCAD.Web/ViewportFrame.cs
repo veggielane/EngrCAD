@@ -79,13 +79,23 @@ public readonly record struct ViewportLegend(
 public readonly record struct ViewportFurniture(string GridKey, int GridVertexCount, string AxesKey);
 
 /// <summary>
-/// Keys the section-plane SDF isolines are uploaded under — the three level families
-/// <c>SectionContours.Build</c> produces, uploaded by the component and drawn by
-/// <see cref="ViewportFrame.Build"/> whenever sections are active. The geometry
-/// (including the lift below the plane that keeps the shader discard from eating the
-/// lines) and the family colours all come from the shared <c>SectionContours</c>;
-/// nothing about what an isoline looks like is decided in this project.
+/// Keys ONE section plane's SDF isolines are uploaded under — the three level families
+/// <c>SectionContours.Build</c> produces for that plane, uploaded by the component and
+/// drawn by <see cref="ViewportFrame.Build"/> whenever sections are active. The
+/// geometry (including the lift below the plane that keeps the shader discard from
+/// eating the lines) and the family colours all come from the shared
+/// <c>SectionContours</c>; nothing about what an isoline looks like is decided in this
+/// project.
+/// <para>The value carries the PLANE its contours were built for, because the frame
+/// clips each plane's contours by its <em>sibling</em> planes
+/// (<c>SectionClip.Siblings</c> — that method owns the rule): under a quarter cut a
+/// plane's cut face is only exposed where the other plane excludes, so drawing its
+/// isolines across the full extent would draw them through remaining material. The
+/// sibling set is computed from the planes the drawn geometry was BUILT for — the
+/// desktop renderer's self-consistency rule — which is why the plane rides here rather
+/// than being re-read from the live section state.</para>
 /// </summary>
+/// <param name="Plane">The section plane these contours lie on.</param>
 /// <param name="ZeroKey">Upload key of the d = 0 family (the exact cross-section).</param>
 /// <param name="ZeroVertexCount">Vertices in that upload.</param>
 /// <param name="PositiveKey">Upload key of the positive (outside material) families.</param>
@@ -93,6 +103,7 @@ public readonly record struct ViewportFurniture(string GridKey, int GridVertexCo
 /// <param name="NegativeKey">Upload key of the negative (inside material) families.</param>
 /// <param name="NegativeVertexCount">Vertices in that upload.</param>
 public readonly record struct ViewportContours(
+    SectionPlane Plane,
     string ZeroKey, int ZeroVertexCount,
     string PositiveKey, int PositiveVertexCount,
     string NegativeKey, int NegativeVertexCount);
@@ -241,10 +252,16 @@ public static class ViewportFrame
     /// uniform per draw group.</param>
     /// <param name="sectionCombine">How several planes combine — the shared
     /// <see cref="SectionCombine"/> rule, carried as <c>uSectionUnion</c>.</param>
-    /// <param name="contours">SDF isolines on the cut, or null. Drawn only while
-    /// sections are active, after everything else so they read as an overlay: signed
-    /// families first, then d = 0 last so the gold cross-section wins any overdraw —
-    /// the desktop renderer's order, with the shared <c>SectionContours</c> palette.</param>
+    /// <param name="contours">SDF isolines on the cut — one entry per section plane
+    /// the overlay was built for — or null. Drawn only while sections are active,
+    /// after everything else so they read as an overlay: per plane, signed families
+    /// first, then d = 0 last so the gold cross-section wins any overdraw — the
+    /// desktop renderer's order, with the shared <c>SectionContours</c> palette. Each
+    /// plane's contours are clipped by its SIBLING planes
+    /// (<c>SectionClip.Siblings</c>, always applied with Union), so a quarter cut
+    /// shows each cut face's isolines only where that face is exposed; a single plane
+    /// has no siblings and its draws opt out of the clip entirely, the incumbent
+    /// behaviour.</param>
     /// <param name="cube">The view cube, or null. Drawn last of all (the desktop rule:
     /// the cube is window chrome sitting on top of everything), into its own top-right
     /// sub-viewport with the depth buffer cleared first.</param>
@@ -264,11 +281,12 @@ public static class ViewportFrame
         int hovered = -1,
         IReadOnlyList<SectionPlane>? sectionPlanes = null,
         SectionCombine sectionCombine = SectionCombine.Intersection,
-        ViewportContours? contours = null,
+        IReadOnlyList<ViewportContours>? contours = null,
         ViewportCube? cube = null,
         ViewportAnnotations? annotations = null,
         ViewportLegend? legend = null,
-        double deformFactor = 1)
+        double deformFactor = 1,
+        ShadingStyle shading = ShadingStyle.Lit)
     {
         ArgumentNullException.ThrowIfNull(instances);
         ArgumentNullException.ThrowIfNull(camera);
@@ -315,6 +333,10 @@ public static class ViewportFrame
             ["uSectionEnabled"] = sectionActive ? 1f : 0f,
             ["uSectionCount"] = new IntUniform(sectionCount),
             ["uPointSize"] = PointSize * (float)pixelScale,
+            // The shading selector (standard light or an analytic matcap) — an int
+            // uniform, so the typed marker, and frame-constant: no per-part override,
+            // exactly as the desktop passes write it once per frame.
+            ["uMatcap"] = new IntUniform((int)shading),
         };
         if (sectionActive)
         {
@@ -481,22 +503,41 @@ public static class ViewportFrame
 
         // Pass 5: SDF isolines on the cut — after everything else so they read as an
         // overlay (the desktop draws them last for the same reason). Depth-tested like
-        // feature edges; the geometry already sits 1% of a spacing below the plane so
-        // the fragment discard cannot eat it, but a SINGLE plane has no siblings to
-        // clip against (SectionClip.Siblings returns empty), so the draws carry the
-        // unclip override.
-        if (sectionActive && contours is { } iso)
+        // feature edges; the geometry already sits 1% of a spacing below its own plane
+        // so the fragment discard cannot eat it. Each plane's contours are clipped by
+        // its SIBLING planes (SectionClip.Siblings owns the rule; always applied with
+        // Union, whatever combine the model uses — the desktop renderer's exact
+        // arrangement), so a quarter cut shows each cut face's isolines only where
+        // that face is exposed. A single plane has no siblings, and its draws carry
+        // the unclip override instead — the incumbent single-plane behaviour, bit for
+        // bit. Siblings come from the planes the contours were BUILT for (the entries'
+        // own planes), never the live section state, so a stale overlay awaiting a
+        // rebuild stays self-consistent.
+        if (sectionActive && contours is { Count: > 0 } iso)
         {
             var identity = ColumnMajor(Matrix4d.Identity);
-            if (iso.PositiveVertexCount > 0)
-                draws.Add(Line(iso.PositiveKey, identity, Rgb(SectionContours.PositiveColor),
-                    first: 0, count: iso.PositiveVertexCount, unclip: true));
-            if (iso.NegativeVertexCount > 0)
-                draws.Add(Line(iso.NegativeKey, identity, Rgb(SectionContours.NegativeColor),
-                    first: 0, count: iso.NegativeVertexCount, unclip: true));
-            if (iso.ZeroVertexCount > 0)
-                draws.Add(Line(iso.ZeroKey, identity, Rgb(SectionContours.ZeroColor),
-                    first: 0, count: iso.ZeroVertexCount, unclip: true));
+            var builtPlanes = new SectionPlane[iso.Count];
+            for (int i = 0; i < iso.Count; i++)
+                builtPlanes[i] = iso[i].Plane;
+            var siblings = new List<SectionPlane>(iso.Count);
+            for (int i = 0; i < iso.Count; i++)
+            {
+                var planeContours = iso[i];
+                if (planeContours.PositiveVertexCount == 0 && planeContours.NegativeVertexCount == 0
+                    && planeContours.ZeroVertexCount == 0)
+                    continue;
+                SectionClip.Siblings(builtPlanes, i, sectionCombine, siblings);
+                var overrides = ContourClip(siblings);
+                if (planeContours.PositiveVertexCount > 0)
+                    draws.Add(ContourLine(planeContours.PositiveKey, identity,
+                        Rgb(SectionContours.PositiveColor), planeContours.PositiveVertexCount, overrides));
+                if (planeContours.NegativeVertexCount > 0)
+                    draws.Add(ContourLine(planeContours.NegativeKey, identity,
+                        Rgb(SectionContours.NegativeColor), planeContours.NegativeVertexCount, overrides));
+                if (planeContours.ZeroVertexCount > 0)
+                    draws.Add(ContourLine(planeContours.ZeroKey, identity,
+                        Rgb(SectionContours.ZeroColor), planeContours.ZeroVertexCount, overrides));
+            }
         }
 
         // Pass 6: the annotation overlay — depth test OFF (always-on-top v1, so
@@ -875,6 +916,51 @@ public static class ViewportFrame
         for (int i = 0; i < drawn.Count; i++)
             world[i] = byPath.TryGetValue(drawn[i].Path, out var moved) ? moved : drawn[i].World;
         return world;
+    }
+
+    /// <summary>
+    /// The per-draw section-uniform overrides for one plane's isoline draws, shared by
+    /// its three family batches: an empty sibling set opts out of the clip entirely
+    /// (<c>uSectionEnabled = 0</c>, the single-plane case), a non-empty one REPLACES
+    /// the frame's plane set with the siblings under Union — packed exactly as the
+    /// shared uniforms are, typed markers included, and applied per draw because the
+    /// interop lets a call's own uniforms win over the frame constants.
+    /// </summary>
+    private static Dictionary<string, object> ContourClip(IReadOnlyList<SectionPlane> siblings)
+    {
+        if (siblings.Count == 0)
+            return new Dictionary<string, object> { ["uSectionEnabled"] = 0f };
+        var packed = new float[siblings.Count * 4];
+        for (int i = 0; i < siblings.Count; i++)
+        {
+            packed[i * 4] = (float)siblings[i].Normal.X;
+            packed[i * 4 + 1] = (float)siblings[i].Normal.Y;
+            packed[i * 4 + 2] = (float)siblings[i].Normal.Z;
+            packed[i * 4 + 3] = (float)siblings[i].Offset;
+        }
+        return new Dictionary<string, object>
+        {
+            ["uSectionCount"] = new IntUniform(siblings.Count),
+            ["uSectionPlanes"] = new Vec4ArrayUniform(packed),
+            ["uSectionUnion"] = 1f,   // the sibling clip is ALWAYS Union — SectionClip.Siblings
+        };
+    }
+
+    /// <summary>One isoline family's draw: the line program with the plane's shared
+    /// clip overrides folded into its uniforms.</summary>
+    private static DrawCall ContourLine(
+        string key, float[] model, float[] color, int count, Dictionary<string, object> clip)
+    {
+        var uniforms = new Dictionary<string, object>(clip) { ["uModel"] = model, ["uColor"] = color };
+        return new DrawCall
+        {
+            Program = LineProgram,
+            Geometry = key,
+            First = 0,
+            Count = count,
+            Cull = false,
+            Uniforms = uniforms,
+        };
     }
 
     private static DrawCall Line(

@@ -876,6 +876,31 @@ engine's half-edge structure and the implicit engine's SDFs are both real assets
 verified boundary recovery, radius-edge + sizing-field refinement, region ids from
 multi-body input, per-facet source-triangle tags, 10-node elements. Residuals below.
 
+- [ ] **HYPOTHESIS to measure: `MaxElementSize` may not bound element size in the
+  presence of a fine curved feature.** Found via `docs/examples/fea-structural.md`'s
+  `run:fea-error-estimate` snippet, which sat in `TetMesher.Mesh(part.GetMesh(), new
+  TetMeshOptions { RefineQuality = true, MaxElementSize = 4.0 })` on
+  `Box(60, 20, 8) − Cylinder(4, 40)` long enough to look like a hang from two
+  different processes (a DocsGen run killed at 50+ min, a standalone repro killed at
+  23+ min). The snippet's own author then let it COMPLETE: **~40 minutes,
+  225 083 elements** — against a nominal count of order 900 for h = 4 over that
+  ~9 600 mm³ volume, a **250× overshoot**. The suspect (unmeasured, so a hypothesis
+  and not a finding): the bore is Ø8 through an 8 mm plate, and the tessellated bore
+  wall's facet size — not `MaxElementSize` — appears to drive the refinement. Two
+  things follow whatever the cause: a mesher that answers a request for h = 4 with a
+  quarter of a million elements should either SAY so (a report field, the
+  `RefinementBlockedByFrozenBoundary` convention) or refuse, and 40 silent minutes
+  is indistinguishable from a hang from the outside — a `ProgressCancel` seam
+  and/or an element-budget refusal would make the difference observable. **The cheap
+  experiment that separates the two candidate causes** (bore-wall facet size driving
+  refinement, vs `RefineQuality`'s radius-edge target doing it on its own with the
+  bore incidental): hold the bore fixed and sweep `MaxElementSize` — if the element
+  count barely moves, the size parameter is not in control and the facet-size framing
+  is right; if it scales as h⁻³, the hole is a red herring and the 40 minutes is an
+  expensive-but-correct mesh nobody asked for. Two runs, and it decides which duty
+  above is the real one. (The docs snippet itself is being re-fixtured by its author
+  to a cheap mesh — the example is about the error estimate and never needed an
+  expensive one.)
 - [ ] **Conforming Delaunay for a CURVED non-Delaunay surface triangulation** (what is left of
   the old "boundary recovery on remeshed surfaces" top gap, whose filed diagnosis was measured
   and found wrong in two directions — see design.md §3b and the Fea README table).
@@ -2229,35 +2254,15 @@ honest no) is recorded in design.md §6b with the comparison committed as
   - [ ] The **80k-triangle opt-out** is still a cliff: a part just over it renders flat
     while its neighbour just under it does not. A budget expressed in rays × expected
     per-ray cost would degrade instead of cutting off.
-- [ ] **Matcap shading — assessed, viable as a *procedural* shader variant** (idea
-  stage; ambient occlusion landed). A matcap shades by sampling a lit-sphere image at
-  the view-space normal — material-rich metal/clay looks with zero lights. What the
-  assessment found: (a) the render stack has **no texture machinery at all** (no
-  sampler uniforms, no image decode for COLOR input — `PngGrayReader` is 8/16-bit
-  gray, `PngWriter` write-only), and the parity rule means any texture must reach
-  three front ends (window GL, offscreen EGL, WebGL2 via `engrcad-gl.js`), so a
-  texture-based matcap drags in a color PNG reader plus upload plumbing times three;
-  (b) an **analytic matcap needs none of that** — two or three Gaussian/Phong lobes
-  evaluated in normal space inside the mesh shader reproduce the classic studio
-  matcap look, with the lobe constants living in `ViewerShaders` where window,
-  offscreen and web already share every shading decision; (c) interactions are
-  clean: AO multiplies the matcap sample exactly as it multiplies ambient+diffuse
-  today, the section cut-face flat material and `gl_FrontFacing` rule stay, and the
-  selection `uHighlight` blend is orthogonal. Recommendation: a `ViewStyle`-adjacent
-  toggle (or per-part `DisplayMode` addition) with 2–3 built-in analytic matcaps;
-  texture-based custom matcaps only if a color image reader lands for other reasons.
-  Verify with the docs-PNG byte-compare discipline (default look must not move).
-  **Re-assessed this sweep and still not started, with the reason sharpened.** The
-  analytic form is genuinely small — two or three Gaussian lobes over the view-space
-  normal, ~15 lines in `ViewerShaders.MeshFragment` behind a `uMatcap` selector — but
-  it lands in the ONE file all three front ends compile, so the risk is not the shader,
-  it is that a mistake there is invisible until 100 docs PNGs move. The safe order is:
-  add the selector defaulting to 0 (the current lighting) and prove the byte comparison
-  is untouched FIRST, as its own commit; then add lobes behind non-zero values in a
-  second. That also settles where the toggle lives: not in `ViewStyle` (which is about
-  what is drawn — points, lines, fills — while a matcap is about how a fill is *lit*),
-  so a separate `EngrCadOptions.Shading` + a toolbar dropdown, with per-part override
-  deliberately NOT offered in v1 (a scene lit two ways reads as a rendering bug).
+- [ ] **Matcap follow-ups** (the analytic matcap ✅ landed — `ShadingStyle` Lit/Clay/
+  Metal behind the `uMatcap` selector in `ViewerShaders.MeshFragment`, driven by the
+  toolbar Shading dropdown / `EngrCadOptions.Shading` / `RenderToImage(shading:)` /
+  MCP `screenshot`'s `shading` / `EngrCadViewport.Shading`, default byte-identical
+  by the docs-PNG oracle): texture-based CUSTOM matcaps stay declined until a color
+  image reader lands for other reasons (a texture must reach three front ends);
+  more built-in looks (pearl, toon-step) are one lobe set each in the one shader
+  file if anyone asks; per-part override stays deliberately not offered (a scene
+  lit two ways reads as a rendering bug).
 
 ## Blazor web viewer
 
@@ -2364,14 +2369,20 @@ UI dependencies, which makes this unusually feasible.
   occurrence path; the transport is `AnimationPlayback` from Viewer.Core with a timer
   and three widgets here) → ~~multi-plane section planes + combine, through to picking~~
   ✅ → ~~debug-modifier parity (`DebugFilter.Shown` in `ResolveInstances`)~~ ✅.
+  → ~~multi-plane isolines (`SectionClip.Siblings` per plane)~~ ✅ (per-plane
+  contour builds with the plane carried on each `ViewportContours`, sibling-clipped
+  under Union exactly as the desktop renderer; single-plane output bit-identical;
+  `SetSectionPlanesAsync` is the direct-call path and the `?report` beacon carries
+  the quarter-cut relationships `bodySectioned < bodyQuarter < bodyWhole` and
+  `0 < goldQuarter < goldContours + goldContoursY`).
   **Remaining rungs**: construction-tree rows + rollback previews (needs
   `ConstructionPreviewCache`'s background-lowering story rethought for one thread);
   a multi-plane section **UI** (the plane list and combine are plumbed end to end now —
-  what is missing is a toolbar affordance for building the set, which the desktop does
-  not have either); multi-plane isolines want `SectionClip.Siblings` per plane; and the
-  `?report` self-check should grow pose/measure relationships (the pose seam is unit
-  tested, but "the canvas changed when the slider moved" is the check this front end's
-  culture asks for).
+  what is missing is a browser toolbar affordance for building the set; the desktop
+  toolbar has a plane-count cycler, so this is a real parity gap, not a shared one);
+  and the `?report` self-check should grow pose/measure relationships (the pose seam
+  is unit tested, but "the canvas changed when the slider moved" is the check this
+  front end's culture asks for).
 - [ ] **Docs-site embedding, the general form** — one page embeds the demo today
   (`docs/examples/web.md`). The payoff synergy is DocsGen emitting an interactive WASM
   viewer block *per example* instead of (or alongside) static PNGs — spin-the-model
@@ -2434,18 +2445,19 @@ flattened; a loaded document is an overlay `reload` still discards) and the
   against a REAL `ViewportControl`) plus `WindowedRpcTests` (a live window, opt-in via
   `ENGRCAD_WINDOWED_TESTS=1`). The filed reason for it being untestable was wrong; see
   CLAUDE.md's status paragraph for what a `ViewportControl` does without a window.
-- [ ] **A client that connects the instant the port is announced sees NO parts.**
-  Measured, every run, by the windowed test: the port is reported from `OnViewportReady`
-  while `ViewportControl._instances` is only swapped in from `_pending` by the render
-  pass, so `list_parts` answers `[]` — and `select_part`/`set_display_mode` then refuse
-  with "displayed parts: " and nothing after it, which reads as "this model has no parts"
-  rather than "not yet". The test retries; that is right for a test and wrong as the only
-  answer a client gets. Reporting the PENDING list instead is NOT the fix — it would
-  desynchronize the paths from the INDICES those two methods address. The shapes worth
-  weighing: a `ready` field on `ping` (cheap, and a client has to poll anyway), or holding
-  the port announcement until the first frame (changes when `--rpc` reports, and a window
-  that never renders would then never announce). Neither is obviously right, which is why
-  it is filed rather than patched.
+- [x] **A client that connects the instant the port is announced sees NO parts** —
+  resolved as the filed entry's FIRST shape: `ping` carries **`ready`**
+  (`ViewportControl.InstancesDisplayed` — true once the render pass has adopted the
+  instance swap and nothing newer is queued), and a part-not-found refusal during the
+  gap says "poll ping until ready" instead of reading as "this model has no parts".
+  Holding the port announcement until the first frame was rejected for the entry's own
+  reason (a window that never renders would never announce), and reporting the pending
+  list for its own (it would desynchronize the paths from the indices `select_part`/
+  `set_display_mode` address). The windowed test now polls `ready` and then reads the
+  list ONCE, with no blind retry; the headless half (a control that never renders IS
+  the gap held open) is pinned in `ViewportRemoteViewerTests`. Honest scope: under
+  lazy tab meshing the list is a growing prefix, so `ready` means "what is drawn",
+  not "the document is fully loaded".
 - [x] **`viewer_screenshot` returns pixels** — `ViewportControl.CaptureScreenshotAsync`
   is `SaveScreenshot` with a `TaskCompletionSource`; `ViewportRemoteViewer` awaits it
   OFF the UI thread under a 10 s deadline (blocking the dispatcher is how the frame would

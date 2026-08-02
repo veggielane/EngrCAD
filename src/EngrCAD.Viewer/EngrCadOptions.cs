@@ -111,6 +111,17 @@ public sealed class EngrCadOptions
     public bool AmbientOcclusion { get; set; } = AmbientOcclusionDefault;
 
     /// <summary>
+    /// How fills are lit (default <see cref="ShadingStyle.Lit"/> — the standard
+    /// directional light). The non-default members are analytic matcaps — studio
+    /// clay/metal looks with zero lights — evaluated in the shared mesh shader, so the
+    /// window, headless renders and the browser client agree by construction. Global
+    /// per pass with no per-part override (a scene lit two ways reads as a rendering
+    /// bug); the window's toolbar dropdown drives the same
+    /// <see cref="ViewportControl.Shading"/> this seeds.
+    /// </summary>
+    public ShadingStyle Shading { get; set; } = ShadingStyle.Lit;
+
+    /// <summary>
     /// The shipped default for on-demand tab meshing: ON. A document's tabs are meshed
     /// when they are first VIEWED, so the window opens immediately instead of waiting
     /// for tabs the user may never open (measured on the demo scene: 54 s to a window,
@@ -186,6 +197,14 @@ public sealed class EngrCadBuilder
     public EngrCadBuilder WithQuality(MeshQuality quality)
     {
         Options.Quality = quality ?? throw new ArgumentNullException(nameof(quality));
+        return this;
+    }
+
+    /// <summary>Sets how fills are lit — the standard directional light or an analytic
+    /// matcap; see <see cref="EngrCadOptions.Shading"/>.</summary>
+    public EngrCadBuilder WithShading(ShadingStyle shading)
+    {
+        Options.Shading = shading;
         return this;
     }
 
@@ -355,6 +374,7 @@ public sealed class EngrCadBuilder
             sectionPlanes ?? Options.SectionPlanes,
             Options.SectionCombine,
             preview: null,
-            explode ?? Options.Explode);
+            explode ?? Options.Explode,
+            shading: Options.Shading);
     }
 }
