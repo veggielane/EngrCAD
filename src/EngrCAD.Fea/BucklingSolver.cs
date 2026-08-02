@@ -46,6 +46,21 @@ public sealed record BucklingSolveOptions
     /// relative — fourteen digits below anything the mesh they are computed on can support.
     /// The same 23 166-DOF column accepted at 1e-5 returns 15 437.12 N against the
     /// 9 310-DOF mesh's 15 437.99 N.</para>
+    ///
+    /// <para><b>The obvious alternative measure was MEASURED and declined</b>
+    /// (<c>FeaBenchmark.WhetherAKInverseNormResidualEscapesTheBucklingFloor</c>): a residual
+    /// taken in the K^-1 norm — <c>|K^-1(K phi - lambda Kg phi)|/|phi|</c>, one extra
+    /// back-substitution — does escape the cancellation (8.2e-11 on the same vector whose
+    /// standard residual stalls at 1.9e-9), because <c>K^-1·r = -lambda·(T phi - theta phi)</c>
+    /// is exactly the shift-invert OPERATOR's residual, which full reorthogonalization
+    /// drives to round-off. But that is also why it cannot serve as the acceptance test: it
+    /// SATURATES at its own ~1e-10 floor within a dozen Lanczos steps, while the standard
+    /// measure still reads 1.2e-7 — so past that point it can no longer distinguish a
+    /// 1e-7-grade vector from a 1e-9-grade one, and an acceptance measure that has stopped
+    /// measuring is worse than a looser one that has not. The eigenvalue drift between the
+    /// earliest and the most converged acceptance is 1e-15…5e-13 relative on all three
+    /// column refinements, so a tighter default would have bought no accuracy — only a
+    /// smaller printed number.</para>
     /// </summary>
     public double Tolerance
     {
@@ -71,6 +86,22 @@ public sealed record BucklingSolveOptions
             field = value;
         }
     } = 8;
+
+    /// <summary>Vectors the Lanczos iteration advances per step (default 1) — the same
+    /// knob, for the same reason, as <see cref="ModalSolveOptions.BlockSize"/>, whose
+    /// remarks carry the argument: a multiplicity above the block size is not guaranteed
+    /// complete, and axisymmetric parts buckle in degenerate families exactly as they
+    /// vibrate in them.</summary>
+    public int BlockSize
+    {
+        get;
+        init
+        {
+            ArgumentOutOfRangeException.ThrowIfLessThan(value, 1);
+            ArgumentOutOfRangeException.ThrowIfGreaterThan(value, 8);
+            field = value;
+        }
+    } = 1;
 
     /// <summary>Quadrature rule override for the elastic stiffness, for tests that check the
     /// production rule is exact. Null uses the cheapest exact rule for the element order.</summary>
@@ -127,6 +158,11 @@ public sealed record BucklingSolveReport
     /// factorization of K.</summary>
     public required int Iterations { get; init; }
 
+    /// <summary>Vectors advanced per Lanczos step — <see cref="BucklingSolveOptions.BlockSize"/>
+    /// as applied. 1 is the scalar recursion; part of the answer's provenance because a
+    /// multiplicity above the block size is not guaranteed complete.</summary>
+    public int BlockSize { get; init; } = 1;
+
     /// <summary>How many times the Krylov space was rebuilt from a fresh start vector.</summary>
     public required int Restarts { get; init; }
 
@@ -159,7 +195,8 @@ public sealed record BucklingSolveReport
         $"shift {Shift:G6} (always zero on this path - the metric is K, not Kg)",
         $"{(Converged ? "converged" : "NOT CONVERGED")}: {ModeCount} mode"
             + $"{(ModeCount == 1 ? "" : "s")} from {Iterations} Lanczos steps through ONE "
-            + $"factorization{(Restarts > 0 ? $" and {Restarts} restart{(Restarts == 1 ? "" : "s")}" : "")}, "
+            + $"factorization{(BlockSize > 1 ? $" (block size {BlockSize})" : "")}"
+            + $"{(Restarts > 0 ? $" and {Restarts} restart{(Restarts == 1 ? "" : "s")}" : "")}, "
             + $"worst residual {WorstResidual:E2}",
         $"assemble {AssembleMs:F1} ms, factor {FactorMs:F1} ms, eigen {EigenMs:F1} ms");
 
@@ -303,7 +340,7 @@ public static class BucklingSolver
         // is zero, so `factor` really is a factorization of `K - 0·B`.
         var eigen = LanczosEigen.Solve(
             k, b, k, factor, 0.0, [], options.ModeCount,
-            options.Tolerance, krylov, options.MaxRestarts, progress);
+            options.Tolerance, krylov, options.MaxRestarts, options.BlockSize, progress);
         double eigenMs = stopwatch.Elapsed.TotalMilliseconds;
 
         if (eigen.Pairs.Count == 0)
@@ -323,6 +360,7 @@ public static class BucklingSolver
             Ordering = options.Ordering,
             Shift = 0.0,
             Iterations = eigen.Iterations,
+            BlockSize = options.BlockSize,
             Restarts = eigen.Restarts,
             Converged = eigen.Converged,
             ModeCount = modes.Length,

@@ -77,11 +77,16 @@ internal sealed record LanczosResult(
 /// spurious duplicate copies of eigenvalues it has already found — the classic ghost. With
 /// it, a GENUINE multiplicity is invisible: single-vector Lanczos spans a Krylov space that
 /// contains only one vector from each eigenspace, and a square shaft's two identical bending
-/// modes are a real, common multiplicity. The fix here is LOCKING AND RESTARTING: converged
-/// Ritz vectors join the deflation set, and a fresh start vector is orthogonalized against
-/// them, so the next run's extreme eigenvalue is the second copy. That reuses the same
-/// deflation machinery the rigid-body modes already need, rather than adding a block
-/// variant.</para>
+/// modes are a real, common multiplicity. Two mechanisms answer it. LOCKING AND RESTARTING:
+/// converged Ritz vectors join the deflation set, and a fresh start vector is orthogonalized
+/// against them, so the next run's extreme eigenvalue is the second copy — which, with the
+/// one-extra targeting, provably recovers a DOUBLE and can stop one copy short of anything
+/// higher (the failure <see cref="ModalSolveOptions.BlockSize"/> documents with numbers).
+/// And BLOCK iteration (<c>blockSize</c> &gt; 1): a block's Krylov space contains up to b
+/// vectors of each eigenspace, so a multiplicity up to b is recovered by construction —
+/// beyond b, copies can still arrive the way the scalar path's second copy does
+/// (reorthogonalization round-off re-seeding the eigenspace), which is common and NOT a
+/// guarantee.</para>
 ///
 /// <para><b>Convergence is MEASURED, not bounded.</b> The textbook test is the Lanczos
 /// bound <c>beta_m·|y_m|</c>, which is a bound on the residual of the SHIFTED, INVERTED
@@ -110,8 +115,16 @@ internal static class LanczosEigen
     /// rigid-body modes, whose eigenvalue is zero and which are reported separately.</param>
     /// <param name="wanted">How many eigenpairs above the deflation space to return.</param>
     /// <param name="tolerance">Relative residual a pair must reach to be locked.</param>
-    /// <param name="maxKrylov">Cap on the Krylov dimension of ONE run.</param>
+    /// <param name="maxKrylov">Cap on the Krylov dimension of ONE run — total basis
+    /// VECTORS, whatever the block size, so the memory bound reads the same either
+    /// way.</param>
     /// <param name="maxRestarts">Cap on the number of restarts.</param>
+    /// <param name="blockSize">Vectors advanced per Lanczos step (default 1, the incumbent
+    /// scalar recursion, byte for byte). A block of size b spans up to b vectors of EACH
+    /// eigenspace in one run, which is what makes a multiplicity up to b provably
+    /// recoverable — locking and restarting alone finds one copy per run and can stop a
+    /// copy short of a triple root (see <see cref="ModalSolveOptions.BlockSize"/> for the
+    /// failure spelled out).</param>
     /// <param name="progress">Optional cooperative cancellation, polled once per RESTART.
     /// Per restart rather than per Lanczos step because a step is one back-substitution
     /// against an already-built factorization — bounded and short — while a restart is a
@@ -129,9 +142,17 @@ internal static class LanczosEigen
         double tolerance,
         int maxKrylov,
         int maxRestarts,
+        int blockSize = 1,
         ProgressCancel? progress = null)
     {
         int n = k.Rows;
+        if (blockSize > 1)
+        {
+            return SolveBlock(
+                k, m, metric, factor, shift, deflation, wanted, tolerance, maxKrylov,
+                maxRestarts, blockSize, progress);
+        }
+
         var locked = new List<EigenPair>();
         // The deflation set grows as pairs lock: rigid modes first, then everything found.
         var deflate = new List<double[]>(deflation);
@@ -203,6 +224,300 @@ internal static class LanczosEigen
 
         return new LanczosResult(
             locked, Math.Max(0, restart - 1), totalIterations, converged, worst, candidate);
+    }
+
+    /// <summary>
+    /// The block outer loop — the same locking, restarting and one-extra targeting as the
+    /// scalar path, with a BLOCK of start vectors per run. It is a separate method rather
+    /// than a branch inside the scalar loop so the incumbent path stays byte for byte what
+    /// it was, the neutrality rule every optional feature here carries.
+    /// </summary>
+    private static LanczosResult SolveBlock(
+        PackedSparseMatrix k,
+        PackedSparseMatrix m,
+        PackedSparseMatrix metric,
+        SparseCholesky factor,
+        double shift,
+        IReadOnlyList<double[]> deflation,
+        int wanted,
+        double tolerance,
+        int maxKrylov,
+        int maxRestarts,
+        int blockSize,
+        ProgressCancel? progress)
+    {
+        int n = k.Rows;
+        // A block cannot be wider than the space it iterates in, nor than the run cap.
+        blockSize = Math.Max(1, Math.Min(blockSize, Math.Min(maxKrylov, n)));
+        var locked = new List<EigenPair>();
+        var deflate = new List<double[]>(deflation);
+
+        // The scalar path's one-extra targeting, GENERALIZED: one extra per vector the
+        // iteration advances per step (b = 1 reduces to the incumbent +1). The reason it
+        // must scale with the block is a measured trap: an UNCONVERGED copy of a repeated
+        // eigenvalue does not sit beside its converged twins in the Ritz ordering — its
+        // Rayleigh quotient mixes toward the complement, so it surfaces as a HIGH lambda
+        // beyond the next distinct eigenvalues — and the contiguous prefix therefore
+        // accepts those distinct values and fills a +1 target while the copy is still
+        // buried (a block of four on a synthetic quadruple returned {1, 1, 1, 2} exactly
+        // this way, stopping four iterations short of its own budget because it believed
+        // itself done). Up to b - 1 copies can be pending at a run's stop, so the target
+        // carries b extras and the restart, with the found copies deflated, makes the
+        // missing one the operator's extreme direction.
+        int target = Math.Min(wanted + blockSize, Math.Max(wanted, n - deflation.Count));
+
+        var scratchS = new double[n];
+        int totalIterations = 0;
+        int restart = 0;
+        (double Eigenvalue, double Residual)? candidate = null;
+
+        while (locked.Count < target && restart <= maxRestarts)
+        {
+            progress?.ThrowIfCancelled();
+
+            // A start BLOCK: deterministic and well-mixed (see BlockStartVector for why the
+            // scalar pattern family cannot serve here), each column purged against the
+            // deflation set AND the columns already accepted into this block, so the run
+            // starts from a metric-orthonormal block outside everything already found.
+            var start = new List<double[]>(blockSize);
+            var against = new List<double[]>(deflate);
+            for (int i = 0; i < blockSize; i++)
+            {
+                var v = BlockStartVector(n, restart * blockSize + i);
+                if (!Purge(metric, against, v, scratchS))
+                    continue;
+                start.Add(v);
+                against.Add(v);
+            }
+            if (start.Count == 0)
+            {
+                restart++;
+                continue;
+            }
+
+            var run = RunBlockOnce(
+                k, m, metric, factor, shift, deflate, start,
+                target - locked.Count, tolerance, maxKrylov, scratchS);
+            totalIterations += run.Steps;
+            restart++;
+
+            if (run.Candidate is { } miss
+                && (candidate is not { } best || miss.Residual < best.Residual))
+                candidate = miss;
+
+            foreach (var pair in run.Pairs)
+            {
+                locked.Add(pair);
+                deflate.Add(pair.Vector);
+                if (locked.Count >= target)
+                    break;
+            }
+        }
+
+        locked.Sort((a, b) => a.Eigenvalue.CompareTo(b.Eigenvalue));
+        bool converged = locked.Count >= wanted;
+        if (locked.Count > wanted)
+            locked.RemoveRange(wanted, locked.Count - wanted);
+
+        double worst = 0;
+        foreach (var pair in locked)
+            worst = Math.Max(worst, pair.Residual);
+
+        return new LanczosResult(
+            locked, Math.Max(0, restart - 1), totalIterations, converged, worst, candidate);
+    }
+
+    /// <summary>
+    /// One BLOCK Lanczos run: the three-term recursion with b vectors advanced per step,
+    /// full reorthogonalization, and a metric Gram-Schmidt QR closing each step. What the
+    /// block buys is structural: the Krylov space of a block start contains up to b vectors
+    /// of every eigenspace, so a multiplicity up to b appears complete in ONE run's Ritz
+    /// values instead of one copy per restart.
+    ///
+    /// <para><b>Rank deficiency is a BREAKDOWN, not repaired.</b> A residual block column
+    /// whose metric norm collapses (against the same scale-free test the scalar path uses)
+    /// means the block's Krylov space has gone invariant in that direction — a success for
+    /// the pairs it contains — and the run checks, returns what converged, and lets the
+    /// outer loop restart, exactly the scalar path's breakdown contract. Shrinking the
+    /// block and continuing is the adaptive refinement, deliberately not built until a
+    /// fixture wants it: restarting is slower, never wrong.</para>
+    /// </summary>
+    private static RunResult RunBlockOnce(
+        PackedSparseMatrix k,
+        PackedSparseMatrix m,
+        PackedSparseMatrix metric,
+        SparseCholesky factor,
+        double shift,
+        List<double[]> deflate,
+        List<double[]> start,
+        int wanted,
+        double tolerance,
+        int maxKrylov,
+        double[] scratchS)
+    {
+        int n = k.Rows;
+        int b = start.Count;
+        int cap = Math.Min(maxKrylov, n);
+        var basis = new List<double[]>(cap);
+        var alphas = new List<double[]>();  // b·b, row-major, symmetric
+        var betas = new List<double[]>();   // b·b, upper triangular R of each step's QR
+
+        var found = new List<EigenPair>();
+        (double Eigenvalue, double Residual)? candidate = null;
+        double alphaScale = 0;
+        int steps = 0;
+
+        var current = start.ToArray();
+        double[][]? previous = null;
+
+        for (; ; )
+        {
+            foreach (var column in current)
+                basis.Add(column);
+            steps += b;
+
+            // Z = A^-1 M Q_j, column by column — b back-substitutions through the one
+            // factorization, which is what a block step costs.
+            var z = new double[b][];
+            for (int q = 0; q < b; q++)
+            {
+                m.Multiply(current[q], scratchS);
+                z[q] = new double[n];
+                factor.Solve(scratchS, z[q]);
+            }
+
+            // Alpha_j = Q_j' G Z, built symmetric by construction: the operator is
+            // self-adjoint in the metric, so the computed [p,q] and [q,p] differ only by
+            // round-off and picking the upper triangle is a determinism rule, not a fix.
+            var gCurrent = new double[b][];
+            for (int q = 0; q < b; q++)
+                gCurrent[q] = metric.Multiply(current[q]);
+            var alpha = new double[b * b];
+            for (int p = 0; p < b; p++)
+            {
+                for (int q = p; q < b; q++)
+                {
+                    double value = Dot(gCurrent[p], z[q]);
+                    alpha[p * b + q] = value;
+                    alpha[q * b + p] = value;
+                }
+                alphaScale = Math.Max(alphaScale, Math.Abs(alpha[p * b + p]));
+            }
+
+            // Z -= Q_j Alpha_j + Q_{j-1} Beta_{j-1}'.
+            for (int q = 0; q < b; q++)
+            {
+                for (int p = 0; p < b; p++)
+                    Subtract(z[q], current[p], alpha[p * b + q]);
+                if (previous is not null)
+                {
+                    var beta = betas[^1];
+                    for (int p = 0; p < b; p++)
+                        Subtract(z[q], previous[p], beta[q * b + p]);
+                }
+            }
+
+            // Full reorthogonalization in the metric, two passes, against the deflation
+            // set and the whole basis — the scalar path's rule, per column.
+            for (int q = 0; q < b; q++)
+            {
+                for (int pass = 0; pass < 2; pass++)
+                {
+                    metric.Multiply(z[q], scratchS);
+                    foreach (var v in deflate)
+                        Subtract(z[q], v, Dot(v, scratchS));
+                    foreach (var v in basis)
+                        Subtract(z[q], v, Dot(v, scratchS));
+                }
+            }
+
+            // Metric Gram-Schmidt QR of the residual block: Z = Q_{j+1}·R with R upper
+            // triangular. A collapsing diagonal is the block form of the scalar path's
+            // scale-free breakdown test.
+            bool breakdown = false;
+            var next = new double[b][];
+            var gNext = new double[b][];
+            var r = new double[b * b];
+            for (int q = 0; q < b; q++)
+            {
+                for (int p = 0; p < q; p++)
+                {
+                    double coefficient = Dot(gNext[p], z[q]);
+                    r[p * b + q] = coefficient;
+                    Subtract(z[q], next[p], coefficient);
+                }
+                metric.Multiply(z[q], scratchS);
+                double nu = Dot(z[q], scratchS);
+                double norm = nu > 0 ? Math.Sqrt(nu) : 0;
+                if (norm <= 1e-13 * alphaScale)
+                {
+                    breakdown = true;
+                    break;
+                }
+                r[q * b + q] = norm;
+                var column = new double[n];
+                double inverse = 1.0 / norm;
+                for (int i = 0; i < n; i++)
+                    column[i] = z[q][i] * inverse;
+                next[q] = column;
+                gNext[q] = metric.Multiply(column);
+            }
+
+            alphas.Add(alpha);
+
+            bool lastStep = basis.Count + b > cap;
+            bool check = breakdown || lastStep || basis.Count >= wanted;
+            if (check)
+            {
+                found = Ritz(
+                    k, m, metric, basis, BlockProjection(alphas, betas, b, basis.Count),
+                    shift, wanted, tolerance, new double[n], out var miss);
+                if (miss is { } m2 && (candidate is not { } best || m2.Residual < best.Residual))
+                    candidate = m2;
+                if (found.Count >= wanted || breakdown || lastStep)
+                    return new RunResult(found, steps, candidate);
+            }
+
+            if (breakdown)
+                return new RunResult(found, steps, candidate);
+
+            betas.Add(r);
+            previous = current;
+            current = next;
+        }
+    }
+
+    /// <summary>The dense block-tridiagonal projection: Alpha_j on the diagonal blocks,
+    /// each step's R below it and R' above, in the (row, column) convention
+    /// <c>A^-1 M Q_j = Q_{j-1} R_{j-1}' + Q_j Alpha_j + Q_{j+1} R_j</c> implies.</summary>
+    private static double[] BlockProjection(
+        List<double[]> alphas, List<double[]> betas, int b, int size)
+    {
+        var t = new double[size * size];
+        for (int j = 0; j < alphas.Count; j++)
+        {
+            var alpha = alphas[j];
+            int offset = j * b;
+            for (int p = 0; p < b; p++)
+            {
+                for (int q = 0; q < b; q++)
+                    t[(offset + p) * size + (offset + q)] = alpha[p * b + q];
+            }
+            if (j < alphas.Count - 1)
+            {
+                var beta = betas[j];
+                for (int p = 0; p < b; p++)
+                {
+                    for (int q = 0; q < b; q++)
+                    {
+                        // Row block j+1, column block j carries R; the transpose mirrors it.
+                        t[(offset + b + p) * size + (offset + q)] = beta[p * b + q];
+                        t[(offset + q) * size + (offset + b + p)] = beta[p * b + q];
+                    }
+                }
+            }
+        }
+        return t;
     }
 
     private readonly record struct RunResult(
@@ -354,9 +669,9 @@ internal static class LanczosEigen
     private const int CheckEvery = 5;
 
     /// <summary>
-    /// The Rayleigh-Ritz step: eigen-decompose the tridiagonal projection, map each Ritz
-    /// value back through <c>lambda = sigma + 1/theta</c>, form the Ritz vectors, and keep
-    /// those whose MEASURED residual is within tolerance.
+    /// The Rayleigh-Ritz step for the SCALAR path: build the tridiagonal projection and
+    /// hand it to the dense form below. The construction is the same values in the same
+    /// slots it always was, so the scalar path's arithmetic is untouched.
     /// </summary>
     private static List<EigenPair> Ritz(
         PackedSparseMatrix k,
@@ -371,9 +686,7 @@ internal static class LanczosEigen
         double[] scratch,
         out (double Eigenvalue, double Residual)? rejected)
     {
-        rejected = null;
         int size = basis.Count;
-        int n = basis[0].Length;
         var t = new double[size * size];
         for (int i = 0; i < size; i++)
         {
@@ -384,6 +697,33 @@ internal static class LanczosEigen
                 t[(i + 1) * size + i] = beta[i];
             }
         }
+        return Ritz(k, m, metric, basis, t, shift, wanted, tolerance, scratch, out rejected);
+    }
+
+    /// <summary>
+    /// The Rayleigh-Ritz step over an explicit dense projection: eigen-decompose it, map
+    /// each Ritz value back through <c>lambda = sigma + 1/theta</c>, form the Ritz vectors,
+    /// and keep those whose MEASURED residual is within tolerance. The scalar path hands a
+    /// tridiagonal here and the block path a block tridiagonal; everything downstream —
+    /// the descending-theta walk, the contiguous-prefix rule, the measured residual — is
+    /// ONE implementation, so the two paths cannot come to disagree about what "accepted"
+    /// means.
+    /// </summary>
+    private static List<EigenPair> Ritz(
+        PackedSparseMatrix k,
+        PackedSparseMatrix m,
+        PackedSparseMatrix metric,
+        List<double[]> basis,
+        double[] t,
+        double shift,
+        int wanted,
+        double tolerance,
+        double[] scratch,
+        out (double Eigenvalue, double Residual)? rejected)
+    {
+        rejected = null;
+        int size = basis.Count;
+        int n = basis[0].Length;
 
         var (values, vectors) = SmallSymmetricEigen.Solve(t, size);
 
@@ -513,6 +853,42 @@ internal static class LanczosEigen
         int a = 7 + 2 * restart, b = 3 + restart, c = 11 + 3 * restart;
         for (int i = 0; i < n; i++)
             v[i] = 1.0 + (i % a) * 0.13 - (i % b) * 0.21 + (i % c) * 0.07;
+        return v;
+    }
+
+    /// <summary>
+    /// A deterministic well-MIXED start vector for block columns, and the reason it is a
+    /// second generator rather than more seeds of the first is a measured failure:
+    /// <see cref="StartVector"/>'s pattern is piecewise AFFINE in the index with one shared
+    /// slope (0.13 − 0.21 + 0.07 = −0.01 between modulus wraps), so any few consecutive
+    /// components of EVERY seed lie in span{constant, ramp} plus a wrap jump — and a
+    /// block's projections onto an eigenspace concentrated on a few coordinates are then
+    /// structurally near rank-deficient however the seeds are chosen. Measured on a
+    /// synthetic diagonal quadruple: a block of four carried an effective rank of about two
+    /// into the eigenspace, the missing copies had to regrow from round-off, and the run
+    /// budget filled with the next distinct eigenvalues first. A 64-bit LCG has no such
+    /// structure and is exactly reproducible. The SCALAR path keeps the incumbent pattern,
+    /// byte for byte.
+    ///
+    /// <para><b>Components are CENTERED, and that is a second measured lesson</b>: a first
+    /// draft mapped them to [0.5, 1.5) so no component could vanish, which made every
+    /// column sit near the all-ones direction (pairwise cosine about 0.9) — and a block of
+    /// near-parallel columns wastes its width, because its later principal directions carry
+    /// tiny weight into every eigenspace (the same quadruple's fourth copy started with a
+    /// factor-20 component penalty and missed the tolerance at the run cap). Centering on
+    /// zero makes the columns near-orthogonal in expectation; orthogonality to an
+    /// EIGENVECTOR — the thing a start vector must avoid — is measure-zero for a mixed
+    /// stream either way.</para>
+    /// </summary>
+    private static double[] BlockStartVector(int n, int seed)
+    {
+        var v = new double[n];
+        ulong state = (ulong)(uint)seed * 2654435761UL + 12345UL;
+        for (int i = 0; i < n; i++)
+        {
+            state = state * 6364136223846793005UL + 1442695040888963407UL;
+            v[i] = (state >> 11) * (2.0 / (1UL << 53)) - 1.0;
+        }
         return v;
     }
 

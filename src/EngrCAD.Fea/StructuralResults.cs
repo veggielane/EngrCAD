@@ -45,15 +45,26 @@ public sealed class StructuralResults
 {
     private readonly Vector3d[] _displacement;
     private readonly Vector3d[] _reaction;
-    private SymmetricTensor3[]? _nodalStress;
-    private double[]? _nodalVonMises;
+    private readonly IReadOnlyList<Vector3d> _displacementView;
+    private readonly IReadOnlyList<Vector3d> _reactionView;
+    private IReadOnlyList<SymmetricTensor3>? _nodalStress;
+    private IReadOnlyList<double>? _nodalVonMises;
     private SymmetricTensor3[]? _averagedStress;
-    private SuperconvergentRecovery.RecoveredStress? _recovered;
-    private ErrorEstimate? _errorEstimate;
+    // The recovery and the error estimate are readonly record STRUCTS, cached boxed: an
+    // object reference publishes atomically where a Nullable<T> write of a multi-word struct
+    // can tear, and tearing would hand a concurrent reader half of one value and half of
+    // another — corruption, not merely wasted work.
+    private object? _recovered;
+    private object? _errorEstimate;
 
-    // Not thread-safe: the two lazy caches below are unsynchronised, so a first read from
-    // several threads would recompute rather than corrupt, but would waste the work. A
-    // results object belongs to whoever solved for it.
+    // Concurrency contract: concurrent READS are safe — every lazy cache below is a pure
+    // deterministic function of immutable data published by a single reference assignment,
+    // so racing first reads duplicate the work and agree on the value. What is NOT safe is
+    // setting Averaging or Recovery while another thread reads: the setters clear the caches,
+    // and a reader between the clear and its own recompute may pair values from different
+    // settings. A results object still belongs to whoever solved for it; the guarantee
+    // exists so a viewer that only READS resolved fields off another thread cannot corrupt
+    // one.
     internal StructuralResults(
         StructuralModel model,
         Vector3d[] displacement,
@@ -63,6 +74,8 @@ public sealed class StructuralResults
         Model = model;
         _displacement = displacement;
         _reaction = reaction;
+        _displacementView = Array.AsReadOnly(displacement);
+        _reactionView = Array.AsReadOnly(reaction);
         Report = report;
     }
 
@@ -75,8 +88,10 @@ public sealed class StructuralResults
     /// <summary>What the solve did.</summary>
     public FeaSolveReport Report { get; }
 
-    /// <summary>Nodal displacements, indexed by node.</summary>
-    public IReadOnlyList<Vector3d> Displacement => _displacement;
+    /// <summary>Nodal displacements, indexed by node. A read-only VIEW, not the internal
+    /// array — the same array feeds every derived stress pass, so handing it out castable
+    /// back to <c>Vector3d[]</c> would let a consumer silently change the answer.</summary>
+    public IReadOnlyList<Vector3d> Displacement => _displacementView;
 
     /// <summary>Displacement of one node.</summary>
     public Vector3d DisplacementAt(int node)
@@ -103,7 +118,7 @@ public sealed class StructuralResults
     /// Nodal force residuals: the support reaction at a restrained degree of freedom, and
     /// the solve's own residual (near zero) at a free one.
     /// </summary>
-    public IReadOnlyList<Vector3d> Reactions => _reaction;
+    public IReadOnlyList<Vector3d> Reactions => _reactionView;
 
     /// <summary>The reaction at one node (see <see cref="Reactions"/>).</summary>
     public Vector3d ReactionAt(int node)
@@ -160,6 +175,12 @@ public sealed class StructuralResults
             _nodalStress = null;
             _nodalVonMises = null;
             _averagedStress = null;
+            // The recovery and the estimate consume AveragedStress too (boundary nodes fall
+            // back to it), so they are stale under a changed averaging as well — clearing
+            // only the averaged caches would let a later superconvergent read pair a fresh
+            // average with a recovery computed under the old one.
+            _recovered = null;
+            _errorEstimate = null;
         }
     } = NodalAveraging.VolumeWeighted;
 
@@ -225,19 +246,38 @@ public sealed class StructuralResults
         return StressAt(element, r, s, t);
     }
 
-    /// <summary>The nodal stress field, by whichever <see cref="Recovery"/> is selected.</summary>
+    /// <summary>The nodal stress field, by whichever <see cref="Recovery"/> is selected.
+    /// A read-only view — the array behind it is a cache shared with the error
+    /// estimator.</summary>
     public IReadOnlyList<SymmetricTensor3> NodalStress =>
-        _nodalStress ??= Recovery == StressRecovery.Direct
-            ? AveragedStress
-            : RecoveredNodalStress.Stress;
+        Publish(ref _nodalStress, () => Array.AsReadOnly(
+            Recovery == StressRecovery.Direct ? AveragedStress : RecoveredNodalStress.Stress));
 
     /// <summary>The directly averaged nodal stress, whatever <see cref="Recovery"/> says —
     /// the fallback the recovery itself uses, and the field the error estimator's residual
     /// is measured against having replaced.</summary>
-    private SymmetricTensor3[] AveragedStress => _averagedStress ??= ComputeNodalStress();
+    private SymmetricTensor3[] AveragedStress =>
+        Publish(ref _averagedStress, ComputeNodalStress);
 
     private SuperconvergentRecovery.RecoveredStress RecoveredNodalStress =>
-        _recovered ??= SuperconvergentRecovery.Recover(this, AveragedStress);
+        (SuperconvergentRecovery.RecoveredStress)Publish(
+            ref _recovered,
+            () => (object)SuperconvergentRecovery.Recover(this, AveragedStress));
+
+    /// <summary>
+    /// First-publish-wins lazy initialization (the <see cref="AnalysisMesh"/> pattern):
+    /// compute on a miss, install by CompareExchange, return whichever copy won. Every
+    /// compute routed through here is deterministic over data that does not change under it,
+    /// which is what makes a racing loser's value identical to the winner's.
+    /// </summary>
+    private static T Publish<T>(ref T? field, Func<T> compute) where T : class
+    {
+        var current = field;
+        if (current is not null)
+            return current;
+        var computed = compute();
+        return Interlocked.CompareExchange(ref field, computed, null) ?? computed;
+    }
 
     /// <summary>
     /// The Zienkiewicz-Zhu error estimate: the energy-norm distance between the element
@@ -249,22 +289,19 @@ public sealed class StructuralResults
     /// error in the finite-element one. Using the averaged field instead is the older and
     /// markedly weaker form of the same idea.</para>
     /// </summary>
-    public ErrorEstimate ErrorEstimate => _errorEstimate ??= ComputeErrorEstimate();
+    public ErrorEstimate ErrorEstimate =>
+        (ErrorEstimate)Publish(ref _errorEstimate, () => (object)ComputeErrorEstimate());
 
     /// <summary>Averaged von Mises stress at every node — what a colour map shows.</summary>
-    public IReadOnlyList<double> NodalVonMises
-    {
-        get
+    public IReadOnlyList<double> NodalVonMises =>
+        Publish(ref _nodalVonMises, () =>
         {
-            if (_nodalVonMises is not null)
-                return _nodalVonMises;
             var stress = NodalStress;
             var values = new double[stress.Count];
             for (int v = 0; v < values.Length; v++)
                 values[v] = TetElement.VonMises(stress[v]);
-            return _nodalVonMises = values;
-        }
-    }
+            return Array.AsReadOnly(values);
+        });
 
     /// <summary>The largest averaged nodal von Mises stress.</summary>
     public double MaxVonMises

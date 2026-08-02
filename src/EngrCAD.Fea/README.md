@@ -751,7 +751,17 @@ results.WriteVtu("bracket.vtu");                                 // or ParaView
 `AnalysisMesh` is the one type assembly, boundary conditions, load integration, stress
 recovery and publishing are written against, so the linear/quadratic difference is two
 integers rather than two implementations. It wraps a `TetMesh` or a `QuadraticTetMesh` and
-copies nothing but index arrays.
+copies nothing but index arrays. Three API-hygiene rules it and `StructuralResults` share:
+derived summaries (`Regions`, `FacetTags`, `Bounds`, `Volume`, the lazy stress caches) are
+computed once and published lock-free by CompareExchange — legal because each is a pure
+function of immutable data, so a racing first read computes an identical value and the loser
+is discarded; every `IReadOnlyList` property is a read-only VIEW, never the internal array
+castable back to `T[]` (the array behind `Nodes` is what every solver assembles from, and the
+one behind `Displacement` feeds every derived stress pass); and a mesh whose index arithmetic
+would overflow `int` (~215 M quadratic elements, ~716 M nodes) is refused at `Of` by name
+rather than failing as a bare `OverflowException` from a negative array length. What is still
+NOT safe is mutating `Averaging`/`Recovery` while another thread reads — the setters clear
+the caches, and that is stated on the type.
 
 - **Stiffness is assembled in index form, not as B'DB.** For an isotropic material the
   integrand collapses to `K_ij^ab = L·N_i,a·N_j,b + M·N_i,b·N_j,a + M·(gradN_i · gradN_j)·d_ab`,
@@ -1545,7 +1555,15 @@ Three implementation rules, each of which cost something:
   Converged modes therefore join the deflation set and a fresh start vector is orthogonalized
   against them, so the next run's extreme eigenvalue is the second copy. The solver also
   targets **one more mode than asked for** and returns the lowest `wanted`, which is what
-  gives a missed copy a run to appear in before the extra one is discarded.
+  gives a missed copy a run to appear in before the extra one is discarded. That machinery
+  recovers a double (now MEASURED on a synthetic exact double, not merely reasoned) and
+  provably stops one copy short of a triple; `ModalSolveOptions.BlockSize` is the answer past
+  it — b vectors advanced per step carry a multiplicity up to b by construction, with the
+  extra targeting scaled to b because an UNCONVERGED copy's Ritz value hides high in the
+  spectrum, past the next distinct eigenvalues, where the contiguous prefix cannot shield it
+  (measured: a block of four on a synthetic quadruple stopped at `{1, 1, 1, 2}` believing
+  itself done, four iterations short of its own budget, until the target learned to carry b
+  extras).
 - **A CONTIGUOUS converged prefix, never "whatever has converged".** Ritz values converge from
   the extreme end inwards but not in lock step, so a run can have the second eigenvalue
   converged while the first is still moving. Accepting out of order returns eigenvalues 2 and
@@ -1667,8 +1685,12 @@ square root of round-off.
   enters per mode where it is used (see `ModalDamping`), never as a matrix here.
 - **No transient dynamics.** Frequency response is covered by `HarmonicSolver`; direct
   time integration needs a different stepping loop.
-- **Multiplicity three and above is not guaranteed.** Locking and restarting recovers the second
-  member of a degenerate pair; a triple root wants a block method.
+- **Multiplicity three and above wants `ModalSolveOptions.BlockSize`.** Locking and restarting
+  recovers the second member of a degenerate pair and provably stops one copy short of a
+  triple (pinned on a synthetic exact triple: `{f1, f1, f2}` for a truth of `{f1, f1, f1}`,
+  every returned mode a genuine eigenpair); a block of size b carries a multiplicity up to b
+  by construction. The default stays 1 — the incumbent path byte for byte — because real
+  meshes split their theoretical multiplicities.
 - **A near-critical prestress raises the residual floor**, because `K + s·Kg` is nearly singular
   by construction: measured on the pinned-pinned column, 2.99e-10 unloaded and 3.09e-9 at 90% of
   the critical load. The mode is right either way — its frequency lands on the closed-form law
@@ -1793,6 +1815,19 @@ refinement of an ordinary model. Nothing is given up: an eigenvalue is accurate 
 SQUARE of the residual over the spectral gap, and the same 23 166-DOF column accepted at 1e-5
 returns 15 437.12 N against the 9 310-DOF mesh's 15 437.99 N.
 
+**Whether a K^-1-norm residual removes the floor was measured, and the answer is a lesson**
+(`FeaBenchmark.WhetherAKInverseNormResidualEscapesTheBucklingFloor`): it escapes the
+cancellation — 8.2e-11 on the same vector whose standard residual stalls at 1.9e-9, roughly
+mesh-independent where the standard floor grows with `kappa(K)` — because
+`K^-1·r = -lambda·(T phi - theta phi)` is exactly the shift-invert operator's residual, which
+full reorthogonalization drives to round-off. That is also why it cannot be the acceptance
+test: it saturates at its own ~1e-10 floor within a dozen Lanczos steps, while the standard
+measure still reads 1.2e-7, so past that point it cannot distinguish a 1e-7-grade vector from
+a 1e-9-grade one — a measure that has stopped measuring. The eigenvalue drift between the
+earliest and the most converged acceptance is 1e-15…5e-13 relative on all three refinements,
+so a tighter default was never going to buy accuracy; the default stands, and the reported
+residual keeps its backward-error meaning.
+
 The refusal when even that is unreachable **names which of the two causes it hit** —
 `LanczosEigen` now reports the best candidate it saw but did not accept, so "no positive factor
 exists" and "a factor was there and the tolerance was in the way" are different messages. They
@@ -1878,9 +1913,9 @@ still 32% high at 3 550 DOF, where the quadratic answer converged to 0.2% with 4
   ReferenceLoad` test pins.
 - **Positive factors only** (see above); a load case that buckles only when reversed is refused
   rather than reported with a negative number nobody asked for.
-- **Multiplicity three and above** inherits the modal solver's limitation — locking and
-  restarting recovers the second member of a degenerate pair, and a triple root wants a block
-  method.
+- **Multiplicity three and above** takes the modal solver's answer —
+  `BucklingSolveOptions.BlockSize`, the same block iteration through the same `LanczosEigen`,
+  since axisymmetric parts buckle in degenerate families exactly as they vibrate in them.
 
 ---
 

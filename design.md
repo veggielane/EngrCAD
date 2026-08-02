@@ -746,6 +746,36 @@ bending mode of 834.9 Hz. And convergence is **measured** (`K phi − lambda M p
 taken from the `beta_m·|y_m|` bound, which describes the shifted, inverted operator's residual
 — one transformation away from what a caller cares about.
 
+**Multiplicity three and above is BLOCK Lanczos (`ModalSolveOptions.BlockSize`, buckling
+likewise), and building it produced three measured findings.** The scalar machinery's limits
+were measured for the first time on synthetic exact-multiplicity pencils (no mesh fixture can
+carry one — real meshes SPLIT their theoretical multiplicities, this project's beam pairs by
+0.04–0.13%): lock-and-restart plus the one-extra target recovers an exact DOUBLE — the
+recorded claim, previously reasoned, now measured — and stops exactly one copy short of a
+TRIPLE, returning `{1, 1, 2}` for a truth of `{1, 1, 1}` with every returned pair a genuine
+eigenpair, which is why nothing inside the iteration can notice. A block of size b carries up
+to b vectors of each eigenspace in its start block's exact-arithmetic span, so a multiplicity
+up to b is recovered by construction; b = 1 takes the incumbent scalar path byte for byte
+(the neutrality rule). The findings: **(a) an unconverged COPY hides high in the spectrum,
+where the contiguous prefix cannot shield it** — its Rayleigh quotient mixes toward the
+complement, so it surfaces beyond the next DISTINCT eigenvalues, the walk accepts those, and
+a +1 target fills while a copy is still buried (a block of four on a quadruple stopped at
+`{1, 1, 1, 2}` believing itself done, four iterations short of its own budget) — hence the
+extra targeting scales with the block: one extra per vector advanced per step, which reduces
+to the incumbent +1 at b = 1. **(b) A block start must not come from the scalar pattern
+family**: the pattern is piecewise AFFINE in the index with one shared slope, so any few
+consecutive components of every seed lie in span{constant, ramp} plus a wrap jump, and a
+block's projections onto a coordinate-concentrated eigenspace are structurally near
+rank-deficient however the seeds are chosen — block starts use a 64-bit LCG stream instead,
+deterministic and well mixed. **(c) The stream must be CENTERED**: a first draft mapped
+components to [0.5, 1.5) so none could vanish, which put every column near the all-ones
+direction (pairwise cosine ~0.9) and starved the block's later principal directions — the
+quadruple's fourth copy started with a factor-20 component penalty and missed the tolerance
+at the run cap. Orthogonality to an eigenvector, the thing a start vector must actually
+avoid, is measure-zero for a mixed stream either way. Rank deficiency in the block QR is a
+BREAKDOWN (return what converged, restart), not an adaptive block-shrink — restarting is
+slower, never wrong, and the refinement waits for a fixture that wants it.
+
 **Rigid-body modes are separated, not refused.** The static solver refuses an unrestrained
 body because its answer is not unique; a modal analysis of one is well posed and its six
 zero-frequency modes are part of the answer. `RigidBodyModes.Surviving` was extracted from
@@ -844,6 +874,29 @@ the floor. Measured on a slender column: every mesh up to 9 310 DOF reaches 1e-1
 ordinary model. Nothing is given up — an eigenvalue is accurate to roughly the SQUARE of the
 residual over the spectral gap, and that same column accepted at 1e-5 returns 15 437.12 N
 against a finer mesh's 15 437.99 N.
+
+**Whether a better residual MEASURE removes the floor was an open question, and the answer is
+measured: half yes, and it does not matter — because a measure that escapes the cancellation
+also stops measuring.** The candidate was the K^-1 norm, `|K^-1(K phi - lambda Kg phi)|/|phi|`
+— one extra back-substitution through the factorization that already exists — and it does
+escape: on the same 23 166-DOF column the standard measure stalls at 1.9e-9 while the K^-1
+measure of the SAME vector reads 8.2e-11, and where the standard floor grows with `kappa(K)`
+across refinements (3.1e-10 / 9.1e-10 / 1.9e-9 at 3 550 / 10 486 / 23 166 DOF) the K^-1
+figure sits near 1e-10 at every one (5.5e-11 / 9.1e-11 / 8.2e-11). The structural reason is
+also the disqualification: `K^-1·r = -lambda·(T phi - theta phi)` is exactly the shift-invert
+OPERATOR's residual — the quantity the textbook `beta·|y|` bound describes and the acceptance
+test deliberately declined — and full reorthogonalization drives it to round-off within a
+dozen steps, after which it reads the back-substitution's noise rather than the pair's
+quality: at 12 Lanczos steps it already sits at 8.9e-11 while the standard measure still
+reads **1.2e-7**, and it does not move again through 120 steps. An acceptance measure that
+saturates before convergence cannot distinguish a 1e-7-grade vector from a 1e-9-grade one,
+which is worse than a looser measure that still measures. And nothing was on the table: the
+eigenvalue drift between the earliest acceptance and the most converged one is
+1e-15…4.8e-13 relative on all three meshes — the residual-squared-over-gap claim, confirmed —
+so the 1e-7 default stands as chosen and the reported residual keeps its honest
+backward-error meaning. (`FeaBenchmark.WhetherAKInverseNormResidualEscapesTheBucklingFloor`;
+the historical 1.76e-9 reads 1.87e-9 on today's code — same fixture, summation orders have
+moved since.)
 
 **An empty eigen-result has two unrelated causes**, and an empty list cannot tell them apart:
 either the spectrum genuinely holds nothing wanted, or a candidate was there and the tolerance

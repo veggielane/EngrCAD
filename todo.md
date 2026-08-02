@@ -1085,22 +1085,13 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   - **A displacement-stated input scales as omega²**, so the vocabulary has to say whether the
     caller is giving an acceleration, a velocity or a displacement amplitude; naming the method
     after the acceleration and offering the other two as conversions is the honest shape.
-- [ ] **FEA: the buckling residual FLOOR, and whether a better residual measure removes it.**
-  The measured relative residual is a total cancellation of `K phi` against `lambda Kg phi`, so
-  its floor is `eps·kappa(K)` — worse than a modal solve's because `K^-1 Kg` does not SMOOTH
-  the way `K^-1 M` does (a geometric stiffness is derivative-like, so the Lanczos vectors keep
-  the high-frequency content K amplifies). Measured: a 23 166-DOF slender column stalls at
-  1.76e-9 where every coarser mesh reaches 1e-10, which is why the buckling default tolerance
-  is 1e-7. A residual measured in the `K^-1` norm (i.e. `|K^-1(K phi − lambda Kg phi)|`, one
-  extra back-substitution per check through a factorization that already exists) would not
-  cancel the same way and might restore a tighter default; unmeasured, and the current default
-  is honest rather than a workaround.
-- [ ] **FEA: block Lanczos, for multiplicity three and above.** Locking and restarting
-  recovers the SECOND member of a degenerate pair, and the solver targets one extra mode so a
-  missed copy has a run to appear in — but neither is a proof of completeness for a triple
-  root, and axisymmetric parts have them. A block method (block size 2–4) finds a whole
-  eigenspace at once and is the standard answer; it is filed rather than pretended, and the
-  limitation is stated in `ModalResults`' docs and the README.
+- [ ] **FEA: adaptive block shrink on Lanczos QR rank deficiency.** Block Lanczos landed
+  (`ModalSolveOptions.BlockSize`/`BucklingSolveOptions.BlockSize`; design.md §3e carries the
+  three measured findings) and treats a rank-deficient residual block as a BREAKDOWN — return
+  what converged, restart — because restarting is slower and never wrong. The standard
+  refinement is to drop the collapsed column and continue with a narrower block, which saves
+  the restart's re-convergence; deliberately not built until a fixture wants it, since no
+  case in the suite reaches the breakdown path other than by exhausting a small space.
 - [ ] **FEA: transient dynamics — several load patterns with independent histories.**
   `TransientSolveOptions.LoadFactor` scales the model's ONE spatial load pattern by one scalar
   law, which covers a step, an impulse, a ramp, a harmonic drive and a measured trace. What it
@@ -1348,22 +1339,6 @@ half-power bandwidth within 0.54%, the static correction exact to 1.8e-16. Resid
   problem rather than a bigger version of this one (a nonlinear solve wrapping the linear
   one). Modal has landed, so the assembly is now shared by three physics and a fourth
   consumer would be the fifth reason not to fork it.
-- [ ] **FEA API hygiene** (from the code-quality review of the structural landing; the
-  correctness items it found were fixed in place, these are the residue):
-  - `AnalysisMesh.Regions` and `FacetTags` run `Distinct().Order().ToArray()` on EVERY
-    get, and `Bounds`/`Volume` recompute over all nodes/elements per get. All are cold
-    paths today, but the shape invites `for (…) if (mesh.Regions.Contains(x))`. Cache
-    them, or make them methods so the cost is visible at the call site.
-  - `AnalysisMesh.Nodes`, `StructuralResults.Displacement`/`Reactions` hand internal
-    arrays out as `IReadOnlyList<T>`, castable back to `T[]` and mutable by any consumer.
-    `ReadOnlyCollection` or a copy — the same question `MeshField` answered by copying.
-  - `AnalysisMesh.Of` overflows `TetCount * 10` above ~215 M elements and
-    `3 * NodeCount` above ~716 M nodes. It fails loudly (negative array length) but with
-    a bare `OverflowException`; one up-front refusal naming the limit would match the
-    refuse-by-name convention.
-  - `StructuralResults`' two lazy caches are unsynchronised (documented in the type, not
-    enforced). Fine while a results object belongs to whoever solved for it; worth
-    revisiting if the viewer ever resolves fields off the render thread.
 - [ ] **FEA thermal follow-ups** (v1 ✅ landed — `ThermalModel`/`ThermalSolver`/
   `ThermalResults` + `StructuralModel.ThermalLoad`, docs `examples/fea-thermal.md`):
   - [ ] **Time-varying boundary conditions.** The stepping already carries the previous
