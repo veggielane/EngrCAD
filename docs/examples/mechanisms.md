@@ -684,6 +684,188 @@ while the sweep has period lead.
 (naming the diameter factor), a pointed thread, and adjacent starts overlapping at
 the root cylinder.
 
+## Straight bevel gears
+
+`BevelPair` turns two tooth counts and a shaft angle into the two pitch cone angles
+— `tan δ₁ = sin Σ / (z₂/z₁ + cos Σ)`, which at the usual 90° is just `z₁/z₂` — and
+the wheel takes the complement, `δ₁ + δ₂ = Σ`. `BevelGears.StraightGear` then draws
+each member: the tooth section at the heel, lofted toward the shared pitch apex.
+
+```csharp render:mechanism-bevel
+var pair = new BevelPair(pinionTeeth: 20, wheelTeeth: 30);
+if (Math.Abs(pair.PinionConeAngleDegrees + pair.WheelConeAngleDegrees - 90) > 1e-12)
+    throw new Exception("the cone angles must sum to the shaft angle");
+
+var spec = new GearSpec(module: 3, teeth: pair.PinionTeeth);
+var profile = BevelGears.Straight(spec, pair.PinionConeAngleDegrees, faceWidth: 14);
+
+// The section reproduces the standard cone angles as an identity, read back off
+// its own radii rather than off a stored number.
+double faceCone = Math.Atan(profile.SectionTipRadius / profile.HeelPlaneZ) * 180 / Math.PI;
+if (Math.Abs(faceCone - profile.FaceConeAngleDegrees) > 1e-9)
+    throw new Exception("face cone angle is an identity");
+
+var pinion = BevelGears.StraightGear(spec, pair.PinionConeAngleDegrees, 14, boreDiameter: 12);
+var wheel = BevelGears.StraightGear(
+    new GearSpec(3, pair.WheelTeeth), pair.WheelConeAngleDegrees, 14, boreDiameter: 16);
+
+// Both apexes sit at the origin and the wheel's axis is the pinion's turned by the
+// shaft angle, so the two pitch cones share the element at delta1 from +Z. TOOTH
+// phasing across a bevel pair is the caller's (see below): contact here is at the
+// pinion's own 90 deg azimuth, where 20 teeth put a tooth centre and 30 teeth put a
+// space centre, so these two counts need no extra rotation.
+if (pair.PinionTeeth % 4 != 0 || pair.WheelTeeth % 4 != 2)
+    throw new Exception("this placement relies on the tooth counts phasing at 90 deg");
+
+var scene = new Scene();
+var tab = scene.AddTab("bevel pair");
+tab.Add(new Part("pinion", pinion, Palette.Coral));
+tab.Add(new Part("wheel", wheel.RotateX(-Math.PI / 2), Palette.Sky));
+```
+
+![A 20-tooth bevel pinion meshing a 30-tooth wheel on perpendicular shafts](images/mechanism-bevel.png)
+
+The construction is **Tredgold's back-cone approximation, and the docs say so**.
+The virtual spur gear on the back cone has `z_v = z / cos δ` teeth at the same
+module — generally not a whole number, which is why it is a construction rather
+than a gear — and its involute is wrapped onto the back cone and projected from
+the pitch apex onto the section plane. Everything a bevel is dimensioned by comes
+out exact: the pitch diameter, the arc tooth thickness `πm/2`, and the face and
+root cone angles `δ ± arctan(h/R_e)` to machine precision. What is approximate is
+the flank's shape away from the pitch point, measured at **7×10⁻⁴ to 3×10⁻² of a
+module** against the true spherical involute over a family spanning m 1–5, z 12–60
+and δ 20–70°. Treat these as modelling-grade teeth — right pitch, right cone
+angles, sound for kinematics, assembly, casting patterns and printing — and not as
+a substitute for a generated flank on a ground gear (production straight bevels
+are octoid, which is neither of these curves).
+
+Two limits are reported rather than hidden. The end faces are **planes**, not the
+back and front cones, because a loft section must be planar — so the model's heel
+section is deeper than a real back-cone tooth, and both `SectionTipRadius` and the
+standard `BackConeTipRadius` are there to compare. That same depth is what caps the
+cone angle near 68° with the ISO 53 profile-A root fillet; past it the refusal names
+the cause and the remedy (a smaller `RootFilletCoefficient` — 0.30 reaches 75°, 0.20
+reaches 80°), which is what a 3:1 or 4:1 pair's wheel needs. Undercut is decided by
+the *virtual* tooth count, so a bevel tolerates fewer real teeth than a spur gear:
+13 teeth is undercut as a spur at 20° and perfectly fine on a 45° cone.
+
+**Spiral bevel and hypoid gears are refused by name.** A spiral flank is the
+envelope swept by a face-mill or face-hob cutter under a generating machine's
+motion — cutter radius, machine settings and roll ratio all enter the surface — not
+a closed-form curve this kernel could fit and stand behind; a hypoid's axes do not
+even intersect, so there is no common apex and the pitch surfaces are hyperboloids.
+Transcribing a published approximation would be a guess wearing a standard's name.
+
+## Planetary gear sets
+
+A planetary set is an *arrangement* rather than a tooth form, and `PlanetarySet`
+owns the arithmetic that makes ordinary involute gears fit together: the ring count
+is **derived** from coaxiality (`z_ring = z_sun + 2·z_planet`), so an inconsistent
+set cannot be spelled, and two conditions are checked and refused by name — equally
+spaced planets need `(z_sun + z_ring)` divisible by the planet count, and adjacent
+planets must clear each other along the centre chord.
+
+```csharp render:mechanism-planetary
+var set = new PlanetarySet(module: 2, sunTeeth: 24, planetTeeth: 18, planetCount: 3);
+if (set.RingTeeth != 60 || (set.SunTeeth + set.RingTeeth) % set.PlanetCount != 0)
+    throw new Exception("the assembly condition must hold");
+
+// Every member drawn and placed, phases solved so each planet meshes with BOTH
+// the sun and the ring at its own angular position.
+var members = PlanetaryGears.Layout(
+    set, faceWidth: 8, sunBore: 10, planetBore: 6);
+
+var scene = new Scene();
+var tab = scene.AddTab("planetary");
+var colors = new[] { Palette.Coral, Palette.Sky, Palette.Sky, Palette.Sky, Palette.Sage };
+for (int i = 0; i < members.Count; i++)
+    tab.Add(new Part(members[i].Name, members[i].Shape, colors[i % colors.Length]));
+```
+
+![A 24-tooth sun, three 18-tooth planets and a 60-tooth internal ring](images/mechanism-planetary.png)
+
+The **internal ring needs no boolean at all**. An internal gear's tooth *space* is
+bounded by involutes of the same base circle as an external gear of the same
+module, tooth count and pressure angle, with the same arc thickness at the pitch
+circle — only the tip and root swap roles, the tips pointing inward. So the ring's
+bore is exactly the outline of a "cutter" gear whose addendum reaches the ring's
+root, and the ring is that outline used as a hole in a disc: lines and arcs, exact
+in all three representations. Two consequences are stated rather than hidden — the
+ring's tooth tips carry the cutter's root fillet (rounded, which is closer to a
+real chamfered tip than a sharp corner), its roots are sharp, and the internal-mesh
+interference conditions (tip, involute and trimming) are not checked in v1.
+
+Getting the **phases** right is the substance. Each mesh fixes a relation — along
+the line of centres the sun shows a tooth where the planet shows a space, and the
+planet shows a tooth where the ring shows a space — and solving the pair gives each
+planet's own rotation. It is verified from *contact*, by measuring each placed
+planet's outline against the sun's and the ring's material with the sketches' own
+exact signed distance: every planet touches within the flank fit's own deviation,
+while a quarter-pitch phase error buries it 1.5 mm deep.
+
+### The Willis equation, as a test rather than a constraint
+
+`PlanetaryGears.Mechanism` builds the kinematics from **one `Coupling.Gear` per
+mesh** — sun to each planet, each planet to the ring — and states no train ratio
+anywhere. What makes that work is which bodies the joints connect: the sun and the
+ring pin to the **carrier**, not to the housing, so every coupling is written on
+angles that are already relative to the rotating line of centres. (Pinning the sun
+to the housing instead would constrain ω_sun where the mesh constrains
+ω_sun − ω_carrier, and the set would run happily and return a wrong ratio.)
+
+```csharp run:mechanism-willis
+var set = new PlanetarySet(module: 2, sunTeeth: 24, planetTeeth: 18, planetCount: 3);
+
+var rig = new Assembly("planetary");
+Part Body(string n) => new(n, MeshPrimitives.Box(4, 2, 1));
+var housing = rig.Add(Body("housing"));
+var carrier = rig.Add(Body("carrier"));
+var sun = rig.Add(Body("sun"));
+var ring = rig.Add(Body("ring"));
+var planets = new List<Occurrence>();
+for (int k = 0; k < set.PlanetCount; k++)
+{
+    double a = set.PlanetAzimuth(k);
+    planets.Add(rig.Add(Body($"planet.{k + 1}"), Frame3d.FromXY(
+        (set.CentreDistance * Math.Cos(a), set.CentreDistance * Math.Sin(a), 0),
+        Vector3d.UnitX, Vector3d.UnitY)));
+}
+
+var planetary = PlanetaryGears.Mechanism(set, rig, housing, carrier, sun, ring, planets);
+planetary.Mechanism.Ground(ring);          // the ordinary reduction drive
+
+// One degree of freedom, though Kutzbach predicts a deeply negative number:
+// three planets carry the same relation three times, which is load sharing.
+if (planetary.Mechanism.Assemble().RemainingDegreesOfFreedom != 1)
+    throw new Exception("a planetary set with a held ring has one DOF");
+
+planetary.Mechanism.SolveAt(MechanismDriver.Angle(planetary.CarrierPin), 0.4);
+
+// The Willis relation - EMERGENT from the composed couplings, not enforced.
+double willis = planetary.SunPin.Angle / planetary.RingPin.Angle;
+if (Math.Abs(willis - set.WillisRatio) > 1e-9)
+    throw new Exception($"Willis: {willis} != {set.WillisRatio}");
+
+// ... and the familiar held-ring reduction 1 + z_ring/z_sun = 3.5.
+double sunAbsolute = planetary.SunPin.Angle + planetary.CarrierPin.Angle;
+if (Math.Abs(sunAbsolute / planetary.CarrierPin.Angle - set.RingHeldRatio) > 1e-9)
+    throw new Exception("the held-ring ratio must emerge too");
+```
+
+Asserting the Willis relation against the solver is not circular, which is the
+whole reason it is worth doing: `Coupling.Gear` does enforce a ratio, but only for
+*one mesh at a time*, and the train value is what those compose to through a third
+body neither of them mentions. A wrong choice of which body a joint hangs from
+would leave every individual coupling satisfied and the assembled ratio wrong.
+
+One characterization is worth knowing because the failure looks like a modelling
+error: a gear coupling is written on the *change* in each joint's coordinate, so a
+cold solve has to cross the **largest** change in the train rather than the driven
+one. Here the planet turns 3.33× the carrier, so driving the carrier 0.8 rad
+converges while 1.0 rad — asking the planet for more than half a turn in one
+step — does not. Use `Sweep`, which is continuation and seeds each step from the
+previous converged pose.
+
 ## Saving a mechanism
 
 `Mechanism.SaveMechanism()` writes the whole joint layer as one JSON envelope —

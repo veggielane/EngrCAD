@@ -451,6 +451,27 @@ seam refinement in `MeshRegionOperator` + `LoopSubdivision(preserveBoundary:)`,
 
 ## B-Rep / sketching (EngrCAD.BRep)
 
+- [ ] **`SketchRegion.SignedDistance` returns the wrong SIGN in a ~1e-13 band at a full
+  circle's parity seam** (found 2026-08-02 while measuring planetary ring geometry; the
+  MAGNITUDE is right and only the parity flips, however far the point is from the
+  boundary). Measured on a plain `Sketch.Circle(70.5)`: the point (60, 0) reads
+  **−10.5** (inside, correct) and **(60, −1.47e-14) reads +10.5** (outside, wrong);
+  (60, −1e-9) is correct again, so the band is narrow and sits at the seam's own
+  ordinate. It is reachable from ordinary code without anyone writing a tiny number:
+  `sin(2π)` is −2.45e-16, so sampling a full turn INCLUSIVELY (`θ = 2πi/n`, `i` up to
+  `n`) lands the last sample exactly in it — which is how it surfaced, as an **odd 121
+  boundary transitions** around a 60-tooth ring, combinatorially impossible on a closed
+  curve. This is the recorded closed-curve seam family (CLAUDE.md: "a +x parity ray
+  whose ordinate falls INSIDE it counts the seam piece's two endpoints on opposite
+  sides"), so the fix is likely the same one — the full-turn arc's end point must BE its
+  start point exactly, and the first/last y-monotone piece must take its ordinate from
+  the STORED endpoints — applied to whichever path `Sketch.Circle` takes into
+  `SketchRegion`. Both gear test files currently sample `[0, 2π)` and close the cycle
+  explicitly to route around it; **those workarounds should come out when this lands**,
+  since they are the evidence it was here. Worth checking whether `Sdf.ExtrudedRegion`
+  and `RevolvedRegion` inherit it (a prism's field does not vary along z, so a whole
+  scan line at the seam ordinate would be wrong, not one point).
+
 - [ ] **Threads follow-ups** (B-Rep-native external threads AND threaded holes ✅
   landed — `HelicalSurface`/`SpiralArc3d`/`MakeThreadedRod`, boolean-free lateral
   sweep, clipped-pilot hole tool; **left-hand threads and the ISO 261 fine-pitch
@@ -781,57 +802,58 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
       junction (the apex section is the shared spur profile, so the two twists meet in
       a plane of exact mirror symmetry — a weld by construction, verify by the mirror
       identity). Optional apex gap (real hobbed herringbones relieve the middle).
-    - **Straight bevel** — via Tredgold's back-cone approximation, STATED as such: the
-      virtual spur gear on the back cone (z_v = z/cos δ) gives the profile, teeth loft
-      toward the apex (the loft machinery exists; a pure taper is B-Rep-Native as a
-      ruled two-section loft — but toothed sections have no holes, so check the
-      loft-sections gate first). Verification: the virtual-gear identities plus the
-      shaft-angle sum δ₁+δ₂ = Σ. Spiral bevel and hypoid are REFUSED by name — Gleason
-      spiral bevel geometry is machine-tool kinematics, not a closed-form profile, and
-      a transcription would be a guess wearing a standard's name.
-    - **Throated (globoid) worm wheel** — the residual of the worm work, which landed
-      as `Gears.Worm`/`WormPair`/`WormWheel` with the crossed-helical wheel and its
-      point-contact caveat stated. What is missing is the wheel whose teeth WRAP the
-      worm, and it is assessed rather than merely deferred: the throat flank is the
-      ENVELOPE of the worm's motion, so there is no profile to fit — it is a swept
-      subtraction (the worm's solid swept through the wheel's rotation, removed from
-      the blank), which the kernel can already spell as `Shape.SweptOver` +
-      `MotionStudy.SweptVolume` in the IMPLICIT representation only (that node is
-      implicit-Native and B-Rep-Impossible by construction). So a v2 is reachable
-      today at mesh/implicit fidelity and would need (a) a `Mechanism` posing the
-      worm against the wheel blank at the correct ratio, (b) enough sweep frames that
-      the scalloping is under the print/mesh tolerance — the adaptive `maxTravel`
-      rule already bounds that — and (c) an honest statement that the result is the
-      GENERATED wheel rather than an exact surface. What it cannot give is a B-Rep,
-      and no amount of work here changes that: the envelope of a helicoid under
-      rotation is not in this kernel's surface vocabulary. Worth doing when a
-      consumer wants a load-carrying reducer rather than a motion drive.
-    - **Worm follow-ups (smaller)** — the ZI (involute-helicoid) and ZN worm forms
-      beside ZA (each is a different straight-generator placement, so each is another
-      `MakeThreadedRod` profile plus its own axial-section identity); a worm's own
-      end chamfers/runout; and a conjugate-contact instrument for a crossed-helical
-      pair, which is genuinely 3D where the spur and rack instruments are 2D — point
-      contact means bisecting a clearance over two independent rotations rather than
-      one, so it is a real piece of work rather than the existing helper reused.
+    - **Straight bevel residuals** (`BevelGears.cs` landed: `BevelPair` +
+      `Straight`/`StraightGear`, spiral and hypoid refused by name; see the Modeling
+      README for the projection measurements). What is left:
+      - **`BevelPair.PhaseFor(member)`** — the pair's TOOTH phasing is not solved, so a
+        caller placing two members must phase them by hand (the docs example asserts the
+        condition its own counts satisfy: contact at the pinion's 90° azimuth needs
+        z₁ % 4 == 0 and z₂ % 4 == 2). The `PlanetarySet` phase solve is the pattern —
+        same tooth-opposite-space relation, on the shared cone element instead of a
+        line of centres — and the contact instrument to verify it with already exists.
+      - **Conical end faces** — the loft's sections must be planar, so the ends are
+        planes rather than the back and front cones, which makes the heel section
+        deeper than the real tooth (×2.4 at δ = 65°) and is what caps the cone angle
+        near 68° with the ISO 53 fillet. Trimming with cones needs a loft∩revolve
+        boolean whose curves the tracer must find at tooth scale — measure before
+        promising, since that is the aspect ratio the thread work found it fails at.
+      - **A full-radius root** where two fillets no longer fit the gap, which is what a
+        real deep-tooth gear does and would lift the cone-angle cap without changing
+        the flank.
+    - **Worm and worm wheel** — the worm IS a thread: `MakeThreadedRod`'s helical
+      sweep with a trapezoid (ZA) profile is the exact worm body, one axis-touching
+      revolve family this kernel already speaks. The WHEEL is the honest problem: a
+      true throated wheel is the envelope of the worm's motion (no closed form —
+      that is gashing-and-hobbing kinematics), so v1 is a helical gear at the worm's
+      lead angle (the crossed-helical approximation, stated, with its point-contact
+      caveat named) and the throated envelope is filed as assessed-not-promised.
     - **Cycloidal profiles** — clock/instrument gears and cycloidal-drive discs: the
       epicycloid/hypocycloid are closed-form parametric curves, so they enter exactly
       as the involute did (fit with reported deviation); BS 978-2 clock-gear
       addenda are a transcription with the verify-against-datasheet flag. The
       cycloidal-drive disc (pin-wheel reducer) is the same curve family offset by the
       roller radius — the cam roller-follower machinery already owns that offset.
-    - **Planetary / epicyclic sets** — an ARRANGEMENT, not a tooth form: a factory
-      checking the assembly conditions (z_ring = z_sun + 2·z_planet; the meshing
-      constraint (z_sun + z_ring) divisible by planet count; neighbour clearance) and
-      placing sun/planets/ring with the right phases, plus `Coupling.Gear` chains for
-      the kinematics — the Willis equation as a TEST against the mechanism solver's
-      measured ratio, which is not circular here because the couplings compose and
-      the assembled ratio (1 + z_ring/z_sun for held ring) is an emergent check.
-    - **Crossed helical (screw) gears at a GENERAL shaft angle** — the 90° case
-      landed as `WormPair` (β₁ + β₂ = Σ with Σ = 90, matching normal modules, the
-      point-contact caveat stated). What remains is the general Σ, which is the same
-      arithmetic with the sum no longer forcing β₂ = γ, plus the centre-distance and
-      sliding-velocity relations that only matter once the two members are ordinary
-      helicals rather than a worm and its wheel.
+    - **Planetary residuals** (`PlanetaryGears.cs` landed: `PlanetarySet` with the three
+      conditions, the boolean-free internal ring, solved phases verified from contact,
+      and Willis emergent over composed `Coupling.Gear`s). What is left:
+      - **Internal-mesh interference** — tip, involute and trimming interference are
+        genuinely different conditions from an external pair's and none is checked; the
+        undercut refusal that fires today is `Gears.Spur`'s applied to the CUTTER, which
+        is conservative for a ring and is not the same question.
+      - **An internal root fillet** — the ring's tooth roots are sharp (its tips carry
+        the cutter's root fillet instead), which is a stress raiser rather than a
+        geometric fault.
+      - **Unequally spaced planets**, which have their own weaker assembly condition,
+        and **profile-shifted sets** (a shifted sun/planet pair changes the operating
+        centre distance, so `z_ring = z_sun + 2·z_planet` stops being the coaxiality
+        statement and the derived ring count would silently be wrong).
+      - **A compound/Ravigneaux vocabulary** — stepped planets and shared carriers are
+        more couplings over the same joints, so the mechanism side likely needs nothing
+        new; it is the placement and the assembly conditions that generalize.
+    - **Crossed helical (screw) gears** — the geometry already exists (two helicals
+      at skew shafts); what is missing is only the pairing arithmetic (shaft angle =
+      β₁+β₂, matching normal modules) — arithmetic on `GearSpec`, plus the
+      point-contact caveat stated.
     - **Non-circular/elliptical gears** — refuse by name for now: conjugacy for a
       stated centre-distance function is an integral condition, a different problem
       from fitting a known curve; file only if a consumer appears.

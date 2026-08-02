@@ -3687,6 +3687,66 @@ four decisions carry it:
   multi-member joints, zero-angle joints, consumed members and Bézier-outline trims are
   refused by name.
 
+### Bevel gears: which approximation, decided by measuring all three
+
+A straight bevel's flanks are ruled surfaces through the pitch apex, so the SOLID is
+exactly a two-section ruled loft and the only real decision is what the section is.
+Tredgold's back-cone approximation says the tooth on the back cone is the developed
+spur involute of a *virtual* gear with `z_v = z/cos δ` teeth — which is generally not
+an integer, so it cannot be drawn by `Gears.Spur` and has to be reached some other way.
+Three candidates, all built or costed, and **the ranking inverted the intuition**:
+
+- An **equivalent planar gear** — z teeth at `arctan(tan α / cos δ)` with tooth
+  proportions scaled by cos δ — matches the projected back-cone tooth in pitch, arc
+  thickness, tip and root radii *and* flank slope at the pitch point, and `Gears.Spur`
+  draws it verbatim for free. It measures **1.4e-2 … 7.5e-2 module** from the tooth it
+  approximates, which is **2–8× Tredgold's own error**. A second approximation that
+  dominates the first is not a shortcut, it is the answer; dropped after being built.
+- **Axial projection** of the back-cone trace reproduces the textbook
+  `d_ae = d + 2·h_a·cos δ` directly, which is seductive, but the flank it makes has a
+  back-cone trace that is *not* the Tredgold curve: 5e-3 … 3.7e-2 module from the true
+  spherical involute.
+- **Central projection from the pitch apex** — what a ruled-to-the-apex tooth does by
+  definition — measures **7.2e-4 … 2.9e-2**, and reproduces the standard cone angles
+  `δ ± arctan(h/R_e)` as an IDENTITY to 3e-16 rad when read back off the section's own
+  radii. It wins on both counts, and the textbook diameter is recovered as a reported
+  property rather than as the section's own extent.
+
+The general rule is the one the numbers taught: **when a construction stacks a cheap
+approximation on top of a principled one, measure the two SEPARATELY before assuming
+the cheap one is subordinate.** The flank fit sits two orders below the method's error
+by design, which is the relationship to aim for and the one the first attempt inverted.
+
+Two limits are consequences rather than omissions and are therefore *reported*. A loft
+section must be planar, so the end faces are planes and not the back and front cones —
+the teeth are the correct cones, so every angle and the pitch diameter are exact, but
+the heel SECTION is deeper than the real back-cone tooth (×2.4 at δ = 65°), which is
+also what caps the usable cone angle near 68° with the ISO 53 profile-A root fillet.
+The refusal there names the cause and a verified remedy rather than stopping, which is
+the difference between a limit and a dead end.
+
+### Planetary sets: the arrangement is the design, and the ratio is emergent
+
+Three decisions carry `PlanetaryGears`. **The ring count is derived, not accepted**, so
+coaxiality cannot be violated by a caller. **The internal ring is not a boolean**: an
+internal tooth space is bounded by the same involutes as an external tooth of the same
+spec with tip and root swapped, so the ring's bore is exactly a "cutter" gear's outline
+used as a hole — which keeps it lines and arcs, hence exact in all three
+representations, where a boolean would have cost a 2 000-segment intersection and
+delivered less.
+
+The third is the one worth generalizing. `Coupling.Gear` enforces a ratio, so asserting
+a gear ratio against it is circular — the involute work already recorded that, and
+measures conjugate action from contact instead. A planetary set is the **exception, and
+precisely because it is an arrangement**: the couplings are per-MESH (sun–planet,
+planet–ring) and the train value is what they compose to through the carrier, a third
+body neither coupling mentions. So the Willis relation and the held-ring reduction are
+genuine tests of the topology. What they test is the decision that the sun and ring pin
+to the **carrier** rather than to the housing, so that every coupling is written on
+coordinates already relative to the rotating line of centres — and the failure mode if
+that is wrong is the dangerous kind: every individual coupling stays satisfied, the
+mechanism solves, and the assembled ratio is quietly wrong.
+
 ## 6c. Drawings (hidden lines, sheets, drafting)
 
 A drawing is a *document*, not a picture, and the whole design follows from that.
