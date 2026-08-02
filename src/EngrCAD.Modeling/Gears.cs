@@ -1,0 +1,572 @@
+using EngrCAD.BRep;
+using EngrCAD.Core;
+
+namespace EngrCAD.Modeling;
+
+/// <summary>
+/// An involute spur gear definition: module, tooth count, pressure angle and profile
+/// shift, with the tooth proportions of the ISO 53 basic rack (profile A) as
+/// overridable coefficients. All linear dimensions derive from the module in
+/// millimetres; angles are degrees at the API surface (radians internally).
+/// </summary>
+/// <remarks>
+/// The derived properties are the base-circle identities stated as arithmetic —
+/// <see cref="BasePitch"/> = π·m·cos α, <see cref="BaseDiameter"/> = z·m·cos α,
+/// <see cref="ToothThicknessAtPitch"/> = m·(π/2 + 2x·tan α) — so a caller (and a test)
+/// can ask the spec rather than restate the formulas. The coefficient defaults
+/// (addendum 1.00·m, dedendum 1.25·m, root fillet 0.38·m) are transcribed from the
+/// ISO 53 basic rack profile A: VERIFY against the current standard before production
+/// use — profiles B–D carry different clearance/fillet pairs.
+/// </remarks>
+public sealed record GearSpec
+{
+    public GearSpec(double module, int teeth, double pressureAngleDegrees = 20, double profileShift = 0)
+    {
+        if (!(module > 0))
+            throw new ArgumentOutOfRangeException(nameof(module), "Module must be positive.");
+        if (teeth < 3)
+            throw new ArgumentOutOfRangeException(nameof(teeth), "A gear needs at least 3 teeth.");
+        if (!(pressureAngleDegrees > 0) || !(pressureAngleDegrees < 45))
+            throw new ArgumentOutOfRangeException(nameof(pressureAngleDegrees),
+                "Pressure angle must lie strictly between 0° and 45°.");
+        if (!double.IsFinite(profileShift))
+            throw new ArgumentOutOfRangeException(nameof(profileShift));
+        Module = module;
+        Teeth = teeth;
+        PressureAngleDegrees = pressureAngleDegrees;
+        ProfileShift = profileShift;
+    }
+
+    /// <summary>Module m (mm) — pitch diameter over tooth count.</summary>
+    public double Module { get; }
+
+    /// <summary>Tooth count z.</summary>
+    public int Teeth { get; }
+
+    /// <summary>Pressure angle α in degrees (20° default, the ISO 53 standard).</summary>
+    public double PressureAngleDegrees { get; }
+
+    /// <summary>Profile shift coefficient x (dimensionless; the rack datum shifts by x·m).</summary>
+    public double ProfileShift { get; }
+
+    /// <summary>Addendum coefficient h_a* (of module). ISO 53 profile A: 1.00.</summary>
+    public double AddendumCoefficient { get; init; } = 1.00;
+
+    /// <summary>Dedendum coefficient h_f* (of module), including the clearance. ISO 53 profile A: 1.25.</summary>
+    public double DedendumCoefficient { get; init; } = 1.25;
+
+    /// <summary>Root fillet radius coefficient ρ_f* (of module). ISO 53 profile A: 0.38.</summary>
+    public double RootFilletCoefficient { get; init; } = 0.38;
+
+    internal double PressureAngleRadians => PressureAngleDegrees * Math.PI / 180;
+
+    /// <summary>Pitch (reference) diameter d = m·z.</summary>
+    public double PitchDiameter => Module * Teeth;
+
+    /// <summary>Base circle diameter d_b = m·z·cos α — the circle every flank tangent touches.</summary>
+    public double BaseDiameter => PitchDiameter * Math.Cos(PressureAngleRadians);
+
+    /// <summary>Circular pitch p = π·m (tooth spacing along the pitch circle).</summary>
+    public double CircularPitch => Math.PI * Module;
+
+    /// <summary>Base pitch p_b = π·m·cos α (flank spacing along any line of action —
+    /// what two meshing gears must agree on for conjugate handover).</summary>
+    public double BasePitch => Math.PI * Module * Math.Cos(PressureAngleRadians);
+
+    /// <summary>Tip (addendum) diameter d_a = m·(z + 2·(h_a* + x)).</summary>
+    public double TipDiameter => Module * (Teeth + 2 * (AddendumCoefficient + ProfileShift));
+
+    /// <summary>Root diameter d_f = m·(z − 2·(h_f* − x)).</summary>
+    public double RootDiameter => Module * (Teeth - 2 * (DedendumCoefficient - ProfileShift));
+
+    /// <summary>Tooth thickness along the pitch circle s = m·(π/2 + 2x·tan α).</summary>
+    public double ToothThicknessAtPitch =>
+        Module * (Math.PI / 2 + 2 * ProfileShift * Math.Tan(PressureAngleRadians));
+
+    /// <summary>
+    /// The rack-generation undercut limit z_min = 2·(h_a* − x)/sin²α: below this tooth
+    /// count a generating cutter trims the root trochoid into the involute, and a mating
+    /// tooth would interfere with the drawn flank. <see cref="Gears.Spur"/> refuses below it.
+    /// </summary>
+    public double MinimumTeethWithoutUndercut =>
+        2 * (AddendumCoefficient - ProfileShift) / Sin2(PressureAngleRadians);
+
+    /// <summary>The smallest profile shift avoiding undercut at this tooth count:
+    /// x_min = h_a* − z·sin²α/2.</summary>
+    public double MinimumProfileShift =>
+        AddendumCoefficient - Teeth * Sin2(PressureAngleRadians) / 2;
+
+    private static double Sin2(double a) => Math.Sin(a) * Math.Sin(a);
+}
+
+/// <summary>
+/// A generated involute gear tooth profile: the <see cref="Sketch"/> (lines and circular
+/// arcs only, so it is exact in all three representations downstream) plus the fit
+/// contract — the tolerance that was asked for and the deviation that was measured.
+/// </summary>
+/// <remarks>
+/// The flank is the closed-form involute of the base circle approximated by a
+/// tangent-continuous biarc chain (<c>BiArcFit</c>'s convention: the deviation is
+/// REPORTED, never silent). <see cref="MaxFitDeviation"/> is measured against the
+/// closed form at 512 samples per flank after the fit; everything else in the outline —
+/// tip arc, root arc, root fillets, the radial flank stretch below the base circle —
+/// is exact by construction, so the fit deviation is the profile's entire error.
+/// </remarks>
+public sealed class GearProfile
+{
+    internal GearProfile(GearSpec spec, Sketch sketch, double fitTolerance, double maxFitDeviation,
+        int curvesPerFlank, double closedFormArea, in GearToothGeometry geometry)
+    {
+        Spec = spec;
+        Sketch = sketch;
+        FitTolerance = fitTolerance;
+        MaxFitDeviation = maxFitDeviation;
+        CurvesPerFlank = curvesPerFlank;
+        ClosedFormArea = closedFormArea;
+        Geometry = geometry;
+    }
+
+    /// <summary>The definition this profile was generated from.</summary>
+    public GearSpec Spec { get; }
+
+    /// <summary>The tooth profile as a closed sketch (CCW outer loop, no holes),
+    /// centred at the origin with one tooth centred on +X.</summary>
+    public Sketch Sketch { get; }
+
+    /// <summary>The flank fit tolerance that was requested (mm).</summary>
+    public double FitTolerance { get; }
+
+    /// <summary>The measured maximum deviation of the fitted flank from the closed-form
+    /// involute (mm) — at most <see cref="FitTolerance"/>.</summary>
+    public double MaxFitDeviation { get; }
+
+    /// <summary>Number of curves the biarc chain spent on one flank.</summary>
+    public int CurvesPerFlank { get; }
+
+    /// <summary>
+    /// The EXACT area of the ideal (un-fitted) outline, from closed forms: the involute's
+    /// Green's-theorem term is r_b²·t³/6, every other piece is a line or arc. The
+    /// sketch's own <see cref="Modeling.Sketch.Area"/> differs from this by at most the
+    /// fit deviation times the flank length — an identity a test can hold the profile to.
+    /// </summary>
+    public double ClosedFormArea { get; }
+
+    /// <summary>Construction values (radii, roll angles, fillet case) for verification.</summary>
+    internal GearToothGeometry Geometry { get; }
+}
+
+/// <summary>Closed-form construction values for one canonical tooth (internal test seam).</summary>
+internal readonly record struct GearToothGeometry(
+    double PitchRadius, double BaseRadius, double TipRadius, double RootRadius,
+    double FilletRadius, double HalfToothAngle, double InvoluteOrigin,
+    double RollAtRoot, double RollAtTip, bool FilletTangentToInvolute,
+    double TipArcSweep, double RootArcSweep);
+
+/// <summary>
+/// Involute gear factory: <see cref="Spur"/> generates the tooth profile as a
+/// <see cref="Sketch"/>, <see cref="SpurGear"/> and <see cref="HelicalGear"/> wrap it
+/// into solids. The geometry counterpart of <c>Coupling.Gear</c>, which constrains the
+/// ratio but draws nothing.
+/// </summary>
+public static class Gears
+{
+    /// <summary>
+    /// Generates the involute spur gear profile for <paramref name="spec"/> as a closed
+    /// <see cref="Sketch"/> centred at the origin with a tooth centred on +X.
+    /// </summary>
+    /// <param name="spec">Module, tooth count, pressure angle, profile shift, rack coefficients.</param>
+    /// <param name="fitTolerance">Maximum allowed deviation of the fitted flank from the
+    /// closed-form involute (mm). Defaults to module·1e-4 — an order tighter than the
+    /// finest ISO 1328 profile form tolerances, at a cost of roughly a dozen arcs per
+    /// flank. The deviation actually achieved is reported on
+    /// <see cref="GearProfile.MaxFitDeviation"/>.</param>
+    /// <exception cref="ArgumentException">
+    /// The geometry refuses by name rather than drawing a flank it cannot stand behind:
+    /// tooth counts below the rack undercut limit z_min = 2·(h_a* − x)/sin²α (the drawn
+    /// involute would interfere with a conjugate tooth where a generating cutter would
+    /// have trochoid-trimmed it), pointed teeth (tip thickness below weld tolerance),
+    /// a root fillet that does not fit its gap or consumes the whole flank, and
+    /// degenerate radii (root ≤ 0, tip ≤ base).
+    /// </exception>
+    public static GearProfile Spur(GearSpec spec, double? fitTolerance = null)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        double tolerance = fitTolerance ?? spec.Module * 1e-4;
+        if (!(tolerance > 0))
+            throw new ArgumentOutOfRangeException(nameof(fitTolerance));
+        if (!(spec.AddendumCoefficient > 0))
+            throw new ArgumentException("Addendum coefficient must be positive.", nameof(spec));
+        if (!(spec.DedendumCoefficient > 0))
+            throw new ArgumentException("Dedendum coefficient must be positive.", nameof(spec));
+        if (spec.RootFilletCoefficient < 0)
+            throw new ArgumentException("Root fillet coefficient cannot be negative.", nameof(spec));
+
+        double alpha = spec.PressureAngleRadians;
+        double m = spec.Module;
+        int z = spec.Teeth;
+        double x = spec.ProfileShift;
+
+        // Undercut: the classical rack-generation limit, using the WORKING addendum
+        // coefficient (the straight portion of the cutter flank; the fillet/clearance
+        // band below it cuts no involute). Refused rather than trochoid-trimmed: an
+        // honest refusal beats an unverified flank.
+        double sinAlpha = Math.Sin(alpha);
+        if (z * sinAlpha * sinAlpha / 2 + x < spec.AddendumCoefficient)
+            throw new ArgumentException(
+                $"A z={z} gear at {spec.PressureAngleDegrees:0.#} deg pressure angle with profile shift "
+                + $"x={x:0.###} would be undercut: undercut begins below z_min = 2(h_a* - x)/sin^2(a) = "
+                + $"{spec.MinimumTeethWithoutUndercut:0.##} teeth (equivalently below x_min = "
+                + $"{spec.MinimumProfileShift:0.###} at z={z}). A generating cutter would trochoid-trim "
+                + "the root there, which this factory does not model; add teeth, raise the pressure "
+                + "angle, or increase the profile shift.");
+
+        double r = m * z / 2;                          // pitch radius
+        double rb = r * Math.Cos(alpha);               // base radius
+        double ra = r + m * (spec.AddendumCoefficient + x);
+        double rf = r - m * (spec.DedendumCoefficient - x);
+        double rho = m * spec.RootFilletCoefficient;
+
+        if (!(rf > 0))
+            throw new ArgumentException(
+                $"Root diameter {2 * rf:0.###} is not positive (dedendum {spec.DedendumCoefficient}*m "
+                + $"with profile shift {x:0.###} exceeds the pitch radius).", nameof(spec));
+        if (!(ra > rb))
+            throw new ArgumentException(
+                $"Tip radius {ra:0.###} does not clear the base radius {rb:0.###} - there is no "
+                + "involute to draw. Increase the addendum or the profile shift.", nameof(spec));
+        if (!(ra > rf))
+            throw new ArgumentException(
+                $"Tip radius {ra:0.###} does not clear the root radius {rf:0.###}.", nameof(spec));
+
+        double invAlpha = Math.Tan(alpha) - alpha;
+        double psi = (Math.PI / 2 + 2 * x * Math.Tan(alpha)) / z;   // half tooth angle at pitch
+        double theta0 = -psi - invAlpha;               // right-flank involute origin ray
+        double tTip = Math.Sqrt(ra * ra / (rb * rb) - 1);
+
+        // Root fillet tangency, CLOSED FORM: with the involute P(t), gap-side normal n
+        // and fillet centre C = P + rho*n, |C|^2 = (r_b*t + rho)^2 + r_b^2 - so
+        // |C| = r_f + rho solves to t* = (sqrt((r_f+rho)^2 - r_b^2) - rho)/r_b, monotone
+        // in t. t* >= 0 means the fillet is tangent to the involute itself; otherwise the
+        // tangency would fall below the base circle and the flank continues as a RADIAL
+        // line (the involute's own cusp tangent, so the joint is tangent-continuous)
+        // down to a fillet tangent to that line.
+        double q = (rf + rho) * (rf + rho) - rb * rb;
+        bool filletOnInvolute = q >= rho * rho;
+        double tLow = filletOnInvolute ? (Math.Sqrt(q) - rho) / rb : 0;
+        if (tLow >= tTip)
+            throw new ArgumentException(
+                $"The root fillet (rho = {spec.RootFilletCoefficient}*m = {rho:0.###}) consumes the whole "
+                + $"flank: its involute tangency at roll {tLow:0.###} is past the tip at roll {tTip:0.###}. "
+                + "Reduce the fillet coefficient or the dedendum.", nameof(spec));
+
+        // Tip arc: sweep 2*(psi + inv(a) - inv(a_tip)); a tip THICKNESS below the weld
+        // tier (expressed as a length - angular epsilons scale with radius) is a pointed
+        // tooth and is refused by name.
+        double invAlphaTip = tTip - Math.Atan(tTip);
+        double tipHalfAngle = psi + invAlpha - invAlphaTip;
+        double tipThickness = 2 * tipHalfAngle * ra;
+        if (tipThickness < 1e-9)
+            throw new ArgumentException(
+                $"The tooth comes to a point: tip thickness {tipThickness:0.###e0} at profile shift "
+                + $"x={x:0.###}. Reduce the profile shift or the addendum, or add teeth.", nameof(spec));
+
+        // ---- canonical right-side pieces (root -> tip), tooth centred on +X ----
+        var right = new List<Curve2d>();
+        Vector2d filletCentre, filletRootPoint, filletFlankPoint;
+        if (filletOnInvolute)
+        {
+            var p0 = InvolutePoint(rb, theta0, tLow);
+            double u0 = theta0 + tLow;
+            var gapNormal = new Vector2d(Math.Sin(u0), -Math.Cos(u0));
+            filletCentre = p0 + gapNormal * rho;
+            filletFlankPoint = p0;
+            filletRootPoint = filletCentre * (rf / filletCentre.Length);
+        }
+        else
+        {
+            // Fillet tangent to the radial stretch: centre at distance r_f+rho from the
+            // origin, perpendicular distance rho from the flank ray, on the gap side.
+            double gamma = Math.Asin(rho / (rf + rho));
+            double thetaC = theta0 - gamma;
+            filletCentre = new Vector2d(Math.Cos(thetaC), Math.Sin(thetaC)) * (rf + rho);
+            filletRootPoint = new Vector2d(Math.Cos(thetaC), Math.Sin(thetaC)) * rf;
+            double dt = Math.Sqrt((rf + rho) * (rf + rho) - rho * rho);
+            filletFlankPoint = new Vector2d(Math.Cos(theta0), Math.Sin(theta0)) * dt;
+        }
+
+        double filletSweep = 0;
+        if (rho > 1e-9) // weld tier: a fillet below weld tolerance is no segment at all
+        {
+            var fillet = ArcBetween(filletCentre, rho, filletRootPoint, filletFlankPoint);
+            filletSweep = fillet.SweepAngle;
+            right.Add(fillet);
+        }
+        if (!filletOnInvolute)
+        {
+            var basePoint = new Vector2d(Math.Cos(theta0), Math.Sin(theta0)) * rb;
+            // Skip the radial stretch when shorter than weld tolerance (the fillet then
+            // reaches the base circle itself).
+            if (rb - filletFlankPoint.Length > 1e-9)
+                right.Add(new Line2d(filletFlankPoint, basePoint));
+        }
+
+        var flank = FitFlank(rb, theta0, tLow, tTip, tolerance, out double deviation);
+        right.AddRange(flank);
+
+        // Tip arc from the right flank's end across the tooth top.
+        double tipStart = theta0 + tTip - Math.Atan(tTip);
+        var tipArc = new Arc2d(Vector2d.Zero, ra, tipStart, 2 * tipHalfAngle);
+
+        // Left side: mirror of the right side across +X, traversed tip -> root. Exact
+        // parameter transforms (the left-hand-thread lesson: mirrored geometry must be
+        // the arithmetic mirror, not a re-fit).
+        var left = new List<Curve2d>(right.Count);
+        for (int i = right.Count - 1; i >= 0; i--)
+            left.Add(ReverseCurve(MirrorX(right[i])));
+
+        // Root arc across the gap to the next tooth. Its angular reach is the fillet
+        // root point's; refusal/skip thresholds are LENGTHS (weld tier).
+        double rootPointAngle = -Math.Atan2(filletCentre.Y, filletCentre.X);
+        double pitchAngle = 2 * Math.PI / z;
+        double rootSweep = pitchAngle - 2 * rootPointAngle;
+        double rootLength = rootSweep * rf;
+        if (rootLength < -1e-9)
+            throw new ArgumentException(
+                $"The root fillet (rho = {spec.RootFilletCoefficient}*m = {rho:0.###}) does not fit the "
+                + $"root gap: adjacent fillets overlap by {-rootSweep:0.###} rad at the root circle. "
+                + "Reduce the fillet coefficient or the profile shift, or add teeth.", nameof(spec));
+        Arc2d? rootArc = rootLength < 1e-9
+            ? null
+            : new Arc2d(Vector2d.Zero, rf, rootPointAngle, rootSweep);
+
+        // ---- assemble all teeth by exact parameter rotation ----
+        var tooth = new List<Curve2d>(right.Count + left.Count + 2);
+        tooth.AddRange(right);
+        tooth.Add(tipArc);
+        tooth.AddRange(left);
+        if (rootArc is not null)
+            tooth.Add(rootArc);
+
+        var outline = new List<Curve2d>(tooth.Count * z);
+        for (int k = 0; k < z; k++)
+        {
+            double beta = k * pitchAngle;
+            double cos = Math.Cos(beta), sin = Math.Sin(beta);
+            foreach (var piece in tooth)
+                outline.Add(Rotate(piece, cos, sin, beta));
+        }
+        var sketch = Sketch.FromCurves(outline);
+
+        // Exact area of the ideal outline by Green's theorem: involute term r_b^2*t^3/6
+        // per flank, r^2*sweep/2 for origin-centred arcs, [C x (B-A) + rho^2*sweep]/2
+        // for fillets, exactly zero for the radial stretches (lines through the origin).
+        double filletTerm = rho > 1e-9
+            ? 0.5 * (filletCentre.Cross(filletFlankPoint - filletRootPoint) + rho * rho * filletSweep)
+            : 0;
+        double areaPerTooth =
+            rb * rb * (tTip * tTip * tTip - tLow * tLow * tLow) / 3
+            + 0.5 * ra * ra * tipArc.SweepAngle
+            + (rootArc is not null ? 0.5 * rf * rf * rootSweep : 0)
+            + 2 * filletTerm;
+        double closedFormArea = z * areaPerTooth;
+
+        var geometry = new GearToothGeometry(
+            r, rb, ra, rf, rho, psi, theta0, tLow, tTip, filletOnInvolute,
+            tipArc.SweepAngle, rootArc?.SweepAngle ?? 0);
+        return new GearProfile(spec, sketch, tolerance, deviation, flank.Count, closedFormArea, geometry);
+    }
+
+    /// <summary>
+    /// A spur gear solid: the <see cref="Spur"/> profile extruded to
+    /// <paramref name="faceWidth"/>, with an optional plain bore. Exact in all three
+    /// representations (the profile is lines and circular arcs).
+    /// </summary>
+    public static Shape SpurGear(GearSpec spec, double faceWidth, double boreDiameter = 0,
+        double? fitTolerance = null)
+    {
+        var sketch = GearBlank(spec, faceWidth, boreDiameter, fitTolerance);
+        return Shape.Extrude(sketch, faceWidth);
+    }
+
+    /// <summary>
+    /// A helical gear solid via the twisted extrusion: the <see cref="Spur"/> profile is
+    /// the TRANSVERSE section (so <see cref="GearSpec.Module"/> and the pressure angle
+    /// are transverse values m_t, α_t; the normal module is m_t·cos β), twisted by
+    /// faceWidth·tan β / r_pitch over the face width. Positive
+    /// <paramref name="helixAngleDegrees"/> is a right-hand helix; mesh a pair with
+    /// opposite hands on parallel axes.
+    /// </summary>
+    /// <remarks>
+    /// Representation support follows the twisted extrusion: the mesh lowering is the
+    /// section sweep (with the twist-matched profile subdivision), implicit wraps that
+    /// mesh, and B-Rep is honestly Impossible — <c>Explain</c> reports it.
+    /// </remarks>
+    public static Shape HelicalGear(GearSpec spec, double faceWidth, double helixAngleDegrees,
+        double boreDiameter = 0, double? fitTolerance = null, int? slices = null)
+    {
+        if (!(Math.Abs(helixAngleDegrees) < 60))
+            throw new ArgumentOutOfRangeException(nameof(helixAngleDegrees),
+                "Helix angle must lie strictly between -60 and 60 degrees.");
+        var sketch = GearBlank(spec, faceWidth, boreDiameter, fitTolerance);
+        if (helixAngleDegrees == 0)
+            return Shape.Extrude(sketch, faceWidth);
+        double twist = faceWidth * Math.Tan(helixAngleDegrees * Math.PI / 180) / (spec.PitchDiameter / 2);
+        return Shape.Extrude(sketch, faceWidth, twist, scale: 1, plane: null, slices: slices);
+    }
+
+    private static Sketch GearBlank(GearSpec spec, double faceWidth, double boreDiameter,
+        double? fitTolerance)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        if (!(faceWidth > 0))
+            throw new ArgumentOutOfRangeException(nameof(faceWidth));
+        var profile = Spur(spec, fitTolerance);
+        if (boreDiameter <= 0)
+            return profile.Sketch;
+        if (boreDiameter >= spec.RootDiameter)
+            throw new ArgumentOutOfRangeException(nameof(boreDiameter),
+                $"Bore diameter {boreDiameter:0.###} reaches the root circle (diameter {spec.RootDiameter:0.###}).");
+        return profile.Sketch.WithHole(Sketch.Circle(boreDiameter / 2));
+    }
+
+    // ------------------------------------------------------------------ involute math
+
+    /// <summary>Point of the base-circle involute anchored at ray <paramref name="theta0"/>
+    /// (unwrapping counter-clockwise) at roll angle <paramref name="t"/>.</summary>
+    private static Vector2d InvolutePoint(double rb, double theta0, double t)
+    {
+        double u = theta0 + t;
+        double cos = Math.Cos(u), sin = Math.Sin(u);
+        return new Vector2d(rb * (cos + t * sin), rb * (sin - t * cos));
+    }
+
+    /// <summary>Unit tangent of the same involute (direction of increasing roll) — the
+    /// radial direction of the base tangent point, exactly.</summary>
+    private static Vector2d InvoluteTangent(double theta0, double t)
+    {
+        double u = theta0 + t;
+        return new Vector2d(Math.Cos(u), Math.Sin(u));
+    }
+
+    /// <summary>
+    /// Fits a tangent-continuous biarc chain to the involute over roll
+    /// [<paramref name="tLow"/>, <paramref name="tTip"/>] by recursive bisection —
+    /// the <c>BiArcFit</c> convention with EXACT endpoint tangents from the closed form
+    /// instead of estimates. <paramref name="deviation"/> is measured against the
+    /// closed form at 512 samples after the fit.
+    /// </summary>
+    private static List<Curve2d> FitFlank(double rb, double theta0, double tLow, double tTip,
+        double tolerance, out double deviation)
+    {
+        var curves = new List<Curve2d>();
+        Fit(tLow, tTip, 0);
+
+        // Independent verification pass - the reported figure, denser than the
+        // per-span acceptance samples.
+        double worst = 0;
+        for (int i = 0; i <= 512; i++)
+        {
+            var p = InvolutePoint(rb, theta0, tLow + (tTip - tLow) * i / 512);
+            double best = double.PositiveInfinity;
+            foreach (var curve in curves)
+                best = Math.Min(best, curve.DistanceTo(p));
+            worst = Math.Max(worst, best);
+        }
+        deviation = worst;
+        return curves;
+
+        void Fit(double a, double b, int depth)
+        {
+            if (depth > 48)
+                throw new InvalidOperationException(
+                    "Involute biarc fit did not converge - this is a bug, not a modelling error.");
+            if (BiArcFit.TryFit(
+                    InvolutePoint(rb, theta0, a), InvoluteTangent(theta0, a),
+                    InvolutePoint(rb, theta0, b), InvoluteTangent(theta0, b),
+                    out var biarc) == BiArcFitStatus.Success)
+            {
+                double worstInterior = -1;
+                double worstT = (a + b) / 2;
+                for (int i = 1; i < 32; i++)
+                {
+                    double t = a + (b - a) * i / 32;
+                    double d = biarc!.DistanceTo(InvolutePoint(rb, theta0, t));
+                    if (d > worstInterior)
+                    {
+                        worstInterior = d;
+                        worstT = t;
+                    }
+                }
+                if (worstInterior <= tolerance)
+                {
+                    AddPiece(biarc!.First);
+                    AddPiece(biarc.Second);
+                    return;
+                }
+                Fit(a, worstT, depth + 1);
+                Fit(worstT, b, depth + 1);
+                return;
+            }
+
+            double mid = (a + b) / 2;
+            Fit(a, mid, depth + 1);
+            Fit(mid, b, depth + 1);
+        }
+
+        void AddPiece(Curve2d piece)
+        {
+            // A biarc half can degenerate to (near) zero length at the joint; below the
+            // weld tier it is no segment at all.
+            double length = piece switch
+            {
+                Line2d line => (line.End - line.Start).Length,
+                Arc2d arc => arc.Length,
+                _ => double.PositiveInfinity,
+            };
+            if (length > 1e-9)
+                curves.Add(piece);
+        }
+    }
+
+    // ------------------------------------------------------------------ curve helpers
+
+    /// <summary>Arc from <paramref name="from"/> to <paramref name="to"/> about
+    /// <paramref name="center"/>, taking the shorter way round (every fillet here spans
+    /// well under a half turn).</summary>
+    private static Arc2d ArcBetween(in Vector2d center, double radius, in Vector2d from, in Vector2d to)
+    {
+        double a0 = Math.Atan2(from.Y - center.Y, from.X - center.X);
+        double a1 = Math.Atan2(to.Y - center.Y, to.X - center.X);
+        double sweep = a1 - a0;
+        if (sweep > Math.PI)
+            sweep -= 2 * Math.PI;
+        else if (sweep < -Math.PI)
+            sweep += 2 * Math.PI;
+        return new Arc2d(center, radius, a0, sweep);
+    }
+
+    private static Curve2d MirrorX(Curve2d curve) => curve switch
+    {
+        Line2d line => new Line2d(new(line.Start.X, -line.Start.Y), new(line.End.X, -line.End.Y)),
+        Arc2d arc => new Arc2d(new(arc.Center.X, -arc.Center.Y), arc.Radius, -arc.StartAngle, -arc.SweepAngle),
+        _ => throw new InvalidOperationException($"Unexpected gear outline curve {curve.GetType().Name}."),
+    };
+
+    private static Curve2d ReverseCurve(Curve2d curve) => curve switch
+    {
+        Line2d line => new Line2d(line.End, line.Start),
+        Arc2d arc => arc.Reversed(),
+        _ => throw new InvalidOperationException($"Unexpected gear outline curve {curve.GetType().Name}."),
+    };
+
+    private static Curve2d Rotate(Curve2d curve, double cos, double sin, double angle)
+    {
+        Vector2d Rot(in Vector2d p) => new(p.X * cos - p.Y * sin, p.X * sin + p.Y * cos);
+        return curve switch
+        {
+            Line2d line => new Line2d(Rot(line.Start), Rot(line.End)),
+            Arc2d arc => new Arc2d(Rot(arc.Center), arc.Radius, arc.StartAngle + angle, arc.SweepAngle),
+            _ => throw new InvalidOperationException($"Unexpected gear outline curve {curve.GetType().Name}."),
+        };
+    }
+}

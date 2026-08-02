@@ -2135,6 +2135,55 @@ system with DOF > 0 plus a driver consuming them. No second solver exists.
   where the rank correctly measures 1 (Bennett/Sarrus are the textbook cases), and
   raw mates outside the joint vocabulary are flagged as invisible to the formula.
 
+### Involute gears (`Gears.cs`)
+
+`Coupling.Gear` constrains a ratio; `Gears.Spur(GearSpec)` draws the teeth. The
+vocabulary is `GearSpec` — module, tooth count, pressure angle (20° default),
+profile shift — with the ISO 53 basic rack profile A proportions (addendum 1.00·m,
+dedendum 1.25·m, root fillet 0.38·m; transcribed values, verify-against-datasheet
+like `StandardHoles`) as overridable `init` coefficients, and derived properties
+stating the base-circle identities as arithmetic (base pitch π·m·cos α, base
+diameter z·m·cos α, tooth thickness m·(π/2 + 2x·tan α), the undercut limit
+2(h_a* − x)/sin²α).
+
+- **The flank enters the sketch vocabulary as a fit with the deviation REPORTED**
+  (the `BiArcFit` convention): a tangent-continuous biarc chain against the
+  closed-form involute, recursive bisection with EXACT endpoint tangents (the
+  involute tangent at roll t is the base-radial at θ₀+t, closed form), deviation
+  measured at 512 samples and returned as `GearProfile.MaxFitDeviation`. Default
+  tolerance module·1e-4 costs ~16 arcs per flank (measured 1.5e-4 deviation at
+  m = 2). Everything else — tip arc, root arc, fillets, the radial stretch below
+  the base circle — is exact, so the fit deviation is the profile's entire error.
+- **The root fillet tangency is CLOSED FORM**: with fillet centre C = P(t) + ρ·n̂,
+  |C|² = (r_b·t + ρ)² + r_b², so |C| = r_f + ρ solves to
+  t\* = (√((r_f+ρ)² − r_b²) − ρ)/r_b. When t\* < 0 the tangency would fall below
+  the base circle and the flank continues as a RADIAL line down to a fillet
+  tangent to that line — tangent-continuous, because the involute's cusp tangent
+  IS radial.
+- **Refusals by name**: tooth counts below the rack undercut limit (the drawn
+  involute would interfere with a conjugate tooth where a generating cutter would
+  have trochoid-trimmed the root — an honest refusal beats an unverified flank;
+  the message names z_min AND the x_min that clears it), pointed teeth (tip
+  thickness below the weld tier, stated as a LENGTH — angular epsilons scale with
+  radius), fillets that overlap in the root gap or consume the whole flank.
+- **Conjugate action is verified from CONTACT, deliberately not via the mechanism
+  solver** — `Coupling.Gear` ENFORCES the ratio it would be asserting. Two
+  generated gears at an extended centre distance (real backlash makes drive-flank
+  contact a transversal zero; the involute's ratio is centre-distance-invariant)
+  are rotated into contact by bisecting the pinion region's exact signed distance
+  over the wheel outline: ratio constant to 9.3e-6 rad through tooth handover
+  (asserted at 6e-5). Mutation-checked: a 25° wheel against a 20° pinion reads
+  5.6e-3 rad and a 5e-2-tolerance flank 5.6e-4 rad ≈ deviation/r_b — the
+  instrument sees flank FORM, not just ratio.
+- **Solids**: `Gears.SpurGear(spec, faceWidth, boreDiameter?)` (exact in all
+  three representations — the profile is lines and arcs) and
+  `Gears.HelicalGear(spec, faceWidth, helixAngleDegrees, …)` over the twisted
+  extrusion (the spur profile is the TRANSVERSE section, so module and pressure
+  angle are transverse values; mesh/implicit only, B-Rep honestly Impossible per
+  the twisted-extrude contract). `GearProfile.ClosedFormArea` is the ideal
+  outline's exact Green's-theorem area (the involute term is r_b²·t³/6), held
+  against `Sketch.Area()` in tests.
+
 Docs: `docs/examples/mechanisms.md`. Deliberately out of scope: forces, masses,
 friction, contact dynamics — mechanisms answer "where does it go".
 
