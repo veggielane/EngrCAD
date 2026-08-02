@@ -2714,6 +2714,51 @@ flattened; a loaded document is an overlay `reload` still discards) and the
 
 ## Future work (whole domains, not scheduled)
 
+- [ ] **GPU acceleration — for modelling AND simulation, and the contract question comes
+  before the kernel question.** The repo's strongest correctness tool is bit-identity
+  (batch SDF == scalar to the bit, deterministic assembly order, PNG byte-comparison),
+  and a GPU cannot honour it: fused multiply-adds, vendor transcendentals and
+  nondeterministic reduction order all move the last bits, and `Vector.Cos` differing
+  by 1 ulp was already enough to keep the trig kernels scalar. So every GPU path is
+  **opt-in with a stated deviation bound, never a silent default** — the "a silently
+  divergent fast path is worse than none" rule is the whole design constraint, and the
+  first deliverable is the seam that makes an honest A/B possible (upload boundary =
+  the existing SoA batch seam; results compared against the CPU path with the bound
+  ASSERTED, not assumed).
+  - **Dependency shape**: kernel projects stay free of rendering/GPU references — a new
+    leaf (`EngrCAD.Gpu`) implements existing seams (`Sdf` batch evaluation, an
+    `IProjectionTarget`, a CG matvec provider) the way the viewer already consumes
+    kernels, injected by the caller rather than referenced by Core/Implicit/Fea. The
+    compute stack should ride what is already shipped (Silk.NET / ANGLE ES 3.1 compute
+    or a thin D3D/Vulkan binding), measured before chosen; consumer GPUs run fp64 at
+    1/32–1/64 rate, so fp32-with-refinement vs native fp64 is a MEASUREMENT, not a
+    preference.
+  - **Modelling candidates, ranked by contract compatibility**: (1) the ambient-
+    occlusion bake — embarrassingly parallel hemisphere rays, 12.3 s CPU on the demo
+    scene, and its output is *shading*, where a bounded deviation is survivable (though
+    the committed PNGs move, so it lands as an opt-in like `Scheduling`); (2) dense/
+    NarrowBand `Sampled` grid bakes through the batch seam — but re-measure first:
+    SurfaceNets is now ASSEMBLY-bound, not evaluation-bound (the cull lesson: an 8×
+    saving in the dominant cost bought 2.5× because the dominant cost stopped being
+    dominant); (3) expression-tree→compute-shader SDF compilation, which CLAUDE.md's
+    implicit roadmap already names. Mesh booleans and the exact predicates are
+    OFF-LIMITS — classification order is load-bearing there.
+  - **Simulation candidates**: (1) the CG matvec + Jacobi apply — the memory-bound
+    classic, and CG already wins on 3D elasticity at scale, so accelerating it widens
+    the win where the direct solver's wall stands; (2) batched element-stiffness
+    integration feeding the SAME deterministic scatter (the assembly-parallelisation
+    decline showed the scatter is 82–94% of assembly cost, so measure whether the GPU
+    half pays at all before building it); (3) the supernodal factorization's BLAS-3
+    inner kernel — the analysis already on file says blocking is the lever and the tree
+    ceiling is 1.6–1.9×, and a GPU GEMM is that lever's strongest form, but it only
+    exists AFTER the supernodal CPU factorization does, so it is sequenced behind it.
+  - **Verification bar**: every kernel ships with its CPU twin and an asserted
+    deviation bound; FEA results additionally re-verified through the existing
+    closed-form suite (the figures that held through the unit consolidation are the
+    regression oracle — if a GPU path moves the cantilever or a modal frequency past
+    its recorded tolerance, the path is wrong, whatever the speedup); determinism
+    stated honestly per path (same-device reproducibility is achievable, cross-device
+    is not, and the docs must say which is promised).
 - [ ] **2.5D CAM — pocketing, profiling, drilling cycles and a G-code writer.** The
   nearest-term of the domains here, because the hard part shipped without ever being
   called CAM: `Region2dOffset` IS toolpath offsetting, successive inward offsets ARE
