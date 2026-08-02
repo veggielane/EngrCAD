@@ -866,6 +866,120 @@ converges while 1.0 rad — asking the planet for more than half a turn in one
 step — does not. Use `Sweep`, which is continuation and seeds each step from the
 previous converged pose.
 
+A helical pair's conjugate action needs no second instrument. At every transverse
+section the pair **is** a spur pair, since a helical gear's section at height z is
+its own spur profile rotated by ψ(z) and a meshing pair's two members are rotated
+by +ψ(z) and −ψ(z); rotating both members rigidly moves the *phase* of contact and
+not the ratio. So what the tests measure is the half that could actually be wrong
+— that a real transverse section of the built solid, rotated back by ψ(z), lands
+on the exact spur region's zero level, within a bound derived from the three error
+sources (arc flattening, the wall-panel chord, the biarc fit) and mutation-checked
+against a 5% twist error.
+
+### Herringbone (double-helical)
+
+Two helical halves of *opposite hand* in one solid. Their axial thrusts are equal
+and opposite, so they cancel in the bearings — which is the whole reason the form
+exists, and the geometric statement behind it is that the mid-plane is a plane of
+**exact mirror symmetry**.
+
+That symmetry is how the solid is built rather than a property checked afterwards.
+Both halves share the same transverse section at the apex — the twist law is
+Λ-shaped in z — so `HerringboneGears.Herringbone` sweeps the lower half through
+the ordinary twisted extrusion, reflects its mesh in z = W/2 and welds the two
+**by index**: the apex ring's vertices are exact fixed points of the reflection,
+so nothing is welded by tolerance and the two coincident cap facets are simply
+dropped. A union of two separately built halves would hand a large coincident
+planar region to a boolean for an answer the symmetry already gives.
+
+```csharp render:mechanism-herringbone
+var spec = new GearSpec(module: 2, teeth: 24);
+double width = 18, beta = 25;
+
+var gear = HerringboneGears.Herringbone(spec, width, beta, boreDiameter: 12);
+
+// The two halves' helix angles are equal and opposite: the section rotation law
+// is Lambda-shaped, so it depends on z only through |z - W/2|.
+double below = HerringboneGears.SectionAngleAt(spec, width, beta, 4);
+double above = HerringboneGears.SectionAngleAt(spec, width, beta, width - 4);
+if (Math.Abs(below - above) > 1e-15)
+    throw new Exception("the mid-plane must be a mirror plane");
+
+var scene = new Scene();
+scene.AddTab("herringbone").Add(new Part("gear", gear, Palette.Brass));
+```
+
+![A 24-tooth herringbone gear, its two opposite-hand halves meeting at the mid-plane](images/mechanism-herringbone.png)
+
+The **apex relief groove** a hobbed double-helical gear carries is deliberately
+not a parameter yet, and the reason is a measurement rather than an omission: a
+groove is material genuinely *removed*, so it wants a boolean rather than another
+weld, and subtracting an axial band from a gear fails in both engines — the exact
+mesh boolean's imprint at every relief diameter, gap width and density tried, and
+the B-Rep boolean as an unclosed solid with 1522 unpaired edges for the same band
+against an ordinary spur gear. What the groove wants instead is a mixed-section
+ring stack (a helical toothed run, an annular transition face, a plain relief
+band, then the mirror), which is a construction rather than an argument, and it is
+filed with those figures.
+
+### Crossed helical (screw) gears
+
+Two ordinary helical gears on **skew** shafts. The geometry is nothing new, so
+what `CrossedHelicalPair` carries is the pairing arithmetic and the placement:
+the two members must share a **normal** module and normal pressure angle (the same
+hob cuts them), the shaft angle is Σ = β₁ + β₂ over *signed* helix angles, and the
+centre distance is the sum of the pitch radii, m_n/2·(z₁/cos β₁ + z₂/cos β₂).
+
+The signed form is one rule where the textbook states two: "β₁ + β₂ for the same
+hand, β₁ − β₂ for opposite hands" is what Σ = β₁ + β₂ says once the second gear's
+hand rides in the sign of its own angle.
+
+> [!WARNING]
+> **Crossed helical gears make POINT contact, not line contact.** Two helicoids on
+> skew axes touch at a single point which travels across the flank as the pair
+> turns, so the contact stress is concentrated and the load capacity is a small
+> fraction of an equivalent parallel-axis pair's. These are for light drives,
+> instrument trains and motion transfer between skew shafts — not for power. The
+> wear-in that broadens the point into a patch is why they are usually run in
+> dissimilar materials.
+
+```csharp render:mechanism-crossed-helical
+// A right-angle screw pair: 45 degrees on each member, same hand.
+var pair = CrossedHelicalPair.Create(
+    normalModule: 2, teeth1: 18, teeth2: 24,
+    helixAngle1Degrees: 45, helixAngle2Degrees: 45);
+
+if (Math.Abs(pair.ShaftAngleDegrees - 90) > 1e-12)
+    throw new Exception("shaft angle is the signed sum of the helix angles");
+
+// The ratio follows the TEETH, never the pitch radii - on skew axes those differ.
+if (Math.Abs(pair.Ratio - 24.0 / 18.0) > 1e-12)
+    throw new Exception("ratio is z2/z1");
+
+var scene = new Scene();
+var tab = scene.AddTab("screw pair");
+tab.Add(new Part("driver", pair.FirstGear(faceWidth: 10, boreDiameter: 10), Palette.Coral));
+tab.Add(new Part("driven", pair.SecondGear(faceWidth: 10, boreDiameter: 10), Palette.Sky));
+```
+
+![Two 45-degree helical gears on shafts crossed at a right angle](images/mechanism-crossed-helical.png)
+
+Two things the arithmetic gets right that a habit gets wrong. The **ratio is
+z₂/z₁ and not the pitch-radius ratio** — on parallel axes those coincide and the
+habit is harmless, but r = m_n·z/(2·cos β), so a pair at 20° and 50° has radii out
+by cos β₁/cos β₂ = 1.46, a 46% error for anyone who reads the radii. And every
+**per-module coefficient scales by cos β** when a gear ordered in normal terms is
+turned into a `GearSpec`, which reads them against the *transverse* module: the
+addendum, dedendum, root fillet radius and profile shift are all radial *lengths*,
+so `HelicalGearGeometry.FromNormal` divides each by m_t/m_n. Unscaled, a 0.38·m
+root fillet reads 1.34× too large at 45° and a 24-tooth member is refused outright
+for overlapping root fillets — a plausible-looking pair that cannot be drawn.
+
+The pair is placed at the correct centre distance and shaft angle with its pitch
+cylinders tangent at `ContactPoint`; the angular *phase* that would put a tooth of
+one in the gap of the other is not solved, because that is a mate or a mechanism
+driver rather than a property of the pairing.
+
 ## Saving a mechanism
 
 `Mechanism.SaveMechanism()` writes the whole joint layer as one JSON envelope —

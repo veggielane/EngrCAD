@@ -3387,6 +3387,58 @@ Design decisions:
   read off the geometry — the worm by the sign of its quarter-turn advance, the wheel
   by ONE probe on the pitch cylinder at +twist, inside for a right-hand wheel and
   outside for a left-hand one because twice the twist exceeds the tooth half-angle.
+  *Herringbone and crossed helical are the same geometry paired differently*
+  (`HerringboneGears.cs`, `CrossedHelicalGears.cs`, `HelicalGearGeometry.cs`), and
+  three decisions carry them. **A herringbone's apex is a WELD and the symmetry is
+  what makes it one**: both opposite-hand halves share the transverse section at the
+  mid-plane, so the twist law is Λ-shaped in z, the mid-plane is a plane of exact
+  mirror symmetry, and the upper half IS the lower half reflected — which turns the
+  junction from "a boolean over a large coincident planar region" into a weld BY
+  INDEX. Three exact facts carry it and none is a tolerance: the apex ring's z is
+  `Height·1.0`, the reflection z → 2a − z fixes it bit for bit (2a is exact and
+  2a − a = a), and every wall facet spans two rings, so "every vertex is at the
+  apex" is an exact test for the two cap facets to drop. Reflected faces keep vertex
+  0 in place (`[a, d, c, b]`), the recorded rule that a polygon's winding may be
+  reversed freely and its fan diagonal may not. The verification is the identity
+  itself — the vertex set is invariant under z → W − z BIT for bit, where a
+  tolerance would accept a weld that had drifted — plus the two halves' helix angles
+  read off REAL transverse sections of the built solid as +20.000 and −20.000
+  degrees, that instrument mutation-checked by seeding it from the 20° law on a 30°
+  solid. **The apex relief groove is filed rather than shipped, and the entry
+  carries the measurement**: a groove is material genuinely REMOVED, so it wants a
+  boolean rather than another weld, and subtracting an axial band from a gear fails
+  in both engines (the exact mesh boolean's imprint at every relief diameter, gap
+  width and density tried; the B-Rep boolean as an unclosed solid with 1522 unpaired
+  edges for the SAME band against an ordinary spur gear — which is what shows it is
+  gear geometry rather than the herringbone's weld). What it wants is a
+  mixed-section ring stack, a construction rather than a parameter. **A crossed pair
+  needs no geometry, only arithmetic — and the signed form is one rule where the
+  textbook states two**: Σ = β₁ + β₂ over SIGNED helix angles reproduces both "β₁ +
+  β₂ same hand" and "β₁ − β₂ opposite hands" once the second gear's hand rides in
+  the sign of its own angle, and construction then VERIFIES what it placed rather
+  than trusting the formula, by requiring the two tooth traces to be the same line
+  at the contact point (the geometric content of Σ, and the one thing a sign slip
+  breaks). The trap worth a test is that **the ratio follows the TEETH**: on
+  parallel axes z₂/z₁ and r₂/r₁ coincide and the habit is harmless, while on skew
+  axes r = m_n·z/(2·cos β) puts them cos β₁/cos β₂ apart — 46% for a 20°/50° pair.
+  **And a defect came out of building it, of the "two conventions each individually
+  right" family**: the ISO 53 rack coefficients and the profile shift are quoted
+  against the NORMAL module because a hob cuts them, while `GearSpec` reads them
+  against the TRANSVERSE one — and they are all RADIAL LENGTHS, so every one must be
+  divided by m_t/m_n. Unscaled, a 0.38 fillet reads 1.34× too large at 45° and a
+  24-tooth member is refused outright for overlapping root fillets: a plausible pair
+  that cannot be drawn. The conversion is checked by identities rather than by
+  inspection (transverse thickness = normal thickness / cos β; undercut limit =
+  2·h_a*_n·cos β/sin²α_t). **The helical pair's conjugate test is the
+  transverse-section argument, made into a measurement of the half that could be
+  wrong**: at every section a helical pair IS a spur pair, since each member's
+  section is its own spur profile rotated by ψ(z) and rotating both rigidly moves
+  the PHASE of contact and not the ratio — so the spur pair's contact-measured
+  conjugacy carries over, and what is left to check is that a real transverse
+  section of the built solid, rotated back by ψ(z), lands on the exact spur region's
+  zero level. The bound is DERIVED (arc-flattening sagitta + wall-panel chord +
+  biarc fit deviation, summed because all three are systematic) and the instrument
+  mutation-checked at a 5% twist error, which reads over 100× the bound.
 - **The document model lives here too** (`Document.cs`): `Part` is a self-contained,
   user-constructed object — name, geometry from any engine (including `Shape`), color,
   transform — with a lazily produced, cached display mesh (`GetMesh`;

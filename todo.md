@@ -793,15 +793,31 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
     z·inv α) and measurement over pins, as arithmetic on `GearSpec` plus a
     measured-off-the-sketch check (the tooth-thickness bisection pattern in
     `GearTests` generalizes).
-  - **Helical pair conjugate test** — the spur pair's contact instrument is 2D; a
-    helical pair adds axial overlap, and the transverse-section argument says the 2D
-    test at every section is sufficient — worth asserting once on the twisted mesh.
+  - **The apex relief groove on a herringbone** (`HerringboneGears`) — the one part
+    of the double-helical form that did NOT land, and the entry carries its
+    measurement so it cannot rot into a guess. A hobbed herringbone cannot have a
+    continuous apex, so real ones carry a relief groove; a groove is material
+    genuinely REMOVED, so it wants a boolean rather than the mid-plane weld — and
+    subtracting an axial band from a gear fails in BOTH engines: the exact mesh
+    boolean's imprint ("flip recovery of the intersection segment … did not
+    converge") at every relief diameter, gap width and mesh density tried, and the
+    B-Rep boolean as an unclosed solid with 1522 unpaired edges for the SAME band
+    against an ordinary SPUR gear, which is what shows this is gear geometry rather
+    than the herringbone's weld (both pinned by
+    `HerringboneGearTests.SubtractingAnAxialBandFromAHerringbone_StillFails`). Two
+    ways forward and they are different sizes: fix the boolean (the mesh imprint's
+    flip recovery is the nearer of the two), or build the groove as a MIXED-SECTION
+    RING STACK — helical toothed run, an annular transition face (gear outline with
+    the relief circle as a hole), a plain relief band, then the mirror — which needs
+    a level/loop bookkeeping layer beside `TwistedExtrusion` and is a construction
+    rather than a parameter.
+  - **A lazy herringbone node** — `HerringboneGears.Herringbone` meshes EAGERLY at a
+    stated quality and wraps the result in `Shape.From`, because a `Shape` node would
+    need a `ShapeCompiler` case. Nothing is lost in the B-Rep direction (a twisted
+    extrude is Impossible there anyway); what is lost is re-meshing at a scene's own
+    quality, so a herringbone in a scene rendered finer keeps the quality it was
+    built at.
   - **The full gear taxonomy** (requested 2026-08-02), each with its honest scope:
-    - **Herringbone / double-helical** — two opposite-hand helicals in one solid; the
-      twisted-extrude machinery does each half today, and the work is the mid-plane
-      junction (the apex section is the shared spur profile, so the two twists meet in
-      a plane of exact mirror symmetry — a weld by construction, verify by the mirror
-      identity). Optional apex gap (real hobbed herringbones relieve the middle).
     - **Straight bevel residuals** (`BevelGears.cs` landed: `BevelPair` +
       `Straight`/`StraightGear`, spiral and hypoid refused by name; see the Modeling
       README for the projection measurements). What is left:
@@ -850,10 +866,14 @@ The foundation ✅ landed (`EngrCAD.Core.Solvers`: `PackedSparseMatrix` /
       - **A compound/Ravigneaux vocabulary** — stepped planets and shared carriers are
         more couplings over the same joints, so the mechanism side likely needs nothing
         new; it is the placement and the assembly conditions that generalize.
-    - **Crossed helical (screw) gears** — the geometry already exists (two helicals
-      at skew shafts); what is missing is only the pairing arithmetic (shaft angle =
-      β₁+β₂, matching normal modules) — arithmetic on `GearSpec`, plus the
-      point-contact caveat stated.
+    - **A meshing PHASE for a crossed-helical pair** — `CrossedHelicalPair` places
+      the two members at the right centre distance and shaft angle with their pitch
+      cylinders tangent, but not at the angular phase that would put a tooth of one
+      in the gap of the other. That is a mate or a mechanism driver rather than a
+      property of the pairing (which flank drives is the caller's), and the same gap
+      exists for the spur pair, whose docs snippet phases by hand with a
+      `RotateZ(π − π/z)`. A `Mates`-level "mesh these two gear placements" helper
+      would serve both.
     - **Non-circular/elliptical gears** — refuse by name for now: conjugacy for a
       stated centre-distance function is an integral condition, a different problem
       from fitting a known curve; file only if a consumer appears.
@@ -874,7 +894,14 @@ maxTravel)` (rigidly interpolated placements bounded by exact bounding-box-corne
 travel; 97%+ of the analytic disk from a 9-frame full-turn sweep), and **involute gear
 geometry** (`Gears.cs`: `GearSpec` + `Gears.Spur/SpurGear/HelicalGear`, biarc-fitted
 flanks with the deviation reported, undercut/pointed/fillet refusals by name,
-conjugate action verified from contact — see the gear follow-ups item above).
+conjugate action verified from contact — see the gear follow-ups item above), plus
+**herringbone and crossed helical** (`HerringboneGears.cs`/`CrossedHelicalGears.cs`
+/`HelicalGearGeometry.cs`: the double-helical apex as a mirror WELD verified by the
+bit-exact vertex-set identity and by helix angles read off real transverse sections;
+the crossed pair's Σ = β₁ + β₂ over signed helix angles with the tooth traces checked
+coincident at construction; the every-coefficient-scales-by-cos-β rule for a gear
+ordered in normal terms; and the helical pair's conjugate test as the
+transverse-section argument measured against a derived bound).
 Remaining follow-ups:
 
 - [ ] **B-Rep-exact interference volumes** — `CheckInterference`'s opt-in volumes use
